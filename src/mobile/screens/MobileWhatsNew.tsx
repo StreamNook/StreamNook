@@ -22,8 +22,10 @@ import {
   DownloadSimple,
   LinkSimple,
   Path,
+  PlayCircle,
   SpeakerHigh,
   Sparkle,
+  UserCircle,
   Wrench,
 } from 'phosphor-react';
 import { getAppVersion } from '../updateCheck';
@@ -76,6 +78,12 @@ function iconFor(title: string): React.ElementType {
   const t = title.toLowerCase();
   if (/(audio|listen|lock|media control|background|picture-in-picture)/.test(t)) return SpeakerHigh;
   if (/(batter|cooler|hot|power|data|performance|quality)/.test(t)) return BatteryCharging;
+  // Playback words are some of the commonest things a release note is about,
+  // and the first real changelog through here matched none of the original
+  // rules: every entry fell back to the spark, which makes the whole layout
+  // look like it is not trying.
+  if (/(pause|paused|play|player|playback|stream|video|buffer|latency)/.test(t)) return PlayCircle;
+  if (/(profile|badge|paint|identity|avatar|cosmetic)/.test(t)) return UserCircle;
   if (/(link|clip)/.test(t)) return LinkSimple;
   if (/(chat|reply|message|emote)/.test(t)) return ChatCircleText;
   if (/(notification|alert)/.test(t)) return BellSimple;
