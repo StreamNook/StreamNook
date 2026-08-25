@@ -6,6 +6,7 @@ import { ChevronRight } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { useMobileNavStore } from '../navStore';
 import { checkForAndroidUpdate, openAndroidUpdate, type AndroidUpdate } from '../updateCheck';
+import { OwnIdentityHeader } from '../profile/OwnIdentityHeader';
 import { SETTINGS_ROWS } from './SettingsScreen';
 
 export const YouScreen: React.FC = () => {
@@ -33,25 +34,31 @@ export const YouScreen: React.FC = () => {
 
   return (
     <div className="sn-mobile-screen sn-tabbar-clearance">
-      <div className="flex items-center gap-3 px-4 pt-4 pb-3">
+      {/* items-start, not items-center: the identity block can run to two lines
+          for a long name plus a badge row, and centring against it would drag
+          the avatar and the sign out control off the name they belong to. */}
+      <div className="flex items-start gap-3 px-4 pt-4 pb-3">
         {currentUser?.profile_image_url ? (
           <img
             src={currentUser.profile_image_url}
             alt=""
-            className="w-14 h-14 rounded-full"
+            className="w-14 h-14 rounded-full shrink-0"
             draggable={false}
           />
         ) : (
-          <div className="w-14 h-14 rounded-full bg-surface" />
+          <div className="w-14 h-14 rounded-full bg-surface shrink-0" />
         )}
-        <div className="min-w-0 flex-1">
-          <div className="text-lg font-bold text-textPrimary truncate">
-            {currentUser?.display_name || currentUser?.username || 'Signed in'}
+        {currentUser?.user_id ? (
+          <OwnIdentityHeader
+            userId={currentUser.user_id}
+            displayName={currentUser.display_name || currentUser.username || 'Signed in'}
+            login={currentUser.login}
+          />
+        ) : (
+          <div className="min-w-0 flex-1">
+            <div className="text-lg font-bold text-textPrimary truncate">Signed in</div>
           </div>
-          {currentUser?.login && (
-            <div className="text-[13px] text-textMuted truncate">@{currentUser.login}</div>
-          )}
-        </div>
+        )}
 
         {/* Sign out belongs WITH the account, not at the end of a scroll list.
             It used to sit under the settings rows, which put it behind the
