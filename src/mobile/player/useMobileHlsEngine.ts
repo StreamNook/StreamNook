@@ -65,6 +65,21 @@ const PAUSE_REPORT_GRACE_MS = 6000;
 // whole gate exists to prevent.
 const REPORT_TIMEOUT_MS = 2000;
 
+// How long a pause must last before we stop pulling segments.
+//
+// hls.js keeps filling the buffer while the element is paused, so a paused
+// stream downloads at full bitrate indefinitely. Measured on device: the buffer
+// grew by exactly 2.00s per 2s of wall clock until it reached
+// `liveMaxLatencyDuration`, at which point hls seeked ~56s to the live edge and
+// discarded the entire buffer - then did it again, every ~55 seconds, for as
+// long as the stream sat paused. A paused phone downloads a live stream
+// continuously and throws all of it away.
+//
+// The grace window exists so a quick pause/resume, or a transient pause from
+// audio focus, does not tear the buffer down for nothing. Anything longer is a
+// real pause and worth stopping for.
+const STOP_LOAD_AFTER_PAUSE_MS = 2000;
+
 let pausedReportTimer: number | null = null;
 
 // `report_player_playing` is an async command, so Tauri spawns each call as its
@@ -129,12 +144,19 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement>) 
     let stopGovernor: (() => void) | null = null;
     let detachVideo: (() => void) | null = null;
     let gateTimer: number | null = null;
+    let stopLoadTimer: number | null = null;
+    let loadStopped = false;
 
     const destroy = () => {
       if (gateTimer !== null) {
         window.clearTimeout(gateTimer);
         gateTimer = null;
       }
+      if (stopLoadTimer !== null) {
+        window.clearTimeout(stopLoadTimer);
+        stopLoadTimer = null;
+      }
+      loadStopped = false;
       if (stopGovernor) {
         stopGovernor();
         stopGovernor = null;
@@ -302,8 +324,39 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement>) 
         }
       });
 
+      // Segment loading follows the play state.
+      //
+      // Deliberately driven off `play`/`pause` (intent) rather than
+      // `playing`/`waiting` (buffer health), so an ordinary rebuffer never stops
+      // the loader that is trying to end it.
+      const resumeLoad = (why: string) => {
+        if (stopLoadTimer !== null) {
+          window.clearTimeout(stopLoadTimer);
+          stopLoadTimer = null;
+        }
+        if (!loadStopped) return;
+        loadStopped = false;
+        try {
+          // No start position: resume buffering around the current playhead, so
+          // resuming behaves exactly as it does today. Passing -1 here would
+          // snap to the live edge and silently skip content on a short pause.
+          hls.startLoad();
+          Logger.debug(`[MobilePlayer] segment loading resumed (${why})`);
+        } catch {
+          /* player already torn down */
+        }
+      };
+
+      const onPlayIntent = () => {
+        if (seq !== seqRef.current) return;
+        resumeLoad('play');
+      };
+
       const onPlaying = () => {
         if (seq !== seqRef.current) return;
+        // Belt and braces: if anything resumed playback without a `play` event
+        // reaching us, do not leave the loader stopped under a running element.
+        resumeLoad('playing');
         setState('playing');
         reportPlaying();
       };
@@ -322,6 +375,28 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement>) 
         // resumes the WebView on purpose so playback continues, which means a
         // pause there is a real pause and reporting at once is still right. No
         // PiP signal is needed, and no race with it exists.
+        // Stop pulling segments once the pause outlives the grace window. See
+        // STOP_LOAD_AFTER_PAUSE_MS: without this a paused stream downloads at
+        // full bitrate forever and discards the lot every ~55 seconds.
+        //
+        // Note this is armed even when the page is hidden. Backgrounding does
+        // NOT pause playback here (lifecycle.ts leaves the audio alone on
+        // purpose), so a pause event while hidden is a genuine pause, not the
+        // app going to the background.
+        if (stopLoadTimer === null && !loadStopped) {
+          stopLoadTimer = window.setTimeout(() => {
+            stopLoadTimer = null;
+            if (seq !== seqRef.current || !video.paused || loadStopped) return;
+            loadStopped = true;
+            try {
+              hls.stopLoad();
+              Logger.debug('[MobilePlayer] paused past the grace window, segment loading stopped');
+            } catch {
+              /* player already torn down */
+            }
+          }, STOP_LOAD_AFTER_PAUSE_MS);
+        }
+
         if (document.visibilityState === 'hidden') {
           cancelPausedReport();
           sendPlaying(false);
@@ -339,12 +414,14 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement>) 
           sendPlaying(false);
         }
       };
+      video.addEventListener('play', onPlayIntent);
       video.addEventListener('playing', onPlaying);
       video.addEventListener('waiting', onWaiting);
       video.addEventListener('pause', onPauseOrEnd);
       video.addEventListener('ended', onPauseOrEnd);
       document.addEventListener('visibilitychange', onVisibilityChange);
       detachVideo = () => {
+        video.removeEventListener('play', onPlayIntent);
         video.removeEventListener('playing', onPlaying);
         video.removeEventListener('waiting', onWaiting);
         video.removeEventListener('pause', onPauseOrEnd);
