@@ -154,3 +154,21 @@ windows = { version = "0.62", features = [
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+# Remote WebView inspection in a RELEASE build. Deliberately NOT in `default`.
+#
+# A release build is the only build that can be installed over a daily driver: a
+# debug APK is debug-key-signed and fails INSTALL_FAILED_UPDATE_INCOMPATIBLE, and
+# the uninstall that would fix that wipes login, cookie jar and settings. So
+# profiling the app people actually run needs devtools ON in a release build.
+#
+# wry already does the work - it calls WebView.setWebContentsDebuggingEnabled
+# under cfg(any(debug_assertions, feature = "devtools")) - so this only forwards
+# the flag. Pass it per build:
+#
+#   npx tauri android build --apk --target aarch64 --features devtools
+#
+# then attach from a Chromium browser at chrome://inspect (Firefox cannot inspect
+# a Chromium WebView). NEVER add this to `default`: the shipped build must not be
+# remotely inspectable.
+devtools = ["tauri/devtools"]
