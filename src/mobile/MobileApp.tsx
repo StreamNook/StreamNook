@@ -52,6 +52,22 @@ const MobileApp: React.FC = () => {
   const [wizardDismissed, setWizardDismissed] = useState(false);
   const activeTab = useMobileNavStore((s) => s.activeTab);
 
+  // Is the tab shell completely hidden behind the full-screen watch layer?
+  //
+  // The shell stays MOUNTED while you watch (so the back gesture and scroll
+  // position survive), which means its stream cards keep animating their live
+  // dots and hype-train shine forever, on a list nobody can see. Measured on
+  // device: 29 `animate-ping` halos plus a hype-train badge, all running with
+  // `iteration-count: infinite`, 24 of them off-screen, costing ~4.6% of a CPU
+  // core. Each animating element is its own composited layer, so the compositor
+  // services all of them every frame.
+  //
+  // Only in `full`. In `mini` the shell is genuinely visible behind the small
+  // player, and the dots have to keep moving there.
+  const playerMode = useMobileNavStore((s) => s.playerMode);
+  const streamUrl = useAppStore((s) => s.streamUrl);
+  const shellCovered = playerMode === 'full' && !!streamUrl && streamUrl !== 'offline';
+
   // Same backstop the desktop gate uses, and it matters MORE here: the wizard's
   // own comment records that `setup_complete` has been seen reverting to false
   // between launches ON ANDROID specifically, which reopens the wizard forever
@@ -118,6 +134,7 @@ const MobileApp: React.FC = () => {
         <>
           <div
             className="flex-1 min-h-0 flex flex-col relative overflow-hidden"
+            data-sn-covered={shellCovered ? 'true' : undefined}
             style={{ paddingTop: 'var(--sn-safe-t, 0px)' }}
           >
             <AnimatePresence mode="popLayout" initial={false} custom={direction}>

@@ -53,3 +53,20 @@
 .sn-tabbar-clearance {
   padding-bottom: calc(var(--sn-tabbar-h, 56px) + var(--sn-safe-b, 0px) + 64px);
 }
+
+/* Stop the covered tab shell animating things nobody can see.
+   `data-sn-covered` is set in MobileApp when the full-screen watch layer is
+   over the shell. The shell stays mounted on purpose (back gesture, scroll
+   position), so without this its stream cards keep running infinite live-dot
+   and hype-train animations behind an opaque player.
+   Measured on device: ~4.6% of a CPU core, from 29 ping halos plus a shine
+   sweep, 24 of them off-screen. Every animating element is its own composited
+   layer, so the compositor services all of them on every frame.
+   Selectors are deliberately specific rather than a universal `*`: matching
+   thousands of nodes would add style-recalc cost of its own and trade one
+   compositor bill for another. */
+[data-sn-covered='true'] .animate-ping,
+[data-sn-covered='true'] .hype-train-badge-glass::after,
+[data-sn-covered='true'] .hype-train-badge-glass-golden::after {
+  animation: none !important;
+}
