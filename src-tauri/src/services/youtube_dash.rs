@@ -161,6 +161,8 @@ struct DashStream {
     /// one viewing session of one video", so two concurrent streams must not
     /// share one.
     cpn: String,
+    /// Request counter, incremented per media request to match what YouTube's own
+    /// player sends alongside `cpn`.
     rn: AtomicU64,
     force_rotate: std::sync::atomic::AtomicBool,
     rotating: std::sync::atomic::AtomicBool,
@@ -215,21 +217,8 @@ fn lookup(id: &str) -> Option<Arc<DashStream>> {
     REGISTRY.lock().ok()?.get(id).cloned()
 }
 
-/// Client playback nonce: one per playback session, sent on every media request.
-///
-/// YouTube's own player sends `cpn` and an incrementing `rn` on every
-/// videoplayback request (captured: `&cpn=2T698qjkaUcd0OL8&cver=...&rn=10`), so
-/// these are sent to match it.
-///
-/// They are NOT what fixed the 403 wall, despite an earlier note here saying so.
-/// Adding them changed nothing. Gated urls expire about thirty seconds after
-/// they are issued and the cure is to re-issue them; see `rotate_if_stale`.
-/// Mint a playback nonce. One per DashStream, generated at construction.
-///
-/// This was a process-global that `start` cleared on every call, which meant
-/// starting a second stream rewrote the nonce the first was mid-playback on and
-/// reset its request counter to zero. A fresh instance is now a fresh nonce, so
-/// the reset function is gone entirely.
+/// Mint a playback nonce. One per `DashStream`, generated at construction, so
+/// two concurrent streams never share one.
 fn mint_nonce() -> String {
     const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut r = rand::rng();
@@ -380,10 +369,9 @@ impl DashStream {
             } else {
                 (&mut s.audio_head, &mut s.audio_head_at)
             };
-            // Follow the origin in BOTH directions. Taking the maximum made a
-            // single over-reported head permanent, and every later request for
-            // a segment past the real edge 404ed forever: measured in the app as
-            // playback dying after a few seconds and never recovering.
+            // Follow the origin in BOTH directions. Taking the maximum makes a
+            // single over-reported head permanent, and every later request for a
+            // segment past the real edge then 404s forever.
             //
             // A BACKWARDS step is the interesting case: the playlist shrinks under
             // the player, which it sees as the live edge moving away from it. One
@@ -493,12 +481,11 @@ pub async fn start(
 
     // Everything else comes from a REAL numbered segment.
     //
-    // Taking the duration from the edge chunk was the bug behind playback dying
-    // after a few seconds: the chunk covers several segments, so EXTINF came out
-    // far too long, the player paced itself slower than the origin produced, and
-    // it fell behind until it was chasing sequences that did not exist. The
-    // symptom looked like an edge problem (404s near the head) but the cause was
-    // the advertised segment duration.
+    // Never take the duration from the edge chunk: it covers several segments, so
+    // EXTINF comes out far too long, the player paces itself slower than the origin
+    // produces, and it falls behind until it is chasing sequences that do not
+    // exist. The symptom looks like an edge problem (404s near the head); the cause
+    // is the advertised segment duration.
     let probe_sq = head.saturating_sub(EDGE_BACKOFF_START);
     let (_, vbytes) = fetch_fragment(&cpn, &rn, &r.video_url, Some(probe_sq), true, None).await;
     let vbytes = vbytes?;
@@ -754,10 +741,8 @@ impl DashStream {
 }
 
 /// Gated urls stop working about thirty seconds after they are issued, so they
-/// are swapped out before they get there. Measured on a live broadcast
-/// 2026-08-21: 28 back-to-back segments in 26.6s, or 5 segments in 14s when
-/// paced two seconds apart. Same wall clock, very different request counts, so
-/// this is an age limit rather than a quota.
+/// are swapped out before they get there. It is an AGE limit, not a request
+/// quota: the same wall clock expires them whatever the request count.
 ///
 /// Fifteen leaves roughly half the window as headroom, because the refresh runs
 /// in the background and a webview resolve is not instant. Playback keeps using
@@ -894,12 +879,11 @@ impl DashStream {
     async fn refresh_urls(&self, video_id: &str, above: u32, itag: u64) -> Result<()> {
     // Bounded by AGE, never by invalidating first.
     //
-    // Invalidating before the resolver lock meant two surfaces on ONE broadcast
-    // each wiped the other's just-stored result, so the coalescing re-check inside
-    // that lock could never hit: both paid a full hidden-webview resolve, every
-    // ROTATE_AFTER, indefinitely. The registry is keyed by stream id precisely so
-    // one broadcast CAN be open twice, which makes that a supported case rather
-    // than an exotic one.
+    // Invalidating before the resolver lock lets two surfaces on ONE broadcast each
+    // wipe the other's just-stored result, so the coalescing re-check inside that
+    // lock never hits and both pay a full hidden-webview resolve. The registry is
+    // keyed by stream id precisely so one broadcast CAN be open twice, which makes
+    // that a supported case rather than an exotic one.
     //
     // REUSE_WITHIN + ROTATE_AFTER must stay under the ~30s gated-url wall, because
     // a stream adopting an entry of that age records `issued` as now and will not

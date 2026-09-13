@@ -321,31 +321,26 @@ function persistOwnChatColor(color: string): void {
   }
 }
 
-// Shared per-channel emote cache. Replaces the prior `const [emotes] = useState`
-// inside every ChatWidget instance — three split panes for the same channel
-// used to hold three copies of the same EmoteSet (~5–10k entries each, every
-// entry an Emote object with URL and metadata). Now they share one reference.
+// Shared per-channel emote cache, so split panes on the same channel hold one
+// EmoteSet between them rather than a copy each.
 //
-// Strictly keyed by lowercase channel login so 7TV emotes with the same name
-// in different channels never collide (e.g. "Stare" in #xqc vs "Stare" in
-// #anothername — different emote ids, different URLs, different actual emotes).
+// Keyed strictly by lowercase channel login, so 7TV emotes sharing a name
+// across channels never collide: same name, different ids and URLs.
 const emoteCache = new Map<string, EmoteSet>();
 const inflightEmoteFetches = new Map<string, Promise<EmoteSet | null>>();
 const emoteSubscribers = new Map<string, Set<() => void>>();
 
-// Chat-side gift-bomb collapse: a submysterygift announces N gifts and its N
-// subgift follow-ups share an origin id. When collapse is on we keep only the
-// announcement row and route children to the activity path (dropped from chat),
-// funneling their recipients into giftBombStore for the announcement card.
+// Chat-side gift-bomb collapse: a submysterygift announces N gifts, and its N
+// subgift follow-ups share an origin id. With collapse on, only the
+// announcement row is kept; children route to the activity path and their
+// recipients feed giftBombStore for the announcement card.
 //
-// A child is collapsed only once we've SEEN its announcement, so a lone single
-// gift (its own origin, no announcement) still renders as its own card. Children
-// that arrive BEFORE the announcement (out of order) render for a moment, then
-// get folded out of the buffer the instant the announcement lands
-// (foldBufferedGiftChildren). Origin ids are globally unique, so a pruned origin
-// can never collide with a later bomb; the set is bounded purely to cap memory.
-// This mirrors the overlay's order-independent, anon-aware collapse
-// (OverlayChat.collapseGiftBombs) via the shared matchers in giftBombCollapse.
+// A child collapses only once its announcement has been seen, so a lone gift
+// still renders as its own card. Children arriving before the announcement
+// render briefly, then fold out via foldBufferedGiftChildren. Origin ids are
+// globally unique, so a pruned origin cannot collide with a later bomb; the
+// set is bounded only to cap memory. Mirrors OverlayChat.collapseGiftBombs
+// through the shared matchers in giftBombCollapse.
 const announcedGiftBombOrigins = new Set<string>();
 const MAX_TRACKED_BOMB_ORIGINS = 200;
 
@@ -636,36 +631,30 @@ function withReminderEngine(fn: (mod: ReminderEngine) => void): void {
   void reminderEnginePromise.then((mod) => { reminderEngineMod = mod; fn(mod); });
 }
 
-// --- Coalesced render flush --------------------------------------------------
+// --- Coalesced render flush ---------------------------------------------------
 //
-// Each incoming chat frame used to call bumpRevision() directly, which is one
-// React render per message. Player and chat share a single webview main thread,
-// and hls.js feeds the video buffer from that same thread (MSE appends are
-// main-thread). At hundreds of messages/sec the per-message render rate pins the
-// thread, starves the buffer appends, and playback stalls (bufferStalledError).
+// Player and chat share one webview main thread, and hls.js appends to the
+// video buffer from it. Rendering once per message pins that thread under fast
+// chat and starves the appends, which stalls playback.
 //
-// Instead, brand-new messages are queued and the array append + render happen
-// once per animation frame, so render rate is bounded by the frame rate no
-// matter how fast chat moves. The video buffer gets the idle gaps it needs.
+// New messages are queued so the array append and the render happen once per
+// animation frame, bounding render rate by frame rate however fast chat moves.
 //
-// Dedup (seenMessageIds) and the in-place reconciliation paths (own-message echo
-// upgrade, Helix id stamp, moderation) still run synchronously at ingestion;
-// only the array append and the render are deferred. In-place paths call
-// scheduleFlush() (mark the frame dirty); new messages call queueMessage().
+// Dedup and the in-place reconciliation paths (own-message echo upgrade, Helix
+// id stamp, moderation) still run synchronously at ingestion; only the append
+// and the render are deferred. In-place paths call scheduleFlush(); new
+// messages call queueMessage().
 const pendingByChannel = new Map<string, any[]>();
-// Two independent schedulers race to drain the queue, and the gate is "is any
-// timer armed" — never a sticky boolean. rAF is the fast path: while the window
-// is visible it fires at frame rate (~16ms), giving the render-coalescing that
-// keeps the shared video buffer from starving under fast chat. The timeout is
-// the liveness guarantee: rAF callbacks are suspended — and can be dropped
-// outright, not merely deferred — while a WebView2 window is occluded,
-// minimized, or mid-fullscreen-transition. A lone rAF gate whose callback was
-// dropped would wedge this (the only live-render path) permanently, with no
-// recovery short of releasing the channel — which is why a stream refresh, that
-// repopulates history through a separate synchronous path, appeared to "fix"
-// the backlog while new messages stayed frozen. Arming a timeout alongside rAF
-// caps a dropped flush at FLUSH_MAX_LATENCY_MS, never forever. Whichever fires
-// first drains the queue and cancels the other.
+// Two schedulers race to drain the queue, and the gate is "is any timer armed",
+// never a sticky boolean.
+//
+// rAF is the fast path, firing at frame rate while the window is visible. The
+// timeout is the liveness guarantee: rAF callbacks are suspended, and can be
+// dropped outright rather than deferred, while a WebView2 window is occluded,
+// minimized or mid-fullscreen-transition. A lone rAF gate whose callback was
+// dropped would wedge the only live-render path with no recovery short of
+// releasing the channel. The timeout caps a dropped flush at
+// FLUSH_MAX_LATENCY_MS. Whichever fires first drains and cancels the other.
 let rafHandle: number | null = null;
 let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
@@ -754,13 +743,12 @@ function flushPending(): void {
     }
     const historyMax = getActiveHistoryMax();
     // After a resume the buffer can still hold up to CHAT_BUFFER_SIZE rows of
-    // paused overflow. Never cut it to historyMax in one step (that deletes
-    // scrollback the user just read mid-glide, a visible jump); instead let the
-    // overflow decay a few rows per flush from the top, invisible from the
-    // bottom the user resumed to. setChannelPaused only records the allowance;
-    // every live append (here and pushMessage) shares liveAppendLimit so no one
-    // path can drain it faster. See chatBufferTrim.ts for why the allowance is
-    // its own counter rather than something derived from messages.length.
+    // paused overflow. Never cut to historyMax in one step: that deletes scrollback
+    // the user is mid-read of, a visible jump. Let the overflow decay a few rows
+    // per flush from the top instead, invisible from the bottom they resumed to.
+    // setChannelPaused only records the allowance; every live append shares
+    // liveAppendLimit so no one path drains it faster. See chatBufferTrim.ts for
+    // why the allowance is its own counter.
     const limit = liveAppendLimit(slice, historyMax);
     // Push everything received this frame, then trim event-aware so a burst can't
     // evict recent subs/redemptions/raids from the shared buffer. liveMessageCount
@@ -888,38 +876,24 @@ function emptySlice(
   };
 }
 
-/** This lowercases, so every key in `channels` is lowercase regardless of what
- *  the caller computed. That makes storage the authority on key shape: an
- *  acquireChannel key of `youtube:HVtwmO9RLNw` is STORED as
- *  `youtube:hvtwmo9rlnw`.
- *
- *  Every lookup must therefore fold to this form. Use `sliceLookupKey` below
- *  when starting from (provider, channel); the message router lowercases its
- *  whole composite string for the same reason. Making either side
- *  case-preserving was tried on 2026-08-29 and killed YouTube chat outright:
- *  74 drops in 90s and a dead pane, zero after reverting. */
 /** The key a slice is actually STORED under.
  *
- *  `setSlice` lowercases unconditionally, so this is the only form that can ever
- *  be found in `channels`. `makeKey` preserves case for YouTube, so a caller that
- *  computes a composite key and looks it up directly MISSES ITS OWN SLICE.
+ *  `setSlice` lowercases unconditionally, so this is the only form that can be
+ *  found in `channels`. `makeKey` preserves case for YouTube, so a caller that
+ *  computes a composite key and looks it up directly MISSES ITS OWN SLICE, and a
+ *  missed slice means the ref count never rises and `releaseChannel` never PARTs
+ *  the channel or frees its emote metadata.
  *
- *  Measured before this existed: a mixed-case YouTube key resolved 0 times out of
- *  40 across a full session log. The consequence was not cosmetic. `acquireChannel`
- *  never found the existing slice so its ref count never rose, and
- *  `releaseChannel` returned early without PARTing the channel or freeing the
- *  slice's emote metadata (1-3 MB per channel, per its own comment), so a YouTube
- *  chat connection outlived every tile that opened it.
- *
- *  NOT the same as the message-routing key. Routing lowercases a whole composite
- *  string; this takes (provider, channel) and folds the result. Both land on
- *  lowercase because STORAGE is lowercase. Do not "unify" them by making either
- *  side case-preserving: that was tried on 2026-08-29 and killed YouTube chat
- *  outright, because storage does not care what the caller intended. */
+ *  NOT the same as the message-routing key: routing lowercases a whole composite
+ *  string, this folds (provider, channel). Both land on lowercase because storage
+ *  is lowercase. Do not unify them by making either side case-preserving. */
 function sliceLookupKey(provider: ProviderId, channel: string): string {
   return (provider === 'twitch' ? channel : makeKey(provider, channel)).toLowerCase();
 }
 
+/** Stores a slice, lowercasing the key unconditionally, which makes storage the
+ *  authority on key shape: an acquireChannel key of `youtube:HVtwmO9RLNw` is
+ *  stored as `youtube:hvtwmo9rlnw`. Every lookup must fold to this form. */
 function setSlice(channel: string, slice: ChannelSlice) {
   const key = channel.toLowerCase();
   useChatConnectionStore.setState((state) => {
@@ -994,16 +968,16 @@ function insertChronological(slice: ChannelSlice, incoming: any[]): void {
   slice.messages = out;
 }
 
-// --- Copy-on-write for slice.messages ---------------------------------------
+// --- Copy-on-write for slice.messages ----------------------------------------
 //
 // React treats array identity as the change signal, and so does React
-// Compiler's automatic memoization. This store used to mutate the row array in
-// place and lean on renderToken to compensate, which is exactly the shape the
-// compiler cannot see through: a compiled consumer caches derived values by
-// identity and goes stale (chat "dead on join" all over again). Every write to
-// slice.messages now produces a new array: a copy of at most cap + 30
-// references, microseconds, on paths that already run at most once per frame.
-// Identity is a truthful signal again; renderToken stays as a second one.
+// Compiler's memoization. Mutating the row array in place and leaning on
+// renderToken is the shape the compiler cannot see through: a compiled consumer
+// caches derived values by identity and goes stale.
+//
+// Every write produces a new array instead: at most cap + 30 references, on
+// paths that run at most once per frame. Identity is a truthful signal again;
+// renderToken stays as a second one.
 function replaceMessageAt(slice: ChannelSlice, index: number, msg: any): void {
   const next = slice.messages.slice();
   next[index] = msg;
@@ -1383,14 +1357,12 @@ async function reconnectAllInner() {
   }
   intentionalDisconnect = false;
 
-  // Re-attach with the first channel, then re-claim the rest. The Rust side
-  // records consumer claims per window label in a set, so re-claiming a
-  // channel this window already holds is a no-op (claims cannot inflate) and
-  // re-claiming after a true cold restart (the Rust IRC service died and its
-  // claim table was wiped) correctly re-registers us. `reattach: true` tells
-  // start_chat to skip its stale-claim sweep: that sweep assumes a window
-  // claim-starting its bridge holds no channels, which is true for a first
-  // acquire but not here.
+  // Re-attach with the first channel, then re-claim the rest. Rust records
+  // consumer claims per window label in a set, so re-claiming a channel this
+  // window already holds is a no-op, while re-claiming after a cold Rust
+  // restart correctly re-registers us. `reattach: true` skips start_chat's
+  // stale-claim sweep, which assumes a claim-starting window holds no
+  // channels: true for a first acquire, not here.
   const first = channels[0];
   const firstSlice = state.channels.get(first);
   if (!firstSlice) return;
@@ -1697,24 +1669,14 @@ async function preloadChannel(
     withSlice(key, (slice) => {
       const source: any[] = parsed;
 
-      // De-dupe against messages already in the slice. The WS subscription
-      // starts streaming live messages the moment handle_local_ws upgrades
-      // the connection, but `preloadChannel` is async — IVR fetch + Rust
-      // parse take ~hundreds of ms. Any live message that lands in that
-      // window has already been appended via `appendStructuredMessage` (and
-      // its id added to seenMessageIds). If we prepended naively, the same
-      // id would appear twice in the array, which React reconciles as a
-      // duplicate key — manifests as either a "two children with the same
-      // key" warning OR a more subtle bug where the live half is omitted
-      // and the chat appears to "stop receiving messages" once it catches
-      // up to the historical batch.
-      // Also dedupe against ids ALREADY in the array, not just seenMessageIds.
-      // An own message that was sent (not received) lives in slice.messages
-      // stamped with its real Helix id, but that id is intentionally never added
-      // to seenMessageIds (so a later IRC echo can upgrade it in place). Without
-      // this set, a history backfill that includes your own recent message would
-      // not see it as already-present and would prepend a SECOND copy with the
-      // same id — a duplicate React key that breaks reconciliation and leaks DOM.
+      // De-dupe against messages already in the slice. preloadChannel is async
+      // while the WS subscription streams live messages immediately, so anything
+      // arriving in that window is already appended. Prepending naively repeats
+      // its id, which React reconciles as a duplicate key.
+      //
+      // The second set covers own messages: one that was sent rather than
+      // received carries its real Helix id but is deliberately absent from
+      // seenMessageIds, so a later IRC echo can upgrade it in place.
       const existingIds = new Set<string>();
       for (const m of slice.messages) {
         const eid = typeof m === 'string' ? m.match(/(?:^|;)id=([^;]+)/)?.[1] : (m as any)?.id;
@@ -2079,14 +2041,12 @@ function handleWsMessage(raw: string) {
           const appState = useAppStore.getState();
           if (parsed.target_user_id) {
             const isTimeout = parsed.ban_duration !== undefined && parsed.ban_duration !== null;
-            // Surface the target's most recent message in this channel as the
-            // likely reason for the action — mirrors how deletions show the removed
-            // text. CLEARCHAT carries no message, so read it back from chat history:
-            // the messages are still present (CLEARCHAT only marks them cleared, it
-            // doesn't drop them). Chronological order means the last match wins.
-            // Recover what the action frame omits from chat history: the target's
-            // display name (YouTube/Kick frames give only an id), their last removed
-            // message, and how many of their messages were cleared.
+            // Surface the target's most recent message as the likely reason,
+            // mirroring how deletions show the removed text. CLEARCHAT carries no
+            // message, so read it back from history: CLEARCHAT only marks messages
+            // cleared, it does not drop them. Chronological order means the last
+            // match wins. Also recovers what the frame omits: display name
+            // (YouTube/Kick give only an id) and cleared count.
             let lastMessage: string | undefined;
             let recoveredName: string | undefined;
             let removedCount = 0;

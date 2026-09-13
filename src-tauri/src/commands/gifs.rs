@@ -5,8 +5,7 @@
 //! either because Twitch strips client-supplied tags, so the `gifs` tag we PARSE
 //! on the way in (see irc_service) can never be forged on the way out. The web
 //! client uses two private GQL operations, read out of its own bundle rather
-//! than guessed; the shapes and the discovery method are written up in
-//! `Brain/references/Twitch_Chat_GIFs.md` and `Twitch_GQL_Discovery.md`.
+//! than guessed, because Twitch strips GQL introspection silently.
 //!
 //! Two things make this Rust's job rather than the page's:
 //!

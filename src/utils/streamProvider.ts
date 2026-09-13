@@ -33,8 +33,8 @@ export function streamProvider(stream: Pick<TwitchStream, 'provider'> | null | u
  * only YouTube takes the `user_id` branch. The old `!isTwitchStream` guard
  * swallowed Kick too, keying its follows by the NUMERIC user id: an entry the
  * live check (which queries `slug=`) could never resolve and the followed
- * check (which compares logins) could never read back. Instance eight in
- * Brain/references/StreamNook_Identity_Keying.md.
+ * check (which compares logins) could never read back. Mixing the two key
+ * spaces has caused this class of bug repeatedly; keep them distinct.
  */
 export function followIdentifier(
   stream: Pick<TwitchStream, 'provider' | 'user_login' | 'user_id'>,

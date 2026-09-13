@@ -305,7 +305,7 @@ struct DankChatBadge {
 // TIER ORDER (developer, top_donor, founder, supporter) and each tier carries its
 // holders. Moltorino's own client shows only the FIRST tier a user appears in,
 // so a user gets at most one badge here too. Feed facts, asset sizes and the
-// client rules mirrored here: Brain/references/Moltorino_Badge_API.md.
+// client rules are mirrored in the tier handling below.
 //
 // Every asset is an animated webp of 120-160 frames (1x 118 KB, 2x 353 KB,
 // 3x 962 KB), which is why the chat row renders third-party badges at 2x.

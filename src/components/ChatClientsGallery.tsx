@@ -7,7 +7,7 @@
 // it. BetterTTV rides the same command but has its own tab, so it is not in
 // the provider list below.
 //
-// Layout rules follow Brain/references/Design_System.md: a `.glass-panel`
+// Layout follows the house glass rules: a `.glass-panel`
 // frames each client, tiles are for-show `.glass-tile` surfaces (not buttons,
 // the only action is the "open site" button in the header), colour lives on
 // the mark, and the only accent is the owned ring. ~46 tiles across seven

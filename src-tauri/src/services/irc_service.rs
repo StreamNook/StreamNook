@@ -77,20 +77,11 @@ static CHANNEL_EMOTES: OnceLock<Mutex<HashMap<String, EmoteSet>>> = OnceLock::ne
 // data per message; evicted with the other per-channel caches on PART/stop.
 static CHANNEL_CHEERMOTES: OnceLock<std::sync::RwLock<HashMap<String, Arc<CheermoteSet>>>> =
     OnceLock::new();
-// Per-channel consumer claims, keyed by window label (lowercase channel ->
-// set of window labels). A window's chat store claims via `start_chat` /
-// `join_chat_channel` and releases via `leave_chat_channel`; the IRC JOIN /
-// PART happen on the no-consumers <-> some-consumers transitions, so a popout
-// opening for xqc while main's ChatWidget is unmounting (also for xqc)
-// doesn't lose the channel — whichever IPC arrives first, the channel stays
-// JOINed as long as any window still wants it. Sets instead of counts because
-// a JS context can claim more than once for the same want (webview reload,
-// reconnect re-attach) and can die without releasing (popout window closed,
-// webview reload): inserting the same label twice is a no-op, and
-// `release_window_claims` sweeps a dead window's claims wholesale. Ensure-only
-// callers (the stream-start warm-up, the defensive re-JOIN in send_message)
-// never touch these sets: they are not consumers, and a claim nothing releases
-// would keep the room streaming traffic after every consumer is gone.
+// Per-channel consumer claims: lowercase channel -> set of window labels.
+// JOIN and PART fire only on the empty <-> non-empty transitions, so two
+// windows can hand a channel between them without it leaving. Sets rather
+// than counts: a claim may repeat, and a window may die without releasing.
+// Ensure-only callers (the warm-up, the defensive re-JOIN) must not claim.
 static CHANNEL_CONSUMERS: OnceLock<Mutex<HashMap<String, HashSet<String>>>> = OnceLock::new();
 // Handle to the plugin host so parsed chat lines can be forwarded to plugins
 // subscribed to on_chat_message. Set once, on the first chat start.
@@ -98,15 +89,10 @@ static PLUGIN_HOST: OnceLock<Arc<PluginHost>> = OnceLock::new();
 // The logged-in user's (login, user id), for attributing locally sent
 // messages: Twitch IRC does not echo your own PRIVMSG back.
 static OWN_IDENTITY: OnceLock<Mutex<Option<(String, String)>>> = OnceLock::new();
-// A 7TV subscriber's personal-use emotes, keyed by the sender's Twitch user id
-// (not by channel): these render in ANY channel, even ones the streamer never
-// added them to. Value is (personal set id, name -> emote). The 7TV EventAPI
-// service fills this from EMOTE_SET entitlements; parse_text_segment overlays
-// the sender's entry with priority over channel emotes. PERSONAL_EMOTES_PRESENT
-// lets the per-message hot path skip the lock entirely while no user has any.
-// LRU-bounded: one personal set accrues per 7TV-entitled user ever seen and
-// nothing evicted them (entitlements only revoke explicitly). 512 covers any
-// realistic set of concurrently active personal-emote users.
+// A 7TV subscriber's personal emotes, keyed by sender id rather than by
+// channel: they render in every channel. Value is (set id, name -> emote).
+// PERSONAL_EMOTES_PRESENT lets the per-message path skip the lock while
+// no user has any. LRU-bounded; entitlements are only revoked explicitly.
 #[allow(clippy::type_complexity)]
 static PERSONAL_EMOTES: OnceLock<
     std::sync::RwLock<lru::LruCache<String, (String, Arc<HashMap<String, Emote>>)>>,
@@ -343,15 +329,10 @@ struct MessageSideEffects {
     history_key: String,
 }
 
-// Ordered side-effect lane: history LRU, chat logger (synchronous file IO), and
-// plugin fan-out ran ON the IRC read loop, so any of them stalling froze the
-// reader — undetectably, since sends kept working. One long-lived consumer
-// preserves chat-log line order; the read loop only pays a queue push per
-// message. Bounded with drop-OLDEST: the real stall vector is the logger's
-// file IO to a user-configurable folder (a sleeping disk or network share can
-// block seconds per line), and an unbounded queue would then hold every full
-// ChatMessage in RAM. Drops are counted per channel and surface as an honest
-// marker line in the affected chat logs once the lane catches up.
+// Ordered side-effect lane: history LRU, chat logger and plugin fan-out.
+// Kept off the IRC read loop so slow file IO cannot stall the reader, and
+// single-consumer so chat-log line order survives. Bounded, dropping
+// oldest; drops are counted per channel and reported in the affected log.
 const SIDE_EFFECT_CAP: usize = 2048;
 
 struct SideEffectLane {
@@ -445,15 +426,13 @@ fn enqueue_side_effect(se: MessageSideEffects) {
     lane.notify.notify_one();
 }
 
-/// Run the shared per-message side effects (persisted user history, chat-log
-/// file write, plugin fan-out) for a message that did NOT come from the Twitch
-/// IRC reader.
+/// Runs the shared per-message side effects (persisted user history,
+/// chat-log write, plugin fan-out) for a message that did not come from
+/// the Twitch IRC reader.
 ///
-/// Provider adapters publish straight onto the broadcast, which is what the UI
-/// reads, so their messages were never logged to file and never reached the
-/// persisted user history that the profile card's "messages" tab shows. Reusing
-/// this lane rather than calling the services directly keeps chat-log line order
-/// intact and keeps the file IO off the caller's task.
+/// Provider adapters publish straight onto the broadcast, so they must go
+/// through here to be logged and recorded. Using the lane keeps chat-log
+/// line order intact and the file IO off the caller's task.
 pub fn run_message_side_effects(msg: ChatMessage) {
     let add_history = !msg.user_id.is_empty();
     let history_key = history_key_for(&msg);
@@ -612,16 +591,13 @@ async fn abort_keepalive_tasks() {
     }
 }
 
-/// Send a frame to the local WS bridge, resolving the broadcaster AT CALL TIME.
-/// The bridge can be rebuilt mid-session (a dead warp task mints a fresh
-/// broadcast channel); a sender captured at session spawn keeps publishing into
-/// the dead one, which stuffed every message into MESSAGE_QUEUE — backlog drains
-/// on each refresh, then silence again. Returns whether a receiver got it.
+/// Sends a frame to the local WS bridge, resolving the broadcaster at call
+/// time because the bridge can be rebuilt mid-session. Returns whether a
+/// receiver took it.
 ///
-/// `queue_on_fail` holds chat payloads for the next client attach. Status frames
-/// (HEARTBEAT, IRC_CONNECTED, IRC_RECONNECTING, ROOMSTATE, ...) must pass false:
-/// a stale status replayed from the queue later would lie to the frontend
-/// watchdog.
+/// `queue_on_fail` holds chat payloads for the next client attach. Status
+/// frames must pass `false`: replayed later, a status would misreport the
+/// current state to the frontend watchdog.
 async fn send_to_bridge(msg: String, queue_on_fail: bool) -> bool {
     let tx = get_message_broadcaster().lock().await.clone();
     let delivered = match tx {
@@ -658,17 +634,12 @@ fn get_room_state_cache() -> &'static Mutex<HashMap<String, String>> {
     ROOM_STATE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Chat messages published while NOTHING was subscribed to the bus.
+/// Chat messages published while nothing was subscribed to the bus.
 ///
-/// `broadcast::send` discards when there are no receivers, and a provider's join
-/// backlog is published within ~100ms of resolving, which is reliably BEFORE the
-/// frontend's WebSocket client has attached. Measured on a YouTube join: 28 of 30
-/// backlog rows discarded, so the pane opened empty while the log happily reported
-/// having trimmed and sent them.
-///
-/// Bounded, and DRAINED by the first client to attach, on the same handshake that
-/// already replays room state and user badges. The frontend dedupes by message id,
-/// so a replay can never double up a row that also arrived live.
+/// `broadcast::send` discards when there are no receivers, and a provider's
+/// join backlog is published before the frontend WebSocket client attaches.
+/// Bounded, and drained by the first client to attach. The frontend dedupes
+/// by message id, so a replayed row cannot double up one that arrived live.
 static PENDING_MESSAGES: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 /// Enough for a full join backlog with headroom; past this the oldest go, because
 /// a buffer that grows without a listener is a leak, not a feature.
@@ -1030,14 +1001,9 @@ impl IrcService {
                     // can recover.
                     let join_result = if claim {
                         let r = Self::join_channel(&key, window).await;
-                        // A window claim-starts its bridge only when its JS
-                        // store holds no channels, so any claims still
-                        // recorded for this window are leftovers from a
-                        // previous JS context of the same window (webview
-                        // reload). Sweep them so their rooms PART. The
-                        // reconnect re-attach path skips this: its store DOES
-                        // still hold channels, and it re-claims each of them
-                        // right after this call.
+                        // Claims still recorded for this window are leftovers from a previous
+                        // JS context (webview reload); sweep them so their rooms PART. The
+                        // reconnect re-attach path skips this and re-claims instead.
                         if !reattach {
                             Self::release_window_claims(window, Some(&key)).await;
                         }
@@ -1416,14 +1382,9 @@ impl IrcService {
         mark_irc_read();
         record_lifecycle("authenticated");
 
-        // Join every channel we're tracking — not just the initial one. On a
-        // fresh connect `current_channels` holds only the initial channel; on a
-        // reconnect it also holds every additional channel added during the
-        // session (MultiNook tiles, MultiChat tabs) via `join_channel`, plus
-        // any JOINs deferred while the connection was down. Those must be
-        // re-JOINed here or they stay silently PARTed after a reconnect:
-        // `join_channel` won't re-issue a JOIN for them because their refcount
-        // is still > 0.
+        // Re-JOIN every tracked channel, not just the initial one. `join_channel`
+        // will not re-issue a JOIN while a channel's refcount is above zero, so
+        // channels added during the session stay PARTed unless re-joined here.
         {
             let mut channels: Vec<String> = get_current_channels()
                 .lock()
@@ -1493,24 +1454,10 @@ impl IrcService {
             }
         }
 
-        // Fetch channel emotes + per-channel subscriptions for the captured
-        // initial channel — but only while it is still joined. The supervisor
-        // keeps this channel name for the life of the process, so after the
-        // user switches away a reconnect must not re-fetch or re-subscribe a
-        // departed channel. Channels joined later keep their own emote maps
-        // and EventAPI subscriptions across IRC sessions, so they need no
-        // per-reconnect setup here.
-        // Spawned, not awaited: these are network-bound (Helix lookup, emote
-        // CDNs, EventSub), and awaiting them here left the initial channel's
-        // ROOMSTATE/USERSTATE acks unread in the socket buffer until they
-        // finished, which the JOIN watchdog could misread as a lost JOIN and
-        // escalate into a session drop. The read loop must start draining
-        // immediately after the JOIN burst. Failure handling is a lifecycle
-        // record only: every reconnect and every join_channel re-runs this
-        // work, and both subscribes are idempotent. Deliberately not tied to
-        // the keepalive abort set: the task is finite, holds no writer, and
-        // only writes channel-keyed caches, with the CURRENT_CHANNELS re-check
-        // below as its lifetime guard.
+        // Emote and subscription setup for the initial channel, skipped if it has
+        // since been left. Spawned rather than awaited so the read loop starts
+        // draining immediately after the JOIN burst. Re-checks CURRENT_CHANNELS
+        // before applying; every call is idempotent.
         {
             let init_channel = initial_channel.to_string();
             let emote_svc = Arc::clone(emote_service);
@@ -1743,14 +1690,9 @@ impl IrcService {
         if trimmed.starts_with("PING") {
             // Safe slice: extract everything after "PING " (5 chars), or empty if too short
             let ping_data = if trimmed.len() > 5 { &trimmed[5..] } else { "" };
-            // Bound the LOCK WAIT only, never an in-flight write (a cancelled
-            // write_all can leave a torn protocol line on a live socket). The
-            // paced-JOIN task and JOIN watchdog hold this writer across
-            // write_all to raw TCP; on a congested link that parks for longer
-            // than the handler's 10s stall deadman, which then dropped the
-            // session as a false "handler stall". Skipping one PONG is
-            // survivable, and if the congestion is real Twitch closes the
-            // socket and the session ends with an honest "closed by server".
+            // Bound the wait for the lock, never an in-flight write: cancelling
+            // `write_all` can leave a partial protocol line on a live socket. Missing
+            // one PONG is recoverable; a torn line is not.
             match tokio::time::timeout(std::time::Duration::from_secs(5), writer.lock()).await {
                 Ok(mut w) => {
                     w.send_line(&format!("PONG {}\r\n", ping_data)).await?;
@@ -2378,14 +2320,9 @@ impl IrcService {
 
         debug!("[WS] New local WebSocket client connected");
 
-        // Replay cached per-channel state to the new client. The state for each
-        // currently JOINed channel is sent so a late-mounting MultiChat tab
-        // sees room state and user badges without waiting for the next
-        // ROOMSTATE/USERSTATE roundtrip.
-        //
-        // Snapshot under the lock then release before awaiting sends to avoid
-        // holding the cache lock across await points (deadlock risk if the
-        // IRC reader concurrently tries to write).
+        // Replay cached room state + badges so a late-mounting tab doesn't wait for
+        // the next ROOMSTATE/USERSTATE. Snapshot under the lock, release BEFORE
+        // awaiting sends (holding it across an await can deadlock the reader).
         let room_states: Vec<String> = {
             let cache = get_room_state_cache().lock().await;
             cache.values().cloned().collect()
@@ -2445,19 +2382,12 @@ impl IrcService {
         }
         drop(queue);
 
-        // Forward messages from broadcast to local client.
+        // Forward messages from the broadcast to the local client.
         //
-        // Note: `while let Ok(text) = rx.recv().await` is wrong here — it exits
-        // on `RecvError::Lagged`, which fires when a subscriber falls behind by
-        // more than the channel capacity. In fast chats a freshly-mounted
-        // MultiChat popout window does enough first-render work that its
-        // browser-side WS read drains slowly, the tokio TCP write blocks, this
-        // receiver stops being polled, the broadcast buffer overflows, and the
-        // next poll returns Lagged. Exiting the loop on Lagged silently closed
-        // the WS — visible to the user as chat "freezing" the moment the
-        // popout opened in a busy channel. Treat Lagged as a recoverable miss:
-        // log it and keep draining; only Closed actually tears the handler
-        // down.
+        // `while let Ok(..) = rx.recv()` is wrong here: it exits on
+        // `RecvError::Lagged`, which fires whenever a subscriber falls behind the
+        // channel capacity. Lagged is a recoverable miss, so log it and keep
+        // draining. Only `Closed` tears the handler down.
         loop {
             match rx.recv().await {
                 Ok(text) => {
@@ -2735,16 +2665,10 @@ impl IrcService {
             }
         }
 
-        // First time this channel becomes desired: shared-chat lookup + 7TV
-        // EventAPI + mod-view subscriptions. A health-probe re-issue must not
-        // re-subscribe — those were set up when the key first entered the set.
-        //
-        // Spawned, not awaited. All three are network calls (Helix, 7TV, EventSub)
-        // and this runs inside start_chat for a channel added to a live session,
-        // so awaiting them held the socket handoff for as long as 7TV took:
-        // measured 4.8 to 9.2 s while the id lookup still downloaded the whole
-        // channel document. Guarded by a CURRENT_CHANNELS re-check like the
-        // connect-time task, and every call is idempotent.
+        // First time this channel is wanted: shared-chat lookup, 7TV EventAPI and
+        // mod-view subscriptions. A health-probe re-issue must not repeat them.
+        // Spawned rather than awaited so the socket handoff does not wait on three
+        // network calls. Re-checks CURRENT_CHANNELS; every call is idempotent.
         if newly_desired {
             let key = key.to_string();
             tokio::spawn(async move {
@@ -2803,14 +2727,13 @@ impl IrcService {
         Ok(())
     }
 
-    /// Drop every consumer claim held by `window`, PARTing channels whose
-    /// consumer set empties. `keep` exempts one channel (the one the window is
-    /// in the middle of claiming). Two callers: the window-destroyed handler
-    /// (a destroyed webview never runs its React cleanup, so its claims would
-    /// otherwise pin channels JOINed forever) and a fresh-claim `start_chat`
-    /// (a window only cold-claims its bridge when its JS store holds no
-    /// channels, so claims still recorded for it belong to a previous JS
-    /// context of the same window, e.g. before a webview reload).
+    /// Drops every consumer claim held by `window`, PARTing channels whose
+    /// consumer set empties. `keep` exempts a channel the window is in the
+    /// middle of claiming.
+    ///
+    /// Called when a window is destroyed, since its React cleanup never runs,
+    /// and on a fresh-claim `start_chat`, where any claims still recorded for
+    /// the window belong to a previous JS context of it.
     pub async fn release_window_claims(window: &str, keep: Option<&str>) {
         let emptied: Vec<String> = {
             let mut consumers = get_channel_consumers().lock().await;
@@ -2921,24 +2844,17 @@ impl IrcService {
         Self::resolve_emotes(channel_name, emote_service, false).await
     }
 
-    /// Make the channel parseable and return, refreshing from the network AFTER.
+    /// Makes the channel parseable and returns, refreshing from the network
+    /// afterwards.
     ///
-    /// The chat socket must never wait on emote providers. 7TV alone measured
-    /// 2.4-3.1s (TTFB 1.0-1.5s, so it is their server, not the connection) on
-    /// 2026-08-29 while BTTV was 87ms and FFZ 188ms, and awaiting it held
-    /// `start_chat` open for that whole time: bridge connect went from a
-    /// recorded 366ms baseline to 1065-3705ms, and first chat frame from 678ms
-    /// to 4013ms. One slow third party made chat look broken.
+    /// The chat socket must not wait on third-party emote providers. Only the
+    /// work that decides correctness runs first: the broadcaster lookup and the
+    /// disk-dictionary seed, which is what the visible backlog and the first
+    /// live messages tokenize against.
     ///
-    /// What still happens BEFORE returning is the part that costs ~150ms and
-    /// decides correctness: the broadcaster lookup and the disk-dictionary seed.
-    /// That dictionary is what the visible backlog and the first live messages
-    /// tokenize against, so emotes in them still render as emotes. The network
-    /// refresh only has to beat the user reading, not the socket opening.
-    ///
-    /// Cost when there is no disk dictionary yet (a channel opened for the first
-    /// time): messages arriving in the second or so before the refresh lands
-    /// show emote names as text. They are re-seeded for every later join.
+    /// Callers that must hold the live set before parsing anything should use
+    /// [`Self::fetch_and_store_emotes`] instead. On a channel with no saved
+    /// dictionary yet, emotes briefly render as their names.
     pub async fn seed_emotes_deferring_refresh(
         channel_name: &str,
         emote_service: Arc<tokio::sync::RwLock<EmoteService>>,
@@ -2977,16 +2893,11 @@ impl IrcService {
                     });
                 }
 
-                // Disk-first: seed the chat parse map from the saved per-channel
-                // dictionary so chat recognizes this channel's emotes instantly,
-                // with no network round-trip, even when 7TV is slow or down. The
-                // prefetch and earlier good fetches populate this on disk. Seed
-                // ONLY when nothing is in memory yet: a set already there is at
-                // least as fresh (fetched or delta-patched this session), so a
-                // second window joining the same channel never downgrades it.
-                // The old "seed if disk has more 7TV rows" rule got that case
-                // backwards: a dictionary inflated by 287 trending rows outranked
-                // a correct live set and would have replaced it.
+                // Seed from the saved per-channel dictionary so emotes resolve with no
+                // network round-trip, even when a provider is slow or down. Seed only when
+                // nothing is in memory: an in-memory set was fetched or delta-patched this
+                // session and is at least as fresh, so a second window joining the same
+                // channel must not replace it.
                 let mut seeded = false;
                 if let Some(disk_set) = crate::services::emote_set_cache::load(&user.id) {
                     let mut map = get_channel_emotes().lock().await;
@@ -3046,15 +2957,14 @@ impl IrcService {
         }
     }
 
-    /// Pull the live third-party set and install it as the channel's parse map.
+    /// Pulls the live third-party set and installs it as the channel's parse
+    /// map.
     ///
-    /// Split out of the seed path so the start path can spawn it instead of
-    /// awaiting it. Replaces the parse map only when 7TV's channel fetch
-    /// definitively succeeded (`seven_tv_ok`): a deficient fetch (globals-only
-    /// from a tripped circuit breaker, or a timed-out channel set) keeps the
-    /// disk-seeded set rather than poisoning chat with a worse one. An
-    /// authoritative result is written through to disk, so the next join is
-    /// disk-first and legit removals persist.
+    /// Installs only when the 7TV channel fetch definitively succeeded. A
+    /// partial result, such as globals-only from a tripped circuit breaker or a
+    /// timed-out channel set, leaves the disk-seeded set in place. An
+    /// authoritative result is written through to disk so the next join is
+    /// disk-first and removals persist.
     async fn refresh_channel_emotes(
         channel_name: String,
         key: String,
@@ -3106,14 +3016,12 @@ impl IrcService {
         }
     }
 
-    /// Apply a live 7TV set change to this channel's parse dictionary with no
-    /// network fetch. The dispatch carries the whole emote; re-downloading the
-    /// channel document per change cost 14 MB and 6 s on a large channel and
-    /// silently dropped the change whenever that fetch timed out (2026-09-07).
-    /// Returns what changed in the composed dictionary (channel rows plus any
-    /// global a removal stopped shadowing) so every other copy can be patched
-    /// the same way, or None when the channel is not in memory (a later join
-    /// fetches fresh).
+    /// Applies a live 7TV set change to this channel's parse dictionary without
+    /// a network fetch; the dispatch carries the emote itself.
+    ///
+    /// Returns what changed in the composed dictionary (channel rows, plus any
+    /// global that a removal stops shadowing) so every other copy can be patched
+    /// the same way, or `None` when the channel is not in memory.
     pub async fn apply_seventv_delta(
         key: &str,
         user_id: &str,
@@ -3596,18 +3504,16 @@ impl IrcService {
         segments
     }
 
-    /// Parse a potential cheermote word (`<prefix><bits>`, e.g. Cheer500,
-    /// mathox1Cheer100). Twitch prefixes are ALPHANUMERIC and the digits can
-    /// sit anywhere in them — a channel's own prefix comes from its name, and
-    /// the globals include `4Head` — so matching is the LONGEST known prefix
-    /// whose remainder is all digits, never a letters-then-digits split.
-    /// Longest matters because real prefixes nest: `cheerwhal` extends `cheer`,
-    /// and a short match would leave `whal100` as the amount.
+    /// Parses a cheermote word of the form `<prefix><bits>`, e.g. `Cheer500`.
     ///
-    /// `channel_set` is the per-channel map fetched from Helix (globals + the
-    /// channel's `channel_custom` prefixes, tier art and colors included).
-    /// Without it only the static global list below can match.
-    /// Returns Some((prefix, bits, tier, color, url)) if valid, None otherwise.
+    /// Prefixes are alphanumeric and can nest, so matching takes the longest
+    /// known prefix whose remainder is all digits rather than splitting on the
+    /// first digit. `cheerwhal` extends `cheer`, and a short match would leave
+    /// `whal100` as the amount.
+    ///
+    /// `channel_set` supplies the channel's own prefixes alongside the globals;
+    /// without it only the static global list can match.
+    /// Returns `Some((prefix, bits, tier, color, url))` when valid.
     fn parse_cheermote(
         word: &str,
         channel_set: Option<&CheermoteSet>,

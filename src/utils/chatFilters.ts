@@ -9,10 +9,9 @@
 // OR the display name, so pasting either form works.
 //
 // Per-channel keys are COMPOSITE for every platform (`makeKey`, e.g.
-// `twitch:xqc`), unlike the legacy bare-Twitch persisted spaces documented in
-// Brain/references/StreamNook_Identity_Keying.md: this is a brand-new persisted
-// store with no legacy data to stay compatible with, and a composite key can
-// never collide across platforms. Reads normalize through parseKey, so a bare
+// `twitch:xqc`), unlike the older bare-Twitch persisted key spaces elsewhere
+// in the app: this is a brand-new persisted store with no legacy data to stay
+// compatible with, and a composite key can never collide across platforms. Reads normalize through parseKey, so a bare
 // login in a hand-edited settings file still resolves.
 
 import { makeKey, parseKey } from './providerKey';

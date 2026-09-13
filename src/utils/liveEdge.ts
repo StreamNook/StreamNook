@@ -19,8 +19,7 @@
 // what has actually been downloaded. It deliberately does NOT extrapolate the
 // edge with wall-clock time: `hls.latency` already does that (it adds playlist
 // `age`) and a stale playlist inflates it by a second per second while playback
-// is fine, which has produced two wrong diagnoses already. See
-// `Brain/references/StreamNook_LL_Latency_Control.md`.
+// is fine, which is a reliable source of false latency diagnoses.
 
 /** Peak window. Must exceed the largest expected segment duration so a whole
  *  sawtooth period is always in view; 6 s covers Twitch's 2 s segments and the

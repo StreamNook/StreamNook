@@ -566,16 +566,15 @@ fn cached_highs(video_id: &str) -> Option<Vec<HighRendition>> {
 
 /// One resolve per video at a time, so concurrent callers share it.
 ///
-/// Two callers race on EVERY tile start: the playback resolve (`try_high`) and
+/// Two callers race on every tile start: the playback resolve (`try_high`) and
 /// the quality menu (`qualities`). Both check the cache, both miss it on a cold
-/// open, and both then drive the resolver webview, serialised behind the resolver
-/// lock. Measured on one Lofi Girl tile: three callers inside 158ms, three full
-/// BotGuard resolves, ~2.8s of hidden-webview work before first frame.
+/// open, and both then drive the resolver webview behind the resolver lock,
+/// costing seconds of hidden-webview work before first frame.
 ///
 /// A cache alone cannot fix that, because nothing is in it yet when they race.
-/// It is the same shape as the segment single-flight in youtube_dash, and it is
-/// the reason a broadcast with NO rungs above 1080p was the expensive case: the
-/// answer is "nothing", and every racing caller paid full price to learn it.
+/// Same shape as the segment single-flight in youtube_dash. It is also why a
+/// broadcast with NO rungs above 1080p was the expensive case: the answer is
+/// "nothing", and every racing caller paid full price to learn it.
 type Gate = std::sync::Arc<tokio::sync::Mutex<()>>;
 static HIGHS_INFLIGHT: Lazy<std::sync::Mutex<std::collections::HashMap<String, Gate>>> =
     Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
@@ -586,12 +585,9 @@ static HIGHS_INFLIGHT: Lazy<std::sync::Mutex<std::collections::HashMap<String, G
 /// a FRESH resolve after rebuilding the session and must not be served a cached
 /// answer.
 ///
-/// Note there is no negative TTL to choose here, which was the open question when
-/// this was found. An empty result is already cached by `store_highs` like any
-/// other, for MASTER_TTL, so the SEQUENTIAL "nothing above 1080p" case was always
-/// handled; only the concurrent one was not. Adding a separate negative cache
-/// would have meant picking a number that could lock a broadcast out of a rung it
-/// gained mid-stream. This needs no such number.
+/// No negative TTL is needed: an empty result is cached by `store_highs` like any
+/// other, for MASTER_TTL. A separate negative cache would mean picking a number
+/// that could lock a broadcast out of a rung it gained mid-stream.
 pub async fn high_renditions_cached(video_id: &str, above: u32) -> Vec<HighRendition> {
     if let Some(h) = cached_highs(video_id) {
         return h;
@@ -847,9 +843,8 @@ fn store_master(video_id: &str, qualities: &[PlaybackQuality]) {
 /// by `&sq=N`. `youtube_dash` rewrites their container and serves them as HLS,
 /// so they DO appear in the menu.
 ///
-/// This line stays because the two transports are worth telling apart in a log:
-/// it records which client won, what HLS could carry, and which itags had to
-/// come the other way.
+/// Logged at Info because the two transports are worth telling apart: it records
+/// which client won, what HLS could carry, and which itags came the other way.
 fn report_ladder(
     channel: &str,
     video_id: &str,
@@ -1063,9 +1058,7 @@ impl StreamSource for YouTubeSource {
         // start_stream again), so without this every switch paid for another
         // InnerTube round trip plus a master fetch. Keyed by VIDEO id, not by
         // channel: when a broadcast ends and the channel starts a new one the id
-        // changes, so a dead manifest can never be replayed from cache. Kick's
-        // equivalent keys by slug and has no invalidation at all; that is the one
-        // part of it not worth copying.
+        // changes, so a dead manifest can never be replayed from cache.
         // 1440p/2160p live only outside the HLS ladder. Resolve them first so
         // they are in the menu whether or not the master came from cache, and so
         // a request for one is answered before the HLS selector, which cannot
@@ -1165,15 +1158,11 @@ impl StreamSource for YouTubeSource {
         if let Some(meta) = youtube::channel_meta_fresh(channel, META_TTL) {
             return Ok(row_from_meta(channel, &meta));
         }
-        // Stale or absent: fetch the live page AND PARSE IT.
-        //
-        // This used to call `fetch_youtube_html` and discard the result, on the
-        // belief that fetching "repopulates the cache". It does not - only the
-        // chat connect path writes that cache - so this answered ONLY for
-        // channels whose chat had already been opened this session and returned
-        // "no metadata" for every other one. Since `live_check` is built on this
-        // method, that made the who's-live poller and the favourites sweep blind
-        // to any YouTube channel you had not chatted in.
+        // Stale or absent: fetch the live page AND PARSE IT. Fetching alone does
+        // not populate the metadata cache; only the chat connect path writes it.
+        // Since `live_check` is built on this method, parsing here is what keeps
+        // the who's-live poller and the favourites sweep working for channels
+        // whose chat was never opened.
         match youtube::refresh_channel_meta(&HTTP, channel).await {
             Ok(meta) => Ok(row_from_meta(channel, &meta)),
             Err(e) => {
@@ -1602,11 +1591,6 @@ fn row_from_meta(channel: &str, meta: &youtube::YouTubeChannelMeta) -> ProviderS
     }
 }
 
-/// Pull `videoRenderer` entries out of a search response. The shape is deeply
-/// nested and changes shape between surfaces, so this walks the tree rather than
-/// hard-coding a path.
-/// Every LIVE row anywhere in an InnerTube response.
-///
 /// Both leaf keys are accepted because the same video row is named differently by
 /// layout: search returns `videoRenderer`, while a grid feed (subscriptions) can
 /// return `gridVideoRenderer` with the same fields. The walk recurses through
@@ -1614,9 +1598,6 @@ fn row_from_meta(channel: &str, meta: &youtube::YouTubeChannelMeta) -> ProviderS
 /// shelves) need no cases of their own.
 const VIDEO_RENDERER_KEYS: [&str; 2] = ["videoRenderer", "gridVideoRenderer"];
 
-/// A compact `name xN` census of every `*Renderer` / `*ViewModel` in a response,
-/// most frequent first. Purely diagnostic: it turns an authed response nobody here
-/// can reproduce into one readable log line.
 /// How many video/lockup CONTENT items the feed carried, regardless of liveness.
 ///
 /// Separates "the account has nothing live" from "the response has no feed at
@@ -1651,6 +1632,9 @@ fn count_feed_items(root: &Value) -> usize {
     count
 }
 
+/// A compact `name xN` census of every `*Renderer` / `*ViewModel` in a response,
+/// most frequent first. Purely diagnostic: it turns an authed response nobody here
+/// can reproduce into one readable log line.
 fn renderer_histogram(root: &Value) -> String {
     let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     let mut stack = vec![root];
@@ -1707,10 +1691,9 @@ fn contains_key(root: &Value, key: &str) -> bool {
 /// what search returns) and `lockupViewModel`, which is what the SUBSCRIPTIONS
 /// feed returns now.
 ///
-/// Reading only the first is what made the followed-live list come back empty
-/// while the account had plenty live: the feed carried 110 lockups and zero
-/// `videoRenderer`, so the walk went straight past every row. Verified against the
-/// real authed feed, not assumed.
+/// Reading only the classic shape makes the followed-live list come back empty
+/// while the account has plenty live: a subscriptions feed can carry lockups and
+/// zero `videoRenderer`, so the walk goes straight past every row.
 ///
 /// The walk recurses through everything, so the wrapping containers
 /// (`richItemRenderer`, `richSectionRenderer`, shelves) need no cases of their own.
@@ -1923,6 +1906,10 @@ fn parse_count(s: &str) -> u32 {
     scaled.clamp(0.0, u32::MAX as f64) as u32
 }
 
+/// One classic `videoRenderer` row as a live stream, or None when it is not live.
+///
+/// The shape is deeply nested and differs between surfaces, so callers walk the
+/// tree for these rather than hard-coding a path.
 fn row_from_renderer(r: &Value) -> Option<ProviderStream> {
     let video_id = r.get("videoId").and_then(|v| v.as_str())?;
     // Only LIVE entries belong in a live grid; the badge is how YouTube marks them.
@@ -2519,12 +2506,6 @@ pub async fn channel_avatars(channel_ids: &[String]) -> std::collections::HashMa
     out
 }
 
-/// One channel's avatar via InnerTube `browse`.
-///
-/// `metadata/channelMetadataRenderer/avatar` is the stable home for it; the
-/// microformat copy is a fallback for a response shaped differently. Measured
-/// alternatives that do NOT help: a params-scoped tab returns the same ~530KB, and
-/// the ANDROID client 400s on a channel browse.
 /// A chatter's channel profile.
 ///
 /// Only the CHANNEL-level facts come from here. Everything that is per-room —
@@ -2596,6 +2577,12 @@ pub async fn user_profile(channel_id: &str) -> Result<YouTubeUserProfile> {
     })
 }
 
+/// One channel's avatar via InnerTube `browse`.
+///
+/// `metadata/channelMetadataRenderer/avatar` is the stable home for it; the
+/// microformat copy is a fallback for a response shaped differently. A
+/// params-scoped tab returns the same ~530KB, and the ANDROID client 400s on a
+/// channel browse, so neither is a cheaper route.
 async fn fetch_channel_avatar(channel_id: &str) -> Option<String> {
     let body = json!({
         "browseId": channel_id,
