@@ -336,7 +336,7 @@ fn avatar_cache() -> &'static std::sync::Mutex<HashMap<String, String>> {
     KICK_AVATARS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
-/// Whether the connected Kick account can moderate `slug`./// Whether the connected Kick account can moderate `slug`.
+/// Whether the connected Kick account can moderate `slug`.
 ///
 /// Asks the same in-room endpoint the profile card uses, which reports the
 /// viewer's role in that channel. This replaces inferring mod status from our

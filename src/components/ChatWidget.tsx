@@ -404,13 +404,12 @@ const ChatMessagesPanel = ({
   }, [src.messages, src.renderToken, messagesRef]);
 
   // Process new messages for user history tracking.
-  // Iterate the full message array and skip any whose ID is already in
-  // processedMessageIdsRef. CRITICAL: extract the message ID cheaply (regex
-  // on raw IRC tags or the object's `id` field) BEFORE invoking the much
-  // more expensive parseMessage. In a fast chat (50+ msg/s) the old code
-  // would parse all 100 cap-bounded messages on every render even though
-  // 99% were already processed — that stalled the main thread and produced
-  // the "burst then freeze" pattern. Now we only parse new messages.
+  //
+  // Extract the message id CHEAPLY (regex on raw IRC tags, or the object's
+  // `id`) and check processedMessageIdsRef BEFORE calling the far more
+  // expensive parseMessage. Parsing the whole capped array on every render
+  // stalls the main thread in a fast chat, since almost all of it is already
+  // processed.
   useEffect(() => {
     const seen = processedIdsRef.current;
     const currentIds = new Set<string>();
@@ -490,15 +489,14 @@ const ChatMessagesPanel = ({
             // Still in the session, just a message from this channel itself.
             sharedChatQuietRef.current = 0;
           } else if (++sharedChatQuietRef.current >= SHARED_CHAT_END_STREAK) {
-            // Twitch tags EVERY message in a shared-chat session with
-            // source-room-id, including the host channel's own (see the shared
-            // chat section of the IRC docs), so messages arriving without it
-            // mean the session ended. Without this the flag was sticky until
-            // the next channel change: the header kept reading "SHARED STREAM
-            // CHAT" and its gradient kept animating for the rest of the stream.
-            // A streak rather than a single miss because the docs describe the
-            // tag's presence but do not guarantee it on every message shape,
-            // and one stray untagged line must not flicker the indicator.
+            // Twitch tags EVERY message in a shared-chat session with source-room-id,
+            // including the host channel's own, so messages arriving without it mean the
+            // session ended. Without this the flag stays set until the next channel
+            // change.
+            //
+            // A streak rather than a single miss: the docs describe the tag's presence
+            // without guaranteeing it on every message shape, and one stray untagged line
+            // must not flicker the indicator.
             setIsSharedChat(false);
           }
         }
@@ -570,13 +568,12 @@ const ChatMessagesPanel = ({
     for (const id of seen) {
       if (!currentIds.has(id)) seen.delete(id);
     }
-    // `renderToken` stays in the deps alongside `messages`. The store now writes
-    // a fresh array per change (copy-on-write), so identity would do on its own
-    // for the Twitch path; the token also covers provider snapshots and any
-    // future in-place writer, and a missed run here means chatters never reach
-    // the chat-user store and never resolve 7TV cosmetics (the original bug).
-    // Re-running per flush is cheap: `processedMessageIdsRef` skips every message
-    // already handled, so each new message is parsed exactly once.
+    // `renderToken` stays in the deps alongside `messages`. The store writes a
+    // fresh array per change, so identity alone would cover the Twitch path, but
+    // the token also covers provider snapshots and any future in-place writer.
+    // A missed run means chatters never reach the chat-user store and never
+    // resolve 7TV cosmetics. Re-running per flush is cheap: every message already
+    // handled is skipped, so each new one is parsed exactly once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src.messages, src.renderToken, addUser]);
 

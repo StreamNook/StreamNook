@@ -37,17 +37,17 @@ interface UserCosmeticsResponse {
 }
 
 // Cache for 7TV user data.
-//   - Successful lookups (user is on 7TV, with or without inventory; or user
-//     genuinely not on 7TV) ride the full TTL — they're stable answers.
+//   - Successful lookups (on 7TV with or without inventory, or genuinely not
+//     on 7TV) ride the full TTL: they are stable answers.
 //   - Hard failures (network error, 5xx, retry-exhausted) get a much shorter
-//     TTL so a transient 7TV blip can't strand a real user without a paint
-//     for 5 minutes. The next request retries.
+//     TTL so a transient blip cannot strand a real user without a paint.
+//
 // Bounded LRU, NOT a plain Map: the TTL only decides freshness (an expired
 // entry is overwritten on read, never deleted), so an unbounded map grows one
 // whole-inventory entry per unique chatter for the life of the process. The
-// size cap is safe precisely because the TTL re-fetches anything colder than
-// eviction would discard. Do NOT trim entries to the selected paint instead:
-// paint COUNTS and the pickers read the full inventory from this cache.
+// size cap is safe because the TTL re-fetches anything colder than eviction
+// would discard. Do NOT trim entries to the selected paint: paint COUNTS and
+// the pickers read the full inventory from this cache.
 const userCache = new LruMap<string, { data: UserCosmeticsResponse; hardFail: boolean; timestamp: number }>(4000);
 const CACHE_DURATION = 5 * 60 * 1000;
 const HARD_FAIL_CACHE_DURATION = 30 * 1000;

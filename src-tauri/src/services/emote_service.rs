@@ -50,18 +50,15 @@ fn open_seventv_circuit() {
 /// that guards the small calls.
 const SEVENTV_DOCUMENT_TIMEOUT: Duration = Duration::from_secs(25);
 
-// Channel-independent 7TV data (the global set) cached process-wide: every
-// channel join and every prefetch-scan worker previously re-fetched it.
+// Channel-independent 7TV data (the global set) cached process-wide, so a
+// channel join or a prefetch-scan worker does not re-fetch it.
 // Serve-stale-on-error: when 7TV is down an expired copy still beats an empty
 // picker.
 //
-// Trending used to live here too and was merged into every channel's
-// dictionary. It is gone on purpose: trending is a discovery list, not an emote
-// layer. Merged first and deduped by id, it silently replaced a channel's own
-// alias with the trending row for the same emote (measured 2026-09-07: 8 to 53
-// aliases per channel, and a channel with no 7TV set at all carried 287 rows),
-// and it made chat render emotes nobody else in the room could see. Nothing
-// consumed it except that merge.
+// Trending deliberately does NOT live here. It is a discovery list, not an
+// emote layer: merged into a channel dictionary and deduped by id it replaces
+// the channel's own alias with the trending row for the same emote, and makes
+// chat render emotes nobody else in the room can see.
 const SEVENTV_SHARED_TTL: Duration = Duration::from_secs(3600);
 
 type SharedEmoteCache = RwLock<Option<(Instant, Vec<Emote>)>>;
@@ -233,18 +230,16 @@ pub(crate) fn seventv_user_id_from_payload(json: &serde_json::Value) -> Option<S
 /// set order, then the globals whose names the channel did not take.
 ///
 /// Keyed by NAME and nothing else. 7TV keys a set entry by (emote id, alias),
-/// so one emote legitimately appears under two names in one set (kathi carried
-/// 44 such pairs on 2026-09-07); deduping by id destroyed the second alias
-/// every time. A channel row shadows a global with the same name, which is what
-/// 7TV's own client renders.
+/// so one emote legitimately appears under two names in one set, and deduping
+/// by id destroys the second alias. A channel row shadows a global of the same
+/// name, which is what 7TV's own client renders.
 ///
-/// A repeated NAME within the channel set also happens: legacy rows from before
-/// 7TV enforced uniqueness (kathi has 12 such names, every pair from 2021). A
-/// name-keyed dictionary holds one row per name, and the LAST row wins: it is
-/// the newer add, it is what the delta path produces when an add takes an
-/// existing name (so an initial composition and a patched one agree), and it is
-/// how 7TV's own client builds its maps (forward assignment). The winner keeps
-/// the first occurrence's position so the picker order stays stable.
+/// A repeated NAME within the channel set also happens, from legacy rows
+/// predating 7TV's uniqueness rule. A name-keyed dictionary holds one row per
+/// name and the LAST row wins: it is the newer add, it matches what the delta
+/// path produces when an add takes an existing name (so initial and patched
+/// compositions agree), and it is how 7TV's own client builds its maps. The
+/// winner keeps the first occurrence's position so picker order stays stable.
 pub(crate) fn compose_seventv(channel: Vec<Emote>, globals: &[Emote]) -> Vec<Emote> {
     let mut slot: HashMap<String, usize> = HashMap::with_capacity(channel.len() + globals.len());
     let mut out: Vec<Emote> = Vec::with_capacity(channel.len() + globals.len());
@@ -687,16 +682,15 @@ impl EmoteService {
             self.fetch_7tv_emotes(channel_name.clone(), channel_id.clone()),
             self.fetch_ffz_emotes(channel_name.clone()),
             // Twitch's `chat/emotes/user` takes a NUMERIC Twitch broadcaster_id, so a
-            // YouTube UC id makes it 400 ("value must be numeric") on every stream.
-            // The id is only meaningful for follower emotes on a Twitch channel, so
-            // it is simply omitted elsewhere: the call still returns the user's own
-            // global and subscription emotes, which is the correct result.
+            // YouTube UC id makes it 400 ("value must be numeric"). The id only means
+            // anything for follower emotes on a Twitch channel, so it is omitted
+            // elsewhere: the call still returns the user's own global and subscription
+            // emotes, which is the correct result.
             //
-            // The VALUE is checked, not just the `provider` flag. `provider` is
-            // optional and defaults to Twitch, so any caller that forgets to pass it
-            // while holding a non-Twitch id silently reintroduces the 400 — which is
-            // exactly how it came back after the flag alone was added. A shape the id
-            // can never legally have is not worth sending under any provider.
+            // Check the VALUE, not just the `provider` flag. `provider` is optional and
+            // defaults to Twitch, so a caller that forgets it while holding a non-Twitch
+            // id would silently reintroduce the 400. A shape the id can never
+            // legally have is not worth sending under any provider.
             self.fetch_user_twitch_emotes(
                 access_token.as_deref(),
                 twitch_broadcaster_id(is_twitch, channel_id.as_deref()),

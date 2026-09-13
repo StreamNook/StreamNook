@@ -848,16 +848,15 @@ pub(crate) async fn fetch_youtube_html(
 
 /// Fetch the live page for `identifier`, PARSE it, and cache the metadata.
 ///
-/// This exists because `channel_meta` used to fetch the page and throw the HTML
-/// away, then read a cache that only the CHAT connect path ever writes. So it
-/// answered only for channels whose chat had already been opened this session
-/// and returned "no metadata" for every other one - which is not a cosmetic
-/// gap: `live_check` is built on `channel_meta`, so the who's-live poller and
-/// the favourites sweep were BLIND to any YouTube channel you had not chatted
-/// in, and a MultiNook tile fell back to titling itself with its raw video id.
+/// Parsing here is the point: the metadata cache is written only by the CHAT
+/// connect path, so fetching without parsing answers only for channels whose
+/// chat was opened this session. `live_check` is built on `channel_meta`, so
+/// that leaves the who's-live poller and the favourites sweep blind to every
+/// other YouTube channel, and a MultiNook tile titling itself with a raw
+/// video id.
 ///
-/// Accepts any identifier `live_page_url` does: a video id, an `@handle`, or a
-/// `UC` id.
+/// Accepts any identifier `live_page_url` does: a video id, an `@handle`, or
+/// a `UC` id.
 pub(crate) async fn refresh_channel_meta(
     http: &reqwest::Client,
     identifier: &str,
