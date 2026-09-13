@@ -1424,11 +1424,6 @@ fn advance_pdt_by(pdt: &str, steps: i64) -> Option<String> {
     )
 }
 
-/// Decide how the reader brings a stale window up to date before the next
-/// in-progress segment. Returns `(clear_window_first, sns_to_fetch)`. The fetch
-/// range is always consecutive and ends at `inprogress_sn - 1`, and when not
-/// rebuilding it starts right after `window_newest`, so appending the fetched
-/// segments keeps the window contiguous at every intermediate render.
 /// How many missing segments the reader will fill ADJACENTLY before declaring
 /// a rebuild instead. Catch-up fetches are serial whole-segment downloads; on
 /// a connection delivering near the stream bitrate each one costs about a
@@ -1468,6 +1463,12 @@ fn init_url_update(edge: &LiveEdge, upstream_init: Option<&str>) -> Option<Strin
     }
 }
 
+/// Decide how the reader brings a stale window up to date before the next
+/// in-progress segment. Returns `(clear_window_first, sns_to_fetch)`.
+///
+/// The fetch range is always consecutive and ends at `inprogress_sn - 1`, and
+/// when not rebuilding it starts right after `window_newest`, so appending the
+/// fetched segments keeps the window contiguous at every intermediate render.
 fn plan_catch_up(
     window_newest: u64,
     oldest_published: u64,

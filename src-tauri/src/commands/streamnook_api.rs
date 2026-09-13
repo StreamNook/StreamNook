@@ -45,12 +45,6 @@ pub struct ApiResponse {
     pub body: String,
 }
 
-/// POST to an allowlisted StreamNook API path, authenticated as the current
-/// account (or a named linked account).
-///
-/// Returns Err only for conditions the caller can act on differently from an
-/// HTTP error: no token, a disallowed path, or the request never completing. A
-/// 4xx/5xx comes back as Ok with `ok: false` so callers can inspect the body.
 /// Paths the overlay builder may call with any of GET/POST/DELETE. Exact
 /// path or `/api/overlays/<id>` (one segment, no slashes inside).
 const OVERLAY_PREFIX: &str = "/api/overlays";
@@ -114,6 +108,12 @@ pub async fn streamnook_api_request(
     })
 }
 
+/// POST to an allowlisted StreamNook API path, authenticated as the current
+/// account (or a named linked account).
+///
+/// Returns Err only for conditions the caller can act on differently from an
+/// HTTP error: no token, a disallowed path, or the request never completing. A
+/// 4xx/5xx comes back as Ok with `ok: false` so callers can inspect the body.
 #[tauri::command]
 pub async fn streamnook_api_post(
     path: String,
