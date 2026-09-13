@@ -307,7 +307,9 @@ impl BackgroundService {
         }
 
         let mut found: Vec<(String, String, String, i32)> = Vec::new();
-        for chunk in channels.chunks(35) {
+        for chunk in
+            channels.chunks(crate::services::twitch_limits::GQL_MAX_BATCHED_OPERATIONS)
+        {
             let body: Vec<serde_json::Value> = chunk
                 .iter()
                 .map(|(login, _id, _name)| {
@@ -329,36 +331,69 @@ impl BackgroundService {
             {
                 Ok(r) => r,
                 Err(e) => {
-                    debug!("[CP-Auto-Poll] balance batch failed: {}", e);
+                    error!("[CP-Auto-Poll] balance batch failed: {}", e);
                     continue;
                 }
             };
 
+            // Status first: an over-cap batch returns 400 with valid JSON,
+            // so json() succeeds and the failure would pass unlogged.
+            let status = resp.status();
             let parsed: serde_json::Value = match resp.json().await {
                 Ok(v) => v,
                 Err(e) => {
-                    debug!("[CP-Auto-Poll] balance batch parse failed: {}", e);
+                    error!("[CP-Auto-Poll] balance batch parse failed: {}", e);
                     continue;
                 }
             };
 
-            if let Some(arr) = parsed.as_array() {
-                for (idx, item) in arr.iter().enumerate() {
-                    let Some((login, channel_id, display_name)) = chunk.get(idx) else {
-                        continue;
-                    };
-                    if let Some(bal) = item
-                        .pointer("/data/user/channel/self/communityPoints/balance")
-                        .and_then(|v| v.as_i64())
-                    {
-                        if bal > 0 {
-                            found.push((
-                                channel_id.clone(),
-                                login.clone(),
-                                display_name.clone(),
-                                bal as i32,
-                            ));
-                        }
+            if !status.is_success() {
+                error!(
+                    "[CP-Auto-Poll] balance batch HTTP {} for {} operations (cap is {}): {}",
+                    status,
+                    chunk.len(),
+                    crate::services::twitch_limits::GQL_MAX_BATCHED_OPERATIONS,
+                    parsed
+                );
+                continue;
+            }
+
+            // Results map to requests BY INDEX, sound only while lengths
+            // agree; a short array would misattribute balances.
+            let Some(arr) = parsed.as_array() else {
+                error!(
+                    "[CP-Auto-Poll] balance batch returned a non-array body, \
+                     skipping {} channels: {}",
+                    chunk.len(),
+                    parsed
+                );
+                continue;
+            };
+            if arr.len() != chunk.len() {
+                error!(
+                    "[CP-Auto-Poll] balance batch length mismatch (sent {}, got {}); \
+                     refusing to map positionally",
+                    chunk.len(),
+                    arr.len()
+                );
+                continue;
+            }
+
+            for (idx, item) in arr.iter().enumerate() {
+                let Some((login, channel_id, display_name)) = chunk.get(idx) else {
+                    continue;
+                };
+                if let Some(bal) = item
+                    .pointer("/data/user/channel/self/communityPoints/balance")
+                    .and_then(|v| v.as_i64())
+                {
+                    if bal > 0 {
+                        found.push((
+                            channel_id.clone(),
+                            login.clone(),
+                            display_name.clone(),
+                            bal as i32,
+                        ));
                     }
                 }
             }

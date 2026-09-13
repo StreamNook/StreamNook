@@ -6,7 +6,7 @@ lazy_static::lazy_static! { static ref HTTP_CLIENT: reqwest::Client = crate::ser
 use crate::models::drops::*;
 use crate::models::settings::AppState;
 use crate::services::drops_auth_service::{DropsAuthService, DropsDeviceCodeInfo};
-use log::debug;
+use log::{debug, error};
 use tauri::{AppHandle, Emitter, State};
 
 #[tauri::command]
@@ -312,7 +312,7 @@ pub async fn refresh_followed_channel_points(
     // Collect off-lock so the network walk never stalls chat/automation, which also
     // hold the drops service mutex.
     let mut found: Vec<(String, String, i32)> = Vec::new(); // (channel_id, login, balance)
-    for chunk in channels.chunks(35) {
+    for chunk in channels.chunks(crate::services::twitch_limits::GQL_MAX_BATCHED_OPERATIONS) {
         let body: Vec<serde_json::Value> = chunk
             .iter()
             .map(|(login, _id)| {
@@ -334,32 +334,63 @@ pub async fn refresh_followed_channel_points(
         {
             Ok(r) => r,
             Err(e) => {
-                debug!("[ChannelPoints] balance batch failed: {}", e);
+                error!("[ChannelPoints] balance batch failed: {}", e);
                 continue;
             }
         };
 
+        // Status first: an over-cap batch returns 400 with valid JSON, so
+        // json() succeeds and the failure would pass unlogged.
+        let status = resp.status();
         let parsed: serde_json::Value = match resp.json().await {
             Ok(v) => v,
             Err(e) => {
-                debug!("[ChannelPoints] balance batch parse failed: {}", e);
+                error!("[ChannelPoints] balance batch parse failed: {}", e);
                 continue;
             }
         };
 
-        // Batched responses come back in request order; zip by index.
-        if let Some(arr) = parsed.as_array() {
-            for (idx, item) in arr.iter().enumerate() {
-                let Some((login, channel_id)) = chunk.get(idx) else {
-                    continue;
-                };
-                if let Some(bal) = item
-                    .pointer("/data/user/channel/self/communityPoints/balance")
-                    .and_then(|v| v.as_i64())
-                {
-                    if bal > 0 {
-                        found.push((channel_id.clone(), login.clone(), bal as i32));
-                    }
+        if !status.is_success() {
+            error!(
+                "[ChannelPoints] balance batch HTTP {} for {} operations (cap is {}): {}",
+                status,
+                chunk.len(),
+                crate::services::twitch_limits::GQL_MAX_BATCHED_OPERATIONS,
+                parsed
+            );
+            continue;
+        }
+
+        // Results map to requests BY INDEX, sound only while lengths agree;
+        // a short array would misattribute balances.
+        let Some(arr) = parsed.as_array() else {
+            error!(
+                "[ChannelPoints] balance batch returned a non-array body, skipping {} channels: {}",
+                chunk.len(),
+                parsed
+            );
+            continue;
+        };
+        if arr.len() != chunk.len() {
+            error!(
+                "[ChannelPoints] balance batch length mismatch (sent {}, got {}); \
+                 refusing to map positionally",
+                chunk.len(),
+                arr.len()
+            );
+            continue;
+        }
+
+        for (idx, item) in arr.iter().enumerate() {
+            let Some((login, channel_id)) = chunk.get(idx) else {
+                continue;
+            };
+            if let Some(bal) = item
+                .pointer("/data/user/channel/self/communityPoints/balance")
+                .and_then(|v| v.as_i64())
+            {
+                if bal > 0 {
+                    found.push((channel_id.clone(), login.clone(), bal as i32));
                 }
             }
         }
