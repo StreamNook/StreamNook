@@ -67,6 +67,7 @@ pub mod youtube_potoken;
 pub mod youtube_sabr;
 pub mod twitch_auth_service;
 pub mod twitch_resolver;
+pub mod twitch_limits;
 pub mod twitch_service;
 pub mod universal_cache_service;
 pub mod user_message_history_service;

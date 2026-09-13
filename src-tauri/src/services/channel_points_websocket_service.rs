@@ -6,6 +6,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{Mutex as TokioMutex, RwLock};
@@ -15,9 +16,11 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use uuid::Uuid;
 
 use crate::services::drops_auth_service::DropsAuthService;
+use crate::services::twitch_limits::{
+    PUBSUB_LISTEN_TOPICS_PER_FRAME, PUBSUB_MAX_TOPICS_PER_CONNECTION,
+};
 
 const PUBSUB_URL: &str = "wss://pubsub-edge.twitch.tv";
-const MAX_TOPICS_PER_CONNECTION: usize = 50;
 
 /// Mapping structure for channel information
 #[derive(Debug, Clone)]
@@ -167,11 +170,8 @@ impl ChannelPointsWebSocketService {
         *self.auth_token.write().await = auth_token.to_string();
         *self.user_id.write().await = user_id.to_string();
 
-        // Each channel now generates 4 topics (video-playback, predictions, polls,
-        // community-points-channel) - removed raid.
-        // Plus 2 global topics (community-points-user and predictions-user)
-        // Use 10 channels per connection - testing shows 48 topics fails but 6 succeeds
-        // 10 channels * 4 topics + 2 global = 42 topics (safe, under the 50 cap)
+        // 4 topics per channel + 2 global = 42 per connection, under the
+        // connection cap. Safe only because LISTEN is batched; see twitch_limits.
         const MAX_CHANNELS_PER_CONNECTION: usize = 10;
 
         // Calculate how many WebSocket connections we need
@@ -309,24 +309,53 @@ impl ChannelPointsWebSocketService {
             }
         }
 
-        // Send LISTEN message for all topics
-        let listen_message = json!({
-            "type": "LISTEN",
-            "nonce": Uuid::new_v4().to_string(),
-            "data": {
-                "topics": topics,
-                "auth_token": auth_token
+        // Batch: an oversized LISTEN frame is dropped silently, subscribing
+        // to nothing. See twitch_limits.
+        for (batch_index, batch) in topics.chunks(PUBSUB_LISTEN_TOPICS_PER_FRAME).enumerate() {
+            let listen_message = json!({
+                "type": "LISTEN",
+                "nonce": Uuid::new_v4().to_string(),
+                "data": {
+                    "topics": batch,
+                    "auth_token": auth_token
+                }
+            });
+
+            write
+                .send(Message::text(listen_message.to_string()))
+                .await?;
+            debug!(
+                "WebSocket #{} sent LISTEN batch {} ({} topics)",
+                index,
+                batch_index,
+                batch.len()
+            );
+
+            // Space the frames out so a burst does not trip rate limiting.
+            tokio::time::sleep(Duration::from_millis(350)).await;
+        }
+        debug!(
+            "WebSocket #{} sent LISTEN for {} topics in {} batch(es)",
+            index,
+            topics.len(),
+            topics.len().div_ceil(PUBSUB_LISTEN_TOPICS_PER_FRAME)
+        );
+
+        // Twitch answers every good LISTEN; a missing ack is the only signal
+        // a frame was dropped, so count them and shout rather than fail quiet.
+        let expected_acks = topics.len().div_ceil(PUBSUB_LISTEN_TOPICS_PER_FRAME);
+        let listen_acks = Arc::new(AtomicUsize::new(0));
+        let acks_probe = listen_acks.clone();
+        let subscribe_watchdog = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(15)).await;
+            let got = acks_probe.load(Ordering::Relaxed);
+            if got < expected_acks {
+                error!(
+                    "WebSocket #{} only {}/{} LISTEN batches acknowledged.                      Twitch silently drops an oversized LISTEN frame, so these                      topics are subscribed to NOTHING. Lower                      PUBSUB_LISTEN_TOPICS_PER_FRAME (currently {}).",
+                    index, got, expected_acks, PUBSUB_LISTEN_TOPICS_PER_FRAME
+                );
             }
         });
-
-        write
-            .send(Message::text(listen_message.to_string()))
-            .await?;
-        debug!(
-            "WebSocket #{} sent LISTEN for {} topics",
-            index,
-            topics.len()
-        );
 
         let connections_ping = connections.clone();
         let connection_id_ping = connection_id.clone();
@@ -374,6 +403,7 @@ impl ChannelPointsWebSocketService {
                             index,
                             &channel_mappings,
                             &active_viewing_channels,
+                            &listen_acks,
                         )
                         .await;
                     }
@@ -394,6 +424,7 @@ impl ChannelPointsWebSocketService {
 
         // Signal ping task to stop
         ping_task.abort();
+        subscribe_watchdog.abort();
 
         // Mark as disconnected
         {
@@ -434,6 +465,7 @@ impl ChannelPointsWebSocketService {
         index: usize,
         channel_mappings: &Arc<RwLock<HashMap<String, ChannelMapping>>>,
         active_viewing_channels: &Arc<RwLock<HashSet<String>>>,
+        listen_acks: &Arc<AtomicUsize>,
     ) {
         match msg.msg_type.as_str() {
             "MESSAGE" => {
@@ -508,6 +540,7 @@ impl ChannelPointsWebSocketService {
                 // Connection will automatically reconnect when closed
             }
             "RESPONSE" => {
+                listen_acks.fetch_add(1, Ordering::Relaxed);
                 if let Some(error) = msg.error {
                     // Only treat non-empty errors as actual errors
                     if !error.is_empty() {
