@@ -93,18 +93,13 @@ interface ChatUserStore {
 // Module-scope batched-update coalescer for cosmetic resolutions.
 //
 // 7TV's batched GraphQL request (see seventvService.requestUserCosmeticsBatched)
-// can fan out from a single network round-trip into N user resolutions, all
-// firing within the same microtask. Without coalescing, each resolution did
-// its own store.setState — that's N Map clones AND N rounds of selector
-// evaluation across every ChatMessage subscriber. For a 50-user batch with
-// 50 mounted ChatMessage components, that's 2500 selector calls and 50
-// commit phases, producing visible chat-stuttering bursts.
+// fans one network round-trip out into N user resolutions in the same
+// microtask. One setState each would mean N Map clones and N rounds of selector
+// evaluation across every mounted ChatMessage, which stutters visibly.
 //
-// With this coalescer, all updates enqueued within the same microtask drain
-// into ONE setState: one Map clone, one subscriber notification cycle, one
-// React commit. Each ChatMessage that subscribes to a specific userId still
-// re-renders if its user's paint/badge actually changed; unrelated users
-// pay nothing.
+// Coalesced, everything enqueued in the same microtask drains into ONE
+// setState: one clone, one notification cycle, one commit. A ChatMessage still
+// re-renders when its own user's paint or badge changed; others pay nothing.
 type CosmeticUpdate = { paint: any; seventvBadge: any };
 const pendingCosmeticUpdates = new Map<string, CosmeticUpdate>();
 let pendingFlushScheduled = false;
@@ -180,10 +175,9 @@ let pendingThirdPartyFlushScheduled = false;
 
 // Non-members whose real provider badges have already been resolved this session.
 // The Rust lookup reads only the prefetched provider databases, so a non-member's
-// result can't change within a session — resolving them once is enough. Without
-// this guard a non-member re-triggers the Rust IPC lookup on EVERY message until
-// their (separate) 7TV cosmetics resolve flips the cosmeticsResolved fast path,
-// which floods a busy channel with thousands of redundant cross-process calls.
+// result cannot change within a session. Without this guard they re-trigger the
+// Rust IPC lookup on EVERY message until their separate 7TV cosmetics resolve
+// flips the fast path, flooding a busy channel with redundant IPC.
 // Members are intentionally NOT gated here (they go through their own identity
 // resolve cache, so a live loadout edit still re-resolves). Pruned alongside the
 // user map (eviction + channel switch) so it never outgrows the tracked users.

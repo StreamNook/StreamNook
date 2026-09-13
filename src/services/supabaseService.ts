@@ -344,9 +344,9 @@ const clientPlatform = (): string =>
 /**
  * Record which client a member signed in from.
  *
- * The realtime presence payload already carries this, but presence answers "who
- * is on Android right now", and the dashboard needs "who uses Android". Without
- * a persisted row, an Android user who is offline looks like a desktop user.
+ * Presence answers "who is on Android right now"; this answers "who uses
+ * Android". Without a persisted row an offline Android user looks like a
+ * desktop one.
  *
  * Fire-and-forget: telemetry must never be able to fail a sign-in.
  */
@@ -366,10 +366,8 @@ const recordClient = async (twitchUserId: string): Promise<void> => {
 /**
  * Record that a member has a non-Twitch platform account connected.
  *
- * The dashboard has always been able to see who signed into StreamNook, because
- * that is a Twitch account and `users` holds it. Kick and YouTube are accounts
- * too now, and nothing was recording them, so "how many people actually use the
- * multi-platform support" had no answer.
+ * The `users` table only holds the Twitch account someone signed in with, so
+ * Kick and YouTube connections would otherwise go unrecorded.
  *
  * Keyed on the Twitch identity, like every other per-member table here. With no
  * Twitch user signed in there is no member to attach the link to, so this is a
@@ -788,16 +786,13 @@ export const getProfileViews = async (userId: string): Promise<number | null> =>
 };
 
 /**
- * Get the award-badge ids this user has earned (seasonal / limited, etc.).
- * Returns [] when Supabase is unconfigured or the table is missing, so the UI
- * shows everything locked rather than breaking.
- */
-/**
- * Earned accolade ids for a member. REJECTS on a failed read instead of
- * resolving to []: both callers (ProfileOverview, ProfileSettings) apply the
- * result as the new earned set, so an empty answer on a flaky Supabase moment
- * un-lit every seasonal, event and secret medallion until the next window
- * focus. A rejection leaves whatever was on screen alone; callers catch it.
+ * Earned accolade ids for a member (seasonal, limited, and so on).
+ *
+ * Returns [] only when Supabase is unconfigured or no user is signed in.
+ * A failed READ REJECTS rather than resolving to []: both callers apply the
+ * result as the new earned set, so an empty answer on a flaky moment would
+ * un-light every medallion until the next window focus. A rejection leaves
+ * what is on screen alone; callers catch it.
  */
 export const getAccolades = async (userId: string): Promise<string[]> => {
     if (!supabase || !userId) return [];

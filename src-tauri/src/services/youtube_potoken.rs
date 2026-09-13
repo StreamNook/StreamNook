@@ -235,17 +235,10 @@ fn cached_streams_with_age(video_id: &str) -> Option<(ResolvedStreams, Duration)
     // it starts playback on a url the origin already refuses. Ungated visionos
     // urls last as long as their own expiry says and keep the long TTL.
     //
-    // Mirrors cached_highs in youtube_media, which has always bounded a gated set
-    // by ROTATE_AFTER for exactly this reason.
-    //
-    // Why this was not needed before: refresh_urls used to call invalidate_streams
-    // on every rotation, wiping this entry roughly every fifteen seconds and
-    // keeping it accidentally fresh. Removing that invalidation (correctly, it
-    // caused a resolver thrash with two surfaces on one broadcast) exposed the
-    // real defect underneath: a 90-minute cache of 30-second credentials.
-    // Measured 2026-08-29: with no rotation to wipe it, a start 24-48 minutes
-    // after the last resolve took an instant UPSTREAM 403 and every 1440p
-    // selection fell back to 1080p.
+    // Mirrors cached_highs in youtube_media, which bounds a gated set by
+    // ROTATE_AFTER for the same reason. Caching gated urls for the long TTL means
+    // a start well after the last resolve takes an instant upstream 403, and every
+    // 1440p selection falls back to 1080p.
     let ttl = if s
         .videos
         .iter()
@@ -290,10 +283,6 @@ fn decode_streams(b64: &str) -> Result<ResolvedStreams> {
     serde_json::from_slice(&bytes).map_err(|e| anyhow!("stream blob was not valid json: {}", e))
 }
 
-/// Resolve playable video and audio URLs for a video, using the webview.
-///
-/// Cached, because this costs a hidden window and a BotGuard run. Callers may
-/// call it per stream start; they should not call it per fragment.
 /// Set when the relay sees an upstream 403, so the NEXT resolve rebuilds the
 /// resolver's warm session instead of handing back more urls signed with the
 /// credential that was just refused.
@@ -364,6 +353,10 @@ pub async fn resolve_streams_fresh(
     Ok(s)
 }
 
+/// Resolve playable video and audio URLs for a video, using the webview.
+///
+/// Cached, because this costs a hidden window and a BotGuard run. Callers may
+/// call it per stream start; they should not call it per fragment.
 pub async fn resolve_streams(video_id: &str, min_height: u32) -> Result<ResolvedStreams> {
     if let Some(s) = cached_streams(video_id) {
         return Ok(s);
