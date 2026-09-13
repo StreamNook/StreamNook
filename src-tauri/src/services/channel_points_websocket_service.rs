@@ -493,6 +493,9 @@ impl ChannelPointsWebSocketService {
                             "video-playback-by-id" => {
                                 // Dead event (frontend uses EventSub), but topic is still needed for internal Twitch drops tracking
                             }
+                            "predictions-user-v1" => {
+                                Self::handle_self_prediction_event(message_data, app_handle).await;
+                            }
                             "predictions-channel-v1" => {
                                 Self::handle_prediction_event(
                                     message_data,
@@ -707,6 +710,64 @@ impl ChannelPointsWebSocketService {
                 _ => {}
             }
         }
+    }
+
+    /// The viewer's OWN stake in a prediction, from `predictions-user-v1`.
+    ///
+    /// Twitch keeps one prediction record per user per event and mutates it in
+    /// place, so `points` is always the running total rather than a delta, and
+    /// `prediction-updated` carries the same id as the `prediction-made` before
+    /// it. All three message types share one payload shape.
+    ///
+    /// This is the only source for a viewer's own stake: the GQL read path for
+    /// predictions no longer exists, and the channel topic reports only pooled
+    /// totals. Nothing replays it, so a stake placed before the app started is
+    /// unknowable and the UI must say nothing rather than imply zero.
+    async fn handle_self_prediction_event(message_data: Value, app_handle: &AppHandle) {
+        let kind = message_data["type"].as_str().unwrap_or_default();
+        let p = &message_data["data"]["prediction"];
+        if !p.is_object() {
+            return;
+        }
+        let str_of = |k: &str| p.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+        let channel_id = str_of("channel_id");
+        let event_id = str_of("event_id");
+        let outcome_id = str_of("outcome_id");
+        let points = p.get("points").and_then(|v| v.as_i64()).unwrap_or(0);
+        // `result` is null while the prediction is open and an object once it
+        // resolves; the type inside is what decides win/lose/refund.
+        let result_type = p
+            .pointer("/result/type")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let points_won = p.pointer("/result/points_won").and_then(|v| v.as_i64());
+
+        debug!(
+            "[Prediction] self {} on {}: {} points on outcome {}{}",
+            kind,
+            channel_id,
+            points,
+            outcome_id,
+            result_type
+                .as_deref()
+                .map(|r| format!(" -> {}", r))
+                .unwrap_or_default()
+        );
+
+        let _ = app_handle.emit(
+            "prediction-self-updated",
+            json!({
+                "kind": kind,
+                "channel_id": channel_id,
+                "prediction_id": str_of("id"),
+                "event_id": event_id,
+                "outcome_id": outcome_id,
+                "points": points,
+                "result_type": result_type,
+                "points_won": points_won,
+            }),
+        );
     }
 
     /// Handle prediction events

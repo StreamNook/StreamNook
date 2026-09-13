@@ -6,7 +6,7 @@ lazy_static::lazy_static! { static ref HTTP_CLIENT: reqwest::Client = crate::ser
 use crate::models::drops::*;
 use crate::models::settings::AppState;
 use crate::services::drops_auth_service::{DropsAuthService, DropsDeviceCodeInfo};
-use log::{debug, error};
+use log::{debug, error, warn};
 use tauri::{AppHandle, Emitter, State};
 
 #[tauri::command]
@@ -822,6 +822,22 @@ pub async fn get_active_prediction(
         .json()
         .await
         .map_err(|e| format!("Failed to parse prediction response: {}", e))?;
+
+    // Twitch REMOVED `Channel.activePredictionEvent`, so this query now fails
+    // validation and the branch below can never be taken. Surface that instead of
+    // reporting "no active prediction", which is what made it look like a working
+    // late-join path for as long as it did.
+    //
+    // Nothing depends on it any more: the predictions-channel-v1 topic sends the
+    // full event on `event-updated`, which fires on every bet, so an already
+    // running prediction reaches the overlay within seconds of subscribing.
+    if let Some(errors) = result.get("errors") {
+        warn!(
+            "[Prediction] get_active_prediction is no longer supported by Twitch              (PubSub is the only source): {}",
+            errors
+        );
+        return Ok(None);
+    }
 
     // Check if there's an active prediction
     if let Some(prediction) = result["data"]["channel"]["activePredictionEvent"].as_object() {
