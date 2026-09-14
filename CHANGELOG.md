@@ -1,3 +1,25 @@
+## [8.6.2] - 2026-09-14
+
+### ✨ Features
+- **Continue Watching.** VODs you opened on purpose and left partway show up in a row at the top of Following, with how much is left on the thumbnail. Open one and it picks up where you stopped. Dismiss a card to drop it. Turn resume off in Player settings if you would rather always start from the beginning.
+- **See where a VOD's audio is muted.** Muted stretches draw as bands on the seek bar and a small chip appears while you are inside one, so a silent minute is never a mystery.
+- **Predictions show your stake.** When you have points on a prediction, the card shows what you put in, and you can add more while it is open.
+
+### 🐛 Bug Fixes
+- The viewer count shown while watching now refreshes instead of staying at whatever it was when you opened the stream.
+- Watching a VOD no longer leaks replayed chat into a live room, and streams added from a saved layout fill their chat history on open.
+- Channel points: balance updates that failed are retried and reported instead of silently skipped, and point subscriptions register reliably on busy accounts.
+- Polls no longer re-expand every time a vote comes in.
+- Clearing the cache now clears cached emote and badge images too, and cache size shows inline.
+- Fixed a race that could drop 7TV cosmetics on a fresh install, a token refresh that could run twice at once, and a channel-points mapping that grew across reconnects.
+- The welcome-back greeting is back on desktop.
+
+### ⚡ Performance
+- Chat user tracking, 7TV cosmetics and the on-disk cache manifest are bounded and updated in place, so long sessions stop growing quietly in the background.
+
+### 🔧 Maintenance
+- Desktop and Android now build from one codebase, so fixes reach both at the same time.
+
 ## [8.6.1] - 2026-09-07
 
 > [!NOTE]
