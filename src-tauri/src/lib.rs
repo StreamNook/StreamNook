@@ -1201,6 +1201,10 @@ pub fn run() {
             get_stream_low_latency,
             set_experimental_low_latency,
             set_codec_preference,
+            // Allowed only by mobile-commands.toml (a phone caps its rendition
+            // height to what the panel can show); registering it on desktop
+            // would just be a command the ACL denies.
+            #[cfg(mobile)]
             set_max_video_height,
             start_ll_diag,
             append_ll_diag,

@@ -6,7 +6,8 @@ use crate::services::ll_origin::{
 use anyhow::Result;
 use log::{debug, info, warn};
 use once_cell::sync::Lazy;
-use rand::Rng;
+// rand 0.10 moved random_range onto RngExt.
+use rand::RngExt;
 use reqwest::Client;
 use std::collections::HashMap;
 use std::net::SocketAddr;

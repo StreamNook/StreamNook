@@ -3,7 +3,8 @@ use anyhow::Result;
 use discord_rich_presence::{activity::*, DiscordIpc, DiscordIpcClient};
 use lazy_static::lazy_static;
 use rand::prelude::IndexedRandom;
-use rand::Rng;
+// rand 0.10 moved random_bool / random_range onto RngExt.
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;

@@ -726,7 +726,10 @@ fn active_twitch_web_profile_dir() -> Result<PathBuf, String> {
 /// is an overlay too, and payment flows use popups legitimately, so swallowing
 /// every new window could break checkout. Twitch and Kick sign-in are full-page
 /// and never needed this.
-#[cfg(windows)]
+///
+/// `test` is in the cfg because `overlay_script_tests` below asserts on this
+/// list on every platform, including the macOS CI job.
+#[cfg(any(windows, test))]
 const CONTAIN_POPUPS_IN_OVERLAY: &[&str] = &["youtube-login"];
 
 /// Make a popup from `win`'s page navigate the overlay itself instead of opening a
