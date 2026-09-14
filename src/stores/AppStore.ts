@@ -11,6 +11,7 @@ import { reportCodecPreference } from '../utils/codecPreference';
 import { setInlineEmoteScale } from '../services/emoteService';
 import { upsertUser, claimLoginAccolades, grantAtmosphereOwnership } from '../services/supabaseService';
 import { emitSettingsUpdated } from '../utils/settingsBroadcast';
+import { IS_MOBILE } from '../utils/platform';
 import { makeKey, parseKey } from '../utils/providerKey';
 import { isStrayYouTubeFavoriteId } from '../utils/favorites';
 import { buildProviderUrl, streamProvider } from '../utils/streamProvider';
@@ -603,6 +604,9 @@ const modLogMetaOf = (l: ModLogEvent): { key: string; ts: number } => {
   }
   return m;
 };
+
+// Shown once per app session, desktop only (the phone keeps boot quiet).
+let hasShownWelcomeBackToast = false;
 
 // Store EventSub listener cleanup functions at module level
 let eventSubListenerCleanup: (() => void)[] = [];
@@ -3658,8 +3662,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         });
       }
 
-      // No welcome-back toast. Restoring a stored session is the expected case,
-      // not news, and announcing it put a toast over the UI on every launch.
+      // A restored session gets one greeting per app session on desktop. The
+      // phone skips it: a toast over the UI on every launch was too much there.
+      if (!IS_MOBILE && hasCredentials && !wasAuthenticated && !hasShownWelcomeBackToast) {
+        hasShownWelcomeBackToast = true;
+        get().addToast(`Welcome back, ${userInfo.display_name}!`, 'success');
+      }
 
       // Start whisper listener after successful authentication
       try {
