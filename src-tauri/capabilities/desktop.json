@@ -17,6 +17,7 @@
   ],
   "permissions": [
     "app-commands",
+    "core:app:allow-version",
     "core:window:allow-close",
     "core:window:allow-minimize",
     "core:window:allow-maximize",
