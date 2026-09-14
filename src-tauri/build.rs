@@ -61,7 +61,39 @@ fn main() {
 
     ensure_potoken_bundle(&manifest_dir);
 
+    link_common_controls_v6_for_tests();
+
     tauri_build::build()
+}
+
+/// Windows/MSVC only: give every linked executable a Common-Controls v6 dependency.
+///
+/// `tauri_build::build()` compiles a resource carrying the app manifest (comctl32
+/// v6 dependency) and emits it as `rustc-link-arg-bins`, so the `StreamNook` bin
+/// AND its test harness carry it embedded. The `streamnook_lib` unit-test
+/// executable is not a bin, so it links with no manifest at all. That binary still
+/// imports `comctl32!TaskDialogIndirect` through tauri-plugin-dialog / rfd, which
+/// only comctl32 v6 exports; with no manifest the loader binds the System32 v5
+/// comctl32 and the process dies at load with STATUS_ENTRYPOINT_NOT_FOUND
+/// (0xC0000139) before a single test runs. `cargo:rustc-link-arg-tests` does not
+/// help: cargo applies it to `[[test]]` targets only, never to lib unit tests.
+///
+/// `/MANIFESTDEPENDENCY` makes link.exe generate that dependency in its own
+/// manifest, written as `<exe>.manifest` next to the output (link.exe's default
+/// `/MANIFEST` mode). The loader honours that side file for an executable with no
+/// embedded manifest, which is exactly the lib unit-test case. For the bin the
+/// embedded manifest from tauri-build's resource wins and the side file is inert,
+/// so this is deliberately NOT `/MANIFEST:EMBED`: embedding here would give the
+/// bin two RT_MANIFEST resources and fail the link (CVT1100 duplicate resource).
+fn link_common_controls_v6_for_tests() {
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    if target_os != "windows" || target_env != "msvc" {
+        return;
+    }
+    println!(
+        "cargo:rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
+    );
 }
 
 /// Keep the PO token bundle present and in step with its source.
