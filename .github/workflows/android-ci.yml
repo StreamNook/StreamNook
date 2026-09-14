@@ -33,6 +33,17 @@ env:
   # clang wrapper per API level, so a mismatch means the compiler binary named
   # below simply does not exist.
   ANDROID_API: "26"
+  # The Twitch/Kick OAuth client ids are read with a hard env!() at compile
+  # time in the shared backend, so cargo check needs them defined. They are
+  # public by construction (they appear in every authorize URL the app opens);
+  # only the *_SECRET values are secrets, and a compile check needs a defined
+  # value, not a real one, so an unset secret (Dependabot PRs cannot read
+  # repository secrets) simply compiles as the empty string.
+  TWITCH_APP_CLIENT_ID: "1qgws7yzcp21g5ledlzffw3lmqdvie"
+  TWITCH_ANDROID_CLIENT_ID: "kd1unb4b3q4t58fwlpcbzcbnm76a8fp"
+  TWITCH_WEB_CLIENT_ID: "kimne78kx3ncx6brgo4mv6wki5h1ko"
+  KICK_APP_CLIENT_ID: "01KMKM0HVR6HY0BMA101JFCTW3"
+  TWITCH_APP_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
 
 jobs:
   compile:
