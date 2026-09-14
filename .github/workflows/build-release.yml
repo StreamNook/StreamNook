@@ -178,13 +178,17 @@ jobs:
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          TWITCH_APP_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
+          # OAuth CLIENT IDs are public by construction: they appear in every
+          # authorize URL the app opens and in our own wrangler configs. Storing
+          # them as repo secrets implied a confidentiality they never had, which
+          # made it look like rotating them would achieve something. Only the
+          # SECRETS below are real secrets.
+          TWITCH_APP_CLIENT_ID: "1qgws7yzcp21g5ledlzffw3lmqdvie"
           TWITCH_APP_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
           TWITCH_ANDROID_CLIENT_ID: "kd1unb4b3q4t58fwlpcbzcbnm76a8fp"
           TWITCH_WEB_CLIENT_ID: "kimne78kx3ncx6brgo4mv6wki5h1ko"
-          KICK_APP_CLIENT_ID: ${{ secrets.KICK_APP_CLIENT_ID }}
+          KICK_APP_CLIENT_ID: "01KMKM0HVR6HY0BMA101JFCTW3"
           KICK_APP_CLIENT_SECRET: ${{ secrets.KICK_APP_CLIENT_SECRET }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
       - name: Download StreamNook.exe from previous release (skip_build mode)
         if: steps.check_release.outputs.RELEASE_EXISTS == 'false' && inputs.skip_build == 'true'
