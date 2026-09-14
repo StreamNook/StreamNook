@@ -2411,6 +2411,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   startStream: async (channel, providedStreamInfo?, skipChatRefresh = false) => {
+    // A live start ends any VOD/clip chat replay, on every provider. This is the
+    // one entry that never went through stopStream (playMedia does), so a VOD
+    // or offline-chat session followed by a sidebar click, or the "just went
+    // live" wake-up, left the replay engine ticking against the LIVE player and
+    // the VOD Chat / Live Chat toggle painted over a live room.
+    import('./vodReplayStore')
+      .then((m) => m.stopVodReplay())
+      .catch(() => {});
     // `channel` may be a bare Twitch login (every legacy caller) or a composite
     // `provider:channel` key. Callers holding a row pass the provider on the row
     // itself, so nothing that already worked has to change.
@@ -2475,13 +2483,67 @@ export const useAppStore = create<AppState>((set, get) => ({
         info = followedStreamInfo;
       } else if (providedStreamInfo && providedStreamInfo.user_id) {
         // Provided info has a user_id, so it's complete enough to drive the
-        // stream. But a seeded object (e.g. a raid redirect, which only knows
-        // the target's user_id) can arrive with an empty title and category.
-        // Left blank, the player overlay drops its title and Home button (both
-        // gated on a non-empty title) and Discord RPC falls back to the app
-        // logo instead of the real category art. Backfill the missing fields
-        // from a channel-info lookup. On failure we keep whatever was provided.
+        // stream. But a SEEDED object carries only what its source knew: a raid
+        // redirect, for instance, gets ids and a viewer count from the raid event
+        // and nothing else, so title, category, thumbnail and avatar arrive empty
+        // and `started_at` is a placeholder of "now".
+        //
+        // Left that way the overlay drops its title and Home button (both gated on
+        // a non-empty title), the profile shows no avatar, uptime counts from zero,
+        // and Discord RPC falls back to the app logo instead of the category art.
+        //
+        // The live row is the better source than `get_channel_info`, which knows
+        // only title and category: one lookup by user id brings the real title,
+        // game, thumbnail, viewer count and start time together. The avatar is not
+        // on a stream row at all and needs the user lookup. Each is applied only
+        // over a field the caller left blank, so a complete row is never
+        // overwritten, and either failing leaves what was provided.
         info = providedStreamInfo;
+        const seededGaps =
+          !info.title?.trim() ||
+          !info.game_name?.trim() ||
+          !info.thumbnail_url?.trim() ||
+          !info.profile_image_url?.trim();
+
+        if (seededGaps && info.user_id) {
+          const [liveRow, user] = await Promise.all([
+            invoke<TwitchStream[]>('get_streams_by_user_ids', { userIds: [info.user_id] })
+              .then(rows => rows?.[0])
+              .catch((e) => {
+                Logger.warn('Could not backfill live row for seeded stream:', e);
+                return undefined;
+              }),
+            info.profile_image_url?.trim()
+              ? Promise.resolve(undefined)
+              : invoke<{ profile_image_url?: string }>('get_user_by_id', { userId: info.user_id })
+                  .catch((e) => {
+                    Logger.warn('Could not backfill avatar for seeded stream:', e);
+                    return undefined;
+                  }),
+          ]);
+
+          const keep = (mine?: string, theirs?: string) =>
+            mine?.trim() ? mine : (theirs || '');
+
+          info = {
+            ...info,
+            id: info.id || liveRow?.id || '',
+            title: keep(info.title, liveRow?.title),
+            game_name: keep(info.game_name, liveRow?.game_name),
+            game_id: info.game_id || liveRow?.game_id,
+            thumbnail_url: keep(info.thumbnail_url, liveRow?.thumbnail_url),
+            profile_image_url: keep(info.profile_image_url, user?.profile_image_url),
+            // The raid event's count is the raiding party, not the target's own
+            // audience, and the seeded start time is just "now". Prefer the live
+            // row for both so uptime and viewers read true.
+            viewer_count: liveRow?.viewer_count ?? info.viewer_count,
+            started_at: liveRow?.started_at || info.started_at,
+          };
+        }
+
+        // Still nothing for title or category (the live row 404s for a channel
+        // that went offline between the raid and this lookup): fall back to the
+        // channel-info call, which answers for offline channels too.
         if (!info.title?.trim() || !info.game_name?.trim()) {
           try {
             const rawInfo = await invoke<{ title?: string; game_name?: string }>('get_channel_info', { channelName: channel });
@@ -2639,20 +2701,32 @@ export const useAppStore = create<AppState>((set, get) => ({
             // Small delay to let user see the notification
             await new Promise(resolve => setTimeout(resolve, 1500));
 
-            // Seed startStream with the user_id Twitch already gave us on the raid event.
-            // Without this, startStream falls back to get_channel_info; if that one Helix call
-            // hiccups, currentStream.user_id ends up empty and the Follow button no-ops until
-            // the user closes the stream and re-opens it via search.
+            // Seed startStream with the user_id Twitch already gave us on the raid
+            // event. Without this, startStream falls back to get_channel_info; if
+            // that one Helix call hiccups, currentStream.user_id ends up empty and
+            // the Follow button no-ops until the user closes the stream and
+            // re-opens it via search.
+            //
+            // Everything else here is a FLOOR, not an answer. The raid event knows
+            // only ids and the size of the raiding party, so the blank fields are
+            // left blank on purpose: startStream backfills them from the target's
+            // live row, and a blank reads as "not known yet" while a wrong value
+            // would be rendered as fact.
             const raidedStreamInfo: TwitchStream = {
               id: '',
               user_id: raidData.to_broadcaster_user_id,
               user_login: raidData.to_broadcaster_user_login,
               user_name: raidData.to_broadcaster_user_name || raidData.to_broadcaster_user_login,
               title: '',
+              // The raid's count is the incoming party, not the channel's own
+              // audience, and it is superseded by the live row.
               viewer_count: raidData.viewers,
               game_name: '',
               thumbnail_url: '',
-              started_at: new Date().toISOString(),
+              profile_image_url: '',
+              // Deliberately NOT `new Date()`: a fabricated start time makes uptime
+              // count from zero on a stream that has been live for hours.
+              started_at: '',
             };
 
             // Start the new stream (this will also set up new EventSub subscription)
@@ -2894,6 +2968,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   startOfflineChat: async (channel, providedStreamInfo?, opts?) => {
     set({ isLoading: true });
     trackActivity(`Joined offline chat: ${channel}`);
+    // Drop a previous replay first. When this channel resolves a VOD, a fresh
+    // session begins below; when it does not (chatOnly, or no VOD), the old
+    // one must not keep driving the panel.
+    import('./vodReplayStore')
+      .then((m) => m.stopVodReplay())
+      .catch(() => {});
     try {
       // Use the provided stream info, or find it or construct it
       let info: TwitchStream;

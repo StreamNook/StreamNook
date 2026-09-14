@@ -114,6 +114,12 @@ impl AccountStore {
         let path = Self::accounts_file_path()?;
         let json = serde_json::to_string_pretty(accounts)?;
         fs::write(&path, json)?;
+        // Per-account stores cache "who is primary" and would keep writing to
+        // the departing account's file for the length of their TTL. This is the
+        // one chokepoint every registry mutation passes through (set_active,
+        // sign_out_active, reset_all), so invalidating here cannot be missed by
+        // a future path the way three separate call sites could.
+        crate::services::vod_progress_service::invalidate_owner();
         Ok(())
     }
 

@@ -741,13 +741,20 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // playing, the panel defaults to synced historical chat and can toggle to the
   // channel's live chat. The replay hook always runs (rules of hooks); we just
   // select it as the message source when in replay mode. Replay is read-only.
+  // Read before the replay seam below, which gates on it.
+  const currentMediaType = useAppStore((s) => s.currentMediaType);
   const replayChat = useVodReplaySnapshot();
   const replaySessionId = useVodReplayStore((s) => s.sessionId);
   const replayActive = useVodReplayStore((s) => s.active);
   // The toggle is available whenever a VOD replay session exists — started for a
   // VOD opened from the Videos list OR via the offline-channel button. Never in
-  // popouts (they always show their own live channel).
-  const isVodReplay = !channelOverride && replayActive;
+  // popouts (they always show their own live channel), and never over a LIVE
+  // room: the store flag is cleared by startStream, but if a session ever
+  // outlives its media again, the media type is the fact that cannot lie.
+  const isVodReplay =
+    !channelOverride &&
+    replayActive &&
+    (currentMediaType === 'video' || currentMediaType === 'clip' || currentMediaType === 'offline_chat');
   const [chatMode, setChatMode] = useState<'replay' | 'live'>('replay');
   const chat = isVodReplay && chatMode === 'replay' ? replayChat : isTwitch ? twitchChat : providerChat;
   const { connectChat, sendMessage, isConnected, error, setPaused: setBufferPaused, roomState, userBadges } = chat;
@@ -856,7 +863,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // uses the global store value. Resolving it here means the banner, countdown
   // and level-up logic below all work per-pane with no further changes.
   const currentHypeTrain = channelOverride ? (hypeTrainOverride ?? null) : globalHypeTrain;
-  const currentMediaType = useAppStore((s) => s.currentMediaType);
   const isMultiNookActive = usemultiNookStore((s) => s.isMultiNookActive);
   const activeChatChannelId = usemultiNookStore((s) => s.activeChatChannelId);
   const slots = usemultiNookStore((s) => s.slots);
