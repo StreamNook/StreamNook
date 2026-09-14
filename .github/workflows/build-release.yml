@@ -174,22 +174,21 @@ jobs:
           echo "EOF" >> "$GITHUB_OUTPUT"
           echo "Signed $bundle"
 
-      - name: Attach macOS artifacts to the release
+      # The GitHub release is created by the Windows `build` job, which runs
+      # AFTER this one (it needs our outputs for the manifest). So this job can
+      # never wait for the release: it would wait forever, fail, and take the
+      # Windows release down with it. Hand the bundle over as a workflow
+      # artifact instead; `build` attaches it right after `gh release create`.
+      - name: Hand the macOS bundle to the release job
         if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          version=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          bundle="${{ steps.pack.outputs.BUNDLE_NAME }}"
-          # The Windows job creates the release; retry briefly so job ordering
-          # does not decide whether the macOS artifact lands.
-          for i in $(seq 1 30); do
-            gh release view "v$version" >/dev/null 2>&1 && break
-            echo "waiting for release v$version ($i/30)"; sleep 10
-          done
-          gh release upload "v$version" "$bundle" --clobber
-          [ -f "$bundle.minisig" ] && gh release upload "v$version" "$bundle.minisig" --clobber || true
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-bundle
+          path: |
+            ${{ steps.pack.outputs.BUNDLE_NAME }}
+            ${{ steps.pack.outputs.BUNDLE_NAME }}.minisig
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Push macOS bundle to Cloudflare R2
         if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
@@ -217,6 +216,10 @@ jobs:
 
   build:
     needs: [merge-to-main, build-macos]
+    # Run even when the macOS job failed: a Mac build problem degrades to a
+    # Windows-only release (the manifest step already handles empty macOS
+    # outputs) instead of blocking every Windows user's update.
+    if: ${{ !cancelled() && needs.merge-to-main.result == 'success' }}
     runs-on: windows-latest
     permissions:
       contents: write
@@ -537,6 +540,29 @@ jobs:
           gh release create "v$version" --title "StreamNook v$version" --notes-file ./release_notes.md "$bundleName" "bundle/components.json" "checksums.txt"
 
           echo "Release v$version created!"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # The macOS job cannot attach to a release that does not exist yet (it
+      # runs before this job), so it parks the bundle as a workflow artifact
+      # and we attach it here. Skipped when the macOS job produced nothing.
+      - name: Fetch the macOS bundle
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false' && needs.build-macos.outputs.BUNDLE_NAME != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-bundle
+          path: macos-bundle
+
+      - name: Attach the macOS bundle to the release
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false' && needs.build-macos.outputs.BUNDLE_NAME != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.VERSION }}"
+          bundle="macos-bundle/${{ needs.build-macos.outputs.BUNDLE_NAME }}"
+          gh release upload "v$version" "$bundle" --clobber
+          [ -f "$bundle.minisig" ] && gh release upload "v$version" "$bundle.minisig" --clobber || true
+          echo "Attached $(basename "$bundle") to v$version"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
