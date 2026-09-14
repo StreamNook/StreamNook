@@ -59,12 +59,38 @@ jobs:
         with:
           ref: main
 
+      # Release-exists guard, the macOS twin of the Windows job's check. This
+      # workflow fires on ANY `dev` push that touches Cargo.toml, release or
+      # not, and every upload below is `--clobber`. Without this guard a
+      # dependency bump after a release would rebuild the macOS bundle from a
+      # different tree and overwrite the published assets under the same tag,
+      # so an installed client's pinned hash would no longer match what the
+      # release serves. When the tag already exists, every step from here on
+      # is skipped and the job's outputs stay empty; the `build` job already
+      # treats empty macOS outputs as "no macOS entry in the manifest".
+      - name: Check if release already exists
+        id: check_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "RELEASE_EXISTS=true" >> "$GITHUB_OUTPUT"
+            echo "Release v$version already exists; skipping the macOS build so its published assets are not clobbered"
+          else
+            echo "RELEASE_EXISTS=false" >> "$GITHUB_OUTPUT"
+            echo "Release v$version does not exist; building the macOS bundle"
+          fi
+
       - name: Setup Node.js
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
       - name: Setup Rust
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
         uses: dtolnay/rust-toolchain@stable
         with:
           # Both halves of the universal binary. `universal-apple-darwin` is not
@@ -73,15 +99,18 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Rust cache
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: "./src-tauri -> target"
           key: macos
 
       - name: Install dependencies
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
         run: npm ci
 
       - name: Build Tauri app (universal)
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
         run: npm run tauri build -- --target universal-apple-darwin
         env:
           # Same values the Windows job uses; the client IDs are public by
@@ -96,6 +125,7 @@ jobs:
           KICK_APP_CLIENT_SECRET: ${{ secrets.KICK_APP_CLIENT_SECRET }}
 
       - name: Pack the .app into a tarball
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
         id: pack
         run: |
           set -euo pipefail
@@ -117,6 +147,7 @@ jobs:
           echo "Packed $bundle ($(du -h "$bundle" | cut -f1)) for v$version"
 
       - name: Sign the tarball with the update key
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
         id: sign
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
@@ -144,6 +175,7 @@ jobs:
           echo "Signed $bundle"
 
       - name: Attach macOS artifacts to the release
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -160,6 +192,7 @@ jobs:
           [ -f "$bundle.minisig" ] && gh release upload "v$version" "$bundle.minisig" --clobber || true
 
       - name: Push macOS bundle to Cloudflare R2
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

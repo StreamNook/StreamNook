@@ -1,0 +1,139 @@
+name: Desktop CI
+
+# WHY THIS EXISTS
+#
+# The release pipeline (build-release.yml) is the only place the desktop app
+# was ever compiled on GitHub, and it runs on a `dev` push that bumps
+# `Cargo.toml`, publishing as it goes. That means the first time a change was
+# proven on Windows or macOS was also the time it shipped. This workflow is the
+# same proof with no publish step: check, test and a real release link of the
+# three crate types (staticlib + cdylib + rlib, plus the bin) on both desktop
+# hosts, on every converge branch and pull request.
+#
+# It is not a release pipeline. Nothing here signs, bundles or uploads.
+
+on:
+  push:
+    branches: ["converge*"]
+  pull_request:
+  workflow_dispatch:
+
+# A force-push should cancel the run it superseded.
+concurrency:
+  group: desktop-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # The OAuth client ids are read with a hard env!() at compile time, so cargo
+  # needs them defined. They are public by construction (they appear in every
+  # authorize URL the app opens); only the *_SECRET values are secrets. A
+  # compile needs a defined value, not a real one, so on a pull request that
+  # cannot read repository secrets the secret compiles as the empty string.
+  TWITCH_APP_CLIENT_ID: "1qgws7yzcp21g5ledlzffw3lmqdvie"
+  TWITCH_ANDROID_CLIENT_ID: "kd1unb4b3q4t58fwlpcbzcbnm76a8fp"
+  TWITCH_WEB_CLIENT_ID: "kimne78kx3ncx6brgo4mv6wki5h1ko"
+  KICK_APP_CLIENT_ID: "01KMKM0HVR6HY0BMA101JFCTW3"
+  TWITCH_APP_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
+
+jobs:
+  windows:
+    name: Windows check, test and release link
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install node dependencies
+        run: npm ci
+
+      # Runs `tsc && vite build`. It type-checks the frontend and produces
+      # dist/, which is gitignored. tauri-build resolves frontendDist
+      # ("../dist") while compiling, so no cargo step below can run until this
+      # step has created it.
+      - name: Build frontend
+        run: npm run build
+
+      - name: Frontend tests
+        run: npm test
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          key: windows-ci
+
+      # --locked so a lockfile that drifted from Cargo.toml fails loudly.
+      - name: cargo check (all targets)
+        working-directory: src-tauri
+        run: cargo check --locked --all-targets
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test --locked
+
+      # cargo check never links and cargo test links only the test binaries.
+      # This is the first real link of the lib's three crate types plus the
+      # bin, the step that would otherwise happen for the first time inside the
+      # release pipeline. It is the slow step and the decisive one.
+      - name: cargo build --release (lib + bin, no bundler)
+        working-directory: src-tauri
+        run: cargo build --release --locked
+
+  macos:
+    name: macOS check, test and release link
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install node dependencies
+        run: npm ci
+
+      # Same reason as on Windows: dist/ must exist before any cargo step.
+      - name: Build frontend
+        run: npm run build
+
+      - name: Frontend tests
+        run: npm test
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # The host is arm64. The release ships a universal binary, so the
+          # Intel half is checked here as well; a break in either arch would
+          # otherwise surface only when the release job runs lipo.
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          key: macos-ci
+
+      - name: cargo check (all targets, arm64 host)
+        working-directory: src-tauri
+        run: cargo check --locked --all-targets
+
+      - name: cargo check (all targets, x86_64-apple-darwin)
+        working-directory: src-tauri
+        run: cargo check --locked --all-targets --target x86_64-apple-darwin
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test --locked
+
+      # Same reason as on Windows: the real three-crate-type link, proven
+      # before anything reaches the release pipeline.
+      - name: cargo build --release (lib + bin, no bundler)
+        working-directory: src-tauri
+        run: cargo build --release --locked

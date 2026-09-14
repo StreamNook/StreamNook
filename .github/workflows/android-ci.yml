@@ -19,7 +19,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [android]
+    branches: [android, dev, "converge*"]
   workflow_dispatch:
 
 # A dependabot force-push should cancel the run it superseded.
