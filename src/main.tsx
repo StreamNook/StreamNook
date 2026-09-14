@@ -13,15 +13,21 @@ import './bootPreload';
 // App's whole tree (video player + hls.js/plyr, browse, settings) — a real
 // footprint + startup cut for the chat-only popout.
 const App = lazy(() => import('./App.tsx'));
+const MobileApp = lazy(() => import('./mobile/MobileApp.tsx'));
 const ProfileCardPage = lazy(() => import('./pages/ProfileCardPage.tsx'));
 const MultiChatWindow = lazy(() => import('./components/multichat/MultiChatWindow.tsx'));
 const ChatOverlayWindow = lazy(() => import('./components/multichat/ChatOverlayWindow'));
 const PluginWindowHost = lazy(() => import('./plugins-ui/PluginWindowHost.tsx'));
-// Side-effect import: registers `window.openMultiChatWindow` for popout spawning.
-import './utils/multichatWindow';
-// Side-effect import: listens for the tray's "Open MultiChat" menu event and
-// spawns an empty popout from the main window.
-import './utils/multichatTrayBridge';
+// Popout-window and tray plumbing. These used to be unconditional side-effect
+// imports, so they registered at module load on Android too, where there is no
+// tray and WebviewWindow.create() throws. Desktop-only now; the microtask delay
+// is irrelevant because both are driven by later user interaction.
+if (!IS_MOBILE) {
+  // registers `window.openMultiChatWindow` for popout spawning
+  import('./utils/multichatWindow');
+  // listens for the tray's "Open MultiChat" menu event
+  import('./utils/multichatTrayBridge');
+}
 // Fraunces (variable serif). The upright axis backs the "Serif" choice in
 // Theme > Font, so its @font-face must exist at boot for users who chose it
 // (the woff2 itself only downloads when rendered). The italic axis is only
@@ -31,7 +37,37 @@ import './styles/globals.css';
 // Light treatment for the Prism theme. Separate from globals.css so the effect
 // is one self-contained sheet, and loaded after it so its selectors win.
 import './styles/theme-prism.css';
+// Mobile layout layer. Every rule is scoped behind html[data-mobile="true"],
+// which is set just below, so importing it on desktop is inert.
+import './styles/mobile.css';
 import { initLogCapture } from './services/logService';
+import { IS_MOBILE, isPortrait, onOrientationChange } from './utils/platform';
+
+// Drive the mobile CSS off the document element. Orientation is tracked here
+// rather than with a CSS media query because the layout branch also needs it in
+// JS (the player switches between a fixed 16:9 band and full-bleed).
+if (IS_MOBILE) {
+  const root = document.documentElement;
+  root.dataset.mobile = 'true';
+  const applyOrientation = () => {
+    root.dataset.orientation = isPortrait() ? 'portrait' : 'landscape';
+  };
+  applyOrientation();
+  onOrientationChange(applyOrientation);
+  // Android back-button chain for the in-place shell (MainActivity calls
+  // window.__SN_BACK__). MobileApp overrides this with navStore on mount.
+  void import('./mobile/inPlaceBack').then((m) => m.installInPlaceBackHandler());
+  // Pull the native WindowInsets into --sn-inset-* CSS vars. The push from
+  // MainActivity fires on inset CHANGES, which a fresh page load missed, and
+  // env(safe-area-inset-*) reads 0 in this WebView, so without this pull the
+  // UI draws under the status bar and camera cutout on every boot.
+  void import('./mobile/nativeInsets').then((m) => m.applyNativeInsetsOnce());
+  // Keep the status/navigation bar icon colour on the StreamNook theme rather
+  // than on the phone's night-mode setting, which is what the platform would
+  // otherwise guess from. Safe to land after the first theme apply: it reads the
+  // live palette on install as well as listening for changes.
+  void import('./mobile/systemBars').then((m) => m.installSystemBarAppearance());
+}
 
 import { Logger } from './utils/logger';
 // Initialize log capture early to capture all console messages
@@ -50,6 +86,12 @@ const isProfileCard = hash.startsWith('#/profile');
 const isMultiChat = hash.startsWith('#/multichat');
 const isChatOverlay = hash.startsWith('#/chat-overlay');
 const isPluginWindow = hash.startsWith('#/plugin/');
+
+// The dedicated mobile shell (src/mobile/: bottom tabs, sheets, touch player,
+// drill-in settings) is the mobile DEFAULT. The in-place adapted App
+// (data-mobile CSS + MobileNav) remains reachable as an escape hatch: set
+// localStorage['sn-legacy-shell'] = '1' on a device build to fall back.
+const useNextMobileShell = IS_MOBILE && localStorage.getItem('sn-legacy-shell') !== '1';
 
 // Create the React root ONCE per container. The lazy route imports above can make
 // React Fast Refresh re-execute this module instead of full-reloading, and a second
@@ -133,7 +175,7 @@ root.render(
   <React.StrictMode>
     <MotionScope>
       <Suspense fallback={null}>
-        {isChatOverlay ? <ChatOverlayWindow /> : isMultiChat ? <MultiChatWindow /> : isPluginWindow ? <PluginWindowHost /> : isProfileCard ? <ProfileCardPage /> : <App />}
+        {isChatOverlay ? <ChatOverlayWindow /> : isMultiChat ? <MultiChatWindow /> : isPluginWindow ? <PluginWindowHost /> : isProfileCard ? <ProfileCardPage /> : useNextMobileShell ? <MobileApp /> : <App />}
       </Suspense>
     </MotionScope>
   </React.StrictMode>,

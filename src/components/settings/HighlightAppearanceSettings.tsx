@@ -1,4 +1,7 @@
 import { useAppStore } from '../../stores/AppStore';
+// Rendered inside ChatSettings, so this reaches the phone too. Shared panel,
+// so a platform branch here is legitimate.
+import { IS_MOBILE } from '../../utils/platform';
 import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
 import type { HighlightDisplayStyle } from '../../types';
 
@@ -79,18 +82,23 @@ const HighlightAppearanceSettings = () => {
         />
       </SettingsRow>
 
-      <SettingsRow
-        title="Flash window title when unfocused"
-        description="When a highlight lands while StreamNook is in the background, flash the window title until you tab back. Messages older than 5 seconds (history backfill) are skipped."
-        control={
-          <Toggle
-            enabled={appearance.flash_title_when_unfocused ?? false}
-            onChange={() =>
-              writeAppearance({ flash_title_when_unfocused: !appearance.flash_title_when_unfocused })
-            }
-          />
-        }
-      />
+      {/* Desktop only: there is no window title to flash on Android and nothing
+          to tab back from. The phone surfaces background highlights through
+          system notifications instead (Settings > Notifications). */}
+      {!IS_MOBILE && (
+        <SettingsRow
+          title="Flash window title when unfocused"
+          description="When a highlight lands while StreamNook is in the background, flash the window title until you tab back. Messages older than 5 seconds (history backfill) are skipped."
+          control={
+            <Toggle
+              enabled={appearance.flash_title_when_unfocused ?? false}
+              onChange={() =>
+                writeAppearance({ flash_title_when_unfocused: !appearance.flash_title_when_unfocused })
+              }
+            />
+          }
+        />
+      )}
     </SettingsSection>
   );
 };

@@ -14,6 +14,7 @@ import { getCosmeticsWithFallback } from '../services/cosmeticsCache';
 import type { ThirdPartyBadge as ThirdPartyBadgeType } from '../services/thirdPartyBadges';
 import { useAppStore } from '../stores/AppStore';
 import { openBadgesWithBadgeInMain } from '../utils/openBadgesInMain';
+import { openExternal } from '../utils/openExternal';
 import { useChatUserStore } from '../stores/chatUserStore';
 import { useShallow } from 'zustand/react/shallow';
 import { boundedSet } from '../utils/boundedMap';
@@ -27,6 +28,7 @@ import { StreamNookBadge } from './StreamNookBadge';
 import { AtmosphereBackground } from './AtmosphereBackground';
 import { MajorCologneChrome } from './MajorCologneChrome';
 import { getAtmosphere } from '../services/atmospheres';
+import { features } from '../features';
 import { MAJOR_COLOGNE_THEME_ID } from '../services/cologneEvent';
 import type { HighlightMatch } from '../utils/chatHighlightMatcher';
 import { useStreamerMode } from '../utils/streamerMode';
@@ -63,7 +65,6 @@ import {
 // component, so the expression lives here and the component calls a plain
 // function.
 const loadInvoke = () => import('@tauri-apps/api/core').then((m) => m.invoke);
-const loadShellOpen = () => import('@tauri-apps/plugin-shell').then((m) => m.open);
 
 // Owns the try/catch for the moderation and pin handlers below. The compiler
 // cannot lower a conditional inside a try/catch in a compiled component, and
@@ -1058,8 +1059,10 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   const seventvBadge = seventvBadgeRaw as SevenTVBadgeWithSelection | null | undefined;
   const atmosphere = atmosphereId ? getAtmosphere(atmosphereId) : null;
   // Frost behind the text only when the atmosphere declares it needs it (busy
-  // washes); subtle ones render the text bare.
-  const atmosphereFrost = !!atmosphere?.chatFrost;
+  // washes); subtle ones render the text bare. A backdrop-filter per message row
+  // is the single most expensive thing in the list on phone GPUs, so the wash
+  // still renders there but the frost pass does not.
+  const atmosphereFrost = features.richAtmospheres && !!atmosphere?.chatFrost;
   const cologneAtm = cologne ? getAtmosphere(MAJOR_COLOGNE_THEME_ID) : null;
   const [broadcasterType] = useState<string | null>(null);
   // Hover-action DOM (copy/pin cluster + mod menu) mounts on the row's FIRST
@@ -1902,15 +1905,15 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             // No target="_blank": the webview opens _blank links externally on
             // its own, which would stack a second tab on top of the open() below.
             className="text-info hover:text-info/80 underline cursor-pointer"
-            onClick={async (e) => {
+            onClick={(e) => {
+              // preventDefault runs BEFORE the open attempt, so if the open
+              // fails there is no fallback navigation left - which is why this
+              // has to route through a helper that actually works on both
+              // platforms. The shell plugin's `open` rejects on Android (no
+              // xdg-open), and the rejection used to be swallowed by a catch
+              // that only logged: a dead tap on every chat link on the phone.
               e.preventDefault();
-              try {
-                // Use Tauri's shell plugin to open URL in default browser
-                const open = await loadShellOpen();
-                await open(url);
-              } catch (err) {
-                Logger.error('[ChatMessage] Failed to open URL:', err);
-              }
+              void openExternal(url);
             }}
           >
             {label}
@@ -3173,6 +3176,13 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         <Tooltip content="Click to view parent message" side="top">
           <div
             className="mb-1.5 pl-2 border-l-2 border-textSecondary/40 cursor-pointer hover:border-textSecondary/60 transition-colors"
+            // This line owns its own tap. Without the marker, a tap on mobile
+            // ALSO reaches MobileChatPane's tap-to-reply handler on the list, so
+            // jumping to the parent would simultaneously start a reply to the
+            // child. `data-no-drag` is the existing repo convention for exactly
+            // this (see the mod-drag handles below and StyledChatName), and it
+            // is inert on desktop, which has no competing parent click handler.
+            data-no-drag="true"
             onClick={() => onReplyClick?.(parsed.replyInfo!.parentMsgId)}
           >
             <div

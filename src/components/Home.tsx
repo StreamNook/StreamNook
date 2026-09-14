@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore, ensureHomeSnapshotSync, clipSourceOf, HomeTab } from '../stores/AppStore';
+import { IS_MOBILE } from '../utils/platform';
 import { createPortal } from 'react-dom';
 import { Search, ArrowLeft, Heart, X, Gift, Pickaxe, LayoutGrid, Flame, ArrowUpRight, Undo2, Users, User, Loader2, Clock, Play, Check, Plus } from 'lucide-react';
 import { MediaCard } from './MediaCard';
@@ -42,6 +43,7 @@ import { useStreamAvatars } from '../hooks/useStreamAvatars';
 import { useVisibleAvatarKeys } from '../hooks/useVisibleAvatarKeys';
 import { Logger } from '../utils/logger';
 import { useVisibleInterval } from '../utils/useVisibleInterval';
+import { gameBoxArt } from '../utils/boxArt';
 // Types for drops data
 interface DropCampaign {
     id: string;
@@ -1520,13 +1522,7 @@ const Home = () => {
             .replace('{width}', '640').replace('{height}', '360');
     };
 
-    const getGameBoxArt = (url: string) => {
-        if (!url) return '';
-        if (url.includes('{width}') && url.includes('{height}')) {
-            return url.replace('{width}', '1200').replace('{height}', '1600');
-        }
-        return url.replace(/-\d+x\d+\.(jpg|jpeg|png)$/i, '-1200x1600.$1');
-    };
+    const getGameBoxArt = (url: string) => gameBoxArt(url);
 
     const handleStreamClick = (e: React.MouseEvent, stream: TwitchStream) => {
         const provider = streamProvider(stream);
@@ -2751,19 +2747,38 @@ const Home = () => {
             {/* Top Navigation Frame - Always Center Navigation */}
             {!(activeTab === 'category' && selectedCategory) && (
                 <div className="flex flex-col relative box-border overflow-hidden z-20">
-                    <div className="flex gap-3 relative z-30 px-4 py-2.5 min-h-[48px] items-center justify-center border-b border-borderSubtle bg-background/95 backdrop-blur-md">
+                    {/* Mobile: pad past the status bar (targetSdk 36 forces edge-to-edge,
+                        so without this the clock sits on top of the tabs), and let the
+                        row scroll horizontally instead of clipping — at 360px the
+                        desktop row runs off the right edge and the last tab is
+                        unreachable. justify-start on mobile so scrolling starts at the
+                        first tab rather than mid-row. */}
+                    <div
+                        className={`flex gap-3 relative z-30 px-4 py-2.5 min-h-[48px] items-center border-b border-borderSubtle bg-background/95 backdrop-blur-md ${
+                            IS_MOBILE ? 'justify-start overflow-x-auto' : 'justify-center'
+                        }`}
+                        style={IS_MOBILE ? { paddingTop: 'calc(0.625rem + var(--sn-safe-top))' } : undefined}
+                    >
                     <div ref={searchBarRef} className="relative flex items-center glass-panel px-1.5 py-1 !rounded-xl">
                         {/* Navigation buttons - fade out when search is expanded */}
                         <LayoutGroup>
                         <div className={`flex items-center gap-1 transition-opacity duration-300 ${isSearchExpanded ? 'opacity-0' : 'opacity-100'}`}>
-                            {/* The platform switcher used to sit here. It moved to
-                                the title bar (PlatformSwitcher): this toolbar unmounts
-                                on a category drill-down and is gone entirely while
-                                watching, so it could never answer "which platform
-                                am I in" for more than one screen. */}
-                            <MultiNookToggle />
-                            <MultiChatButton />
-                            <div className="border-l border-borderSubtle h-5 mx-0.5" />
+                            {/* Both are multi-window features. MultiNook tiles several
+                                players at once and MultiChat spawns a popout, and
+                                WebviewWindow.create() throws on mobile, so on a phone
+                                these are dead buttons taking scarce header width. */}
+                            {!IS_MOBILE && (
+                                <>
+                                    {/* The platform switcher used to sit here. It moved to
+                                        the title bar (PlatformSwitcher): this toolbar unmounts
+                                        on a category drill-down and is gone entirely while
+                                        watching, so it could never answer "which platform
+                                        am I in" for more than one screen. */}
+                                    <MultiNookToggle />
+                                    <MultiChatButton />
+                                    <div className="border-l border-borderSubtle h-5 mx-0.5" />
+                                </>
+                            )}
                             {isAuthenticated && (
                                 <button
                                     onClick={() => { setActiveTab('following'); setIsSearchExpanded(false); }}

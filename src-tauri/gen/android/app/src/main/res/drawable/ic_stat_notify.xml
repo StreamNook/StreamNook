@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Status-bar icon: the Penrose mark as a flat silhouette.
+
+  Android tints small notification icons to a single colour and uses only their
+  alpha, so anything with opaque colour in it collapses into a filled blob. The
+  launcher icon has the same constraint and solves it with a luminance-to-alpha
+  monochrome layer, but that trick needs more pixels than 24dp gives, and the
+  three cube-face shades that carry the impossible-triangle illusion are not
+  separable at this size anyway. A clean silhouette of the tribar is the honest
+  treatment here and still reads as the mark.
+
+  Geometry generated from src-tauri/images/logo.svg: nine isometric cubes, each
+  the hexagonal outline of its three faces, centres straight out of the source
+  art with its translate(10,0) applied. Regenerate from that file rather than
+  hand-editing these numbers if the mark ever changes.
+
+  Drawn as one path with nine subpaths, all wound the same way, so nonZero fill
+  unions the overlaps into a single shape instead of punching holes where the
+  cubes touch.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="124"
+    android:viewportHeight="124">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="nonZero"
+        android:pathData="M33.67,96.64L41.17,83.64L56.17,83.64L63.67,96.64L56.17,109.64L41.17,109.64ZM60.33,96.64L67.83,83.64L82.83,83.64L90.33,96.64L82.83,109.64L67.83,109.64ZM87.00,96.64L94.50,83.64L109.50,83.64L117.00,96.64L109.50,109.64L94.50,109.64ZM73.67,73.55L81.17,60.55L96.17,60.55L103.67,73.55L96.17,86.55L81.17,86.55ZM60.33,50.45L67.83,37.45L82.83,37.45L90.33,50.45L82.83,63.45L67.83,63.45ZM47.00,27.36L54.50,14.36L69.50,14.36L77.00,27.36L69.50,40.36L54.50,40.36ZM33.67,50.45L41.17,37.45L56.17,37.45L63.67,50.45L56.17,63.45L41.17,63.45ZM20.33,73.55L27.83,60.55L42.83,60.55L50.33,73.55L42.83,86.55L27.83,86.55ZM7.00,96.64L14.50,83.64L29.50,83.64L37.00,96.64L29.50,109.64L14.50,109.64Z" />
+</vector>

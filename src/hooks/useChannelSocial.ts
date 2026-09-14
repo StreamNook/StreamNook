@@ -343,7 +343,17 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
         if (isFollowing) await store.unfollow(provider, providerChannel);
         else await store.follow(provider, providerChannel, userName ?? undefined);
       }
-      setIsFollowing((prev) => !prev);
+      const nowFollowing = !isFollowing;
+      setIsFollowing(nowFollowing);
+      // Announce it, so anything else keyed on follow state updates without
+      // making its own request. The mobile composer blocks on "Follow to send a
+      // message" in followers-only rooms and listens for this, so following
+      // unlocks it immediately instead of at the next remount.
+      window.dispatchEvent(
+        new CustomEvent('sn:follow-changed', {
+          detail: { userId, following: nowFollowing },
+        }),
+      );
       Logger.debug(`[useChannelSocial] Successfully ${action}ed ${userLogin}`);
     } catch (err) {
       Logger.error(`[useChannelSocial] ${action} error:`, err);

@@ -5,7 +5,8 @@ use crate::services::ll_origin::{
 use anyhow::Result;
 use log::{error, info, warn};
 use once_cell::sync::Lazy;
-use rand::Rng;
+// rand 0.10 moved random_range onto the RngExt extension trait.
+use rand::RngExt;
 use reqwest::Client;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -851,6 +852,10 @@ impl StreamServer {
                     return finish_playlist_response(status, request_path, bytes);
                 }
                 detect_ads_in_playlist(text);
+                #[cfg(target_os = "android")]
+                let filtered = crate::services::ad_bypass::filter_and_escalate(text);
+                #[cfg(target_os = "android")]
+                let text = filtered.as_str();
                 // Lower the over-declared TARGETDURATION, then (LIVE only) pin every
                 // segment URL stable across refreshes so Twitch re-signing a path
                 // can't trip hls.js into replaying a segment. Gated two ways: a

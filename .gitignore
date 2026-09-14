@@ -55,6 +55,16 @@ Thumbs.db
 
 # Wrangler / Cloudflare local dev cache (streamnook.app tooling)
 .wrangler/
+
+# Android port: Windows-only bare-clang linker workaround (breaks the Linux build).
+# The repo-root one is the Windows hack; src-tauri/.cargo/config.toml is tracked
+# because it carries the Android strip flags.
+/.cargo/
+
+# Android port: generated/local Gradle state
+src-tauri/gen/android/local.properties
+src-tauri/gen/android/.gradle/
+src-tauri/gen/android/**/build/
 badge-assets-r2/
 atmosphere-assets-r2/
 
@@ -62,3 +72,9 @@ atmosphere-assets-r2/
 # src-tauri/build.rs when it is missing or stale. ~700KB of minified output that
 # rewrites wholesale on any source edit, so it is built rather than committed.
 src-tauri/potoken/mint.bundle.js
+
+# Android release signing. Never commit: the keystore and its passwords are
+# the app identity, and a leaked one lets anyone ship an update as StreamNook.
+keystore.properties
+*.jks
+*.keystore

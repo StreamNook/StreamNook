@@ -76,7 +76,7 @@ fn persist(sess: &YouTubeSession) {
     let Ok(json) = serde_json::to_string(sess) else {
         return;
     };
-    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
+    if let Ok(entry) = crate::services::secure_store::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
         let _ = entry.set_password(&json);
     }
     if let Some(p) = session_path() {
@@ -85,7 +85,7 @@ fn persist(sess: &YouTubeSession) {
 }
 
 fn load_persisted() -> Option<YouTubeSession> {
-    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
+    if let Ok(entry) = crate::services::secure_store::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
         if let Ok(json) = entry.get_password() {
             if let Ok(s) = serde_json::from_str::<YouTubeSession>(&json) {
                 return Some(s);
@@ -99,7 +99,7 @@ fn load_persisted() -> Option<YouTubeSession> {
 }
 
 fn clear_persisted() {
-    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
+    if let Ok(entry) = crate::services::secure_store::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
         let _ = entry.delete_credential();
     }
     if let Some(p) = session_path() {

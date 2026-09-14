@@ -4,11 +4,13 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 import { SevenTVBadge, SevenTVPaint } from '../types';
 
 import { Logger } from '../utils/logger';
+import { features } from '../features';
+import { LruMap } from './cosmeticsCache';
+import { IS_MOBILE } from '../utils/platform';
 // The paint → CSS engine + its v4 paint types now live in the standalone,
 // Tauri-free `paintStyle` module so the hosted overlay page can share the exact
 // same rendering. Re-exported here so existing importers stay unchanged.
 import type { PaintV4 } from './paintStyle';
-import { LruMap } from './cosmeticsCache';
 export { computePaintStyle } from './paintStyle';
 export type { PaintShadowMode } from './paintStyle';
 
@@ -40,15 +42,26 @@ interface UserCosmeticsResponse {
 //   - Successful lookups (on 7TV with or without inventory, or genuinely not
 //     on 7TV) ride the full TTL: they are stable answers.
 //   - Hard failures (network error, 5xx, retry-exhausted) get a much shorter
-//     TTL so a transient blip cannot strand a real user without a paint.
+//     TTL so a transient 7TV blip can't strand a real user without a paint
+//     for 5 minutes. The next request retries.
+// Bounded, because this used to be a plain Map that only ever grew: the TTL
+// below decides FRESHNESS, and an expired entry is overwritten rather than
+// deleted, so a long session in a busy channel accumulated one entry per unique
+// chatter forever. Each one holds that user's whole 7TV inventory.
 //
-// Bounded LRU, NOT a plain Map: the TTL only decides freshness (an expired
-// entry is overwritten on read, never deleted), so an unbounded map grows one
-// whole-inventory entry per unique chatter for the life of the process. The
-// size cap is safe because the TTL re-fetches anything colder than eviction
-// would discard. Do NOT trim entries to the selected paint: paint COUNTS and
-// the pickers read the full inventory from this cache.
-const userCache = new LruMap<string, { data: UserCosmeticsResponse; hardFail: boolean; timestamp: number }>(4000);
+// A size cap is safe precisely BECAUSE of the TTL: anything older than
+// CACHE_DURATION is re-fetched on read anyway, so evicting a cold entry can
+// only ever discard something the next read would have thrown away. The cap is
+// set well above a realistic 5-minute working set so it never causes refetches
+// that the TTL would not already have caused.
+//
+// Note for anyone tempted to shrink these entries instead: the full inventory
+// is load-bearing. The pickers map over it to change a selection, and the
+// public profile overlay reports a paint COUNT for other users, both fed from
+// this same data via getFullProfileWithFallback.
+const userCache = new LruMap<string, { data: UserCosmeticsResponse; hardFail: boolean; timestamp: number }>(
+  IS_MOBILE ? 1500 : 4000,
+);
 const CACHE_DURATION = 5 * 60 * 1000;
 const HARD_FAIL_CACHE_DURATION = 30 * 1000;
 
@@ -63,6 +76,12 @@ export interface UserCosmeticsResult {
 
 // Cache for cosmetic file paths (id -> localPath) to avoid repeated IPC calls
 let cachedCosmeticFiles: Record<string, string> | null = null;
+// Whether the disk listing has been read successfully. Split out from
+// `cachedCosmeticFiles === null` because that sentinel was doing two jobs at
+// once: "we have not loaded from disk yet" and "we have nothing memoized". A
+// download that finished before the listing arrived therefore had nowhere to
+// record itself and got re-queued forever, at a manifest write each time.
+let cosmeticFilesLoadedFromDisk = false;
 
 // Track pending requests to prevent duplicate fetches
 const pendingRequests = new Map<string, Promise<UserCosmeticsResult>>();
@@ -405,6 +424,8 @@ async function downloadCosmeticIfNeeded(id: string, url: string): Promise<string
     return pendingCosmeticDownloads.get(id)!;
   }
 
+  if (!features.assetDiskCache) return null;
+
   const settings = await getCosmeticCacheSettings();
   if (!settings.enabled) return null;
 
@@ -418,8 +439,12 @@ async function downloadCosmeticIfNeeded(id: string, url: string): Promise<string
         expiryDays: settings.expiryDays
       }) as string;
 
-      if (localPath && cachedCosmeticFiles) {
-        cachedCosmeticFiles[id] = localPath;
+      if (localPath) {
+        // Record it even if the disk listing has not arrived yet. This used to
+        // be gated on cachedCosmeticFiles being non-null, so a download that
+        // won that race was cached on disk, reported as a miss, and queued
+        // again on the next render.
+        (cachedCosmeticFiles ??= {})[id] = localPath;
         return localPath;
       }
       return null;
@@ -783,17 +808,23 @@ export async function getUserCosmetics(twitchId: string): Promise<UserCosmeticsR
     }
   }
 
-  if (cachedCosmeticFiles === null && !filesInitializationPromise) {
+  if (!cosmeticFilesLoadedFromDisk && !filesInitializationPromise) {
     filesInitializationPromise = (async () => {
       try {
-        cachedCosmeticFiles = await invoke('get_cached_files', { cacheType: 'cosmetic' });
+        const fromDisk = await invoke<Record<string, string>>('get_cached_files', {
+          cacheType: 'cosmetic',
+        });
+        // Merge rather than replace: anything downloaded while this was in
+        // flight is already memoized above and would otherwise be dropped.
+        cachedCosmeticFiles = { ...fromDisk, ...(cachedCosmeticFiles ?? {}) };
+        cosmeticFilesLoadedFromDisk = true;
       } catch (e) {
         Logger.warn('Failed to get cached cosmetic files:', e);
-        // Leave it null (NOT {}) so the next cosmetic resolve retries. A
-        // transient failure here (e.g. the shared Rust file cache contended
-        // while another window is also hitting it) used to poison the cache as
-        // {} forever, which left 7TV paints/badges broken until an app restart.
-        cachedCosmeticFiles = null;
+        // Leave the flag false so the next cosmetic resolve retries. A transient
+        // failure here (e.g. the shared Rust file cache contended while another
+        // window is also hitting it) used to poison the cache as {} forever,
+        // which left 7TV paints/badges broken until an app restart. Whatever is
+        // already memoized stays: it came from real downloads, not from disk.
       } finally {
         filesInitializationPromise = null;
       }
@@ -947,5 +978,8 @@ export const getBadgeImageUrlForProvider = (badge: any, provider: '7tv' | 'ffz')
 
 export function clearUserCache() {
   userCache.clear();
-  cachedCosmeticFiles = null; // Also clear the file cache so it re-fetches
+  // Also clear the file cache so it re-fetches. Both halves: the map itself and
+  // the flag that says we have read the disk listing.
+  cachedCosmeticFiles = null;
+  cosmeticFilesLoadedFromDisk = false;
 }

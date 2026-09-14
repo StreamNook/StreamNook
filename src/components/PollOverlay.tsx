@@ -38,7 +38,12 @@ const PollOverlay = ({ channelId }: PollOverlayProps) => {
   const [votedChoiceId, setVotedChoiceId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState<number>(0); // seconds
-  const [isExpanded, setIsExpanded] = useState(true);
+  // Mirrors the pinned banner's `pinned_start_collapsed`: some people want polls
+  // out of the way by default rather than eating the top of chat.
+  const pollsStartCollapsed = useAppStore(
+    (s) => s.settings.chat_design?.polls_start_collapsed ?? false,
+  );
+  const [isExpanded, setIsExpanded] = useState(!pollsStartCollapsed);
 
   // Ref mirrors votedChoiceId so the completion listener sees the latest value
   // without re-subscribing (same pattern as PredictionOverlay).
@@ -64,7 +69,8 @@ const PollOverlay = ({ channelId }: PollOverlayProps) => {
     const applyPoll = (poll: PollData) => {
       setActivePoll(poll);
       setTimeRemaining(Math.max(0, Math.round((poll.remaining_ms || 0) / 1000)));
-      setIsExpanded(true);
+      // A brand new poll opens, unless you asked for polls to start collapsed.
+      setIsExpanded(!pollsStartCollapsed);
     };
 
     const unlistenCreated = listen<PollData>('poll-created', (event) => {
@@ -90,7 +96,9 @@ const PollOverlay = ({ channelId }: PollOverlayProps) => {
         return { ...prev, ...poll };
       });
       setTimeRemaining(Math.max(0, Math.round((poll.remaining_ms || 0) / 1000)));
-      setIsExpanded(true);
+      // Deliberately NOT re-expanding here. This listener fires on every vote,
+      // so forcing it open meant a poll you collapsed sprang back open the
+      // moment anyone else voted. Only a NEW poll opens itself (see applyPoll).
     });
 
     const unlistenCompleted = listen<PollData>('poll-completed', (event) => {
@@ -126,7 +134,7 @@ const PollOverlay = ({ channelId }: PollOverlayProps) => {
       unlistenUpdated.then(fn => fn()).catch(() => {});
       unlistenCompleted.then(fn => fn()).catch(() => {});
     };
-  }, [currentChannelId, addToast]);
+  }, [currentChannelId, addToast, pollsStartCollapsed]);
 
   // Countdown timer.
   useEffect(() => {

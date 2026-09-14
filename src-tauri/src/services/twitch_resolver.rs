@@ -50,6 +50,30 @@ fn effective_codec_pref() -> Vec<String> {
     }
 }
 
+/// Tallest rendition the display can actually show, in pixels. 0 = uncapped.
+///
+/// Mobile only. Desktop never sets this, so desktop keeps resolving to source
+/// exactly as before - a monitor generally CAN show the source rendition, and a
+/// desktop is not on a battery budget. See `capped_source_index`.
+static MAX_VIDEO_HEIGHT: Mutex<u32> = Mutex::new(0);
+
+/// Set the display's usable video height. Called from `set_max_video_height`,
+/// which the mobile shell invokes at boot and again whenever the display mode
+/// changes (a phone can switch between FHD+ and QHD+ at runtime, so a value
+/// sampled once at startup goes stale).
+pub fn set_max_video_height(height: u32) {
+    *MAX_VIDEO_HEIGHT.lock().unwrap() = height;
+}
+
+/// The cap, or None when unset/uncapped.
+///
+/// Floored at 360 so a bad or half-initialised value can never pin every stream
+/// to the bottom of the ladder.
+fn effective_max_height() -> Option<u32> {
+    let h = *MAX_VIDEO_HEIGHT.lock().unwrap();
+    if h == 0 { None } else { Some(h.max(360)) }
+}
+
 /// Classify a `CODECS="..."` attribute's first (video) codec into a family name.
 /// An empty/missing codec is treated as H.264 (the safe, universally-decodable
 /// default).
@@ -406,9 +430,72 @@ fn best_index(variants: &[Variant]) -> Option<usize> {
 }
 
 fn best_index_with(variants: &[Variant], pref: &[String]) -> Option<usize> {
-    let src = source_index(variants)?;
+    let src = capped_source_index(variants, effective_max_height())?;
     let (h, f) = (variants[src].height, variants[src].fps);
     Some(prefer_codec_at(variants, h, f, pref).unwrap_or(src))
+}
+
+/// `source_index`, but never taller than `cap`.
+///
+/// A phone was decoding a 2560x1440 rendition onto a display whose short edge is
+/// 1080 - more than five times the pixels the portrait player band can show, at
+/// roughly double the bitrate. Nothing in the resolver had any notion of the
+/// screen it was drawing on, and hls.js cannot compensate because StreamNook
+/// resolves to a SINGLE variant before the player ever sees a manifest, so there
+/// is no ABR ladder left for `capLevelToPlayerSize` to act on.
+///
+/// This deliberately short-circuits the `chunked` fast path in `source_index`:
+/// "chunked" IS the oversized source, so honouring it first would defeat the cap
+/// on exactly the streams that need it.
+///
+/// Only the "best"/auto path reaches here. An explicitly requested rendition is
+/// name-matched in `select_variant` and bypasses the cap entirely, which is what
+/// makes the quality menu a real override.
+fn capped_source_index(variants: &[Variant], cap: Option<u32>) -> Option<usize> {
+    let Some(cap) = cap else {
+        return source_index(variants);
+    };
+
+    // `height.is_some()` throughout is load-bearing: audio_only carries no
+    // resolution and sits at index 0 in modern masters, so a bare `first()` or
+    // an `.or(Some(0))` fallback here would silently serve an audio-only stream
+    // on any ladder whose every tier is above the cap.
+    fn ordering(a: &Variant, b: &Variant) -> std::cmp::Ordering {
+        a.height
+            .cmp(&b.height)
+            .then(
+                a.fps
+                    .partial_cmp(&b.fps)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+            .then(a.bandwidth.cmp(&b.bandwidth))
+    }
+
+    // The highest rendition that fits.
+    if let Some((i, _)) = variants
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| v.height.is_some_and(|h| h <= cap))
+        .max_by(|(_, a), (_, b)| ordering(a, b))
+    {
+        return Some(i);
+    }
+
+    // Nothing fits: take the LOWEST rendition above the cap, not the highest.
+    // Falling back to the highest would re-select the very source tier the cap
+    // exists to avoid.
+    if let Some((i, _)) = variants
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| v.height.is_some())
+        .min_by(|(_, a), (_, b)| ordering(a, b))
+    {
+        return Some(i);
+    }
+
+    // No video renditions at all (an audio-only master). Defer to the uncapped
+    // path rather than inventing a choice.
+    source_index(variants)
 }
 
 /// "worst" = the lowest-height video rendition (audio_only has no resolution and
@@ -1020,6 +1107,75 @@ https://euc11.playlist.ttvnw.net/160.m3u8\n";
         assert!(names.iter().any(|n| n == "best"));
         assert!(names.iter().any(|n| n == "worst"));
         assert!(names.iter().any(|n| n == "audio_only"));
+    }
+
+    // --- Screen-size cap (mobile) -----------------------------------------
+    // Every one of these asserts against `capped_source_index` directly rather
+    // than through the global, so they cannot race each other: the cap lives in
+    // a process-wide Mutex and `cargo test` runs tests in parallel.
+
+    #[test]
+    fn cap_picks_the_tallest_rendition_that_fits() {
+        let v = parse();
+        let i = capped_source_index(&v, Some(720)).unwrap();
+        assert!(v[i].height.unwrap() <= 720, "picked {}", v[i].name);
+        // And the TALLEST that fits, not just any.
+        assert_eq!(v[i].height, Some(720));
+    }
+
+    #[test]
+    fn cap_ignores_the_chunked_shortcut() {
+        // `source_index` returns the "chunked" group immediately. chunked IS the
+        // oversized source, so a cap that honoured it first would never bite.
+        let v = parse();
+        let i = capped_source_index(&v, Some(480)).unwrap();
+        assert_ne!(v[i].group_id, "chunked");
+        assert!(v[i].height.unwrap() <= 480);
+    }
+
+    #[test]
+    fn uncapped_matches_source_index() {
+        let v = parse();
+        assert_eq!(capped_source_index(&v, None), source_index(&v));
+    }
+
+    #[test]
+    fn cap_below_every_tier_never_yields_audio_only() {
+        // THE trap this cap could ship: audio_only carries no resolution and is
+        // the LAST entry here (index 0 in some real masters). A `first()` or
+        // `.or(Some(0))` fallback would hand the viewer a black screen with
+        // sound. Cap below the whole ladder and demand a real video rendition.
+        let v = parse();
+        let i = capped_source_index(&v, Some(144)).unwrap();
+        assert!(v[i].height.is_some(), "picked {} (audio!)", v[i].name);
+        assert_ne!(v[i].name, "audio_only");
+        // And specifically the LOWEST above the cap, not the source again.
+        let lowest = v
+            .iter()
+            .filter(|x| x.height.is_some())
+            .map(|x| x.height.unwrap())
+            .min()
+            .unwrap();
+        assert_eq!(v[i].height, Some(lowest));
+    }
+
+    #[test]
+    fn cap_at_or_above_source_is_a_no_op() {
+        let v = parse();
+        let i = capped_source_index(&v, Some(1080)).unwrap();
+        assert_eq!(v[i].height, Some(1080));
+        assert_eq!(v[i].name, "1080p60");
+    }
+
+    #[test]
+    fn audio_only_master_does_not_panic_under_a_cap() {
+        let v: Vec<Variant> = parse()
+            .into_iter()
+            .filter(|x| x.height.is_none())
+            .collect();
+        assert!(!v.is_empty(), "fixture should have an audio rendition");
+        // No video to choose: must defer rather than panic or index out of range.
+        assert!(capped_source_index(&v, Some(720)).is_some());
     }
 
     #[test]

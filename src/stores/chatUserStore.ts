@@ -24,6 +24,7 @@ import {
   resolveBttvProUrl,
 } from '../services/bttvProBadge';
 import { snapshotOverrides } from '../utils/userChatOverrides';
+import { IS_MOBILE } from '../utils/platform';
 
 /**
  * Represents a user who has chatted in the current channel.
@@ -545,7 +546,11 @@ function pushCologne(userId: string, cosmetics: CologneCosmetics | null) {
 // per-channel message cap tops out at ~1150), so the least-recently-seen users
 // evicted here have long since scrolled out of view across every surface; if one
 // speaks again they are simply re-added (a cheap cosmetics re-resolve).
-const MAX_TRACKED_USERS = 8000;
+// Phones pay for this map twice over: addUser clones it (and usernameToId) on
+// EVERY message, so the per-message cost tracks occupancy, and a three-hour
+// session in a busy channel pins it at the cap. A lower ceiling there cuts that
+// clone volume proportionally. Desktop keeps 8000 unchanged.
+const MAX_TRACKED_USERS = IS_MOBILE ? 1500 : 8000;
 const USER_EVICT_SLACK = 1000;
 const MATCH_SCAN_CAP = 200;
 
@@ -580,6 +585,20 @@ function evictStaleUsers(
     const unameKey = victim.username.toLowerCase();
     if (usernameToId.get(unameKey) === victim.userId) {
       usernameToId.delete(unameKey);
+    }
+    // The per-user cosmetic caches deliberately outlive `users` on desktop, so a
+    // member's wash paints instantly when they reappear (see clearUsers below).
+    // On a phone that trade stops paying: the maps are unbounded, they survive
+    // channel switches, and a chatter evicted here has long since scrolled away.
+    // A pruned entry simply re-resolves if they speak again.
+    //
+    // atmosphereInFlight is deliberately NOT touched. It is a concurrency guard
+    // that ensureAtmosphereResolved adds and removes in a finally, and deleting
+    // it from outside lets a concurrent sighting kick a duplicate lookup.
+    if (IS_MOBILE) {
+      atmosphereCache.delete(victim.userId);
+      lastResolvedAt.delete(victim.userId);
+      cologneCache.delete(victim.userId);
     }
   }
 }

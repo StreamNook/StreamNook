@@ -1,0 +1,46 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "mobile-capability",
+  "description": "Mobile shell capabilities (single webview, no window/tray surface)",
+  "platforms": ["android"],
+  "windows": ["main"],
+  "webviews": ["main"],
+  "permissions": [
+    "app-commands",
+    "mobile-commands",
+    "core:default",
+    "core:event:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:event:allow-emit",
+    "core:event:allow-emit-to",
+    "os:default",
+    "shell:allow-open",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://*" }, { "url": "http://*" }]
+    },
+    "deep-link:default",
+    "dialog:default",
+    "clipboard-manager:default",
+    "notification:default",
+    {
+      "identifier": "http:default",
+      "scope": [
+        "https://api.twitch.tv/*",
+        "https://id.twitch.tv/oauth2/token",
+        "https://www.twitch.tv/*",
+        "https://gql.twitch.tv/*",
+        "https://*.ttvnw.net/*",
+        "https://static-cdn.jtvnw.net/*",
+        "https://7tv.io/*",
+        "https://api.7tv.app/*",
+        "https://cdn.7tv.app/*",
+        "https://api.frankerfacez.com/*",
+        "https://cdn.frankerfacez.com/*",
+        "https://api.betterttv.net/*",
+        "https://cdn.betterttv.net/*"
+      ]
+    }
+  ]
+}

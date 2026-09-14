@@ -3,6 +3,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { convertFileSrc } from '@tauri-apps/api/core';
 
 import { Logger } from '../utils/logger';
+import { features } from '../features';
+import { IS_MOBILE } from '../utils/platform';
 export interface Emote {
   id: string;
   name: string;
@@ -111,7 +113,30 @@ export function enhanceRustEmotes(emotes: any[]): Emote[] {
 // every surface drew 2x). devicePixelRatio is effectively fixed per display;
 // the tier is memoized and reset on resize so moving the window to a
 // different-density monitor re-picks the right size and caches it fresh.
-export type EmoteTier = '1x' | '2x' | '4x';
+// 7TV serves 1x=32px, 2x=64px, 3x=96px, 4x=128px (verified against
+// 7tv.io/v3/emote-sets/global). `3x` was missing from this union, which is part
+// of why the mobile ladder had nowhere sensible to land.
+export type EmoteTier = '1x' | '2x' | '3x' | '4x';
+
+const TIER_PX: Record<EmoteTier, number> = { '1x': 32, '2x': 64, '3x': 96, '4x': 128 };
+const TIER_ORDER: EmoteTier[] = ['1x', '2x', '3x', '4x'];
+
+// Nominal CSS size of an inline chat emote before the user's emote_scale. The
+// exact figure only has to be close: it selects a tier, and the tiers are an
+// octave apart.
+const INLINE_EMOTE_CSS_PX = 28;
+
+// The user's emote_scale (0.5x to 3x), pushed in at boot. Module-level rather
+// than read from the store, so this file keeps no dependency on AppStore.
+let _emoteScale = 1;
+
+/** Called at boot with the persisted chat design. Resets the memoized tier. */
+export function setInlineEmoteScale(scale: number): void {
+  const next = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  if (next === _emoteScale) return;
+  _emoteScale = next;
+  _inlineTier = null;
+}
 
 let _inlineTier: EmoteTier | null = null;
 
@@ -123,6 +148,30 @@ export function inlineEmoteTier(): EmoteTier {
   } catch {
     /* non-DOM context */
   }
+
+  if (IS_MOBILE) {
+    // Pick the smallest tier that actually covers the rendered glyph.
+    //
+    // The old rule was `dpr > 2 -> 4x`, written for retina desktops, and on a
+    // phone it was badly wrong: a modern handset reports DPR 3 or 4, so EVERY
+    // 7TV emote was fetched as a 128px ANIMATED AVIF and then scaled down to a
+    // ~28px glyph. Chromium decodes animated AVIF in software (dav1d), per
+    // frame, per visible instance - so a busy channel decoded tens of 128px
+    // animations continuously to draw thumbnails. One of the larger
+    // contributors to the phone running hot.
+    //
+    // Deriving from the real pixel need also self-corrects: at DPR 4 (this
+    // panel's QHD+ mode) or a large emote_scale it picks 4x again, because at
+    // that point the screen genuinely has the pixels to show it.
+    const needed = INLINE_EMOTE_CSS_PX * _emoteScale * dpr;
+    _inlineTier = TIER_ORDER.find((t) => TIER_PX[t] >= needed) ?? '4x';
+    return _inlineTier;
+  }
+
+  // Desktop is UNCHANGED, deliberately. Windows display scaling at 225-300
+  // percent puts a desktop at DPR 2.25-3.0, so a hi-DPI desktop DOES take the
+  // `4x` branch today; changing it here would alter the frozen desktop build
+  // and orphan its emote disk cache for no measured reason.
   _inlineTier = dpr <= 1 ? '1x' : dpr <= 2 ? '2x' : '4x';
   return _inlineTier;
 }
@@ -277,6 +326,11 @@ async function downloadEmoteIfNeeded(id: string, url: string): Promise<string | 
   if (pendingDownloads.has(id)) {
     return pendingDownloads.get(id)!;
   }
+
+  // When the disk cache is off, consumers fall back to the CDN URL they already
+  // carry. This used to claim the cache was unavailable on mobile; that stopped
+  // being true when the flag was turned on for Android. See features.ts.
+  if (!features.assetDiskCache) return null;
 
   const settings = await getEmoteCacheSettings();
   if (!settings.enabled) return null;

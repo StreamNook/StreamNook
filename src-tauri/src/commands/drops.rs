@@ -530,7 +530,9 @@ pub async fn poll_drops_token(
         .await
         .map_err(|e| e.to_string())?;
     // Dismiss the in-app drops login overlay the instant we have the token, so it
-    // doesn't linger after the user authorizes.
+    // doesn't linger after the user authorizes. (Desktop-only overlay; mobile logs
+    // in via device-code with no popup window to dismiss.)
+    #[cfg(desktop)]
     crate::commands::twitch::dismiss_login_overlay(&app, "drops-login");
     Ok(token)
 }

@@ -2,6 +2,8 @@ import { useEffect, useState, useRef, lazy, Suspense } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
+import { IS_MOBILE, isPortrait, onOrientationChange } from './utils/platform';
+import MobileNav from './components/mobile/MobileNav';
 import { useAppStore, type WhisperImportProgress, type SettingsTab } from './stores/AppStore';
 import { listenForSettingsUpdates } from './utils/settingsBroadcast';
 import { trackPresence, isSupabaseConfigured, incrementStat, incrementChannelWatch, subscribeToStreamNookRegistry, subscribeToCosmeticsRegistry, subscribeToAtmospheresRegistry, refreshEntitlementRegistries } from './services/supabaseService';
@@ -23,6 +25,7 @@ import { useCommandPaletteHotkey } from './hooks/useCommandPaletteHotkey';
 import { usePlatformSessionCheck } from './hooks/usePlatformSessionCheck';
 import { usePlatformAccountSync } from './hooks/usePlatformAccountSync';
 import { useKeybindings } from './keybindings';
+import { useCurrentStreamStats } from './utils/useCurrentStreamStats';
 import { startSnippetSync } from './stores/snippetStore';
 import PluginUiHost from './plugins-ui/PluginUiHost';
 import PluginUpdatesChecker from './components/plugins/PluginUpdatesChecker';
@@ -30,6 +33,7 @@ import PluginOverlayOutlet from './plugins-ui/PluginOverlayOutlet';
 import { usemultiNookStore } from './stores/multiNookStore';
 import LoadingWidget from './components/LoadingWidget';
 import ToastManager from './components/ToastManager';
+import DeviceLoginOverlay from './components/DeviceLoginOverlay';
 import SemiquincentennialShow from './components/SemiquincentennialShow';
 import EntitlementUnlockNote from './components/EntitlementUnlockNote';
 import AnnouncementsBanner from './components/AnnouncementsBanner';
@@ -50,9 +54,9 @@ import { applyModerateEvent } from './utils/applyModerateEvent';
 import { handleSeventvEmoteSetUpdate, handleSeventvCosmeticUpdate, type EmoteSetUpdatePayload, type CosmeticUpdatePayload } from './services/seventvEventApi';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
+import { useThemeBoot } from './boot/useThemeBoot';
 import { getLogicalInnerSize, clampToWorkArea } from './utils/windowSizing';
 import { isTitlebarDragActive } from './utils/titleBarDrag';
-import { getThemeById, applyTheme, DEFAULT_THEME_ID, getThemeByIdWithCustom, applyGlassStrength, DEFAULT_GLASS_TRANSPARENCY, applyFont, DEFAULT_FONT_ID, OLED_THEME_ID, getOledTheme } from './themes';
 import { getSelectedCompactViewPreset } from './constants/compactViewPresets';
 import { afterBoot, type BootTier } from './utils/startupScheduler';
 import { getAppVersion } from './utils/appVersion';
@@ -100,6 +104,10 @@ const WEBVIEW_RELOGIN_MIGRATION_KEY = 'streamnook-webview-relogin-v4.9.1';
 
 // One-time migration flag for v2.2.0 - force re-login with full webview data clear
 const V220_RELOGIN_MIGRATION_KEY = 'streamnook-relogin-v2.2.0';
+// Backstop for the first-run wizard. settings.setup_complete is the source of
+// truth, but it has been seen reverting to false between launches on Android, so
+// completion is also recorded here where nothing else writes it.
+const SETUP_COMPLETE_MARKER = 'streamnook-setup-complete';
 
 // Default sizes for different placements (outside component to avoid recreating on each render)
 const DEFAULT_CHAT_WIDTH = 402; // For 'right' placement
@@ -130,6 +138,10 @@ async function restoreFromCompact(
 function App() {
   useCommandPaletteHotkey();
   useKeybindings();
+  // Viewer count is written once when playback starts and never updated after,
+  // so without this it shows whatever it was the instant the stream opened, for
+  // as long as you watch.
+  useCurrentStreamStats();
   // Main window only: popouts learn from the `platform-account-changed` broadcast
   // rather than each running a check of their own.
   usePlatformSessionCheck();
@@ -239,7 +251,7 @@ function App() {
   // every toast, every mod-log entry (which fires on the IRC hot path) and every
   // 30s drops poll re-rendered the root and the whole tree under it.
   const { loadSettings, checkAuthStatus, addToast, setShowBadgesOverlay, setShowWhispersOverlay, updateSettings, loadActiveDropsCache, setProfileModalUser, openSettings } = useAppStore.getState();
-  const { chatPlacement, isLoading, isBooting, streamUrl, currentMediaType, showBadgesOverlay, badgesOverlayInitialPaintId, badgesOverlayInitialBadgeId, badgesOverlayInitialStreamNook, badgesOverlayInitialTarget, showWhispersOverlay, settings, isTheaterMode, isHomeActive, profileModalUser } = useAppStore(
+  const { chatPlacement: storedChatPlacement, isLoading, isBooting, streamUrl, currentMediaType, showBadgesOverlay, badgesOverlayInitialPaintId, badgesOverlayInitialBadgeId, badgesOverlayInitialStreamNook, badgesOverlayInitialTarget, showWhispersOverlay, settings, isTheaterMode, isHomeActive, profileModalUser } = useAppStore(
     useShallow((s) => ({
       chatPlacement: s.chatPlacement,
       isLoading: s.isLoading,
@@ -271,6 +283,18 @@ function App() {
     currentStream?.user_login &&
     channelsInPopouts.has(currentStream.user_login.toLowerCase())
   );
+
+  // Mobile portrait cannot use a side-docked chat: the stream view is a flex row,
+  // so a docked panel squeezes the video to nothing. Rather than fork the layout,
+  // force the placement the column path already handles ('bottom') and let
+  // mobile.css size the two bands. Landscape is close enough to a narrow desktop
+  // window that the stored preference still works there.
+  const [isPortraitNow, setIsPortraitNow] = useState(() => IS_MOBILE && isPortrait());
+  useEffect(() => {
+    if (!IS_MOBILE) return;
+    return onOrientationChange(() => setIsPortraitNow(isPortrait()));
+  }, []);
+  const chatPlacement = IS_MOBILE && isPortraitNow ? 'bottom' : storedChatPlacement;
 
   const [chatSize, setChatSize] = useState(chatPlacement === 'bottom' ? DEFAULT_CHAT_HEIGHT : DEFAULT_CHAT_WIDTH);
   const [modLogsSize, setModLogsSize] = useState(300); // Default Mod Logs size
@@ -739,6 +763,9 @@ function App() {
     };
   }, []);
 
+  // NOTE (mobile port): the shell-agnostic steps of this boot effect are
+  // replicated in src/mobile/boot/useMobileBoot.ts. When adding a boot step
+  // here, decide whether the mobile shell needs it too and mirror it there.
   useEffect(() => {
     let isMounted = true;
     const cleanupFunctions: (() => void)[] = [];
@@ -1024,6 +1051,8 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadSettings, checkAuthStatus]);
 
+  // Theme/glass/font application is shared with the mobile shell.
+  useThemeBoot();
   // Tell CSS when a stream is actually on screen. Decorative chrome animations
   // (the title-bar gift pulse, the update pill's glow, the shared-chat shimmer)
   // are part of how the app feels while you browse, so they run freely on Home.
@@ -1043,36 +1072,28 @@ function App() {
     }
   }, [streamUrl, isMultiNookActive, isHomeActive]);
 
-  // Apply theme when settings are loaded or theme changes
-  useEffect(() => {
-    const themeId = settings.theme || DEFAULT_THEME_ID;
-    const customThemes = settings.custom_themes || [];
-    // OLED is the one configurable signature theme: its accent comes from the
-    // saved oled_accent, so resolve it through getOledTheme rather than the
-    // static registry entry.
-    const theme = themeId === OLED_THEME_ID
-      ? getOledTheme(settings.oled_accent)
-      : (getThemeByIdWithCustom(themeId, customThemes) || getThemeById(DEFAULT_THEME_ID));
-    if (theme) {
-      Logger.debug('[App] Applying theme:', theme.name);
-      applyTheme(theme);
-    }
-    // Global glassiness is independent of the palette, so re-assert it whenever
-    // the theme is (re)applied as well as when the slider itself changes.
-    applyGlassStrength(settings.glass_transparency ?? DEFAULT_GLASS_TRANSPARENCY);
-    // Interface font is also palette-independent; re-assert alongside the theme.
-    applyFont(settings.font ?? DEFAULT_FONT_ID, settings.font_custom);
-  }, [settings.theme, settings.custom_themes, settings.glass_transparency, settings.font, settings.font_custom, settings.oled_accent]);
-
   // Check if we need to show the first-time setup wizard. Drive purely off
   // setup_complete: if it's false, show the wizard. (Gate on `quality` only as a
   // "settings have hydrated" signal.)
   useEffect(() => {
     if (settings.quality === undefined) return; // wait until settings hydrate
     if (settings.setup_complete) {
+      // Backstop: settings.setup_complete has been observed reverting to false on
+      // Android between launches even after the wizard writes it (root cause not
+      // yet identified — nothing in loadSettings or the updateSettings callers
+      // accounts for it). Without this marker the wizard reopens on every launch
+      // and the app is unusable, so record completion somewhere that survives
+      // independently of the settings file.
+      try { localStorage.setItem(SETUP_COMPLETE_MARKER, 'true'); } catch { /* private mode */ }
       Logger.debug('[App] Setup already complete, skipping wizard');
       return;
     }
+    try {
+      if (localStorage.getItem(SETUP_COMPLETE_MARKER) === 'true') {
+        Logger.debug('[App] Setup marked complete locally, skipping wizard');
+        return;
+      }
+    } catch { /* private mode */ }
     Logger.debug('[App] Setup not complete - showing wizard');
     setShowSetupWizard(true);
   }, [settings.quality, settings.setup_complete]);
@@ -1107,6 +1128,18 @@ function App() {
         const lastSeenVersion = settings.last_seen_version;
 
         Logger.debug('[App] Version check - Current:', currentVersion, 'Last seen:', lastSeenVersion);
+
+        // The two migrations below force a re-login for DESKTOP users upgrading
+        // from v4.9.1 and v2.2.0. They fire when localStorage lacks a marker key
+        // and the user is signed in. A fresh Android install has empty
+        // localStorage and has never run either version, so both would fire on
+        // first launch, log the user straight back out and re-open the setup
+        // wizard — every single launch, which is exactly what was happening.
+        // Mark them satisfied on mobile so they never run.
+        if (IS_MOBILE) {
+          localStorage.setItem(WEBVIEW_RELOGIN_MIGRATION_KEY, 'true');
+          localStorage.setItem(V220_RELOGIN_MIGRATION_KEY, 'true');
+        }
 
         // One-time force re-login for v4.9.1 webview features
         // This only triggers once per user, ever, and only if they're currently logged in
@@ -1851,7 +1884,10 @@ function App() {
           </div>
         }
       >
-        <TitleBar />
+        {/* The title bar is desktop window chrome: minimise/maximise/close, the
+            drag region and the update pill. None of it means anything on a phone,
+            and it costs ~40px of a screen that has little to spare. */}
+        {!IS_MOBILE && <TitleBar />}
       </ErrorBoundary>
       {/* Dynamic Island lives at the app root (not inside the title bar) so it can
           lift above the Settings blur overlay; it pins itself to the top center. */}
@@ -1890,9 +1926,14 @@ function App() {
         {/* Sidebar - only visible when stream is playing. Flips to the right edge
             when chat is docked left with reveal-on-hover, so the left edge belongs
             to the chat hover and the two don't fight over the same zone. */}
-        <ErrorBoundary componentName="Sidebar">
-          <Sidebar side={chatPlacement === 'left' && autoHideActive ? 'right' : 'left'} />
-        </ErrorBoundary>
+        {/* The sidebar is built around edge-hover reveal and drag-to-resize, both
+            of which are mouse-only. Mobile navigation is a bottom tab bar instead
+            (see MobileNav), driving the same store fields. */}
+        {!IS_MOBILE && (
+          <ErrorBoundary componentName="Sidebar">
+            <Sidebar side={chatPlacement === 'left' && autoHideActive ? 'right' : 'left'} />
+          </ErrorBoundary>
+        )}
 
         {/* Main content area with Home/PIP support */}
         <div className="flex-1 relative overflow-hidden">
@@ -1946,6 +1987,10 @@ function App() {
                 {/* Video & Chat Container */}
                 <div 
                   ref={containerRef}
+                  // Marker for the mobile layout layer: on a phone in portrait
+                  // the first child (the player) is pinned to a 16:9 band and the
+                  // chat panel takes the rest. See src/styles/mobile.css.
+                  data-sn-stream-container=""
                   className={`flex flex-1 h-full overflow-hidden relative ${chatPlacement === 'bottom' ? 'flex-col' : 'flex-row'}`}
                 >
                   <ChannelAboutReveal
@@ -2188,6 +2233,15 @@ function App() {
         </div>
       </div>
       </ErrorBoundary>
+      {/* Bottom tab bar replaces the desktop Sidebar on phones. Rendered as a
+          sibling of the main content inside the h-screen column so it always
+          holds the bottom edge, and hidden while booting so it does not appear
+          over the splash. */}
+      {IS_MOBILE && !isBooting && (
+        <ErrorBoundary componentName="MobileNav">
+          <MobileNav />
+        </ErrorBoundary>
+      )}
       {/* Boot overlay — sits above the home screen from launch until the initial
           auth check resolves, then fades out so home eases in. Without it the
           logged-out nav and empty state flash for a beat before stored
@@ -2281,6 +2335,7 @@ function App() {
       {settings.setup_complete && !showSetupWizard && <AnnouncementsBanner />}
       <SemiquincentennialShow />
       <ToastManager />
+      <DeviceLoginOverlay />
       <EntitlementUnlockNote />
       <TooltipManager />
       {commandPaletteEverOpened && <Suspense fallback={null}><CommandPalette /></Suspense>}

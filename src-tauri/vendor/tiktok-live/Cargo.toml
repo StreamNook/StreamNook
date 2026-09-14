@@ -1,7 +1,7 @@
 # Vendored from piratetok-live-rs 0.2.0 (https://github.com/PirateTok/live-rs,
 # license 0BSD). Kept as an in-tree path dependency so StreamNook owns the source
 # and pins the transport stack to the SAME versions the main crate uses
-# (tokio-tungstenite 0.27, reqwest 0.12) — cargo then unifies them and compiles
+# (tokio-tungstenite 0.30, reqwest 0.12) — cargo then unifies them and compiles
 # no duplicate WebSocket/HTTP layer. The TikTok adapter (services/providers/tiktok.rs)
 # wraps this into the ChatProvider trait.
 [package]
@@ -14,9 +14,6 @@ license = "0BSD"
 [dependencies]
 prost = "0.14"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
-# Matches StreamNook's tokio-tungstenite so cargo builds one WebSocket stack, not two.
-tokio-tungstenite = { version = "0.27", features = ["native-tls"] }
-reqwest = { version = "0.12", features = ["json", "gzip"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -27,3 +24,14 @@ base64 = "0.22"
 rand = "0.9"
 http = "1"
 futures-util = "0.3"
+
+# Same per-platform transport split as the main crate (see src-tauri/Cargo.toml):
+# desktop keeps native-tls, Android uses rustls with bundled roots. Versions match
+# StreamNook's so cargo builds one WebSocket/HTTP stack, not two.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
+reqwest = { version = "0.12", features = ["json", "gzip"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "gzip", "rustls-tls"] }

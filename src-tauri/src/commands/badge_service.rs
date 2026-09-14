@@ -299,7 +299,14 @@ pub async fn get_discovered_bttv_pro_badges() -> Result<Vec<String>, String> {
 /// Whether a badge's earn window is open right now. Prefers the enrichment's
 /// ISO window (authoritative campaign data) over the payload's `status`, which
 /// is only a snapshot of when the relay sent it.
-fn is_window_open(badge: &crate::services::badge_polling_service::BadgeNotification) -> bool {
+///
+/// Crate-visible so the Android background poll classifies a drop exactly as
+/// this path does. Duplicating the window logic would let the two drift, and a
+/// drop treated as available by one and not the other is the kind of
+/// disagreement nobody notices until it is wrong.
+pub(crate) fn is_window_open(
+    badge: &crate::services::badge_polling_service::BadgeNotification,
+) -> bool {
     use crate::services::badge_polling_service::BadgeNotificationStatus;
     use chrono::{DateTime, Utc};
 

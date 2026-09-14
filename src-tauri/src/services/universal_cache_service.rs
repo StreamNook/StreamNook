@@ -38,6 +38,26 @@ static DOWNLOAD_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
         .expect("failed to build shared cache-download HTTP client")
 });
 
+// The metadata/index fetches below used to build a fresh `Client` per call, each
+// one carrying its own connection pool and TLS session for a single request.
+// They are kept as three separate clients rather than folded into the shared
+// `services::http` one because their timeouts are deliberately different from
+// its 30s default, and one of them runs in a loop of up to 100 items where a
+// longer timeout would change worst-case runtime by a lot.
+fn cache_meta_client(secs: u64) -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent("StreamNook/1.0")
+        .timeout(std::time::Duration::from_secs(secs))
+        .build()
+        .expect("failed to build universal-cache metadata HTTP client")
+}
+/// Single-entry lookups, in a loop of up to 100. Short on purpose.
+static META_CLIENT_5S: Lazy<reqwest::Client> = Lazy::new(|| cache_meta_client(5));
+/// Index files and remote-manifest probes.
+static META_CLIENT_10S: Lazy<reqwest::Client> = Lazy::new(|| cache_meta_client(10));
+/// The bulk index download, which is a much larger body.
+static META_CLIENT_30S: Lazy<reqwest::Client> = Lazy::new(|| cache_meta_client(30));
+
 // In-memory mirror of the on-disk manifest. Initialized from disk on first
 // access; every subsequent read/write hits memory only. A background task
 // flushes dirty state to disk on a MANIFEST_FLUSH_DEBOUNCE_SECS debounce (or on next tick if a
@@ -382,10 +402,7 @@ pub async fn fetch_universal_cache_data(
 
     debug!("[UniversalCache] Attempting to fetch from: {}", url);
 
-    let client = reqwest::Client::builder()
-        .user_agent("StreamNook/1.0")
-        .timeout(std::time::Duration::from_secs(5))
-        .build()?;
+    let client = &*META_CLIENT_5S;
 
     match client.get(&url).send().await {
         Ok(response) if response.status().is_success() => {
@@ -435,10 +452,7 @@ async fn download_universal_manifest() -> Result<bool> {
 
     let url = format!("{}/manifest.json", UNIVERSAL_CACHE_URL);
 
-    let client = reqwest::Client::builder()
-        .user_agent("StreamNook/1.0")
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
+    let client = &*META_CLIENT_30S;
 
     match client.get(&url).send().await {
         Ok(response) if response.status().is_success() => {
@@ -832,10 +846,7 @@ pub async fn sync_universal_cache(item_types: Vec<CacheType>) -> Result<usize> {
 
         debug!("[UniversalCache] Fetching index from: {}", index_url);
 
-        let client = reqwest::Client::builder()
-            .user_agent("StreamNook/1.0")
-            .timeout(std::time::Duration::from_secs(10))
-            .build()?;
+        let client = &*META_CLIENT_10S;
 
         match client.get(&index_url).send().await {
             Ok(response) if response.status().is_success() => {
@@ -1443,12 +1454,19 @@ pub async fn get_cached_file_path(cache_type: CacheType, id: &str) -> Result<Opt
 pub fn get_all_cached_items_by_type(
     cache_type: CacheType,
 ) -> Result<HashMap<String, UniversalCacheEntry>> {
-    let manifest = load_manifest()?;
+    // Reads under the lock and clones only the entries it keeps. It used to call
+    // load_manifest(), which deep-clones EVERY entry, and then throw most of
+    // them away. Mobile calls this on the Rewards screen, where the manifest is
+    // almost entirely badges, so the discarded half of that clone was the
+    // expensive half.
+    let guard = MANIFEST_MEMORY
+        .read()
+        .map_err(|_| anyhow::anyhow!("manifest memory lock poisoned"))?;
     let mut items = HashMap::new();
 
-    for (key, entry) in manifest.entries {
+    for (key, entry) in guard.entries.iter() {
         if entry.cache_type == cache_type && !is_cache_expired(&entry.metadata) {
-            items.insert(key, entry);
+            items.insert(key.clone(), entry.clone());
         }
     }
 
@@ -1460,11 +1478,15 @@ pub fn get_cached_items_batch(
     cache_type: CacheType,
     ids: &[String],
 ) -> Result<HashMap<String, UniversalCacheEntry>> {
-    let manifest = load_manifest()?;
+    // Same reasoning as get_all_cached_items_by_type: this asks for a handful of
+    // ids, so cloning the whole manifest to look them up was the wrong shape.
+    let guard = MANIFEST_MEMORY
+        .read()
+        .map_err(|_| anyhow::anyhow!("manifest memory lock poisoned"))?;
     let mut items = HashMap::new();
 
     for id in ids {
-        if let Some(entry) = manifest.entries.get(id) {
+        if let Some(entry) = guard.entries.get(id) {
             if entry.cache_type == cache_type && !is_cache_expired(&entry.metadata) {
                 items.insert(id.clone(), entry.clone());
             }
@@ -1507,10 +1529,7 @@ pub async fn get_cached_files_list(cache_type: CacheType) -> Result<HashMap<Stri
 async fn fetch_remote_manifest_timestamp() -> Result<Option<u64>> {
     let url = format!("{}/manifest.json", UNIVERSAL_CACHE_URL);
 
-    let client = reqwest::Client::builder()
-        .user_agent("StreamNook/1.0")
-        .timeout(std::time::Duration::from_secs(10))
-        .build()?;
+    let client = &*META_CLIENT_10S;
 
     match client.get(&url).send().await {
         Ok(response) if response.status().is_success() => {

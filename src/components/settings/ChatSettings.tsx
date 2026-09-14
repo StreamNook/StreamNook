@@ -2,6 +2,11 @@ import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { X } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
+// This panel is genuinely SHARED - both shells render it - so a platform branch
+// here is legitimate, unlike in components that only ever run on one platform.
+// It hides rows whose backing feature does not exist on Android, so the phone
+// settings stop offering knobs that quietly do nothing.
+import { IS_MOBILE } from '../../utils/platform';
 import PanelChannelList from '../plugins/PanelChannelList';
 import { trustableHost } from '../../services/linkPreviewService';
 import { Tooltip } from '../ui/Tooltip';
@@ -371,6 +376,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     link_preview_trusted_domains: stored?.link_preview_trusted_domains ?? [],
     pinned_collapsed_style: stored?.pinned_collapsed_style ?? 'bar',
     pinned_start_collapsed: stored?.pinned_start_collapsed ?? true,
+    polls_start_collapsed: stored?.polls_start_collapsed ?? false,
   };
 
   const setDesign = (patch: Partial<typeof cd>) => {
@@ -473,7 +479,10 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
   return (
     <div className="space-y-8">
-      {!hidePlacement && (
+      {/* Desktop only. This positions the MAIN app's chat panel (left / right /
+          bottom / hidden) plus the hover-reveal that goes with it. The phone
+          shell stacks the player over chat and has no edge to tuck against. */}
+      {!hidePlacement && !IS_MOBILE && (
       <SettingsSection
         label="Chat Placement"
         description="Where chat sits next to the player, and what it does when the video goes fullscreen."
@@ -742,6 +751,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
       </SettingsSection>
 
+      {/* Desktop only. Writes .log files into a folder the user picks, and there
+          is no user-visible folder to point at on Android. */}
+      {!IS_MOBILE && (
       <SettingsSection
         label="Chat Logging"
         description="Keep a text copy of chat on your disk, for searching later or feeding another tool."
@@ -824,6 +836,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           </>
         )}
       </SettingsSection>
+      )}
 
       <SettingsSection
         label="Chat Design"
@@ -881,20 +894,25 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           />
         </SettingsRow>
 
-        <SettingsRow
-          title={`Activity feed size: ${cd.activity_font_size ?? 14}px`}
-          description="Text size for the MultiChat activity feed, where subs, raids, and gifts land."
-        >
-          <input
-            type="range"
-            min="10"
-            max="28"
-            step="1"
-            value={cd.activity_font_size ?? 14}
-            onChange={(e) => setDesign({ activity_font_size: parseInt(e.target.value) })}
-            className="w-full accent-accent cursor-pointer"
-          />
-        </SettingsRow>
+        {/* Desktop only: its own description says MultiChat, and MultiChat is
+            gated off mobile entirely. Note this is NOT the phone's Activity tab,
+            which is drops and badges and takes no sizing from here. */}
+        {!IS_MOBILE && (
+          <SettingsRow
+            title={`Activity feed size: ${cd.activity_font_size ?? 14}px`}
+            description="Text size for the MultiChat activity feed, where subs, raids, and gifts land."
+          >
+            <input
+              type="range"
+              min="10"
+              max="28"
+              step="1"
+              value={cd.activity_font_size ?? 14}
+              onChange={(e) => setDesign({ activity_font_size: parseInt(e.target.value) })}
+              className="w-full accent-accent cursor-pointer"
+            />
+          </SettingsRow>
+        )}
 
         <SettingsRow
           title="Text weight"
@@ -970,6 +988,20 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             <Toggle
               enabled={cd.pinned_start_collapsed ?? true}
               onChange={() => setDesign({ pinned_start_collapsed: !(cd.pinned_start_collapsed ?? true) })}
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Polls start collapsed"
+          description="Opens live polls as their header bar instead of expanded, so a poll never takes over the top of chat. Tap the header to expand it."
+          help="Collapsing a poll sticks: it no longer reopens itself every time somebody votes."
+          control={
+            <Toggle
+              enabled={cd.polls_start_collapsed ?? false}
+              onChange={() =>
+                setDesign({ polls_start_collapsed: !(cd.polls_start_collapsed ?? false) })
+              }
             />
           }
         />
@@ -1247,17 +1279,20 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
           }
         />
-        <SettingsRow
-          title="Ctrl+Enter sends and keeps the text"
-          description="Sends the message and leaves it in the box, so you can send it again straight away."
-          help="Plain Enter still sends and clears the box as normal."
-          control={
-            <Toggle
-              enabled={settings.chat_input?.quick_send ?? false}
-              onChange={() => setInput({ quick_send: !(settings.chat_input?.quick_send ?? false) })}
-            />
-          }
-        />
+        {/* Desktop only: there is no Ctrl to hold on a phone keyboard. */}
+        {!IS_MOBILE && (
+          <SettingsRow
+            title="Ctrl+Enter sends and keeps the text"
+            description="Sends the message and leaves it in the box, so you can send it again straight away."
+            help="Plain Enter still sends and clears the box as normal."
+            control={
+              <Toggle
+                enabled={settings.chat_input?.quick_send ?? false}
+                onChange={() => setInput({ quick_send: !(settings.chat_input?.quick_send ?? false) })}
+              />
+            }
+          />
+        )}
         <SettingsRow
           title="Check spelling as you type"
           description="Underlines misspelled words in the message box and offers corrections when you right-click one. Emotes, chatters, commands and links are left alone."
@@ -1313,16 +1348,37 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
       </SettingsSection>
 
-      <ImageUploadSettings />
+      {/* Desktop only: the paste-to-upload flow lives in the desktop composer;
+          the phone composer has no uploader, so this section would configure
+          nothing there. */}
+      {!IS_MOBILE && <ImageUploadSettings />}
 
+      {/* Shown on both now. It used to be hidden on the phone because the
+          feature was Tab-driven and there is no Tab key; the phone composer
+          reaches the same suggestions by swiping a strip above the input. The
+          settings themselves were always shared, and hiding the section left
+          them searchable but unreachable.
+
+          Only the wording differs, and it differs through a ternary rather than
+          a rewrite: these strings are mirrored in the settings search index and
+          the command palette, neither of which is platform-aware, so changing
+          the desktop copy here would silently desync three files. */}
       <SettingsSection
         label="Emote Tab Completion"
-        description="Type part of an emote name in chat and press Tab to cycle through matching emotes. Shift+Tab cycles backwards."
+        description={
+          IS_MOBILE
+            ? 'Type part of an emote name in chat to see matching emotes above the input. Swipe the strip to see more, tap one to use it.'
+            : 'Type part of an emote name in chat and press Tab to cycle through matching emotes. Shift+Tab cycles backwards.'
+        }
         id="settings-section-emote-tab-completion"
       >
         <SettingsRow
           title="Complete emote names with Tab"
-          description="Press Tab while typing to insert the best-matching emote, and Tab again to cycle to the next match."
+          description={
+            IS_MOBILE
+              ? 'Suggest matching emotes as you type.'
+              : 'Press Tab while typing to insert the best-matching emote, and Tab again to cycle to the next match.'
+          }
           control={
             <Toggle
               enabled={settings.chat_input?.emote_tab_complete_enabled ?? true}
@@ -1351,7 +1407,11 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
         <SettingsRow
           title="Complete chatter names too"
-          description="Also cycles through the names of people currently in chat."
+          description={
+            IS_MOBILE
+              ? 'Also suggest display names of users currently in chat.'
+              : 'Also cycles through the names of people currently in chat.'
+          }
           control={
             <Toggle
               enabled={settings.chat_input?.emote_tab_complete_include_chatters ?? true}
@@ -1658,6 +1718,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         )}
       </SettingsSection>
 
+      {/* Desktop only: filters are applied from the funnel in a chat's header
+          and search opens with Ctrl+F, and the phone chat pane has neither. */}
+      {!IS_MOBILE && (
       <SettingsSection
         id="settings-section-chat-query"
         label="Message Filters & Search"
@@ -1692,7 +1755,14 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           />
         </SettingsRow>
       </SettingsSection>
+      )}
 
+      {/* Desktop only, and the WHOLE section, not just the row: it holds one
+          setting, so guarding the row alone would leave a titled section with
+          nothing in it. `user_card_opens_messages` is read solely by
+          UserProfileCard.tsx; the phone opens its own UserProfileSheet, which
+          never consults it, so the toggle did nothing on Android. */}
+      {!IS_MOBILE && (
       <SettingsSection
         id="settings-section-user-cards"
         label="User Cards"
@@ -1731,6 +1801,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           />
         ))}
       </SettingsSection>
+      )}
 
       <SettingsSection
         label="7TV Cosmetics"

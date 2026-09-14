@@ -700,6 +700,7 @@ pub async fn clear_webview_data(app: AppHandle) -> Result<(), String> {
 /// it's that account's own profile (adopting a freshly-staged first login if
 /// one is waiting); before any account is recorded it's the staging profile the
 /// login window writes to, which the first per-account window later adopts.
+#[cfg(desktop)]
 fn active_twitch_web_profile_dir() -> Result<PathBuf, String> {
     crate::services::twitch_service::active_twitch_web_profile_dir().map_err(|e| e.to_string())
 }
@@ -725,6 +726,7 @@ fn active_twitch_web_profile_dir() -> Result<PathBuf, String> {
 /// is an overlay too, and payment flows use popups legitimately, so swallowing
 /// every new window could break checkout. Twitch and Kick sign-in are full-page
 /// and never needed this.
+#[cfg(windows)]
 const CONTAIN_POPUPS_IN_OVERLAY: &[&str] = &["youtube-login"];
 
 /// Make a popup from `win`'s page navigate the overlay itself instead of opening a
@@ -788,6 +790,7 @@ fn contain_overlay_popups(win: &tauri::WebviewWindow) {
     }
 }
 
+#[cfg(desktop)]
 fn spa_url_report_script(window_label: &str, is_overlay: bool) -> String {
     let label = serde_json::to_string(window_label).unwrap_or_else(|_| "\"\"".to_string());
     // For the in-app overlay there's no close button, so Esc dismisses it even while
@@ -827,6 +830,7 @@ fn spa_url_report_script(window_label: &str, is_overlay: bool) -> String {
 /// reporter in the Twitch webview on load and on each in-page navigation. The bar
 /// is now part of the React app, so this emits an event keyed by overlay label
 /// instead of poking a second webview.
+#[cfg(desktop)]
 #[tauri::command]
 pub fn report_login_popup_url(app: AppHandle, window_label: String, url: String) {
     use tauri::Emitter;
@@ -850,6 +854,7 @@ pub fn report_login_popup_url(app: AppHandle, window_label: String, url: String)
 /// window, and is hidden/destroyed with it. `x`/`y` are screen coords (the React
 /// chrome lives on the main window, so the frontend adds the main window's client
 /// origin to the body rect before calling here).
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn mount_twitch_overlay(
     app: AppHandle,
@@ -925,6 +930,7 @@ pub async fn mount_twitch_overlay(
 /// Suppress the rounded corners DWM applies to borderless windows on Windows 11, so
 /// the overlay content reads as a crisp rectangle inside React's rounded panel frame.
 #[cfg(windows)]
+#[cfg(desktop)]
 fn square_window_corners(win: &tauri::WebviewWindow) {
     use std::ffi::c_void;
     use windows::Win32::Foundation::HWND;
@@ -946,6 +952,7 @@ fn square_window_corners(win: &tauri::WebviewWindow) {
 
 /// Reposition/resize the overlay window to the screen rect React measured. Called when
 /// the main window moves or resizes so the content keeps tracking the chrome.
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn set_twitch_overlay_bounds(app: AppHandle, label: String, x: f64, y: f64, width: f64, height: f64) {
     use tauri::{LogicalPosition, LogicalSize};
@@ -959,6 +966,7 @@ pub async fn set_twitch_overlay_bounds(app: AppHandle, label: String, x: f64, y:
 /// on minimize; this stays as a belt-and-suspenders driven from React on
 /// `visibilitychange`, and toggles the whole window (no per-webview controller call
 /// that could touch native state from a window-event path).
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn set_twitch_overlay_visible(app: AppHandle, label: String, visible: bool) {
     if let Some(win) = app.get_webview_window(&label) {
@@ -970,6 +978,7 @@ pub async fn set_twitch_overlay_visible(app: AppHandle, label: String, visible: 
 /// Safe to call when nothing is open (no-op). Driven from the backend on login success
 /// AND from the frontend (Esc, close, completion), so dismissal never hangs on
 /// frontend timing.
+#[cfg(desktop)]
 pub fn dismiss_login_overlay(app: &AppHandle, label: &str) {
     use tauri::Emitter;
     if let Some(win) = app.get_webview_window(label) {
@@ -980,6 +989,7 @@ pub fn dismiss_login_overlay(app: &AppHandle, label: &str) {
 }
 
 /// Command form for the frontend completion / Esc handlers.
+#[cfg(desktop)]
 #[tauri::command]
 pub fn close_login_overlay(app: AppHandle, label: String) {
     dismiss_login_overlay(&app, &label);
@@ -989,6 +999,7 @@ pub fn close_login_overlay(app: AppHandle, label: String) {
 /// panel) with a Twitch page. React renders the chrome and mounts the single Twitch
 /// webview at the rect it measures. `mode` is "fullbody" (login, drops) or "panel"
 /// (subscribe).
+#[cfg(desktop)]
 fn emit_overlay_open(app: &AppHandle, label: &str, url: &str, mode: &str) -> Result<(), String> {
     emit_overlay_open_with(app, label, url, mode, None)
 }
@@ -1014,6 +1025,7 @@ pub(crate) fn emit_overlay_open_with(
 /// account's web profile. A per-account profile means a re-login lands on the same
 /// account and can't silently inherit a different account's web session. The React
 /// overlay shows the live URL in a bar at the top.
+#[cfg(desktop)]
 #[tauri::command]
 pub fn open_twitch_login_window(app: AppHandle, url: String) -> Result<(), String> {
     emit_overlay_open(&app, "twitch-login", &url, "fullbody")
@@ -1022,6 +1034,7 @@ pub fn open_twitch_login_window(app: AppHandle, url: String) -> Result<(), Strin
 /// Take over the app body with the drops/points device-code login. The active
 /// account's profile already holds its twitch.tv session, so the user is shown as
 /// signed in and only authorizes the device. Shows the live URL in a bar at the top.
+#[cfg(desktop)]
 #[tauri::command]
 pub fn open_drops_login_window(app: AppHandle, url: String) -> Result<(), String> {
     emit_overlay_open(&app, "drops-login", &url, "fullbody")
@@ -1051,6 +1064,7 @@ fn youtube_join_url(identifier: &str) -> Option<String> {
 /// to the active (main) account's web profile so you subscribe as the account you
 /// watch and stream as. Returns the overlay label so the caller can dismiss it when a
 /// subscription is detected. The panel header shows the live URL.
+#[cfg(desktop)]
 #[tauri::command]
 pub fn open_subscribe_window(
     app: AppHandle,
@@ -1159,6 +1173,7 @@ pub async fn open_browser_url(app: AppHandle, url: String) -> Result<(), String>
         .map_err(|e| format!("Failed to open browser: {}", e))
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn focus_window(app: AppHandle) -> Result<(), String> {
     use tauri::Manager;

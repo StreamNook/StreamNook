@@ -57,17 +57,26 @@ pub async fn handle_host_method(
                 crate::services::stream_server::swap_upstream(playlist_url.to_string())
                     .await
                     .map_err(|e| RpcErr::internal(&e.to_string()))?;
-            } else if crate::services::multi_nook_server::MultiNookServer::get_port(stream_id)
-                .await
-                .is_some()
-            {
-                crate::services::multi_nook_server::MultiNookServer::swap_upstream(
-                    stream_id,
-                    playlist_url.to_string(),
-                )
-                .await
-                .map_err(|e| RpcErr::internal(&e.to_string()))?;
             } else {
+                // MultiNook tiles are desktop-only; on mobile any non-solo id is
+                // unknown.
+                #[cfg(desktop)]
+                {
+                    if crate::services::multi_nook_server::MultiNookServer::get_port(stream_id)
+                        .await
+                        .is_some()
+                    {
+                        crate::services::multi_nook_server::MultiNookServer::swap_upstream(
+                            stream_id,
+                            playlist_url.to_string(),
+                        )
+                        .await
+                        .map_err(|e| RpcErr::internal(&e.to_string()))?;
+                    } else {
+                        return Err(RpcErr::unknown_stream(stream_id));
+                    }
+                }
+                #[cfg(not(desktop))]
                 return Err(RpcErr::unknown_stream(stream_id));
             }
             debug!(

@@ -92,6 +92,18 @@ pub async fn get_window_size(window: Window) -> Result<(u32, u32), String> {
 /// come up first, which leaves the window stuck to the cursor until the next click.
 #[command]
 pub fn start_titlebar_drag(window: Window) -> Result<(), String> {
+    // Android has no borderless desktop caption to restore-and-drag, and
+    // the monitor/cursor Window methods below do not exist on mobile.
+    #[cfg(mobile)]
+    {
+        let _ = window;
+        Ok(())
+    }
+    // The desktop body below is kept at its upstream indentation on purpose:
+    // it is merged textually from the desktop repo on every sync, and
+    // re-indenting it would turn every upstream hunk into a conflict.
+    #[cfg(desktop)]
+    {
     if window.is_maximized().unwrap_or(false) {
         // Read the pre-maximize size BEFORE unmaximizing. Tauri setters are queued on
         // the event loop, so outer_size() straight after unmaximize() can still report
@@ -200,6 +212,7 @@ pub fn start_titlebar_drag(window: Window) -> Result<(), String> {
     }
 
     result
+    }
 }
 
 /// Pre-maximize window size straight from Win32. `rcNormalPosition` is documented as
@@ -230,6 +243,25 @@ fn restore_rect_size(window: &Window) -> Option<(u32, u32)> {
 #[cfg(not(windows))]
 fn restore_rect_size(_window: &Window) -> Option<(u32, u32)> {
     None
+}
+
+/// Flush every debounced persistent store to disk right now.
+///
+/// Desktop flushes these on `RunEvent::Exit`, which Android never delivers:
+/// the OS kills a backgrounded process outright, so anything still sitting in
+/// a debounce window (up to ~2 s of settings writes) is lost. The mobile shell
+/// calls this from its `visibilitychange` handler, the last reliable signal
+/// before the process can die. Every flush is a no-op when nothing is dirty.
+#[cfg(mobile)]
+#[command]
+pub fn flush_persistent_stores() -> Result<(), String> {
+    let _ = crate::commands::settings::flush_settings_now();
+    let _ = crate::services::universal_cache_service::flush_manifest_now();
+    let _ = crate::services::mod_log_storage_service::ModLogStorageService::flush_now();
+    let _ = crate::services::whisper_storage_service::WhisperStorageService::flush_now();
+    let _ = crate::services::vod_progress_service::flush_now();
+    let _ = crate::services::chat_logger_service::ChatLoggerService::flush_all();
+    Ok(())
 }
 
 #[command]

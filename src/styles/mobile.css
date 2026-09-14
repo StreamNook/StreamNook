@@ -1,0 +1,116 @@
+/* Mobile layout layer.
+ *
+ * Scoped entirely behind html[data-mobile="true"], which main.tsx sets at boot,
+ * so none of this can affect the desktop build. The React tree stays shared;
+ * only the chrome and the sizing change.
+ *
+ * Two facts drive most of this:
+ *  1. targetSdk 36 enforces edge-to-edge with no opt-out, so every fixed edge
+ *     needs env(safe-area-inset-*). index.html carries viewport-fit=cover,
+ *     without which those all resolve to 0.
+ *  2. The desktop stream view is a flex ROW (video + docked chat). In portrait
+ *     that squeezes the video to nothing, which is the headline bug. App.tsx
+ *     forces chatPlacement to 'bottom' on mobile so the existing, already-tested
+ *     column path runs instead; the rules here just size it for a phone.
+ */
+
+html[data-mobile='true'] {
+  /* Safe-area values as variables so components can consume them without
+     repeating the env() fallback dance. The native inset bridge (MainActivity
+     WindowInsets listener) writes --sn-inset-* and takes priority: Android
+     WebView's env() reports 0 for the top without a display cutout and 0 for
+     the bottom with button navigation, so env() is only the fallback. */
+  --sn-safe-top: var(--sn-inset-t, env(safe-area-inset-top, 0px));
+  --sn-safe-bottom: var(--sn-inset-b, env(safe-area-inset-bottom, 0px));
+  --sn-safe-left: var(--sn-inset-l, env(safe-area-inset-left, 0px));
+  --sn-safe-right: var(--sn-inset-r, env(safe-area-inset-right, 0px));
+
+  /* Height of the bottom tab bar, so scroll containers can reserve room. */
+  --sn-bottomnav-h: 56px;
+}
+
+/* The app shell owns the safe area; inner panels stay flush. */
+html[data-mobile='true'] body {
+  overscroll-behavior: none; /* no rubber-band over the video */
+}
+
+/* The OS status bar and camera cutout own the top edge under edge-to-edge.
+   The desktop TitleBar used to occupy that band; with it gated off on mobile
+   the shell root must reserve the inset itself, or the Home nav draws under
+   the clock and the cutout pill. Scoped away from .sn-mobile: the dedicated
+   MobileApp shell manages its own insets. */
+html[data-mobile='true'] #root > div:not(.sn-mobile) {
+  padding-top: var(--sn-safe-top);
+}
+
+/* ---------------------------------------------------------------- video --- */
+
+/* The stream view is [player][chat] in DOM order. In portrait, pin the player
+   to a 16:9 band at the top instead of letting it flex, otherwise it and the
+   chat fight over the free space and the video collapses to nothing.
+   56.25vw is exactly 9/16 of the viewport width. */
+html[data-mobile='true'][data-orientation='portrait'] [data-sn-stream-container] > :first-child {
+  flex: 0 0 auto !important;
+  height: 56.25vw !important;
+  max-height: 56.25vw !important;
+  width: 100% !important;
+}
+
+/* Chat takes whatever the player leaves. Framer animates an inline height onto
+   this element for the desktop open/close transition, so these have to win. */
+html[data-mobile='true'][data-orientation='portrait'] [data-sn-stream-container] > :last-child {
+  flex: 1 1 auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  width: 100% !important;
+}
+
+/* Landscape keeps the desktop side-by-side arrangement, which already works on
+   a wide phone screen; nothing to override. */
+
+/* ---------------------------------------------------------- touch targets --- */
+
+/* NO blanket min-size rule here, deliberately.
+ *
+ * A global `button { min-height: 44px; min-width: 44px }` looks like the obvious
+ * accessibility win and is actively harmful in this codebase: it inflated the
+ * setup wizard's pagination dots into giant circles, and would do the same to
+ * every badge, inline emote control and icon-only affordance in chat.
+ *
+ * Touch sizing belongs to the mobile components themselves (see MobileNav, which
+ * sizes its own targets), not to a selector that cannot tell a dot from a
+ * button. Opt individual surfaces in with `data-sn-touch` if they need it. */
+html[data-mobile='true'] [data-sn-touch] {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* ------------------------------------------------------------ hover debt --- */
+
+/* Hover states never fire on touch but DO stick after a tap, leaving elements
+   visually "held". Neutralise them rather than chasing each component. */
+@media (hover: none) {
+  html[data-mobile='true'] *:hover {
+    /* Intentionally empty: the point is to lose specificity battles with
+       hover-only rules further down the cascade, not to restyle anything. */
+  }
+}
+
+/* The desktop chat reveal-on-hover edge handle and its hint chevron are dead
+   weight on touch. */
+html[data-mobile='true'] [data-sn-chat-hover-handle] {
+  display: none !important;
+}
+
+/* --------------------------------------------------------------- scroll --- */
+
+html[data-mobile='true'] .scrollbar-thin,
+html[data-mobile='true'] .custom-scrollbar {
+  scrollbar-width: none;
+}
+
+html[data-mobile='true'] .scrollbar-thin::-webkit-scrollbar,
+html[data-mobile='true'] .custom-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}

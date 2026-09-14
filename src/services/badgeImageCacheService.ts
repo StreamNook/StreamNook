@@ -10,6 +10,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { convertFileSrc } from '@tauri-apps/api/core';
 
 import { Logger } from '../utils/logger';
+import { features } from '../features';
 // Module-level registry of cached badge files (id -> localPath)
 const cachedBadgeFiles: Map<string, string> = new Map();
 
@@ -69,6 +70,8 @@ async function downloadBadgeIfNeeded(id: string, url: string): Promise<string | 
   if (pendingDownloads.has(id)) {
     return pendingDownloads.get(id)!;
   }
+
+  if (!features.assetDiskCache) return null;
 
   const settings = await getBadgeCacheSettings();
   if (!settings.enabled) return null;

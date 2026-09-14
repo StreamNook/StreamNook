@@ -1068,16 +1068,22 @@ pub async fn restart_to_apply_update(app_handle: tauri::AppHandle) -> Result<(),
         // plugin never auto-saves and the relaunch forgets which monitor/size
         // the window had. Flush geometry ourselves first, matching the flags the
         // plugin is built with (position/size/maximized only).
-        use tauri_plugin_window_state::{AppHandleExt, StateFlags};
-        let _ = app_handle.save_window_state(
-            StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED,
-        );
+        // The window-state plugin is desktop-only, and this exe-swap path never
+        // runs on mobile (Android updates via the package installer intent).
+        #[cfg(desktop)]
+        {
+            use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+            let _ = app_handle.save_window_state(
+                StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED,
+            );
+        }
         // Same skipped-RunEvent::Exit reason: flush every debounced store
         // manually before the hard exit.
         let _ = crate::commands::settings::flush_settings_now();
         let _ = crate::services::universal_cache_service::flush_manifest_now();
         let _ = crate::services::mod_log_storage_service::ModLogStorageService::flush_now();
         let _ = crate::services::whisper_storage_service::WhisperStorageService::flush_now();
+        let _ = crate::services::vod_progress_service::flush_now();
         let _ = crate::services::chat_logger_service::ChatLoggerService::flush_all();
         std::process::exit(0);
     }

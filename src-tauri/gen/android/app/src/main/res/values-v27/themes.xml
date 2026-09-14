@@ -1,0 +1,10 @@
+<resources>
+    <!-- Edge-to-edge is enabled programmatically (enableEdgeToEdge in
+         MainActivity); this overlay lets content draw into the display cutout
+         so the WebView owns the full screen. Keep in sync with
+         values-night-v27/themes.xml (the night qualifier outranks -v27, so the
+         item must exist in both). -->
+    <style name="Theme.stream_nook" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+</resources>

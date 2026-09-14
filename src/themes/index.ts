@@ -1498,6 +1498,15 @@ const hexToRgb = (hex: string): { r: number; g: number; b: number } => {
     };
 };
 
+// Whether a background needs light-coloured content drawn on top of it.
+// Relative luminance with the sRGB coefficients, split at the midpoint. Used for
+// the Android system bars, which sit over the app's own background: only the
+// palette knows what is behind the clock and the battery icon.
+export const needsLightContentOn = (color: string): boolean => {
+    const { r, g, b } = hexToRgb(parseColorToHex(color));
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.5;
+};
+
 // Resolve the OLED theme for a chosen accent. OLED is the one signature theme
 // whose accent the user picks; this fills the accent-derived slots (hover/muted,
 // secondary text, scrollbar) from a single hex so the look stays cohesive on
@@ -1655,6 +1664,22 @@ export const applyTheme = (theme: Theme): void => {
     // switching from Prism to a palette-only theme must drop the light.
     if (theme.effect) root.setAttribute('data-theme-effect', theme.effect);
     else root.removeAttribute('data-theme-effect');
+    // Announce the palette so platform chrome can follow it.
+    //
+    // Android draws the app BEHIND the status and navigation bars, so nothing
+    // but the active palette knows what is under the clock and the battery
+    // icon. The mobile shell listens for this and sets the bar icon colour
+    // (src/mobile/systemBars.ts). Deliberately an event rather than a direct
+    // call: this file is shared, and shared code must not reach for a native
+    // bridge that only exists on the phone.
+    window.dispatchEvent(
+        new CustomEvent('sn:theme-applied', {
+            detail: {
+                background: palette.background,
+                lightContent: needsLightContentOn(palette.background),
+            },
+        }),
+    );
 };
 
 // Default glassiness (percent). 100 = full frosted glass — the look every

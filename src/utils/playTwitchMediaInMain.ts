@@ -13,6 +13,7 @@
 
 import { useAppStore, type MediaInfo } from '../stores/AppStore';
 import { Logger } from './logger';
+import { openExternal } from './openExternal';
 
 function isPopoutWindow(): boolean {
   if (typeof window === 'undefined') return false;
@@ -20,14 +21,9 @@ function isPopoutWindow(): boolean {
   return hash.startsWith('#/multichat') || hash.startsWith('#/profile');
 }
 
-async function openExternal(url: string): Promise<void> {
-  try {
-    const { open } = await import('@tauri-apps/plugin-shell');
-    await open(url);
-  } catch (err) {
-    Logger.error('[playTwitchMediaInMain] external open failed:', err);
-  }
-}
+// Shared helper, not a local copy. This is the browser fallback for a clip/VOD
+// that will not play, and it is reached from LinkPreviewCard - so on Android it
+// was a dead end on top of a dead end.
 
 export async function playTwitchMediaInMain(
   type: 'clip' | 'video',

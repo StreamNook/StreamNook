@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "764398608400",
+    "project_id": "streamnook-2de41",
+    "storage_bucket": "streamnook-2de41.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:764398608400:android:528ba6c874504642e82a95",
+        "android_client_info": {
+          "package_name": "app.streamnook"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAP9G7Q7uBqgZ80hOGm_VETQ3bRdGUc5Hg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

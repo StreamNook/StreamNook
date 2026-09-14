@@ -347,9 +347,10 @@ pub async fn send_test_notification(
 
     // Pick a random message
     let random_message = {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        let random_index = rng.gen_range(0..messages.len());
+        // rand 0.10: thread_rng -> rng, gen_range -> random_range on RngExt.
+        use rand::RngExt;
+        let mut rng = rand::rng();
+        let random_index = rng.random_range(0..messages.len());
         messages[random_index].to_string()
     };
 

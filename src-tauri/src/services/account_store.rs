@@ -22,7 +22,7 @@
 //!     flows land in later phases.
 
 use anyhow::Result;
-use keyring::Entry;
+use crate::services::secure_store::Entry;
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use std::fs;

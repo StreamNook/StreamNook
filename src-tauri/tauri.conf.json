@@ -26,6 +26,7 @@
       "csp": "default-src * data: blob: filesystem: about: ws: wss: http: https: tauri: asset:; script-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; connect-src * http: https: ws: wss: ipc: http://ipc.localhost; img-src * data: blob: asset: http://asset.localhost; frame-src *; style-src * 'unsafe-inline'; media-src * blob: data: asset: http://asset.localhost http: https:;",
       "capabilities": [
         "main-capability",
+        "mobile-capability",
         "remote-bridge-capability"
       ]
     },

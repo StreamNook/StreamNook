@@ -163,12 +163,14 @@ impl WatchHeartbeatService {
                     target.broadcast_checked_at = Some(Instant::now());
                 }
                 Err(e) => {
-                    // A FAILED fetch must not refresh the stamp: stamping here
-                    // extended the stale broadcast_id's crediting window by a
-                    // full BROADCAST_REFRESH per failure, so a dead stream kept
-                    // earning against its old broadcast. Leaving the stamp
-                    // stale retries on the next tick instead.
-                    debug!("[Heartbeat] stream info fetch failed: {e}");
+                    // Deliberately does NOT stamp broadcast_checked_at. Doing
+                    // so treats "could not ask" as "asked, and the answer is
+                    // still good", which pins a stale broadcast id for another
+                    // full refresh window and lets a repeatedly-failing lookup
+                    // extend that window indefinitely. On a phone connection
+                    // this is a likely branch, not an exotic one. Leaving the
+                    // mark alone retries on the next tick instead.
+                    debug!("[Heartbeat] stream info fetch failed, retrying next tick: {e}");
                 }
             }
             // Write back the refreshed snapshot unless the target moved on.

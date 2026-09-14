@@ -1,17 +1,11 @@
 import { memo } from 'react';
 import { Music } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
-import { Logger } from '../../utils/logger';
+// Shared helper, not a local copy: this card renders inline in chat, so on
+// Android its service links were dead for the same reason every other chat link
+// was - `@tauri-apps/plugin-shell`'s open has no Android implementation.
+import { openExternal } from '../../utils/openExternal';
 import type { SongMatch } from '../../utils/songId';
-
-async function openExternal(url: string) {
-  try {
-    const { open } = await import('@tauri-apps/plugin-shell');
-    await open(url);
-  } catch (err) {
-    Logger.error('[SongCard] Failed to open URL:', err);
-  }
-}
 
 // The "/song" result rendered inline in chat: cover art, title/artist, and a row
 // of borderless service links (Spotify, Apple Music, ...) plus the song.link

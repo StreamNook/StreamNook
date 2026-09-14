@@ -242,7 +242,12 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
 const WIDTH_BLOCK_ROWS = 8;
 const WIDTH_ROW_PX = 52;
 const TWITCH_BLOCK_ROWS = 6;
-const TWITCH_ROW_PX = 60;
+// Image plus padding, with no name label under it. The other providers render
+// through EmoteGridItem, which never had a label and puts the name in the
+// tooltip; the Twitch and Kick grid is hand-rolled and had simply never been
+// brought in line, so the same picker read two different ways depending on
+// which tab you were on. Dropping the label took this row from 60.
+const TWITCH_ROW_PX = 42;
 const TWITCH_COLS = 7;
 
 const LazyEmoteBlock = memo(
@@ -934,7 +939,6 @@ export function EmotePickerPanel({
                                       else target.style.display = 'none';
                                     }}
                                   />
-                                  <span className="text-xs text-textSecondary truncate w-full text-center">{emote.name}</span>
                                 </button>
                               </Tooltip>
                               <Tooltip content={isFavorited ? 'Remove from favorites' : 'Add to favorites'}>

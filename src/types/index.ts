@@ -51,6 +51,19 @@ export interface VideoPlayerSettings {
   song_id?: SongIdSettings;
   experimental_low_latency?: boolean;
   ll_target_latency?: number;
+  /** Ad-free live playback. Android only; the desktop app resolves through its
+   *  plugin seam and ignores both of these. */
+  ad_bypass_enabled?: boolean;
+  /** Relay bases to prefer, comma or newline separated. Empty = bundled pool. */
+  ad_bypass_proxies?: string;
+  /**
+   * What leaving the app does while a stream plays. Android only.
+   *
+   * 'pip'   - float the video in a system picture-in-picture window (default).
+   * 'audio' - no floating window; drop to the audio-only rendition and keep
+   *           playing behind a media notification that taps back into the app.
+   */
+  background_mode?: 'pip' | 'audio';
   /** Scroll over the player to adjust volume. Default true. */
   scroll_volume?: boolean;
   /** Scroll down over the player to open the channel About drawer. Default
@@ -251,6 +264,9 @@ export interface ChatDesignSettings {
   // Pinned messages start collapsed to the compact bar when entering a channel;
   // expanding is a per-channel choice that lasts until you switch. Default true.
   pinned_start_collapsed?: boolean;
+  // Live polls open collapsed to their header instead of expanded. Independent
+  // of `show_polls`, which hides the card entirely. Default false (polls open).
+  polls_start_collapsed?: boolean;
   // --- Username prefix styling (normal messages only; action/"/me" stay plain) ---
   // Glyph rendered between the username and the message body.
   username_separator?: 'none' | 'colon' | 'dot' | 'arrow' | 'pipe' | 'dash';
@@ -597,6 +613,16 @@ export interface LiveNotificationSettings {
   // Toast placement: anchor + distance from the anchored top/bottom edge (px)
   toast_position?: ToastPosition;
   toast_edge_offset?: number;
+  // Android background delivery. The in-app path needs a live WebView, so these
+  // drive the WorkManager poll that keeps notifications arriving once the app is
+  // closed. Desktop never reads them.
+  background_checks?: boolean;
+  background_interval_minutes?: number;
+  // Android instant push (FCM) registration. Desktop never reads it.
+  push_notifications?: boolean;
+  // Channel logins excluded from live alerts. Empty means everything you follow
+  // notifies, so an upgrade changes nothing until a channel is opted out.
+  muted_live_channels?: string[];
 }
 
 export type AutoSwitchMode = 'same_category' | 'followed_streams';

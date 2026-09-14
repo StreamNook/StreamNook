@@ -1,0 +1,72 @@
+/* Mobile shell scope. Everything here is namespaced under .sn-mobile so the
+   desktop shell is untouched.
+
+   Insets: the native bridge (MainActivity WindowInsets listener) writes
+   --sn-inset-t/r/b/l and --sn-kb (IME height) onto <html>. env() values are the
+   fallback only: Android WebView reports 0 for the top inset on devices without
+   a display cutout and 0 for the bottom with button navigation, so env() alone
+   cannot be trusted. */
+
+.sn-mobile {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-size: 14px;
+  --sn-tabbar-h: 56px;
+  --sn-safe-t: var(--sn-inset-t, env(safe-area-inset-top, 0px));
+  --sn-safe-r: var(--sn-inset-r, env(safe-area-inset-right, 0px));
+  --sn-safe-b: var(--sn-inset-b, env(safe-area-inset-bottom, 0px));
+  --sn-safe-l: var(--sn-inset-l, env(safe-area-inset-left, 0px));
+}
+
+/* Touch surfaces scroll with overlay scrolling; the 8px hover-styled desktop
+   scrollbar is noise on a phone. */
+.sn-mobile ::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* Screen container between the safe top and the tab bar. */
+.sn-mobile-screen {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-left: var(--sn-safe-l);
+  padding-right: var(--sn-safe-r);
+}
+
+/* Minimum touch target for interactive rows/buttons in the mobile tree. */
+.sn-touch {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Bottom clearance for scroll content that runs behind the floating pill tab
+   bar. The bar sits at `safe-b + 14px` and is `--sn-tabbar-h` tall, so it ends
+   at `safe-b + 70px`; everything past that is breathing room.
+   Was +34px, which left only 20px of daylight — enough on a long list, but the
+   You screen ends in the Sign out row and is barely taller than the viewport,
+   so at rest the row sat right against the bar and looked tucked underneath it.
+   +64px gives a clear gap and makes it obvious the row is a row, not chrome. */
+.sn-tabbar-clearance {
+  padding-bottom: calc(var(--sn-tabbar-h, 56px) + var(--sn-safe-b, 0px) + 64px);
+}
+
+/* Stop the covered tab shell animating things nobody can see.
+   `data-sn-covered` is set in MobileApp when the full-screen watch layer is
+   over the shell. The shell stays mounted on purpose (back gesture, scroll
+   position), so without this its stream cards keep running infinite live-dot
+   and hype-train animations behind an opaque player.
+   Measured on device: ~4.6% of a CPU core, from 29 ping halos plus a shine
+   sweep, 24 of them off-screen. Every animating element is its own composited
+   layer, so the compositor services all of them on every frame.
+   Selectors are deliberately specific rather than a universal `*`: matching
+   thousands of nodes would add style-recalc cost of its own and trade one
+   compositor bill for another. */
+[data-sn-covered='true'] .animate-ping,
+[data-sn-covered='true'] .hype-train-badge-glass::after,
+[data-sn-covered='true'] .hype-train-badge-glass-golden::after {
+  animation: none !important;
+}

@@ -35,9 +35,16 @@ pub struct SevenTVAuthService;
 
 impl SevenTVAuthService {
     fn get_token_file_path() -> Result<PathBuf> {
-        let mut path =
-            dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?;
-        path.push("StreamNook");
+        // Mobile: app-private sandbox dir; desktop keeps dirs::config_dir.
+        let mut path = match crate::services::app_paths::mobile_base() {
+            Some(base) => base.join("StreamNook"),
+            None => {
+                let mut p = dirs::config_dir()
+                    .ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?;
+                p.push("StreamNook");
+                p
+            }
+        };
 
         if !path.exists() {
             fs::create_dir_all(&path)?;
@@ -316,9 +323,16 @@ impl SevenTVAuthService {
     }
 
     fn account_token_file_path(twitch_id: &str) -> Result<PathBuf> {
-        let mut path =
-            dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?;
-        path.push("StreamNook");
+        // Mobile: app-private sandbox dir; desktop keeps dirs::config_dir.
+        let mut path = match crate::services::app_paths::mobile_base() {
+            Some(base) => base.join("StreamNook"),
+            None => {
+                let mut p = dirs::config_dir()
+                    .ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?;
+                p.push("StreamNook");
+                p
+            }
+        };
         if !path.exists() {
             fs::create_dir_all(&path)?;
         }

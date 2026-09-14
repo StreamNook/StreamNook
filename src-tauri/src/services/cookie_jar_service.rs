@@ -15,6 +15,10 @@ const DROPS_COOKIES_FILE: &str = "cookies_drops.json";
 
 /// Get the app data directory (works consistently in dev and release)
 fn get_app_data_dir() -> Result<PathBuf> {
+    // Mobile: app-private sandbox dir (desktop keeps the dirs-based path below).
+    if let Some(base) = crate::services::app_paths::mobile_base() {
+        return Ok(base.join("StreamNook"));
+    }
     // Try to use the standard config directory first
     if let Some(config_dir) = dirs::config_dir() {
         let app_dir = config_dir.join("StreamNook");

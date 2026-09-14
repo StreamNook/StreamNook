@@ -1,5 +1,8 @@
 import { Dropdown } from '../ui/Dropdown';
 import { useAppStore } from '../../stores/AppStore';
+// Shared panel: both shells render it, so a platform branch here is legitimate.
+// Hides rows whose backing feature does not exist on Android.
+import { IS_MOBILE } from '../../utils/platform';
 import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
 import { DEFAULT_AUDIO_BOOST, DEFAULT_SONG_ID } from '../../types';
 import { aboutRevealNeedsShift } from '../../utils/playerMouseControls';
@@ -124,6 +127,10 @@ const PlayerSettings = () => {
         These settings control advanced streaming behavior.
       </p>
 
+      {/* Desktop only. These toggle buttons in VideoPlayer's overlay, which the
+          phone never renders: MobilePlayer has its own control set, and several
+          of these (MultiNook, popout) are desktop-only features regardless. */}
+      {!IS_MOBILE && (
       <SettingsSection
         label="Player Overlay Buttons"
         description="Choose which action buttons appear in the top-right of the video player. Each still only shows when it applies (Clip when clippable, MultiNook and Refresh on live streams, and so on)."
@@ -138,6 +145,7 @@ const PlayerSettings = () => {
           />
         ))}
       </SettingsSection>
+      )}
 
       <SettingsSection
         id="settings-section-auto-switch"
@@ -384,6 +392,37 @@ const PlayerSettings = () => {
           }
         />
 
+        {/* Phone-only: a desktop has nothing to leave the app INTO, and no
+            picture-in-picture window to choose against. */}
+        {IS_MOBILE && (
+          <SettingsRow
+            title="Keep playing in the background"
+            description={
+              (videoPlayer?.background_mode ?? 'pip') === 'audio'
+                ? 'Leaving the app keeps the audio going behind a media notification. Tap it to come back.'
+                : 'Leaving the app floats the video in a picture-in-picture window.'
+            }
+            control={
+              <Toggle
+                // On = audio only. Framed around the audio because that is what
+                // the viewer is choosing; losing the floating window is the
+                // consequence, not the point.
+                enabled={(videoPlayer?.background_mode ?? 'pip') === 'audio'}
+                onChange={() =>
+                  updateSettings({
+                    ...settings,
+                    video_player: {
+                      ...videoPlayer,
+                      background_mode:
+                        (videoPlayer?.background_mode ?? 'pip') === 'audio' ? 'pip' : 'audio',
+                    },
+                  })
+                }
+              />
+            }
+          />
+        )}
+
         <SettingsRow
           title="How close to live to stay"
           description="How far behind the live edge the player rides; lower is closer to live (reopen the stream to apply)."
@@ -474,37 +513,45 @@ const PlayerSettings = () => {
           />
         </SettingsRow>
 
-        <SettingsRow
-          title="Keep the window at 16:9"
-          description="Resizing the window snaps to the video's shape, so you never see black bars around the picture."
-          control={
-            <Toggle
-              enabled={videoPlayer?.lock_aspect_ratio ?? true}
-              onChange={() =>
-                updateSettings({
-                  ...settings,
-                  video_player: { ...videoPlayer, lock_aspect_ratio: !(videoPlayer?.lock_aspect_ratio ?? true) },
-                })
-              }
-            />
-          }
-        />
+        {/* Desktop only: it constrains WINDOW RESIZE, and there is no resizable
+            window here. The phone's player band is a fixed 16:9 already. */}
+        {!IS_MOBILE && (
+          <SettingsRow
+            title="Keep the window at 16:9"
+            description="Resizing the window snaps to the video's shape, so you never see black bars around the picture."
+            control={
+              <Toggle
+                enabled={videoPlayer?.lock_aspect_ratio ?? true}
+                onChange={() =>
+                  updateSettings({
+                    ...settings,
+                    video_player: { ...videoPlayer, lock_aspect_ratio: !(videoPlayer?.lock_aspect_ratio ?? true) },
+                  })
+                }
+              />
+            }
+          />
+        )}
 
-        <SettingsRow
-          title="Cinema Mode"
-          description="Use solid black letterbox bars. When off, the bars match your theme color so the video appears to float."
-          control={
-            <Toggle
-              enabled={videoPlayer?.cinema_mode ?? false}
-              onChange={() =>
-                updateSettings({
-                  ...settings,
-                  video_player: { ...videoPlayer, cinema_mode: !(videoPlayer?.cinema_mode ?? false) },
-                })
-              }
-            />
-          }
-        />
+        {/* Desktop only: `cinema_mode` is read solely by VideoPlayer.tsx, which
+            the phone shell never renders, so the toggle did nothing here. */}
+        {!IS_MOBILE && (
+          <SettingsRow
+            title="Cinema Mode"
+            description="Use solid black letterbox bars. When off, the bars match your theme color so the video appears to float."
+            control={
+              <Toggle
+                enabled={videoPlayer?.cinema_mode ?? false}
+                onChange={() =>
+                  updateSettings({
+                    ...settings,
+                    video_player: { ...videoPlayer, cinema_mode: !(videoPlayer?.cinema_mode ?? false) },
+                  })
+                }
+              />
+            }
+          />
+        )}
 
         <SettingsRow
           title="Start streams muted"
@@ -543,6 +590,14 @@ const PlayerSettings = () => {
         </SettingsRow>
       </SettingsSection>
 
+      {/* Desktop only, for now. `applyAudioBoost` is called from exactly one
+          place - VideoPlayer.tsx - and the phone renders MobilePlayer, so every
+          control in here was inert on Android. Worth WIRING rather than
+          dropping at some point: phone speakers are quiet and this is the
+          setting that would help most. It is a small change (call
+          applyAudioBoost on the mobile <video> the same way), just not one to
+          make blind inside a settings audit. */}
+      {!IS_MOBILE && (
       <SettingsSection
         id="settings-section-audio-boost"
         label="Audio Boost"
@@ -616,6 +671,7 @@ const PlayerSettings = () => {
           </details>
         </SettingsRow>
       </SettingsSection>
+      )}
 
       <SettingsSection
         id="settings-section-song-id"

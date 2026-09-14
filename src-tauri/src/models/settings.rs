@@ -109,6 +109,35 @@ pub struct VideoPlayerSettings {
     /// VOD from the top (positions are still recorded for the cards).
     #[serde(default = "default_true")]
     pub resume_vod_playback: bool,
+    /// Ad-free live playback (Android). Routes the playlist through a public
+    /// relay and strips ad segments out of what the player is served. On by
+    /// default, matching the behavior the phone app shipped with through 7.8.6.
+    /// Read only by the Android build; desktop resolves through its plugin
+    /// seam and ignores this.
+    #[serde(default = "default_true")]
+    pub ad_bypass_enabled: bool,
+    /// Relay bases to prefer, comma or newline separated. Empty means the
+    /// bundled pool, which is what almost everyone should use.
+    #[serde(default)]
+    pub ad_bypass_proxies: String,
+    /// What leaving the app does while a stream is playing (Android only).
+    ///
+    /// "pip"   - float the video in a system picture-in-picture window. Default,
+    ///           and the behaviour the phone app has always had.
+    /// "audio" - no floating window: the stream drops to its audio-only
+    ///           rendition and keeps playing behind a media notification, which
+    ///           taps back into the app.
+    ///
+    /// The audio path is not merely a preference. Backgrounding without PiP
+    /// destroys the activity's window surface, and Chromium tears down a media
+    /// pipeline that has a video track and nowhere to render it. Audio-only has
+    /// nothing to render, so it survives.
+    #[serde(default = "default_background_mode")]
+    pub background_mode: String,
+}
+
+fn default_background_mode() -> String {
+    "pip".to_string()
 }
 
 fn default_ll_target_latency() -> f32 {
@@ -132,6 +161,9 @@ impl Default for VideoPlayerSettings {
             audio_boost: AudioBoostSettings::default(),
             experimental_low_latency: false,
             ll_target_latency: 6.0,
+            ad_bypass_enabled: true,
+            ad_bypass_proxies: String::new(),
+            background_mode: default_background_mode(),
             scroll_volume: true,
             scroll_about_reveal: true,
             middle_click_mute: true,
@@ -390,10 +422,30 @@ pub struct LiveNotificationSettings {
     pub toast_position: String,
     #[serde(default = "default_toast_edge_offset")]
     pub toast_edge_offset: u32,
+    // Android background delivery. The in-app path needs a live WebView, so
+    // these drive the WorkManager poll that keeps notifications arriving after
+    // the app is closed. Desktop never reads them.
+    #[serde(default = "default_true")]
+    pub background_checks: bool,
+    #[serde(default = "default_background_interval")]
+    pub background_interval_minutes: u32,
+    // Android push (FCM) registration. Desktop never reads it.
+    #[serde(default = "default_true")]
+    pub push_notifications: bool,
+    // Channels excluded from live alerts, by login. Empty means every followed
+    // channel notifies, which is the behaviour everyone already has, so an
+    // upgrade changes nothing until someone opts a channel out.
+    #[serde(default)]
+    pub muted_live_channels: Vec<String>,
 }
 
 fn default_true() -> bool {
     true
+}
+
+/// WorkManager's floor is 15 minutes and it will not schedule anything tighter.
+fn default_background_interval() -> u32 {
+    15
 }
 
 fn default_toast_position() -> String {
@@ -425,6 +477,10 @@ impl Default for LiveNotificationSettings {
             quick_update_on_toast: false,
             toast_position: "bottom-right".to_string(),
             toast_edge_offset: 72,
+            background_checks: true,
+            background_interval_minutes: 15,
+            push_notifications: true,
+            muted_live_channels: Vec::new(),
         }
     }
 }

@@ -8,6 +8,7 @@ import { Logger, setDiagnosticsEnabled } from '../utils/logger';
 import { getPlayerControls } from '../keybindings/playerControls';
 import { qualitiesEquivalent } from '../utils/quality';
 import { reportCodecPreference } from '../utils/codecPreference';
+import { setInlineEmoteScale } from '../services/emoteService';
 import { upsertUser, claimLoginAccolades, grantAtmosphereOwnership } from '../services/supabaseService';
 import { emitSettingsUpdated } from '../utils/settingsBroadcast';
 import { makeKey, parseKey } from '../utils/providerKey';
@@ -300,6 +301,9 @@ interface AppState {
   setCurrentStream: (stream: TwitchStream | null) => void;
   chatPlacement: string;
   isLoading: boolean;
+  /** Mobile device-code login: the code + verify URL to show while the backend
+   * polls for authorization; null when no login is in progress. */
+  deviceCodeInfo: { userCode: string; verificationUri: string } | null;
   isSettingsOpen: boolean;
   settingsInitialTab: SettingsTab | null;
   // DOM id of a settings section to scroll to when the dialog opens (e.g. from a
@@ -481,6 +485,8 @@ interface AppState {
   reloadStreamAndChat: () => Promise<void>;  // Hard refresh: restart the stream AND reconnect/reload chat
   getAvailableQualities: () => Promise<string[]>;
   changeStreamQuality: (quality: string) => Promise<void>;
+  /** Swap rendition without persisting or notifying. See the implementation. */
+  applyTransientQuality: (quality: string) => Promise<void>;
   /** Apply a backend ad auto-pivot: the relay already hot-swapped to a clean
    *  region, so point the player at the fresh URL to resync cleanly. */
   applyAdPivot: (url: string, region?: string) => void;
@@ -576,7 +582,6 @@ interface AppState {
 }
 
 // Flags to ensure we only show session toasts once per app session
-let hasShownWelcomeBackToast = false;
 
 // Mod-log dedup metadata, memoized per entry object. The dedup scan runs per
 // moderation event over up to MOD_LOG_CAP entries; without this it rebuilt the
@@ -950,6 +955,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setCurrentStream: (stream: TwitchStream | null) => set({ currentStream: stream }),
   chatPlacement: 'right',
   isLoading: false,
+  deviceCodeInfo: null,
   isSettingsOpen: false,
   settingsInitialTab: null,
   settingsInitialSection: null,
@@ -1612,6 +1618,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     // here in the webview), gated by the enhanced-codecs setting. Must run before any
     // stream resolves, so the resolver can prefer AV1/HEVC where decodable.
     reportCodecPreference(settings.streamlink?.enhanced_codecs ?? true);
+
+    // On mobile the emote size tier is chosen from the RENDERED glyph size, so
+    // it needs the user's emote scale. Desktop keeps its DPR ladder and ignores
+    // this. Must run before chat renders, or the first frame picks the default.
+    setInlineEmoteScale(settings.chat_design?.emote_scale ?? 1);
 
     // Sync the experimental parts-based low-latency switch to the backend runtime
     // kill switch. Off by default = the stable whole-segment path. Must run before a
@@ -2358,6 +2369,44 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
 
+  applyTransientQuality: async (quality: string) => {
+    // A quality swap the USER did not ask for, so it must leave no trace:
+    // no settings write, no toast, no "quality changed" feedback.
+    //
+    // Mobile uses this to drop to `audio_only` when the screen goes off. That
+    // is not an optimisation, it is what makes lock-screen audio work at all:
+    // turning the screen off destroys the activity's window surface, and
+    // Chromium tears down the media pipeline for a WebContents that has a video
+    // track and nowhere to render it. Audio-only media has nothing to render, so
+    // it survives. (Xtra does the same thing by disabling the video track; we
+    // resolve to a single muxed variant, so swapping renditions is our
+    // equivalent.)
+    //
+    // Deliberately NOT changeStreamQuality: that persists the choice to
+    // settings, which would leave the user permanently on audio_only after one
+    // screen lock.
+    const currentStream = get().currentStream;
+    if (!currentStream) return;
+    try {
+      const { currentMediaType, originalMediaUrl } = get();
+      const targetUrl =
+        currentMediaType !== 'live' && originalMediaUrl
+          ? originalMediaUrl
+          : `https://twitch.tv/${currentStream.user_login}`;
+      const result = await invoke<StreamStartResult>('change_stream_quality', {
+        url: targetUrl,
+        quality,
+      });
+      // streamUrl only. activeQuality is left alone on purpose so the UI keeps
+      // showing what the VIEWER chose, not the state we swapped in behind them.
+      set({ streamUrl: result.url });
+      Logger.info(`[TransientQuality] swapped to ${result.quality} (no settings write)`);
+    } catch (e) {
+      // Non-fatal: failing to downshift means the stream keeps playing as it is.
+      Logger.warn('[TransientQuality] swap failed, leaving playback alone:', e);
+    }
+  },
+
   changeStreamQuality: async (quality: string) => {
     const currentStream = get().currentStream;
     if (!currentStream) {
@@ -2616,13 +2665,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
           invoke('register_active_channel', { channelId }).catch(() => {});
         } else {
-          // No usable channel id (get_channel_info failed and the placeholder
-          // carries user_id: ''): the heartbeat would otherwise keep its
-          // PREVIOUS target and credit a channel nobody is watching for the
-          // whole session. Not earning here is honest; earning for the wrong
-          // channel is not.
-          Logger.warn(`[Drops] No channel id for ${channelName}; stopping stale monitoring`);
-          await invoke('stop_drops_monitoring');
+          // No broadcaster id, so the watch heartbeat cannot be retargeted.
+          // Silently skipping leaves it aimed at the PREVIOUS channel, which
+          // then keeps collecting watch minutes for a stream nobody is on.
+          // Stopping is the honest outcome: this session earns nothing, which
+          // it was going to regardless, but no other channel is credited for
+          // it either. Reachable when the get_channel_info fallback throws.
+          Logger.warn(`[Stream] No broadcaster id for ${channelName}; drops and points monitoring off for this session`);
+          await invoke('stop_drops_monitoring').catch(() => {});
         }
       } catch (e) {
         Logger.warn('Could not start drops monitoring:', e);
@@ -3315,27 +3365,51 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Show the user code to the user
       get().addToast(`Enter code ${userCode} at twitch.tv/activate`, 'info');
 
-      // Open the verification URL in an in-app WebView window, isolated to the
-      // active account's Twitch web profile. A per-account profile means each
-      // account keeps its own browser session, so a re-login lands on the same
-      // account and can't silently inherit a different account's web session.
-      try {
-        await invoke('open_twitch_login_window', { url: verificationUri });
-        Logger.debug('In-app login window opened successfully');
-      } catch (e) {
-        Logger.error('Failed to open login window:', e);
-        get().addToast(`Please visit ${verificationUri} and enter code: ${userCode}`, 'warning');
+      const isMobile = /android|iphone|ipad|ipod/i.test(navigator.userAgent);
+      if (isMobile) {
+        // Android: present Twitch's login page in a native in-app WebView overlay
+        // (Kotlin plugin) so the user signs in INSIDE the app, not an external
+        // browser. The backend keeps polling and emits `twitch-login-complete`;
+        // the handler below dismisses the overlay. Falls back to the device-code
+        // panel if the plugin isn't available.
+        try {
+          await invoke('open_mobile_login', { url: verificationUri });
+          set({ isLoading: false });
+        } catch (e) {
+          Logger.error('[TwitchLogin] In-app login WebView unavailable, falling back to device code:', e);
+          set({ deviceCodeInfo: { userCode, verificationUri }, isLoading: false });
+        }
+      } else {
+        // Desktop: open the verification URL in an in-app WebView window, isolated
+        // to the active account's Twitch web profile so each account keeps its own
+        // browser session and a re-login can't inherit a different account's.
+        try {
+          await invoke('open_twitch_login_window', { url: verificationUri });
+          Logger.debug('In-app login window opened successfully');
+        } catch (e) {
+          Logger.error('Failed to open login window:', e);
+          get().addToast(`Please visit ${verificationUri} and enter code: ${userCode}`, 'warning');
+        }
       }
 
       // Listen for login completion event from backend
       const { listen } = await import('@tauri-apps/api/event');
+
+      // Set only on Android, where the login overlay can be dismissed by the
+      // user; stays null everywhere else, so the calls below are no-ops off
+      // that platform. See the registration further down.
+      let removeCancelListener: (() => void) | null = null;
 
       const unlisten = await listen('twitch-login-complete', async () => {
         Logger.debug('Login complete event received');
 
         // Dismiss the in-app login overlay
         try {
-          await invoke('close_login_overlay', { label: 'twitch-login' });
+          if (isMobile) {
+            await invoke('close_mobile_login');
+          } else {
+            await invoke('close_login_overlay', { label: 'twitch-login' });
+          }
         } catch (e) {
           Logger.warn('[TwitchLogin] Failed to close login overlay:', e);
         }
@@ -3347,7 +3421,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         get().addToast('Login successful! You are now authenticated with Twitch.', 'success');
         await get().loadFollowedStreams();
 
-        set({ isLoading: false });
+        set({ isLoading: false, deviceCodeInfo: null });
 
         // Bring the app window to focus after successful login
         try {
@@ -3358,6 +3432,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
         // Clean up listener
         unlisten();
+        removeCancelListener?.();
       });
 
       // Also listen for login errors
@@ -3365,17 +3440,42 @@ export const useAppStore = create<AppState>((set, get) => ({
         Logger.error('Login error event received:', event.payload);
         const errorMessage = String(event.payload);
         get().addToast(`Login failed: ${errorMessage}`, 'error');
-        set({ isLoading: false });
+        set({ isLoading: false, deviceCodeInfo: null });
 
         // Also dismiss the login overlay on error
         try {
-          await invoke('close_login_overlay', { label: 'twitch-login' });
+          if (isMobile) {
+            await invoke('close_mobile_login');
+          } else {
+            await invoke('close_login_overlay', { label: 'twitch-login' });
+          }
         } catch (e) {
           Logger.warn('[TwitchLogin] Failed to close login overlay on error:', e);
         }
 
         unlistenError();
+        removeCancelListener?.();
       });
+
+      // Android only: the login overlay is a native view sitting on top of the
+      // app, so closing it with its X leaves no trace on this side. Without
+      // this the sign-in button stays spinning forever behind a screen that is
+      // no longer there. The backend device-code poll is left to expire on its
+      // own, since there is no command to call it off and it is harmless once
+      // nothing is waiting on it.
+      if (isMobile) {
+        const onCancelled = () => {
+          removeCancelListener?.();
+          unlisten();
+          unlistenError();
+          set({ isLoading: false, deviceCodeInfo: null });
+        };
+        removeCancelListener = () => {
+          removeCancelListener = null;
+          window.removeEventListener('sn:login-cancelled', onCancelled);
+        };
+        window.addEventListener('sn:login-cancelled', onCancelled);
+      }
 
     } catch (e) {
       Logger.error('Login failed:', e);
@@ -3510,7 +3610,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Track user in Supabase for analytics (only on initial login, not periodic checks)
       if (!wasAuthenticated) {
         try {
-          const appVersion = await invoke<string>('get_current_app_version');
+          // getVersion(), NOT the get_current_app_version command: that returns
+          // env!("CARGO_PKG_VERSION"), which is the DESKTOP number even inside
+          // an Android build, because the tauri.android.conf.json version
+          // override feeds Gradle and never reaches Cargo. Android had been
+          // reporting 8.3.9 to Supabase.
+          const { getVersion } = await import('@tauri-apps/api/app');
+          const appVersion = await getVersion();
           upsertUser(user, appVersion).catch((e) => {
             Logger.warn('[Auth] Failed to upsert user to Supabase:', e);
           });
@@ -3552,11 +3658,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         });
       }
 
-      // If we successfully restored session from stored credentials, show success (only once)
-      if (hasCredentials && !wasAuthenticated && !hasShownWelcomeBackToast) {
-        hasShownWelcomeBackToast = true;
-        get().addToast(`Welcome back, ${userInfo.display_name}!`, 'success');
-      }
+      // No welcome-back toast. Restoring a stored session is the expected case,
+      // not news, and announcing it put a toast over the UI on every launch.
 
       // Start whisper listener after successful authentication
       try {

@@ -1267,7 +1267,16 @@ const UserProfileCard = ({
       const command = isFollowing ? 'unfollow_channel' : 'follow_channel';
       await invoke(command, { targetUserId: userId });
 
-      setIsFollowing(prev => !prev);
+      const nowFollowing = !isFollowing;
+      setIsFollowing(nowFollowing);
+      // Announce it. A chat composer blocked on "Follow to send a message"
+      // listens for this and unblocks the moment you follow, rather than staying
+      // locked until something happens to remount it.
+      window.dispatchEvent(
+        new CustomEvent('sn:follow-changed', {
+          detail: { userId, following: nowFollowing },
+        }),
+      );
       Logger.debug(`[UserProfileCard] Successfully ${action}ed ${username}`);
     } catch (err: any) {
       Logger.error(`[UserProfileCard] ${action} error:`, err);

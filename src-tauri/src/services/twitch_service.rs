@@ -6,7 +6,7 @@ use crate::models::{
 use crate::services::cookie_jar_service::CookieJarService;
 use anyhow::Result;
 use chrono::{Duration as ChronoDuration, Utc};
-use keyring::Entry;
+use crate::services::secure_store::Entry;
 use log::{debug, error, warn};
 use reqwest::header::{ACCEPT, AUTHORIZATION};
 use reqwest::Client;
@@ -73,6 +73,10 @@ pub(crate) fn gql_device_id() -> String {
 
 /// Get the app data directory (works consistently in dev and release)
 pub(crate) fn get_app_data_dir() -> Result<PathBuf> {
+    // Mobile: app-private sandbox dir (desktop keeps the dirs-based path below).
+    if let Some(base) = crate::services::app_paths::mobile_base() {
+        return Ok(base.join("StreamNook"));
+    }
     // Try to use the standard config directory first
     if let Some(config_dir) = dirs::config_dir() {
         let app_dir = config_dir.join("StreamNook");
@@ -480,7 +484,8 @@ impl TwitchService {
                     // Dismiss the in-app login overlay the instant we have the
                     // token, so the loading screen behind it shows without waiting
                     // on a frontend round-trip. The frontend dismisses it too as a
-                    // backup.
+                    // backup. (Desktop-only overlay; no-op on mobile device-code login.)
+                    #[cfg(desktop)]
                     crate::commands::twitch::dismiss_login_overlay(&app_handle, "twitch-login");
                     debug!(
                         "[LOGIN] Access token (first 10 chars): {}...",
@@ -839,7 +844,15 @@ impl TwitchService {
     }
 
     pub async fn get_token() -> Result<String> {
-        // debug!("[GET_TOKEN] Attempting to retrieve token from storage...");
+        // Serialized end to end. Two callers landing inside the 5-minute
+        // expiry buffer would otherwise BOTH refresh, and whichever persists
+        // last can write back a stale refresh token, killing the session until
+        // the user logs in again. The no-refresh path this also serializes is
+        // a file read, so contention costs nothing. (On Android the background
+        // notification worker shares this path with the running app, which
+        // widened the race enough to be worth closing.)
+        static REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        let _guard = REFRESH_LOCK.lock().await;
 
         // Try to load from file first (primary storage)
         match Self::load_token_from_file() {

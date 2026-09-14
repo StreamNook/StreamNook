@@ -1,0 +1,110 @@
+name: CI
+
+# WHY THIS EXISTS
+#
+# Dependabot merges patch and minor bumps on this repo unattended, and until now
+# nothing compiled the result. A merged dependency PR proved nothing; the next
+# local release build was the CI. phf 0.13 -> 0.14 is the worked example: 0.14
+# moved phf_map! behind a "macros" feature, emoji_service.rs failed E0432, and
+# that was discovered at release time rather than on the PR.
+#
+# So this gate answers exactly one question: does the tree still compile after a
+# dependency changed? It is not a release pipeline and does not produce an APK.
+#
+# Deliberately NOT running `npm run lint` here. eslint currently reports 29
+# errors and 362 warnings of pre-existing debt, so a lint gate would be red on
+# every run from day one, and a check that is always red is a check nobody
+# reads. Add it once that backlog is cleared, not before.
+
+on:
+  pull_request:
+  push:
+    branches: [android]
+  workflow_dispatch:
+
+# A dependabot force-push should cancel the run it superseded.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Must match minSdk in gen/android/app/build.gradle.kts. The NDK ships one
+  # clang wrapper per API level, so a mismatch means the compiler binary named
+  # below simply does not exist.
+  ANDROID_API: "26"
+  # The Twitch/Kick OAuth client ids are read with a hard env!() at compile
+  # time in the shared backend, so cargo check needs them defined. They are
+  # public by construction (they appear in every authorize URL the app opens);
+  # only the *_SECRET values are secrets, and a compile check needs a defined
+  # value, not a real one, so an unset secret (Dependabot PRs cannot read
+  # repository secrets) simply compiles as the empty string.
+  TWITCH_APP_CLIENT_ID: "1qgws7yzcp21g5ledlzffw3lmqdvie"
+  TWITCH_ANDROID_CLIENT_ID: "kd1unb4b3q4t58fwlpcbzcbnm76a8fp"
+  TWITCH_WEB_CLIENT_ID: "kimne78kx3ncx6brgo4mv6wki5h1ko"
+  KICK_APP_CLIENT_ID: "01KMKM0HVR6HY0BMA101JFCTW3"
+  TWITCH_APP_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
+
+jobs:
+  compile:
+    name: Type-check and compile for Android
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install node dependencies
+        run: npm ci
+
+      # Runs `tsc && vite build`. Two jobs in one: it type-checks the frontend,
+      # and it produces dist/, which is gitignored. tauri-build resolves
+      # frontendDist ("../dist") while compiling, so cargo check below cannot
+      # run until this step has created it.
+      - name: Build frontend
+        run: npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      # cargo check does not link, but the build scripts of the native
+      # dependencies still compile C, so cc-rs has to be pointed at the NDK.
+      - name: Point cc-rs at the NDK toolchain
+        run: |
+          TC="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          # Fail here with a readable message rather than inside a build script.
+          for abi in aarch64-linux-android x86_64-linux-android; do
+            test -x "$TC/$abi$ANDROID_API-clang" \
+              || { echo "::error::missing $TC/$abi$ANDROID_API-clang"; exit 1; }
+          done
+          {
+            echo "CC_aarch64_linux_android=$TC/aarch64-linux-android$ANDROID_API-clang"
+            echo "CXX_aarch64_linux_android=$TC/aarch64-linux-android$ANDROID_API-clang++"
+            echo "AR_aarch64_linux_android=$TC/llvm-ar"
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TC/aarch64-linux-android$ANDROID_API-clang"
+            echo "CC_x86_64_linux_android=$TC/x86_64-linux-android$ANDROID_API-clang"
+            echo "CXX_x86_64_linux_android=$TC/x86_64-linux-android$ANDROID_API-clang++"
+            echo "AR_x86_64_linux_android=$TC/llvm-ar"
+            echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=$TC/x86_64-linux-android$ANDROID_API-clang"
+          } >> "$GITHUB_ENV"
+
+      # --lib because tauri android builds the cdylib, not the desktop bin.
+      # --locked so a lockfile that drifted from Cargo.toml fails loudly.
+      - name: cargo check (aarch64, every real phone)
+        working-directory: src-tauri
+        run: cargo check --target aarch64-linux-android --lib --locked
+
+      # Shipped since 0.1.9 so the app runs on x86_64 emulators. Checked
+      # separately because a break here would otherwise surface only at release.
+      - name: cargo check (x86_64, emulators)
+        working-directory: src-tauri
+        run: cargo check --target x86_64-linux-android --lib --locked

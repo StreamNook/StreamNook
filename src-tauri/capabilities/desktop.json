@@ -1,7 +1,8 @@
 {
-  "$schema": "../gen/schemas/desktop_capability.json",
+  "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-capability",
-  "description": "Main application capabilities",
+  "description": "Main application capabilities (desktop shells)",
+  "platforms": ["windows", "macOS", "linux"],
   "windows": [
     "main",
     "profile-*",
@@ -49,10 +50,12 @@
     "core:window:allow-unminimize",
     "core:window:allow-is-visible",
     "core:tray:default",
+    "os:default",
     "shell:allow-open",
     "deep-link:default",
     "dialog:default",
     "clipboard-manager:default",
+    "notification:default",
     "window-state:default",
     {
       "identifier": "http:default",

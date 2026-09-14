@@ -257,7 +257,9 @@ impl LayoutService {
         let metrics = Metrics::new(font_size, line_height);
         let mut buffer = Buffer::new(&mut font_system, metrics);
 
-        buffer.set_size(&mut font_system, Some(effective_width), Some(f32::MAX));
+        // cosmic-text 0.19 defers layout, so set_size/set_text no longer take a
+        // font system; only shape_until_scroll still needs it.
+        buffer.set_size(Some(effective_width), Some(f32::MAX));
 
         // Use appropriate font style for measurement
         // Action messages (/me) are rendered in italics in the frontend
@@ -269,13 +271,7 @@ impl LayoutService {
             Attrs::new().family(Family::Name("Satoshi"))
         };
 
-        buffer.set_text(
-            &mut font_system,
-            &full_text,
-            &attrs,
-            Shaping::Advanced,
-            None,
-        );
+        buffer.set_text(&full_text, &attrs, Shaping::Advanced, None);
 
         buffer.shape_until_scroll(&mut font_system, false);
 

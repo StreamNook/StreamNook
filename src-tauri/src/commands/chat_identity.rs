@@ -361,6 +361,44 @@ pub struct ChatIdentityBadge {
     pub is_selected: bool,
 }
 
+// ── Android: the GQL path only ───────────────────────────────────────────────
+//
+// The desktop commands are `#[cfg(desktop)]` because of what they fall back TO,
+// not what they do first: a hidden webview that scrapes (or drives) Twitch's own
+// badge editor. Android has no second window to hand that job to.
+//
+// The fast paths above are plain HTTP against gql.twitch.tv, so they work on the
+// phone unchanged. These wrappers expose exactly that and nothing else: when GQL
+// declines, the answer is an error the UI can explain rather than a fallback
+// that cannot exist. Both need the drops token, which is why the caller checks
+// `is_drops_authenticated` first and says so plainly.
+
+/// Global badges you can wear, and which one you are wearing.
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn fetch_chat_identity_badges_gql(
+    username: String,
+) -> Result<Vec<ChatIdentityBadge>, String> {
+    match try_gql_badge_fetch(&username).await? {
+        Some(badges) => Ok(badges),
+        None => Err("NEEDS_DROPS_AUTH".to_string()),
+    }
+}
+
+/// Wear a global badge. `badge_version` comes back with the badge from the fetch.
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn update_chat_identity_gql(
+    badge_id: String,
+    badge_version: String,
+) -> Result<(), String> {
+    if try_gql_badge_update(&badge_id, &badge_version).await? {
+        Ok(())
+    } else {
+        Err("NEEDS_DROPS_AUTH".to_string())
+    }
+}
+
 /// Result of setting a badge
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BadgeUpdateResult {
@@ -708,6 +746,7 @@ fn generate_badge_update_script(badge_id: &str, badge_version: &str) -> String {
 }
 
 /// Fetch available global badges - tries fast GQL first, falls back to browser scraping
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn fetch_chat_identity_badges(
     app: AppHandle,
@@ -793,6 +832,7 @@ pub async fn fetch_chat_identity_badges(
 }
 
 /// Command called by the hidden window when badges are found
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn receive_badge_data(app: AppHandle, result: BadgeScrapeResult) -> Result<(), String> {
     debug!(
@@ -818,6 +858,7 @@ pub async fn receive_badge_data(app: AppHandle, result: BadgeScrapeResult) -> Re
 
 /// Update the selected chat identity badge
 /// Tries fast GQL mutation first, falls back to browser automation if needed
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn update_chat_identity(
     app: AppHandle,
@@ -901,6 +942,7 @@ pub async fn update_chat_identity(
 }
 
 /// Receive update result from the hidden window
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn receive_update_result(
     app: AppHandle,

@@ -93,6 +93,9 @@ pub fn get_seventv_login_url() -> String {
 }
 
 /// Open 7TV login in an in-app browser window with automatic token capture
+// Desktop-only: opens a 7TV login webview window. Mobile keeps cosmetics
+// rendering/apply; the popup-based login is a desktop-only mechanism.
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn open_seventv_login_window(app: AppHandle) -> Result<bool, String> {
     let window_label = format!("seventv-login-{}", chrono::Utc::now().timestamp_millis());
@@ -489,6 +492,7 @@ pub async fn set_seventv_badge_for(
 /// signs into Twitch as the alt there without disturbing the main's session, and
 /// 7tv.app authenticates as the alt. The captured token is stored under the
 /// given Twitch account id. `account_id` is the alt's Twitch user id.
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn open_seventv_login_window_for_account(
     app: AppHandle,
@@ -633,6 +637,7 @@ pub async fn open_seventv_login_window_for_account(
 /// shared main session). If the underlying session is still valid the page
 /// re-mints a token with no interaction and we recapture it. Returns true on
 /// success; on timeout the caller falls back to a visible reconnect. Best-effort.
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn refresh_seventv_token_for_account(
     app: AppHandle,

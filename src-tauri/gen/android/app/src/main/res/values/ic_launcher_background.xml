@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Flat stand-in for the brushed plate in drawable-*dpi/ic_launcher_background.png.
+  The adaptive icon does not reference this; it is kept only so anything that
+  falls back to a solid colour matches the plate rather than the #fff this was
+  left at when the background stopped being a flat colour.
+  Midpoint of METAL_LOW..METAL_HIGH in scripts/gen-android-icons.py.
+-->
+<resources>
+  <color name="ic_launcher_background">#24292F</color>
+</resources>

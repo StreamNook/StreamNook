@@ -1,4 +1,5 @@
 import { useState, useEffect, type JSX } from 'react';
+import { IS_MOBILE } from '../utils/platform';
 import PenroseMarch from './PenroseMarch';
 import { Tooltip } from './ui/Tooltip';
 
@@ -139,6 +140,11 @@ const FUNNY_MESSAGES = [
   'Pixels are on the way',
 ];
 
+// Phones have no Ctrl key: keep the command palette tips desktop-only.
+const MESSAGES = IS_MOBILE
+  ? FUNNY_MESSAGES.filter((m) => !m.includes('Ctrl+K'))
+  : FUNNY_MESSAGES;
+
 interface LoadingWidgetProps {
   message?: string;
   useFunnyMessages?: boolean;
@@ -148,7 +154,7 @@ interface LoadingWidgetProps {
 
 const LoadingWidget = ({ message, useFunnyMessages = false, showProxyNote = false, fullScreen = true }: LoadingWidgetProps) => {
   const [currentMessageIndex, setCurrentMessageIndex] = useState(() =>
-    Math.floor(Math.random() * FUNNY_MESSAGES.length)
+    Math.floor(Math.random() * MESSAGES.length)
   );
 
   useEffect(() => {
@@ -159,8 +165,8 @@ const LoadingWidget = ({ message, useFunnyMessages = false, showProxyNote = fals
       setCurrentMessageIndex((prev) => {
         let newIndex;
         do {
-          newIndex = Math.floor(Math.random() * FUNNY_MESSAGES.length);
-        } while (newIndex === prev && FUNNY_MESSAGES.length > 1);
+          newIndex = Math.floor(Math.random() * MESSAGES.length);
+        } while (newIndex === prev && MESSAGES.length > 1);
         return newIndex;
       });
     }, 10000); // Change message every 10 seconds
@@ -169,7 +175,7 @@ const LoadingWidget = ({ message, useFunnyMessages = false, showProxyNote = fals
   }, [useFunnyMessages]);
 
   const displayMessage = useFunnyMessages
-    ? FUNNY_MESSAGES[currentMessageIndex]
+    ? MESSAGES[currentMessageIndex]
     : message || "Loading stream...";
 
   // Parse message and replace emote placeholders with images

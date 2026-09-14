@@ -1,0 +1,6 @@
+<resources>
+    <!-- Night twin of values-v27/themes.xml; see the comment there. -->
+    <style name="Theme.stream_nook" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+</resources>

@@ -1,0 +1,24 @@
+# Android debug builds otherwise ship the full Rust debuginfo: a 471 MB .so and a
+# 478 MB APK, which takes minutes to install on every iteration. Stripping
+# debuginfo brings it to ~103 MB. Native failures are read from logcat rather than
+# from a native debugger, so the symbols buy nothing on-device.
+#
+# Why here and not elsewhere:
+#   - Not Gradle: Tauri symlinks the prebuilt .so into jniLibs, and the AGP strip
+#     task skips symlinked libraries, so keepDebugSymbols changes do nothing.
+#   - Not a Cargo profile: profiles are not per-target, so it would strip the
+#     desktop build too.
+#   - Tauri force-sets the linker through env vars, but rustflags set here still
+#     apply, so this is the one lever that survives.
+
+[target.aarch64-linux-android]
+rustflags = ["-C", "strip=debuginfo"]
+
+[target.armv7-linux-androideabi]
+rustflags = ["-C", "strip=debuginfo"]
+
+[target.i686-linux-android]
+rustflags = ["-C", "strip=debuginfo"]
+
+[target.x86_64-linux-android]
+rustflags = ["-C", "strip=debuginfo"]

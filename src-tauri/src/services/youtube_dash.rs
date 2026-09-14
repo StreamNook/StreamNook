@@ -34,7 +34,7 @@ use crate::services::webm_fmp4::{self, Parsed, Vp9Config};
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
 use once_cell::sync::Lazy;
-use rand::Rng;
+use rand::RngExt;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};

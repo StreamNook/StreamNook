@@ -58,8 +58,16 @@ pub struct DropsAuthService;
 
 impl DropsAuthService {
     fn get_token_file_path() -> Result<PathBuf> {
-        let mut path =
-            dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?;
+        // Mobile: the app-private sandbox dir (see services::app_paths). This
+        // resolver was missed when the other file-backed stores were routed
+        // through it, so on Android `dirs::config_dir()` returned None, the
+        // drops token was never written, and every drops call reported "not
+        // authenticated" immediately after a successful device-code connect.
+        let mut path = match crate::services::app_paths::mobile_base() {
+            Some(base) => base,
+            None => dirs::config_dir()
+                .ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?,
+        };
         path.push("StreamNook");
 
         if !path.exists() {
@@ -419,9 +427,15 @@ impl DropsAuthService {
         }
     }
 
-    /// Check if the user is authenticated for drops
+    /// Check if the user is authenticated for drops.
+    ///
+    /// Uses get_token() (file, then the cookie-jar fallback) rather than the
+    /// file alone: the device-code flow stores the fresh token in the cookie
+    /// jar, so a file-only check reports "not authenticated" immediately after
+    /// a successful connect. Desktop never noticed (its UI trusts the poll
+    /// result); the mobile Activity screen re-checks and exposed it.
     pub async fn is_authenticated() -> bool {
-        Self::load_token_from_file().is_ok()
+        Self::get_token().await.is_ok()
     }
 
     /// Validate the current token

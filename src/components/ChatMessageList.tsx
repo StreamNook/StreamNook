@@ -310,17 +310,23 @@ const ChatMessageList = memo(function ChatMessageList({
     lastTouchY.current = e.touches[0].clientY;
   }, []);
 
+  // Touch is the INVERSE of wheel, and reading it the wheel way is what made
+  // touch chat thrash: dragging the finger DOWN drags content down with it,
+  // revealing OLDER messages (scrollTop decreases) — that is the scroll-up
+  // intent that must pause. Dragging UP chases the newest messages, which is
+  // the return-to-live direction. Inverted, every "let me read back" gesture
+  // cleared the pause and the auto-scroll yanked the view straight back down.
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
     const currentY = e.touches[0].clientY;
-    const deltaY = lastTouchY.current - currentY; // positive = scrolling up
+    const fingerDelta = currentY - lastTouchY.current; // positive = finger moved down
     lastTouchY.current = currentY;
-    
-    if (deltaY > 0) {
-      // Swiping up (scrolling up, away from bottom)
+
+    if (fingerDelta > 0) {
+      // Finger down: revealing older messages (away from the live bottom).
       userScrolledUpRef.current = true;
       onPauseIntent?.();
-    } else if (deltaY < 0) {
-      // Swiping down (scrolling down, toward bottom) - clear the flag
+    } else if (fingerDelta < 0) {
+      // Finger up: heading back toward the live bottom - clear the flag.
       userScrolledUpRef.current = false;
     }
   }, [onPauseIntent]);

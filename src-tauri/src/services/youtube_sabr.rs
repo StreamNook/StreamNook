@@ -405,7 +405,7 @@ pub fn request_url(server_abr_url: &str, client_version: &str, cpn: &str, rn: u6
 
 /// A client playback nonce: 16 chars from YouTube's alphabet.
 pub fn make_cpn() -> String {
-    use rand::Rng;
+    use rand::RngExt;
     const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut r = rand::rng();
     (0..16).map(|_| A[r.random_range(0..A.len())] as char).collect()

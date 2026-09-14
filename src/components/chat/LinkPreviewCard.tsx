@@ -2,24 +2,21 @@ import React, { useEffect, useRef, useState, memo } from 'react';
 import { Play, ExternalLink, Eye, ShieldCheck, Instagram } from 'lucide-react';
 import { Tooltip, type TooltipChildProps } from '../ui/Tooltip';
 import { DiscordGlyph } from '../ui/DiscordGlyph';
-import { Logger } from '../../utils/logger';
 import { useAppStore, type MediaInfo } from '../../stores/AppStore';
 import { playTwitchMediaInMain } from '../../utils/playTwitchMediaInMain';
+// Shared helper, not a local copy. The local copy this replaced used
+// `@tauri-apps/plugin-shell`, which cannot open anything on Android - and this
+// card is the ONLY tap target for trusted domains (Discord, Twitch, YouTube),
+// because ChatMessage suppresses the inline anchor for them in the default
+// preview mode. So a Discord link on the phone was a dead tap even once the
+// inline-anchor path was fixed.
+import { openExternal } from '../../utils/openExternal';
 import {
   fetchLinkPreview,
   prettyUrlLabel,
   trustableHost,
   type LinkPreview,
 } from '../../services/linkPreviewService';
-
-async function openExternal(url: string) {
-  try {
-    const { open } = await import('@tauri-apps/plugin-shell');
-    await open(url);
-  } catch (err) {
-    Logger.error('[LinkPreviewCard] Failed to open URL:', err);
-  }
-}
 
 // Twitch clips and VODs deep-link into the in-app player (the user's stated
 // preference) rather than opening the browser. start_stream (via playMedia)

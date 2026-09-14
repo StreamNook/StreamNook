@@ -28,6 +28,7 @@ pub struct WhisperExportData {
 
 /// Start automated whisper scraping by opening a visible WebView to twitch.tv/messages
 /// and running the scraper script automatically
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn scrape_whispers(app: AppHandle) -> Result<WhisperScrapeResult, String> {
     debug!("[Whisper Scraper] Starting automated whisper scraping...");
@@ -121,6 +122,7 @@ pub async fn emit_whisper_progress(
 }
 
 /// Receive whisper export data from the WebView scraper script
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn receive_whisper_export(
     app: AppHandle,

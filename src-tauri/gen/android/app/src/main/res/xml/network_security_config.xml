@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- StreamNook serves its ad-filtered HLS playlist from a warp loopback server
+     over http://127.0.0.1:<port>, and `tauri android dev` reaches the Vite dev
+     server via adb-reverse on localhost. Android blocks cleartext by default;
+     allow it for loopback only. -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

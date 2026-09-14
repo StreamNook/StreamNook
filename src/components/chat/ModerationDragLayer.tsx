@@ -9,54 +9,17 @@ import { computePaintStyle } from '../../services/seventvService';
 import { useDragModerationStore } from '../../stores/dragModerationStore';
 import { usePinStore } from '../../stores/pinStore';
 import { Logger } from '../../utils/logger';
+import { BucketTile, SOLID_TINT, type Bucket } from './ModBucketTile';
+import {
+  MAX_TIMEOUT_SECS,
+  formatDuration,
+  timeoutSecsFromDistance,
+} from '../../utils/timeoutRamp';
 import { kickAppliedSeconds, kickTimeoutMinutes } from '../../utils/kickTimeout';
 
-type BucketKind = 'neutral' | 'danger';
-interface Bucket {
-  id: 'profile' | 'whisper' | 'delete' | 'timeout' | 'ban' | 'unban' | 'pin' | 'unpin';
-  label: string;
-  icon: LucideIcon;
-  kind: BucketKind;
-  /** Tailwind classes applied when this bucket is the active drop target. */
-  activeTint: string;
-}
 
-// Twitch timeout range: 1s up to the 14-day (1209600s) max; longer is a ban.
-const MAX_TIMEOUT_SECS = 1209600;
-
-// Continuous timeout: drag-out distance (px) -> seconds, on a steep 10th-power
-// ramp (most of the range is short, the last stretch shoots to the 14-day max),
-// snapped to a clean value. No fixed list to clip off-screen; the duration
-// tracks how far you drag.
-const TIMEOUT_RANGE_PX = 260;
-const timeoutSecsFromDistance = (px: number): number => {
-  const ratio = Math.min(1, Math.max(0, px) / TIMEOUT_RANGE_PX);
-  return snapDuration(Math.pow(ratio, 10) * MAX_TIMEOUT_SECS);
-};
-
-// Round to a tidy value whose granularity grows with magnitude.
-function snapDuration(s: number): number {
-  let v: number;
-  if (s < 60) v = Math.round(s / 5) * 5;
-  else if (s < 3600) v = Math.round(s / 60) * 60;
-  else if (s < 86400) v = Math.round(s / 1800) * 1800;
-  else v = Math.round(s / 86400) * 86400;
-  return Math.min(MAX_TIMEOUT_SECS, Math.max(1, v));
-}
-
-// Human-readable duration (e.g. "45s", "10m", "1h 30m", "2d").
-function formatDuration(s: number): string {
-  if (s < 60) return `${Math.round(s)}s`;
-  if (s < 3600) return `${Math.round(s / 60)}m`;
-  if (s < 86400) {
-    const h = Math.floor(s / 3600);
-    const m = Math.round((s % 3600) / 60);
-    return m ? `${h}h ${m}m` : `${h}h`;
-  }
-  const d = Math.floor(s / 86400);
-  const h = Math.round((s % 86400) / 3600);
-  return h ? `${d}d ${h}h` : `${d}d`;
-}
+// The timeout ramp now lives in utils/timeoutRamp so the mobile fan-out dials
+// on the identical curve. Behaviour here is unchanged.
 
 /**
  * Global drag-to-moderate overlay. A grab handle in the chat dock "lifts" a
@@ -523,63 +486,5 @@ export default function ModerationDragLayer() {
       )}
     </div>,
     document.body,
-  );
-}
-
-// Fully-opaque per-action fills for the above-chat layout, where translucent
-// tiles over busy chat are hard to focus on.
-const SOLID_TINT: Record<string, string> = {
-  delete: 'bg-orange-600 border-orange-400 text-white',
-  timeout: 'bg-amber-600 border-amber-300 text-white',
-  ban: 'bg-red-600 border-red-400 text-white',
-  unban: 'bg-emerald-600 border-emerald-400 text-white',
-  pin: 'bg-sky-600 border-sky-400 text-white',
-  unpin: 'bg-sky-600 border-sky-400 text-white',
-};
-
-function BucketTile({
-  bucket,
-  active,
-  activeDuration,
-  solid,
-  big = false,
-}: {
-  bucket: Bucket;
-  active: boolean;
-  activeDuration: number | null;
-  solid: boolean;
-  /** Beside-chat tiles render larger (easier to hit when dragging to the side). */
-  big?: boolean;
-}) {
-  const Icon = bucket.icon;
-  const isDanger = bucket.kind === 'danger';
-  // Each tile floats on its own (no panel). The above-chat ('solid') layout uses
-  // fully opaque fills so they're easy to focus on over busy chat; beside-chat
-  // keeps a lighter translucent tint that lets the stream show through a little.
-  const tint = solid
-    ? active
-      ? SOLID_TINT[bucket.id] ?? 'bg-zinc-900 border-white/25 text-white'
-      : 'bg-zinc-900 border-white/15 text-white/80'
-    : active
-      ? bucket.activeTint
-      : 'bg-zinc-900/70 border-white/10 text-white/75';
-  return (
-    <motion.div
-      data-bucket-id={bucket.id}
-      // Scale only (no y-shift) so the tile's center stays put: the magnetic
-      // nearest-tile selection keys off these centers and must not drift.
-      animate={{ scale: active ? 1.18 : 1 }}
-      transition={{ type: 'spring', stiffness: 500, damping: 17 }}
-      className={`relative flex ${big ? 'h-20 w-20' : 'h-16 w-16'} flex-col items-center justify-center gap-1 rounded-2xl border shadow-[0_8px_22px_rgba(0,0,0,0.5)] transition-colors ${tint}`}
-    >
-      <motion.div animate={active && isDanger ? { rotate: [-10, 6, 0] } : { rotate: 0 }} transition={{ duration: 0.3 }}>
-        <Icon size={big ? 24 : 20} strokeWidth={2} />
-      </motion.div>
-      <span className={`px-0.5 text-center ${big ? 'text-xs' : 'text-[11px]'} font-semibold leading-tight`}>
-        {bucket.id === 'timeout' && active && activeDuration != null
-          ? formatDuration(activeDuration)
-          : bucket.label}
-      </span>
-    </motion.div>
   );
 }

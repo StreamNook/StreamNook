@@ -1288,6 +1288,15 @@ impl ChannelPointsWebSocketService {
 
         let mut connections = self.connections.write().await;
         connections.clear();
+        drop(connections);
+
+        // register_channel_mapping inserts on every watched-channel change and
+        // nothing ever removed an entry, so this grew for the life of the
+        // process while channel hopping. It exists only to decorate events for
+        // channels we are currently connected to, and those were just dropped,
+        // so it has nothing left to describe.
+        self.channel_mappings.write().await.clear();
+
         debug!("All WebSocket connections closed (reader + ping tasks aborted)");
     }
 
