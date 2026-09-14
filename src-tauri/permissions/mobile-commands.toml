@@ -1,0 +1,22 @@
+# Commands registered only in src/lib.rs (the mobile entry) and therefore absent
+# from app-commands.toml, which is generated from main.rs and must stay in step
+# with it (tests/acl_parity.rs fails on desktop otherwise).
+#
+# capabilities/mobile.json references both files. A command registered in
+# lib.rs but listed in neither is DENIED at runtime on the phone with no error;
+# src/mobile/acl_parity.test.ts keeps this list honest.
+[[permission]]
+identifier = "mobile-commands"
+description = "Commands that exist only in the mobile shell. Granted to the mobile webview only."
+[permission.commands]
+allow = [
+  "open_mobile_login",
+  "close_mobile_login",
+  "get_mobile_login_cookies",
+  "push_register",
+  "push_unregister",
+  "set_max_video_height",
+  "fetch_chat_identity_badges_gql",
+  "update_chat_identity_gql",
+  "flush_persistent_stores",
+]

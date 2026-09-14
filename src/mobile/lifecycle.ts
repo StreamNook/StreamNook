@@ -1,20 +1,30 @@
 // Background/foreground lifecycle for the mobile shell.
 //
 // A phone spends most of its time with the app backgrounded, and Android
-// throttles WebView timers there rather than stopping them: the badge-drop
-// socket keeps pinging, Supabase realtime holds its socket, and hls.js keeps
-// pulling segments for a stream nobody is watching. That is battery and data
-// spent on nothing, and on resume the backlogged timers all fire at once.
+// throttles WebView timers there rather than stopping them: Supabase realtime
+// holds its socket, and hls.js keeps pulling segments for a stream nobody is
+// watching. That is battery and data spent on nothing, and on resume the
+// backlogged timers all fire at once.
 //
 // So: stand the background chatter down when hidden and bring it back on
 // resume. The one deliberate exception is picture-in-picture, where the app is
 // reported hidden but is still very much on screen.
+//
+// Going hidden is also the last reliable moment to get persistent state to
+// disk: Android kills a backgrounded process outright, with none of the exit
+// events the desktop flushes on, so the debounced settings / cache / log
+// stores are flushed here.
+//
+// The badge-drop feed used to be paused here too. It is owned by Rust now
+// (services::badge_feed) and keeps its socket up while backgrounded; a
+// backgrounded pause for it is a follow-up on the Rust side.
 //
 // Playback is deliberately NOT touched. Backgrounding a stream to keep
 // listening is a normal thing to do with a Twitch client, and pausing the video
 // (or calling hls stopLoad, which stalls it once the buffer drains) would take
 // that away. The sockets are pure background chatter with no user-visible
 // value while hidden; the audio is not.
+import { invoke } from '@tauri-apps/api/core';
 import { refreshEntitlementRegistries } from '../services/supabaseService';
 import { refreshFollowingIfStale } from './followRefresh';
 import { isInPip, runNotifyCheckNow } from './nativeBridge';
@@ -64,12 +74,12 @@ async function onHidden(): Promise<void> {
   // The polls read this and skip their tick. Set before the await so a poll
   // firing in the same turn already sees it.
   setBackgrounded(true);
-  try {
-    const { stopBadgeFeed } = await import('../services/badgeSocketService');
-    stopBadgeFeed();
-  } catch (err) {
-    Logger.warn('[Lifecycle] badge feed pause failed:', err);
-  }
+  // Fire-and-forget on purpose: the IPC message is posted synchronously, so
+  // it reaches Rust even if the WebView is frozen a moment later, and every
+  // flush is a no-op when nothing is dirty.
+  void invoke('flush_persistent_stores').catch((err) => {
+    Logger.warn('[Lifecycle] flush on hide failed:', err);
+  });
 }
 
 async function onVisible(): Promise<void> {
@@ -78,12 +88,6 @@ async function onVisible(): Promise<void> {
   if (now - lastNotifyKick >= NOTIFY_KICK_MIN_GAP_MS) {
     lastNotifyKick = now;
     runNotifyCheckNow();
-  }
-  try {
-    const { startBadgeFeed } = await import('../services/badgeSocketService');
-    startBadgeFeed();
-  } catch (err) {
-    Logger.warn('[Lifecycle] badge feed resume failed:', err);
   }
   // Entitlements may have changed while away (a purchase completed in a
   // browser, a badge granted). The registries themselves self-heal, this just

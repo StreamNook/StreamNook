@@ -105,10 +105,8 @@ export function useMobileBoot(): void {
       // Active drops cache (1h TTL); powers the Activity surface.
       useAppStore.getState().loadActiveDropsCache();
 
-      // Real-time badge-drop feed (WebSocket + latest.json fallback).
-      void import('../../services/badgeSocketService').then(({ startBadgeFeed }) => {
-        startBadgeFeed();
-      });
+      // The real-time badge-drop feed is owned by Rust (services::badge_feed,
+      // started in lib.rs setup) and pushes events; nothing to start here.
 
       // Pre-fetch cosmetics for the signed-in account(s) so chat and profile
       // paint on frame one. Mirrors the desktop block in App.tsx.

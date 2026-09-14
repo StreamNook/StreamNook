@@ -6,6 +6,8 @@
   "windows": ["main"],
   "webviews": ["main"],
   "permissions": [
+    "app-commands",
+    "mobile-commands",
     "core:default",
     "core:event:default",
     "core:event:allow-listen",
