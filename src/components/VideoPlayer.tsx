@@ -6,7 +6,7 @@ import Plyr from 'plyr';
 // Plyr's CSS ships once, layered, via globals.css (@import ... layer(vendor));
 // a second unlayered copy here would beat the app's control-bar overrides.
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, RefreshCcw, Home, LayoutGrid, Shield, ShieldCheck, ShieldAlert, Clapperboard, Music, Share2, Check, Radio } from 'lucide-react';
+import { Loader2, RefreshCcw, Home, LayoutGrid, Shield, ShieldCheck, ShieldAlert, Clapperboard, Music, Share2, Check, Radio, VolumeX } from 'lucide-react';
 import { Heart, HeartBreak, ArrowLeft, X as XIcon } from 'phosphor-react';
 import { useAppStore } from '../stores/AppStore';
 import { streamProvider } from '../utils/streamProvider';
@@ -21,9 +21,11 @@ import { useChannelSocial } from '../hooks/useChannelSocial';
 import StreamTitleWithEmojis from './StreamTitleWithEmojis';
 import PlayerStatsOverlay from './PlayerStatsOverlay';
 import { useVodProgressReporter } from '../hooks/useVodProgressReporter';
+import { useMutedSegmentNotice } from '../hooks/useMutedSegmentNotice';
 import { formatVodTime } from '../utils/vodProgress';
 import { createLiveEdgeTracker } from '../utils/liveEdge';
 import BroadcastTimeline from './BroadcastTimeline';
+import VodMutedMarks from './VodMutedMarks';
 import { Tooltip } from './ui/Tooltip';
 import { TwitchVerifiedMark } from './ui/TwitchGlyph';
 import { registerPlayerControls, type PlayerControls } from '../keybindings';
@@ -40,7 +42,7 @@ import {
   audioBoostFaderDefs,
   audioBoostResetPatch,
 } from '../utils/audioBoost';
-import type { AudioBoostSettings } from '../types';
+import type { AudioBoostSettings, MutedRange } from '../types';
 import { Fader, Toggle } from './AudioBoostFaders';
 
 /** A backward scrub on a live stream smaller than this is treated as a
@@ -50,6 +52,9 @@ const LIVE_SCRUB_HANDOFF_SECS = 3;
  *  forward by hls.js (liveMaxLatencyDuration), so a scrub that lands beyond
  *  it cannot be served live and hands off to the recording. */
 const LIVE_DVR_MAX_BEHIND_SECS = 55;
+/** Stable empty list, so the muted-notice effect does not re-subscribe on
+ *  every render of a stream that has no muted ranges. */
+const NO_MUTED_RANGES: MutedRange[] = [];
 
 import { open as openExternalUrl } from '@tauri-apps/plugin-shell';
 import { setActiveVideo } from '../utils/activeVideo';
@@ -2445,6 +2450,13 @@ const VideoPlayer = () => {
   // that, so restart the stream, which cold-starts at the edge. The threshold is 5
   // because a healthy promotion playlist legitimately declares ~2-4s the player
   // cannot fetch yet; only a gap beyond that means the pipeline is actually stuck.
+  // A real VOD timeline, which unlike the above DOES include the offline-chat
+  // auto-play: it renders Plyr's full VOD bar and muted marks are useful
+  // there. A rewind is excluded because it always plays a RECORDING VOD, for
+  // which Twitch reports no mute info at all (probed 2026-09-12).
+  const isVodTimeline = !!vodPlayback && !vodPlayback.rewound_from_live;
+  const mutedRanges = isVodTimeline ? (vodPlayback.muted_segments ?? NO_MUTED_RANGES) : NO_MUTED_RANGES;
+  const activeMute = useMutedSegmentNotice(videoRef, mutedRanges);
   // VOD position checkpoints to Rust, the owner of the resume store. Null
   // (live, clips, idle) attaches nothing.
   useVodProgressReporter(
@@ -2918,6 +2930,31 @@ const VideoPlayer = () => {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Muted-audio bands over Plyr's own VOD progress bar. A VOD never
+          mounts BroadcastTimeline (that one is live-anchored), so these
+          decorate the native range instead. */}
+      {isVodTimeline && mutedRanges.length > 0 && (
+        <VodMutedMarks
+          host={timelineHost}
+          ranges={mutedRanges}
+          videoRef={videoRef}
+          fallbackLengthSecs={vodPlayback?.length_seconds ?? 0}
+        />
+      )}
+
+      {/* Why the audio went silent, for as long as it is silent. Static text
+          per range: a ticking countdown would re-render the player every
+          second for three minutes. */}
+      {activeMute && (
+        <div
+          role="status"
+          className="glass-badge pointer-events-none absolute left-3 top-3 z-20 flex items-center gap-1.5 rounded px-2 py-1 text-[11px] font-medium text-white"
+        >
+          <VolumeX size={12} />
+          Audio muted by Twitch · {formatVodTime(activeMute.end_secs - activeMute.start_secs)}
+        </div>
+      )}
 
       {/* The broadcast timeline: spans recording start to the live edge in
           Plyr's progress slot, so a viewer who joined hours in can drag back

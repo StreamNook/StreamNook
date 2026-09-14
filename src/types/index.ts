@@ -1267,6 +1267,17 @@ export interface VodStartInfo {
   start_position_secs?: number;
   /** The viewer rewound a live broadcast into this recording. */
   rewound_from_live: boolean;
+  /** Audio ranges Twitch muted, merged and clamped by Rust. Absent or empty
+   *  when none are known: on a `recording` VOD that means Twitch has not
+   *  determined them yet, NOT that there are none. */
+  muted_segments?: MutedRange[];
+}
+
+/** An audio range Twitch muted on a VOD, in seconds from the VOD start.
+ *  Merged, sorted and clamped in Rust (services/muted_segments.rs). */
+export interface MutedRange {
+  start_secs: number;
+  end_secs: number;
 }
 
 /** Rust's answer to "can this live broadcast be rewound": Twitch keeps a

@@ -10,6 +10,7 @@
 // Streamlink was doing after it received the master.
 
 use crate::services::auth_proxy::{self, PlaybackStatus};
+use crate::services::muted_segments::MutedRange;
 use crate::services::quality::{pick_closest_quality, sort_qualities_descending};
 use anyhow::{anyhow, Context, Result};
 use log::debug;
@@ -1300,6 +1301,11 @@ pub struct VodInfo {
     pub owner_login: Option<String>,
     pub title: Option<String>,
     pub thumbnail_url: Option<String>,
+    /// Audio ranges Twitch muted, merged and clamped. Empty means none are
+    /// KNOWN: on a recording VOD Twitch has not run audio recognition yet,
+    /// which is not the same as "no mutes" (the GQL connection comes back
+    /// `null` in both cases; probed 2026-09-12).
+    pub muted_segments: Vec<MutedRange>,
 }
 
 impl VodInfo {
@@ -1400,12 +1406,18 @@ pub async fn fetch_vod_info(vod_id: &str) -> VodInfo {
         owner_login: None,
         title: None,
         thumbnail_url: None,
+        muted_segments: Vec::new(),
     };
+    // `muteInfo` is free here: it rides the call this function already makes.
+    // Verified 2026-09-12 that it resolves under the WEB client id this
+    // transport uses, and on ARCHIVE / HIGHLIGHT / UPLOAD alike, so adding it
+    // cannot turn a non-archive video into the `unknown` sentinel below.
     let query = r#"query StreamNookVodInfo($id: ID!) {
         video(id: $id) {
             id status lengthSeconds recordedAt title
             owner { login }
             previewThumbnailURL(width: 440, height: 248)
+            muteInfo { mutedSegmentConnection { nodes { offset duration } } }
         }
     }"#;
     let resp = match gql_web_query(query, json!({ "id": vod_id })).await {
@@ -1418,15 +1430,30 @@ pub async fn fetch_vod_info(vod_id: &str) -> VodInfo {
     let Some(video) = resp.pointer("/data/video").filter(|v| !v.is_null()) else {
         return unknown;
     };
+    let length_seconds = video
+        .get("lengthSeconds")
+        .and_then(|v| v.as_u64())
+        .map(|n| n.min(u32::MAX as u64) as u32);
+    // A null connection is the normal shape for an unmuted (or still
+    // recording) video, so it yields an empty list rather than an error.
+    let mute_nodes: Vec<(i64, i64)> = video
+        .pointer("/muteInfo/mutedSegmentConnection/nodes")
+        .and_then(|n| n.as_array())
+        .map(|nodes| {
+            nodes
+                .iter()
+                .filter_map(|n| {
+                    Some((n.get("offset")?.as_i64()?, n.get("duration")?.as_i64()?))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     VodInfo {
         video_id: vod_id.to_string(),
         status: str_field(video, "status")
             .map(|s| s.to_lowercase())
             .unwrap_or_else(|| "unknown".to_string()),
-        length_seconds: video
-            .get("lengthSeconds")
-            .and_then(|v| v.as_u64())
-            .map(|n| n.min(u32::MAX as u64) as u32),
+        length_seconds,
         recorded_at: str_field(video, "recordedAt"),
         owner_login: video
             .get("owner")
@@ -1434,6 +1461,7 @@ pub async fn fetch_vod_info(vod_id: &str) -> VodInfo {
             .map(|s| s.to_lowercase()),
         title: str_field(video, "title"),
         thumbnail_url: str_field(video, "previewThumbnailURL"),
+        muted_segments: crate::services::muted_segments::normalize(&mute_nodes, length_seconds),
     }
 }
 

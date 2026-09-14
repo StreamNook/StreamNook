@@ -4078,3 +4078,46 @@ html[data-motion="reduced"] .sn-ffz-anim-leave {
 .chat-message-row.is-backfill {
   opacity: var(--sn-backfill-opacity, 1);
 }
+
+/* Muted-audio ranges on a VOD's Plyr progress bar (VodMutedMarks.tsx).
+   Portaled into `.plyr__progress` WITHOUT `.sn-timeline-host`, so Plyr's own
+   range stays visible and seekable.
+
+   z-index 3 is Plyr's own annotation layer (`.plyr__progress__marker`), one
+   above its range input (z-index 2). Above is required: the played fill is
+   drawn by that input's `::-webkit-slider-runnable-track` background, so a
+   band underneath it disappears - the same lesson as `.sn-timeline__band`.
+
+   `left: 0; right: 0` is deliberate and must not be "corrected" to match the
+   input's box. Plyr widens that input by one thumb height and offsets it half
+   a thumb left precisely so the thumb CENTRE travels this element's content
+   box, which makes this box the real 0-100% playhead space. The visible track
+   overhangs 6.5px at each end for thumb clearance; that is Plyr's own
+   track-vs-thumb offset, not a bug here.
+
+   Clipped to the track height so the 13px thumb still reads above and below.
+   Unlayered, at the end - a cascade layer here loses to Tailwind preflight and
+   wrecks the control bar. */
+.sn-muted-marks {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: var(--plyr-range-track-height);
+  transform: translateY(-50%);
+  border-radius: 999px;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.sn-muted-mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 255, 255, 0.55) 0 2px,
+    rgba(0, 0, 0, 0.6) 2px 4px
+  );
+}

@@ -156,6 +156,10 @@ pub struct VodStartInfo {
     /// True when the viewer rewound a live broadcast into this recording; the
     /// live session stays up and the player offers "Back to live".
     pub rewound_from_live: bool,
+    /// Audio ranges Twitch muted, for the seekbar marks. Empty when none are
+    /// known; on a `recording` VOD that means not yet determined, not "none".
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub muted_segments: Vec<crate::services::muted_segments::MutedRange>,
 }
 
 /// What we actually KNOW about a channel's liveness.
@@ -617,6 +621,7 @@ async fn start_vod(
             thumbnail_url: info.thumbnail_url,
             start_position_secs: start_position,
             rewound_from_live: false,
+            muted_segments: info.muted_segments,
         }),
     })
 }
