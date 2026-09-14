@@ -118,6 +118,10 @@ pub struct TwitchVideo {
     /// Length in whole seconds, the number `duration` is formatted from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length_seconds: Option<u32>,
+    /// Category the broadcast was in. Only the GQL user-videos path has it;
+    /// Helix video rows carry no game at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_name: Option<String>,
     /// The viewer's stored watch position for this video, joined on by
     /// `vod_progress_service::attach`. Absent when never watched.
     #[serde(default, skip_serializing_if = "Option::is_none")]

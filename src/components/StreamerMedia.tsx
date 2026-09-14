@@ -1,19 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Heart, Loader2, Search, Users, X } from 'lucide-react';
+import { Heart, Loader2, Search, X } from 'lucide-react';
 
 import { useAppStore, clipSourceOf } from '../stores/AppStore';
 import type { TwitchClip, TwitchVideo } from '../types';
 import { GlassSelect } from './ui/GlassSelect';
-import { VodProgressBar, VodRecordingBadge } from './VodCardMarks';
-import { vodProgressLabel } from '../utils/vodProgress';
+import { MediaCard } from './MediaCard';
+import { formatCardDate, mediaKindOfVideo, videoDurationLabel, vodThumbUrl, VOD_FALLBACK_THUMB } from '../utils/vodProgress';
 import { Logger } from '../utils/logger';
 
-const FALLBACK_THUMB = 'https://vod-secure.twitch.tv/_404/404_processing_320x180.png';
-const fmtDate = (iso: string) =>
-  new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-const videoTypeLabel = (t: string) =>
-  t === 'archive' ? 'Past Broadcast' : t === 'highlight' ? 'Highlight' : t === 'upload' ? 'Upload' : 'Video';
 
 // One streamer's Clips or Videos, rendered like the category browser's grid.
 // Clicking a clip opens the centered clip modal (you stay in the browser);
@@ -21,9 +16,14 @@ const videoTypeLabel = (t: string) =>
 export default function StreamerMedia({
   broadcasterId,
   kind,
+  channelAvatarUrl,
+  channelPartner,
 }: {
   broadcasterId: string;
   kind: 'clips' | 'videos';
+  /** The profile already knows the channel's avatar; the cards reuse it. */
+  channelAvatarUrl?: string;
+  channelPartner?: boolean;
 }) {
   const openClipModal = useAppStore((s) => s.openClipModal);
   const playMedia = useAppStore((s) => s.playMedia);
@@ -232,93 +232,51 @@ export default function StreamerMedia({
 
   const renderClip = (clip: TwitchClip) => {
     const category = gameNames[clip.game_id];
+    const reaction = reactions[clip.id];
     return (
-      <div
+      <MediaCard
         key={clip.id}
-        className="glass-panel media-card group relative cursor-pointer overflow-hidden transition-all duration-200 hover:bg-glass-hover"
-        onClick={() => openClipModal(clip.url, { ...clip, clip_source: clipSourceOf(clip) })}
-      >
-        <div className="relative overflow-hidden rounded">
-          <img
-            loading="lazy"
-            src={clip.thumbnail_url || FALLBACK_THUMB}
-            alt={clip.title}
-            onError={(e) => {
-              e.currentTarget.src = FALLBACK_THUMB;
-            }}
-            className="aspect-video w-full bg-black/20 object-cover transition-transform duration-200 group-hover:scale-105"
-          />
-          <div className="glass-badge absolute bottom-1.5 left-1.5 rounded px-2 py-0.5 text-[10px] font-medium text-white">
-            {clip.duration.toFixed(1)}s
-          </div>
-          <div className="glass-badge absolute top-1.5 left-1.5 flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium text-white">
-            <Users size={10} />
-            {clip.view_count.toLocaleString()}
-          </div>
-          {reactions[clip.id] && (
-            <div className="glass-badge absolute top-1.5 right-1.5 flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium text-white">
+        kind="clip"
+        title={clip.title}
+        thumbnailUrl={clip.thumbnail_url || VOD_FALLBACK_THUMB}
+        durationLabel={`${clip.duration.toFixed(1)}s`}
+        viewCount={clip.view_count}
+        topRight={
+          reaction && (
+            <div className="glass-badge absolute right-2 top-2 flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-white">
               <Heart size={10} />
-              {reactions[clip.id].total.toLocaleString()}
+              {reaction.total.toLocaleString()}
             </div>
-          )}
-        </div>
-        <div className="space-y-0.5 px-1 py-2">
-          <h3 className="line-clamp-2 text-[13px] font-medium leading-tight text-textPrimary transition-colors group-hover:text-accent">
-            {clip.title}
-          </h3>
-          <div className="mt-1 flex items-center justify-between gap-2 border-t border-white/5 pt-1 text-[11px] text-textSecondary">
-            <span className="truncate text-accent/90">{category || ''}</span>
-            <span className="shrink-0">{fmtDate(clip.created_at)}</span>
-          </div>
-          <p className="truncate text-[10px] italic text-textSecondary/60">Clipped by {clip.creator_name}</p>
-        </div>
-      </div>
+          )
+        }
+        channel={{ name: clip.broadcaster_name, avatarUrl: channelAvatarUrl, partner: channelPartner }}
+        trailing={formatCardDate(clip.created_at)}
+        category={category}
+        note={`Clipped by ${clip.creator_name}`}
+        onClick={() => openClipModal(clip.url, { ...clip, clip_source: clipSourceOf(clip) })}
+      />
     );
   };
 
   const renderVideo = (video: TwitchVideo) => (
-    <div
+    <MediaCard
       key={video.id}
-      className="glass-panel media-card group relative cursor-pointer overflow-hidden transition-all duration-200 hover:bg-glass-hover"
+      kind={mediaKindOfVideo(video.type)}
+      title={video.title}
+      thumbnailUrl={vodThumbUrl(video.thumbnail_url)}
+      durationLabel={videoDurationLabel(video)}
+      viewCount={video.view_count}
+      progress={video.progress}
+      lengthSeconds={video.length_seconds}
+      status={video.status}
+      channel={{ name: video.user_name, avatarUrl: channelAvatarUrl, partner: channelPartner }}
+      trailing={formatCardDate(video.created_at)}
+      category={video.game_name}
       onClick={() => {
         setProfileModalUser(null);
         playMedia('video', video.url, video);
       }}
-    >
-      <div className="relative overflow-hidden rounded">
-        <img
-          loading="lazy"
-          src={
-            video.thumbnail_url
-              ? video.thumbnail_url.replace('%{width}', '440').replace('%{height}', '248')
-              : FALLBACK_THUMB
-          }
-          alt={video.title}
-          onError={(e) => {
-            e.currentTarget.src = FALLBACK_THUMB;
-          }}
-          className="aspect-video w-full bg-black/20 object-cover transition-transform duration-200 group-hover:scale-105"
-        />
-        <div className="glass-badge absolute bottom-1.5 left-1.5 rounded px-2 py-0.5 text-[10px] font-medium text-white">
-          {video.duration}
-        </div>
-        <div className="glass-badge absolute top-1.5 left-1.5 flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium text-white">
-          <Users size={10} />
-          {video.view_count.toLocaleString()}
-        </div>
-        <VodRecordingBadge status={video.status} />
-        <VodProgressBar progress={video.progress} lengthSeconds={video.length_seconds} />
-      </div>
-      <div className="space-y-0.5 px-1 py-2">
-        <h3 className="line-clamp-2 text-[13px] font-medium leading-tight text-textPrimary transition-colors group-hover:text-accent">
-          {video.title}
-        </h3>
-        <div className="mt-1 flex items-center justify-between gap-2 border-t border-white/5 pt-1 text-[11px] text-textSecondary">
-          <span className="truncate text-accent/90">{vodProgressLabel(video.progress) ?? videoTypeLabel(video.type)}</span>
-          <span className="shrink-0">{fmtDate(video.created_at)}</span>
-        </div>
-      </div>
-    </div>
+    />
   );
 
   const loadedCount = kind === 'clips' ? clips.length : videos.length;

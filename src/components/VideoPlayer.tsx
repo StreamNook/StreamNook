@@ -2450,6 +2450,20 @@ const VideoPlayer = () => {
   // that, so restart the stream, which cold-starts at the edge. The threshold is 5
   // because a healthy promotion playlist legitimately declares ~2-4s the player
   // cannot fetch yet; only a gap beyond that means the pipeline is actually stuck.
+  // May this playback write a watch position? ONLY a VOD the viewer chose to
+  // open. `vodPlayback` has three writers (grep `vodPlayback:` in AppStore)
+  // and two of them are live sessions that must leave no trace, or Home's
+  // Continue Watching row fills up with every stream you ever watched:
+  //   - a live rewind (`rewound_from_live`), which the `seeking` handler in
+  //     this file triggers by itself for any backward scrub over 3 s, so a
+  //     casual "rewind ten seconds" would file a card;
+  //   - the offline-chat auto-play of a channel's latest broadcast, whose
+  //     dominant trigger is handleStreamOffline — the broadcast you were
+  //     watching ENDING — so every stream watched to the end would file a
+  //     card for itself.
+  // Anything new that sets `vodPlayback` must be audited against this.
+  const isDeliberateVod =
+    currentMediaType === 'video' && !!vodPlayback && !vodPlayback.rewound_from_live;
   // A real VOD timeline, which unlike the above DOES include the offline-chat
   // auto-play: it renders Plyr's full VOD bar and muted marks are useful
   // there. A rewind is excluded because it always plays a RECORDING VOD, for
@@ -2458,13 +2472,14 @@ const VideoPlayer = () => {
   const mutedRanges = isVodTimeline ? (vodPlayback.muted_segments ?? NO_MUTED_RANGES) : NO_MUTED_RANGES;
   const activeMute = useMutedSegmentNotice(videoRef, mutedRanges);
   // VOD position checkpoints to Rust, the owner of the resume store. Null
-  // (live, clips, idle) attaches nothing.
+  // (live, clips, rewinds, offline auto-play, idle) attaches nothing.
   useVodProgressReporter(
     videoRef,
-    vodPlayback
+    isDeliberateVod
       ? {
           videoId: vodPlayback.video_id,
           channelLogin: vodPlayback.channel_login ?? currentStream?.user_login,
+          channelName: currentStream?.user_name,
           title: vodPlayback.title ?? currentStream?.title,
           thumbnailUrl: vodPlayback.thumbnail_url ?? currentStream?.thumbnail_url,
         }

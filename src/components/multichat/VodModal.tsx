@@ -71,6 +71,7 @@ function VodModalInner({
       ? {
           videoId: vod.video_id,
           channelLogin: vod.channel_login ?? info.user_login,
+          channelName: info.user_name,
           title: vod.title ?? info.title,
           thumbnailUrl: vod.thumbnail_url ?? info.thumbnail_url,
         }

@@ -7,6 +7,9 @@ import { Logger } from '../utils/logger';
 export interface VodProgressTarget {
   videoId: string;
   channelLogin?: string;
+  /** Display name, so a Continue Watching card is not stuck with a bare
+   *  lowercase login. */
+  channelName?: string;
   title?: string;
   thumbnailUrl?: string;
 }
@@ -30,6 +33,7 @@ export function useVodProgressReporter(
 ): void {
   const videoId = target?.videoId ?? null;
   const channelLogin = target?.channelLogin;
+  const channelName = target?.channelName;
   const title = target?.title;
   const thumbnailUrl = target?.thumbnailUrl;
   const lastSentRef = useRef(0);
@@ -54,6 +58,7 @@ export function useVodProgressReporter(
         positionSecs: position,
         durationSecs: duration,
         channelLogin,
+        channelName,
         title,
         thumbnailUrl,
       }).catch((e) => Logger.debug('[VodProgress] report failed:', e));
@@ -81,5 +86,5 @@ export function useVodProgressReporter(
       video.removeEventListener('seeked', onSeeked);
       video.removeEventListener('ended', onEnded);
     };
-  }, [videoRef, videoId, channelLogin, title, thumbnailUrl]);
+  }, [videoRef, videoId, channelLogin, channelName, title, thumbnailUrl]);
 }

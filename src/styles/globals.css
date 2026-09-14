@@ -4121,3 +4121,16 @@ html[data-motion="reduced"] .sn-ffz-anim-leave {
     rgba(0, 0, 0, 0.6) 2px 4px
   );
 }
+
+/* Continue Watching rail (ContinueWatchingRow.tsx). `.scrollbar-thin` sets
+   only `::-webkit-scrollbar { width }`, which does nothing for a HORIZONTAL
+   scroller - it would fall back to WebView2's default unthemed bar. Hidden
+   here and replaced by the hover chevrons, which is what makes the overflow
+   readable without a strip of chrome under every card. */
+.sn-rail {
+  scrollbar-width: none;
+}
+
+.sn-rail::-webkit-scrollbar {
+  display: none;
+}

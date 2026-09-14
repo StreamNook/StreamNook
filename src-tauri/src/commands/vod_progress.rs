@@ -12,15 +12,17 @@ pub async fn report_vod_position(
     position_secs: f64,
     duration_secs: Option<f64>,
     channel_login: Option<String>,
+    channel_name: Option<String>,
     title: Option<String>,
     thumbnail_url: Option<String>,
 ) -> Result<VodProgressSummary, String> {
     let meta = VodMeta {
         channel_login,
+        channel_name,
         title,
         thumbnail_url,
     };
-    tokio::task::spawn_blocking(move || {
+    let summary = tokio::task::spawn_blocking(move || {
         vod_progress_service::record(
             &video_id,
             position_secs,
@@ -29,7 +31,12 @@ pub async fn report_vod_position(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    // Home's Continue Watching row is derived from this store. The notify is a
+    // no-op unless a Home is actually on screen, and coalesces on a trailing
+    // edge, so the 5 s checkpoint cadence costs nothing here.
+    crate::services::home_snapshot::note_progress_changed();
+    Ok(summary)
 }
 
 /// Stored progress for a set of VODs (cards that were not fetched through a
@@ -41,10 +48,13 @@ pub async fn get_vod_progress(video_ids: Vec<String>) -> Result<Vec<VodProgress>
         .map_err(|e| e.to_string())?)
 }
 
-/// Forget one VOD's position ("start over").
+/// Forget one VOD's position ("start over", or dismissing a Continue Watching
+/// card).
 #[tauri::command]
 pub async fn clear_vod_progress(video_id: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || vod_progress_service::clear(&video_id))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())??;
+    crate::services::home_snapshot::note_progress_changed();
+    Ok(())
 }

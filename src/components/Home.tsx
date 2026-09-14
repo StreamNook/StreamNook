@@ -3,8 +3,9 @@ import { useShallow } from 'zustand/react/shallow';
 import { useAppStore, ensureHomeSnapshotSync, clipSourceOf, HomeTab } from '../stores/AppStore';
 import { createPortal } from 'react-dom';
 import { Search, ArrowLeft, Heart, X, Gift, Pickaxe, LayoutGrid, Flame, ArrowUpRight, Undo2, Users, User, Loader2, Clock, Play, Check, Plus } from 'lucide-react';
-import { VodProgressBar, VodRecordingBadge } from './VodCardMarks';
-import { vodProgressLabel } from '../utils/vodProgress';
+import { MediaCard } from './MediaCard';
+import ContinueWatchingRow from './ContinueWatchingRow';
+import { formatCardDate, mediaKindOfVideo, videoDurationLabel, vodThumbUrl, VOD_FALLBACK_THUMB } from '../utils/vodProgress';
 import { motion, LayoutGroup, AnimatePresence } from 'framer-motion';
 import { usemultiNookStore } from '../stores/multiNookStore';
 
@@ -2688,86 +2689,47 @@ const Home = () => {
         (selectedCategory.name && dropsGameNames.has(selectedCategory.name.toLowerCase()))
     ));
 
-    const renderClipCard = (clip: TwitchClip) => {
-        return (
-            <div
-                key={clip.id}
-                className={`glass-panel media-card cursor-pointer hover:bg-glass-hover transition-all duration-200 group overflow-hidden relative ${isOverlayMode ? '!bg-black/40 !border-white/5' : ''}`}
-                onClick={() => {
-                    setHomeCategoryTab('clips');
-                    playMedia('clip', clip.url, { ...clip, clip_source: clipSourceOf(clip) });
-                }}
-            >
-                <div className="relative overflow-hidden rounded">
-                    <img
-                        loading="lazy"
-                        src={clip.thumbnail_url || 'https://vod-secure.twitch.tv/_404/404_processing_320x180.png'}
-                        alt={clip.title}
-                        onError={(e) => { e.currentTarget.src = 'https://vod-secure.twitch.tv/_404/404_processing_320x180.png'; }}
-                        className="w-full aspect-video object-cover group-hover:scale-105 transition-transform duration-200 bg-black/20"
-                    />
-                    <div className="absolute bottom-1.5 left-1.5 px-2 py-0.5 glass-badge text-white text-[10px] font-medium rounded">
-                        {clip.duration.toFixed(1)}s
-                    </div>
-                    <div className="absolute top-1.5 left-1.5 px-2 py-0.5 glass-badge text-white text-[10px] font-medium rounded flex items-center gap-1">
-                        <Users size={10} />
-                        {clip.view_count.toLocaleString()}
-                    </div>
-                </div>
-                <div className="px-1 py-2 space-y-0.5">
-                    <h3 className="text-textPrimary font-medium text-[13px] leading-tight line-clamp-2 group-hover:text-accent transition-colors">
-                        {clip.title}
-                    </h3>
-                    <div className="flex items-center justify-between text-[11px] text-textSecondary mt-1 pt-1 border-t border-white/5">
-                        <span className="truncate max-w-[50%]">{clip.broadcaster_name}</span>
-                        <span className="shrink-0">{new Date(clip.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</span>
-                    </div>
-                    <p className="text-[10px] text-textSecondary/60 truncate italic">Clipped by {clip.creator_name}</p>
-                </div>
-            </div>
-        );
-    };
+    const renderClipCard = (clip: TwitchClip) => (
+        <MediaCard
+            key={clip.id}
+            kind="clip"
+            title={clip.title}
+            thumbnailUrl={clip.thumbnail_url || VOD_FALLBACK_THUMB}
+            durationLabel={`${clip.duration.toFixed(1)}s`}
+            viewCount={clip.view_count}
+            channel={{ name: clip.broadcaster_name }}
+            trailing={formatCardDate(clip.created_at)}
+            category={clip.game_name || selectedCategory?.name}
+            note={`Clipped by ${clip.creator_name}`}
+            className={isOverlayMode ? '!bg-black/40 !border-white/5' : ''}
+            onClick={() => {
+                setHomeCategoryTab('clips');
+                playMedia('clip', clip.url, { ...clip, clip_source: clipSourceOf(clip) });
+            }}
+        />
+    );
 
-    const renderVideoCard = (video: TwitchVideo) => {
-        return (
-            <div
-                key={video.id}
-                className={`glass-panel media-card cursor-pointer hover:bg-glass-hover transition-all duration-200 group overflow-hidden relative ${isOverlayMode ? '!bg-black/40 !border-white/5' : ''}`}
-                onClick={() => {
-                    setHomeCategoryTab('videos');
-                    playMedia('video', video.url, video);
-                }}
-            >
-                <div className="relative overflow-hidden rounded">
-                    <img
-                        loading="lazy"
-                        src={video.thumbnail_url ? video.thumbnail_url.replace('%{width}', '440').replace('%{height}', '248') : 'https://vod-secure.twitch.tv/_404/404_processing_320x180.png'}
-                        alt={video.title}
-                        onError={(e) => { e.currentTarget.src = 'https://vod-secure.twitch.tv/_404/404_processing_320x180.png'; }}
-                        className="w-full aspect-video object-cover group-hover:scale-105 transition-transform duration-200 bg-black/20"
-                    />
-                    <div className="absolute bottom-1.5 left-1.5 px-2 py-0.5 glass-badge text-white text-[10px] font-medium rounded">
-                        {video.duration}
-                    </div>
-                    <div className="absolute top-1.5 left-1.5 px-2 py-0.5 glass-badge text-white text-[10px] font-medium rounded flex items-center gap-1">
-                        <Users size={10} />
-                        {video.view_count.toLocaleString()}
-                    </div>
-                    <VodRecordingBadge status={video.status} />
-                    <VodProgressBar progress={video.progress} lengthSeconds={video.length_seconds} />
-                </div>
-                <div className="px-1 py-2 space-y-0.5">
-                    <h3 className="text-textPrimary font-medium text-[13px] leading-tight line-clamp-2 group-hover:text-accent transition-colors">
-                        {video.title}
-                    </h3>
-                    <div className="flex items-center justify-between text-[11px] text-textSecondary mt-1 pt-1 border-t border-white/5">
-                        <span className="truncate max-w-[50%]">{video.user_name}</span>
-                        <span className="shrink-0">{vodProgressLabel(video.progress) ?? new Date(video.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</span>
-                    </div>
-                </div>
-            </div>
-        );
-    };
+    const renderVideoCard = (video: TwitchVideo) => (
+        <MediaCard
+            key={video.id}
+            kind={mediaKindOfVideo(video.type)}
+            title={video.title}
+            thumbnailUrl={vodThumbUrl(video.thumbnail_url)}
+            durationLabel={videoDurationLabel(video)}
+            viewCount={video.view_count}
+            progress={video.progress}
+            lengthSeconds={video.length_seconds}
+            status={video.status}
+            channel={{ name: video.user_name }}
+            trailing={formatCardDate(video.created_at)}
+            category={video.game_name || selectedCategory?.name}
+            className={isOverlayMode ? '!bg-black/40 !border-white/5' : ''}
+            onClick={() => {
+                setHomeCategoryTab('videos');
+                playMedia('video', video.url, video);
+            }}
+        />
+    );
 
     return (
         <div className="flex flex-col h-full">
@@ -3925,6 +3887,11 @@ const Home = () => {
                                     between Discover pages. The count sits on the
                                     section rather than the tab badge, which still
                                     means "live channels you follow". */}
+                                {/* Pick up where you left off, above everything
+                                    else on the tab. A rail, so an unfinished VOD
+                                    never pushes live channels down the page, and
+                                    self-hiding when there is nothing to resume. */}
+                                {activeTab === 'following' && <ContinueWatchingRow />}
                                 <LayoutGroup>
                                 {favoritesTab && favoritesSectionCount > 0 && (
                                     <div className="mb-6 relative isolate rounded-2xl px-2 pt-2 -mx-2">

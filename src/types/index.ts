@@ -1094,13 +1094,6 @@ export interface ReleaseNotes {
   published_at: string;
 }
 
-/**
- * A live stream row. The name is historical: rows may now come from any
- * platform, tagged by `provider`. Non-Twitch rows are field-compatible but
- * differ semantically — `user_id` is the platform's own id (Kick numeric,
- * YouTube UC…), `thumbnail_url` is a direct URL with no {width} template, and
- * `game_id` / `tags` / `broadcaster_type` may be absent.
- */
 /** Channel points as the Rust channel-state service reports them. */
 export interface ChannelPoints {
   enabled: boolean;
@@ -1155,6 +1148,29 @@ export interface HomeSnapshot {
   drops_campaigns: DropCampaign[];
   drops_active_game_names: string[];
   drops_at: number | null;
+  continue_watching: ContinueWatchingItem[];
+  continue_watching_at: number | null;
+}
+
+/** One card in Home's Continue Watching row. Rust builds these from the local
+ *  watch-position store, so the row renders with no Twitch call. Only VODs the
+ *  viewer deliberately opened ever appear — live sessions, live rewinds and
+ *  the offline auto-play all record nothing. */
+export interface ContinueWatchingItem {
+  video_id: string;
+  channel_login: string;
+  /** Display name, already falling back to the login in Rust. */
+  channel_name: string;
+  title: string;
+  thumbnail_url: string;
+  position_secs: number;
+  duration_secs: number;
+  /** Empty until Rust's hourly hydrate has seen the VOD once. */
+  profile_image_url: string;
+  /** Twitch partner: the card shows the verified mark. */
+  partner: boolean;
+  /** Category of the broadcast; empty until Rust's hydrate has seen it. */
+  game_name: string;
 }
 
 /** One changed section, the payload of the `home-snapshot` event. */
@@ -1164,8 +1180,16 @@ export type HomeSnapshotUpdate =
   | { section: 'recommended'; streams: TwitchStream[]; cursor: string | null; at: number }
   | { section: 'hype_trains'; statuses: HypeTrainBulkStatus[]; at: number }
   | { section: 'watch_streaks'; streaks: Record<string, number>; at: number }
-  | { section: 'drops'; campaigns: DropCampaign[]; active_game_names: string[]; at: number };
+  | { section: 'drops'; campaigns: DropCampaign[]; active_game_names: string[]; at: number }
+  | { section: 'continue_watching'; items: ContinueWatchingItem[]; at: number };
 
+/**
+ * A live stream row. The name is historical: rows may now come from any
+ * platform, tagged by `provider`. Non-Twitch rows are field-compatible but
+ * differ semantically — `user_id` is the platform's own id (Kick numeric,
+ * YouTube UC…), `thumbnail_url` is a direct URL with no {width} template, and
+ * `game_id` / `tags` / `broadcaster_type` may be absent.
+ */
 export interface TwitchStream {
   id: string;
   user_id: string;
@@ -1243,6 +1267,8 @@ export interface TwitchVideo {
   /** The viewer's stored watch position, joined on by Rust. Absent when never
    *  watched. */
   progress?: VodProgressSummary;
+  /** Category of the broadcast. Only the GQL user-videos path fills it. */
+  game_name?: string;
 }
 
 /** Rust-owned VOD watch state, the slice a card needs for its bar. */

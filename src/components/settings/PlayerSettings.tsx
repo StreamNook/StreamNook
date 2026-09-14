@@ -325,12 +325,18 @@ const PlayerSettings = () => {
 
         <SettingsRow
           title="Resume VODs where you left off"
-          description="Reopening a past broadcast picks up at your last position."
-          help="Off starts every VOD from the beginning; positions are still remembered for the video cards."
+          description="Reopening a past broadcast picks up at your last position, and Home keeps a Continue Watching row."
+          help="Off starts every VOD from the beginning and hides the Continue Watching row; positions are still remembered for the video cards. Only VODs you open yourself are remembered, never a live stream you were watching."
           control={
             <Toggle
               enabled={resumeVodPlayback}
-              onChange={() => setVideoPlayer({ resume_vod_playback: !resumeVodPlayback })}
+              onChange={() => {
+                setVideoPlayer({ resume_vod_playback: !resumeVodPlayback });
+                // The row is gated on this setting, and Home is mounted behind
+                // this dialog, so ask Rust to rebuild it rather than waiting
+                // for a remount.
+                void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
+              }}
             />
           }
         />

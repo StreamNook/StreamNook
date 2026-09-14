@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, emit } from '@tauri-apps/api/event';
-import type { Settings, TwitchUser, TwitchStream, UserInfo, TwitchCategory, HypeTrainData, TwitchVideo, ModLogEvent, DropProgressStatus, FavoriteChannel, VodStartInfo, LiveRewindInfo, HomeSnapshot, HomeSnapshotUpdate, HypeTrainBulkStatus } from '../types';
+import type { Settings, TwitchUser, TwitchStream, UserInfo, TwitchCategory, HypeTrainData, TwitchVideo, ModLogEvent, DropProgressStatus, FavoriteChannel, VodStartInfo, LiveRewindInfo, HomeSnapshot, HomeSnapshotUpdate, HypeTrainBulkStatus, ContinueWatchingItem } from '../types';
 import { trackActivity } from '../services/logService';
 import { Logger, setDiagnosticsEnabled } from '../utils/logger';
 // Direct import (not via the keybindings index) to avoid a storecommands cycle.
@@ -457,6 +457,15 @@ interface AppState {
   loadSettings: () => Promise<void>;
   updateSettings: (newSettings: Settings) => Promise<void>;
   watchStreaks: Record<string, number>;
+  /** Home's Continue Watching row, owned by Rust's home snapshot. Derived from
+   *  the local VOD watch-position store, so it is present on the first paint
+   *  after a cold start. */
+  continueWatching: ContinueWatchingItem[];
+  /** Fetch stamp; null means the section has never been built (the spinner
+   *  condition, matching offlineFollowsAt). */
+  continueWatchingAt: number | null;
+  /** Drop a VOD from the row and forget its position. */
+  dismissContinueWatching: (videoId: string) => Promise<void>;
   loadFollowedStreams: () => Promise<void>;
   loadRecommendedStreams: () => Promise<void>;
   loadMoreRecommendedStreams: () => Promise<void>;
@@ -914,6 +923,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   homeOpenCount: 0,
   homeScrollTop: 0,
   watchStreaks: {},
+  continueWatching: [],
+  continueWatchingAt: null,
   recommendedStreams: [],
   recommendedCursor: null,
   hasMoreRecommended: true,
@@ -1144,6 +1155,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (snapshot.drops_at !== null) {
       set({ dropsCampaigns: snapshot.drops_campaigns, dropsActiveGameNames: snapshot.drops_active_game_names });
     }
+    if (snapshot.continue_watching_at !== null) {
+      set({ continueWatching: snapshot.continue_watching, continueWatchingAt: snapshot.continue_watching_at });
+    }
   },
   applyHomeUpdate: (update) => {
     switch (update.section) {
@@ -1173,6 +1187,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       case 'drops':
         set({ dropsCampaigns: update.campaigns, dropsActiveGameNames: update.active_game_names });
         break;
+      case 'continue_watching':
+        set({ continueWatching: update.items, continueWatchingAt: update.at });
+        break;
+    }
+  },
+  dismissContinueWatching: async (videoId) => {
+    // Optimistic so the card leaves under the cursor. Rust re-emits the
+    // authoritative row from its own store a moment later.
+    set((s) => ({ continueWatching: s.continueWatching.filter((v) => v.video_id !== videoId) }));
+    try {
+      await invoke('clear_vod_progress', { videoId });
+    } catch (e) {
+      Logger.warn('[ContinueWatching] dismiss failed:', e);
+      // Put the real row back rather than leaving a card the store still has.
+      void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
     }
   },
   // Whisper import state

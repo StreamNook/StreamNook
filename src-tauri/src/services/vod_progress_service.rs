@@ -60,10 +60,24 @@ pub struct VodProgress {
     pub completed: bool,
     #[serde(default)]
     pub channel_login: String,
+    /// Display name, so a card is not forced to show a bare lowercase login.
+    /// Falls back to `channel_login` when unknown.
+    #[serde(default)]
+    pub channel_name: String,
     #[serde(default)]
     pub title: String,
     #[serde(default)]
     pub thumbnail_url: String,
+    /// Channel avatar, filled by the batched hydrate (the player never
+    /// has it at report time). Empty until then.
+    #[serde(default)]
+    pub profile_image_url: String,
+    /// Twitch partner, which is what the verified mark on a card means.
+    #[serde(default)]
+    pub partner: bool,
+    /// Category of the broadcast, from the hydrate. Empty until then.
+    #[serde(default)]
+    pub game_name: String,
 }
 
 /// The slice of a `VodProgress` a video card needs, joined onto `TwitchVideo`.
@@ -79,8 +93,35 @@ pub struct VodProgressSummary {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct VodMeta {
     pub channel_login: Option<String>,
+    pub channel_name: Option<String>,
     pub title: Option<String>,
     pub thumbnail_url: Option<String>,
+}
+
+/// A fresh metadata read for one stored VOD, from the batched GQL hydrate that
+/// keeps the Continue Watching row honest.
+#[derive(Debug, Clone)]
+pub struct VodRefresh {
+    pub video_id: String,
+    pub title: String,
+    pub channel_name: String,
+    pub thumbnail_url: String,
+    pub length_secs: f64,
+    /// The broadcast has finished, so `length_secs` is final and completion
+    /// can finally be judged against it.
+    pub finished: bool,
+    pub profile_image_url: String,
+    /// None when the owner node was missing, so an unknown never clears
+    /// a mark the store already holds.
+    pub partner: Option<bool>,
+    pub game_name: String,
+}
+
+/// A thumbnail URL Twitch serves while a VOD is still being processed. Storing
+/// it would freeze a placeholder image into the card (verified 2026-09-12: a
+/// RECORDING archive returns `404_processing_440x248.png`).
+fn is_placeholder_thumb(url: &str) -> bool {
+    url.contains("404_processing")
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -307,8 +348,12 @@ pub fn record(
                 updated_at: 0,
                 completed: false,
                 channel_login: String::new(),
+                channel_name: String::new(),
                 title: String::new(),
                 thumbnail_url: String::new(),
+                profile_image_url: String::new(),
+                partner: false,
+                game_name: String::new(),
             });
         entry.position_secs = position_secs;
         // A recording VOD grows; never let a shorter stale hint replace a
@@ -321,10 +366,16 @@ pub fn record(
         if let Some(login) = meta.channel_login.filter(|s| !s.is_empty()) {
             entry.channel_login = login.to_lowercase();
         }
+        if let Some(name) = meta.channel_name.filter(|s| !s.is_empty()) {
+            entry.channel_name = name;
+        }
         if let Some(title) = meta.title.filter(|s| !s.is_empty()) {
             entry.title = title;
         }
-        if let Some(thumb) = meta.thumbnail_url.filter(|s| !s.is_empty()) {
+        if let Some(thumb) = meta
+            .thumbnail_url
+            .filter(|s| !s.is_empty() && !is_placeholder_thumb(s))
+        {
             entry.thumbnail_url = thumb;
         }
         let summary = VodProgressSummary {
@@ -357,6 +408,126 @@ pub fn lookup_many(video_ids: &[String]) -> Vec<VodProgress> {
             .collect()
     })
     .unwrap_or_default()
+}
+
+/// Does this entry still have somewhere worth resuming to? The predicate
+/// behind Home's Continue Watching row, pulled out so it can be tested
+/// without a filesystem.
+pub fn is_resumable(entry: &VodProgress) -> bool {
+    !entry.completed && entry.position_secs >= RESUME_MIN_SECS
+}
+
+/// Order the row: newest watch first, capped. Ties break on the id so the
+/// order is stable, which matters because the Home snapshot decides whether to
+/// emit by comparing serialized content and a reshuffle would read as a change.
+/// Split out from `recent` so it can be tested without a filesystem.
+fn rank(rows: &mut Vec<VodProgress>, limit: usize) {
+    rows.sort_by(|a, b| {
+        b.updated_at
+            .cmp(&a.updated_at)
+            .then_with(|| a.video_id.cmp(&b.video_id))
+    });
+    rows.truncate(limit);
+}
+
+/// Most recently watched VODs that still have somewhere to resume, newest
+/// first. Reads the local store only, so the Continue Watching row paints with
+/// no Twitch call and survives a cold start.
+pub fn recent(limit: usize) -> Vec<VodProgress> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    with_owner(|owner| {
+        let mut rows: Vec<VodProgress> = owner
+            .file
+            .entries
+            .values()
+            .filter(|p| is_resumable(p))
+            .cloned()
+            .collect();
+        rank(&mut rows, limit);
+        rows
+    })
+    .unwrap_or_default()
+}
+
+/// Fold a batched hydrate back into the store: refresh metadata and length for
+/// `updates`, forget `gone` (Twitch deleted those VODs), and recompute
+/// `completed` for finished videos now that their length is final. One lock
+/// for the whole batch. Returns true when anything changed.
+///
+/// `updated_at` is deliberately untouched: it is watch recency, and the row
+/// sorts on it.
+pub fn reconcile(updates: &[VodRefresh], gone: &[String]) -> bool {
+    if updates.is_empty() && gone.is_empty() {
+        return false;
+    }
+    let changed = with_owner(|owner| {
+        let mut changed = false;
+        for id in gone {
+            if owner.file.entries.remove(&vod_key(id)).is_some() {
+                debug!("[VodProgress] dropping {} (deleted on Twitch)", id);
+                changed = true;
+            }
+        }
+        for up in updates {
+            let Some(entry) = owner.file.entries.get_mut(&vod_key(&up.video_id)) else {
+                continue;
+            };
+            if !up.title.is_empty() && entry.title != up.title {
+                entry.title = up.title.clone();
+                changed = true;
+            }
+            if !up.channel_name.is_empty() && entry.channel_name != up.channel_name {
+                entry.channel_name = up.channel_name.clone();
+                changed = true;
+            }
+            if !up.thumbnail_url.is_empty()
+                && !is_placeholder_thumb(&up.thumbnail_url)
+                && entry.thumbnail_url != up.thumbnail_url
+            {
+                entry.thumbnail_url = up.thumbnail_url.clone();
+                changed = true;
+            }
+            if !up.profile_image_url.is_empty() && entry.profile_image_url != up.profile_image_url {
+                entry.profile_image_url = up.profile_image_url.clone();
+                changed = true;
+            }
+            if let Some(partner) = up.partner {
+                if entry.partner != partner {
+                    entry.partner = partner;
+                    changed = true;
+                }
+            }
+            if !up.game_name.is_empty() && entry.game_name != up.game_name {
+                entry.game_name = up.game_name.clone();
+                changed = true;
+            }
+            // Same ratchet as `record`: a recording VOD only ever grows.
+            if up.length_secs > entry.duration_secs {
+                entry.duration_secs = up.length_secs;
+                changed = true;
+            }
+            // Completion is only meaningful against a final length, which is
+            // exactly what `finished` promises.
+            if up.finished {
+                let done = resume_decision(entry.position_secs, entry.duration_secs).1;
+                if entry.completed != done {
+                    entry.completed = done;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            owner.dirty = true;
+        }
+        changed
+    })
+    .unwrap_or(false);
+    if changed {
+        mark_dirty();
+    }
+    changed
 }
 
 /// The position a VOD should open at, or None to start from the top. Applies
@@ -484,22 +655,80 @@ mod tests {
         assert_eq!(resume_decision(900.0, 0.0), (Some(900.0), false));
     }
 
+    /// A bare stored entry. One place to add a field, so a new one does not
+    /// break every test that happens to need an entry.
+    fn entry(video_id: &str, position_secs: f64, duration_secs: f64, updated_at: i64) -> VodProgress {
+        VodProgress {
+            video_id: video_id.to_string(),
+            position_secs,
+            duration_secs,
+            updated_at,
+            completed: false,
+            channel_login: String::new(),
+            channel_name: String::new(),
+            title: String::new(),
+            thumbnail_url: String::new(),
+            profile_image_url: String::new(),
+            partner: false,
+            game_name: String::new(),
+        }
+    }
+
+    #[test]
+    fn only_unfinished_entries_past_the_floor_are_resumable() {
+        // Mirrors the 30 s floor the resume policy uses.
+        assert!(is_resumable(&entry("a", 900.0, 3600.0, 1)));
+        assert!(!is_resumable(&entry("b", 12.0, 3600.0, 1)));
+        let mut done = entry("c", 900.0, 3600.0, 1);
+        done.completed = true;
+        assert!(!is_resumable(&done));
+        // A recording VOD reports no duration and must still qualify.
+        assert!(is_resumable(&entry("d", 900.0, 0.0, 1)));
+    }
+
+    #[test]
+    fn the_row_ranks_newest_watch_first_with_a_stable_tie_break() {
+        let mut rows = vec![
+            entry("b", 100.0, 1000.0, 50),
+            entry("a", 100.0, 1000.0, 50),
+            entry("c", 100.0, 1000.0, 99),
+        ];
+        rank(&mut rows, 24);
+        // Newest first, and equal timestamps fall back to the id so `same()`
+        // never sees a reshuffle of identical content as a change.
+        assert_eq!(
+            rows.iter().map(|r| r.video_id.as_str()).collect::<Vec<_>>(),
+            vec!["c", "a", "b"]
+        );
+    }
+
+    #[test]
+    fn the_row_honours_its_limit() {
+        let mut rows: Vec<VodProgress> = (0..10)
+            .map(|i| entry(&i.to_string(), 100.0, 1000.0, i as i64))
+            .collect();
+        rank(&mut rows, 3);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].video_id, "9");
+    }
+
+    #[test]
+    fn a_processing_thumbnail_is_never_stored() {
+        assert!(is_placeholder_thumb(
+            "https://vod-secure.twitch.tv/_404/404_processing_440x248.png"
+        ));
+        assert!(!is_placeholder_thumb(
+            "https://static-cdn.jtvnw.net/cf_vods/abc//thumb/thumb0-440x248.jpg"
+        ));
+    }
+
     #[test]
     fn cap_evicts_least_recently_updated() {
         let mut file = ProgressFile::default();
         for i in 0..(CAP + 10) {
             file.entries.insert(
                 vod_key(&i.to_string()),
-                VodProgress {
-                    video_id: i.to_string(),
-                    position_secs: 100.0,
-                    duration_secs: 1000.0,
-                    updated_at: i as i64,
-                    completed: false,
-                    channel_login: String::new(),
-                    title: String::new(),
-                    thumbnail_url: String::new(),
-                },
+                entry(&i.to_string(), 100.0, 1000.0, i as i64),
             );
         }
         enforce_cap(&mut file);
@@ -517,30 +746,10 @@ mod tests {
         let now = now_secs();
         file.entries.insert(
             vod_key("old"),
-            VodProgress {
-                video_id: "old".into(),
-                position_secs: 1.0,
-                duration_secs: 2.0,
-                updated_at: now - RETENTION_SECS - 1,
-                completed: false,
-                channel_login: String::new(),
-                title: String::new(),
-                thumbnail_url: String::new(),
-            },
+            entry("old", 1.0, 2.0, now - RETENTION_SECS - 1),
         );
-        file.entries.insert(
-            vod_key("fresh"),
-            VodProgress {
-                video_id: "fresh".into(),
-                position_secs: 1.0,
-                duration_secs: 2.0,
-                updated_at: now,
-                completed: false,
-                channel_login: String::new(),
-                title: String::new(),
-                thumbnail_url: String::new(),
-            },
-        );
+        file.entries
+            .insert(vod_key("fresh"), entry("fresh", 1.0, 2.0, now));
         assert_eq!(prune_stale(&mut file), 1);
         assert!(file.entries.contains_key(&vod_key("fresh")));
     }

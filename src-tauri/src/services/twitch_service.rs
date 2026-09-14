@@ -4043,6 +4043,7 @@ impl TwitchService {
                             viewCount
                             previewThumbnailURL(width: 440, height: 248)
                             broadcastType
+                            game { displayName }
                             owner { id login displayName }
                         }
                     }
@@ -4137,6 +4138,7 @@ impl TwitchService {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_lowercase()),
                 length_seconds: Some(length_secs.min(u32::MAX as u64) as u32),
+                game_name: Some(str_at(node, &["game", "displayName"])).filter(|g| !g.is_empty()),
                 progress: None,
                 stream_id: None,
                 id,
@@ -4151,6 +4153,113 @@ impl TwitchService {
         let next = if has_next { last_cursor } else { None };
 
         Ok((videos, next))
+    }
+
+    /// Read many VODs by id in ONE request, using GraphQL aliases.
+    ///
+    /// Returns `(fresh metadata, ids Twitch no longer has)`. Probed live
+    /// 2026-09-12: a deleted id resolves to `null` for just its own alias and
+    /// the rest of the response is intact, so one call both refreshes the
+    /// Continue Watching cards and tells us which stored entries to forget.
+    ///
+    /// Ids travel as `$iN: ID!` variables. They come from our own store and
+    /// are numeric in practice, but a query built by string interpolation is
+    /// not a thing worth shipping.
+    pub async fn get_videos_by_ids(
+        ids: &[String],
+    ) -> Result<(
+        Vec<crate::services::vod_progress_service::VodRefresh>,
+        Vec<String>,
+    )> {
+        /// Aliases per request. Kept well under any practical query-size cap;
+        /// callers currently send at most a couple of dozen.
+        const CHUNK: usize = 50;
+
+        let mut found = Vec::new();
+        let mut gone = Vec::new();
+
+        for chunk in ids.chunks(CHUNK) {
+            let params = (0..chunk.len())
+                .map(|i| format!("$i{i}: ID!"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let selections = (0..chunk.len())
+                .map(|i| {
+                    format!(
+                        "v{i}: video(id: $i{i}) {{ id title lengthSeconds status \
+                         previewThumbnailURL(width: 440, height: 248) \
+                         game {{ displayName }} \
+                         owner {{ displayName profileImageURL(width: 70) roles {{ isPartner }} }} }}"
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            let query = format!("query StreamNookVodsByIds({params}) {{ {selections} }}");
+            let variables: serde_json::Map<String, serde_json::Value> = chunk
+                .iter()
+                .enumerate()
+                .map(|(i, id)| (format!("i{i}"), serde_json::Value::String(id.clone())))
+                .collect();
+
+            let resp = Self::gql_public_read(serde_json::json!({
+                "operationName": "StreamNookVodsByIds",
+                "query": query,
+                "variables": variables,
+            }))
+            .await?;
+
+            for (i, id) in chunk.iter().enumerate() {
+                // Map back by ALIAS INDEX, never by the returned id: a deleted
+                // video comes back as a bare `null` with no id to match on.
+                let node = resp.pointer(&format!("/data/v{i}"));
+                match node.filter(|v| !v.is_null()) {
+                    None => gone.push(id.clone()),
+                    Some(v) => {
+                        let status = v
+                            .get("status")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        found.push(crate::services::vod_progress_service::VodRefresh {
+                            video_id: id.clone(),
+                            title: v
+                                .get("title")
+                                .and_then(|t| t.as_str())
+                                .unwrap_or_default()
+                                .to_string(),
+                            channel_name: v
+                                .pointer("/owner/displayName")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or_default()
+                                .to_string(),
+                            thumbnail_url: v
+                                .get("previewThumbnailURL")
+                                .and_then(|t| t.as_str())
+                                .unwrap_or_default()
+                                .to_string(),
+                            length_secs: v
+                                .get("lengthSeconds")
+                                .and_then(|n| n.as_f64())
+                                .unwrap_or(0.0),
+                            finished: status.eq_ignore_ascii_case("RECORDED"),
+                            profile_image_url: v
+                                .pointer("/owner/profileImageURL")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or_default()
+                                .to_string(),
+                            partner: v.pointer("/owner/roles/isPartner").and_then(|b| b.as_bool()),
+                            game_name: v
+                                .pointer("/game/displayName")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or_default()
+                                .to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok((found, gone))
     }
 
     /// Format a second count as a Helix-style duration string ("3h21m4s").

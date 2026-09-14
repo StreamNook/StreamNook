@@ -22,6 +22,14 @@
 //! - watch streaks: hourly, for the followed-live channels.
 //! - drops: active campaigns plus the inventory's active game names, hourly
 //!   while any window exists and on mount when stale.
+//! - continue watching: **no poll loop at all.** The row is derived from the
+//!   local VOD watch-position store, which only changes when the viewer
+//!   watches something, so it is rebuilt on Home mount, on a trailing-edge
+//!   notify from `report_vod_position` / `clear_vod_progress` while a Home is
+//!   actually on screen, and on manual refresh. Hourly, and only while
+//!   mounted, one batched GQL call reconciles the stored entries against
+//!   Twitch (deleted VODs, final lengths, real thumbnails for a VOD watched
+//!   while it was still recording).
 //! - recommended paging: `load_more_recommended` appends the next page to
 //!   the same section, so the list stays canonical here.
 //!
@@ -64,6 +72,19 @@ const MIN_MANUAL_GAP: Duration = Duration::from_secs(15);
 const RECOMMENDED_LIMIT: u32 = 20;
 /// Follow list page size for the offline roster (Home showed 100 before).
 const OFFLINE_LIMIT: u32 = 100;
+/// Cards the Continue Watching row carries, and the hydrate batch size.
+const CONTINUE_LIMIT: usize = 24;
+/// How often the row is reconciled against Twitch.
+const CONTINUE_HYDRATE_PERIOD: Duration = Duration::from_secs(3600);
+/// A card with no avatar yet (a VOD first watched since the last hydrate)
+/// pulls the next hydrate forward to this floor, so the new card fills in
+/// on the next Home mount instead of up to an hour later.
+const CONTINUE_HYDRATE_RETRY: Duration = Duration::from_secs(60);
+/// Rebuild the row at most this often while Home is mounted and the viewer is
+/// watching (`report_vod_position` fires every 5 s).
+const CONTINUE_COALESCE: Duration = Duration::from_secs(10);
+/// A mount rebuilds the row if it is older than this.
+const CONTINUE_MOUNT_STALE: Duration = Duration::from_secs(30);
 
 #[derive(Serialize, Clone, Default)]
 pub struct HomeSnapshot {
@@ -85,6 +106,31 @@ pub struct HomeSnapshot {
     /// Lower-cased game names of campaigns the account is actively in.
     pub drops_active_game_names: Vec<String>,
     pub drops_at: Option<u64>,
+    /// Unfinished VODs the viewer opened on purpose, newest watch first.
+    pub continue_watching: Vec<ContinueWatchingItem>,
+    pub continue_watching_at: Option<u64>,
+}
+
+/// One card in Home's Continue Watching row. Built entirely from the local
+/// watch-position store, which already keeps the channel, title and thumbnail,
+/// so the row paints with no Twitch call and survives a cold start.
+///
+/// No `PartialEq`: change detection goes through `same()`, which compares
+/// serialized forms, so a derive here would be dead code.
+#[derive(Serialize, Clone)]
+pub struct ContinueWatchingItem {
+    pub video_id: String,
+    pub channel_login: String,
+    pub channel_name: String,
+    pub title: String,
+    pub thumbnail_url: String,
+    pub position_secs: f64,
+    pub duration_secs: f64,
+    /// Empty until the first hydrate after the VOD was recorded.
+    pub profile_image_url: String,
+    pub partner: bool,
+    /// Category of the broadcast; empty until the hydrate has seen it.
+    pub game_name: String,
 }
 
 /// One changed section, as emitted on `EVENT`.
@@ -118,6 +164,10 @@ pub enum HomeUpdate {
         active_game_names: Vec<String>,
         at: u64,
     },
+    ContinueWatching {
+        items: Vec<ContinueWatchingItem>,
+        at: u64,
+    },
 }
 
 struct Inner {
@@ -131,9 +181,17 @@ struct Inner {
     /// Channel ids a Home has on screen beyond followed + recommended
     /// (category and search results), included in the hype poll.
     extra_hype_ids: RwLock<Vec<String>>,
+    /// When the Continue Watching row was last reconciled against Twitch.
+    /// Internal timing, deliberately not on the React-facing snapshot, and
+    /// stamped only on success so a failed hydrate retries.
+    continue_hydrated: Mutex<Option<Instant>>,
 }
 
 static SERVICE: OnceLock<Arc<Inner>> = OnceLock::new();
+/// A Continue Watching rebuild is already scheduled. Trailing edge, so the
+/// final position report of a session always lands.
+static CONTINUE_PENDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 fn now_secs() -> u64 {
     SystemTime::now()
@@ -177,6 +235,7 @@ pub fn start(app: AppHandle, notifications: Arc<LiveNotificationService>) {
         home_mounted: AtomicUsize::new(0),
         last_manual: Mutex::new(HashMap::new()),
         extra_hype_ids: RwLock::new(Vec::new()),
+        continue_hydrated: Mutex::new(None),
     });
     if SERVICE.set(inner.clone()).is_err() {
         return;
@@ -356,6 +415,133 @@ async fn refresh_streaks(inner: &Inner) {
     }
 }
 
+/// Rebuild Home's Continue Watching row from the local watch-position store.
+/// No network, no Twitch call.
+async fn refresh_continue_watching(inner: &Inner) {
+    // The row exists to resume. With "Resume VODs where you left off" off, a
+    // card promising "Resume at 1:23:45" would start from the top instead, so
+    // the row stays empty rather than lying.
+    //
+    // Read on ONE line: `settings` is a std Mutex and its guard must not be
+    // alive across the await below (same shape as streaming.rs's resume read).
+    let enabled = match app_state(&inner.app) {
+        Some(state) => state.settings.lock().unwrap().video_player.resume_vod_playback,
+        None => true,
+    };
+    let items: Vec<ContinueWatchingItem> = if enabled {
+        let rows = tokio::task::spawn_blocking(|| {
+            crate::services::vod_progress_service::recent(CONTINUE_LIMIT)
+        })
+        .await
+        .unwrap_or_default();
+        rows.into_iter()
+            .map(|p| ContinueWatchingItem {
+                video_id: p.video_id,
+                // A card should never show a bare lowercase login when a
+                // display name is known.
+                channel_name: if p.channel_name.is_empty() {
+                    p.channel_login.clone()
+                } else {
+                    p.channel_name
+                },
+                channel_login: p.channel_login,
+                title: p.title,
+                thumbnail_url: p.thumbnail_url,
+                position_secs: p.position_secs,
+                duration_secs: p.duration_secs,
+                profile_image_url: p.profile_image_url,
+                partner: p.partner,
+                game_name: p.game_name,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let at = now_secs();
+    let changed = {
+        let mut s = inner.snap.write().await;
+        let changed = !same(&s.continue_watching, &items);
+        s.continue_watching = items.clone();
+        s.continue_watching_at = Some(at);
+        changed
+    };
+    if changed {
+        emit(&inner.app, HomeUpdate::ContinueWatching { items, at });
+    }
+}
+
+/// Reconcile the stored watch positions against Twitch in one batched call:
+/// drop VODs Twitch has deleted (the store keeps entries for 90 days, Twitch
+/// keeps VODs for 7-60), pick up final lengths, and replace the processing
+/// placeholder thumbnail a VOD watched mid-broadcast was left with.
+async fn hydrate_continue_watching(inner: &Inner) {
+    let (ids, missing_avatar) = {
+        let s = inner.snap.read().await;
+        let ids: Vec<String> = s.continue_watching.iter().map(|i| i.video_id.clone()).collect();
+        // Avatar or category still blank: the store predates the hydrate that
+        // fills them, or the VOD was recorded since the last one.
+        let missing = s
+            .continue_watching
+            .iter()
+            .any(|i| i.profile_image_url.is_empty() || i.game_name.is_empty());
+        (ids, missing)
+    };
+    if ids.is_empty() {
+        return;
+    }
+    {
+        let period = if missing_avatar {
+            CONTINUE_HYDRATE_RETRY
+        } else {
+            CONTINUE_HYDRATE_PERIOD
+        };
+        let hydrated = inner.continue_hydrated.lock().await;
+        if hydrated.is_some_and(|t| t.elapsed() < period) {
+            return;
+        }
+    }
+    let (updates, gone) = match TwitchService::get_videos_by_ids(&ids).await {
+        Ok(pair) => pair,
+        Err(e) => {
+            // Not stamped, so the next mount or manual refresh retries.
+            debug!("[HomeSnapshot] continue-watching hydrate: {e}");
+            return;
+        }
+    };
+    *inner.continue_hydrated.lock().await = Some(Instant::now());
+    let changed = tokio::task::spawn_blocking(move || {
+        crate::services::vod_progress_service::reconcile(&updates, &gone)
+    })
+    .await
+    .unwrap_or(false);
+    if changed {
+        refresh_continue_watching(inner).await;
+    }
+}
+
+/// A watch position changed. Rebuilds the row on the TRAILING edge so the last
+/// report of a session always lands (a leading-edge debounce drops it, leaving
+/// a finished VOD on the row), and only while a Home is on screen: during
+/// playback Home is usually unmounted and this returns immediately.
+pub fn note_progress_changed() {
+    let Some(inner) = SERVICE.get() else { return };
+    if inner.home_mounted.load(Ordering::Relaxed) == 0 {
+        return;
+    }
+    // Already scheduled: that rebuild will see this change too.
+    if CONTINUE_PENDING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let inner = inner.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(CONTINUE_COALESCE).await;
+        // Cleared BEFORE the rebuild, so a change arriving during it schedules
+        // the next one instead of being swallowed.
+        CONTINUE_PENDING.store(false, Ordering::Release);
+        refresh_continue_watching(&inner).await;
+    });
+}
+
 async fn refresh_drops(inner: &Inner) {
     let Some(state) = app_state(&inner.app) else { return };
     let (campaigns, active_game_names) = {
@@ -423,16 +609,21 @@ pub async fn set_home_mounted(mounted: bool) {
     let Some(inner) = SERVICE.get() else { return };
     if mounted {
         inner.home_mounted.fetch_add(1, Ordering::Relaxed);
-        let (offline_stale, recommended_stale, drops_stale) = {
+        let (offline_stale, recommended_stale, drops_stale, continue_stale) = {
             let s = inner.snap.read().await;
             (
                 is_stale(s.offline_at, OFFLINE_PERIOD),
                 is_stale(s.recommended_at, RECOMMENDED_PERIOD),
                 is_stale(s.drops_at, DROPS_PERIOD),
+                is_stale(s.continue_watching_at, CONTINUE_MOUNT_STALE),
             )
         };
         let inner = inner.clone();
         tauri::async_runtime::spawn(async move {
+            // First: the row is local-only, so it paints before any network.
+            if continue_stale {
+                refresh_continue_watching(&inner).await;
+            }
             if recommended_stale {
                 refresh_recommended(&inner).await;
             }
@@ -443,6 +634,9 @@ pub async fn set_home_mounted(mounted: bool) {
             if drops_stale && signed {
                 refresh_drops(&inner).await;
             }
+            // Last: reconciling the row against Twitch is the least urgent
+            // work here, and it needs the rebuild above to have run.
+            hydrate_continue_watching(&inner).await;
         });
     } else {
         let _ = inner
@@ -465,6 +659,7 @@ pub async fn refresh(
         "hype_trains" => "hype_trains",
         "watch_streaks" => "watch_streaks",
         "drops" => "drops",
+        "continue_watching" => "continue_watching",
         other => return Err(format!("unknown home section: {other}")),
     };
     {
@@ -480,6 +675,12 @@ pub async fn refresh(
         "recommended" => refresh_recommended_with(inner, languages, personalized).await,
         "watch_streaks" => refresh_streaks(inner).await,
         "drops" => refresh_drops(inner).await,
+        // Explicit arm required: the catch-all below silently refreshes hype
+        // trains instead, with no error, for any key added above but not here.
+        "continue_watching" => {
+            refresh_continue_watching(inner).await;
+            hydrate_continue_watching(inner).await;
+        }
         _ => refresh_hype(inner).await,
     }
     Ok(())
@@ -508,6 +709,13 @@ async fn refresh_followed(inner: &Inner) {
                 },
             );
         }
+        // The reset above zeroed every field, including Continue Watching.
+        // That row is per-account INCLUDING the signed-out `anon` store, so a
+        // sign-out changes WHICH row applies rather than deleting the concept;
+        // rebuild it against the new owner. Without this the row blanks on
+        // every 60 s poll while signed out, and the `had_data` guard above
+        // means the windows are never even told.
+        refresh_continue_watching(inner).await;
         return;
     }
     match TwitchService::get_followed_streams(&state).await {
