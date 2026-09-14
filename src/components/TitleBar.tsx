@@ -1,5 +1,5 @@
 import { Window } from '@tauri-apps/api/window';
-import { Gift, User, Settings, Store, Proportions, MessageCircle, Pickaxe, Clock, Tv, Download, LogIn, Sparkles, Check, Pin, PinOff } from 'lucide-react';
+import { Gift, User, Settings, Store, Proportions, MessageCircle, Pickaxe, Clock, Tv, Download, LogIn, Sparkles, Check, Pin, PinOff, Home } from 'lucide-react';
 import { Minus, X, CornersOut, CornersIn, ArrowsOut, ArrowsIn, Medal } from 'phosphor-react';
 import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
@@ -7,8 +7,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../stores/AppStore';
 import PenroseLogo from './PenroseLogo';
+import PlatformSwitcher from './PlatformSwitcher';
 import AboutWidget from './AboutWidget';
 import UpdateOverlay, { type UpdatePhase } from './UpdateOverlay';
+import CompactStreamStats from './CompactStreamStats';
 import { captureResumeSnapshot } from '../services/sessionResume';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -47,8 +49,8 @@ const TitleBar = () => {
   // subscribing; state goes through a shallow-compared selector. This was a
   // whole-store subscription, so the title bar re-rendered on every unrelated
   // store tick.
-  const { openSettings, setShowDropsOverlay, setShowMarketplaceOverlay, setShowBadgesOverlay, setShowWhispersOverlay, toggleTheaterMode, toggleWindowFullscreen, toggleKeepOnTop, addToast } = useAppStore.getState();
-  const { isAuthenticated, currentUser, dropProgressActive, dropProgressComplete, isTheaterMode, isWindowFullscreen, streamUrl, settings, whisperImportState, updateInfo } = useAppStore(
+  const { openSettings, setShowDropsOverlay, setShowMarketplaceOverlay, setShowBadgesOverlay, setShowWhispersOverlay, toggleTheaterMode, toggleWindowFullscreen, toggleKeepOnTop, toggleHome, setHomeActiveTab, addToast } = useAppStore.getState();
+  const { isAuthenticated, currentUser, dropProgressActive, dropProgressComplete, isTheaterMode, isWindowFullscreen, isHomeActive, streamUrl, currentMediaType, settings, whisperImportState, updateInfo } = useAppStore(
     useShallow((s) => ({
       isAuthenticated: s.isAuthenticated,
       currentUser: s.currentUser,
@@ -56,7 +58,9 @@ const TitleBar = () => {
       dropProgressComplete: s.dropProgressComplete,
       isTheaterMode: s.isTheaterMode,
       isWindowFullscreen: s.isWindowFullscreen,
+      isHomeActive: s.isHomeActive,
       streamUrl: s.streamUrl,
+      currentMediaType: s.currentMediaType,
       settings: s.settings,
       whisperImportState: s.whisperImportState,
       updateInfo: s.updateInfo,
@@ -494,8 +498,33 @@ const TitleBar = () => {
           {/* Penrose Logo */}
           <PenroseLogo onClick={() => setShowAbout(true)} />
 
+          {/* Which platform the app is in. Lives here because the title bar is
+              the only chrome mounted in every view: a quiet mark-and-name
+              readout beside the logo that opens the switcher on hover. */}
+          <PlatformSwitcher />
+
           {/* Grouped action icons */}
           <div className="titlebar-icon-group">
+          {/* Home / Return — one dynamic toggle instead of a "Keep Browsing"
+              button in the player overlay and a "Return" button on the far side
+              of the Home header. Only show when a stream is playing, same rule
+              as the Compact View button: with nothing playing there is nothing
+              to browse away from or come back to. */}
+          {streamUrl && (
+            <Tooltip content={isHomeActive ? 'Return to Stream' : 'Keep Browsing'} delay={200}>
+              <button
+                onClick={() => {
+                  if (!isHomeActive) setHomeActiveTab(isAuthenticated ? 'following' : 'recommended');
+                  toggleHome();
+                }}
+                className="titlebar-icon-btn"
+                aria-label={isHomeActive ? 'Return to Stream' : 'Keep Browsing'}
+              >
+                {isHomeActive ? <Tv size={14} /> : <Home size={14} />}
+              </button>
+            </Tooltip>
+          )}
+
           {/* Drops Button with Inline Progress Badge */}
           <div
             className="relative"
@@ -736,6 +765,18 @@ const TitleBar = () => {
             </button>
           </Tooltip>
           </div>
+
+          {/* Compact View stats. Lives at the end of the LEFT cluster, not next
+              to the Compact View button on the right, because the notification
+              island is fixed to the center of the bar and would sit on top of
+              them on the smaller presets. Outside the icon-group pill too: that
+              pill's bevel means "pressable", and these are readouts. Dropped
+              below 700px so a tiny custom preset does not overflow the bar. */}
+          {isTheaterMode && streamUrl && streamUrl !== 'offline' && currentMediaType === 'live' && (
+            <div className="hidden min-[700px]:flex items-center gap-3 ml-1">
+              <CompactStreamStats />
+            </div>
+          )}
 
           {/* Update pill — appears only when an update is available. Slides in
               toward the center / notification island and settles to the right of

@@ -1,3 +1,13 @@
+/* Plyr's stylesheet must be UNLAYERED and load first: putting it in a cascade
+   layer makes every unlayered rule beat it regardless of specificity, so even
+   Tailwind's element-level preflight resets (button padding/background/color)
+   override Plyr's class-level control styles and wreck the control bar.
+   Importing it here, above everything else, keeps the original order: preflight
+   loses to Plyr on specificity, and the .video-player-container overrides
+   below win their equal-specificity ties by source order. Replaces the old
+   eager main.tsx import that existed for the same ordering reason. */
+@import 'plyr/dist/plyr.css';
+
 /* 
  * Satoshi Variable Font
  * Single file contains all weights (300-900) with smooth interpolation
@@ -146,6 +156,101 @@ html[data-motion="off"] .update-pill { animation: none; }
     inset 1px 1px 0 0 rgba(255, 255, 255, 0.08),
     inset -1px -1px 0 0 rgba(0, 0, 0, 0.2),
     0 1px 2px rgba(0, 0, 0, 0.15);
+}
+
+/* The platform anchor. Three treatments were tried and rejected before this
+   one: nothing at all (a label that happened to be clickable), the icon group's
+   raised bevel (it just looked like another icon button), and a recessed
+   trench. What is left is the quietest thing that still has a shape: a flat
+   neutral fill and no depth cue whatsoever. No bevel, no border, no inset
+   shadow, nothing that claims to be raised or sunken. It reads as a control
+   because it has a body, and it cannot be confused with the cluster beside it
+   because that cluster's whole identity is the bevel this deliberately lacks. */
+.titlebar-select {
+  /* A hairline under the content and nothing else: no fill, no pill, no depth.
+     This is form-field language rather than button language, which is the right
+     register for a control whose job is to disclose a list. Square by
+     definition, because a rounded corner on a single-sided border has nothing
+     to round against. */
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+  transition: border-color 0.15s ease;
+}
+/* The open twin holds the hover state while the flyout is up, so the anchor
+   does not go quiet the moment the pointer moves down into the menu. */
+.titlebar-select:hover,
+.titlebar-select.is-open {
+  border-bottom-color: rgba(255, 255, 255, 0.34);
+}
+
+/* The platform anchor as a glass pill.
+   Deliberately lighter than .glass-flyout. That recipe keeps a near-opaque base
+   because it hangs OVER LIVE VIDEO and has to stay readable there. This sits on
+   the title bar, where the surface behind it is already the app's own chrome, so
+   a near-opaque plate reads as a button stuck onto the bar rather than part of
+   it. A low tint that picks up what is behind it, one specular hairline for the
+   light, and no ring: a lit outline here would be the bordered-chip look, which
+   is the opposite of glass.
+   Tinted from theme vars rather than flat white, so it does not invert into a
+   glowing lozenge on a light theme. */
+.titlebar-pill {
+  border-radius: 9999px;
+  background-color: color-mix(in srgb, var(--color-background-tertiary) 46%, transparent);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.055), transparent 62%);
+  -webkit-backdrop-filter: blur(calc(6px + 12px * var(--glass-strength))) saturate(135%);
+  backdrop-filter: blur(calc(6px + 12px * var(--glass-strength))) saturate(135%);
+  /* Light from above, weight below. Both insets, so the silhouette stays a clean
+     pill instead of gaining a drawn edge. */
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.10),
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.20);
+  transition: background-color 0.16s ease, box-shadow 0.16s ease;
+}
+.titlebar-pill:hover,
+.titlebar-pill.is-open {
+  background-color: color-mix(in srgb, var(--color-background-tertiary) 66%, transparent);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.16),
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.24);
+}
+
+/* A row in the platform flyout.
+   Selection here is a lit SURFACE, not a grey plate. A flat white-alpha fill is
+   the same material as a disabled control, which is why the selected row read as
+   "greyed" rather than "chosen": nothing about it said light was falling on it.
+   Two earlier attempts are deliberately not repeated — a brand wash per row (the
+   marks are already three saturated colours, and tinting under them made the menu
+   read as a toy) and a left accent bar (it became the loudest thing in the menu
+   and made every other row look indented). So the state is carried by the same
+   grammar as the rest of the app's glass: a top-lit gradient, a specular hairline
+   along the top edge, and a soft floor under it. */
+.platform-row {
+  border-radius: 8px;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+}
+.platform-row:hover,
+.platform-row:focus-visible {
+  background-color: rgba(255, 255, 255, 0.045);
+}
+.platform-row.is-selected {
+  /* Gradient rather than a flat fill: the row is brightest where the light hits
+     it and settles toward the bottom, so it sits IN the panel instead of on it. */
+  background-image: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.13),
+    rgba(255, 255, 255, 0.06) 55%,
+    rgba(255, 255, 255, 0.045)
+  );
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.16),
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.22);
+}
+.platform-row.is-selected:hover {
+  background-image: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.16),
+    rgba(255, 255, 255, 0.075) 55%,
+    rgba(255, 255, 255, 0.055)
+  );
 }
 
 .titlebar-icon-btn {
@@ -739,6 +844,41 @@ body {
     opacity 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
+/* Small floating flyout (the title bar's platform switcher menu). A popover
+   this small hangs over live video, where .glass-panel does not work: its blur
+   AND its base both ride the Glassiness slider, so at low settings it stops
+   being a material and becomes a ghost you can read the stream straight
+   through. The recipe here separates the two. The base is near-opaque and
+   fixed (see below), which is what makes the text legible; the frost keeps a
+   deterministic floor with only the upper half riding the slider, and
+   saturating what little bleeds through keeps the backdrop glowing rather than
+   greying. Light comes from above: a top specular inset and a hairline border
+   that dims toward the bottom, grounded by a tight contact shadow plus a deep
+   soft one. At Glassiness 0% the global data-glass override strips the blur and
+   the flyout degrades to a plain solid panel like everything else. */
+.glass-flyout {
+  /* Readability does NOT ride the Glassiness slider, the same call .stats-hud
+     makes for the telemetry panel: this menu opens over live video, and a menu
+     you cannot read is not a minimal menu, it is a broken one. Fading the base
+     out with the slider is exactly what left it a ghost over a bright stream.
+     So the base stays a near-opaque theme surface at every slider position and
+     the frost, the tint and the top light are what make it read as glass. */
+  background-color: color-mix(in srgb, var(--color-background-tertiary) 92%, transparent);
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012) 45%, transparent),
+    linear-gradient(var(--color-background-secondary), var(--color-background-secondary));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom-color: rgba(255, 255, 255, 0.03);
+  border-radius: 12px;
+  -webkit-backdrop-filter: blur(calc(16px + 26px * var(--glass-strength))) saturate(140%);
+  backdrop-filter: blur(calc(16px + 26px * var(--glass-strength))) saturate(140%);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.12),
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.28),
+    0 1px 2px rgba(0, 0, 0, 0.3),
+    0 16px 40px -12px rgba(0, 0, 0, 0.65);
+}
+
 /* Glassiness floor. At 0% the slider sets html[data-glass="off"]; strip every
    remaining backdrop blur — Tailwind `backdrop-blur-*` utilities and the inline
    filters on menus, popovers, badges and media chrome that aren't individually
@@ -1195,9 +1335,14 @@ html[data-motion="reduced"] .animate-shimmer {
 }
 
 /* Custom ultra-blur for floating header */
+/* Parameterized so the radius can be A/B'd live (devtools: set
+   --sn-ultra-blur on :root). The chat header carries this class OVER the
+   scroller, so every chat scroll frame pays a resample at this radius; 24px
+   is the proposed perf value (visually near-identical against the header's
+   90% tint), 64px is the shipping look until the eyeball pass approves. */
 .backdrop-blur-ultra {
-  backdrop-filter: blur(calc(64px * var(--glass-strength))) saturate(180%);
-  -webkit-backdrop-filter: blur(calc(64px * var(--glass-strength))) saturate(180%);
+  backdrop-filter: blur(calc(var(--sn-ultra-blur, 64px) * var(--glass-strength))) saturate(180%);
+  -webkit-backdrop-filter: blur(calc(var(--sn-ultra-blur, 64px) * var(--glass-strength))) saturate(180%);
 }
 
 /* Iridescent animation for shared chat title bar */
@@ -1400,15 +1545,16 @@ html[data-motion="reduced"] .animate-shimmer {
 
 /* The fill's wavy leading edge, CARVED with a mask. Nothing is painted.
 
-   Two earlier versions both painted a 20px band across the fill's leading edge
-   and used the band's silhouette as the wave: first in opaque
-   `var(--color-background)`, then in the track's frost. Both are visible,
-   and unavoidably so - a painted band can only ever approximate whatever is
-   behind the bar, and on mobile that is a translucent blurred header. The only
-   band you cannot see is one that does not exist.
+   Earlier versions painted a 20px band across the fill's leading edge in
+   opaque `var(--color-background)` and used the band's silhouette as the wave.
+   That only looks right when whatever sits behind the bar IS that flat colour;
+   over anything else (translucent surfaces, atmospheres, a stream) it reads as
+   a black shape sliding in front of the wave. A painted band can only ever
+   approximate what is behind it; the only band you cannot see is one that does
+   not exist.
 
-   So this masks the fill instead. The catch that made the earlier attempts
-   avoid masking: the note on `wave-flow` below is right that animating
+   So this masks the fill instead. The catch that made earlier attempts avoid
+   masking: the note on `wave-flow` above is right that animating
    `mask-position` re-rasterizes the SVG every frame, once per banner, and
    MultiChat renders one per channel. But a transform works here for a reason
    that is easy to miss - the fill gradient is `linear-gradient(90deg, ...)`,
@@ -2026,23 +2172,107 @@ html[data-motion="reduced"] .animate-shimmer {
   font-weight: 800;
   letter-spacing: 0.5px;
   animation: plyr-live-pulse 2s ease-in-out infinite;
+  text-shadow: 0 0 14px color-mix(in srgb, var(--color-live) 65%, transparent);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0 4px;
 }
 
+/* Opacity only. Animating text-shadow here re-layerized the whole player tree on
+   every frame of playback; the glow is now a static value on the rule above, so
+   this runs entirely on the compositor. Visually identical. */
 @keyframes plyr-live-pulse {
   0%,
   100% {
     opacity: 1;
-    text-shadow: 0 0 10px color-mix(in srgb, var(--color-live) 50%, transparent);
   }
   50% {
     opacity: 0.8;
-    text-shadow: 0 0 20px color-mix(in srgb, var(--color-live) 80%, transparent);
   }
 }
+
+/* ===== Watching gate =====
+   `data-watching` is set on <html> while a stream is actually on screen (see
+   App.tsx). Decorative chrome animations are the app's character while you are
+   browsing, so they run freely on Home — but during playback they were the
+   single largest CPU cost in the app: an infinite `filter`/`color` pulse on the
+   title-bar gift icon plus an infinite `box-shadow` pulse on the update pill
+   repaint the window on every frame, and on a 144 Hz display that measured 0.31
+   of a CPU core on top of the video itself. Each element below keeps a static
+   value taken from inside its own animation's range, so nothing looks unstyled
+   while it is held still.
+
+   While Home is overlaid on a playing stream the attribute is cleared, because
+   then you are browsing again and the animations belong back on screen. */
+/* Full-window veil over a running stream (Home over the player, the clip
+   modal). The 85-90% tint is what dims the video into the background; the
+   blur is what turns it into ambience rather than a readable picture. The
+   radius follows the Glassiness slider like every other glass surface, so the
+   slider is the one compute knob for browsing over a stream: at the default it
+   is the same 40 px frost as before (Tailwind backdrop-blur-2xl), at 0 the
+   stream shows dimmed and sharp. Measured 2026-09-06: this layer is about a
+   quarter of a core of GPU-process time at full strength over 1080p60. */
+.sn-glass-veil {
+  -webkit-backdrop-filter: blur(calc(40px * var(--glass-strength)));
+  backdrop-filter: blur(calc(40px * var(--glass-strength)));
+}
+
+/* Minimized, as Rust reports it (html[data-sn-hidden], see
+   utils/windowVisibility.ts). Chromium cannot see the window is minimized
+   (native occlusion detection is off), so without this a minimized playing
+   stream kept every animation and every video frame compositing at the
+   display rate. Animations hold; the video element leaves the render tree
+   so nothing composites it, while playback and audio continue untouched. */
+html[data-sn-hidden] *,
+html[data-sn-hidden] *::before,
+html[data-sn-hidden] *::after {
+  animation-play-state: paused !important;
+}
+html[data-sn-hidden] video {
+  display: none !important;
+}
+
+html[data-watching] .plyr__time--live {
+  animation: none;
+}
+
+html[data-watching] .gift-shimmer-silver {
+  animation: none;
+  color: #d4d4d4;
+  filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.45));
+}
+
+html[data-watching] .gift-shimmer-gold {
+  animation: none;
+  color: #e6bf3f;
+  filter: drop-shadow(0 0 5px rgba(255, 215, 0, 0.5));
+}
+
+html[data-watching] .gift-shimmer-iridescent {
+  animation: none;
+  color: #7bd9de;
+  filter: drop-shadow(0 0 5px rgba(121, 157, 241, 0.55));
+}
+
+html[data-watching] .update-pill {
+  animation: none;
+  box-shadow:
+    0 0 13px rgba(132, 255, 87, 0.32),
+    inset 0 0 9px rgba(132, 255, 87, 0.11),
+    inset 1px 1px 0 0 rgba(255, 255, 255, 0.08);
+}
+
+/* The badge already carries this shadow statically, so only the pulse stops. */
+html[data-watching] .drops-progress-inline {
+  animation: none;
+}
+
+/* Deliberately NOT gated: shared chat and hype trains are rare, transient events
+   whose whole job is to be noticed, and a hype train is most worth noticing
+   while you are watching. They cost nothing when they are not happening,
+   because the elements are not on screen — provided they really do come off
+   screen when the event ends (see the shared-chat teardown in ChatWidget). */
 
 /* Tooltip */
 .video-player-container .plyr__tooltip {
@@ -2191,6 +2421,16 @@ html[data-motion="reduced"] .animate-shimmer {
      other tiles regardless of DOM order. Only applies while a tile is fullscreen;
      harmless for the single player, which has no sibling tiles. */
   z-index: 2147483646 !important;
+}
+
+/* The wheel/middle-click volume readout. It normally sits inside the player box,
+   but Plyr's CSS fullscreen pins .plyr to the viewport at z-index 10000000 with
+   an opaque background, which would paint straight over it. Match that geometry
+   and clear that z-index while a player in this container is fullscreen. */
+.video-player-container:has(.plyr--fullscreen-fallback) .player-volume-osd {
+  position: fixed;
+  inset: 0;
+  z-index: 10000001;
 }
 
 /* Custom overlay positioning for Plyr fullscreen mode */
@@ -3386,7 +3626,14 @@ html[data-motion="reduced"] .animate-shimmer {
    popover is ever OBSERVED to flicker over chat, flatten that one site with an
    inline backdrop-filter override; do not de-blur the class. */
 .sn-popover {
-  background-color: color-mix(in srgb, var(--color-background) 50%, transparent);
+  /* The tint rides the Glassiness slider exactly like .glass-panel's base:
+     50% at full glass (the look every theme is tuned around), fully opaque at
+     0%. It has to, because html[data-glass="off"] strips the blur at 0% on the
+     understanding that every surface has already gone solid on its own. This
+     one had a FIXED 50% alpha, so at Glassiness 0 it lost its frost and kept
+     its transparency, and chat scrolled straight through the popover. */
+  --sn-popover-tint: calc(50% + (1 - var(--glass-strength)) * 50%);
+  background-color: color-mix(in srgb, var(--color-background) var(--sn-popover-tint), transparent);
   border: 1px solid var(--color-border-subtle);
   border-radius: 8px;
   -webkit-backdrop-filter: blur(calc(64px * var(--glass-strength))) saturate(300%);
@@ -3397,6 +3644,13 @@ html[data-motion="reduced"] .animate-shimmer {
     0 8px 24px -8px rgba(0, 0, 0, 0.55);
   transition: background-color 0.2s ease, box-shadow 0.2s ease,
     border-color 0.2s ease, opacity 0.2s ease, transform 0.2s ease;
+}
+
+/* Hover lift for an .sn-popover that is itself a button (the collapsed pinned
+   message). Rides the same ramp so hovering can never re-introduce the
+   see-through state at Glassiness 0; it just deepens the tint at full glass. */
+.sn-popover-hover:hover {
+  --sn-popover-tint: calc(60% + (1 - var(--glass-strength)) * 40%);
 }
 
 /* Bonus-chest "claim me" attention. The chest button rests most of the cycle,
@@ -3544,4 +3798,283 @@ html[data-motion="reduced"] .sn-ffz-anim-leave {
   .sn-ffz-anim-leave {
     animation: none;
   }
+}
+
+/* Broadcast timeline (BroadcastTimeline.tsx) portals into Plyr's progress
+   slot; hide Plyr's own session-relative range, buffer bar and tooltip there.
+   Unlayered, at the end, so it wins the (0,2,1) tie with plyr.css by order. */
+.plyr__progress.sn-timeline-host > input[type=range],
+.plyr__progress.sn-timeline-host > progress,
+.plyr__progress.sn-timeline-host > .plyr__tooltip {
+  display: none;
+}
+
+/* The timeline itself, on Plyr's own variables so it matches the range it
+   replaces: 4px track that grows to 6px on hover, the theme's fill gradient,
+   the info-colored thumb with its glow, and the player's tooltip look. */
+.sn-timeline {
+  position: relative;
+  width: 100%;
+  height: 20px;
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+}
+.sn-timeline__track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: var(--plyr-range-track-height, 4px);
+  transform: translateY(-50%);
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.16);
+  transition: height 0.2s ease;
+}
+.sn-timeline:hover .sn-timeline__track,
+.sn-timeline--dragging .sn-timeline__track {
+  height: 6px;
+}
+.sn-timeline__available {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: var(--plyr-video-progress-buffered-background, var(--color-accent-muted));
+}
+.sn-timeline__fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: var(--plyr-range-fill-background, var(--plyr-color-main));
+}
+.sn-timeline__thumb {
+  position: absolute;
+  top: 50%;
+  width: var(--plyr-range-thumb-height, 13px);
+  height: var(--plyr-range-thumb-height, 13px);
+  transform: translate(-50%, -50%) scale(0);
+  border-radius: 50%;
+  background: var(--plyr-range-thumb-background, var(--plyr-color-main));
+  box-shadow: var(--plyr-range-thumb-shadow, none);
+  transition: transform 0.15s ease;
+  pointer-events: none;
+}
+.sn-timeline:hover .sn-timeline__thumb,
+.sn-timeline--dragging .sn-timeline__thumb {
+  transform: translate(-50%, -50%) scale(1);
+}
+/* Section boundaries of the compressed scale: a hairline always, its
+   "-1h 02m" label only while the bar is hovered or dragged. */
+.sn-timeline__band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+.sn-timeline__band--alt {
+  background: rgba(0, 0, 0, 0.28);
+}
+.sn-timeline__tick {
+  position: absolute;
+  top: 50%;
+  width: 2px;
+  height: 14px;
+  transform: translate(-50%, -50%);
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+.sn-timeline__tick-label {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 1px;
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.85);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+  transition: opacity 0.15s ease;
+}
+.sn-timeline:hover .sn-timeline__tick-label,
+.sn-timeline--dragging .sn-timeline__tick-label {
+  opacity: 1;
+}
+.sn-timeline__tip {
+  position: absolute;
+  bottom: 100%;
+  margin-bottom: 10px;
+  transform: translateX(-50%);
+  padding: 4px 8px;
+  white-space: nowrap;
+  pointer-events: none;
+  background: var(--plyr-tooltip-background, rgba(0, 0, 0, 0.85));
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--plyr-tooltip-radius, 4px);
+  color: var(--plyr-tooltip-color, #fff);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+  z-index: 3;
+}
+
+/* Fullscreen chat overlay (App.tsx). While Plyr is in CSS fullscreen (its
+   .plyr sits fixed at z-index 10000000), the docked chat panel is lifted
+   above it as a translucent fixed column: same node, no remount, no second
+   window. Width and opacity are user settings passed as custom properties.
+   Never animate backdrop-filter here (see MultiChat glass artifacts note). */
+.chat-fullscreen-overlay {
+  position: fixed !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  height: 100vh !important;
+  width: var(--fs-chat-width, 340px) !important;
+  z-index: 10000002 !important;
+  background: color-mix(in srgb, var(--color-background) var(--fs-chat-opacity, 55%), transparent) !important;
+  transition: opacity 0.2s ease, transform 0.25s ease;
+}
+.chat-fullscreen-overlay--right {
+  right: 0;
+  border-left: 1px solid color-mix(in srgb, var(--color-border-subtle) 60%, transparent);
+}
+.chat-fullscreen-overlay--left {
+  left: 0;
+  border-right: 1px solid color-mix(in srgb, var(--color-border-subtle) 60%, transparent);
+}
+.chat-fullscreen-overlay[data-fs-hidden="true"] {
+  opacity: 0;
+  pointer-events: none;
+}
+.chat-fullscreen-overlay--right[data-fs-hidden="true"] {
+  transform: translateX(12px);
+}
+.chat-fullscreen-overlay--left[data-fs-hidden="true"] {
+  transform: translateX(-12px);
+}
+
+/* ---------------------------------------------------------------------------
+   Chat overlay window (#/chat-overlay). The window itself is transparent; this
+   frame is the only painted thing. ONE alpha (--sn-overlay-alpha, the user's
+   slider) drives everything that is chrome rather than message: the tint, the
+   single hairline, the scrollbar, the message dividers, the row stripes and
+   the hover strip's ground. At 0 nothing but the rows is left on screen.
+   No backdrop blur: nothing of the page sits behind a transparent window,
+   so a filter here is pure compositor cost for no visible result.
+   --------------------------------------------------------------------------- */
+.sn-chat-overlay-frame {
+  --sn-overlay-alpha: 0.7;
+  border-radius: 14px;
+  border: 0;
+  background-color: color-mix(in srgb, var(--color-background) calc(var(--sn-overlay-alpha) * 100%), transparent);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, calc(0.04 * var(--sn-overlay-alpha))), rgba(255, 255, 255, 0) 30%);
+  /* One hairline, never a border plus a bevel (that read as two edges). */
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, calc(0.10 * var(--sn-overlay-alpha))),
+    0 12px 32px -10px rgba(0, 0, 0, calc(0.6 * var(--sn-overlay-alpha)));
+  transition: box-shadow 0.2s ease;
+}
+/* Interaction feedback only while hovered and clickable; it fades with the
+   slider too so a fully clear overlay stays clear. */
+.sn-chat-overlay-frame[data-chrome="on"][data-clickthrough="off"] {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--color-accent) calc(45% * var(--sn-overlay-alpha)), transparent),
+    0 12px 32px -10px rgba(0, 0, 0, calc(0.6 * var(--sn-overlay-alpha)));
+}
+/* The control strip keeps a floor of contrast while it is showing, or the
+   buttons would be unreadable on a clear overlay; hidden at rest anyway. */
+.sn-chat-overlay-chrome {
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  background-color: color-mix(in srgb, var(--color-background) calc(max(var(--sn-overlay-alpha), 0.35) * 55%), transparent);
+  border-bottom: 1px solid rgba(255, 255, 255, calc(0.06 * max(var(--sn-overlay-alpha), 0.35)));
+}
+.sn-chat-overlay-frame[data-chrome="on"] .sn-chat-overlay-chrome {
+  opacity: 1;
+  transform: none;
+}
+/* Rows: legible over anything, and every piece of chrome inside the feed
+   follows the slider. */
+.sn-overlay-feed {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+}
+.sn-overlay-feed img {
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.5));
+}
+.sn-overlay-feed .border-borderSubtle,
+.sn-overlay-feed .border-borderLight,
+.sn-overlay-feed [class*="border-white/"] {
+  border-color: rgba(255, 255, 255, calc(0.09 * var(--sn-overlay-alpha))) !important;
+}
+.sn-overlay-feed .chat-striped > .chat-message-row:nth-child(even) {
+  background-color: color-mix(in srgb, var(--color-surface) calc(var(--sn-overlay-alpha) * 100%), transparent);
+}
+.sn-overlay-feed .overflow-y-auto {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, calc(0.28 * var(--sn-overlay-alpha))) transparent;
+}
+.sn-overlay-feed .overflow-y-auto::-webkit-scrollbar {
+  width: 6px;
+}
+.sn-overlay-feed .overflow-y-auto::-webkit-scrollbar-track {
+  background: transparent;
+}
+.sn-overlay-feed .overflow-y-auto::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, calc(0.28 * var(--sn-overlay-alpha)));
+  border-radius: 3px;
+}
+.sn-overlay-slider {
+  accent-color: var(--color-accent);
+  opacity: 0.85;
+}
+
+/* Fullscreen chat overlay column: same glass grammar as the overlay window,
+   plus a light frost since the video really is behind it in this WebView. */
+.chat-fullscreen-overlay {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 25%) !important;
+  box-shadow:
+    inset 1px 0 0 0 rgba(255, 255, 255, 0.10),
+    0 0 40px -10px rgba(0, 0, 0, 0.6);
+  -webkit-backdrop-filter: blur(calc(10px * var(--glass-strength))) saturate(140%);
+  backdrop-filter: blur(calc(10px * var(--glass-strength))) saturate(140%);
+}
+.chat-fullscreen-overlay--left {
+  box-shadow:
+    inset -1px 0 0 0 rgba(255, 255, 255, 0.10),
+    0 0 40px -10px rgba(0, 0, 0, 0.6);
+}
+
+/* Split-pane strip (MultiChat custom splits): a glass tile, not a bar. The
+   focused pane shows an accent underline; the rest stay quiet. */
+.sn-pane-strip {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015));
+  border-bottom: 1px solid var(--color-border-subtle);
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
+}
+.sn-pane-strip[data-focused="true"] {
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.08),
+    inset 0 -2px 0 0 color-mix(in srgb, var(--color-accent) 70%, transparent);
+}
+
+/* AutoMod queue strip above the composer: amber edge, glass body. */
+.sn-automod-strip {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01));
+  border-top: 1px solid var(--color-border-subtle);
+  box-shadow: inset 3px 0 0 0 color-mix(in srgb, #f59e0b 75%, transparent);
+}
+
+/* History rows loaded on join (metadata.from_backfill) at the user's chosen
+   opacity; live rows stay at 1. */
+.chat-message-row.is-backfill {
+  opacity: var(--sn-backfill-opacity, 1);
 }

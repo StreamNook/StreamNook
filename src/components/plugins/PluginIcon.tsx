@@ -10,7 +10,7 @@
 import { useState } from 'react';
 import { Puzzle } from 'lucide-react';
 import type { PluginTier } from '../../types/plugins';
-import streamNookLogo from '../../assets/streamnook-logo.png';
+import streamNookLogo from '../../assets/streamnook-logo-128.webp';
 
 // Canonical bevel recipe lives in globals.css as --bevel-tile.
 const TILE_BEVEL = 'var(--bevel-tile)';

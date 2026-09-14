@@ -1,20 +1,23 @@
-// Single source of truth for the order badges render in, so the profile Overview
-// card and chat always agree. The canonical order, left to right (badges sit
-// before the username, so "first" = leftmost = furthest from the name):
+// Single source of truth for the order badges render in on chat ROWS (in-app
+// chat and the overlay renderer). The canonical order, left to right (badges sit
+// before the username, so "last" = rightmost = adjacent to the name; YouTube rows
+// put badges AFTER the name, where "last" is still the rightmost slot):
 //
-//   1. StreamNook member badge      — who you are on StreamNook (takes the lead spot)
-//   2. Channel-contextual Twitch     — your standing in THIS channel: subscriber,
+//   1. Channel-contextual Twitch     - your standing in THIS channel: subscriber,
 //      badges (chat only)              predictions/poll, bits, founder, etc. Dynamic.
-//   3. Global Twitch badges          — your portable Twitch identity: partner,
+//   2. Global Twitch badges          - your portable Twitch identity: partner,
 //                                       prime/turbo, staff, etc.
-//   4. 7TV badge
-//   5. Third-party badges            — BTTV / FFZ / Chatterino / Homies / BTTV Pro
+//   3. 7TV badge
+//   4. Third-party badges            - BTTV / FFZ / Chatterino / Homies / BTTV Pro
 //                                       (any order among themselves)
+//   5. StreamNook member badge       - who you are on StreamNook. Rightmost, next
+//                                       to the name, where readers look first.
 //
-// The Overview card has no channel context, so group 2 never appears there; it
-// renders 1, 3, 4, 5. Both surfaces order the tiers by laying their JSX blocks out
-// in this sequence; this module owns the only piece that needs real logic — the
-// split of a chatter's Twitch badges into the channel-contextual vs global tiers.
+// The profile card is exempt: it groups badges by PROVIDER in labeled sections
+// and deliberately leads with StreamNook (see UserProfileCard's badges panel).
+// Chat surfaces order the tiers by laying their JSX blocks out in this sequence;
+// this module owns the only piece that needs real logic: the split of a
+// chatter's Twitch badges into the channel-contextual vs global tiers.
 
 // Twitch badge SET ids that are scoped to the current channel (different image /
 // meaning per channel) rather than global identity. Drives both badge ordering

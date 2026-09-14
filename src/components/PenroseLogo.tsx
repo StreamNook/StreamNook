@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import streamnookLogo from '../assets/streamnook-logo.png';
+import streamnookLogo from '../assets/streamnook-logo-128.webp';
 import { Tooltip } from './ui/Tooltip';
 
 interface PenroseLogoProps {

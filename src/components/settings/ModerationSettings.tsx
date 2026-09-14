@@ -80,12 +80,54 @@ const ModerationSettings = () => {
   return (
     <div className="space-y-8">
       <SettingsSection
+        id="settings-section-streamer-mode"
+        label="Streamer Mode"
+        description="While you are live, hide what should not be on stream: viewer counts in the chat header, link previews are muted, rows from restricted (low-trust) users are hidden, and highlight sounds stay silent. Auto watches for OBS, Streamlabs, XSplit, Twitch Studio and vMix; detection runs in the Rust backend, nothing polls when it is off."
+      >
+        <SettingsRow title="Streamer mode" description="Off, always on, or automatic while broadcasting software is running.">
+          <SegmentedSelect<'off' | 'on' | 'auto'>
+            value={settings.streamer_mode?.mode ?? 'off'}
+            onChange={(mode) => updateSettings({ ...settings, streamer_mode: { ...settings.streamer_mode, mode } })}
+            options={[
+              { value: 'off', label: 'Off' },
+              { value: 'auto', label: 'Auto' },
+              { value: 'on', label: 'On' },
+            ]}
+          />
+        </SettingsRow>
+      </SettingsSection>
+
+      <SettingsSection
         label="Moderation Actions"
-        description="How you act on a chatter from chat. Buttons: the classic click delete/timeout/ban on the message hover dock (text stays selectable). Drag: grab a message anywhere and drop it on a color-coded action bucket — profile and whisper for everyone, plus delete, timeout, and ban for mods (text selection is off in this mode; use Copy). Both enables both. Mod actions require mod or broadcaster status in the channel."
+        description="How you delete, time out, or ban straight from a message, and which timeout lengths are one click away. Mod actions only appear in channels where you are a mod or the broadcaster."
       >
         <SettingsRow
-          title="Action Style"
-          description="Choose how moderation actions are triggered in chat."
+          title="Timeout presets"
+          description="The durations the timeout button offers when you hover a message. Seconds, comma separated: 60, 600, 3600, 86400 shows as 1m, 10m, 1h, 24h."
+          help="Up to eight presets, longest 14 days (1209600). Leave it as is for the classic 1s, 10m, 1h, 24h."
+        >
+          <input
+            type="text"
+            defaultValue={(settings.moderation?.timeout_presets ?? [1, 600, 3600, 86400]).join(', ')}
+            onBlur={(e) => {
+              const parsed = e.target.value
+                .split(/[,\s]+/)
+                .map((v) => parseInt(v, 10))
+                .filter((n) => Number.isFinite(n) && n >= 1 && n <= 1209600)
+                .slice(0, 8);
+              updateSettings({
+                ...settings,
+                moderation: { ...settings.moderation, timeout_presets: parsed.length ? parsed : undefined },
+              });
+            }}
+            className="glass-input w-56 px-2.5 py-1.5 text-sm text-textPrimary"
+            spellCheck={false}
+          />
+        </SettingsRow>
+        <SettingsRow
+          title="How you act on a message"
+          description="Buttons show delete, timeout, and ban when you hover a message; Drag lets you pick a message up and drop it on a color-coded action bucket; Both gives you both."
+          help="Buttons keep message text selectable. In Drag mode text selection is off, so use Copy instead. Everyone gets profile and whisper buckets; delete, timeout, and ban buckets only appear where you are a mod or the broadcaster."
         >
           <SegmentedSelect<'buttons' | 'drag' | 'both'>
             value={modActionStyle}
@@ -100,8 +142,8 @@ const ModerationSettings = () => {
 
         {modActionStyle !== 'buttons' && (
           <SettingsRow
-            title="Drag Style"
-            description="Where the action buckets appear. Beside chat: a vertical bucket column to the left of chat, with bigger tiles kept clear of the player's controls. Above chat: a compact bucket cluster just above the message, for when there's less room."
+            title="Where the drop buckets appear"
+            description="Beside chat puts a column of bigger tiles to the left of chat, clear of the player controls; Above chat puts a compact cluster right above the message for when space is tight."
           >
             <SegmentedSelect<'column' | 'bar'>
               value={modDragLayout}
@@ -115,8 +157,8 @@ const ModerationSettings = () => {
         )}
 
         <SettingsRow
-          title="Pin Action"
-          description="The inline Pin button (next to Copy on a message) is always available to moderators. This only controls whether a Pin tile ALSO appears in the drag-to-moderate gesture."
+          title="Pin from the drag gesture too"
+          description="Moderators always get a Pin button beside Copy on a message; this adds a Pin tile to the drag buckets as well."
         >
           <SegmentedSelect<'inline' | 'both'>
             value={modPinStyle}
@@ -170,11 +212,11 @@ const ModerationSettings = () => {
 
       <SettingsSection
         label="Mod Logs"
-        description="Recent moderation activity surface."
+        description="A running list of timeouts, bans, and deletions in the channel you are watching, so you can see what the mod team is doing."
       >
         <SettingsRow
-          title="Show Mod Logs panel"
-          description="Display the recent moderation actions sidebar inside chat (timeouts, bans, deletions)."
+          title="Show the mod log beside chat"
+          description="Adds a panel inside chat that lists recent timeouts, bans, and deleted messages as they happen."
           control={
             <Toggle
               enabled={settings.show_mod_logs ?? false}
@@ -188,7 +230,7 @@ const ModerationSettings = () => {
 
       <SettingsSection
         label="Mod Rooms"
-        description="Private, encrypted chat rooms for the mod teams of channels you moderate. Rooms use a separate one-time Twitch consent that only proves which channels you moderate; it cannot act on your account."
+        description="Private, encrypted chat rooms for the mod teams of channels you moderate, unlocked by a separate one-time Twitch consent that only proves which channels you moderate and cannot act on your account."
       >
         <SettingsRow
           title="Connection"
@@ -221,7 +263,7 @@ const ModerationSettings = () => {
 
       <SettingsSection
         label="Message Visibility"
-        description="Controls how moderation events appear in chat. Defaults preserve the existing strikethrough behavior."
+        description="How timeouts, bans, and deletions show up inside the chat itself. By default a removed message stays in place with a strikethrough."
       >
         <SettingsRow
           title="Announce mod actions inline"
@@ -235,7 +277,7 @@ const ModerationSettings = () => {
         />
         <SettingsRow
           title="Hide strikethrough on removed messages"
-          description="Suppress the strikethrough overlay on banned, timed-out, or deleted messages so your backlog stays pristine."
+          description="Banned, timed-out, and deleted messages stay exactly as they were, with no line through them."
           control={
             <Toggle
               enabled={mod.ignore_clear_chat ?? false}
@@ -330,11 +372,12 @@ const ModerationSettings = () => {
 
       <SettingsSection
         label="Mass Actions"
-        description="Type these in any chat input. Mod-only — both commands no-op for non-mods."
+        description="Commands you type in any chat box to act on many messages at once. They only work in channels where you are a mod; elsewhere they do nothing."
       >
         <SettingsRow
           title="/nuke"
-          description="Mass-action by phrase or /regex/flags. Pattern is the text to match. Action is delete, ban, or a duration like 10m. Past[:future] is the lookback window and an optional forward window that keeps matching new messages."
+          description="Bans, times out, or deletes every recent message that matches a word or /regex/flags, typed as /nuke <pattern> <action> <past[:future]>."
+          help="Pattern is the text to match. Action is delete, ban, or a duration like 10m. Past is how far back to look; add :future to keep catching new matches for that long after."
         >
           <div className="space-y-1.5 text-[12px] text-textSecondary leading-relaxed">
             <div>
@@ -359,7 +402,7 @@ const ModerationSettings = () => {
         </SettingsRow>
         <SettingsRow
           title="/undo"
-          description="Reverses the most recent /nuke on this channel. Bans and timeouts are reversible. Deletes are permanent — Twitch doesn't allow message un-delete."
+          description="Reverses the most recent /nuke in this channel. Bans and timeouts are lifted; deleted messages stay gone because Twitch cannot restore them."
         />
       </SettingsSection>
     </div>

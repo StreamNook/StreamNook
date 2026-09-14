@@ -414,6 +414,7 @@ const PluginsSettings = () => {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search plugins..."
+              aria-label="Search plugins"
               className="glass-input w-full rounded-lg py-2 pl-9 pr-3 text-[13px] text-textPrimary"
             />
           </div>
@@ -528,7 +529,7 @@ const PluginsSettings = () => {
       ) : (
         <SettingsSection
           label="Installed"
-          description="Each plugin runs as its own process and only gets the capabilities on its card."
+          description="The plugins you have added. Each one runs as its own process and can only do what its card lists, and you can take any permission back here."
           bare
         >
           {plugins.map((plugin) => {
@@ -755,7 +756,7 @@ const PluginsSettings = () => {
         <div className="flex flex-col gap-9">
       <SettingsSection
         label="Sources"
-        description="Where plugins come from. Each source signs its listings; the key is pinned the first time you add it, and StreamNook does not review or host what community sources list."
+        description="Where StreamNook looks for plugins to install. Add only community sources you trust, because StreamNook does not review or host what they list."
         bare
       >
         {sources.map((source) => (
@@ -822,6 +823,7 @@ const PluginsSettings = () => {
                 value={newSourceUrl}
                 onChange={(e) => setNewSourceUrl(e.target.value)}
                 placeholder="https://example.org/index.json"
+                aria-label="Source index URL"
                 className="glass-input flex-1 rounded-md px-3 py-1.5 text-[13px] text-textPrimary"
               />
               <Chip
@@ -865,7 +867,7 @@ const PluginsSettings = () => {
       {/* Develop */}
       <SettingsSection
         label="Develop"
-        description="Register a plugin straight from a folder containing plugin.toml. No signature chain applies; it is labeled Dev and gets the same capability and consent gates."
+        description="Load a plugin you are building straight from its folder (the one containing plugin.toml). It shows as Dev, skips signature checks, and still asks for the same permissions as a store plugin."
         bare
       >
         {showDevelop || localDir ? (
@@ -877,6 +879,7 @@ const PluginsSettings = () => {
                 value={localDir}
                 onChange={(e) => setLocalDir(e.target.value)}
                 placeholder="C:\path\to\my-plugin"
+                aria-label="Plugin folder path"
                 className="glass-input flex-1 rounded-md px-3 py-1.5 font-mono text-[13px] text-textPrimary"
               />
               <Chip

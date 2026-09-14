@@ -47,7 +47,16 @@ const getReplayMessageId = (m: string | { id?: string }): string | null =>
  *  The clip plays its own MP4 as always; this only reads the source broadcast's
  *  comments, because Twitch addresses them by video id + offset and has no
  *  clip-addressed equivalent. */
-function ClipChatPanel({ hasSource }: { hasSource: boolean }) {
+function ClipChatPanel({
+  hasSource,
+  channelName,
+}: {
+  hasSource: boolean;
+  /** Broadcaster of the source VOD. Threaded through so a profile opened from
+   *  clip chat resolves badges and message history against the right channel
+   *  instead of falling back to the clicked user's own channel. */
+  channelName?: string;
+}) {
   const chat = useVodReplaySnapshot();
   const error = useVodReplayStore((s) => s.error);
   const active = useVodReplayStore((s) => s.active);
@@ -95,6 +104,7 @@ function ClipChatPanel({ hasSource }: { hasSource: boolean }) {
             displayName,
             color,
             badges,
+            channelName,
             clientX: event.clientX,
             clientY: event.clientY,
           });
@@ -655,7 +665,10 @@ function ClipModalInner({
             squeezing both. */}
         {showChat && (
           <div className="relative hidden w-[340px] flex-shrink-0 self-stretch border-l border-borderSubtle lg:block">
-            <ClipChatPanel hasSource={hasClipSource} />
+            <ClipChatPanel
+              hasSource={hasClipSource}
+              channelName={clipSource?.broadcaster_login || channelLogin || undefined}
+            />
           </div>
         )}
         </div>

@@ -1,25 +1,29 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, lazy, Suspense } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
 import { IS_MOBILE, isPortrait, onOrientationChange } from './utils/platform';
 import MobileNav from './components/mobile/MobileNav';
 import { useAppStore, type WhisperImportProgress, type SettingsTab } from './stores/AppStore';
-import { useContextMenuStore } from './stores/contextMenuStore';
 import { listenForSettingsUpdates } from './utils/settingsBroadcast';
 import { trackPresence, isSupabaseConfigured, incrementStat, incrementChannelWatch, subscribeToStreamNookRegistry, subscribeToCosmeticsRegistry, subscribeToAtmospheresRegistry, refreshEntitlementRegistries } from './services/supabaseService';
+import { primeClientConfig } from './services/clientConfig';
 import { maybeClaimWatchRewards } from './services/watchRewards';
 import TitleBar from './components/TitleBar';
 import DynamicIsland from './components/DynamicIsland';
-import VideoPlayer from './components/VideoPlayer';
 import ChannelAboutReveal from './components/ChannelAboutReveal';
 import ChatWidget from './components/ChatWidget';
+import MainProviderChat from './components/MainProviderChat';
+import { activeChatSlot } from './stores/multiNookStore';
+import { streamProvider } from './utils/streamProvider';
+import { useFollowsStore, type ProviderStreamRow } from './stores/followsStore';
+import { useFavoritesStore, type FavoriteStreamRow } from './stores/favoritesStore';
+import type { ProviderId } from './types/providers';
 import { ModLogsWidget } from './components/chat/ModLogsWidget';
 import Home from './components/Home';
-import SettingsDialog from './components/SettingsDialog';
-import PublicProfileOverlay from './components/PublicProfileOverlay';
-import CommandPalette from './components/CommandPalette';
 import { useCommandPaletteHotkey } from './hooks/useCommandPaletteHotkey';
+import { usePlatformSessionCheck } from './hooks/usePlatformSessionCheck';
+import { usePlatformAccountSync } from './hooks/usePlatformAccountSync';
 import { useKeybindings } from './keybindings';
 import { useCurrentStreamStats } from './utils/useCurrentStreamStats';
 import { startSnippetSync } from './stores/snippetStore';
@@ -27,8 +31,6 @@ import PluginUiHost from './plugins-ui/PluginUiHost';
 import PluginUpdatesChecker from './components/plugins/PluginUpdatesChecker';
 import PluginOverlayOutlet from './plugins-ui/PluginOverlayOutlet';
 import { usemultiNookStore } from './stores/multiNookStore';
-import { MultiNookView } from './components/multi-nook/MultiNookView';
-import MultiNookChatSwitcher from './components/multi-nook/MultiNookChatSwitcher';
 import LoadingWidget from './components/LoadingWidget';
 import ToastManager from './components/ToastManager';
 import DeviceLoginOverlay from './components/DeviceLoginOverlay';
@@ -37,25 +39,15 @@ import EntitlementUnlockNote from './components/EntitlementUnlockNote';
 import AnnouncementsBanner from './components/AnnouncementsBanner';
 import { TooltipManager } from './components/ui/TooltipManager';
 import { Tooltip } from './components/ui/Tooltip';
-import { SearchProfileModal } from './components/SearchProfileModal';
-import DropsOverlay from './components/DropsOverlay';
-import MarketplaceOverlay from './components/MarketplaceOverlay';
 import DropProgressController from './components/plugins/DropProgressController';
 import ReminderEngine from './components/ReminderEngine';
-import BadgesOverlay from './components/BadgesOverlay';
-import EmoteSetsOverlay from './components/EmoteSetsOverlay';
 import EmoteSpotlight from './components/EmoteSpotlight';
-import BadgeDetailOverlay from './components/BadgeDetailOverlay';
-import ChangelogOverlay from './components/ChangelogOverlay';
 import WhispersWidget from './components/WhispersWidget';
 import PluginRuntimeBridge from './components/plugins/PluginRuntimeBridge';
-import SetupWizard from './components/SetupWizard';
 import Sidebar from './components/Sidebar';
-import ClipModal from './components/ClipModal';
-import ClipEditor from './components/ClipEditor';
 import TwitchOverlay from './components/TwitchOverlay';
 import ErrorBoundary from './components/ErrorBoundary';
-import { StreamContextMenu } from './components/StreamContextMenu';
+import InputContextMenuHost from './components/InputContextMenuHost';
 import ModerationDragLayer from './components/chat/ModerationDragLayer';
 import { listen } from '@tauri-apps/api/event';
 import { applyModerateEvent } from './utils/applyModerateEvent';
@@ -64,10 +56,36 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { useThemeBoot } from './boot/useThemeBoot';
 import { getLogicalInnerSize, clampToWorkArea } from './utils/windowSizing';
-import { getThemeById, applyTheme, DEFAULT_THEME_ID, getThemeByIdWithCustom, applyGlassStrength, DEFAULT_GLASS_TRANSPARENCY, applyFont, DEFAULT_FONT_ID, OLED_THEME_ID, getOledTheme } from './themes';
+import { isTitlebarDragActive } from './utils/titleBarDrag';
 import { getSelectedCompactViewPreset } from './constants/compactViewPresets';
+import { afterBoot, type BootTier } from './utils/startupScheduler';
+import { getAppVersion } from './utils/appVersion';
 
 import { Logger } from './utils/logger';
+
+// Heavy overlays load on first open instead of riding the boot bundle. Each
+// always-mounted one is gated behind an "ever opened" latch in the component
+// body; overlays App already mounts conditionally just gain a Suspense wrapper.
+const VideoPlayer = lazy(() => import('./components/VideoPlayer'));
+const SettingsDialog = lazy(() => import('./components/SettingsDialog'));
+const PublicProfileOverlay = lazy(() => import('./components/PublicProfileOverlay'));
+const CommandPalette = lazy(() => import('./components/CommandPalette'));
+const MultiNookView = lazy(() =>
+  import('./components/multi-nook/MultiNookView').then((m) => ({ default: m.MultiNookView })),
+);
+const MultiNookChatSwitcher = lazy(() => import('./components/multi-nook/MultiNookChatSwitcher'));
+const SearchProfileModal = lazy(() =>
+  import('./components/SearchProfileModal').then((m) => ({ default: m.SearchProfileModal })),
+);
+const DropsOverlay = lazy(() => import('./components/DropsOverlay'));
+const MarketplaceOverlay = lazy(() => import('./components/MarketplaceOverlay'));
+const BadgesOverlay = lazy(() => import('./components/BadgesOverlay'));
+const EmoteSetsOverlay = lazy(() => import('./components/EmoteSetsOverlay'));
+const BadgeDetailOverlay = lazy(() => import('./components/BadgeDetailOverlay'));
+const ChangelogOverlay = lazy(() => import('./components/ChangelogOverlay'));
+const SetupWizard = lazy(() => import('./components/SetupWizard'));
+const ClipModal = lazy(() => import('./components/ClipModal'));
+const ClipEditor = lazy(() => import('./components/ClipEditor'));
 interface BadgeVersion {
   id: string;
   image_url_1x: string;
@@ -124,6 +142,81 @@ function App() {
   // so without this it shows whatever it was the instant the stream opened, for
   // as long as you watch.
   useCurrentStreamStats();
+  // Main window only: popouts learn from the `platform-account-changed` broadcast
+  // rather than each running a check of their own.
+  usePlatformSessionCheck();
+  usePlatformAccountSync();
+  // First-paint signal for the hidden-until-ready main window. The Rust
+  // command lands with the visibility-gate change; until then the invoke
+  // rejects and the catch keeps this a no-op. Runs on every App mount so the
+  // runtime-recreated main window flows through the same reveal path.
+  useEffect(() => {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      void invoke('reveal_main_window').catch(() => {});
+    }));
+  }, []);
+  useEffect(() => {
+    // In-app follows for platforms with no followed-channels API of their own.
+    // The backend poller owns liveness and pushes `provider-live-update`; the
+    // initial pull just paints whatever it already knows so the sidebar isn't
+    // empty for the first poll interval after launch.
+    const follows = useFollowsStore.getState();
+    void follows.hydrate();
+    void follows.refreshLive();
+    let unlistenLive: (() => void) | undefined;
+    let unlistenFavorites: (() => void) | undefined;
+    let cancelled = false;
+    // The stream we are WATCHING ended, reported the moment the backend learns
+    // it rather than on the liveness poll's schedule. That poll needs two 60s
+    // cycles to agree, and never gets there at all if the check itself is
+    // erroring — so without this the player just froze on its last frame.
+    void listen<{ provider: ProviderId; channel: string }>(
+      'provider-stream-offline',
+      (event) => {
+        const watching = useAppStore.getState().currentStream;
+        if (!watching) return;
+        const sameChannel =
+          (watching.user_login || '').toLowerCase() ===
+          (event.payload.channel || '').toLowerCase();
+        if (streamProvider(watching) !== event.payload.provider || !sameChannel) return;
+        void useAppStore.getState().handleStreamOffline();
+      },
+    ).then((u) => {
+      if (cancelled) u();
+    });
+    void listen<{ provider: ProviderId; streams: ProviderStreamRow[] }>(
+      'provider-live-update',
+      (event) => {
+        useFollowsStore
+          .getState()
+          .setProviderLive(event.payload.provider, event.payload.streams ?? []);
+      },
+    ).then((u) => {
+      if (cancelled) u();
+      else unlistenLive = u;
+    });
+
+    // The same arrangement for FAVORITES, which are a separate watchlist: a
+    // favorite need not be followed anywhere, so neither the Twitch follow
+    // poller nor the provider one above can see it. The event carries the whole
+    // snapshot across every platform, so the store replaces its map wholesale.
+    void useFavoritesStore.getState().hydrate();
+    void listen<{ source: string; streams: FavoriteStreamRow[] }>(
+      'favorites-live-update',
+      (event) => {
+        useFavoritesStore.getState().setLive(event.payload.streams ?? []);
+      },
+    ).then((u) => {
+      if (cancelled) u();
+      else unlistenFavorites = u;
+    });
+
+    return () => {
+      cancelled = true;
+      unlistenLive?.();
+      unlistenFavorites?.();
+    };
+  }, []);
   useEffect(() => {
     // Subscribe to snippet-store updates from MultiChat popouts so changes
     // made over there propagate here without reload.
@@ -147,8 +240,10 @@ function App() {
     // exists — so a revoked/expired token showed "connected" while earning
     // nothing. validate_drops_token clears stored tokens ONLY on a real 401
     // (a transport error rejects and changes nothing), so being offline at
-    // boot is safe. Fire and forget.
-    invoke('validate_drops_token').catch(() => {});
+    // boot is safe. Fire and forget, staggered off the boot path.
+    return afterBoot(2000, () => {
+      invoke('validate_drops_token').catch(() => {});
+    });
   }, []);
   // Actions are stable for the store's lifetime, so read them without
   // subscribing. State goes through a shallow-compared selector. Previously this
@@ -210,6 +305,21 @@ function App() {
   const chatAutoHide = settings.chat_auto_hide ?? false;
   const isSideChat = chatPlacement === 'right' || chatPlacement === 'left';
   const autoHideActive = chatAutoHide && isSideChat;
+  // Fullscreen chat overlay: while Plyr is in CSS fullscreen the docked chat
+  // panel is lifted above the fullscreen layer as a translucent fixed column
+  // (globals.css .chat-fullscreen-overlay). Same DOM node, no remount, no
+  // second WebView. Hidden with the player controls unless hovered/focused.
+  const isPlayerFullscreen = useAppStore((s) => s.isPlayerFullscreen);
+  const playerOverlayVisible = useAppStore((s) => s.playerOverlayVisible);
+  const fsChat = settings.fullscreen_chat;
+  const fsOverlayActive = isPlayerFullscreen && (fsChat?.mode ?? 'overlay') === 'overlay';
+  const [fsChatHeld, setFsChatHeld] = useState(false);
+  const fsChatSide: 'left' | 'right' =
+    fsChat?.side && fsChat.side !== 'auto' ? fsChat.side : chatPlacement === 'left' ? 'left' : 'right';
+  const fsChatHidden = fsOverlayActive && (fsChat?.auto_hide ?? true) && !playerOverlayVisible && !fsChatHeld;
+  useEffect(() => {
+    if (!isPlayerFullscreen) setFsChatHeld(false);
+  }, [isPlayerFullscreen]);
   const [chatRevealed, setChatRevealed] = useState(false);
   const chatRevealTimer = useRef<number | null>(null);
   // A streamnook:// deep link that landed while the app was still booting. Played
@@ -229,6 +339,10 @@ function App() {
     return () => { if (chatRevealTimer.current) window.clearTimeout(chatRevealTimer.current); };
   }, [autoHideActive]);
   const isMultiNookActive = usemultiNookStore((s) => s.isMultiNookActive);
+  // Which tile the grid's chat pane is showing. Only read to decide WHICH chat
+  // surface renders; ChatWidget still synthesizes the Twitch case itself.
+  const multiNookSlots = usemultiNookStore((s) => s.slots);
+  const activeChatChannelId = usemultiNookStore((s) => s.activeChatChannelId);
   const isChatHidden = usemultiNookStore((s) => s.isChatHidden);
   const slots = usemultiNookStore((s) => s.slots);
   const visibleSlotsLength = slots.filter((s) => !s.isMinimized).length;
@@ -255,6 +369,38 @@ function App() {
   // doesn't persist last_seen_version (the version isn't really installed).
   const devForcedChangelogRef = useRef(false);
   const [showSetupWizard, setShowSetupWizard] = useState(false);
+
+  // Narrow gate subscriptions for the lazy overlays below — never the whole store.
+  const isSettingsOpen = useAppStore((s) => s.isSettingsOpen);
+  const isProfileViewerOpen = useAppStore((s) => !!s.profileViewerUserId);
+  const showDropsOverlay = useAppStore((s) => s.showDropsOverlay);
+  const showMarketplaceOverlay = useAppStore((s) => s.showMarketplaceOverlay);
+  const showEmoteSetsOverlay = useAppStore((s) => s.showEmoteSetsOverlay);
+  const isCommandPaletteOpen = useAppStore((s) => s.isCommandPaletteOpen);
+  const isClipModalOpen = useAppStore((s) => s.clipModal !== null);
+  const isClipEditorOpen = useAppStore((s) => s.clipEditor !== null);
+
+  // "Ever opened" latches: each always-mounted overlay owns its open/close
+  // animation, so once its gate first opens it stays mounted. Setting state
+  // during render is the StrictMode-safe way to latch without an effect.
+  const [settingsEverOpened, setSettingsEverOpened] = useState(false);
+  if (isSettingsOpen && !settingsEverOpened) setSettingsEverOpened(true);
+  const [profileViewerEverOpened, setProfileViewerEverOpened] = useState(false);
+  if (isProfileViewerOpen && !profileViewerEverOpened) setProfileViewerEverOpened(true);
+  const [dropsEverOpened, setDropsEverOpened] = useState(false);
+  if (showDropsOverlay && !dropsEverOpened) setDropsEverOpened(true);
+  const [marketplaceEverOpened, setMarketplaceEverOpened] = useState(false);
+  if (showMarketplaceOverlay && !marketplaceEverOpened) setMarketplaceEverOpened(true);
+  const [emoteSetsEverOpened, setEmoteSetsEverOpened] = useState(false);
+  if (showEmoteSetsOverlay && !emoteSetsEverOpened) setEmoteSetsEverOpened(true);
+  const [commandPaletteEverOpened, setCommandPaletteEverOpened] = useState(false);
+  if (isCommandPaletteOpen && !commandPaletteEverOpened) setCommandPaletteEverOpened(true);
+  const [clipModalEverOpened, setClipModalEverOpened] = useState(false);
+  if (isClipModalOpen && !clipModalEverOpened) setClipModalEverOpened(true);
+  const [clipEditorEverOpened, setClipEditorEverOpened] = useState(false);
+  if (isClipEditorOpen && !clipEditorEverOpened) setClipEditorEverOpened(true);
+  const [setupWizardEverOpened, setSetupWizardEverOpened] = useState(false);
+  if (showSetupWizard && !setupWizardEverOpened) setSetupWizardEverOpened(true);
 
   // Track previous placement and chat size to detect changes
   const prevChatPlacementRef = useRef(chatPlacement);
@@ -518,29 +664,11 @@ function App() {
     }
   }, [isBooting]);
 
-  // Global Context Menu Blocker (exempting inputs)
+  // The context-menu blocker lives in InputContextMenuHost (rendered below), so
+  // MultiChat popouts get the same menu — they render MultiChatWindow, not App.
+  //
+  // Global Keydown Blocker for Developer Tools (F12, Ctrl+Shift+I, Cmd+Option+I)
   useEffect(() => {
-    const handleContextMenu = (e: MouseEvent) => {
-        const target = e.target as HTMLElement;
-        const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('input, textarea, [contenteditable]');
-        
-        if (isInput) {
-            e.preventDefault();
-            useContextMenuStore.getState().openInputMenu(e, target as HTMLElement);
-            return;
-        }
-
-        const selection = window.getSelection();
-        if (selection && selection.toString().trim().length > 0) {
-            e.preventDefault();
-            useContextMenuStore.getState().openSelectionMenu(e);
-            return;
-        }
-
-        e.preventDefault();
-    };
-    
-    // Global Keydown Blocker for Developer Tools (F12, Ctrl+Shift+I, Cmd+Option+I)
     // Disabled automatically in development environment
     const handleKeyDown = (e: KeyboardEvent) => {
         if (import.meta.env.DEV) return;
@@ -553,10 +681,8 @@ function App() {
         }
     };
 
-    document.addEventListener('contextmenu', handleContextMenu);
     document.addEventListener('keydown', handleKeyDown);
     return () => {
-        document.removeEventListener('contextmenu', handleContextMenu);
         document.removeEventListener('keydown', handleKeyDown);
     };
   }, []);
@@ -570,7 +696,7 @@ function App() {
         const { currentUser, isAuthenticated } = useAppStore.getState();
         let appVersion;
         try {
-          appVersion = await invoke<string>('get_current_app_version');
+          appVersion = await getAppVersion();
         } catch (e) {
           Logger.warn('[App] Failed to get app version for presence:', e);
         }
@@ -584,9 +710,13 @@ function App() {
       }
     };
 
-    initPresence();
+    // Presence is telemetry, not boot-critical: stagger it clear of startup.
+    const cancel = afterBoot(5000, () => {
+      void initPresence();
+    });
 
     return () => {
+      cancel();
       if (cleanupPresence) {
         cleanupPresence();
       }
@@ -595,26 +725,41 @@ function App() {
 
   useEffect(() => {
     if (!isSupabaseConfigured()) return;
-    const cleanupRegistry = subscribeToStreamNookRegistry();
-    const cleanupCosmetics = subscribeToCosmeticsRegistry();
-    const cleanupAtmospheres = subscribeToAtmospheresRegistry();
+    // Deferred registry init: the subscriptions start in the 5s stagger tier,
+    // so the cleanup reads the unsubs from variables the deferred task fills in.
+    let cleanupRegistry: (() => void) | null = null;
+    let cleanupCosmetics: (() => void) | null = null;
+    let cleanupAtmospheres: (() => void) | null = null;
+    let onFocus: (() => void) | null = null;
 
-    // When the user returns to the app (e.g. after finishing a purchase on
-    // streamnook.app in their browser), re-pull entitlements so a freshly
-    // granted badge/perk shows right away even if the realtime channel happened
-    // to miss the event. Throttled so rapid alt-tabbing doesn't spam the network.
-    let lastResync = 0;
-    const onFocus = () => {
-      const now = Date.now();
-      if (now - lastResync < 10_000) return;
-      lastResync = now;
-      refreshEntitlementRegistries();
-    };
-    window.addEventListener('focus', onFocus);
+    const cancel = afterBoot(5000, () => {
+      // Warm the server-controlled switches before the first privileged write, so
+      // a login-time write does not pay the manifest fetch (and does not fall
+      // back to the legacy path just because the config had not landed yet).
+      primeClientConfig();
+
+      cleanupRegistry = subscribeToStreamNookRegistry();
+      cleanupCosmetics = subscribeToCosmeticsRegistry();
+      cleanupAtmospheres = subscribeToAtmospheresRegistry();
+
+      // When the user returns to the app (e.g. after finishing a purchase on
+      // streamnook.app in their browser), re-pull entitlements so a freshly
+      // granted badge/perk shows right away even if the realtime channel happened
+      // to miss the event. Throttled so rapid alt-tabbing doesn't spam the network.
+      let lastResync = 0;
+      onFocus = () => {
+        const now = Date.now();
+        if (now - lastResync < 10_000) return;
+        lastResync = now;
+        refreshEntitlementRegistries();
+      };
+      window.addEventListener('focus', onFocus);
+    });
 
     return () => {
+      cancel();
       cleanupRegistry?.(); cleanupCosmetics?.(); cleanupAtmospheres?.();
-      window.removeEventListener('focus', onFocus);
+      if (onFocus) window.removeEventListener('focus', onFocus);
     };
   }, []);
 
@@ -640,10 +785,18 @@ function App() {
     });
     cleanupFunctions.push(() => unlistenSettingsSync?.());
 
+    // Stagger helper scoped to this effect: schedules a task in a boot tier and
+    // wires its cancel into this effect's cleanup (mirroring the isMounted
+    // pattern the listeners below already use).
+    const deferred = (tier: BootTier, task: () => void) => {
+      const cancel = afterBoot(tier, task);
+      if (isMounted) cleanupFunctions.push(cancel);
+      else cancel();
+    };
+
     const initializeApp = async () => {
       try {
-        await loadSettings();
-        await checkAuthStatus();
+        await Promise.allSettled([loadSettings(), checkAuthStatus()]);
       } finally {
         // Auth is now resolved (logged in or confirmed logged out), or a boot
         // step failed — either way drop the boot overlay so the home screen
@@ -664,21 +817,20 @@ function App() {
       localStorage.removeItem('streamnook_notified_available_badges');
 
       // Load active drops cache on startup (cached for 1 hour)
-      loadActiveDropsCache();
+      deferred(2000, () => {
+        loadActiveDropsCache();
+      });
 
       // Auto-sync universal cache if stale (>24 hours since last sync)
       // This downloads the latest badge manifest from GitHub in the background
-      import('./services/universalCacheService').then(({ autoSyncUniversalCacheIfStale }) => {
-        autoSyncUniversalCacheIfStale();
+      deferred(5000, () => {
+        import('./services/universalCacheService').then(({ autoSyncUniversalCacheIfStale }) => {
+          autoSyncUniversalCacheIfStale();
+        });
       });
 
-      // Connect the real-time badge-drop feed (WebSocket + latest.json fallback).
-      // New Twitch badges are detected server-side on the bot and pushed here, so
-      // drops surface within minutes; a startup poll catches any missed while
-      // the app was closed.
-      import('./services/badgeSocketService').then(({ startBadgeFeed }) => {
-        startBadgeFeed();
-      });
+      // The badge-drop feed (WebSocket + latest.json fallback) is Rust's
+      // (services/badge_feed.rs): it must outlive this window.
 
       // Pre-fetch cosmetics for current user
       const { currentUser, isAuthenticated } = useAppStore.getState();
@@ -712,20 +864,24 @@ function App() {
 
         // Revalidate in place (no blank window — unlike a deep clear-then-refetch).
         // The active account also warms the FULL profile cache so opening Profile
-        // Settings is instant; others warm on demand when switched to.
-        revalidateOwnCosmetics(selfId)
-          .then(() => getFullProfileWithFallback(selfId, selfLogin, selfId, selfLogin))
-          .catch((err: Error) =>
-            Logger.error('[App] Failed to pre-fetch user profile:', err),
-          );
-        getResolvedIdentity(selfId).catch(() => {});
-        getIdentityWithCache(selfId).catch(() => {});
-        for (const id of accountIds) {
-          if (id === selfId) continue;
-          revalidateOwnCosmetics(id).catch(() => {});
-          getResolvedIdentity(id).catch(() => {});
-          getIdentityWithCache(id).catch(() => {});
-        }
+        // Settings is instant; others warm on demand when switched to. Network
+        // revalidation is staggered: the disk seeds above already painted, so
+        // this only refreshes them and must not compete with boot fetches.
+        deferred(2000, () => {
+          revalidateOwnCosmetics(selfId)
+            .then(() => getFullProfileWithFallback(selfId, selfLogin, selfId, selfLogin))
+            .catch((err: Error) =>
+              Logger.error('[App] Failed to pre-fetch user profile:', err),
+            );
+          getResolvedIdentity(selfId).catch(() => {});
+          getIdentityWithCache(selfId).catch(() => {});
+          for (const id of accountIds) {
+            if (id === selfId) continue;
+            revalidateOwnCosmetics(id).catch(() => {});
+            getResolvedIdentity(id).catch(() => {});
+            getIdentityWithCache(id).catch(() => {});
+          }
+        });
       }
 
       // Set up event listeners for drops and channel points
@@ -865,33 +1021,12 @@ function App() {
         addToast('Reserved stream went offline - token returned to rotation', 'info');
       });
 
-      // Listen for streamnook:// deep links (e.g. browser-triggered "Watch Stream" buttons)
-      try {
-        const { onOpenUrl } = await import('@tauri-apps/plugin-deep-link');
-        const unlistenDeepLink = await onOpenUrl((urls: string[]) => {
-          for (const url of urls) {
-            Logger.debug('[App] Deep link received:', url);
-            // Parse streamnook://watch/{channel}
-            const match = url.match(/^streamnook:\/\/watch\/(.+)$/i);
-            if (match) {
-              const channel = match[1].replace(/\/$/, ''); // strip trailing slash
-              Logger.info(`[App] Deep link: opening stream for ${channel}`);
-              const { startStream } = useAppStore.getState();
-              startStream(channel);
-              // Bring window to front
-              getCurrentWindow().setFocus().catch(() => {});
-            }
-          }
-        });
-        
-        if (isMounted) {
-          cleanupFunctions.push(unlistenDeepLink);
-        } else {
-          unlistenDeepLink();
-        }
-      } catch (e) {
-        Logger.warn('[App] Deep link plugin not available:', e);
-      }
+      // streamnook:// links are owned by Rust: its deep-link handler emits
+      // `streamnook:watch` (see the effect near the top of this component),
+      // and cold starts drain `take_pending_watch_link`. A second
+      // subscription here through the plugin's onOpenUrl started every warm
+      // link twice (two relay starts 20 to 40 ms apart, the outgoing hls.js
+      // instance erroring against a swapped upstream) until 2026-09-06.
     };
 
     initializeApp();
@@ -918,6 +1053,24 @@ function App() {
 
   // Theme/glass/font application is shared with the mobile shell.
   useThemeBoot();
+  // Tell CSS when a stream is actually on screen. Decorative chrome animations
+  // (the title-bar gift pulse, the update pill's glow, the shared-chat shimmer)
+  // are part of how the app feels while you browse, so they run freely on Home.
+  // During playback they are pure cost: they repaint the window every frame on
+  // top of the video, which measured 0.31 of a CPU core on a 144 Hz display.
+  // globals.css holds them still under `html[data-watching]`. Home overlaying a
+  // running stream counts as browsing, not watching, so the flag clears there.
+  useEffect(() => {
+    // 'offline' is the offline-chat sentinel, not a playing stream, so it does
+    // not count: there is no video on screen to spend the frames on.
+    const hasVideo = (!!streamUrl && streamUrl !== 'offline') || isMultiNookActive;
+    const watching = hasVideo && !isHomeActive;
+    if (watching) {
+      document.documentElement.dataset.watching = 'true';
+    } else {
+      delete document.documentElement.dataset.watching;
+    }
+  }, [streamUrl, isMultiNookActive, isHomeActive]);
 
   // Check if we need to show the first-time setup wizard. Drive purely off
   // setup_complete: if it's false, show the wizard. (Gate on `quality` only as a
@@ -953,7 +1106,7 @@ function App() {
       if (e.ctrlKey && e.shiftKey && (e.key === 'C' || e.key === 'c')) {
         e.preventDefault();
         try {
-          const currentVersion = await invoke<string>('get_current_app_version');
+          const currentVersion = await getAppVersion();
           setChangelogVersion(currentVersion);
           setShowChangelog(true);
         } catch (err) {
@@ -970,7 +1123,7 @@ function App() {
     const checkForVersionChange = async () => {
       try {
         // Get the current app version
-        const currentVersion = await invoke<string>('get_current_app_version');
+        const currentVersion = await getAppVersion();
         const { settings, logoutFromTwitch, isAuthenticated } = useAppStore.getState();
         const lastSeenVersion = settings.last_seen_version;
 
@@ -1271,8 +1424,12 @@ function App() {
     incrementStat(currentUser.user_id, 'streams_watched', 1);
 
     // Claim any active watch-to-earn event reward this stream qualifies for.
-    // Check on stream start, then every minute below.
-    void maybeClaimWatchRewards(
+    // Check on stream start, then every minute below. TWITCH ONLY: the rewards
+    // are keyed to Twitch channels and the category fallback is Helix, so on a
+    // provider stream this only produced a failed lookup on every tick.
+    const rewardsEligible =
+      streamProvider(useAppStore.getState().currentStream) === 'twitch';
+    if (rewardsEligible) void maybeClaimWatchRewards(
       currentUser.user_id,
       useAppStore.getState().currentStream?.user_login,
       useAppStore.getState().currentStream?.game_name,
@@ -1335,9 +1492,11 @@ function App() {
       if (theaterMode || !lockEnabled || (!currentStreamUrl && !currentIsMultiNookActive)) return;
 
       // Prevent re-entrant calls, and stand down while a placement change is
-      // mid-resize. That handler preserves the video dimensions; running the
-      // lock formula here against a half-applied window size shrinks it.
-      if (isAdjustingRef.current || placementResizeInProgressRef.current) return;
+      // mid-resize (that handler preserves the video dimensions; running the
+      // lock formula here against a half-applied window size shrinks it) or a
+      // titlebar drag holds the OS modal move loop (a setSize inside it
+      // corrupts the loop's cached rect).
+      if (isAdjustingRef.current || placementResizeInProgressRef.current || isTitlebarDragActive()) return;
       isAdjustingRef.current = true;
 
       try {
@@ -1362,7 +1521,7 @@ function App() {
         // Logical pixels: innerSize() is physical, and every offset below is a CSS
         // pixel. Mixing the two both skews the formula and, once written back as a
         // LogicalSize, multiplies the window by the scale factor on every pass.
-        const { width, height } = await getLogicalInnerSize(window);
+        const { width, height, scale } = await getLogicalInnerSize(window);
 
         Logger.debug('[AspectRatio] Current window size:', width, height);
         Logger.debug('[AspectRatio] Chat size:', currentChatSize);
@@ -1414,7 +1573,7 @@ function App() {
         Logger.debug('[AspectRatio] Calculated new size:', newWidth, newHeight);
 
         // Only resize if dimensions changed significantly (more than 5px difference)
-        const clamped = await clampToWorkArea(newWidth, newHeight);
+        const clamped = await clampToWorkArea(newWidth, newHeight, scale);
         if (Math.abs(width - clamped.width) > 5 || Math.abs(height - clamped.height) > 5) {
           Logger.debug('[AspectRatio] Resizing window to:', clamped.width, clamped.height);
           selfResizeUntilRef.current = Date.now() + 300;
@@ -1456,7 +1615,7 @@ function App() {
       const multiNookCount = multiNookSlotsLengthRef.current;
 
       if (theaterMode || !lockEnabled || (!currentStreamUrl && !currentIsMultiNookActive)) return;
-      if (isAdjustingRef.current || placementResizeInProgressRef.current) return;
+      if (isAdjustingRef.current || placementResizeInProgressRef.current || isTitlebarDragActive()) return;
       isAdjustingRef.current = true;
 
       try {
@@ -1476,7 +1635,7 @@ function App() {
 
         // Logical pixels — see the settle effect above for why this conversion is
         // what stops the window from growing on every resize event.
-        const { width, height } = await getLogicalInnerSize(window);
+        const { width, height, scale } = await getLogicalInnerSize(window);
 
         const titleBarHeight = 40;
 
@@ -1519,7 +1678,7 @@ function App() {
           uiHeightOffset: uiHeightOffset,
         });
 
-        const clamped = await clampToWorkArea(newWidth, newHeight);
+        const clamped = await clampToWorkArea(newWidth, newHeight, scale);
         if (Math.abs(width - clamped.width) > 5 || Math.abs(height - clamped.height) > 5) {
           Logger.debug('[AspectRatio] Resize event - adjusting to:', clamped.width, clamped.height);
           selfResizeUntilRef.current = Date.now() + 300;
@@ -1541,8 +1700,9 @@ function App() {
           clearTimeout(debounceTimeout);
         }
         debounceTimeout = setTimeout(async () => {
-          // Never react to a resize we performed ourselves.
-          if (Date.now() < selfResizeUntilRef.current) return;
+          // Never react to a resize we performed ourselves, nor to the
+          // restore/move traffic of a titlebar drag still in the OS move loop.
+          if (Date.now() < selfResizeUntilRef.current || isTitlebarDragActive()) return;
           // Check refs for current state
           if (aspectRatioLockEnabledRef.current && !isTheaterModeRef.current && (streamUrlRef.current || isMultiNookActiveRef.current)) {
             await adjustWindowForAspectRatio();
@@ -1587,8 +1747,17 @@ function App() {
         Logger.error('Failed to check for bundle updates:', error);
       }
     };
-    checkUpdates();
+    // Update checking can wait out the boot stagger; nothing on screen needs it.
+    return afterBoot(5000, () => {
+      void checkUpdates();
+    });
   }, []);
+
+  // Warm the lazy VideoPlayer chunk once boot has settled, so the first stream
+  // start doesn't pay the chunk-load latency on top of stream resolution.
+  useEffect(() => afterBoot(5000, () => {
+    void import('./components/VideoPlayer');
+  }), []);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -1667,8 +1836,46 @@ function App() {
     };
   }, [isResizing, isResizingModLogs, chatPlacement]);
 
+  // The chat pane, rendered identically at both docked layouts below. A
+  // non-Twitch stream routes through MainProviderChat, which feeds ChatWidget
+  // the same `channelOverride` seam MultiChat panes already use.
+  //
+  // MultiNook is the second caller: its active chat can be ANY tile, so the
+  // provider comes from that slot rather than from `currentStream` (which still
+  // describes whatever the solo player last had). Routing here, rather than
+  // teaching ChatWidget about providers, is deliberate: a channelOverride inside
+  // ChatWidget's MultiNook branch would also flip its hype-train source, its
+  // VOD-replay gate and its popout header bits, none of which a grid tile wants.
+  const activeTile = isMultiNookActive
+    ? activeChatSlot(multiNookSlots, activeChatChannelId)
+    : null;
+  const activeTileProvider = activeTile?.provider ?? 'twitch';
+  const chatPane =
+    activeTile && activeTileProvider !== 'twitch' ? (
+      <MainProviderChat
+        provider={activeTileProvider}
+        channel={activeTile.channelLogin}
+        details={{
+          user_id: activeTile.channelId,
+          user_name: activeTile.channelName,
+          title: activeTile.title,
+          profile_image_url: activeTile.profileImageUrl,
+          game_name: activeTile.gameName,
+        }}
+      />
+    ) : currentStream && streamProvider(currentStream) !== 'twitch' ? (
+      <MainProviderChat
+        provider={streamProvider(currentStream)}
+        channel={currentStream.user_login}
+      />
+    ) : (
+      <ChatWidget />
+    );
+
+  // sn-app-shell: the hook a theme's light treatment paints onto (see
+  // styles/theme-prism.css); the room every glass surface sits in.
   return (
-    <div className="flex flex-col h-screen bg-background backdrop-blur-md">
+    <div className="sn-app-shell flex flex-col h-screen bg-background">
       <ErrorBoundary
         componentName="TitleBar"
         fallback={
@@ -1738,7 +1945,7 @@ function App() {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.2, ease: "easeInOut" }}
-                className="absolute inset-0 z-40 bg-background/85 backdrop-blur-2xl"
+                className={`absolute inset-0 z-40 ${streamUrl || isMultiNookActive ? 'bg-background/85 sn-glass-veil' : 'bg-background'}`}
               >
                 <ErrorBoundary componentName="Home" reportToLogService resetKeys={[isHomeActive]}>
                   <Home />
@@ -1801,7 +2008,9 @@ function App() {
                           className="w-full h-full absolute inset-0"
                         >
                           <ErrorBoundary componentName="MultiNook" reportToLogService>
-                            <MultiNookView />
+                            <Suspense fallback={null}>
+                              <MultiNookView />
+                            </Suspense>
                           </ErrorBoundary>
                         </motion.div>
                       ) : (
@@ -1814,7 +2023,9 @@ function App() {
                           className="w-full h-full absolute inset-0"
                         >
                           <ErrorBoundary componentName="Video" reportToLogService resetKeys={[streamUrl]}>
-                            <VideoPlayer key={streamUrl} />
+                            <Suspense fallback={null}>
+                              <VideoPlayer key={streamUrl} />
+                            </Suspense>
                           </ErrorBoundary>
                         </motion.div>
                       )}
@@ -1891,10 +2102,10 @@ function App() {
                           className="h-full flex-shrink-0 overflow-hidden bg-background"
                         >
                           <div className="h-full flex flex-col" style={{ width: `${chatSize}px` }}>
-                            {isMultiNookActive && <MultiNookChatSwitcher />}
+                            {isMultiNookActive && <Suspense fallback={null}><MultiNookChatSwitcher /></Suspense>}
                             <div className="flex-1 overflow-hidden relative">
                               <ErrorBoundary componentName="Chat" reportToLogService resetKeys={[streamUrl, currentMediaType]}>
-                                <ChatWidget />
+                                {chatPane}
                               </ErrorBoundary>
                             </div>
                           </div>
@@ -1930,6 +2141,7 @@ function App() {
                           className={`
                             group flex items-center justify-center flex-shrink-0 z-10
                             ${isSideChat ? 'w-1 cursor-ew-resize' : 'h-1 cursor-ns-resize'}
+                            ${fsOverlayActive ? 'hidden' : ''}
                           `}
                         >
                           <div
@@ -1943,15 +2155,26 @@ function App() {
                       </Tooltip>
                       <div
                         data-chat-panel="true"
-                        className="flex-shrink-0 flex flex-col h-full overflow-hidden bg-background"
-                        style={{
-                          [isSideChat ? 'width' : 'height']: `${chatSize}px`
-                        }}
+                        data-fs-hidden={fsChatHidden ? 'true' : undefined}
+                        onMouseEnter={fsOverlayActive ? () => setFsChatHeld(true) : undefined}
+                        onMouseLeave={fsOverlayActive ? () => setFsChatHeld(false) : undefined}
+                        onFocusCapture={fsOverlayActive ? () => setFsChatHeld(true) : undefined}
+                        className={`flex-shrink-0 flex flex-col h-full overflow-hidden bg-background ${
+                          fsOverlayActive ? `chat-fullscreen-overlay chat-fullscreen-overlay--${fsChatSide}` : ''
+                        }`}
+                        style={
+                          fsOverlayActive
+                            ? ({
+                                '--fs-chat-width': `${Math.max(240, Math.min(640, fsChat?.width ?? 340))}px`,
+                                '--fs-chat-opacity': `${Math.max(0, Math.min(100, fsChat?.opacity ?? 55))}%`,
+                              } as React.CSSProperties)
+                            : { [isSideChat ? 'width' : 'height']: `${chatSize}px` }
+                        }
                       >
-                        {isMultiNookActive && <MultiNookChatSwitcher />}
+                        {isMultiNookActive && <Suspense fallback={null}><MultiNookChatSwitcher /></Suspense>}
                         <div className="flex-1 overflow-hidden relative">
                           <ErrorBoundary componentName="Chat" reportToLogService resetKeys={[streamUrl, currentMediaType]}>
-                            <ChatWidget />
+                            {chatPane}
                           </ErrorBoundary>
                         </div>
                       </div>
@@ -2031,58 +2254,66 @@ function App() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.45, ease: 'easeInOut' }}
-            className="fixed inset-x-0 bottom-0 top-[40px] z-[55] flex items-center justify-center bg-background/90 backdrop-blur-2xl"
+            className="fixed inset-x-0 bottom-0 top-[40px] z-[55] flex items-center justify-center bg-background/90 sn-glass-veil"
           >
             <LoadingWidget fullScreen={false} message="Loading StreamNook" />
           </motion.div>
         )}
       </AnimatePresence>
-      <SettingsDialog />
-      <PublicProfileOverlay />
-      <DropsOverlay />
-      <MarketplaceOverlay />
+      {settingsEverOpened && <Suspense fallback={null}><SettingsDialog /></Suspense>}
+      {profileViewerEverOpened && <Suspense fallback={null}><PublicProfileOverlay /></Suspense>}
+      {dropsEverOpened && <Suspense fallback={null}><DropsOverlay /></Suspense>}
+      {marketplaceEverOpened && <Suspense fallback={null}><MarketplaceOverlay /></Suspense>}
       <DropProgressController />
       <ReminderEngine />
-      <EmoteSetsOverlay />
+      {emoteSetsEverOpened && <Suspense fallback={null}><EmoteSetsOverlay /></Suspense>}
       <EmoteSpotlight />
 
       {profileModalUser && (
-        <SearchProfileModal
-          user={profileModalUser}
-          onClose={() => setProfileModalUser(null)}
-        />
+        <Suspense fallback={null}>
+          <SearchProfileModal
+            user={profileModalUser}
+            onClose={() => setProfileModalUser(null)}
+          />
+        </Suspense>
       )}
       <AnimatePresence>
         {showBadgesOverlay && !selectedBadge && (
-          <BadgesOverlay
-            onClose={() => setShowBadgesOverlay(false)}
-            onBadgeClick={(badge, setId) => setSelectedBadge({ badge, setId })}
-            initialPaintId={badgesOverlayInitialPaintId}
-            initialBadgeId={badgesOverlayInitialBadgeId}
-            initialStreamNook={badgesOverlayInitialStreamNook}
-            initialTarget={badgesOverlayInitialTarget}
-          />
+          <Suspense fallback={null}>
+            <BadgesOverlay
+              onClose={() => setShowBadgesOverlay(false)}
+              onBadgeClick={(badge, setId) => setSelectedBadge({ badge, setId })}
+              initialPaintId={badgesOverlayInitialPaintId}
+              initialBadgeId={badgesOverlayInitialBadgeId}
+              initialStreamNook={badgesOverlayInitialStreamNook}
+              initialTarget={badgesOverlayInitialTarget}
+            />
+          </Suspense>
         )}
       </AnimatePresence>
       <AnimatePresence>
         {selectedBadge && (
-        <BadgeDetailOverlay
-          badge={selectedBadge.badge}
-          setId={selectedBadge.setId}
-          onClose={() => {
-            setSelectedBadge(null);
-            setShowBadgesOverlay(false);
-          }}
-          onBack={() => setSelectedBadge(null)}
-        />
+        <Suspense fallback={null}>
+          <BadgeDetailOverlay
+            badge={selectedBadge.badge}
+            setId={selectedBadge.setId}
+            onClose={() => {
+              setSelectedBadge(null);
+              setShowBadgesOverlay(false);
+            }}
+            onBack={() => setSelectedBadge(null)}
+          />
+        </Suspense>
         )}
       </AnimatePresence>
       <AnimatePresence>
         {showChangelog && changelogVersion && (
-          <ChangelogOverlay
-            version={changelogVersion}
-            onClose={handleChangelogClose}
-          />
+          <Suspense fallback={null}>
+            <ChangelogOverlay
+              version={changelogVersion}
+              onClose={handleChangelogClose}
+            />
+          </Suspense>
         )}
       </AnimatePresence>
       <WhispersWidget
@@ -2093,21 +2324,25 @@ function App() {
       <PluginUiHost />
       <PluginUpdatesChecker />
       <PluginOverlayOutlet />
-      <SetupWizard
-        isOpen={showSetupWizard}
-        onClose={() => setShowSetupWizard(false)}
-      />
+      {setupWizardEverOpened && (
+        <Suspense fallback={null}>
+          <SetupWizard
+            isOpen={showSetupWizard}
+            onClose={() => setShowSetupWizard(false)}
+          />
+        </Suspense>
+      )}
       {settings.setup_complete && !showSetupWizard && <AnnouncementsBanner />}
       <SemiquincentennialShow />
       <ToastManager />
       <DeviceLoginOverlay />
       <EntitlementUnlockNote />
       <TooltipManager />
-      <CommandPalette />
-      <StreamContextMenu />
+      {commandPaletteEverOpened && <Suspense fallback={null}><CommandPalette /></Suspense>}
+      <InputContextMenuHost />
       <ModerationDragLayer />
-      <ClipModal />
-      <ClipEditor />
+      {clipModalEverOpened && <Suspense fallback={null}><ClipModal /></Suspense>}
+      {clipEditorEverOpened && <Suspense fallback={null}><ClipEditor /></Suspense>}
       <TwitchOverlay />
     </div>
   );

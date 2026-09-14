@@ -7,12 +7,20 @@
 // so what a streamer sees while editing is exactly what viewers get.
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { KNOWN_BOTS, isChatBotBadge } from '../../utils/knownBots';
 import type { CSSProperties, HTMLAttributeReferrerPolicy, ReactNode } from 'react';
 import { Gift, Star, Users, Megaphone, DollarSign, Flame, Heart } from 'lucide-react';
 import { computePaintStyle } from '../../services/paintStyle';
 import { PROVIDERS, type ProviderId } from '../../types/providers';
 import type { MessageSegment } from '../../services/twitchChat';
-import { clampOverlayStyle, type OverlayStyle, type EventCategory } from './overlayConfig';
+import {
+  clampOverlayStyle,
+  renderEventTemplate,
+  DEFAULT_LINK_COLOR,
+  type OverlayStyle,
+  type EventCategory,
+  type EventTemplateContext,
+} from './overlayConfig';
 import type { OverlayMessage } from './sampleMessages';
 import { ProviderIcon } from './ProviderIcon';
 import { AtmosphereChatWash } from './AtmosphereChatWash';
@@ -122,6 +130,22 @@ const FallbackImg = ({ fallback = null, ...props }: FallbackImgProps) => {
   if (failed || !props.src) return <>{fallback}</>;
   return <img {...props} onError={() => setFailed(true)} />;
 };
+
+// A Twitch chat GIF (GIPHY-backed, Tier 2/3 subscribers). Always drawn at the
+// gigantified size; the message renderer places it by the giant placement
+// setting. The URL is used exactly as Twitch sent it, and a failed load shows
+// the description Twitch put in the message text.
+const GifImg = ({ segment, emoteScale }: { segment: Extract<MessageSegment, { type: 'gif' }>; emoteScale: number }) => (
+  <FallbackImg
+    src={segment.gif_url}
+    alt={segment.content}
+    loading="lazy"
+    referrerPolicy="no-referrer"
+    className="inline-block w-auto align-middle"
+    style={{ height: `calc(8em * ${emoteScale})`, maxWidth: `calc(24em * ${emoteScale})`, margin: '0 0.125rem', borderRadius: '0.35em', verticalAlign: 'middle' }}
+    fallback={<span>{segment.content}</span>}
+  />
+);
 
 const badgeUrl = (b: OverlayMessage['badges'][number]): string | undefined =>
   b.image_url_4x || b.image_url_2x || b.image_url_1x;
@@ -315,9 +339,16 @@ const renderTextWithEmoji = (text: string, style: string): ReactNode => {
   return out;
 };
 
-const OverlaySegment = ({ segment, emoteScale, emojiStyle = 'apple', giant = false }: { segment: MessageSegment; emoteScale: number; emojiStyle?: string; giant?: boolean }) => {
+const OverlaySegment = ({ segment, style, emoteScale, giant = false }: { segment: MessageSegment; style: OverlayStyle; emoteScale?: number; giant?: boolean }) => {
+  const scale = emoteScale ?? style.emoteScale;
+  const emojiStyle = style.emojiStyle;
   if (segment.type === 'emote') {
-    return <EmoteImg segment={segment} emoteScale={emoteScale} giant={giant} />;
+    // A 7TV personal emote belongs to the SENDER, not the channel, so it renders
+    // in rooms that never added it. With the toggle off, show what they typed.
+    if (segment.is_personal && style.showPersonalEmotes === false) {
+      return <span>{segment.content}</span>;
+    }
+    return <EmoteImg segment={segment} emoteScale={scale} giant={giant} />;
   }
   if (segment.type === 'emoji') {
     const uni = isUnicodeEmoji(segment.content);
@@ -331,13 +362,31 @@ const OverlaySegment = ({ segment, emoteScale, emojiStyle = 'apple', giant = fal
   if (segment.type === 'cheermote') {
     return (
       <span className="inline-flex items-center align-middle" style={{ margin: '0 0.125rem' }}>
-        <FallbackImg src={segment.cheermote_url} alt={segment.content} className="inline-block align-middle" style={{ height: `calc(1.75em * ${emoteScale})` }} />
+        <FallbackImg src={segment.cheermote_url} alt={segment.content} className="inline-block align-middle" style={{ height: `calc(1.75em * ${scale})` }} />
         <span style={{ color: segment.color, fontWeight: 700, marginLeft: 2 }}>{segment.bits}</span>
       </span>
     );
   }
+  if (segment.type === 'gif') {
+    // Off renders the description Twitch sent, the way personal emotes off
+    // renders the word typed. On, the GIF draws at the gigantified size; the
+    // message renderer decides whether it sits inline or on its own line below.
+    if (style.showGifs === false) return <span>{segment.content}</span>;
+    return <GifImg segment={segment} emoteScale={scale} />;
+  }
   if (segment.type === 'link') {
-    return <span style={{ color: '#8ab4ff', textDecoration: 'underline' }}>{segment.content}</span>;
+    // 'plain' inherits the body color from the container, so a link reads as
+    // ordinary text; underlining is independent of the color choice.
+    return (
+      <span
+        style={{
+          color: style.linkStyle === 'plain' ? undefined : (style.linkColor || '').trim() || DEFAULT_LINK_COLOR,
+          textDecoration: style.linkUnderline === false ? 'none' : 'underline',
+        }}
+      >
+        {segment.content}
+      </span>
+    );
   }
   // Plain text: under a vendor style, image any unicode emoji sitting in the text.
   return <span>{emojiStyle === 'system' ? segment.content : renderTextWithEmoji(segment.content, emojiStyle)}</span>;
@@ -378,32 +427,8 @@ const SourceTag = ({ provider, mode }: { provider: ProviderId; mode: OverlayStyl
   );
 };
 
-// Known chat bots (lowercased logins), hidden when "Hide bots" is on. The bot
-// BADGE below catches the rest — this list only needs the well-known bots that
-// don't carry one.
-const KNOWN_BOTS = new Set([
-  'nightbot', 'streamelements', 'streamlabs', 'moobot', 'fossabot', 'wizebot',
-  'sery_bot', 'commanderroot', 'soundtrackbot', 'streamlootsbot', 'pretzelrocks',
-  'tangiabot', 'blerp', 'kofistreambot', 'own3d', 'botrixoficial', 'coebot',
-  'phantombot', 'thepositivebot', 'streamstickers', 'lattemotte',
-  'restreambot', 'supibot', 'anotherttvviewer', 'streamdatabase', 'streamdbbot',
-  // Command/utility bots that carry NO bot badge in the chat data (their "Chat Bot"
-  // badge is Twitch web-client chrome, not sent over IRC), so only a name catches them.
-  'potatbotat', 'pajbot', 'titlechange_bot', 'buttsbot', 'snusbot', 'deepbot',
-  'ankhbot', 'vivbot', 'revlobot', 'dixperbro', 'botisimo', 'mikuia', 'wzbot',
-  'own3dpro_bot', 'playwithviewersbot', 'thepixelbot', 'cloudbot', '9gag',
-]);
-
-// A bot badge. FrankerFaceZ (badge id 2), Chatterino, and Homies all label bot
-// accounts with a badge titled exactly "Bot"; some Twitch/other sets say "Chat
-// Bot". Match either, exact (not substring) so cosmetics like "Robot" or "Botany"
-// don't trip it. This is the signal that catches channel-specific custom bots that
-// aren't in KNOWN_BOTS above — the same badge the app resolves, so the hosted
-// overlay and the in-app preview filter identically.
-const isChatBotBadge = (s?: string): boolean => {
-  const v = (s || '').trim().toLowerCase();
-  return v === 'bot' || v === 'chat bot';
-};
+// Known-bot list and the bot-badge check are shared with the chat widget's
+// chat filters (utils/knownBots.ts) so both surfaces agree on what a bot is.
 
 const isBotMessage = (m: OverlayMessage): boolean => {
   if (KNOWN_BOTS.has((m.username || '').toLowerCase())) return true;
@@ -465,6 +490,102 @@ const stripLeadingName = (text: string, names: (string | undefined)[]): string =
   return text;
 };
 
+// Twitch's numeric sub-plan ids as the platform labels them. Anything else (a
+// YouTube tier name, a Kick plan) is already human-readable and passes through.
+const SUB_PLAN_LABELS: Record<string, string> = {
+  '1000': 'Tier 1',
+  '2000': 'Tier 2',
+  '3000': 'Tier 3',
+  Prime: 'Prime',
+};
+
+// A positive integer from an IRC tag, or undefined. Zero counts as absent: the
+// platforms send these tags only when the value means something, and a template
+// that resolved {months} to 0 would read as broken.
+const tagCount = (raw?: string): number | undefined => {
+  const n = Number.parseInt(raw ?? '', 10);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+};
+
+// A non-empty tag value with Twitch's escaped spaces restored, or undefined.
+const tagText = (raw?: string): string | undefined => {
+  const v = (raw ?? '').replace(/\\s/g, ' ').trim();
+  return v || undefined;
+};
+
+// Twitch sends a charity donation as an integer in the currency's smallest unit
+// plus the exponent to shift by (1234 + exponent 2 = 12.34). Formatted here so a
+// template gets "$12.34" rather than a number it would have to caption itself.
+const charityAmount = (t: Record<string, string>): string | undefined => {
+  const raw = Number.parseInt(t['msg-param-donation-amount'] ?? '', 10);
+  if (!Number.isFinite(raw)) return undefined;
+  const exponent = Number.parseInt(t['msg-param-exponent'] ?? '2', 10);
+  const value = raw / Math.pow(10, Number.isFinite(exponent) ? exponent : 2);
+  const currency = t['msg-param-donation-currency'] || 'USD';
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(value);
+  } catch {
+    // An unrecognized currency code throws rather than degrading, so fall back
+    // to the bare number instead of losing the token entirely.
+    return String(value);
+  }
+};
+
+// Real values behind an event, for a streamer's custom wording. Everything comes
+// off the event itself — a token with no value makes renderEventTemplate bail to
+// the platform's own system message rather than fill a hole with a guess.
+const eventTemplateContext = (
+  message: OverlayMessage,
+  category: EventCategory,
+  bits: number,
+  platformAction: string,
+): EventTemplateContext => {
+  const t = message.tags ?? {};
+  const plan = t['msg-param-sub-plan'];
+  const provider = (message.provider ?? 'twitch') as ProviderId;
+  const months = tagCount(t['msg-param-cumulative-months']) ?? tagCount(t['msg-param-months']);
+  const tierDigit = plan && /^[123]000$/.test(plan) ? Number.parseInt(plan.charAt(0), 10) : undefined;
+  return {
+    username: message.display_name || message.username || undefined,
+    userLogin: message.username || undefined,
+
+    tier: plan ? (SUB_PLAN_LABELS[plan] ?? plan) : tagText(t['msg-param-sub-plan-name']),
+    tierNumber: tierDigit,
+    planName: tagText(t['msg-param-sub-plan-name']),
+    months,
+    // Only from a full year up, so "{years} years" can never render "0 years".
+    years: months && months >= 12 ? Math.floor(months / 12) : undefined,
+    // Subs carry a month streak; a watch-streak Milestone carries its count in
+    // msg-param-value instead, which is the number a "consecutive days" wording wants.
+    streak: category === 'milestone'
+      ? tagCount(t['msg-param-value'])
+      : tagCount(t['msg-param-streak-months']),
+    giftMonths: tagCount(t['msg-param-gift-months']),
+    multimonth: tagCount(t['msg-param-multimonth-duration']),
+    priorGifter: tagText(t['msg-param-prior-gifter-display-name']),
+
+    recipient: tagText(t['msg-param-recipient-display-name']),
+    recipientLogin: tagText(t['msg-param-recipient-user-name']),
+    count: tagCount(t['msg-param-mass-gift-count']),
+    gifterTotal: tagCount(t['msg-param-sender-count']),
+
+    bits: bits > 0 ? bits : undefined,
+    charity: tagText(t['msg-param-charity-name']),
+    amount: charityAmount(t),
+
+    viewers: tagCount(t['msg-param-viewerCount']),
+
+    points: tagCount(t['msg-param-copoReward']),
+
+    // The channel key is composite off Twitch ("youtube:slug"), so show the part
+    // a viewer would recognize.
+    channel: (message.channel ?? '').split(':').pop() || undefined,
+    platform: PROVIDERS[provider]?.label ?? PROVIDERS.twitch.label,
+    time: message.metadata?.formatted_timestamp || undefined,
+    default: platformAction || undefined,
+  };
+};
+
 const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; style: OverlayStyle; expiring?: boolean }) => {
   const provider = (message.provider ?? 'twitch') as ProviderId;
   const color = message.color || '#9147ff';
@@ -499,7 +620,11 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
   const visibleExtraBadges = thirdPartyOn ? (message.extraBadges ?? []).filter((b) => !badgeSourceHidden(b.source)) : [];
   const showExtraBadges = visibleExtraBadges.length > 0;
   const anyBadge = showNativeBadges || showSnBadge || showSeventvBadge || showExtraBadges;
-  const reply = style.showReplies === false ? undefined : message.metadata?.reply_info;
+  // 'full' draws the context line above the message, 'mention' prefixes the body
+  // with the parent's @name (pre-threading Twitch), 'off' shows neither.
+  const replyInfo = message.metadata?.reply_info;
+  const reply = style.replyStyle === 'full' ? replyInfo : undefined;
+  const replyMention = style.replyStyle === 'mention' ? replyInfo : undefined;
   const avatar = style.showAvatars !== false && (provider === 'youtube' || provider === 'tiktok')
     ? message.tags?.avatar
     : undefined;
@@ -584,16 +709,6 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
   // normal chat row: their badges + paint-decorated name.
   const badgesNode = anyBadge ? (
     <span className="inline-flex items-center" style={{ gap: '0.2em', verticalAlign: '-0.18em', ...(provider === 'youtube' ? { marginLeft: '0.3em', marginRight: '0.15em' } : { marginRight: '0.4em' }) }}>
-      {/* StreamNook identity badge leads the row, mirroring the real chat row. */}
-      {showSnBadge && (
-        <FallbackImg
-          src={message.streamNookBadgeUrl || SN_DEFAULT_LOGO}
-          alt="StreamNook"
-          loading="lazy"
-          className="inline-block align-middle"
-          style={{ height: badgeSize, width: badgeSize, objectFit: 'contain' }}
-        />
-      )}
       {showNativeBadges && nativeBadges.map((b, i) => {
         // YouTube rows resolve role badges (no API image) to their own platform
         // art; everything else uses the badge's resolved image.
@@ -609,6 +724,17 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
       {showExtraBadges && visibleExtraBadges.map((b, i) => (
         <FallbackImg key={`tp-${i}`} src={b.url} alt={b.title || 'badge'} className="inline-block align-middle" style={{ height: badgeSize, width: badgeSize }} />
       ))}
+      {/* StreamNook identity badge sits rightmost, next to the name, mirroring
+          the real chat row (see utils/badgeOrder in the app repo). */}
+      {showSnBadge && (
+        <FallbackImg
+          src={message.streamNookBadgeUrl || SN_DEFAULT_LOGO}
+          alt="StreamNook"
+          loading="lazy"
+          className="inline-block align-middle"
+          style={{ height: badgeSize, width: badgeSize, objectFit: 'contain' }}
+        />
+      )}
     </span>
   ) : null;
 
@@ -652,9 +778,22 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
       : systemMessage || eventFallback(category, message.display_name || message.username);
     // Convert the amount in a YouTube Super Chat / Super Sticker to the chosen target
     // currency (no-op unless a target is set + rates are loaded).
-    const text = style.superchatCurrency && (msgType === 'superchat' || msgType === 'supersticker')
+    const converted = style.superchatCurrency && (msgType === 'superchat' || msgType === 'supersticker')
       ? convertMoneyInText(rawEventText, style.superchatCurrency)
       : rawEventText;
+    // The streamer's own wording for this category, if they set one and this event
+    // carries every value it references. Null (no template, or a token with nothing
+    // behind it) keeps the platform's message. A template opening with {username}
+    // resolves to the sender's name, which stripLeadingName then hands to the
+    // decorated name node below — so the paint/badge treatment is kept, not doubled.
+    // {action} always reflects the PLATFORM's wording, never the template being
+    // built from it — otherwise the token would be defined in terms of itself.
+    const platformAction = stripLeadingName(converted, [message.display_name, message.username]);
+    const templated = renderEventTemplate(
+      style.eventTemplates?.[category] ?? '',
+      eventTemplateContext(message, category, cheerBits, platformAction),
+    );
+    const text = templated ?? converted;
     // TikTok stamps the action itself as the message body (e.g. "sent Team Power",
     // "followed"), which just duplicates the event line — so skip it. Twitch resubs
     // and YouTube Super Chats carry a real separate message, so those keep it.
@@ -683,6 +822,10 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
     // months" (or "with Prime for N months"). Prefer the tags; fall back to folding
     // the month count out of the 2nd sentence for samples / providers without them.
     const shownAction = (() => {
+      // A template is the streamer's own sentence. The re-phrasings below exist to
+      // improve the PLATFORM's default wording, so they must not rewrite it —
+      // without this, a custom sub message is silently replaced by the collapse.
+      if (templated) return action;
       if (category !== 'subscription') return action;
       const plan = message.tags?.['msg-param-sub-plan'];
       const cumulative = message.tags?.['msg-param-cumulative-months'] || message.tags?.['msg-param-months'];
@@ -701,7 +844,7 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
     const isWatchStreak = msgType === 'viewermilestone' && message.tags?.['msg-param-category'] === 'watch-streak';
     const streakValue = isWatchStreak ? parseInt(message.tags?.['msg-param-value'] || '0', 10) : 0;
     const streakPoints = isWatchStreak ? parseInt(message.tags?.['msg-param-copoReward'] || '0', 10) : 0;
-    const finalAction = isWatchStreak && streakValue > 0
+    const finalAction = !templated && isWatchStreak && streakValue > 0
       ? `watched ${streakValue} consecutive streams and sparked a watch streak!`
       : shownAction;
     // TikTok gifts carry the gift's own (often animated) image as an emote segment.
@@ -795,7 +938,7 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
                 </span>
               )}
               {giftSegments.map((seg, i) => (
-                <OverlaySegment key={`gift-${i}`} segment={seg} emoteScale={Math.max(style.emoteScale, 1)} emojiStyle={style.emojiStyle} />
+                <OverlaySegment key={`gift-${i}`} segment={seg} style={style} emoteScale={Math.max(style.emoteScale, 1)} />
               ))}
             </div>
             {hasBody && (
@@ -807,7 +950,7 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
                 <span aria-hidden="true" style={{ flexShrink: 0, width: '2px', borderRadius: '1px', background: 'color-mix(in srgb, currentColor 45%, transparent)' }} />
                 <span style={{ minWidth: 0 }}>
                   {message.segments!.map((seg, i) => (
-                    <OverlaySegment key={i} segment={seg} emoteScale={style.emoteScale} emojiStyle={style.emojiStyle} />
+                    <OverlaySegment key={i} segment={seg} style={style} />
                   ))}
                 </span>
               </div>
@@ -842,6 +985,14 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
   const giantAlign = style.giantEmoteAlign ?? 'center';
   const giantInline = giantIdx >= 0 && giantAlign === 'inline';
 
+  // Twitch chat GIFs share the giant placement: plucked onto the line below
+  // (Left / Center / Right) or left where they were typed (Inline), always at
+  // the giant size. With the GIF toggle off they stay in the flow and
+  // OverlaySegment renders the description Twitch sent instead.
+  const gifIdxs: number[] = style.showGifs === false ? [] : bodySegs.flatMap((s, i) => (s.type === 'gif' ? [i] : []));
+  const gifsPlucked = gifIdxs.length > 0 && giantAlign !== 'inline';
+  const gifInline = gifIdxs.length > 0 && giantAlign === 'inline';
+
   // Long-message clamp: cap the whole rendered line block at N lines with an
   // ellipsis, so one copypasta can't eat the canvas. The -webkit-box line-clamp
   // works over the mixed inline content (badges, name, emotes) as line boxes.
@@ -849,7 +1000,7 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
   // Skipped for an inline giant: the clamp would slice an 8em image mid-emote, and the
   // block placements dodge this by living outside the clamped div entirely.
   const lineClampStyle =
-    clampLines >= 1 && !giantInline
+    clampLines >= 1 && !giantInline && !gifInline
       ? { display: '-webkit-box', WebkitLineClamp: Math.min(6, clampLines), WebkitBoxOrient: 'vertical' as const, overflow: 'hidden' }
       : null;
 
@@ -879,25 +1030,32 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
           ...(message.metadata?.is_action ? { color, fontStyle: 'italic' as const } : null),
         }}
       >
+        {replyMention && (
+          <span style={{ fontWeight: 700, opacity: 0.85 }}>@{stripAt(replyMention.parent_display_name)} </span>
+        )}
         {bodySegs.map((seg, i) => (
-          i === giantIdx && !giantInline
+          (i === giantIdx && !giantInline) || (gifsPlucked && seg.type === 'gif')
             ? null
-            : <OverlaySegment key={i} segment={seg} emoteScale={style.emoteScale} emojiStyle={style.emojiStyle} giant={i === giantIdx && giantInline} />
+            : <OverlaySegment key={i} segment={seg} style={style} giant={i === giantIdx && giantInline} />
         ))}
       </span>
     </div>
   );
 
-  // The plucked gigantified emote on its own line below the message line.
-  const giantBlock = giantIdx >= 0 && !giantInline ? (
+  // The plucked gigantified emote, and any chat GIFs, on their own line below
+  // the message line, sharing the giant placement.
+  const giantBlock = (giantIdx >= 0 && !giantInline) || gifsPlucked ? (
     <div
       style={{
         display: 'flex',
+        flexWrap: 'wrap',
+        gap: '0.25em',
         justifyContent: giantAlign === 'left' ? 'flex-start' : giantAlign === 'right' ? 'flex-end' : 'center',
         marginTop: '0.2em',
       }}
     >
-      <OverlaySegment segment={bodySegs[giantIdx]} emoteScale={style.emoteScale} emojiStyle={style.emojiStyle} giant />
+      {giantIdx >= 0 && !giantInline && <OverlaySegment segment={bodySegs[giantIdx]} style={style} giant />}
+      {gifsPlucked && gifIdxs.map((i) => <OverlaySegment key={`gif-${i}`} segment={bodySegs[i]} style={style} giant />)}
     </div>
   ) : null;
 

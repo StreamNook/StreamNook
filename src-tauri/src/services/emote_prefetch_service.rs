@@ -399,7 +399,8 @@ fn spawn_scan(
     join_set.spawn(async move {
         let guard = es.read().await;
         let result = guard
-            .fetch_channel_emotes(Some(login.clone()), Some(id.clone()), token)
+            // Prefetch runs over Twitch logins only.
+            .fetch_channel_emotes(Some(login.clone()), Some(id.clone()), token, None)
             .await;
         (login, id, result)
     });

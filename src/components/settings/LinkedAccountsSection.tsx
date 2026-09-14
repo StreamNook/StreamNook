@@ -4,6 +4,7 @@ import { useAppStore } from '../../stores/AppStore';
 import { addAccount, removeAccount, type StoredAccount } from '../../services/accountService';
 import { useSendAccountStore } from '../../stores/sendAccountStore';
 import AccountIdentityEditor from './AccountIdentityEditor';
+import PlatformAccountRows from './PlatformAccountRows';
 import { Tooltip } from '../ui/Tooltip';
 
 /**
@@ -104,7 +105,10 @@ export default function LinkedAccountsSection() {
     );
 
   return (
-    <div className="glass-panel rounded-xl p-4 space-y-4">
+    // The id is a deep-link target: the title bar's platform switcher sends you
+    // straight here when you pick a platform you have not connected yet, via
+    // openSettings('Profile', 'settings-section-accounts').
+    <div id="settings-section-accounts" className="glass-panel rounded-xl p-4 space-y-4">
       <div className="flex items-center justify-between">
         <h4 className="text-sm font-semibold text-textPrimary uppercase tracking-wide">Accounts</h4>
         <button
@@ -290,6 +294,10 @@ export default function LinkedAccountsSection() {
           Add another account to send chat from it or switch which one you watch as.
         </p>
       )}
+
+      {/* Kick and YouTube sit alongside Twitch rather than under it: three
+          platforms, same weight, one place to manage all of them. */}
+      <PlatformAccountRows />
 
       {editing && <AccountIdentityEditor account={editing} onClose={() => setEditing(null)} />}
     </div>

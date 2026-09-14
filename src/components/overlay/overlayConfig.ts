@@ -30,6 +30,30 @@ export const CHEER_DISPLAYS: { value: CheerDisplay; label: string }[] = [
   { value: 'event', label: 'Event card' },
 ];
 
+/** How a reply renders. 'full' draws the "Replying to @name: body" context line
+ *  above the message; 'mention' drops the context line and prefixes the body with
+ *  the parent's "@name" the way Twitch chat did before threading; 'off' shows the
+ *  message alone with no sign it was a reply. */
+export type ReplyStyle = 'full' | 'mention' | 'off';
+
+export const REPLY_STYLES: { value: ReplyStyle; label: string }[] = [
+  { value: 'full', label: 'Context line' },
+  { value: 'mention', label: '@username' },
+  { value: 'off', label: 'Off' },
+];
+
+/** How a URL in a message body renders. 'accent' colors it (linkColor) the way chat
+ *  clients do; 'plain' leaves it in the body text color so it reads as ordinary text. */
+export type LinkStyle = 'accent' | 'plain';
+
+export const LINK_STYLES: { value: LinkStyle; label: string }[] = [
+  { value: 'accent', label: 'Accent' },
+  { value: 'plain', label: 'Body text' },
+];
+
+/** Default link accent when linkColor is left empty. */
+export const DEFAULT_LINK_COLOR = '#8ab4ff';
+
 export type SourceTagMode = 'none' | 'dot' | 'label' | 'icon';
 export type OverlayBackground = 'transparent' | 'solid';
 export type OverlayDirection = 'newBottom' | 'newTop';
@@ -212,8 +236,28 @@ export interface OverlayStyle {
   /** Show the @ some platforms put in front of usernames (YouTube handles are
    *  "@name"). Off strips the leading @ wherever a name renders. */
   showAtSign: boolean;
-  /** Show the small "Replying to @name" context line above a reply. */
+  /** Legacy reply toggle. Superseded by replyStyle: clampOverlayStyle migrates
+   *  `false` here into replyStyle 'off'. Kept in the type only so old saved
+   *  configs still parse. */
   showReplies: boolean;
+  /** How a reply renders — context line, bare "@name" prefix, or nothing. */
+  replyStyle: ReplyStyle;
+  /** Whether a URL gets its own accent color or stays in the body text color. */
+  linkStyle: LinkStyle;
+  /** Accent color for links when linkStyle is 'accent'. '' = DEFAULT_LINK_COLOR. */
+  linkColor: string;
+  /** Underline links. Independent of linkStyle, so plain-colored links can still
+   *  be underlined (and accented ones left clean). */
+  linkUnderline: boolean;
+  /** Render 7TV personal emotes — a subscriber's own set, which works in every
+   *  channel. On by default (it matches the 7TV extension), but a streamer whose
+   *  channel has no 7TV emotes still sees them from chatters who do, which reads
+   *  as emotes appearing from nowhere. Off renders the emote's name as text. */
+  showPersonalEmotes: boolean;
+  /** Custom wording per event category, replacing the platform's system message.
+   *  Values are `{token}` templates; see renderEventTemplate. Absent/empty for a
+   *  category = keep the platform's own wording. */
+  eventTemplates: Partial<Record<EventCategory, string>>;
   /** How a chatter's first-ever message in the channel is marked. 'twitch' draws
    *  the outline + label Twitch's own chat uses; 'streamnook' uses the app chat's
    *  purple highlight (gradient wash + left border + label). Twitch sends the
@@ -273,6 +317,217 @@ export interface OverlayStyle {
   giantEmotes: boolean;
   /** Where the gigantified emote lands. See GiantEmoteAlign. */
   giantEmoteAlign: GiantEmoteAlign;
+  /** Twitch chat GIFs (GIPHY-backed, Tier 2/3 subscribers): draw them at the
+   *  gigantified size with the same placement. Off shows the description
+   *  Twitch puts in the message text instead. */
+  showGifs: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Custom event text
+// ---------------------------------------------------------------------------
+// Each event category can carry a template that replaces the platform's own
+// system message ("winters27 subscribed at Tier 1. They've subscribed for 94
+// months!") with the streamer's own wording. Tokens are `{name}` and resolve
+// from the event's real data, so nothing here invents a value.
+
+/** The values a template can reference. Absent = the event did not carry it, and
+ *  renderEventTemplate then falls back to the platform's own message. Everything
+ *  here comes off the event; nothing is invented or guessed. */
+export interface EventTemplateContext {
+  // ── Who ──────────────────────────────────────────────────────────────────
+  /** Display name of whoever triggered the event (subscriber, gifter, raider). */
+  username?: string;
+  /** Their lowercase login, for templates that want an @-less or URL-ish form. */
+  userLogin?: string;
+
+  // ── Subscription ─────────────────────────────────────────────────────────
+  /** Sub tier as the platform labels it ("Tier 1", "Prime", a YouTube tier name). */
+  tier?: string;
+  /** Just the digit: 1, 2 or 3. Absent for Prime, which has no tier number. */
+  tierNumber?: number;
+  /** The channel's own name for the plan, when it set one. */
+  planName?: string;
+  /** Total months subscribed, cumulative across gaps. */
+  months?: number;
+  /** Whole years subscribed. Absent under 12 months, so "{years} years" can't say 0. */
+  years?: number;
+  /** Consecutive months (a sub streak) or days (a watch-streak milestone). */
+  streak?: number;
+  /** Months covered by a gift. */
+  giftMonths?: number;
+  /** Months bought up front in a multi-month sub. */
+  multimonth?: number;
+  /** Who gifted the sub being upgraded or paid forward. */
+  priorGifter?: string;
+
+  // ── Gifts ────────────────────────────────────────────────────────────────
+  /** Gift recipient's display name. Absent on community gifts (no single target). */
+  recipient?: string;
+  /** Recipient's lowercase login. */
+  recipientLogin?: string;
+  /** How many were gifted in a community gift. */
+  count?: number;
+  /** The gifter's lifetime gift count in this channel. */
+  gifterTotal?: number;
+
+  // ── Money ────────────────────────────────────────────────────────────────
+  /** Bits cheered / Super Chat amount as sent. */
+  bits?: number;
+  /** Charity name on a charity donation. */
+  charity?: string;
+  /** Donation amount, already formatted with its currency symbol. */
+  amount?: string;
+
+  // ── Raid ─────────────────────────────────────────────────────────────────
+  /** Viewers brought by a raid. */
+  viewers?: number;
+
+  // ── Milestones ───────────────────────────────────────────────────────────
+  /** Channel points earned from a watch-streak milestone. */
+  points?: number;
+
+  // ── Context ──────────────────────────────────────────────────────────────
+  /** The channel the event landed in. */
+  channel?: string;
+  /** Platform label: Twitch, Kick, YouTube, TikTok. */
+  platform?: string;
+  /** The event's timestamp, formatted the way the overlay formats timestamps. */
+  time?: string;
+  /** Whatever the platform itself would have said, with the leading name removed
+   *  ("subscribed at Tier 1 for 94 months"). Lets a template add to the default
+   *  instead of replacing it: "{username} {default} — welcome back!". */
+  default?: string;
+}
+
+/** One row of the token reference.
+ *
+ *  `example` is the point of this table. A token is only obvious once you see the
+ *  value it stands in for, so the builder shows the example everywhere the token
+ *  appears and renders a live preview from these values as you type. Keep them
+ *  realistic and mutually consistent — they read as one imaginary event. */
+export const EVENT_TEMPLATE_TOKENS: {
+  token: keyof EventTemplateContext;
+  label: string;
+  example: string;
+  group: string;
+}[] = [
+  { token: 'username', label: 'Who triggered it', example: 'Winters27', group: 'Who' },
+  { token: 'userLogin', label: 'The same name, all lowercase', example: 'winters27', group: 'Who' },
+  { token: 'tier', label: 'Sub tier, worded the way the platform words it', example: 'Tier 1', group: 'Subscription' },
+  { token: 'tierNumber', label: 'Just the tier digit. Prime subs have none', example: '1', group: 'Subscription' },
+  { token: 'planName', label: "The channel's own name for the sub plan", example: 'Channel Subscription (mathox)', group: 'Subscription' },
+  { token: 'months', label: 'Months subscribed in total', example: '94', group: 'Subscription' },
+  { token: 'years', label: 'Whole years subscribed. Nothing under 12 months', example: '7', group: 'Subscription' },
+  { token: 'streak', label: 'Months in a row subscribed, or days in a watch streak', example: '12', group: 'Subscription' },
+  { token: 'giftMonths', label: 'How many months the gift covers', example: '3', group: 'Subscription' },
+  { token: 'multimonth', label: 'Months bought in one go', example: '6', group: 'Subscription' },
+  { token: 'priorGifter', label: 'Who gifted the sub being continued', example: 'Zo0x_', group: 'Subscription' },
+  { token: 'recipient', label: 'Who got the gift', example: 'Mathox', group: 'Gifts' },
+  { token: 'recipientLogin', label: 'The same name, all lowercase', example: 'mathox', group: 'Gifts' },
+  { token: 'count', label: 'How many subs were gifted at once', example: '50', group: 'Gifts' },
+  { token: 'gifterTotal', label: 'How many they have gifted here in total', example: '412', group: 'Gifts' },
+  { token: 'bits', label: 'Bits cheered, or the Super Chat amount', example: '1000', group: 'Money' },
+  { token: 'charity', label: 'Which charity a donation went to', example: 'Direct Relief', group: 'Money' },
+  { token: 'amount', label: 'Donation amount, currency symbol included', example: '$12.34', group: 'Money' },
+  { token: 'viewers', label: 'How many viewers the raid brought', example: '237', group: 'Raid' },
+  { token: 'points', label: 'Channel points earned from a watch streak', example: '350', group: 'Milestones' },
+  { token: 'channel', label: 'The channel it happened in', example: 'mathox', group: 'Context' },
+  { token: 'platform', label: 'Which platform it came from', example: 'Twitch', group: 'Context' },
+  { token: 'time', label: 'When it happened', example: '3:45 PM', group: 'Context' },
+  { token: 'default', label: 'What the platform would have said on its own', example: 'subscribed at Tier 1 for 94 months', group: 'Context' },
+];
+
+/** The examples as a context, so the builder can render a template live. Every
+ *  token resolves here, which is the point: the preview shows the SHAPE of the
+ *  sentence. Real events fall back whole when a value is missing. */
+export const SAMPLE_TEMPLATE_CONTEXT: EventTemplateContext = Object.fromEntries(
+  EVENT_TEMPLATE_TOKENS.map((t) => [t.token, t.example]),
+) as EventTemplateContext;
+
+/** {default} is the one token whose real value changes with the event type, so a
+ *  single sample would show a sub sentence in the Raids preview. Per-category
+ *  samples keep the preview honest about what the streamer would actually get. */
+export const CATEGORY_DEFAULT_EXAMPLES: Record<EventCategory, string> = {
+  subscription: 'subscribed at Tier 1 for 94 months',
+  gift: 'is gifting 50 subs to the community',
+  raid: 'is raiding with 237 viewers',
+  cheer: 'cheered 1000 bits',
+  milestone: 'watched 12 consecutive streams',
+  follow: 'followed',
+  announcement: 'we go live an hour early tomorrow',
+};
+
+/** The sample context for one category: shared examples, with {default} swapped
+ *  for the wording that category would really produce. */
+export const sampleContextFor = (category: EventCategory): EventTemplateContext => ({
+  ...SAMPLE_TEMPLATE_CONTEXT,
+  default: CATEGORY_DEFAULT_EXAMPLES[category],
+});
+
+/** Tokens every category can resolve, appended to each list below. */
+const COMMON_TOKENS: (keyof EventTemplateContext)[] = [
+  'username', 'userLogin', 'channel', 'platform', 'time', 'default',
+];
+
+/** Which tokens can carry a value for each category, so the builder only offers
+ *  tokens that can resolve rather than every token everywhere. */
+export const CATEGORY_TEMPLATE_TOKENS: Record<EventCategory, (keyof EventTemplateContext)[]> = {
+  subscription: ['months', 'years', 'streak', 'tier', 'tierNumber', 'planName', 'giftMonths', 'multimonth', 'priorGifter', ...COMMON_TOKENS],
+  gift: ['recipient', 'recipientLogin', 'count', 'gifterTotal', 'tier', 'tierNumber', 'giftMonths', ...COMMON_TOKENS],
+  raid: ['viewers', ...COMMON_TOKENS],
+  cheer: ['bits', 'charity', 'amount', ...COMMON_TOKENS],
+  milestone: ['streak', 'points', 'months', ...COMMON_TOKENS],
+  follow: [...COMMON_TOKENS],
+  announcement: [...COMMON_TOKENS],
+};
+
+/** A starting point per category, shown as the placeholder in the builder. */
+export const EVENT_TEMPLATE_EXAMPLES: Record<EventCategory, string> = {
+  subscription: '{username} just re-subscribed for {months} months!',
+  gift: '{username} gifted {count} subs to the channel!',
+  raid: '{username} is raiding with {viewers} viewers!',
+  cheer: '{username} cheered {bits} bits!',
+  milestone: '{username} has been watching for {streak} in a row!',
+  follow: 'Welcome in, {username}!',
+  announcement: '{username} says: {default}',
+};
+
+const TOKEN_RE = /\{([a-zA-Z]+)\}/g;
+
+/**
+ * Fill a template from an event's real values.
+ *
+ * Returns null when the template is empty or references a token this event did
+ * not carry — the caller then falls back to the platform's own system message.
+ * Falling back whole is deliberate: a partial fill reads as broken ("re-subscribed
+ * for  months!"), and an event missing its data is better shown as the platform
+ * worded it than as a sentence with a hole in it.
+ */
+export function renderEventTemplate(template: string, ctx: EventTemplateContext): string | null {
+  const t = (template || '').trim();
+  if (!t) return null;
+  let missing = false;
+  const out = t.replace(TOKEN_RE, (whole, name: string) => {
+    if (!(name in ctx)) { missing = true; return whole; }
+    const v = ctx[name as keyof EventTemplateContext];
+    if (v === undefined || v === null || v === '') { missing = true; return whole; }
+    return String(v);
+  });
+  return missing ? null : out;
+}
+
+/** Strip templates down to the categories that exist, trimmed, empties dropped. */
+export function sanitizeEventTemplates(raw: unknown): Partial<Record<EventCategory, string>> {
+  if (!raw || typeof raw !== 'object') return {};
+  const valid = new Set(EVENT_CATEGORIES.map((c) => c.id));
+  const out: Partial<Record<EventCategory, string>> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!valid.has(k as EventCategory)) continue;
+    const text = String(v ?? '').trim().slice(0, 200);
+    if (text) out[k as EventCategory] = text;
+  }
+  return out;
 }
 
 // Which event categories each platform can actually emit — drives the per-platform
@@ -304,6 +559,7 @@ export const THIRD_PARTY_BADGE_PROVIDERS: { id: string; label: string }[] = [
   { id: 'ffz', label: 'FFZ' },
   { id: 'chatterino', label: 'Chatterino' },
   { id: 'homies', label: 'Homies' },
+  { id: 'moltorino', label: 'Moltorino' },
   { id: 'bttv', label: 'BTTV' },
   { id: 'chatsen', label: 'Chatsen' },
   { id: 'chatty', label: 'Chatty' },
@@ -388,6 +644,12 @@ export const DEFAULT_OVERLAY_STYLE: OverlayStyle = {
   showAvatars: true,
   showAtSign: true,
   showReplies: true,
+  replyStyle: 'full',
+  linkStyle: 'accent',
+  linkColor: '',
+  linkUnderline: true,
+  showPersonalEmotes: true,
+  eventTemplates: {},
   firstTimeStyle: 'off',
   firstTimeFill: false,
   firstTimeAnimation: 'none',
@@ -397,13 +659,17 @@ export const DEFAULT_OVERLAY_STYLE: OverlayStyle = {
   restoreOnReload: false,
   giantEmotes: true,
   giantEmoteAlign: 'center',
+  showGifs: true,
 };
 
 // Clamp ranges so a builder (or a hand-edited saved config) can't produce a
 // broken overlay. Mirrored by the renderer.
 export const OVERLAY_LIMITS = {
-  width: { min: 260, max: 900 },
-  height: { min: 300, max: 1600 },
+  // Floors are deliberately low. The renderer measures real row heights and mounts
+  // only what fits, so a short canvas just shows fewer messages — nothing breaks.
+  // A low banner strip across a gameplay scene is a real use case.
+  width: { min: 160, max: 900 },
+  height: { min: 80, max: 1600 },
   fontSize: { min: 10, max: 48 },
   lineHeight: { min: 1, max: 2.2 },
   messageGap: { min: 0, max: 28 },
@@ -500,6 +766,8 @@ export const clampOverlayStyle = (s: OverlayStyle): OverlayStyle => {
       s.giantEmoteAlign === 'left' || s.giantEmoteAlign === 'right' || s.giantEmoteAlign === 'inline'
         ? s.giantEmoteAlign
         : 'center',
+    // Absent on configs saved before chat GIFs existed → on, like Twitch.
+    showGifs: s.showGifs !== false,
     textAlign: s.textAlign === 'center' || s.textAlign === 'right' ? s.textAlign : 'left',
     cheerDisplay: s.cheerDisplay === 'event' ? 'event' : 'message',
     fontWeight:
@@ -509,5 +777,21 @@ export const clampOverlayStyle = (s: OverlayStyle): OverlayStyle => {
     textShadowColor: (s.textShadowColor || '').trim() || '#000000',
     textShadowSize: clamp(s.textShadowSize ?? 2, OVERLAY_LIMITS.textShadowSize.min, OVERLAY_LIMITS.textShadowSize.max),
     textShadowOpacity: clamp(s.textShadowOpacity ?? 0.85, OVERLAY_LIMITS.textShadowOpacity.min, OVERLAY_LIMITS.textShadowOpacity.max),
+    // Reply rendering moved from a boolean to a three-way. A config saved before
+    // replyStyle existed only knows showReplies, so read that: false → 'off',
+    // anything else → the context line it used to draw. Idempotent once migrated.
+    replyStyle:
+      s.replyStyle === 'mention' || s.replyStyle === 'off' || s.replyStyle === 'full'
+        ? s.replyStyle
+        : s.showReplies === false
+          ? 'off'
+          : 'full',
+    // Absent on configs saved before these existed → today's look, so an overlay
+    // published before the update renders exactly as it did.
+    linkStyle: s.linkStyle === 'plain' ? 'plain' : 'accent',
+    linkColor: (s.linkColor || '').trim(),
+    linkUnderline: s.linkUnderline !== false,
+    showPersonalEmotes: s.showPersonalEmotes !== false,
+    eventTemplates: sanitizeEventTemplates(s.eventTemplates),
   };
 };

@@ -90,10 +90,11 @@ async fn fetch_badges_from_api(
 
 /// Fetch global Twitch badges with caching support
 #[tauri::command]
-pub async fn fetch_global_badges(
-    client_id: String,
-    token: String,
-) -> Result<HelixBadgesResponse, String> {
+pub async fn fetch_global_badges() -> Result<HelixBadgesResponse, String> {
+    let client_id = env!("TWITCH_APP_CLIENT_ID").to_string();
+    let token = TwitchService::get_token()
+        .await
+        .map_err(|e| format!("Failed to get token: {}", e))?;
     // Serialize against the socket-drop merge so a fetch and a merge can't
     // clobber each other's write of the shared global_badges entry.
     let _guard = GLOBAL_BADGES_LOCK.lock().await;
@@ -193,10 +194,8 @@ pub async fn get_cached_global_badges() -> Result<Option<HelixBadgesResponse>, S
 pub async fn prefetch_global_badges() -> Result<(), String> {
     debug!("[Badges] Starting background badge pre-fetch...");
 
-    let client_id = env!("TWITCH_APP_CLIENT_ID").to_string();
-
     match TwitchService::get_token().await {
-        Ok(token) => match fetch_global_badges(client_id, token).await {
+        Ok(_) => match fetch_global_badges().await {
             Ok(badges) => {
                 debug!(
                     "[Badges] Pre-fetch complete: {} badge sets cached",
@@ -261,15 +260,20 @@ pub async fn force_refresh_global_badges() -> Result<HelixBadgesResponse, String
 /// After a local force-refresh, this will show "0 days" instead of the stale GitHub sync age.
 #[tauri::command]
 pub async fn get_badge_cache_age() -> Result<Option<u64>, String> {
-    use crate::services::universal_cache_service::load_manifest;
+    use crate::services::universal_cache_service::{manifest_last_sync, peek_cached_entry};
 
-    let manifest = load_manifest().map_err(|e| format!("Failed to load manifest: {}", e))?;
-
+    // Read the one entry and the sync stamp, never the whole manifest: cloning
+    // every entry to look at one of them costs ~80 ms and ~20 MB on a
+    // long-lived cache.
     // Check if locally-cached badge data is newer than the last GitHub sync
     let cache_key = "global_badges";
-    if let Some(entry) = manifest.entries.get(cache_key) {
+    let cached_entry =
+        peek_cached_entry(cache_key).map_err(|e| format!("Failed to read manifest: {}", e))?;
+    if let Some(entry) = cached_entry.as_ref() {
         let badge_timestamp = entry.metadata.timestamp;
-        let manifest_sync = manifest.last_sync.unwrap_or(0);
+        let manifest_sync = manifest_last_sync()
+            .map_err(|e| format!("Failed to read manifest: {}", e))?
+            .unwrap_or(0);
 
         // If badge data is newer than last GitHub sync, report badge data age
         if badge_timestamp > manifest_sync {
@@ -279,7 +283,7 @@ pub async fn get_badge_cache_age() -> Result<Option<u64>, String> {
     }
 
     // Fall back to manifest sync age
-    match manifest.last_sync {
+    match manifest_last_sync().map_err(|e| format!("Failed to read manifest: {}", e))? {
         Some(last_sync) => {
             let cache_age_days = (get_current_timestamp() - last_sync) / (24 * 60 * 60);
             Ok(Some(cache_age_days))
@@ -292,16 +296,16 @@ pub async fn get_badge_cache_age() -> Result<Option<u64>, String> {
 /// Returns list of badge identifiers (set_id/version) that need metadata fetching
 #[tauri::command]
 pub async fn get_badges_missing_metadata() -> Result<Vec<(String, String)>, String> {
-    use crate::services::universal_cache_service::load_manifest;
+    use crate::services::universal_cache_service::peek_cached_entry;
 
     debug!("[Badges] Checking for badges missing metadata...");
 
-    // Load the manifest directly to check local cache only (no GitHub download)
-    let manifest = load_manifest().map_err(|e| format!("Failed to load manifest: {}", e))?;
-
-    // Get current global badges from local cache
+    // Read local cache only (no GitHub download), one entry rather than a full
+    // manifest clone.
     let cache_key = "global_badges";
-    let badges = match manifest.entries.get(cache_key) {
+    let cached_entry =
+        peek_cached_entry(cache_key).map_err(|e| format!("Failed to read manifest: {}", e))?;
+    let badges = match cached_entry.as_ref() {
         Some(entry) => match serde_json::from_value::<CachedBadgesData>(entry.data.clone()) {
             Ok(cached_data) => {
                 debug!(
@@ -330,9 +334,11 @@ pub async fn get_badges_missing_metadata() -> Result<Vec<(String, String)>, Stri
             total_versions += 1;
             let metadata_key = format!("metadata:{}-v{}", badge_set.set_id, version.id);
 
-            // Check local cache only - don't trigger GitHub download
-            let entry = manifest.entries.get(&metadata_key);
-            let needs_refetch = match entry {
+            // Check local cache only - don't trigger GitHub download. One entry
+            // per version, never a full-manifest clone per lookup.
+            let entry = peek_cached_entry(&metadata_key)
+                .map_err(|e| format!("Failed to read manifest: {}", e))?;
+            let needs_refetch = match entry.as_ref() {
                 None => true,
                 Some(e) => {
                     // Stale entries scraped before the timezone-converter fix have a date
@@ -496,16 +502,6 @@ pub async fn prune_invalid_global_badges() -> Result<usize, String> {
     Ok(removed)
 }
 
-/// Get Twitch credentials for badge fetching
-#[tauri::command]
-pub async fn get_twitch_credentials() -> Result<(String, String), String> {
-    let client_id = env!("TWITCH_APP_CLIENT_ID").to_string();
-    let token = TwitchService::get_token()
-        .await
-        .map_err(|e| format!("Failed to get token: {}", e))?;
-
-    Ok((client_id, token))
-}
 
 /// Debug command: List all badge set IDs from Twitch API (bypasses all caching)
 /// Returns a list of (set_id, version_count, version_ids)
@@ -551,7 +547,7 @@ pub async fn debug_list_twitch_badges() -> Result<Vec<(String, usize, Vec<String
 #[tauri::command]
 pub async fn debug_compare_badge_sources() -> Result<(Vec<String>, Vec<String>, Vec<String>), String>
 {
-    use crate::services::universal_cache_service::load_manifest;
+    use crate::services::universal_cache_service::peek_cached_entry;
     use std::collections::HashSet;
 
     debug!("[Badges/Debug] Comparing Twitch API badges with cached badges...");
@@ -564,10 +560,10 @@ pub async fn debug_compare_badge_sources() -> Result<(Vec<String>, Vec<String>, 
 
     let api_badges = fetch_badges_from_api(client_id, token).await?;
 
-    // Get badges from cache
-    let manifest = load_manifest().map_err(|e| format!("Failed to load manifest: {}", e))?;
-
-    let cached_badges = match manifest.entries.get("global_badges") {
+    // Get badges from cache (single entry, no full-manifest clone)
+    let cached_entry = peek_cached_entry("global_badges")
+        .map_err(|e| format!("Failed to read manifest: {}", e))?;
+    let cached_badges = match cached_entry.as_ref() {
         Some(entry) => match serde_json::from_value::<CachedBadgesData>(entry.data.clone()) {
             Ok(data) => data.badges,
             Err(_) => return Err("Failed to parse cached badges".to_string()),
@@ -604,11 +600,11 @@ pub async fn debug_compare_badge_sources() -> Result<(Vec<String>, Vec<String>, 
 
 /// Fetch channel-specific Twitch badges using the Helix API
 #[tauri::command]
-pub async fn fetch_channel_badges(
-    channel_id: String,
-    client_id: String,
-    token: String,
-) -> Result<HelixBadgesResponse, String> {
+pub async fn fetch_channel_badges(channel_id: String) -> Result<HelixBadgesResponse, String> {
+    let client_id = env!("TWITCH_APP_CLIENT_ID").to_string();
+    let token = TwitchService::get_token()
+        .await
+        .map_err(|e| format!("Failed to get token: {}", e))?;
     let url = format!(
         "https://api.twitch.tv/helix/chat/badges?broadcaster_id={}",
         channel_id

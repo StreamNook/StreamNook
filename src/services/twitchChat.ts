@@ -6,11 +6,14 @@ import { kickBadgeImage } from '../utils/kickBadges';
 // Message segment types - matches Rust MessageSegment enum
 export type MessageSegment =
   | { type: 'text'; content: string }
-  | { type: 'emote'; content: string; emote_id?: string; emote_url: string; is_zero_width?: boolean; modifier_flags?: number }
+  | { type: 'emote'; content: string; emote_id?: string; emote_url: string; is_zero_width?: boolean; modifier_flags?: number; is_personal?: boolean }
   | { type: 'emoji'; content: string; emoji_url: string }
   | { type: 'link'; content: string; url: string }
   // Cheermote segment for animated bits (e.g., Cheer500)
-  | { type: 'cheermote'; content: string; prefix: string; bits: number; tier: string; color: string; cheermote_url: string };
+  | { type: 'cheermote'; content: string; prefix: string; bits: number; tier: string; color: string; cheermote_url: string }
+  // Twitch chat GIF (GIPHY-backed). `content` is the bracketed description the
+  // message text carries at the GIF's span; the URL must be used as sent.
+  | { type: 'gif'; content: string; gif_id: string; gif_url: string };
 
 // Reply information parsed from IRC tags - matches Rust ReplyInfo
 export interface BackendReplyInfo {
@@ -46,6 +49,37 @@ export interface MessageMetadata {
   bits_amount?: number;
   /** System message for subscriptions/donations */
   system_message?: string;
+  /** True when the Rust rule engine evaluated this message: the fields below
+   *  are authoritative and the row runs no matcher of its own. */
+  rules_evaluated?: boolean;
+  /** The message replies to one of ours. */
+  is_reply_to_me?: boolean;
+  /** First matching highlight rule (phrase, user, or badge), if any. */
+  highlight?: HighlightStamp;
+  /** Built-in event tint (raid, returning chatter, first message, self). */
+  built_in?: BuiltInStamp;
+  /** Ids of the user's saved filters this message satisfies. */
+  filter_ids?: string[];
+  /** Sender's low-trust status in this channel (moderators only). */
+  suspicious?: 'monitored' | 'restricted' | string;
+  /** Row came from a history backfill rather than live delivery. */
+  from_backfill?: boolean;
+}
+
+/** A matched highlight rule, stamped by the Rust rule engine. */
+export interface HighlightStamp {
+  rule_id: string;
+  kind: 'phrase' | 'user' | 'badge';
+  color: string;
+  sound_id?: string | null;
+  cooldown_ms: number;
+}
+
+/** A built-in event highlight, stamped by the Rust rule engine. */
+export interface BuiltInStamp {
+  kind: 'raider' | 'returning' | 'first_time' | 'self';
+  color: string;
+  label: string;
 }
 
 export interface BackendChatMessage {
@@ -70,8 +104,12 @@ export interface BackendChatMessage {
     title?: string;
     description?: string;
   }>;
-  emotes: Array<{ id: string; start: number; end: number; url: string }>;
-  layout: { height: number; width: number; has_reply?: boolean; is_first_message?: boolean };
+  /** No longer serialized by the backend (the `emotes` tag and `segments`
+   *  carry everything); optional so old cached objects still typecheck. */
+  emotes?: Array<{ id: string; start: number; end: number; url: string }>;
+  /** No longer serialized by the backend - the ResizeObserver measurement is
+   *  authoritative and nothing reads this. */
+  layout?: { height: number; width: number; has_reply?: boolean; is_first_message?: boolean };
   tags: { [key: string]: string };
   // Pre-parsed segments from Rust (Phase 3.1 - The Endgame)
   segments?: MessageSegment[];
@@ -91,7 +129,26 @@ export interface ReplyInfo {
   parentUserLogin: string;
 }
 
+// Structured backend rows are parsed at least twice per message today (the
+// ChatWidget side-effect loop and the row's own render memo), and both derive
+// channelId from the row's own tags - so one cache entry per object is
+// correct. Keyed by object identity: upgrades replace the object, so a stale
+// entry can never be served. Raw IRC strings stay uncached (cheap, and their
+// channelId can vary by caller).
+const parsedObjCache = new WeakMap<object, ReturnType<typeof parseMessageUncached>>();
+
 export const parseMessage = (raw: string | BackendChatMessage, channelId?: string) => {
+  if (typeof raw !== 'string') {
+    const hit = parsedObjCache.get(raw);
+    if (hit) return hit;
+    const parsed = parseMessageUncached(raw, channelId);
+    parsedObjCache.set(raw, parsed);
+    return parsed;
+  }
+  return parseMessageUncached(raw, channelId);
+};
+
+const parseMessageUncached = (raw: string | BackendChatMessage, channelId?: string) => {
   // Check if it's a backend message object
   if (typeof raw !== 'string') {
     const tags = new Map<string, string>(Object.entries(raw.tags));

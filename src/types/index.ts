@@ -1,3 +1,5 @@
+import type { ProviderId } from './providers';
+
 export interface AudioBoostSettings {
   enabled: boolean;
   gain: number; // Makeup gain multiplier applied after compression (1 = unity)
@@ -62,6 +64,17 @@ export interface VideoPlayerSettings {
    *           playing behind a media notification that taps back into the app.
    */
   background_mode?: 'pip' | 'audio';
+  /** Scroll over the player to adjust volume. Default true. */
+  scroll_volume?: boolean;
+  /** Scroll down over the player to open the channel About drawer. Default
+   *  true. Moves to Shift + scroll down while `scroll_volume` is also on. */
+  scroll_about_reveal?: boolean;
+  /** Middle-click the player to toggle mute. Default true. */
+  middle_click_mute?: boolean;
+  /** Volume moved per wheel notch, 0.01-0.25. Default 0.05. */
+  wheel_volume_step?: number;
+  /** Reopen a VOD where you left off. Default true. Typed in Rust. */
+  resume_vod_playback?: boolean;
 }
 
 export interface CacheSettings {
@@ -182,7 +195,16 @@ export interface ChatDesignSettings {
   mention_animation: boolean; // Enable red-shift animation for mentions
   show_timestamps?: boolean; // Show timestamp next to each message
   show_timestamp_seconds?: boolean; // Include seconds in timestamps
+  timestamp_format?: '12h' | '24h'; // Formatted in Rust; default 12h
   emote_scale?: number; // Emote size multiplier (0.5x to 3x). Default 1.
+  // Animated emotes: play always (default), only while the row is hovered,
+  // or never (first frame). Typed in Rust too; the CDNs serve static files.
+  animate_emotes?: 'always' | 'hover' | 'never';
+  // Twitch chat GIFs (Tier 2/3 subscribers). Off swaps each for a chip that
+  // reveals on click. Typed in Rust too (ChatDesignSettings). Default true.
+  show_chat_gifs?: boolean;
+  // Opacity of history rows loaded on join, 0-100. Default 100.
+  backfill_opacity?: number;
   emote_margin?: number; // Horizontal margin around emotes in rem. Negative values overlap. Default 0.125.
   // Height in pixels of the enlarged emote shown in the hover preview card.
   // Default 96 (one step up from the original fixed 64px preview).
@@ -290,8 +312,17 @@ export interface HighlightPhrase {
   cooldown_seconds?: number;
 }
 
+// A user-supplied audio file usable as a highlight sound. `id` is
+// `file:<random>` so it can sit in the same field as the built-in tone ids.
+export interface CustomSound {
+  id: string;
+  name: string;
+  path: string;
+}
+
 export interface ChatHighlightSettings {
   phrases: HighlightPhrase[];
+  custom_sounds?: CustomSound[];
   built_in?: BuiltInHighlightSettings;
   users?: HighlightUser[];
   badges?: HighlightBadge[];
@@ -479,10 +510,28 @@ export interface ChatRenderSettings {
   message_buffer_cap?: number;
 }
 
+export interface ImageUploaderSettings {
+  enabled?: boolean;
+  // A preset id from utils/imageUploadHosts (nuuls, catbox, litterbox, uguu)
+  // or "custom" for the fields below.
+  preset?: string;
+  // Extra text form fields some hosts require, url-encoded "k=v&k2=v2".
+  extra_fields?: string;
+  // Multipart POST target. Chatterino's default is https://i.nuuls.com/upload.
+  url?: string;
+  // Form field name for the file (nuuls: "attachment").
+  form_field?: string;
+  // Dotted path into a JSON response for the link; empty = the body is the link.
+  response_path?: string;
+}
+
 export interface ChatInputSettings {
   // Append an invisible suffix when sending the same message twice in a row,
   // so Twitch's duplicate-message rejection doesn't eat the second send.
   bypass_duplicate?: boolean;
+  // Paste an image into the composer to upload it and insert the link. Off by
+  // default: it sends the image to a third-party host you choose.
+  image_uploader?: ImageUploaderSettings;
   // Ctrl+Enter sends the message AND keeps it in the input box. Plain Enter
   // still sends + clears like normal.
   quick_send?: boolean;
@@ -491,10 +540,20 @@ export interface ChatInputSettings {
   emote_tab_complete_enabled?: boolean;
   emote_tab_complete_match_mode?: 'starts_with' | 'includes';
   emote_tab_complete_include_chatters?: boolean;
+  // Underline misspelled words in the composer and offer corrections on
+  // right-click. Replaces the webview's own spell check, which flags every
+  // emote name and every login because it has never seen Twitch chat.
+  // Defaults to on.
+  spellcheck_enabled?: boolean;
+  // Words taught from the right-click menu. Stored lowercase.
+  spellcheck_custom_words?: string[];
   // Chrome around the composer, for people who want the row as bare as
   // possible. All default to showing.
   hide_placeholder?: boolean;
   hide_emote_button?: boolean;
+  // Hide the command menu button (the slash-in-a-box left of the emote
+  // button). Typing / still opens the autocomplete.
+  hide_command_button?: boolean;
   hide_points_balance?: boolean;
 }
 
@@ -513,12 +572,30 @@ export const DEFAULT_TOAST_POSITION: ToastPosition = 'bottom-right';
 // the chat input (which sits in the bottom-right corner) out of the box.
 export const DEFAULT_TOAST_EDGE_OFFSET = 72;
 
+/** Identity for a favorited channel, so an unfollowed favorite can still be
+ *  drawn while it is offline. Mirrors the Rust `FavoriteChannel`. */
+export interface FavoriteChannel {
+  /** The key used in favorite_streamers: a Twitch numeric user id, or a
+   *  composite `provider:channel`. See utils/favorites. */
+  id: string;
+  provider: ProviderId;
+  /** Login / slug / @handle / UC id: what chat and playback address. */
+  channel: string;
+  display_name?: string;
+  avatar?: string;
+  added_at?: string;
+}
+
 export interface LiveNotificationSettings {
   enabled: boolean;
   play_sound: boolean;
   sound_type?: string; // 'boop' | 'tick' | 'gentle' | 'soft' | 'whisper'
   // Notification type toggles
   show_live_notifications?: boolean;
+  // Go-live notifications for FAVORITED channels, which may not be followed.
+  // Separate from show_live_notifications so a long favorites list can be
+  // silenced without losing notifications for the channels you follow.
+  show_favorite_live_notifications?: boolean;
   show_whisper_notifications?: boolean;
   show_update_notifications?: boolean;
   show_drops_notifications?: boolean;
@@ -642,8 +719,14 @@ export interface CustomTheme {
 
 export interface MultiNookSlot {
   id: string;             // Unique identifier for the slot (e.g., cell-1)
-  channelLogin: string;   // The Twitch channel login name
-  channelId?: string;     // The Twitch user ID for chat connection mapping
+  // The platform this tile is on. ABSENT MEANS TWITCH, matching the bare-key
+  // convention in utils/providerKey.ts, so grids saved before this field keep
+  // loading untouched. The Rust MultiNookSlot must name this field too: that
+  // struct is typed on Settings and never reaches the `extra` catch-all, so a
+  // key it does not know is dropped on save (see its `quality` comment).
+  provider?: ProviderId;
+  channelLogin: string;   // The channel's login/slug on `provider`
+  channelId?: string;     // The platform user ID for chat connection mapping
   channelName?: string;   // The capitalization-correct display name
   volume: number;         // 0.0 to 1.0
   muted: boolean;         // Mute state
@@ -662,8 +745,9 @@ export interface MultiNookSlot {
  *  of MultiNookSlot. A preset records *which* channels to open, not transient
  *  view state (volume/mute/focus/minimize), which is re-derived on load. */
 export interface MultiNookPresetChannel {
-  channelLogin: string;      // The Twitch channel login name (canonical key)
-  channelId?: string;        // Twitch user ID, cached for instant chat mapping on load
+  provider?: ProviderId;     // Platform; absent means Twitch, as on MultiNookSlot
+  channelLogin: string;      // The channel's login/slug on `provider` (canonical key)
+  channelId?: string;        // Platform user ID, cached for instant chat mapping on load
   channelName?: string;      // Capitalization-correct display name for the preset UI
   profileImageUrl?: string;  // Cached avatar so preset rows render without a network hit
   quality?: string;          // Preferred Streamlink quality carried into the loaded tile
@@ -731,6 +815,48 @@ export interface MessageRepeatSettings {
   keep_all_when_moderator?: boolean;
 }
 
+// Hiding chat from chosen users and known bots. Names match the stream
+// overlay's blocklist dialect: case-insensitive, leading @ stripped, matched
+// against login OR display name. Per-channel keys are composite provider keys
+// (`makeKey`, e.g. `twitch:xqc`); utils/chatFilters.ts owns the matching.
+export interface ChatFilterSettings {
+  // Hide well-known bots (StreamElements, Nightbot, ...) in every channel.
+  hide_bots?: boolean;
+  // Hidden everywhere, on every platform.
+  hidden_users?: string[];
+  // Hidden only in one channel: composite channel key -> names.
+  per_channel?: Record<string, string[]>;
+  // Phrases that hide a message everywhere. Evaluated in Rust
+  // (services/chat_rules.rs) before the message reaches any window.
+  ignored_phrases?: IgnoredPhrase[];
+}
+
+export interface IgnoredPhrase {
+  id: string;
+  pattern: string;
+  enabled: boolean;
+  case_sensitive?: boolean;
+  whole_word?: boolean;
+  is_regex?: boolean;
+}
+
+// A saved message filter in Chatterino's expression syntax, evaluated in
+// Rust for every message. Panes bind to a filter id and show only rows the
+// engine stamped with it (metadata.filter_ids).
+export interface SavedChatFilter {
+  id: string;
+  name: string;
+  expr: string;
+  enabled: boolean;
+}
+
+// Rust-owned chat query engine settings: saved filters and the per-channel
+// search history cap (default 1000, range 200-5000).
+export interface ChatQuerySettings {
+  filters?: SavedChatFilter[];
+  history_cap?: number;
+}
+
 // Which rows the chat user card shows. Everything defaults to on, so a user
 // who never opens this sees the card exactly as it has always looked.
 export interface UserCardSettings {
@@ -744,6 +870,11 @@ export interface UserCardSettings {
   show_relative_time?: boolean;
   // Link out to the user's 7TV profile from the card header.
   show_seventv_link?: boolean;
+  // Pronouns from pronouns.alejo.io (one small request per unique user,
+  // cached six hours in the backend). Off by default: it is a third-party call.
+  show_pronouns?: boolean;
+  // Private notes on a user, kept by user id in app data.
+  show_notes?: boolean;
 }
 
 // What the main window's close button does. Mirrors the Rust CloseToTrayMode
@@ -751,12 +882,54 @@ export interface UserCardSettings {
 // the long-standing behavior.
 export type CloseToTrayMode = 'with-popouts' | 'always' | 'never';
 
+// Which of YouTube's two live-chat views to read. Mirrors the Rust
+// YouTubeChatView enum (kebab-case); keep the two in sync. 'live' is the
+// unfiltered firehose and the default; 'top' is YouTube's own filtered view,
+// which drops messages it judges low quality so a very fast chat stays readable.
+export type YouTubeChatView = 'live' | 'top';
+
+export interface StreamerModeSettings {
+  // 'auto' watches for OBS / Streamlabs / XSplit / Twitch Studio / vMix.
+  mode?: 'off' | 'on' | 'auto';
+}
+
+export interface ChatOverlaySettings {
+  opacity?: number; // 10-100, default 70
+  width?: number;
+  height?: number;
+}
+
+export interface FullscreenChatSettings {
+  // 'overlay' (default) shows chat over fullscreen video; 'hidden' keeps the
+  // pre-existing behaviour (video covers everything).
+  mode?: 'overlay' | 'hidden';
+  // Background opacity of the overlay column, 0-100. Default 55.
+  opacity?: number;
+  // Column width in px, 240-640. Default 340.
+  width?: number;
+  // Fade the column out with the player controls; hover or focus keeps it.
+  // Default true.
+  auto_hide?: boolean;
+  // Which edge; 'auto' follows chat_placement (bottom docks to the right).
+  side?: 'auto' | 'left' | 'right';
+}
+
 export interface Settings {
   quality: string;
   chat_placement: string;
   // When chat_placement is 'left' or 'right', hide the docked chat and reveal it
   // on hover toward that edge (it slides in and the player flexes to make room).
   chat_auto_hide?: boolean;
+  // Chat laid over the video while the player is fullscreen. Same WebView, no
+  // second window: the docked chat panel is lifted above Plyr's fullscreen
+  // layer as a translucent column.
+  fullscreen_chat?: FullscreenChatSettings;
+  // Transparent always-on-top chat overlay window (#/chat-overlay). Its
+  // opacity and last size; the window itself is opened by the user.
+  chat_overlay?: ChatOverlaySettings;
+  // Streamer mode: hide viewer counts, link previews, restricted users' rows
+  // and mute highlight sounds while broadcasting. Detection runs in Rust.
+  streamer_mode?: StreamerModeSettings;
   accounts: string[];
   current_account: string;
   hide_search_bar_on_startup: boolean;
@@ -766,6 +939,9 @@ export interface Settings {
   streamlink?: StreamlinkSettings;
   drops: DropsSettings;
   favorite_streamers: string[];
+  // Display identity for the entries in favorite_streamers. A sidecar, not a
+  // replacement: favorite_streamers stays the answer to "is this favorited".
+  favorite_channels?: FavoriteChannel[];
   chat_design?: ChatDesignSettings;
   chat_highlights?: ChatHighlightSettings;
   chat_customization?: ChatCustomizationSettings;
@@ -827,10 +1003,56 @@ export interface Settings {
   user_card?: UserCardSettings;
   // Folding runs of the same message into one row with a count.
   message_repeat?: MessageRepeatSettings;
+  // Hiding chat from chosen users and known bots, per channel or everywhere.
+  // Only the frontend reads it, so it rides Rust's `extra` catch-all.
+  chat_filters?: ChatFilterSettings;
+  chat_query?: ChatQuerySettings;
   // Last 10 polls and predictions you started, newest first, so running the
   // same one again is two clicks in the composer.
   recent_polls?: RecentPollEntry[];
   recent_predictions?: RecentPollEntry[];
+  // Channels followed inside StreamNook on platforms whose own follow list we
+  // can't read (Kick, TikTok). A TYPED Rust field, not an `extra` key, because
+  // the backend who's-live poller reads it.
+  provider_follows?: ProviderFollow[];
+  // Which YouTube live-chat view to read. A TYPED Rust field, not an `extra`
+  // key, because the YouTube adapter reads it when it resolves a stream.
+  youtube_chat_view?: YouTubeChatView;
+  // Which platform the Home tabs are filtered to. Frontend-only, rides `extra`.
+  /** Which platform the app is scoped to (the rail's selection). Frontend-only,
+   *  so it rides Rust's settings catch-all as a top-level key. */
+  active_platform?: ProviderId | 'all';
+  // Whether the sidebar merges platforms into one list or groups them into
+  // collapsible per-platform sections. Frontend-only, rides `extra`.
+  sidebar_provider_grouping?: 'unified' | 'grouped';
+  /** Broadcast-language filter for the Discover feed and sidebar Recommended
+   *  section (Helix codes, e.g. ["fr", "de"]). Empty or absent = no filter.
+   *  Frontend-only, passed to the backend per-call, so it rides Rust's
+   *  settings catch-all as a top-level key. */
+  discovery_languages?: string[];
+  /** Opt-in account personalization for the Discover feed. Off (default) =
+   *  recommendations stay anonymous: no account credentials are ever sent.
+   *  Frontend-only, passed to the backend per-call, rides `extra`. */
+  discovery_personalized?: boolean;
+}
+
+/** A channel the user follows inside StreamNook. Mirrors the Rust struct. */
+export interface ProviderFollow {
+  provider: ProviderId;
+  /** Slug / @handle / UC id, lowercased for Kick, verbatim for YouTube ids. */
+  channel: string;
+  display_name?: string;
+  /** Cached platform user id, filled on the first successful live check. */
+  user_id?: string;
+  /** ISO-UTC. */
+  added_at: string;
+  /** The user subscribes to this channel on the platform. */
+  subscribed?: boolean;
+  /** Imported from the platform's own follow list rather than added by hand. */
+  imported?: boolean;
+  /** Channel avatar captured at import (and backfilled once after a sync), so
+   *  the roster draws without a per-card lookup on every app start. */
+  avatar?: string;
 }
 
 /** A title plus its choices, remembered so the composer can offer it again. */
@@ -858,6 +1080,9 @@ export interface ModerationSettings {
   // Reasons offered when banning or timing out from the user card or a
   // message's moderation controls. First entry is the prefilled default.
   saved_ban_reasons?: string[];
+  // Timeout durations (seconds) offered on the hover dock and drag dial.
+  // Default [1, 600, 3600, 86400].
+  timeout_presets?: number[];
 }
 
 export interface ModLogEvent {
@@ -895,6 +1120,78 @@ export interface ReleaseNotes {
   published_at: string;
 }
 
+/**
+ * A live stream row. The name is historical: rows may now come from any
+ * platform, tagged by `provider`. Non-Twitch rows are field-compatible but
+ * differ semantically — `user_id` is the platform's own id (Kick numeric,
+ * YouTube UC…), `thumbnail_url` is a direct URL with no {width} template, and
+ * `game_id` / `tags` / `broadcaster_type` may be absent.
+ */
+/** Channel points as the Rust channel-state service reports them. */
+export interface ChannelPoints {
+  enabled: boolean;
+  balance: number | null;
+  name: string | null;
+  icon_url: string | null;
+  available_claim_id: string | null;
+}
+
+/** Per-channel chat state owned by Rust (src-tauri/src/services/channel_state.rs). */
+export interface ChannelState {
+  login: string;
+  channel_id: string;
+  viewer_count: number | null;
+  viewers_at: number | null;
+  points: ChannelPoints | null;
+  points_at: number | null;
+  pinned: unknown[];
+  pinned_at: number | null;
+}
+
+/** One changed section, the payload of the `channel-state` event. */
+export type ChannelStateUpdate =
+  | { section: 'viewers'; login: string; viewer_count: number | null; at: number }
+  | { section: 'points'; login: string; points: ChannelPoints | null; at: number }
+  | { section: 'pinned'; login: string; pinned: unknown[]; at: number };
+
+/** One channel's bulk hype-train status, as Rust reports it. */
+export interface HypeTrainBulkStatus {
+  channel_id: string;
+  is_active: boolean;
+  level: number;
+  is_golden_kappa: boolean;
+}
+
+/** The Rust-owned Home snapshot (src-tauri/src/services/home_snapshot.rs):
+ *  everything the Home grid and the Sidebar render, with a fetch time per
+ *  section (unix seconds, null until first fetched). */
+export interface HomeSnapshot {
+  followed_live: TwitchStream[];
+  followed_live_at: number | null;
+  offline_follows: TwitchStream[];
+  last_broadcasts: Record<string, string | null>;
+  offline_at: number | null;
+  recommended: TwitchStream[];
+  recommended_cursor: string | null;
+  recommended_at: number | null;
+  hype_trains: HypeTrainBulkStatus[];
+  hype_at: number | null;
+  watch_streaks: Record<string, number>;
+  streaks_at: number | null;
+  drops_campaigns: DropCampaign[];
+  drops_active_game_names: string[];
+  drops_at: number | null;
+}
+
+/** One changed section, the payload of the `home-snapshot` event. */
+export type HomeSnapshotUpdate =
+  | { section: 'followed_live'; streams: TwitchStream[]; at: number }
+  | { section: 'offline'; channels: TwitchStream[]; last_broadcasts: Record<string, string | null>; at: number }
+  | { section: 'recommended'; streams: TwitchStream[]; cursor: string | null; at: number }
+  | { section: 'hype_trains'; statuses: HypeTrainBulkStatus[]; at: number }
+  | { section: 'watch_streaks'; streaks: Record<string, number>; at: number }
+  | { section: 'drops'; campaigns: DropCampaign[]; active_game_names: string[]; at: number };
+
 export interface TwitchStream {
   id: string;
   user_id: string;
@@ -912,7 +1209,16 @@ export interface TwitchStream {
   is_live?: boolean;
   // Free-form stream tags (e.g. "English", "Speedrun"); used by the category tag filter.
   tags?: string[];
+  /** Broadcast language in Helix form ("en", "fr", "zh-hk"). */
+  language?: string;
+  /** Source platform. ABSENT = twitch (every pre-existing producer). */
+  provider?: ProviderId;
+  /** Canonical platform watch URL, set by provider rows; drives `start_stream`. */
+  watch_url?: string;
 }
+
+/** Platform-neutral alias for new code; identical to `TwitchStream`. */
+export type Stream = TwitchStream;
 
 export interface TwitchClip {
   id: string;
@@ -955,6 +1261,46 @@ export interface TwitchVideo {
   language: string;
   type: string;
   duration: string;
+  /** "recording" while the broadcast is still live, "recorded" when finished.
+   *  Only the GQL user-videos path fills it. */
+  status?: string;
+  /** Length in whole seconds (the number `duration` is formatted from). */
+  length_seconds?: number;
+  /** The viewer's stored watch position, joined on by Rust. Absent when never
+   *  watched. */
+  progress?: VodProgressSummary;
+}
+
+/** Rust-owned VOD watch state, the slice a card needs for its bar. */
+export interface VodProgressSummary {
+  position_secs: number;
+  duration_secs: number;
+  completed: boolean;
+}
+
+/** What `start_stream` returns alongside the proxy URL for a VOD: how to run
+ *  it (a "recording" VOD is a growing EVENT playlist, not live) and where to
+ *  begin. */
+export interface VodStartInfo {
+  video_id: string;
+  status: 'recording' | 'recorded' | 'unknown' | string;
+  length_seconds?: number;
+  recorded_at?: string;
+  channel_login?: string;
+  title?: string;
+  thumbnail_url?: string;
+  /** Resume position, or the mapped broadcast position for a live rewind. */
+  start_position_secs?: number;
+  /** The viewer rewound a live broadcast into this recording. */
+  rewound_from_live: boolean;
+}
+
+/** Rust's answer to "can this live broadcast be rewound": Twitch keeps a
+ *  recording only while the channel has VODs enabled. */
+export interface LiveRewindInfo {
+  available: boolean;
+  video_id?: string;
+  recorded_at?: string;
 }
 
 export interface TwitchUser {

@@ -470,9 +470,15 @@ export async function getFullProfileWithFallback(
       // Fetch badge data from unified service and 7TV cosmetics in parallel
       // Use getAllUserBadgesWithEarned for profile overlays to get full earned badge collection
       const { getAllUserBadgesWithEarned } = await import('./badgeService');
+      // Profile surfaces LIST what an account owns (the cosmetics picker, the
+      // attainables overlay), so this one path pays the full inventory query.
+      // The chat path deliberately fetches only the worn ids, which is why it
+      // cannot be reused here. Falls back to the worn-only shape if the heavier
+      // query fails, so a profile still paints rather than showing nothing.
+      const { fetchUserInventory } = await import('./seventvService');
       const [badgeData, seventvCosmetics] = await Promise.all([
         getAllUserBadgesWithEarned(userId, username, effectiveChannelId, effectiveChannelName),
-        getCosmeticsWithFallback(userId)
+        fetchUserInventory(userId).then((inv) => inv ?? getCosmeticsWithFallback(userId)),
       ]);
 
       // Merge display and earned Twitch badges, then strip cache-dead fields.

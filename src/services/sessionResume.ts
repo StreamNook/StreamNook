@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../stores/AppStore';
 import { Logger } from '../utils/logger';
+import { streamKey, streamProvider } from '../utils/streamProvider';
 
 /** Mirrors the Rust `ResumeSnapshot` struct (commands/session.rs). */
 interface ResumeSnapshot {
@@ -18,15 +19,21 @@ interface ResumeSnapshot {
  */
 export async function captureResumeSnapshot(): Promise<void> {
   const s = useAppStore.getState();
-  const login = s.currentStream?.user_login;
-  if (!login || s.currentMediaType !== 'live') return;
+  const stream = s.currentStream;
+  if (!stream?.user_login || s.currentMediaType !== 'live') return;
 
+  // The COMPOSITE key, so a Kick stream resumes on Kick. Twitch rows still key
+  // as a bare login, so snapshots written before multi-platform browsing (and
+  // every Twitch snapshot after it) restore exactly as they always did.
+  const isTwitch = streamProvider(stream) === 'twitch';
   const snapshot: ResumeSnapshot = {
-    stream_login: login,
+    stream_login: streamKey(stream),
     media_type: s.currentMediaType,
     original_media_url: s.originalMediaUrl ?? null,
-    was_running: s.dropProgressActive,
-    automation_campaign_id: s.liveDropProgress?.current_campaign ?? null,
+    // Drops and their automation are Twitch-only, so a provider snapshot must
+    // not ask the next launch to replay them.
+    was_running: isTwitch && s.dropProgressActive,
+    automation_campaign_id: isTwitch ? (s.liveDropProgress?.current_campaign ?? null) : null,
   };
 
   try {

@@ -23,6 +23,9 @@ interface OverlayState {
   label: string;
   url: string;
   mode: OverlayMode;
+  /** Which persistent web profile backs it. Absent = the active Twitch
+   *  account's, which is what every Twitch caller wants. */
+  profile?: string;
 }
 
 // Matches the React TitleBar height (h-[40px]); the overlay sits just below it so
@@ -100,12 +103,12 @@ export default function TwitchOverlay() {
   // Backend events: open a new overlay, live URL updates, and dismissal.
   useEffect(() => {
     const uns: Array<() => void> = [];
-    listen<{ label: string; url: string; mode: OverlayMode }>('twitch-overlay-open', (e) => {
+    listen<{ label: string; url: string; mode: OverlayMode; profile?: string }>('twitch-overlay-open', (e) => {
       setOverlay((cur) => {
         if (cur && cur.label !== e.payload.label) {
           invoke('close_login_overlay', { label: cur.label }).catch(() => {});
         }
-        return { label: e.payload.label, url: e.payload.url, mode: e.payload.mode };
+        return { label: e.payload.label, url: e.payload.url, mode: e.payload.mode, profile: e.payload.profile };
       });
       setDisplayUrl(e.payload.url);
     }).then((u) => uns.push(u));
@@ -185,7 +188,7 @@ export default function TwitchOverlay() {
       if (mountedLabelRef.current !== overlay.label) {
         mountedLabelRef.current = overlay.label;
         lastKeyRef.current = key;
-        invoke('mount_twitch_overlay', { label: overlay.label, url: overlay.url, ...args }).catch((e) => {
+        invoke('mount_twitch_overlay', { label: overlay.label, url: overlay.url, profile: overlay.profile ?? null, ...args }).catch((e) => {
           Logger.warn('[TwitchOverlay] open failed:', e);
           useAppStore.getState().addToast(`Login window failed to open: ${String(e)}`, 'error');
         });

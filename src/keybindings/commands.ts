@@ -3,8 +3,11 @@
 // (shortcut hints), and the Keybindings settings tab.
 
 import { useAppStore } from '../stores/AppStore';
+import { WATCHABLE_PROVIDERS, type ProviderId } from '../types/providers';
 import { getPlayerControls, isPlayerControllable } from './playerControls';
 import { getChatModController } from './chatModController';
+import { getChatSearchController } from './chatSearchController';
+import { getPaneFocusController } from './paneFocusController';
 import type { BindableCommand } from './types';
 
 const app = () => useAppStore.getState();
@@ -46,6 +49,16 @@ const startRelativeFollow = (dir: 1 | -1): void => {
     curIdx === -1 ? (dir === 1 ? 0 : list.length - 1) : (curIdx + dir + list.length) % list.length;
   const target = list[nextIdx];
   if (target) void s.startStream(target.user_login, target);
+};
+
+/** Step the app to the next platform context, wrapping back to the unified
+ *  view. No toast: the title-bar seam wipes to the new colour and the anchor
+ *  renames itself, which is the feedback. */
+const cyclePlatform = (): void => {
+  const s = app();
+  const order: (ProviderId | 'all')[] = ['all', ...WATCHABLE_PROVIDERS];
+  const idx = order.indexOf(s.activePlatform);
+  s.setActivePlatform(order[(idx + 1) % order.length]);
 };
 
 let cache: BindableCommand[] | null = null;
@@ -217,6 +230,18 @@ function build(): BindableCommand[] {
       keywords: 'previous prev followed channel switch surf cycle',
       isAvailable: () => (app().followedStreams?.length ?? 0) > 0,
       run: () => startRelativeFollow(-1),
+    },
+    {
+      id: 'nav.cyclePlatform',
+      label: 'Next platform',
+      description: 'Cycle the app between all platforms and each one on its own.',
+      category: 'Navigation',
+      context: 'global',
+      defaultBindings: ['Alt+S'],
+      keywords: 'platform provider twitch kick youtube switch scope cycle service',
+      // Hidden on a Twitch-only build, same rule the seam itself follows.
+      isAvailable: () => WATCHABLE_PROVIDERS.length > 1,
+      run: () => cyclePlatform(),
     },
 
     // ---------------- Player ----------------
@@ -476,6 +501,63 @@ function build(): BindableCommand[] {
       keywords: 'moderate unban allow approve',
       isAvailable: modFocused,
       run: () => mod()?.unbanFocused(),
+    },
+
+    // ---------------- Chat search ----------------
+    // Ctrl+F opens the in-pane search bar over the Rust-owned history ring.
+    // Targets the hovered pane, else the main-window chat.
+    {
+      id: 'chat.search',
+      label: 'Search chat',
+      description: 'Find messages in this chat. Supports from:, is:, badge:, has:link, regex: and ! to negate.',
+      category: 'Chat',
+      context: 'global',
+      defaultBindings: ['Ctrl+F'],
+      keywords: 'search find chat messages ctrl f',
+      isAvailable: () => getChatSearchController() !== null,
+      run: () => getChatSearchController()?.openSearch(),
+    },
+
+    // ---------------- MultiChat pane focus ----------------
+    // Custom splits only: cycle keyboard focus (mod keys, tab clicks) between
+    // panes. Ctrl+Alt chords, never Alt+Arrow (WebView2 back/forward).
+    {
+      id: 'multiView.focusNextPane',
+      label: 'Focus next pane',
+      description: 'Move keyboard focus to the next split pane in a MultiChat window.',
+      category: 'Multi-view',
+      context: 'global',
+      defaultBindings: ['Ctrl+Alt+ArrowRight'],
+      keywords: 'pane split focus next right multichat',
+      isAvailable: () => getPaneFocusController()?.isAvailable() === true,
+      run: () => getPaneFocusController()?.focusNext(),
+    },
+    {
+      id: 'multiView.focusPrevPane',
+      label: 'Focus previous pane',
+      description: 'Move keyboard focus to the previous split pane in a MultiChat window.',
+      category: 'Multi-view',
+      context: 'global',
+      defaultBindings: ['Ctrl+Alt+ArrowLeft'],
+      keywords: 'pane split focus previous left multichat',
+      isAvailable: () => getPaneFocusController()?.isAvailable() === true,
+      run: () => getPaneFocusController()?.focusPrev(),
+    },
+
+    // ---------------- Chat overlay window ----------------
+    // A click-through overlay cannot be clicked, so the main window flips it
+    // back. Sent to every overlay window; each toggles its own state.
+    {
+      id: 'overlay.toggleClickThrough',
+      label: 'Chat overlay: toggle click-through',
+      description: 'Send or stop sending clicks through the floating chat overlay to the app behind it.',
+      category: 'Chat',
+      context: 'global',
+      defaultBindings: ['Ctrl+Alt+N'],
+      keywords: 'overlay click through transparent floating chat window',
+      run: () => {
+        void import('@tauri-apps/api/event').then(({ emit }) => emit('chat-overlay-toggle-interactive', null));
+      },
     },
 
     // ---------------- Reserved documentation entries ----------------

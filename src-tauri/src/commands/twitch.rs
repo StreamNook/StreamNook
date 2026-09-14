@@ -712,6 +712,84 @@ fn active_twitch_web_profile_dir() -> Result<PathBuf, String> {
 /// load, so a top-level navigation hook alone would miss them. This reports
 /// `location.href` on load and on each in-page navigation, deduped, to the
 /// `report_login_popup_url` command, which pushes it into this window's bar.
+/// Overlays whose page opens its sign-in in a new window, so that window must be
+/// kept inside the overlay instead of escaping as a bare WebView2 popup.
+///
+/// Google does this: the overlay loads the full-page sign-in, but the account
+/// picker arrives as a popup, and nothing in the app handled WebView2's
+/// `NewWindowRequested`, so it landed as an undecorated window floating over the
+/// desktop with the overlay sitting empty behind it. It reads as "the login opened
+/// outside the overlay", and it only LOOKS fixed when the app is maximized,
+/// because then the stray window happens to land on top of the app.
+///
+/// Deliberately a LIST rather than blanket behaviour: the Twitch subscribe panel
+/// is an overlay too, and payment flows use popups legitimately, so swallowing
+/// every new window could break checkout. Twitch and Kick sign-in are full-page
+/// and never needed this.
+#[cfg(windows)]
+const CONTAIN_POPUPS_IN_OVERLAY: &[&str] = &["youtube-login"];
+
+/// Make a popup from `win`'s page navigate the overlay itself instead of opening a
+/// separate window.
+///
+/// This is done NATIVELY rather than by overriding `window.open` in the injected
+/// script, because a script override only covers the frame it runs in and Google's
+/// sign-in prompt is raised from a CROSS-ORIGIN iframe. That frame can neither be
+/// reached by a top-frame override nor navigate the top document itself, so the
+/// script approach silently leaves the popup escaping. `NewWindowRequested` fires
+/// for the whole webview whichever frame asked, which is why it is the right seam.
+#[cfg(windows)]
+fn contain_overlay_popups(win: &tauri::WebviewWindow) {
+    use webview2_com::take_pwstr;
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2;
+    use webview2_com::NewWindowRequestedEventHandler;
+    use windows::core::{HSTRING, PWSTR};
+
+    let dispatched = win.with_webview(|platform_webview| unsafe {
+        let core = match platform_webview.controller().CoreWebView2() {
+            Ok(c) => c,
+            Err(e) => {
+                error!("[overlay] no CoreWebView2 to contain popups on: {}", e);
+                return;
+            }
+        };
+        // webview2-com 0.38 types the registration token as a plain i64.
+        let mut token: i64 = 0;
+        let handler = NewWindowRequestedEventHandler::create(Box::new(
+            move |sender: Option<ICoreWebView2>, args| {
+                let (Some(sender), Some(args)) = (sender, args) else {
+                    return Ok(());
+                };
+                let mut uri = PWSTR::null();
+                args.Uri(&mut uri as *mut PWSTR)?;
+                let target = take_pwstr(uri);
+                // A scripted popup (`window.open('')` then document.write) has no
+                // real URL. Navigating the overlay to about:blank would wipe the
+                // page the user is on, which is worse than the stray window, so
+                // leave those unhandled for WebView2 to open as it always did.
+                if target.is_empty() || target.starts_with("about:") {
+                    debug!("[overlay] popup has no URL ('{}'); left to WebView2", target);
+                    return Ok(());
+                }
+                // Claim the request BEFORE navigating: leaving it unhandled lets
+                // WebView2 open its own window too, showing the page twice.
+                args.SetHandled(true)?;
+                debug!("[overlay] popup contained -> {}", target);
+                sender.Navigate(&HSTRING::from(target))?;
+                Ok(())
+            },
+        ));
+        if let Err(e) = core.add_NewWindowRequested(&handler, &mut token) {
+            error!("[overlay] add_NewWindowRequested failed: {}", e);
+        }
+    });
+    // with_webview posts to the UI thread; a failure here means the hook was never
+    // installed, so say so rather than leaving a silent gap.
+    if let Err(e) = dispatched {
+        error!("[overlay] couldn't reach the webview to contain popups: {}", e);
+    }
+}
+
 #[cfg(desktop)]
 fn spa_url_report_script(window_label: &str, is_overlay: bool) -> String {
     let label = serde_json::to_string(window_label).unwrap_or_else(|_| "\"\"".to_string());
@@ -786,6 +864,10 @@ pub async fn mount_twitch_overlay(
     y: f64,
     width: f64,
     height: f64,
+    // Which persistent web profile backs the overlay. Absent = the active Twitch
+    // account's, which is every existing caller. Other platforms name their own
+    // so a sign-in lands in the right cookie jar.
+    profile: Option<String>,
 ) -> Result<(), String> {
     use tauri::WebviewWindowBuilder;
 
@@ -802,7 +884,11 @@ pub async fn mount_twitch_overlay(
     let main = app
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
-    let profile = active_twitch_web_profile_dir()?;
+    let profile = match profile.as_deref() {
+        Some("kick-account") => crate::services::providers::kick::account_profile_dir(&app),
+        Some("youtube-account") => crate::services::youtube_auth_service::youtube_profile_dir(),
+        _ => active_twitch_web_profile_dir()?,
+    };
     let parsed = url.parse().map_err(|e| format!("Invalid URL: {}", e))?;
 
     let win = WebviewWindowBuilder::new(&app, label.clone(), WebviewUrl::External(parsed))
@@ -827,6 +913,12 @@ pub async fn mount_twitch_overlay(
     // rectangle; suppress the DWM rounded corners Win11 gives borderless windows.
     #[cfg(windows)]
     square_window_corners(&win);
+
+    // Keep this overlay's own popups inside it, for the platforms that need it.
+    #[cfg(windows)]
+    if CONTAIN_POPUPS_IN_OVERLAY.contains(&label.as_str()) {
+        contain_overlay_popups(&win);
+    }
 
     debug!("[overlay] open '{}' ok", label);
     // Tag the hang watchdog with what's on screen, so a "Not Responding" report names
@@ -909,10 +1001,22 @@ pub fn close_login_overlay(app: AppHandle, label: String) {
 /// (subscribe).
 #[cfg(desktop)]
 fn emit_overlay_open(app: &AppHandle, label: &str, url: &str, mode: &str) -> Result<(), String> {
+    emit_overlay_open_with(app, label, url, mode, None)
+}
+
+/// As above, naming the web profile the overlay should use. The frontend passes
+/// it straight back to `mount_twitch_overlay`.
+pub(crate) fn emit_overlay_open_with(
+    app: &AppHandle,
+    label: &str,
+    url: &str,
+    mode: &str,
+    profile: Option<&str>,
+) -> Result<(), String> {
     use tauri::Emitter;
     app.emit(
         "twitch-overlay-open",
-        serde_json::json!({ "label": label, "url": url, "mode": mode }),
+        serde_json::json!({ "label": label, "url": url, "mode": mode, "profile": profile }),
     )
     .map_err(|e| e.to_string())
 }
@@ -936,6 +1040,26 @@ pub fn open_drops_login_window(app: AppHandle, url: String) -> Result<(), String
     emit_overlay_open(&app, "drops-login", &url, "fullbody")
 }
 
+/// The memberships (`/join`) page for a YouTube identifier.
+///
+/// A handle or a UC id addresses the channel directly. A bare VIDEO id does not,
+/// and that is the common case here: a YouTube stream opened from a browse row is
+/// addressed by video id, because that is what resolves to the broadcast. The chat
+/// adapter caches the owning channel id when it resolves a stream, so the watched
+/// case is a cache hit; None when nothing has resolved that id yet, which the
+/// caller reports rather than opening a page for the wrong channel.
+fn youtube_join_url(identifier: &str) -> Option<String> {
+    let id = identifier.trim();
+    if let Some(handle) = id.strip_prefix('@') {
+        return Some(format!("https://www.youtube.com/@{}/join", handle));
+    }
+    if id.starts_with("UC") && id.len() == 24 {
+        return Some(format!("https://www.youtube.com/channel/{}/join", id));
+    }
+    let channel_id = crate::services::providers::youtube::channel_meta(id)?.user_id?;
+    Some(format!("https://www.youtube.com/channel/{}/join", channel_id))
+}
+
 /// Open the Twitch subscribe page for a channel as a centered in-app panel, isolated
 /// to the active (main) account's web profile so you subscribe as the account you
 /// watch and stream as. Returns the overlay label so the caller can dismiss it when a
@@ -946,6 +1070,9 @@ pub fn open_subscribe_window(
     app: AppHandle,
     channel_login: String,
     title: Option<String>,
+    // Which platform the channel is on. Absent = twitch, so every existing
+    // caller is unchanged.
+    provider: Option<String>,
 ) -> Result<String, String> {
     let _ = title; // the panel header shows the live URL, not a window title
     let label = format!(
@@ -953,8 +1080,29 @@ pub fn open_subscribe_window(
         channel_login,
         chrono::Utc::now().timestamp_millis()
     );
-    let url = format!("https://www.twitch.tv/subs/{}", channel_login);
-    emit_overlay_open(&app, &label, &url, "panel")?;
+    // Each platform has its own subscribe page, and its own signed-in web
+    // profile to open it in — subscribing has to happen as the account the user
+    // is actually signed in as on that platform.
+    let (url, profile) = match provider.as_deref() {
+        Some("kick") => (
+            format!("https://kick.com/{}/subscribe", channel_login),
+            Some("kick-account"),
+        ),
+        // YouTube's paid tier is channel MEMBERSHIP, so `/join` is the page that
+        // matches what Subscribe means on Twitch and Kick (its own free "subscribe"
+        // button costs nothing and is not what this control is for).
+        Some("youtube") => (
+            youtube_join_url(&channel_login).ok_or_else(|| {
+                "Couldn't work out which YouTube channel to open memberships for".to_string()
+            })?,
+            Some("youtube-account"),
+        ),
+        _ => (
+            format!("https://www.twitch.tv/subs/{}", channel_login),
+            None,
+        ),
+    };
+    emit_overlay_open_with(&app, &label, &url, "panel", profile)?;
     Ok(label)
 }
 
@@ -1002,10 +1150,18 @@ pub async fn get_recommended_streams_paginated(
     state: State<'_, AppState>,
     cursor: Option<String>,
     limit: u32,
+    languages: Option<Vec<String>>,
+    personalized: Option<bool>,
 ) -> Result<(Vec<TwitchStream>, Option<String>), String> {
-    TwitchService::get_recommended_streams_paginated(&state, cursor, limit)
-        .await
-        .map_err(|e| e.to_string())
+    TwitchService::get_recommended_streams_paginated(
+        &state,
+        cursor,
+        limit,
+        languages.unwrap_or_default(),
+        personalized.unwrap_or(false),
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1132,6 +1288,24 @@ pub async fn get_all_followed_channels(
     TwitchService::get_all_followed_channels(limit, cursor)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Live status for channels you don't necessarily follow, which is what
+/// favourites need. See `TwitchService::get_streams_by_user_ids`.
+#[tauri::command]
+pub async fn get_streams_by_user_ids(user_ids: Vec<String>) -> Result<Vec<TwitchStream>, String> {
+    TwitchService::get_streams_by_user_ids(&user_ids)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// `user_id -> [login, display_name, avatar]` for a batch of users. Backs the
+/// one-time identity back-fill for favourites saved as bare ids.
+#[tauri::command]
+pub async fn get_users_by_ids(
+    user_ids: Vec<String>,
+) -> Result<std::collections::HashMap<String, (String, String, Option<String>)>, String> {
+    Ok(TwitchService::users_by_ids(&user_ids).await)
 }
 
 #[tauri::command]
@@ -1392,6 +1566,18 @@ pub async fn search_categories(
         .map_err(|e| e.to_string())
 }
 
+/// Which of these names are real categories, matched exactly, in one round trip.
+/// Unknown names are simply missing from the result, so a caller can use it to
+/// test a list of candidates rather than to guess at one.
+#[tauri::command]
+pub async fn get_categories_by_name(
+    names: Vec<String>,
+) -> Result<Vec<serde_json::Value>, String> {
+    TwitchService::categories_by_name(&names)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn get_clips_by_game(
     _state: State<'_, AppState>,
@@ -1452,9 +1638,12 @@ pub async fn get_videos_by_game(
     cursor: Option<String>,
     period: Option<String>,
 ) -> Result<(Vec<TwitchVideo>, Option<String>), String> {
-    TwitchService::get_videos_by_game(&game_id, &sort, period.as_deref(), limit, cursor.as_deref())
-        .await
-        .map_err(|e| e.to_string())
+    let (mut videos, cursor) =
+        TwitchService::get_videos_by_game(&game_id, &sort, period.as_deref(), limit, cursor.as_deref())
+            .await
+            .map_err(|e| e.to_string())?;
+    crate::services::vod_progress_service::attach(&mut videos);
+    Ok((videos, cursor))
 }
 
 #[tauri::command]
@@ -1466,7 +1655,7 @@ pub async fn get_user_videos(
     limit: u32,
     cursor: Option<String>,
 ) -> Result<(Vec<TwitchVideo>, Option<String>), String> {
-    TwitchService::get_user_videos(
+    let (mut videos, cursor) = TwitchService::get_user_videos(
         &user_id,
         &sort,
         video_type.as_deref(),
@@ -1474,7 +1663,9 @@ pub async fn get_user_videos(
         cursor.as_deref(),
     )
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    crate::services::vod_progress_service::attach(&mut videos);
+    Ok((videos, cursor))
 }
 
 // --- VOD chat replay (synced historical comments) ---------------------------
@@ -2084,4 +2275,68 @@ pub async fn update_shield_mode(broadcaster_id: String, is_active: bool) -> Resu
     TwitchService::update_shield_mode(&broadcaster_id, is_active)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Both URL forms were checked against YouTube and return 200:
+    /// `/@handle/join` and `/channel/UC…/join`. The video-id path can't be tested
+    /// here (it reads the chat adapter's live meta cache), which is exactly why the
+    /// two direct forms are pinned.
+    #[test]
+    fn youtube_join_urls_for_direct_identifiers() {
+        assert_eq!(
+            youtube_join_url("@theburntpeanut").as_deref(),
+            Some("https://www.youtube.com/@theburntpeanut/join"),
+        );
+        assert_eq!(
+            youtube_join_url("UCMNEVbszv8ZyvSXoTn3yhpQ").as_deref(),
+            Some("https://www.youtube.com/channel/UCMNEVbszv8ZyvSXoTn3yhpQ/join"),
+        );
+        // A bare video id addresses a BROADCAST, not a channel. With nothing cached
+        // for it, None is correct: the caller reports that rather than opening the
+        // memberships page of whatever channel a malformed URL happens to hit.
+        assert_eq!(youtube_join_url("OMwQgcK-6PE"), None);
+    }
+}
+
+#[cfg(test)]
+mod overlay_script_tests {
+    use super::*;
+
+    /// Popup containment is a native NewWindowRequested hook, not a script
+    /// override, so this only pins the LIST: YouTube's sign-in needs it, and the
+    /// subscribe panel must never get it (payment flows use popups legitimately).
+    #[test]
+    fn popup_containment_is_scoped_to_the_youtube_login() {
+        assert!(CONTAIN_POPUPS_IN_OVERLAY.contains(&"youtube-login"));
+        for label in ["twitch-login", "kick-login", "drops-login", "subscribe-abc-123"] {
+            assert!(
+                !CONTAIN_POPUPS_IN_OVERLAY.contains(&label),
+                "{} must keep native popups",
+                label,
+            );
+        }
+    }
+
+    /// The script is built by string interpolation into a raw literal, so a stray
+    /// brace or a missing separator would ship broken JS that fails silently in
+    /// the page. Check the pieces land in order and the braces balance.
+    #[test]
+    fn generated_overlay_script_is_well_formed() {
+        let s = spa_url_report_script("youtube-login", true);
+        assert!(s.starts_with("(function() {"));
+        assert!(s.trim_end().ends_with("})();"));
+        assert!(s.contains("var label = \"youtube-login\";"));
+        let report_at = s.find("setTimeout(report, 800)").expect("reporter");
+        let esc_at = s.find("'Escape'").expect("escape handler");
+        assert!(report_at < esc_at);
+        assert_eq!(
+            s.chars().filter(|c| *c == '{').count(),
+            s.chars().filter(|c| *c == '}').count(),
+            "unbalanced braces in the generated script",
+        );
+    }
 }

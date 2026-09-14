@@ -34,8 +34,15 @@ export interface LatencyGovernorOptions {
   getTarget?: () => number;
   /** Max rate the governor will use to catch up. Keep < 1.25 (Plyr's lowest speed-up) so user selections are never fought. */
   ceiling?: number;
-  /** Seconds of forward buffer ABOVE target before the governor starts catching up. */
-  band?: number;
+  /**
+   * Seconds of forward buffer ABOVE target before the governor starts catching up.
+   *
+   * Must clear one whole segment on segment-delivered streams. Delivery adds a
+   * segment at a time, so a band narrower than that is overshot on every single
+   * arrival and the rate oscillates instead of ever settling. Pass a getter when
+   * the real segment length is only known once a playlist has landed.
+   */
+  band?: number | (() => number);
   /** Poll interval (ms). */
   tickMs?: number;
   /** Forward buffer beyond `target + dvrSlack` is treated as a deliberate DVR scrub-back and left alone. */
@@ -47,7 +54,7 @@ export interface LatencyGovernorOptions {
    * music) and read as a micro-hitch; a slide of ~0.01/tick is imperceptible.
    * Unset = legacy stepping (set the computed rate directly).
    */
-  rampStep?: number;
+  rampStep?: number | (() => number);
   /**
    * Low-buffer protection: when the forward buffer falls BELOW this (seconds),
    * ease the rate down toward `slowRate` so the playhead stops outrunning a
@@ -61,6 +68,18 @@ export interface LatencyGovernorOptions {
   /** Minimum rate used for low-buffer protection. Keep above Plyr's slow-mo
    *  options (<= 0.75) so user selections are still recognized as manual. */
   slowRate?: number;
+  /**
+   * Seconds of forward buffer ABOVE `floor` at which the full `ceiling` becomes
+   * available. Overspeed consumes the forward buffer, so the allowed rate scales
+   * with the headroom actually there to consume: 1.0 at the floor, the full
+   * ceiling at floor + engageSpan, linear between. Without this, a catch-up
+   * signal (behind-live or buffer excess) pins the rate at the ceiling while
+   * the buffer sits barely above the floor, drains it into the floor regime,
+   * eases down, refills, and seesaws forever: the rate never settles (audible
+   * as continuous pitch-corrector crackle) and the drain regularly overshoots
+   * into a hard stall. Only meaningful when `floor` is set. Default 1.5.
+   */
+  engageSpan?: number;
   /**
    * Behind-live target in seconds. When set (with `getLatency`), rate control is
    * driven by behind-live distance, not forward-buffer excess, and works in BOTH
@@ -92,9 +111,12 @@ export interface LatencyGovernorOptions {
   log?: (msg: string) => void;
 }
 
+/** Fallback band, used until a stream reports its real segment length. */
+export const DEFAULT_LATENCY_BAND = 1.5;
+
 const DEFAULTS = {
   ceiling: 1.05,
-  band: 1.5,
+  band: DEFAULT_LATENCY_BAND,
   tickMs: 2000,
   dvrSlack: 25,
 };
@@ -120,11 +142,13 @@ export function startLatencyGovernor(
   options: LatencyGovernorOptions = {},
 ): () => void {
   const ceiling = options.ceiling ?? DEFAULTS.ceiling;
-  const band = options.band ?? DEFAULTS.band;
+  const bandOf = () =>
+    typeof options.band === 'function' ? options.band() : (options.band ?? DEFAULTS.band);
   const tickMs = options.tickMs ?? DEFAULTS.tickMs;
   const dvrSlack = options.dvrSlack ?? DEFAULTS.dvrSlack;
   const floor = options.floor;
   const slowRate = options.slowRate ?? 0.97;
+  const engageSpan = options.engageSpan ?? 1.5;
   // The lowest rate this governor will ever set itself; anything below it is
   // a manual user speed selection and must not be fought. Both the low-buffer
   // floor and the latency-target slow side (below) can ease the rate down to
@@ -152,6 +176,7 @@ export function startLatencyGovernor(
     if (rate < lowestOwned - 0.005 || rate > ceiling) return;
 
     const target = getTarget();
+    const band = bandOf();
     const fb = forwardBuffer(video);
 
     // A very large forward buffer means the user scrubbed back into the DVR window;
@@ -194,17 +219,35 @@ export function startLatencyGovernor(
     //    the buffer is at/below target, which the floor already handles;
     //  - otherwise: real time.
     const gain = options.gain ?? 0.03;
+    // Overspeed only against buffer that is actually there to consume: the
+    // ceiling scales from 1.0 at the floor to its full value at
+    // floor + engageSpan. A catch-up signal the buffer cannot back (the
+    // downloadable edge sits just ahead of the playhead, e.g. the relay itself
+    // is the bottleneck) then resolves to 1.0 instead of grinding at the
+    // ceiling, draining into the floor, and seesawing between regimes.
+    const effCeiling =
+      floor != null
+        ? 1 + (ceiling - 1) * Math.min(1, Math.max(0, (fb - floor) / engageSpan))
+        : ceiling;
     const desired =
       floor != null && fb < floor
         ? slowRate
         : excess > band
-          ? Math.max(1.0, Math.min(ceiling, 1 + gain * (excess - band)))
+          ? Math.max(1.0, Math.min(effCeiling, 1 + gain * (excess - band)))
           : usingLatency && excess < -band
             ? Math.min(1.0, Math.max(slowRate, 1 + gain * (excess + band)))
             : 1.0;
-    const next = options.rampStep
-      ? rate + Math.max(-options.rampStep, Math.min(options.rampStep, desired - rate))
+    const rampStep =
+      typeof options.rampStep === 'function' ? options.rampStep() : options.rampStep;
+    let next = rampStep
+      ? rate + Math.max(-rampStep, Math.min(rampStep, desired - rate))
       : desired;
+    // Safety beats the audible-comfort ramp: never keep overspeeding a
+    // sub-floor buffer while a slow ramp glides down (at 0.01/tick the descent
+    // from the ceiling takes many seconds, which is exactly how a wobble
+    // becomes a hard stall). One step down to real time is far less audible
+    // than the stall it prevents; the ramp still handles 1.0 -> slowRate.
+    if (floor != null && fb < floor && next > 1.0) next = 1.0;
     if (Math.abs(next - rate) > 0.0049) {
       // Round away float dust so repeated ramp arithmetic stays on clean values.
       video.playbackRate = Math.round(next * 1000) / 1000;

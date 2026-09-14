@@ -153,9 +153,13 @@ const ThemeSettings = () => {
     // persisted value only catches up on release, so we mirror it here for the
     // controlled input and pick up any changes made from another window.
     const [liveGlass, setLiveGlass] = useState(glassTransparency);
-    useEffect(() => {
+    // Adopt a persisted change (a release here, or another window) during
+    // render so the thumb never shows a stale value for a commit.
+    const [seenGlass, setSeenGlass] = useState(glassTransparency);
+    if (glassTransparency !== seenGlass) {
+        setSeenGlass(glassTransparency);
         setLiveGlass(glassTransparency);
-    }, [glassTransparency]);
+    }
 
     // While dragging: only move the thumb and repaint via the CSS variable (cheap).
     // No disk write — persisting on every tick is what made the slider stutter.
@@ -176,9 +180,11 @@ const ThemeSettings = () => {
     // while the persist is deferred (same approach as the Glassiness slider).
     const oledAccent = settings.oled_accent ?? DEFAULT_OLED_ACCENT;
     const [liveOledAccent, setLiveOledAccent] = useState(oledAccent);
-    useEffect(() => {
+    const [seenOledAccent, setSeenOledAccent] = useState(oledAccent);
+    if (oledAccent !== seenOledAccent) {
+        setSeenOledAccent(oledAccent);
         setLiveOledAccent(oledAccent);
-    }, [oledAccent]);
+    }
     const oledPersistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Get current theme (could be custom or built-in). For OLED, fold in the
@@ -475,16 +481,19 @@ const ThemeSettings = () => {
                 </div>
                 {isCustomFont && (
                     <div className="space-y-2.5 pt-0.5">
-                        <input
-                            value={customFontDraft}
-                            onChange={(e) => handleCustomFontChange(e.target.value)}
-                            placeholder="Font name, e.g. Poppins"
-                            aria-label="Custom font name"
-                            spellCheck={false}
-                            autoComplete="off"
-                            style={{ fontFamily: customFontDraft ? customFontStack(customFontDraft) : undefined }}
-                            className="w-full min-w-0 rounded-lg bg-glass border border-borderSubtle px-3 py-2 text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:border-accent/60 transition-colors duration-200"
-                        />
+                        <div>
+                            <label className="text-xs text-textMuted mb-1 block">Font name</label>
+                            <input
+                                value={customFontDraft}
+                                onChange={(e) => handleCustomFontChange(e.target.value)}
+                                placeholder="e.g. Poppins"
+                                aria-label="Custom font name"
+                                spellCheck={false}
+                                autoComplete="off"
+                                style={{ fontFamily: customFontDraft ? customFontStack(customFontDraft) : undefined }}
+                                className="w-full min-w-0 rounded-lg bg-glass border border-borderSubtle px-3 py-2 text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:border-accent/60 transition-colors duration-200"
+                            />
+                        </div>
                         {/* Quick fills. Borderless so they read as a list of
                             names, not a row of buttons; each is drawn in its
                             own face (all eight preload in one request). */}
@@ -515,7 +524,7 @@ const ThemeSettings = () => {
                     <div className="flex items-center gap-2">
                         <PaintBucket size={16} className="text-accent" />
                         <h4 className="text-sm font-semibold text-textSecondary">Your Themes</h4>
-                        <span className="text-xs text-textMuted">— Custom creations</span>
+                        <span className="text-xs text-textMuted">Your own creations</span>
                     </div>
 
                     <div className="grid grid-cols-3 gap-3">
@@ -546,7 +555,7 @@ const ThemeSettings = () => {
                         <div className="flex items-center gap-2">
                             <span className="text-textMuted">{getCategoryIcon(category.id)}</span>
                             <h4 className="text-sm font-semibold text-textSecondary">{category.name}</h4>
-                            <span className="text-xs text-textMuted">— {category.description}</span>
+                            <span className="text-xs text-textMuted">{category.description}</span>
                         </div>
 
                         <div className="grid grid-cols-3 gap-3">
@@ -572,7 +581,7 @@ const ThemeSettings = () => {
                                 <div className="flex items-center gap-2">
                                     <Droplets size={16} className="text-accent" />
                                     <h4 className="text-sm font-semibold text-textPrimary">OLED accent</h4>
-                                    <span className="text-xs text-textMuted">— the glow color on pure black</span>
+                                    <span className="text-xs text-textMuted">The glow color on pure black</span>
                                 </div>
                                 <div className="flex flex-wrap gap-2">
                                     {OLED_ACCENT_PRESETS.map((preset) => {
@@ -606,7 +615,7 @@ const ThemeSettings = () => {
             <div className="p-3 rounded-lg bg-surface/50 border border-borderSubtle mb-4">
                 <p className="text-xs text-textMuted flex items-center gap-2">
                     <Sparkles size={14} />
-                    Tip: Create a custom theme to perfectly match your setup!
+                    Create a custom theme to match your setup exactly.
                 </p>
             </div>
         </div>

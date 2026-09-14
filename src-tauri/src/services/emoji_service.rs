@@ -2905,10 +2905,9 @@ pub fn convert_emoji_shortcodes(text: &str) -> String {
                         if let Some(&emoji) = SHORTCODE_TO_UNICODE.get(inner) {
                             result.push_str(emoji);
                             matched = true;
-                        } else {
-                            // No match, keep original
-                            result.push_str(&shortcode);
                         }
+                        // No match: fall through so the !matched handler below
+                        // emits the original shortcode exactly once
                     }
                     break;
                 } else if next_ch.is_alphanumeric() || next_ch == '_' || next_ch == '-' {

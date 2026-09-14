@@ -43,20 +43,24 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
   const [isLocked, setIsLocked] = useState(false);
   const [channelPoints, setChannelPoints] = useState<number | null>(null);
   const [isExpanded, setIsExpanded] = useState(true);
-  const [hasPlacedBet, setHasPlacedBet] = useState(false);
+  // The viewer's own stake in the active prediction, or null when they have
+  // none THAT WE KNOW OF. Twitch does not replay a stake placed before this
+  // app was listening, so null means "unknown or none", never "definitely
+  // zero", and the UI must not claim otherwise.
+  const [selfStake, setSelfStake] = useState<{ outcomeId: string; points: number } | null>(null);
   const [resolutionState, setResolutionState] = useState<'none' | 'pending' | 'win' | 'loss' | 'refund' | 'announced'>('none');
   const [winningOutcomeId, setWinningOutcomeId] = useState<string | null>(null);
   // Custom channel points icon URL (e.g., custom lips icon for Hamlinz's "Kisses")
   const [customPointsIconUrl, setCustomPointsIconUrl] = useState<string | null>(null);
 
   // Refs to track latest values for use in event listeners (avoids stale closures)
-  const hasPlacedBetRef = useRef(hasPlacedBet);
+  const selfStakeRef = useRef(selfStake);
   const selectedOutcomeRef = useRef(selectedOutcome);
 
   // Keep refs in sync with state
   useEffect(() => {
-    hasPlacedBetRef.current = hasPlacedBet;
-  }, [hasPlacedBet]);
+    selfStakeRef.current = selfStake;
+  }, [selfStake]);
 
   useEffect(() => {
     selectedOutcomeRef.current = selectedOutcome;
@@ -116,7 +120,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
                 setTimeout(() => {
                     setActivePrediction(null);
                     setSelectedOutcome(null);
-                    setHasPlacedBet(false);
+                    setSelfStake(null);
                     setResolutionState('none');
                     setWinningOutcomeId(null);
                 }, 5000);
@@ -128,7 +132,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
 
             // Auto-select first outcome if prediction is still active (not locked)
             setSelectedOutcome(result.status === 'ACTIVE' && result.outcomes?.length > 0 ? result.outcomes[0].id : null);
-            setHasPlacedBet(false);
+            setSelfStake(null);
             
             // Calculate remaining time if prediction is still ACTIVE
             if (result.status === 'ACTIVE' && result.created_at) {
@@ -155,7 +159,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
     // Reset state when channel changes
     setActivePrediction(null);
     setSelectedOutcome(null);
-    setHasPlacedBet(false);
+    setSelfStake(null);
     setResolutionState('none');
     setWinningOutcomeId(null);
     setChannelPoints(null);
@@ -275,7 +279,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
         setIsLocked(false);
         // Auto-select first outcome for immediate betting
         setSelectedOutcome(prediction.outcomes?.length > 0 ? prediction.outcomes[0].id : null);
-        setHasPlacedBet(false);
+        setSelfStake(null);
         setIsExpanded(true);
         fetchChannelPoints();
       }
@@ -301,7 +305,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
           setIsLocked(prediction.status === 'LOCKED');
           // Auto-select first outcome if not locked
           setSelectedOutcome(prediction.status === 'ACTIVE' && prediction.outcomes?.length > 0 ? prediction.outcomes[0].id : null);
-          setHasPlacedBet(false);
+          setSelfStake(null);
           setIsExpanded(true);
           setResolutionState('none');
           fetchChannelPoints();
@@ -328,7 +332,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
               setWinningOutcomeId(winningId);
               
               // Use refs to get latest values (avoids stale closure issue)
-              const userBet = hasPlacedBetRef.current;
+              const userBet = selfStakeRef.current !== null;
               const userSelectedOutcome = selectedOutcomeRef.current;
               
               Logger.debug('[Prediction] Resolution check:', {
@@ -363,7 +367,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
             setTimeout(() => {
               setActivePrediction(null);
               setSelectedOutcome(null);
-              setHasPlacedBet(false);
+              setSelfStake(null);
               setResolutionState('none');
               setWinningOutcomeId(null);
             }, 4000);
@@ -375,7 +379,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
             setTimeout(() => {
               setActivePrediction(null);
               setSelectedOutcome(null);
-              setHasPlacedBet(false);
+              setSelfStake(null);
               setResolutionState('none');
             }, 3000);
           }
@@ -406,9 +410,29 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
         setTimeout(() => {
           setActivePrediction(null);
           setSelectedOutcome(null);
-          setHasPlacedBet(false);
+          setSelfStake(null);
         }, 2000);
       }
+    });
+
+    // The viewer's own stake, straight from Rust. `points` is the running total
+    // rather than a delta, so this replaces the optimistic value rather than
+    // adding to it, which also corrects a failed or partial local write.
+    const unlistenSelf = listen<{
+      kind: string;
+      channel_id: string;
+      event_id: string;
+      outcome_id: string;
+      points: number;
+      result_type: string | null;
+    }>('prediction-self-updated', (event) => {
+      const p = event.payload;
+      if (!currentChannelId || p.channel_id !== currentChannelId) return;
+      if (p.result_type) return; // resolution is handled by prediction-ended
+      Logger.debug(`[Prediction] self stake ${p.points} on ${p.outcome_id}`);
+      setSelfStake({ outcomeId: p.outcome_id, points: p.points });
+      setSelectedOutcome(p.outcome_id);
+      fetchChannelPoints();
     });
 
     return () => {
@@ -418,6 +442,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
       unlistenUpdated.then(fn => fn()).catch(() => {});
       unlistenLocked.then(fn => fn()).catch(() => {});
       unlistenEnded.then(fn => fn()).catch(() => {});
+      unlistenSelf.then(fn => fn()).catch(() => {});
     };
   }, [currentChannelId, activePrediction?.prediction_id, addToast, fetchChannelPoints]);
 
@@ -439,8 +464,12 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
   }, [activePrediction, isLocked, timeRemaining]);
 
   // Handle placing a prediction
+  // Twitch keeps ONE prediction per user per event and adds to it, so placing
+  // again on the same outcome tops the stake up. A different outcome is not a
+  // second bet, it is rejected, so the UI locks the choice once a stake exists.
   const handlePlacePrediction = async () => {
-    if (!activePrediction || !selectedOutcome || isSubmitting || isLocked || hasPlacedBet) return;
+    if (!activePrediction || !selectedOutcome || isSubmitting || isLocked) return;
+    if (selfStake && selfStake.outcomeId !== selectedOutcome) return;
 
     setIsSubmitting(true);
 
@@ -453,8 +482,19 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
       });
 
       const selectedOutcomeTitle = activePrediction.outcomes.find(o => o.id === selectedOutcome)?.title;
-      addToast(`Prediction placed! ${betAmount} points on "${selectedOutcomeTitle}"`, 'success');
-      setHasPlacedBet(true);
+      const topUp = selfStake !== null;
+      addToast(
+        topUp
+          ? `Added ${betAmount} points to "${selectedOutcomeTitle}"`
+          : `Prediction placed! ${betAmount} points on "${selectedOutcomeTitle}"`,
+        'success'
+      );
+      // Optimistic; the predictions-user-v1 event reconciles it with the real
+      // total a moment later.
+      setSelfStake((prev) => ({
+        outcomeId: selectedOutcome,
+        points: (prev?.points ?? 0) + betAmount,
+      }));
       
       // Refresh channel points
       fetchChannelPoints();
@@ -533,11 +573,11 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
           return (
             <button
               key={outcome.id}
-              onClick={() => !isLocked && !hasPlacedBet && setSelectedOutcome(outcome.id)}
-              disabled={isLocked || hasPlacedBet}
+              onClick={() => !isLocked && !selfStake && setSelectedOutcome(outcome.id)}
+              disabled={isLocked || !!selfStake}
               className={`w-full relative p-2.5 rounded-lg border transition-all ${
                 getOutcomeColor(outcome.color, isSelected)
-              } ${(isLocked || hasPlacedBet) ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'}`}
+              } ${(isLocked || !!selfStake) ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'}`}
             >
               {/* Background progress bar */}
               <div 
@@ -549,7 +589,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
               
               <div className="relative flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  {isSelected && (!isLocked || hasPlacedBet) && (
+                  {isSelected && (!isLocked || !!selfStake) && (
                     <div className="w-4 h-4 rounded-full bg-white/30 flex items-center justify-center">
                       <div className="w-2.5 h-2.5 rounded-full bg-white" />
                     </div>
@@ -579,8 +619,9 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
         })}
       </div>
 
-      {/* Bet Amount & Action - only when not locked/already bet */}
-      {!isLocked && !hasPlacedBet && (
+      {/* Bet amount and action. Stays available while the window is open so a
+          stake can be topped up; the outcome is fixed once one exists. */}
+      {!isLocked && (
         <div className="px-3 pb-3">
           {/* Bet Input Row */}
           <div className="flex items-center gap-2 p-2 bg-backgroundSecondary rounded-lg border border-border">
@@ -652,18 +693,22 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
                   : 'bg-background border border-border text-textSecondary cursor-not-allowed'
               }`}
             >
-              {isSubmitting ? '...' : 'Bet'}
+              {isSubmitting ? '...' : selfStake ? 'Add' : 'Bet'}
             </button>
           </div>
         </div>
       )}
 
       {/* Status indicators */}
-      {hasPlacedBet && !isLocked && resolutionState === 'none' && (
+      {selfStake && !isLocked && resolutionState === 'none' && (
         <div className="px-3 pb-3">
           <div className="py-2 px-3 bg-success/20 border border-success/50 rounded-lg flex items-center justify-center gap-2">
             <CheckCircle2 className="w-4 h-4 text-success" />
-            <span className="text-success text-sm font-semibold">Bet Placed!</span>
+            <span className="text-success text-sm font-semibold">
+              {selfStake.points.toLocaleString()} on &ldquo;
+              {activePrediction.outcomes.find(o => o.id === selfStake.outcomeId)?.title ?? 'your pick'}
+              &rdquo;
+            </span>
           </div>
         </div>
       )}
@@ -746,7 +791,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
           <div className="py-2 px-3 bg-warning/20 border border-warning/50 rounded-lg flex items-center justify-center gap-2">
             <Hourglass className="w-4 h-4 text-warning animate-pulse" />
             <span className="text-warning text-sm font-semibold">
-              Awaiting Results{hasPlacedBet && ' • Your bet is in!'}
+              Awaiting Results{selfStake && ` • ${selfStake.points.toLocaleString()} in`}
             </span>
           </div>
           {/* Total stats when locked */}

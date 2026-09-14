@@ -1,4 +1,6 @@
 import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react';
+import { makeKey } from '../../utils/providerKey';
+import type { ProviderId } from '../../types/providers';
 import {
   DndContext,
   KeyboardSensor,
@@ -74,24 +76,36 @@ export const MultiNookView: React.FC = () => {
   // ref-counts subscribers, so the overlap is harmless and changing focus never
   // drops a connection. Diff against a ref (rather than release-all/acquire-all)
   // so unchanged channels keep a steady ref count across renders.
-  const connectedChatKeysRef = useRef<Set<string>>(new Set());
+  // Tracked by the store's own key space (bare login for Twitch, provider:channel
+  // otherwise), because a Kick and a Twitch channel can share a name and must not
+  // share a ref count. The bare channel and provider are kept alongside, since
+  // acquire/release take those, not the composite key.
+  const connectedChatRef = useRef<Map<string, { channel: string; provider: ProviderId }>>(new Map());
   useEffect(() => {
-    const desired = new Map<string, string | null>();
+    const desired = new Map<
+      string,
+      { channel: string; provider: ProviderId; channelId: string | null }
+    >();
     for (const s of visibleSlots) {
-      desired.set(s.channelLogin.toLowerCase(), s.channelId ?? null);
+      const provider = s.provider ?? 'twitch';
+      desired.set(makeKey(provider, s.channelLogin), {
+        channel: s.channelLogin,
+        provider,
+        channelId: s.channelId ?? null,
+      });
     }
-    for (const [login, channelId] of desired) {
-      if (!connectedChatKeysRef.current.has(login)) {
-        connectedChatKeysRef.current.add(login);
-        void acquireChannel(login, channelId).catch((err) =>
+    for (const [key, want] of desired) {
+      if (!connectedChatRef.current.has(key)) {
+        connectedChatRef.current.set(key, { channel: want.channel, provider: want.provider });
+        void acquireChannel(want.channel, want.channelId, want.provider).catch((err) =>
           Logger.error('[MultiNook] background chat acquire failed:', err),
         );
       }
     }
-    for (const login of Array.from(connectedChatKeysRef.current)) {
-      if (!desired.has(login)) {
-        connectedChatKeysRef.current.delete(login);
-        void releaseChannel(login).catch((err) =>
+    for (const [key, held] of Array.from(connectedChatRef.current)) {
+      if (!desired.has(key)) {
+        connectedChatRef.current.delete(key);
+        void releaseChannel(held.channel, held.provider).catch((err) =>
           Logger.warn('[MultiNook] background chat release failed:', err),
         );
       }
@@ -100,12 +114,12 @@ export const MultiNookView: React.FC = () => {
 
   // Release every background connection when leaving MultiNook.
   useEffect(() => {
-    const keys = connectedChatKeysRef.current;
+    const held = connectedChatRef.current;
     return () => {
-      for (const login of Array.from(keys)) {
-        void releaseChannel(login).catch(() => {});
+      for (const entry of Array.from(held.values())) {
+        void releaseChannel(entry.channel, entry.provider).catch(() => {});
       }
-      keys.clear();
+      held.clear();
     };
   }, []);
 
@@ -131,7 +145,7 @@ export const MultiNookView: React.FC = () => {
   // rather than on `slots` itself: volume drags and focus changes mutate slots
   // constantly and would restart the interval each time.
   const loginKey = useMemo(
-    () => slots.map((s) => s.channelLogin.toLowerCase()).sort().join(','),
+    () => slots.map((s) => makeKey(s.provider ?? 'twitch', s.channelLogin)).sort().join(','),
     [slots],
   );
   useEffect(() => {

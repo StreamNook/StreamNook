@@ -116,14 +116,35 @@ interface RenderSection {
   headerOverride?: string;
 }
 
+interface SearchResults {
+  /** The trimmed query these items were fetched for. */
+  forQuery: string;
+  items: PaletteItem[];
+}
+
+const EMPTY_RESULTS: SearchResults = { forQuery: '', items: [] };
+
+function resultsFor(queryKey: string, results: SearchResults): PaletteItem[] {
+  if (queryKey.length < 2) return [];
+  return queryKey.startsWith(results.forQuery) ? results.items : [];
+}
+
 export default function CommandPalette() {
   const isOpen = useAppStore((s) => s.isCommandPaletteOpen);
   const closeCommandPalette = useAppStore((s) => s.closeCommandPalette);
 
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
-  const [twitchResults, setTwitchResults] = useState<PaletteItem[]>([]);
-  const [categoryResults, setCategoryResults] = useState<PaletteItem[]>([]);
+  // Search results remember the query they answered. What the palette shows
+  // is derived from that: nothing below two characters, and a result set
+  // only while the current query still extends the one it was issued for
+  // (so typing onward keeps the last hits on screen until fresh ones land,
+  // while a different prefix drops them at once). No effect clears results.
+  const [twitchResultsRaw, setTwitchResults] = useState<SearchResults>(EMPTY_RESULTS);
+  const [categoryResultsRaw, setCategoryResults] = useState<SearchResults>(EMPTY_RESULTS);
+  const queryKey = query.trim();
+  const twitchResults = resultsFor(queryKey, twitchResultsRaw);
+  const categoryResults = resultsFor(queryKey, categoryResultsRaw);
   /** Tick state used to nudge a re-render after a lazy description fetch
    *  resolves. The actual description lives in the module-level cache. */
   const [, setEnrichmentTick] = useState(0);
@@ -141,8 +162,20 @@ export default function CommandPalette() {
   const snippetAliasesVersion = useSnippetStore((s) => s.aliases);
   const snippetCustomVersion = useSnippetStore((s) => s.customSnippets);
 
+  // Latest query for the debounced searches to compare against when they
+  // resolve. Synced in an effect (not during render) so the ref is never read
+  // or written on the render path.
   const queryRef = useRef('');
-  queryRef.current = query;
+  useEffect(() => {
+    queryRef.current = query;
+  }, [query]);
+  // Bumped by items that want the input focused after they run. Routed through
+  // state so the item list itself never closes over a ref.
+  const [focusRequest, setFocusRequest] = useState(0);
+  useEffect(() => {
+    if (focusRequest === 0) return;
+    inputRef.current?.focus();
+  }, [focusRequest]);
   const twitchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const categoryDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const enrichDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -167,13 +200,19 @@ export default function CommandPalette() {
     };
   }, []);
 
-  // Reset state every time the palette opens.
+  // Reset state every time the palette opens. Done during render on the
+  // closed-to-open transition so the stale query never paints; results are
+  // derived from the query, so clearing it clears them too.
+  const [wasOpen, setWasOpen] = useState(isOpen);
+  if (isOpen !== wasOpen) {
+    setWasOpen(isOpen);
+    if (isOpen) {
+      setQuery('');
+      setActiveIndex(0);
+    }
+  }
   useEffect(() => {
     if (!isOpen) return;
-    setQuery('');
-    setTwitchResults([]);
-    setCategoryResults([]);
-    setActiveIndex(0);
     queueMicrotask(() => inputRef.current?.focus());
   }, [isOpen]);
 
@@ -181,15 +220,12 @@ export default function CommandPalette() {
   useEffect(() => {
     if (!isOpen) return;
     if (twitchDebounceRef.current) clearTimeout(twitchDebounceRef.current);
-    if (query.trim().length < 2) {
-      setTwitchResults([]);
-      return;
-    }
+    if (query.trim().length < 2) return;
     twitchDebounceRef.current = setTimeout(() => {
       const issued = query.trim();
       void searchTwitchChannels(issued).then((items) => {
         if (!mountedRef.current) return;
-        if (queryRef.current.trim() === issued) setTwitchResults(items);
+        if (queryRef.current.trim() === issued) setTwitchResults({ forQuery: issued, items });
       });
     }, TWITCH_DEBOUNCE_MS);
     return () => {
@@ -202,15 +238,12 @@ export default function CommandPalette() {
   useEffect(() => {
     if (!isOpen) return;
     if (categoryDebounceRef.current) clearTimeout(categoryDebounceRef.current);
-    if (query.trim().length < 2) {
-      setCategoryResults([]);
-      return;
-    }
+    if (query.trim().length < 2) return;
     categoryDebounceRef.current = setTimeout(() => {
       const issued = query.trim();
       void searchTwitchCategories(issued).then((items) => {
         if (!mountedRef.current) return;
-        if (queryRef.current.trim() === issued) setCategoryResults(items);
+        if (queryRef.current.trim() === issued) setCategoryResults({ forQuery: issued, items });
       });
     }, CATEGORY_DEBOUNCE_MS);
     return () => {
@@ -284,7 +317,7 @@ export default function CommandPalette() {
           initial: '🔎',
           run: () => {
             setQuery('');
-            inputRef.current?.focus();
+            setFocusRequest((n) => n + 1);
           },
         },
         {
@@ -388,9 +421,10 @@ export default function CommandPalette() {
     return flat;
   }, [sections]);
 
-  useEffect(() => {
-    if (activeIndex >= flatRows.length) setActiveIndex(Math.max(0, flatRows.length - 1));
-  }, [flatRows.length, activeIndex]);
+  // Keep the highlight inside the list when it shrinks under it. Adjusted
+  // during render so the out-of-range index never paints.
+  const maxIndex = Math.max(0, flatRows.length - 1);
+  if (activeIndex > maxIndex) setActiveIndex(maxIndex);
 
   useEffect(() => {
     if (!listRef.current) return;

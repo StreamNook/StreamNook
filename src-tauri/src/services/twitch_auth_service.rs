@@ -254,7 +254,7 @@ async fn harvest(app: &AppHandle) -> HashMap<String, String> {
     let mut found: HashMap<String, String> = HashMap::new();
 
     let primary = AccountStore::primary();
-    log::warn!(
+    log::debug!(
         "[Auth] harvest start: primary account = {:?}",
         primary.as_ref().map(|p| p.user_id.clone())
     );

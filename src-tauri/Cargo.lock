@@ -4,12 +4,14 @@ version = 4
 
 [[package]]
 name = "StreamNook"
-version = "8.4.2"
+version = "8.6.1"
 dependencies = [
+ "ammonia",
  "anyhow",
  "async-trait",
  "base64 0.23.1",
  "byteorder",
+ "bytes",
  "chfft",
  "chrono",
  "confy",
@@ -107,6 +109,18 @@ name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
+
+[[package]]
+name = "ammonia"
+version = "4.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc6d763210e2eb7670d1a5183a08bebefa3f97db2a738a684f2ce00bd49f681d"
+dependencies = [
+ "cssparser 0.37.0",
+ "html5ever 0.39.0",
+ "maplit",
+ "url",
+]
 
 [[package]]
 name = "android_system_properties"
@@ -3316,6 +3330,12 @@ dependencies = [
  "time",
  "uuid 1.26.0",
 ]
+
+[[package]]
+name = "maplit"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e2e65a1a2e43cfcb47a895c4c8b10d1f4a61097f9f254f183aee60cad9c651d"
 
 [[package]]
 name = "markup5ever"

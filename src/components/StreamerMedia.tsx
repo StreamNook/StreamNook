@@ -5,6 +5,8 @@ import { Heart, Loader2, Search, Users, X } from 'lucide-react';
 import { useAppStore, clipSourceOf } from '../stores/AppStore';
 import type { TwitchClip, TwitchVideo } from '../types';
 import { GlassSelect } from './ui/GlassSelect';
+import { VodProgressBar, VodRecordingBadge } from './VodCardMarks';
+import { vodProgressLabel } from '../utils/vodProgress';
 import { Logger } from '../utils/logger';
 
 const FALLBACK_THUMB = 'https://vod-secure.twitch.tv/_404/404_processing_320x180.png';
@@ -304,13 +306,15 @@ export default function StreamerMedia({
           <Users size={10} />
           {video.view_count.toLocaleString()}
         </div>
+        <VodRecordingBadge status={video.status} />
+        <VodProgressBar progress={video.progress} lengthSeconds={video.length_seconds} />
       </div>
       <div className="space-y-0.5 px-1 py-2">
         <h3 className="line-clamp-2 text-[13px] font-medium leading-tight text-textPrimary transition-colors group-hover:text-accent">
           {video.title}
         </h3>
         <div className="mt-1 flex items-center justify-between gap-2 border-t border-white/5 pt-1 text-[11px] text-textSecondary">
-          <span className="truncate text-accent/90">{videoTypeLabel(video.type)}</span>
+          <span className="truncate text-accent/90">{vodProgressLabel(video.progress) ?? videoTypeLabel(video.type)}</span>
           <span className="shrink-0">{fmtDate(video.created_at)}</span>
         </div>
       </div>

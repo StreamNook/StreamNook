@@ -47,38 +47,33 @@ pub(crate) const TILE_MAX_SEGMENTS: usize = 4;
 /// Declared `PART-TARGET` (max part duration). Generously above Twitch's ~0.105s
 /// chunks so every real part is comfortably under it (spec requires that), and so
 /// hls.js's edge clamp (`edge - partTarget`) leaves headroom. It also sets hls.js's
-/// low-latency playlist-reload timeout cap (`PART-TARGET * 3`): 0.667 puts that at
-/// 2.0s so a held blocking reload plus transit and queueing stays under it. Was
-/// 0.5 (a 1.6s cap), which `levelLoadTimeOut` still tripped when a playlist
-/// response queued behind a part fetch on a shared keep-alive connection. Costs
-/// ~0.167s of edge latency over 0.5.
+/// low-latency playlist-reload timeout cap (`PART-TARGET * 3`): 0.667 puts that
+/// at 2.0s so a held blocking reload plus transit and queueing stays under it.
+/// A 1.6s cap was not enough once a playlist response queued behind a part fetch
+/// on a shared keep-alive connection. Costs ~0.167s of edge latency.
 const PART_TARGET: f64 = 0.667;
 /// Fallback per-part duration for CMAF parts whose real span could not be
 /// measured (init unavailable / parse failure). NOT merely advisory: hls.js
 /// SUMS declared playlist durations to place fragments, and a systematic
-/// declared-vs-real error compounds into playlist-vs-buffer drift — real
-/// Twitch CMAF parts run ~0.105s, and declaring 0.1 drifted the playlist edge
-/// ~6.6s behind played media in an hour (summit1g 2026-06-12: hls.js "reset
-/// currentTime" rewinds + a MediaSource-ended recovery loop). Measured
-/// durations from the part's own sample tables are the primary path.
+/// declared-vs-real error compounds into playlist-vs-buffer drift. Real Twitch
+/// CMAF parts run ~0.105s, and declaring 0.1 drifts the playlist edge seconds
+/// behind played media within an hour, which surfaces as hls.js currentTime
+/// rewinds and a MediaSource-ended recovery loop. Measured durations from the
+/// part's own sample tables are the primary path.
 const NOMINAL_PART_DUR: f64 = 0.1;
 const TARGET_DURATION: u64 = 2;
 /// How long a blocking reload waits for the requested part before returning the
 /// current playlist anyway (hls.js then retries; never hang indefinitely). MUST
 /// stay under hls.js's low-latency reload timeout, which it caps at
-/// `max(PART-TARGET * 3, TARGETDURATION * 0.8)` = 2.0s for this origin with
-/// PART-TARGET 0.667 (hls.js dist ~36182, "the default of 10000ms is counter
-/// productive to blocking playlist reload requests"); a 4s hold tripped
-/// `levelLoadTimeOut` on every part drought. 1.4s tripped it about once per
-/// session, and 1.2s still occasionally (two in a row drained the 1.5s cushion
-/// to a stall once on 2026-06-12). At a 1.6s cap (PART-TARGET 0.5) a 1.0s hold
-/// still timed out when a playlist response queued behind a part fetch on a
-/// shared keep-alive connection, so PART-TARGET was raised to 0.667 for a 2.0s
-/// cap: that budget now covers the 1.0s hold plus ~1.0s of transit and queueing.
-/// During a real part drought the shorter hold just means hls.js re-polls
-/// sooner; nothing is lost. If timeouts persist, the next lever is removing the
-/// shared-connection head-of-line blocking (a dedicated playlist connection or
-/// HTTP/2 multiplexing), not this.
+/// `max(PART-TARGET * 3, TARGETDURATION * 0.8)`, which is 2.0s for this origin
+/// at PART-TARGET 0.667. That budget covers this 1.0s hold plus roughly 1.0s of
+/// transit and queueing; longer holds trip `levelLoadTimeOut` once a playlist
+/// response queues behind a part fetch on a shared keep-alive connection.
+///
+/// During a real part drought a shorter hold only means hls.js re-polls sooner,
+/// so nothing is lost. If timeouts persist the next lever is removing the
+/// shared-connection head-of-line blocking (a dedicated playlist connection, or
+/// HTTP/2 multiplexing), not this value.
 const BLOCK_TIMEOUT: Duration = Duration::from_millis(1000);
 /// How long the reader waits for a preopened next-segment connection before
 /// abandoning it for the poll path. Normally ready instantly (the previous
@@ -100,17 +95,17 @@ const FIRST_CHUNK_TIMEOUT: Duration = Duration::from_secs(4);
 /// Max MID-STREAM silence before the segment is abandoned (flush what arrived,
 /// mark complete, move to the next). Chunks normally land every ~0.3s or
 /// faster; multi-second silence means the upstream transfer stalled, and
-/// waiting it out is exactly the part drought that starves the player (5s
-/// production gaps -> drained buffer -> stall, ohnepixel capture 2026-06-12).
+/// waiting it out is exactly the part drought that starves the player: a
+/// multi-second production gap drains the buffer into a stall.
 /// The next segment is usually already preopened and producing, so abandoning
 /// the dead tail converts a 5-10s freeze into a sub-frame skip (the transmuxer
 /// resets its half-assembled PES; the next segment leads with an IDR).
 const MIDSTREAM_CHUNK_TIMEOUT: Duration = Duration::from_secs(2);
 /// Wall-clock grace past the segment's own duration before a TRICKLING
 /// transfer is abandoned too. Silence detection misses slow-but-alive
-/// transfers: a 2s segment that took 5s to deliver produced a 4.5s part gap
-/// and a stall (repullze capture 2026-06-12) while the following segments sat
-/// complete upstream. A live in-progress segment finishes ~its duration after
+/// transfers: a 2s segment taking 5s to deliver opens a multi-second part gap
+/// and stalls, while the following segments sit complete upstream.
+/// A live in-progress segment finishes ~its duration after
 /// its first chunk; running this far past that means delivery is slower than
 /// real time and the famine only grows. Measured from the FIRST chunk (a
 /// preopened connection legitimately idles until the segment starts).
@@ -133,8 +128,8 @@ const TS_PART_PTS: u64 = 27_000;
 /// Transmux TS parts to fMP4 before publishing them, so hls.js takes its
 /// passthrough path (explicit per-sample timestamps, no stateful JS remux).
 /// This is the structural fix for the duplicate-append A/V fork: hls.js
-/// occasionally re-fetches a fragment it already buffered (trigger unknown;
-/// 7 of 83 fragments in the 2026-06-11 streamdatabase capture), and on the raw
+/// occasionally re-fetches a fragment it already buffered (trigger unknown, but
+/// frequent enough to matter), and on the raw
 /// TS path each re-append inserted 2s of duplicate video at the buffer end
 /// while audio coalesced, desyncing A/V by -2s per occurrence. With fMP4 the
 /// same re-append overwrites the same time range and is harmless. When false,
@@ -214,6 +209,10 @@ struct Segment {
     complete: bool,
     duration: f64,
     parts: Vec<Part>,
+    /// Whole-segment bytes, assembled lazily on the first `seg/` fetch and
+    /// handed out by refcount after that. Stays `None` in LL steady state
+    /// (the player fetches parts only), so the parts path pays nothing.
+    assembled: Option<bytes::Bytes>,
 }
 
 struct LiveEdge {
@@ -354,8 +353,7 @@ impl BoxChunker {
     /// mdat boundary (push() already emitted everything), so leftovers only
     /// exist when the transfer was ABANDONED mid-box. Appending a truncated
     /// box makes the browser run MSE's append-error algorithm, which ENDS the
-    /// MediaSource ("readyState: ended" append-failure loops, observed live on
-    /// summit1g 2026-06-12), and a complete moof without its mdat leaves the
+    /// MediaSource outright, and a complete moof without its mdat leaves the
     /// SourceBuffer stuck in PARSING_MEDIA_SEGMENT (the timestampOffset
     /// error). The dropped tail is just the abandoned segment's lost media,
     /// which the playlist already accounts for.
@@ -1001,8 +999,11 @@ impl LlOrigin {
             part_target: PART_TARGET,
             segments,
         });
+        // Query string stripped: it is most of the length and can carry signed
+        // playback params that have no business in a log people send around.
         info!(
-            "[LLOrigin] activated ({container:?} low-latency origin) for {upstream_playlist_url}"
+            "[LLOrigin] activated ({container:?} low-latency origin) for {}",
+            upstream_playlist_url.split('?').next().unwrap_or("")
         );
 
         let handle = tokio::spawn(run_reader(self.clone(), upstream_playlist_url, client, gen));
@@ -1040,6 +1041,7 @@ fn make_segment(
             TARGET_DURATION as f64
         },
         parts,
+        assembled: None,
     }
 }
 
@@ -1082,8 +1084,7 @@ async fn run_reader(
         // time-to-first-byte, no waiting for Twitch to publish the previous segment.
         // Without this the origin publishes NOTHING for the poll + publish-lag +
         // TTFB at every segment boundary (~1-2.5s), which is most of a 2s cushion:
-        // the player drains right as it reaches the live edge and stalls (observed
-        // live 2026-06-09, "Time since last fragment: 2423ms").
+        // the player drains right as it reaches the live edge and stalls.
         if let Some((sn, mut handle)) = preopened.take() {
             let contiguous = {
                 let g = origin.live_edge.lock().unwrap();
@@ -1257,7 +1258,7 @@ async fn run_reader(
         // from #EXT-X-MEDIA-SEQUENCE, so a hole shifts every later segment's number
         // away from its `seg/<sn>.ts` URI, and as the window slides the same URI
         // changes number across refreshes, which hls.js rejects as a fatal
-        // "media sequence mismatch" (live freeze, seen 2026-06-09). A hole opens
+        // "media sequence mismatch", freezing playback. A hole opens
         // whenever a segment finalizes outside the reader's sight: most commonly one
         // finalizing between the activation backfill and the first poll here (a
         // segment boundary falls inside that window on most stream starts), or any
@@ -1434,17 +1435,12 @@ fn advance_pdt_by(pdt: &str, steps: i64) -> Option<String> {
     )
 }
 
-/// Decide how the reader brings a stale window up to date before the next
-/// in-progress segment. Returns `(clear_window_first, sns_to_fetch)`. The fetch
-/// range is always consecutive and ends at `inprogress_sn - 1`, and when not
-/// rebuilding it starts right after `window_newest`, so appending the fetched
-/// segments keeps the window contiguous at every intermediate render.
 /// How many missing segments the reader will fill ADJACENTLY before declaring
 /// a rebuild instead. Catch-up fetches are serial whole-segment downloads; on
 /// a connection delivering near the stream bitrate each one costs about a
-/// segment of real time, so a deep fill can never gain ground (observed live:
-/// o_seg every ~2s for 44s while zero parts published — running to stand
-/// still). One or two segments covers the startup race and a single hiccup;
+/// segment of real time, so a deep fill can never gain ground: it downloads one
+/// segment per segment produced and stands still.
+/// One or two segments covers the startup race and a single hiccup;
 /// beyond that, jumping to the live edge keeps the stream playable and the
 /// player re-anchors via the media-sequence advance.
 const CATCH_UP_MAX_SEGMENTS: u64 = 2;
@@ -1478,6 +1474,12 @@ fn init_url_update(edge: &LiveEdge, upstream_init: Option<&str>) -> Option<Strin
     }
 }
 
+/// Decide how the reader brings a stale window up to date before the next
+/// in-progress segment. Returns `(clear_window_first, sns_to_fetch)`.
+///
+/// The fetch range is always consecutive and ends at `inprogress_sn - 1`, and
+/// when not rebuilding it starts right after `window_newest`, so appending the
+/// fetched segments keeps the window contiguous at every intermediate render.
 fn plan_catch_up(
     window_newest: u64,
     oldest_published: u64,
@@ -1690,6 +1692,7 @@ impl LlOrigin {
             complete: false,
             duration: TARGET_DURATION as f64,
             parts: Vec::new(),
+            assembled: None,
         });
         while edge.segments.len() > self.max_segments {
             if let Some(s) = edge.segments.pop_front() {
@@ -1706,9 +1709,8 @@ impl LlOrigin {
     /// Parts MUST be immutable once served: a part whose listed duration changes
     /// across a playlist refresh is treated by hls.js as a new part and RE-FETCHED,
     /// and re-appending an identical TS part makes hls.js extend the video timeline
-    /// while the audio coalesces — progressive A/V drift (proven from a live capture:
-    /// re-fetches of `part/<sn>/0` at each segment boundary, each adding ~0.5s of
-    /// video-ahead-of-audio). The earlier even-split rewrite here was the cause.
+    /// while the audio coalesces, giving progressive A/V drift of roughly half a
+    /// second per re-fetch. The earlier even-split rewrite here was the cause.
     /// Returns false if the edge is gone.
     fn finish_segment(&self, sn: u64) -> bool {
         let mut g = self.live_edge.lock().unwrap();
@@ -1736,7 +1738,7 @@ impl LlOrigin {
     /// On the transmux path the published duration is the transmuxer's sample-
     /// measured span, NOT `dur` from the chunker: the chunker measures
     /// presentation-timestamp deltas at its cut points, which B-frame arrival
-    /// order systematically inflates (+40-80ms per 2s segment observed live).
+    /// order systematically inflates by tens of milliseconds per segment.
     /// hls.js sums the declared durations to place fragments, so that bias
     /// compounds until its part lookup drifts past tolerance and it re-fetches
     /// parts it already buffered (mid-GOP rewrites at the playhead = visible
@@ -1959,8 +1961,8 @@ fn render_locked(edge: &LiveEdge) -> String {
         // window. Flipping a segment from in-progress to complete in the same
         // refresh that first reveals its final part lets the client decide the
         // segment is done before fetching that part and advance past it, leaving a
-        // one-part (~85-105ms) hole in its buffer at the boundary (observed live
-        // 2026-06-09 as repeating bufferStalledError + bufferSeekOverHole pairs).
+        // one-part (~85-105ms) hole in its buffer at the boundary, which surfaces
+        // as repeating bufferStalledError and bufferSeekOverHole pairs.
         // Deferring the EXTINF guarantees at least one refresh in which the final
         // part is visible on a still-in-progress segment. The lone-segment
         // exception keeps a minimal window startable.
@@ -1999,26 +2001,33 @@ impl LlOrigin {
             .map(|p| p.bytes.clone())
     }
 
-    /// Bytes for a complete segment (`seg/<sn>.ts`), assembled from its parts in memory.
-    pub fn get_segment(&self, sn: u64) -> Option<Vec<u8>> {
-        let assemble = |seg: &Segment| {
+    /// Bytes for a complete segment (`seg/<sn>.ts`), assembled from its parts in
+    /// memory. Assembly runs at most once per segment (memoized on the segment,
+    /// under the same locks as before); repeat fetches clone the handle.
+    pub fn get_segment(&self, sn: u64) -> Option<bytes::Bytes> {
+        let assemble = |seg: &mut Segment| {
+            if let Some(b) = &seg.assembled {
+                return b.clone();
+            }
             let total: usize = seg.parts.iter().map(|p| p.bytes.len()).sum();
             let mut out = Vec::with_capacity(total);
             for p in &seg.parts {
                 out.extend_from_slice(&p.bytes);
             }
-            out
+            let b = bytes::Bytes::from(out);
+            seg.assembled = Some(b.clone());
+            b
         };
         {
-            let g = self.live_edge.lock().unwrap();
-            let edge = g.as_ref()?;
-            if let Some(seg) = edge.segments.iter().find(|s| s.sn == sn && s.complete) {
+            let mut g = self.live_edge.lock().unwrap();
+            let edge = g.as_mut()?;
+            if let Some(seg) = edge.segments.iter_mut().find(|s| s.sn == sn && s.complete) {
                 return Some(assemble(seg));
             }
         }
         // Retirement grace (see get_part).
-        let r = self.retired.lock().unwrap();
-        r.iter().find(|s| s.sn == sn && s.complete).map(assemble)
+        let mut r = self.retired.lock().unwrap();
+        r.iter_mut().find(|s| s.sn == sn && s.complete).map(assemble)
     }
 }
 
@@ -2071,7 +2080,7 @@ pub fn get_part(sn: u64, idx: usize) -> Option<Arc<Vec<u8>>> {
     SOLO.get_part(sn, idx)
 }
 
-pub fn get_segment(sn: u64) -> Option<Vec<u8>> {
+pub fn get_segment(sn: u64) -> Option<bytes::Bytes> {
     SOLO.get_segment(sn)
 }
 
@@ -2113,7 +2122,21 @@ pub(crate) fn parse_part_path(rest: &str) -> Option<(u64, usize)> {
     Some((sn, k))
 }
 
-pub(crate) fn media_response(bytes: Vec<u8>) -> warp::http::Response<Vec<u8>> {
+/// Zero-copy bridge: present a shared part/init buffer as a response body
+/// without copying it (the per-part memcpy this replaces ran ~9-10 times a
+/// second per LL stream).
+struct SharedBuf(std::sync::Arc<Vec<u8>>);
+impl AsRef<[u8]> for SharedBuf {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+pub(crate) fn arc_bytes(buf: std::sync::Arc<Vec<u8>>) -> bytes::Bytes {
+    bytes::Bytes::from_owner(SharedBuf(buf))
+}
+
+pub(crate) fn media_response(bytes: impl Into<bytes::Bytes>) -> warp::http::Response<bytes::Bytes> {
+    let bytes: bytes::Bytes = bytes.into();
     // Sniff the container so a TS part is labelled MP2T (CMAF stays mp4). hls.js
     // demuxes from the bytes regardless, but the honest content-type avoids any
     // strict-MIME edge cases.
@@ -2136,7 +2159,7 @@ pub(crate) fn media_response(bytes: Vec<u8>) -> warp::http::Response<Vec<u8>> {
         .unwrap()
 }
 
-pub(crate) fn playlist_response(bytes: Vec<u8>) -> warp::http::Response<Vec<u8>> {
+pub(crate) fn playlist_response(bytes: Vec<u8>) -> warp::http::Response<bytes::Bytes> {
     warp::http::Response::builder()
         .status(200)
         .header("Content-Type", "application/x-mpegURL")
@@ -2155,15 +2178,15 @@ pub(crate) fn playlist_response(bytes: Vec<u8>) -> warp::http::Response<Vec<u8>>
         // against held responses is the prime suspect; closing costs nothing
         // on loopback and isolates the layer. Parts/segments keep keep-alive.
         .header("Connection", "close")
-        .body(bytes)
+        .body(bytes.into())
         .unwrap()
 }
 
-pub(crate) fn empty_cors(status: u16) -> warp::http::Response<Vec<u8>> {
+pub(crate) fn empty_cors(status: u16) -> warp::http::Response<bytes::Bytes> {
     warp::http::Response::builder()
         .status(status)
         .header("Access-Control-Allow-Origin", "*")
-        .body(vec![])
+        .body(bytes::Bytes::new())
         .unwrap()
 }
 
@@ -2586,6 +2609,7 @@ mod tests {
                 duration: 0.1,
                 bytes: Arc::new(vec![3]),
             }],
+            assembled: None,
         });
         let edge = LiveEdge {
             init_url: "https://cdn/init.mp4".into(),
@@ -2645,6 +2669,7 @@ mod tests {
                     bytes: Arc::new(vec![7]),
                 },
             ],
+            assembled: None,
         });
         let edge = LiveEdge {
             init_url: "https://cdn/init.mp4".into(),
@@ -2693,6 +2718,7 @@ mod tests {
                 duration: 0.3,
                 bytes: Arc::new(vec![3]),
             }],
+            assembled: None,
         });
         let edge = LiveEdge {
             init_url: String::new(),

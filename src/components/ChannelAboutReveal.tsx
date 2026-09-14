@@ -1,8 +1,12 @@
 import { useState, useRef, useEffect, type ReactNode } from 'react';
+import { platformTerms } from '../utils/platformTerms';
+import { streamProvider } from '../utils/streamProvider';
 import { motion } from 'framer-motion';
 import { ChevronUp, ChevronDown, Heart, HeartCrack, Loader2, Star } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useAppStore } from '../stores/AppStore';
+import { aboutRevealNeedsShift, scrollAboutRevealOn } from '../utils/playerMouseControls';
+import { playerOverlayButtonOn } from '../utils/playerOverlayButtons';
 import { useChannelSocial } from '../hooks/useChannelSocial';
 import StreamerAboutPanel from './StreamerAboutPanel';
 
@@ -39,6 +43,10 @@ export default function ChannelAboutReveal({ enabled, channelLogin, children }: 
   // letterbox bar below it big enough to hold the About hint clear of the stream.
   const [hasBottomBar, setHasBottomBar] = useState(false);
   const currentStream = useAppStore((s) => s.currentStream);
+  const playerOverlayButtons = useAppStore((s) => s.settings.player_overlay_buttons);
+  // Platform vocabulary: YouTube calls the free relationship "Subscribe" and the
+  // paid one "Join", which is the exact inverse of Twitch's wording.
+  const terms = platformTerms(streamProvider(currentStream));
   const openStreamerMedia = useAppStore((s) => s.openStreamerMedia);
 
   // Never reveal over a fullscreen stream. Best-effort via the Tauri window
@@ -70,6 +78,18 @@ export default function ChannelAboutReveal({ enabled, channelLogin, children }: 
     };
   }, []);
 
+  // The wheel over the player can only mean one thing. By default it changes
+  // volume, so the reveal is reached by its hint pill instead; setting the wheel
+  // back to "Channel About" restores the scroll-to-reveal gesture.
+  // Scroll-to-reveal is its own setting, independent of scroll-to-change-volume.
+  // When both are on the plain wheel belongs to volume and this gesture moves to
+  // Shift + scroll down, so neither has to be given up for the other.
+  const revealOn = useAppStore((s) => scrollAboutRevealOn(s.settings.video_player));
+  const revealNeedsShift = useAppStore((s) => aboutRevealNeedsShift(s.settings.video_player));
+  // True only when a plain, unmodified scroll down opens the drawer. That's the
+  // case the small bottom hint pill was designed for.
+  const plainScrollReveals = revealOn && !revealNeedsShift;
+
   const active = enabled && !!channelLogin && !isFullscreen;
   // Effective open state — never "open" when the reveal isn't active, so a stale
   // true can't push the video off-screen with nothing behind it.
@@ -86,6 +106,7 @@ export default function ChannelAboutReveal({ enabled, channelLogin, children }: 
     hasSubHistory,
     subscriberBadgeUrl,
     handleSubscribeClick,
+    offersMembership,
   } = useChannelSocial({
     userId: currentStream?.user_id,
     userLogin: currentStream?.user_login,
@@ -129,8 +150,16 @@ export default function ChannelAboutReveal({ enabled, channelLogin, children }: 
   const onWheel = (e: React.WheelEvent) => {
     if (!active) return;
     if (!open) {
-      // On the video: a downward scroll reveals the About.
-      if (e.deltaY > WHEEL_THRESHOLD) setShowAbout(true);
+      // On the video: a downward scroll reveals the About, holding Shift when
+      // volume is also on the wheel. The player's own handler mirrors this test
+      // and leaves those events alone, so exactly one of us acts.
+      if (!revealOn) return;
+      if (revealNeedsShift && !e.shiftKey) return;
+      // Chromium reroutes Shift + wheel onto the horizontal axis, which can
+      // leave deltaY at 0 with deltaX carrying the scroll. Fall back to deltaX
+      // only when deltaY is empty, so ordinary vertical scrolling is untouched.
+      const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+      if (delta > WHEEL_THRESHOLD) setShowAbout(true);
     } else {
       // On the About: it scrolls normally; an upward scroll AT THE TOP returns
       // to the stream.
@@ -140,7 +169,9 @@ export default function ChannelAboutReveal({ enabled, channelLogin, children }: 
   };
 
   return (
-    <div ref={rootRef} className="group/reveal flex-1 relative overflow-hidden bg-background" onWheel={active ? onWheel : undefined}>
+    // Stays bound while the About is open regardless of the wheel setting, so
+    // scrolling up at the top always returns to the stream.
+    <div ref={rootRef} className="group/reveal flex-1 relative overflow-hidden bg-background" onWheel={active && (revealOn || open) ? onWheel : undefined}>
       {/* Video layer — pushed fully up and out when the About is revealed. The
           stream keeps playing; this is only a transform. */}
       <motion.div className="absolute inset-0" animate={{ y: open ? '-100%' : '0%' }} transition={SNAP}>
@@ -167,8 +198,9 @@ export default function ChannelAboutReveal({ enabled, channelLogin, children }: 
                 Back to stream
               </button>
               {/* Channel actions, mirrored from the player overlay so you can act
-                  without leaving the About. */}
+                  without leaving the About — including its visibility setting. */}
               <div className="ml-auto flex items-center gap-2">
+                {playerOverlayButtonOn(playerOverlayButtons, 'follow') && (
                 <button
                   type="button"
                   onClick={handleFollowClick}
@@ -184,8 +216,10 @@ export default function ChannelAboutReveal({ enabled, channelLogin, children }: 
                   ) : (
                     <Heart className="h-3.5 w-3.5 text-emerald-400" />
                   )}
-                  {isFollowing ? 'Following' : 'Follow'}
+                  {isFollowing ? terms.following : terms.follow}
                 </button>
+                )}
+                {offersMembership && playerOverlayButtonOn(playerOverlayButtons, 'subscribe') && (
                 <button
                   type="button"
                   onClick={handleSubscribeClick}
@@ -196,8 +230,9 @@ export default function ChannelAboutReveal({ enabled, channelLogin, children }: 
                   ) : (
                     <Star className="h-3.5 w-3.5 text-accent" />
                   )}
-                  {isSubscribed ? 'Gift Subs' : hasSubHistory ? 'Resubscribe' : 'Subscribe'}
+                  {isSubscribed ? terms.paidGift : hasSubHistory ? terms.paidAgain : terms.paid}
                 </button>
+                )}
                 {currentStream?.user_id && (
                   <button
                     type="button"
@@ -224,12 +259,21 @@ export default function ChannelAboutReveal({ enabled, channelLogin, children }: 
               while the bar exists so it FADES (not pops) with the open/hover swap —
               opacity-0 while the About is open, and on hover so it never collides
               with the player's bottom controls (which only appear on hover). */}
-          {hasBottomBar && (
+          {(hasBottomBar || !plainScrollReveals) && (
             <button
               type="button"
               onClick={() => setShowAbout(true)}
               aria-hidden={open}
-              className={`absolute bottom-2 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border border-transparent bg-black/40 shadow-[inset_1px_1px_0_0_rgba(255,255,255,0.10),inset_-1px_-1px_0_0_rgba(0,0,0,0.18)] px-2.5 py-0.5 text-[11px] font-medium text-white/60 backdrop-blur-sm transition-all duration-300 hover:bg-black/60 hover:text-white group-hover/reveal:pointer-events-none group-hover/reveal:opacity-0 ${open ? 'pointer-events-none opacity-0' : 'pointer-events-auto opacity-80'}`}
+              className={`absolute left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border border-transparent bg-black/40 shadow-[inset_1px_1px_0_0_rgba(255,255,255,0.10),inset_-1px_-1px_0_0_rgba(0,0,0,0.18)] px-2.5 py-0.5 text-[11px] font-medium text-white/60 backdrop-blur-sm transition-all duration-300 hover:bg-black/60 hover:text-white ${
+                plainScrollReveals
+                  // A plain scroll opens the About, so this is only a hint. It
+                  // fades out on hover so it never collides with the controls.
+                  ? `bottom-2 group-hover/reveal:pointer-events-none group-hover/reveal:opacity-0 ${open ? 'pointer-events-none opacity-0' : 'pointer-events-auto opacity-80'}`
+                  // A plain scroll won't open it (Shift-gated, or the gesture is
+                  // off), so this pill is the reliable way in. It appears on
+                  // hover, above the control bar, where it can be clicked.
+                  : `bottom-16 pointer-events-none opacity-0 ${open ? '' : 'group-hover/reveal:pointer-events-auto group-hover/reveal:opacity-80'}`
+              }`}
             >
               About
               <ChevronDown className="h-3 w-3" />

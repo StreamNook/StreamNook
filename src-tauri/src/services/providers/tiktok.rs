@@ -173,6 +173,23 @@ impl ChatProvider for TikTokProvider {
         Ok(())
     }
 
+    async fn release_window(&self, window: &str) {
+        let mut conns = self.conns.lock().await;
+        conns.retain(|id_lc, conn| {
+            if !conn.consumers.remove(window) || !conn.consumers.is_empty() {
+                return true;
+            }
+            // Live connection (task Some) released here; a still-resolving one
+            // (task None) is released by connect()'s attach/failure path.
+            if let Some(task) = conn.task.take() {
+                task.abort();
+                dec_bridge_users();
+                log::debug!("[TikTok] released '{}' with window '{}'", id_lc, window);
+            }
+            false
+        });
+    }
+
     async fn send(&self, _channel: &str, _text: &str, _reply_to: Option<&str>) -> Result<SendOutcome> {
         // Sending to TikTok LIVE from outside the app is ban-risk, so v1 is read-only.
         Ok(SendOutcome {
@@ -377,6 +394,7 @@ fn build_gift_message(m: &WebcastGiftMessage, channel_key: &str) -> Option<ChatM
             emote_url: url.clone(),
             is_zero_width: Some(false),
             modifier_flags: None,
+            is_personal: None,
         });
         segments.push(MessageSegment::Text {
             content: format!(" {}", phrase),

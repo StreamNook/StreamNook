@@ -10,7 +10,9 @@ import { motion, AnimatePresence } from 'framer-motion';
  * lives here rather than in Settings.
  */
 export default function MarketplaceOverlay() {
-  const { showMarketplaceOverlay, setShowMarketplaceOverlay } = useAppStore();
+  // Action without a subscription; only the visibility flag drives re-renders.
+  const { setShowMarketplaceOverlay } = useAppStore.getState();
+  const showMarketplaceOverlay = useAppStore((s) => s.showMarketplaceOverlay);
 
   return (
     <AnimatePresence>

@@ -1,3 +1,260 @@
+## [8.6.1] - 2026-09-07
+
+> [!NOTE]
+> **Two releases in one day, so nothing gets missed.** 8.6.0 shipped a few hours
+> before this one. If you are updating from an older build you may never see its
+> release page, so its notes are repeated here in full.
+>
+> **8.6.1 is not just a fix release.** It adds GIFs in chat and live 7TV emote
+> updates. Those are listed at the very bottom of these notes, under
+> "New in 8.6.1", below the 8.6.0 notes.
+
+---
+
+## From 8.6.0
+
+## 🎉 New: Chat grows up
+> The biggest chat release StreamNook has had. Search any chat, save filters, hide phrases, review AutoMod holds without leaving chat, split MultiChat however you like, float a see-through chat over a fullscreen game, paste a screenshot straight into your message, and browse every command with plain explanations and examples. The AutoMod queue needs two new Twitch permissions, so StreamNook asks you to sign in once more on first launch.
+
+![Chat grows up](https://raw.githubusercontent.com/winters27/StreamNook/main/.github/assets/release-8.6.0-chat-grows-up.webp)
+
+---
+
+### ✨ Features
+- **Paste an image to upload it.** Copy a screenshot, press Ctrl+V in the chat box, and the link lands in your message. Choose i.nuuls.com, catbox, Litterbox, uguu or your own host; links from all of them render as image cards in chat.
+- **Search any chat with Ctrl+F.** Searches the recent history of that chat, with filters like from:, badge:, has:link and regex:, and a result list you can step through.
+- **Saved filters and ignored phrases.** Build reusable chat filters from eight presets or short expressions of your own, and pick one from a chip above chat. Phrases you never want to see are dropped before they reach the screen.
+- **Highlights, mentions and filters are decided in one place.** Every message is checked once, in Rust, so popouts and MultiChat panes always agree, and custom highlight sounds can be your own files.
+- **AutoMod queue inside chat.** Held messages appear in a strip above the message box with Allow and Deny, and restricted users show up marked so moderators can act on them.
+- **Streamer mode.** Turn it on, or let StreamNook notice OBS and friends, and chat hides link previews, viewer counts, sounds and low-trust users while you are live.
+- **MultiChat splits, mentions feed and more windows.** Arrange panes in any split layout, open a mentions-only feed, spin up extra MultiChat windows, and move focus between panes with Ctrl+Alt+Arrows.
+- **Chat over a fullscreen stream, and a floating see-through chat.** Fullscreen keeps chat readable over the video, and /overlay opens an always-on-top glass chat you can park over a game, fade to invisible, and make click-through (Ctrl+Alt+N, or the tray).
+- **A command menu that explains itself.** The new button left of the emote picker lists every command, what it does, who can use it, and examples you can click into the box. Commands you cannot run in this channel show locked, and there is a larger reference view when you want more room.
+- **New slash commands.** /r replies to your last whisper, /clip, /chatters, /ignore, /uptime, /overlay, /settitle and /setgame, and /popup for a new MultiChat window.
+- **Pronouns and private notes on user cards.** Pronouns come from pronouns.alejo.io when you opt in; notes stay on your PC.
+- **12-hour or 24-hour timestamps, animated emotes on hover only, dimmer backfill.** Three small chat design options people kept asking for.
+- **See every StreamNook badge and Atmosphere in profile customization,** with the ones you have not earned yet shown locked.
+- **Moltorino supporter badges**, and a Chat Clients gallery in the Badges window showing the badges every third-party client hands its developers and supporters.
+- **Settings explain themselves.** Every row now says what you get and what it costs in plain language, long tabs have a section rail that follows you as you scroll, and image uploads have their own section.
+
+### 🐛 Bug Fixes
+- **Community badges that are taken back now disappear right away** instead of lingering until the next restart.
+- **Release posts in Discord now carry the release picture.**
+
+### 🔧 Maintenance
+- **A resource line in the log every minute** breaks memory down by process (app, browser, GPU, each window, plugins), so a memory report can be read off the log.
+
+---
+
+## New in 8.6.1
+
+### ✨ Features
+- **GIFs in chat.** Chat GIFs appear as the animated image rather than a bracketed description, with a new GIF tab in the emote picker for searching and sending. The tab only appears in channels where your account can actually use it.
+- **GIFs on the stream overlay.** The overlay draws chat GIFs at the gigantified size and follows your Giant emote placement, with its own toggle if you would rather show the description instead.
+- **Chat GIF controls.** A Chat GIFs switch shows GIFs, or a chip that reveals them on click, and it follows your Animate emotes setting the same way animated emotes do.
+- **7TV emote changes apply live.** When a channel adds, removes or renames a 7TV emote, chat and the emote picker pick it up as it happens instead of at the next restart.
+
+### 🐛 Bug Fixes
+- **Channel emote aliases are back.** Channels using one emote under two names kept only one of them, and a discovery list was being merged into channel sets, which could replace a channel's own name for an emote and render emotes nobody else in the room could see.
+- **Large 7TV channels load again.** Very large emote sets timed out and tripped a cooldown that briefly took every other 7TV request down with it. Big sets now get the time they need, and only a genuine outage triggers the cooldown.
+- **A steady live indicator.** The player flipped between LIVE and a timestamp, and the broadcast timeline's playhead slid backwards, several times a minute on a perfectly healthy stream.
+- **Profile badges show up reliably.** A naming mismatch could group third-party badges under Other, or hide a member's chosen badge outright, depending on which lookup answered first.
+- **Popovers stay readable at low glassiness.** At Glassiness 0 popovers kept their transparency but lost their frost, so chat scrolled visibly through them.
+- **Emote picker recovers on its own.** When a channel's 7TV data failed to load, the picker held a fallback set until a manual refresh. It now re-checks quietly and fills in once 7TV answers.
+
+### 🔧 Maintenance
+- Refreshed dependencies, including the video playback libraries.
+- Update packages are now rejected unless their signature verifies.
+
+## [8.6.0] - 2026-09-07
+
+## 🎉 New: Chat grows up
+> The biggest chat release StreamNook has had. Search any chat, save filters, hide phrases, review AutoMod holds without leaving chat, split MultiChat however you like, float a see-through chat over a fullscreen game, paste a screenshot straight into your message, and browse every command with plain explanations and examples. The AutoMod queue needs two new Twitch permissions, so StreamNook asks you to sign in once more on first launch.
+
+![Chat grows up](https://raw.githubusercontent.com/winters27/StreamNook/main/.github/assets/release-8.6.0-chat-grows-up.webp)
+
+---
+
+### ✨ Features
+- **Paste an image to upload it.** Copy a screenshot, press Ctrl+V in the chat box, and the link lands in your message. Choose i.nuuls.com, catbox, Litterbox, uguu or your own host; links from all of them render as image cards in chat.
+- **Search any chat with Ctrl+F.** Searches the recent history of that chat, with filters like from:, badge:, has:link and regex:, and a result list you can step through.
+- **Saved filters and ignored phrases.** Build reusable chat filters from eight presets or short expressions of your own, and pick one from a chip above chat. Phrases you never want to see are dropped before they reach the screen.
+- **Highlights, mentions and filters are decided in one place.** Every message is checked once, in Rust, so popouts and MultiChat panes always agree, and custom highlight sounds can be your own files.
+- **AutoMod queue inside chat.** Held messages appear in a strip above the message box with Allow and Deny, and restricted users show up marked so moderators can act on them.
+- **Streamer mode.** Turn it on, or let StreamNook notice OBS and friends, and chat hides link previews, viewer counts, sounds and low-trust users while you are live.
+- **MultiChat splits, mentions feed and more windows.** Arrange panes in any split layout, open a mentions-only feed, spin up extra MultiChat windows, and move focus between panes with Ctrl+Alt+Arrows.
+- **Chat over a fullscreen stream, and a floating see-through chat.** Fullscreen keeps chat readable over the video, and /overlay opens an always-on-top glass chat you can park over a game, fade to invisible, and make click-through (Ctrl+Alt+N, or the tray).
+- **A command menu that explains itself.** The new button left of the emote picker lists every command, what it does, who can use it, and examples you can click into the box. Commands you cannot run in this channel show locked, and there is a larger reference view when you want more room.
+- **New slash commands.** /r replies to your last whisper, /clip, /chatters, /ignore, /uptime, /overlay, /settitle and /setgame, and /popup for a new MultiChat window.
+- **Pronouns and private notes on user cards.** Pronouns come from pronouns.alejo.io when you opt in; notes stay on your PC.
+- **12-hour or 24-hour timestamps, animated emotes on hover only, dimmer backfill.** Three small chat design options people kept asking for.
+- **See every StreamNook badge and Atmosphere in profile customization,** with the ones you have not earned yet shown locked.
+- **Moltorino supporter badges**, and a Chat Clients gallery in the Badges window showing the badges every third-party client hands its developers and supporters.
+- **Settings explain themselves.** Every row now says what you get and what it costs in plain language, long tabs have a section rail that follows you as you scroll, and image uploads have their own section.
+
+### 🐛 Bug Fixes
+- **Community badges that are taken back now disappear right away** instead of lingering until the next restart.
+- **Release posts in Discord now carry the release picture.**
+
+### 🔧 Maintenance
+- **A resource line in the log every minute** breaks memory down by process (app, browser, GPU, each window, plugins), so a memory report can be read off the log.
+
+## [8.5.5] - 2026-09-06
+
+## 🎉 StreamNook Community Month is on
+> Two new animated badges. Kindred, the cube heart, goes to anyone who brings a friend into the StreamNook Discord during Community Month, which runs through the end of September. Uplift, the rocket, is the standing thank-you for boosting the Discord, any time. Both appear in chat and on your profile the moment they are granted.
+
+![Kindred and Uplift](https://raw.githubusercontent.com/winters27/StreamNook/main/.github/assets/release-8.5.5-community-month.webp)
+
+---
+
+### ✨ Features
+- **Scrub back through any live stream.** The progress bar under a live stream now spans the whole broadcast, not just the part you have watched. Hover to see the time you would land at and how long ago that was, drop anywhere to go there in the stream's recording, and drag to the end to return to live. The scale is finer near live and coarser further back, so both are easy to hit. Channels that keep no VODs get a note instead of a dead scrub.
+- **VODs remember where you left off.** Reopen a past broadcast and it resumes at your last position, with the chat replay following. Video cards show how far you got. A player setting turns resume off if you prefer starting from the top.
+- **Badge details list the exact categories a badge can be earned in**, as real category cards you can jump to, instead of a line of prose.
+
+### 🐛 Bug Fixes
+- **VODs of a stream that is still live now play and seek properly.** They were being treated as a live stream, which snapped playback back to the end and broke seeking. (#216)
+- **Badges and accolades no longer vanish from profiles when a lookup fails.** A Twitch change that removed the old badge query, or a brief network hiccup, wiped every badge until the next refresh; the last good set is kept instead.
+- **The Drops channel picker only offers channels that are actually earning the drop right now**, per Twitch, instead of guessing from the allow list or category.
+- **Your own chat message no longer shows twice for a moment** after sending an emote from the picker.
+- **StreamNook stays in the tray under "Always minimize" when its last window closes**, instead of quitting and taking the tray icon with it.
+- **7TV channel emotes are not marked as loaded before they actually parse.**
+
+### ⚡ Performance
+- **Chat rendering runs under the React Compiler**, with chat state written copy-on-write, so heavy chat costs less per message and the player keeps its frames.
+
+## [8.5.4] - 2026-09-03
+
+### 🐛 Bug Fixes
+- **Chat now connects on networks that block the old chat port.** Some internet providers, routers and security suites drop the port Twitch chat has always used, which left chat showing older messages and never updating. Chat falls back to Twitch's secure connection on the standard web port, remembers that it had to, and goes straight there next time.
+- **Age-restricted YouTube streams play when you are signed in.** A stream the anonymous request was refused for is retried with your YouTube session instead of stopping at a warning.
+- **Accolades are called accolades on your profile.** Unlock text said "badge", which is the chat cosmetic, and Restless appeared under its internal codename.
+
+## [8.5.3] - 2026-09-02
+
+## 🎉 New: Prism, a theme made of light
+> Prism is a dark, colorless theme where refracted light lands on the glass: a soft bloom in a corner, a streak of separated color across a dialog, a catch of light on a hovered button. It is free for everyone in Theme settings. Alongside it, the Prism set: Facet, a supporter badge; Lumen, a subscriber badge; and Dispersion, an atmosphere that puts dispersed light behind a subscriber's messages and profile. The set is available through October 31.
+
+![Prism and the Prism set](https://raw.githubusercontent.com/winters27/StreamNook/main/.github/assets/release-8.5.3-prism.png)
+
+---
+
+### ✨ Features
+- **Prism theme.** Ivory on near-black, with light instead of color: the interface stays neutral and the spectrum appears only where it would in a photograph of glass. It scales with your glassiness setting, so a solid setup gets a quieter version.
+- **The Prism set, through October 31.** Supporters get Facet, subscribers get Lumen and the Dispersion atmosphere as well as Facet. Anyone who holds a tier before the end of October keeps their pieces for good.
+- **A rebuilt Stream Overlay builder.** Eight short sections instead of one long scroll, a row of tiles to jump between them, a dot on any section you have changed, and one short line per setting with the detail a hover away.
+- **Atmospheres can shape their chat wash.** An atmosphere can drop the left edge, defocus its image behind your messages, and draw a faint rim around the row, so a crisp piece of art reads as light on the row instead of a cropped picture.
+
+### 🐛 Bug Fixes
+- **Links like test.fr are recognized**, not only ones starting with https or www, and a full stop after a link stays out of it.
+- **The shared-chat banner clears when a shared session ends**, instead of staying up until you change channels.
+
+### ⚡ Performance
+- **Chat memory no longer grows for as long as a channel is open.** The buffer trim leaked one row per flush, which on a busy channel added up to over a gigabyte in half an hour.
+- **Far less CPU while watching.** Decorative animations in the title bar and update pill are held still during playback and run again while you browse; they were repainting the window on every frame.
+- **Lighter badge and emote cache.** Lookups read one entry instead of cloning the whole manifest, the manifest is written compactly and atomically at a gentler interval, and the YouTube feed poll no longer re-encodes each response just to log its size.
+
+## [8.5.2] - 2026-08-30
+
+## 🎉 New: Favorites, a watchlist that spans every platform
+> Star any channel on Twitch, Kick or YouTube, whether or not you follow it, and it gets its own section on Home and in the sidebar the moment it goes live. The section stays clear of anyone who is not streaming, and a favorite that is offline is still reachable further down with your other offline channels. Favorites also have their own go-live alert switch, so a long favorites list never forces you to silence alerts for the people you follow.
+
+---
+
+### ✨ Features
+- **Favorites work everywhere, following optional.** The heart is on every stream card now, including category browsing, search results and offline channels, so you can save a channel the moment you find it. Favorited channels report who is live across all three platforms, and a channel you just starred appears right away instead of waiting for the next check. The Favorites section only ever lists channels that are actually live; a starred channel that is offline sits with your other offline channels, keeping its name and picture so you can still get back to it.
+- **MultiNook runs Kick and YouTube.** One grid can hold everything you watch instead of Twitch only, including several YouTube streams at once. Add to MultiNook is offered on every platform, and stays disabled with the reason on hover for anything the grid cannot run yet.
+- **The grid picker searches every platform at once.** Add Stream and the preset editor look across all supported platforms together, and results from the smaller platforms sit near the top instead of being buried under Twitch matches. You can also type a platform prefix such as `kick:name` to add a channel the search did not surface.
+- **Presets remember which platform each channel is on**, so a mixed grid reloads exactly as you saved it. Two channels that share a name on different platforms stay separate everywhere: adding, removing, chat and presets.
+- **Hide bots and specific people from chat.** Mute a chatter or a bot for one channel or everywhere, so the giveaway and gambling spam stops without you having to read past it.
+- **A separate go-live switch for favorites**, so you can be alerted about a starred channel you do not follow, and keep follow alerts tuned independently.
+
+### 🐛 Bug Fixes
+- **Chat no longer misses messages on fast channels.** Repeat collapsing is opt-in and respects the threshold you set, and coming back from a pause keeps your scrollback instead of cutting it in one go.
+- **YouTube chat stays connected.** It no longer goes silent partway through, and closing a tile actually stops its chat instead of leaving it running in the background.
+- **Channel point redemptions show their emotes** instead of printing the emote name as plain text, and unrecognized emoji shortcodes no longer appear twice.
+- **1440p and 2160p on YouTube keep working** when you come back to a stream later in the same session, instead of quietly dropping to 1080p. High resolution playback also stutters and stalls far less, and closing a stream releases what it was holding so the next one can still go above 1080p.
+- **Opening the quality list on a YouTube stream no longer restarts it** on a different resolution.
+- **YouTube channels are detected as live** whether or not you have opened their chat, so the live list and favorites stop missing them, and tiles show real channel details rather than a bare video id.
+- **Favoriting a Kick or YouTube channel saves that exact channel.** A Kick channel could previously be stored as though it were a Twitch one, and a YouTube favorite saved a single broadcast rather than the channel, so neither ever came back as live. Existing YouTube favorites are repaired on launch.
+- **A favorited Kick or YouTube channel appears once**, not twice under both Favorites and Followed, and go-live alerts no longer double up for a channel you both follow and favorite. A stream that briefly drops and returns no longer announces itself again.
+- **Starring several channels quickly keeps all of them**, and un-starring then immediately re-starring no longer removes it a second later.
+- **Kick follows are keyed correctly**, so following and unfollowing from any surface agrees with what the sidebar shows.
+- **The player control bar renders correctly again**, in the main player and on MultiNook tiles, and the LIVE badge stays steady instead of flickering between LIVE and a timer.
+- **Smoother catch-up when you fall behind live.** The player eases back to the edge against real buffer rather than overspeeding into a stall, which also removes the audio crackle that came with it.
+- **The hype train wave animates cleanly** without a dark box behind it.
+- **Channel search results past the first twenty** show the correct viewer counts, thumbnails and start times.
+- **In MultiNook, the follow button and channel details match the tile you selected**, so two channels on different platforms that share a name can no longer be mixed up.
+- **Adding two streams in quick succession** no longer risks the two tiles colliding on the same slot.
+- **The reminder picker offers Twitch channels only**, so you cannot set a reminder that could never fire.
+
+### ⚡ Performance
+- **The app starts noticeably faster.** Boot no longer waits on two network round trips in a row, settings panels and the emoji set load when you first open them rather than up front, and the window paints the branded loader instead of flashing white.
+- **Chat opens almost immediately** when you switch channels or open another chat tab. Emote lists load in the background instead of holding the connection open, so a slow emote provider no longer leaves chat blank for several seconds.
+- **Paints, badges and personal emotes fill in right away** instead of trickling in one chatter at a time, including on a busy channel join with a large backlog.
+- **Busy channels are much lighter.** Chat rows only re-render when they actually change, and several per message scans over the whole buffer are gone, so a fast chat costs a fraction of the CPU it used to.
+- **YouTube streams start quicker**, because the same background lookup is no longer repeated up to three times before the first frame.
+- **Long sessions stay bounded.** Caches that grew for the life of the process are now capped, and settings and log writes are batched instead of rewriting whole files on every change.
+- **The download is smaller** and the app uses less memory for chat badges and emotes.
+
+### 🔧 Maintenance
+- **Update signing is now in place end to end.** Release packages can be signed and the app knows how to verify them against a pinned key, so a corrupted or tampered download can be refused rather than installed. Verification is not being enforced yet: this release lays the groundwork so it can be switched on without another update.
+- **Content loaded into the app cannot run code of its own.** Chat, emotes and embedded pages are confined, and channel About panels are cleaned before display, so a channel cannot hide anything harmful in its own panel text.
+- **Profile and cosmetic changes are saved over a signed-in connection**, so only you can change yours, and a failed profile save no longer stops your presence from updating.
+- **Chat atmospheres only paint for members who genuinely unlocked them.**
+
+## [8.5.1] - 2026-08-25
+
+## 🎉 New: A smarter Discover feed
+> The Discover tab and the sidebar's Recommended section now start from Twitch's real recommendation feed, the same one twitch.tv uses, instead of a plain most-viewers list. Recommendations are anonymous by default, nothing tied to your account is sent unless you choose otherwise, and you can now limit them to the languages you actually speak.
+
+---
+
+### ✨ Features
+- **Recommendations, anonymous by default.** Out of the box, StreamNook asks Twitch for recommendations without attaching your account, so suggestions come from broad signals like your region and what's popular, not from who you are or what you watch. If you would rather have suggestions tailored to your account, turn on Personalized recommendations under Settings, Interface, Discover Feed. It stays off until you enable it, and switching it back off returns you to fully anonymous recommendations.
+- **Pick your stream languages.** The new Languages filter in the same Discover Feed section limits the Discover tab and the sidebar's Recommended section to broadcast languages you choose, like English, French, or German. Select as many as you want, or leave it empty to see every language. Scrolling past the recommendations still continues into the global top streams, and the filter applies there too.
+- **Mute everything in MultiNook at once.** A new speaker button in the MultiNook toolbar silences every tile in one click, handy when someone walks in or a call comes through. Unmuting brings back exactly the audio you had before, and unmuting a single tile by hand also lifts the global mute.
+- **Easier bug reports.** A new Diagnostics toggle on the Support page controls verbose logging, so you can produce a useful log file without editing settings by hand.
+
+### 🐛 Bug Fixes
+- **Browsing YouTube works again.** The YouTube Categories and Discover views and the sidebar section reported "not supported" in 8.5.0. They now load as intended, and the underlying cause can no longer regress silently.
+- **Clicking a sidebar channel while in MultiNook now takes you to that stream.** Previously the click appeared to do nothing and left you in the grid. Reminder: Ctrl+click does the opposite and adds the channel as a new MultiNook tile instead of leaving.
+
+## [8.5.0] - 2026-08-25
+
+## 🎉 New: Kick and YouTube join Twitch
+> StreamNook is no longer a Twitch only app. Browse Kick and YouTube, watch them in the same player, and use the same chat you already know. Connect your accounts and follows from every platform land in one list, so a single glance tells you what is live.
+
+![Kick and YouTube join Twitch](https://raw.githubusercontent.com/winters27/StreamNook/main/.github/assets/release-8.5.0-platforms.png)
+
+---
+
+### ✨ Features
+- **Kick and YouTube, everywhere Twitch already was.** A picker in the title bar switches between platforms or shows all of them at once, with a live count for each. Everything below works the same on all three.
+  - **Browse and watch.** Directories, categories and channel search per platform, in the same player with the same quality picker, theater mode, Compact View and MultiNook.
+  - **Your account.** Sign in once and follows import automatically with their profile pictures, so offline channels look right immediately. Sessions are rechecked in the background, so a revoked login is flagged instead of silently returning nothing. Follow and unfollow from the heart, and open a Kick subscription or YouTube membership where the creator offers one.
+  - **Chat, with the tools you actually use.** Send, reply, mention and tab complete. Ban, timeout and delete from the same drag targets, hover dock and slash commands as Twitch, with your moderator status checked properly rather than guessed. User cards carry recent messages, account age, follow and subscription state. Room modes show when a channel is in slow, followers only, subscriber only or emote only mode, and the composer says why a message was refused instead of quietly dropping it.
+  - **Every event each platform sends.** Kick subscriptions, gifted subs, pins, deletions and bans. YouTube Super Chats and Super Stickers in their real tier colors, memberships and milestones, gift purchases and redemptions, mode changes and pinned banners.
+  - **Chat opens with history** instead of an empty pane, so you arrive with context rather than waiting for someone to talk. Offline Kick channels show their chat too.
+  - **Emotes and cosmetics.** 7TV channel sets and globals load for Kick and YouTube and appear in the picker, in chat and in tab completion. Kick's own channel emotes send correctly so they render for everyone else on kick.com, and YouTube's custom emoji are learned from chat as they arrive. 7TV paints and badges render for you and everyone else, resolved from whichever account they linked.
+  - **YouTube specifics.** Streams play up to 1440p60 wherever the broadcaster offers it, with the rest of the quality ladder still there to step back down to. And you choose which chat to read: Live chat is everything, Top chat is YouTube's own filtered view that keeps a very fast chat readable.
+- **Write your own event text on the overlay.** Every event category can carry your own wording in place of the platform's system message, built from tokens that resolve out of the real event: the name, tier, months, streak, gift count, recipient, bits, raid viewers, channel and more. Nothing is invented, so a token with no value falls back rather than printing a blank.
+- **Finer control over how overlay chat reads.** Choose whether replies show the full quoted parent, a short mention, or nothing at all. Style links with your own color, with or without an underline, or leave them plain. And decide whether your personal emotes appear for viewers.
+- **Spellcheck in the chat box.** Misspellings get a subtle underline as you type, right click any of them for suggestions, and add names, slang and channel in-jokes to a personal dictionary so they stop being flagged. Fully optional and off in one click.
+- **Mouse controls in the player.** Scroll anywhere over the video to change volume and middle click to mute, with a readout that appears while you are adjusting and fades once you stop. Shift and scroll opens the channel's About panel. Each one can be turned off on its own, and the volume step is yours to set.
+- **Know what a channel is streaming before you click.** Hovering a channel in the sidebar shows its title, category and viewers, and Compact View gained a live stats readout of its own.
+
+### 🐛 Bug Fixes
+- Fixed chat that could go quiet while still looking connected. A session that stopped receiving is now spotted and revived, instead of passing as healthy because sending still worked.
+- Fixed a maximized window that could grow slightly larger every time it was dragged.
+- Fixed shared chat headers being clipped, and follow and subscribe buttons showing on streams where they do not apply.
+- The mod logs panel now says why it is empty. "You are not a moderator here", "your login expired" and "this user never spoke" used to look identical, all of them a blank panel.
+- Sign-in popups now stay inside the app. Google's account picker in particular used to escape as a bare undecorated window floating over everything.
+
+### 🔧 Maintenance
+- Playback recovers on its own when a stream's access credentials expire mid session, instead of stalling or dropping to a lower quality.
+
 ## [8.4.2] - 2026-08-16
 
 ## 🔦 Feature Spotlight: The Command Palette

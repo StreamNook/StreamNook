@@ -30,5 +30,49 @@ pub async fn seventv_graphql(query: String) -> Result<GraphQLResponse, String> {
         .await
         .map_err(|e| format!("Failed to parse 7TV response: {}", e))?;
 
+    // Cosmetics lookups are the one query whose FAILURE is silent: a bad platform
+    // value or a rejected batch returns 200 with an errors array, and every user
+    // in it simply renders unpainted. Report what was asked for and what came
+    // back so that is visible instead of inferred.
+    if query.contains("userByConnection") {
+        let asked = query.matches("userByConnection").count();
+        let kick = query.matches("platform: KICK").count();
+        let errs = json
+            .errors
+            .as_ref()
+            .map(|e| {
+                e.iter()
+                    .filter_map(|v| v.get("message").and_then(|m| m.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            })
+            .unwrap_or_default();
+        let resolved = json
+            .data
+            .as_ref()
+            .and_then(|d| d.as_object())
+            .map(|o| {
+                o.values()
+                    .filter(|v| !v.pointer("/userByConnection").map(|u| u.is_null()).unwrap_or(true))
+                    .count()
+            })
+            .unwrap_or(0);
+        if !errs.is_empty() {
+            log::warn!(
+                "[7TV] cosmetics query FAILED ({} asked, {} kick): {}",
+                asked,
+                kick,
+                errs
+            );
+        } else {
+            log::debug!(
+                "[7TV] cosmetics {}/{} resolved ({} kick)",
+                resolved,
+                asked,
+                kick
+            );
+        }
+    }
+
     Ok(json)
 }

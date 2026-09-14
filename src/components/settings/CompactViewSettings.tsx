@@ -135,7 +135,7 @@ const CompactViewSettings = () => {
   return (
     <SettingsSection
       label="Compact View"
-      description="Choose the window size when entering Compact View mode. Perfect for fitting the app on a second monitor."
+      description="Pick the window size StreamNook snaps to when you enter Compact View, handy for parking it on a second monitor."
       bare
     >
       <div className="space-y-2">
@@ -177,13 +177,16 @@ const CompactViewSettings = () => {
                 {editingPresetId === preset.id ? (
                   // Editing mode
                   <div className="p-3 rounded-lg border border-accent bg-accent/5 space-y-3">
-                    <input
-                      type="text"
-                      value={customName}
-                      onChange={(e) => setCustomName(e.target.value)}
-                      placeholder="Preset name (optional)"
-                      className="w-full px-3 py-2 rounded-md bg-surface border border-borderSubtle text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:border-accent"
-                    />
+                    <div>
+                      <label className="text-xs text-textMuted mb-1 block">Name (optional)</label>
+                      <input
+                        type="text"
+                        value={customName}
+                        onChange={(e) => setCustomName(e.target.value)}
+                        placeholder="Second monitor"
+                        className="w-full px-3 py-2 rounded-md bg-surface border border-borderSubtle text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:border-accent"
+                      />
+                    </div>
                     <div className="flex gap-2">
                       <div className="flex-1">
                         <label className="text-xs text-textMuted mb-1 block">Width</label>
@@ -277,13 +280,16 @@ const CompactViewSettings = () => {
       {/* Add Custom Preset */}
       {isAddingCustom ? (
         <div className="p-3 rounded-lg border border-accent bg-accent/5 space-y-3">
-          <input
-            type="text"
-            value={customName}
-            onChange={(e) => setCustomName(e.target.value)}
-            placeholder="Preset name (optional)"
-            className="w-full px-3 py-2 rounded-md bg-surface border border-borderSubtle text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:border-accent"
-          />
+          <div>
+            <label className="text-xs text-textMuted mb-1 block">Name (optional)</label>
+            <input
+              type="text"
+              value={customName}
+              onChange={(e) => setCustomName(e.target.value)}
+              placeholder="Second monitor"
+              className="w-full px-3 py-2 rounded-md bg-surface border border-borderSubtle text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:border-accent"
+            />
+          </div>
           <div className="flex gap-2">
             <div className="flex-1">
               <label className="text-xs text-textMuted mb-1 block">Width</label>
@@ -336,10 +342,10 @@ const CompactViewSettings = () => {
       {/* Info text */}
       <div className="p-3 rounded-lg bg-surface/50 border border-borderSubtle space-y-1">
         <p className="text-xs text-textMuted">
-          <strong className="text-textSecondary">Tip:</strong> Dimensions shown are target window sizes. The system automatically adjusts for window borders and maintains a 16:9 aspect ratio for the video.
+          Sizes are the whole window. StreamNook allows for the window borders on its own and keeps the video at 16:9.
         </p>
         <p className="text-xs text-textMuted">
-          For example, a 1080px preset results in a 1080px total window width, with the video area slightly smaller to account for borders.
+          So a 1080px preset gives you a window 1080px wide, with the video a touch smaller to leave room for the borders.
         </p>
       </div>
     </SettingsSection>

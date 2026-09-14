@@ -44,13 +44,21 @@ export interface Atmosphere {
   // flows two curtain layers horizontally (seamless loop) with a gentle sway.
   motion: 'drift' | 'aurora';
   // A 1px gradient edge drawn down the left of the member's chat message row (in
-  // place of a flat accent bar).
+  // place of a flat accent bar). 'none' draws no edge at all, for atmospheres
+  // whose wash is its own signature and wants no bar beside it.
   chatEdge: string;
   // Frosted readability block (dark translucent fill + slight backdrop blur)
   // behind the member's chat text. Only for atmospheres whose wash is busy
   // enough to fight the text (typically image-backed ones); subtle gradient
   // washes leave it off.
   chatFrost?: boolean;
+  // Defocus the image wash behind the chat row by this many px, so a crisp
+  // asset reads as dispersed light on the row rather than a cropped picture.
+  // Image-backed atmospheres only; gradient washes ignore it.
+  chatBlur?: number;
+  // A 1px rim around the member's chat row, as a CSS gradient, so the wash
+  // reads as light caught on the row's glass edge. Absent = no rim.
+  chatRim?: string;
   // How this Atmosphere is unlocked. 'subscriber' = the paid subscriber tier
   // (the default for the house line). 'accolade' = earned by unlocking a
   // specific accolade, available to ANY member regardless of subscription.
@@ -103,8 +111,10 @@ export interface AtmosphereUnlock {
   kind: 'subscriber' | 'accolade';
   // A secret challenge whose earn method must not be revealed.
   hidden: boolean;
-  // The badge name for a public accolade unlock (absent when hidden).
-  badgeName?: string;
+  // The accolade's display name for a public accolade unlock (absent when
+  // hidden). An accolade is an achievement medallion on the profile wall, not a
+  // chat badge; user-facing copy must say "accolade".
+  accoladeName?: string;
   // One-line status for the library / tooltips.
   label: string;
 }
@@ -113,9 +123,9 @@ export interface AtmosphereUnlock {
 // surface. Keeps the hidden-challenge rule in one place.
 export const getAtmosphereUnlock = (a: Atmosphere): AtmosphereUnlock => {
   if (a.unlock?.kind === 'accolade') {
-    const badgeName = PUBLIC_ATMOSPHERE_UNLOCKS[a.unlock.accoladeId];
-    return badgeName
-      ? { kind: 'accolade', hidden: false, badgeName, label: `Earned with the ${badgeName} badge` }
+    const accoladeName = PUBLIC_ATMOSPHERE_UNLOCKS[a.unlock.accoladeId];
+    return accoladeName
+      ? { kind: 'accolade', hidden: false, accoladeName, label: `Earned with the ${accoladeName} accolade` }
       : { kind: 'accolade', hidden: true, label: 'Hidden challenge' };
   }
   return { kind: 'subscriber', hidden: false, label: 'Subscriber reward' };

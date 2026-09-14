@@ -1,3 +1,4 @@
+import { isWindowHidden, onWindowVisibility } from './windowVisibility';
 // Window-title flasher for highlight matches that arrive while the window is
 // blurred. Replaces document.title with an attention-grabbing variant until the
 // window regains focus, then restores the original. Idempotent on repeat
@@ -27,8 +28,8 @@ function ensureFocusListener() {
   if (focusListenerAttached) return;
   focusListenerAttached = true;
   window.addEventListener('focus', restoreTitle);
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) restoreTitle();
+  onWindowVisibility(() => {
+    if (!isWindowHidden()) restoreTitle();
   });
 }
 
@@ -40,7 +41,7 @@ function ensureFocusListener() {
  */
 export function flashTitle(label: string): void {
   if (typeof document === 'undefined' || typeof window === 'undefined') return;
-  if (document.hasFocus() && !document.hidden) return;
+  if (document.hasFocus() && !isWindowHidden()) return;
   ensureFocusListener();
   if (isFlashing) return;
 

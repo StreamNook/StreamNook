@@ -13,7 +13,8 @@ interface ToggleProps {
   disabled?: boolean;
 }
 
-export const Toggle = ({ enabled, onChange, ariaLabel, disabled = false }: ToggleProps) => (
+export const Toggle = ({ enabled, onChange, ariaLabel, disabled = false }: ToggleProps) => {
+  return (
   <button
     type="button"
     role="switch"
@@ -31,6 +32,7 @@ export const Toggle = ({ enabled, onChange, ariaLabel, disabled = false }: Toggl
       }`}
     />
   </button>
-);
+  );
+};
 
 export default Toggle;

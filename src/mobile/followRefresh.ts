@@ -14,6 +14,7 @@
 //
 // Throttled rather than unconditional because resume fires constantly on a
 // phone: every app switch, every return from PiP, every notification glance.
+import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../stores/AppStore';
 import { Logger } from '../utils/logger';
 
@@ -41,11 +42,10 @@ export async function refreshFollowingIfStale(maxAgeMs = STALE_AFTER_MS): Promis
   markFollowingFresh();
   try {
     await store.loadFollowedStreams();
-    const ids = useAppStore
-      .getState()
-      .followedStreams.map((s) => s.user_id)
-      .filter(Boolean);
-    if (ids.length) await useAppStore.getState().refreshHypeTrainStatuses(ids);
+    // Hype-train statuses are a section of the Rust-owned Home snapshot now
+    // (services::home_snapshot); the result lands as a `home-snapshot` event
+    // the store applies. Floored at 15 s per section on the Rust side.
+    await invoke('refresh_home_section', { section: 'hype_trains' });
   } catch (err) {
     Logger.warn('[Following] resume refresh failed:', err);
   }

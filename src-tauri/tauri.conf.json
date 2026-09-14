@@ -1,6 +1,6 @@
 {
   "productName": "StreamNook",
-  "version": "8.4.2",
+  "version": "8.6.1",
   "identifier": "com.streamnook.dev",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -23,10 +23,11 @@
           "**"
         ]
       },
-      "csp": "default-src * 'unsafe-inline' 'unsafe-eval' data: blob: filesystem: about: ws: wss: http: https: tauri: asset:; script-src * 'unsafe-inline' 'unsafe-eval' blob: data:; connect-src * http: https: ws: wss:; img-src * data: blob: 'unsafe-inline'; frame-src *; style-src * 'unsafe-inline'; media-src * blob: data: http: https:;",
+      "csp": "default-src * data: blob: filesystem: about: ws: wss: http: https: tauri: asset:; script-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; connect-src * http: https: ws: wss: ipc: http://ipc.localhost; img-src * data: blob: asset: http://asset.localhost; frame-src *; style-src * 'unsafe-inline'; media-src * blob: data: asset: http://asset.localhost http: https:;",
       "capabilities": [
         "main-capability",
-        "mobile-capability"
+        "mobile-capability",
+        "remote-bridge-capability"
       ]
     },
     "windows": [
@@ -41,7 +42,9 @@
         "resizable": true,
         "fullscreen": false,
         "decorations": false,
-        "devtools": true
+        "devtools": true,
+        "visible": false,
+        "backgroundColor": "#0c0c0d"
       }
     ]
   },

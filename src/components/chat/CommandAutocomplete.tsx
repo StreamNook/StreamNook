@@ -15,7 +15,7 @@ interface CommandAutocompleteProps {
   onSelectedIndexChange: (index: number) => void;
 }
 
-const renderCommandUsage = (usage: string) => {
+export const renderCommandUsage = (usage: string) => {
   const parts = usage.split(/(<[^>]+>|\[[^\]]+\])/);
   
   return (

@@ -3,7 +3,9 @@
 // global AudioContext is reused across callers so we don't leak contexts when
 // many phrase matches fire in quick succession.
 
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { Logger } from './logger';
+import { isStreamerModeActive } from './streamerMode';
 
 export type SoundId = 'boop' | 'tick' | 'soft' | 'whisper' | 'gentle';
 
@@ -33,8 +35,35 @@ function getSharedAudioContext(): AudioContext | null {
   }
 }
 
-export function playSound(soundId: SoundId | undefined | null): void {
+/** Any sound reference: a built-in tone id or a custom `file:<id>`. */
+export type SoundRef = SoundId | string;
+
+const fileAudio = new Map<string, HTMLAudioElement>();
+
+/** Custom sound file: resolved through settings, played via the asset
+ *  protocol, one HTMLAudioElement per id reused across plays. */
+function playCustomSound(id: string): void {
+  void import('../stores/AppStore').then(({ useAppStore }) => {
+    const entry = useAppStore.getState().settings.chat_highlights?.custom_sounds?.find((s) => s.id === id);
+    if (!entry?.path) return;
+    let el = fileAudio.get(id);
+    if (!el || el.dataset.path !== entry.path) {
+      el = new Audio(convertFileSrc(entry.path));
+      el.dataset.path = entry.path;
+      el.volume = 0.7;
+      fileAudio.set(id, el);
+    }
+    el.currentTime = 0;
+    el.play().catch((err) => Logger.debug('[Sound] custom play failed:', err));
+  });
+}
+
+export function playSound(soundId: SoundRef | undefined | null): void {
   if (!soundId) return;
+  if (soundId.startsWith('file:')) {
+    playCustomSound(soundId);
+    return;
+  }
   const ctx = getSharedAudioContext();
   if (!ctx) return;
 
@@ -124,7 +153,7 @@ const BACKFILL_SKIP_MS = 5000;
 
 export interface SoundPlayOptions {
   key: string;
-  soundId: SoundId | null | undefined;
+  soundId: SoundRef | null | undefined;
   cooldownMs?: number;
   // Server-stamped send time (e.g. tmi-sent-ts). When set, plays only fire if
   // the message is at most BACKFILL_SKIP_MS old — prevents the audio storm
@@ -139,6 +168,8 @@ export function playSoundThrottled({
   sentAtMs,
 }: SoundPlayOptions): void {
   if (!soundId) return;
+  // Streamer mode: no pings on stream.
+  if (isStreamerModeActive()) return;
   if (sentAtMs != null && Number.isFinite(sentAtMs) && Date.now() - sentAtMs > BACKFILL_SKIP_MS) {
     return;
   }

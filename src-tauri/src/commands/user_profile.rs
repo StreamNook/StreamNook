@@ -509,7 +509,9 @@ async fn fetch_badge_data(
             .into_iter()
             .map(|b| ThirdPartyBadge {
                 id: b.badge_info.id,
-                provider: format!("{:?}", b.provider),
+                // The canonical lowercase id, NOT the Debug form: the page compares
+                // this against loadout keys and provider groups. See as_key.
+                provider: b.provider.as_key().to_string(),
                 title: b.badge_info.title,
                 image_url: b.badge_info.image_4x.clone(),
                 image1x: Some(b.badge_info.image_1x),

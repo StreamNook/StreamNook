@@ -172,7 +172,7 @@ export const SearchProfileModal = ({ user, onClose }: { user: TwitchStream, onCl
 
                     {/* Body */}
                     <div className="flex-1 overflow-hidden relative bg-black/20">
-                        {tab === 'about' && <StreamerAboutPanel channelLogin={user.user_login} hideHero={true} />}
+                        {tab === 'about' && <StreamerAboutPanel channelLogin={user.user_login} hideHero={true} onChannelSwitch={onClose} />}
                         {tab === 'clips' && <StreamerMedia broadcasterId={user.user_id} kind="clips" />}
                         {tab === 'videos' && <StreamerMedia broadcasterId={user.user_id} kind="videos" />}
                     </div>

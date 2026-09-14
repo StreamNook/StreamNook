@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { ArrowUpRight } from 'lucide-react';
 import type { TwitchStream } from '../../types';
-import { resolveAvatar, DEFAULT_AVATAR, type ChannelSearchResult } from '../multi-nook/channelSearch';
+import { resolveAvatar, DEFAULT_AVATAR } from '../multi-nook/channelSearch';
 import { Logger } from '../../utils/logger';
 
 interface Resolved {
@@ -24,8 +24,8 @@ async function resolveChannel(login: string): Promise<Resolved | null> {
   const cached = cache.get(key);
   if (cached !== undefined) return cached;
   try {
-    const results = (await invoke('search_channels', { query: login })) as ChannelSearchResult[];
-    const hit = results.find((r) => (r.user_login || r.broadcaster_login || '').toLowerCase() === key);
+    const results = (await invoke('search_channels', { query: login })) as TwitchStream[];
+    const hit = results.find((r) => (r.user_login || '').toLowerCase() === key);
     if (!hit) {
       cache.set(key, null);
       return null;
@@ -41,7 +41,7 @@ async function resolveChannel(login: string): Promise<Resolved | null> {
     }
     const resolved: Resolved = {
       login: hit.user_login || login,
-      displayName: hit.user_name || hit.display_name || login,
+      displayName: hit.user_name || login,
       avatarUrl: resolveAvatar(hit.profile_image_url, hit.thumbnail_url),
       isLive: !!live,
       gameName: live?.game_name ?? undefined,

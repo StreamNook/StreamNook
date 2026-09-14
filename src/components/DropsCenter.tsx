@@ -759,6 +759,11 @@ export default function DropsCenter() {
     useEffect(() => {
         const arm = () => { pendingConnectRef.current = true; };
         window.addEventListener('drops-connect-initiated', arm);
+        // The subscription resolves asynchronously; if this effect is cleaned
+        // up first (StrictMode's double invoke, or a dependency change) the
+        // late-arriving handle must be released, not stored, or the listener
+        // outlives the effect.
+        let cancelled = false;
         let unlisten: (() => void) | undefined;
         getCurrentWindow()
             .onFocusChanged(({ payload: focused }) => {
@@ -767,9 +772,13 @@ export default function DropsCenter() {
                     refreshConnectionStatus();
                 }
             })
-            .then(u => { unlisten = u; })
+            .then(u => {
+                if (cancelled) u();
+                else unlisten = u;
+            })
             .catch(() => {});
         return () => {
+            cancelled = true;
             window.removeEventListener('drops-connect-initiated', arm);
             unlisten?.();
         };

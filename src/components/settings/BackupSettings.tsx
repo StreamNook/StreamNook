@@ -121,11 +121,12 @@ const BackupSettings = () => {
     <div className="space-y-8">
       <SettingsSection
         label="Settings file"
-        description="Everything you customize in StreamNook (theme, chat layout, keybindings, highlight phrases, custom commands, player and notification preferences, and your custom themes) is saved in a single file on this PC. Your Twitch login is stored separately and is never part of a backup."
+        description="Everything you customize in StreamNook lives in one file on this PC, and your Twitch login is stored separately so it never ends up in a backup."
       >
         <SettingsRow
-          title="Settings folder"
+          title="Where your settings file lives"
           description={dir || 'Resolving location...'}
+          help="Theme, chat layout, keybindings, highlight phrases, custom commands, player and notification preferences, and your custom themes are all in this one file."
           control={
             <ActionButton
               icon={FolderOpen}
@@ -142,8 +143,8 @@ const BackupSettings = () => {
         description="Keep a copy of your setup so you can bring it back after a reset, a reinstall, or a move to a new PC."
       >
         <SettingsRow
-          title="Export settings"
-          description="Save a backup file wherever you like, such as a USB drive or a cloud-synced folder."
+          title="Save a backup"
+          description="Writes a copy of your settings file wherever you like, such as a USB drive or a cloud-synced folder."
           control={
             <ActionButton
               icon={Download}
@@ -154,8 +155,9 @@ const BackupSettings = () => {
           }
         />
         <SettingsRow
-          title="Import settings"
-          description="Load a backup and apply it. This replaces your current preferences while leaving your Twitch login untouched. StreamNook reloads when it finishes."
+          title="Restore from a backup"
+          description="Pick a backup file and StreamNook swaps in those preferences, then reloads itself so everything picks them up."
+          help="Your current preferences are replaced, so export first if you want a way back. Your Twitch login is left untouched."
           control={
             <ActionButton
               icon={Upload}

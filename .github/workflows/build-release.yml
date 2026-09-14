@@ -18,6 +18,8 @@ env:
 
 jobs:
   merge-to-main:
+    # Ports inherit this file on sync merges; only run it in the desktop repo.
+    if: github.repository == 'winters27/StreamNook'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -385,11 +387,61 @@ jobs:
           # streamnook.app/api/v1/update (served from R2 as latest.json). Without
           # this, installed clients keep seeing the previous version and either
           # miss the update or get prompted to "update" to an older build.
+          # Detached minisign signature over the bundle bytes.
+          #
+          # This is the only integrity control that survives a compromise of the
+          # update host: sha256 and the bundle are served by the same server, so
+          # whoever can serve a bad bundle can serve a matching hash. The secret
+          # key exists only as a CI secret and must never reach the host serving
+          # updates. The client pins the PUBLIC half as a compile-time const.
+          #
+          # Skipped (not failed) while UPDATE_SIGNING_KEY is unset, so signing can
+          # be turned on without a release being blocked on it. The client is in
+          # warn-only mode until its ENFORCE_UPDATE_SIGNATURE flips, and that flip
+          # must not happen until releases here are reliably signed.
+          $signature = $null
+          if ($env:UPDATE_SIGNING_KEY) {
+            # The official binary, pinned. `npm i -g minisign-cli` was a 404 (that
+            # package does not exist) and the `minisign` npm package exits 1 with
+            # no output, so both were silently doing nothing: the moment a signing
+            # key existed, the `throw` below would have failed every release build.
+            # Verified end to end locally against 0.12 before this was enabled.
+            $msVer = '0.12'
+            $msZip = "minisign-$msVer-win64.zip"
+            Invoke-WebRequest "https://github.com/jedisct1/minisign/releases/download/$msVer/$msZip" -OutFile $msZip -UseBasicParsing
+            Expand-Archive $msZip -DestinationPath ./minisign-bin -Force
+            # The archive carries both architectures; runners are x86_64.
+            $ms = (Get-ChildItem ./minisign-bin -Recurse -Filter minisign.exe |
+                   Where-Object { $_.FullName -match 'x86_64' } |
+                   Select-Object -First 1).FullName
+            if (-not $ms) { throw "minisign.exe (x86_64) not found in $msZip" }
+            $env:UPDATE_SIGNING_KEY | Out-File -FilePath ./update.key -Encoding ascii -NoNewline
+            try {
+              & $ms -S -s ./update.key -m "$bundleName" -x "$bundleName.minisig"
+              if ($LASTEXITCODE -ne 0) { throw "minisign failed (exit $LASTEXITCODE)" }
+              $signature = (Get-Content "$bundleName.minisig" -Raw).TrimEnd()
+              Write-Host "Signed $bundleName"
+              # Also attach it to the GitHub release. The in-app updater reads the
+              # signature from the R2 manifest, not from here, but people do
+              # download straight off the releases page and this is what lets them
+              # verify that copy by hand:
+              #   minisign -Vm StreamNook.7z -P <public key>
+              gh release upload "v$version" "$bundleName.minisig" --clobber
+              if ($LASTEXITCODE -ne 0) { Write-Host "WARN: could not attach .minisig to the release" }
+            } finally {
+              # Never leave the secret key on the runner filesystem.
+              Remove-Item ./update.key -Force -ErrorAction SilentlyContinue
+            }
+          } else {
+            Write-Host "UPDATE_SIGNING_KEY not set - publishing an UNSIGNED update"
+          }
+
           $manifest = [ordered]@{
             version       = $version
             download_url  = "https://streamnook.app/download"
             bundle_name   = $bundleName
             sha256        = (Get-FileHash "$bundleName" -Algorithm SHA256).Hash.ToLower()
+            signature     = $signature
             size          = (Get-Item "$bundleName").Length
             notes         = (Get-Content ./changelog_section.md -Raw).TrimEnd()
             min_supported = "0.0.0"
@@ -405,6 +457,13 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Minisign SECRET key for update signing. Generate with
+          #   minisign -G -p streamnook-update.pub -s streamnook-update.key
+          # then paste the .key contents here as a repo secret and the second
+          # line of the .pub into UPDATE_PUBKEY in commands/components.rs.
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          # For attaching the .minisig to the already-created release.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Notify Discord
         if: steps.check_release.outputs.RELEASE_EXISTS == 'false' && env.DISCORD_RELEASE_WEBHOOK_URL != ''
@@ -436,6 +495,14 @@ jobs:
           # Strip the leading "## [version] - date" header — the version is shown in the title block
           $body = $body -replace '(?ms)^\s*##\s*\[?\d[\d\.]*\]?.*?\r?\n', ''
           $body = $body.Trim()
+
+          # The release hero: the first markdown image in the section. Compaction below keeps
+          # only headers and bullet leads, so without this the picture never reached Discord.
+          # It becomes a Media Gallery component under the title (Discord shows the webp,
+          # animated ones included). Must be an absolute https URL; the raw.githubusercontent
+          # link resolves because dev was force-pushed to main before this step ran.
+          $heroUrl = ''
+          if ($body -match '!\[[^\]]*\]\((https://[^)\s]+)\)') { $heroUrl = $Matches[1] }
 
           # Compact the changelog for Discord. Changelog bullets are written as
           # "- **Bold lead.** explanation prose"; keep only the bold lead so the
@@ -512,6 +579,10 @@ jobs:
             components = @(@{ type = 10; content = "$titleText`n$liveLine" })
             accessory = @{ type = 11; media = @{ url = "https://raw.githubusercontent.com/winters27/StreamNook/main/src-tauri/icons/icon.png" } }
           })
+          if ($heroUrl) {
+            # Type 12 Media Gallery: one item, full width of the container.
+            $children.Add(@{ type = 12; items = @(@{ media = @{ url = $heroUrl } }) })
+          }
           $children.Add(@{ type = 14; divider = $true; spacing = 2 })
 
           # One Text Display per changelog section, thin divider between each.

@@ -56,7 +56,7 @@ interface RustBadgeInfo {
 
 interface RustUserBadge {
   badge_info: RustBadgeInfo;
-  provider: 'twitch' | 'ffz' | 'bttv' | 'chatterino' | 'homies' | 'chatsen' | 'chatty' | 'dankchat';
+  provider: 'twitch' | 'ffz' | 'bttv' | 'chatterino' | 'homies' | 'moltorino' | 'chatsen' | 'chatty' | 'dankchat';
 }
 
 interface RustUserBadgesResponse {

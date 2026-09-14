@@ -41,10 +41,14 @@ export interface OverlayAtmosphere {
   image?: string;
   layers?: string;
   layers2?: string;
-  /** 1px gradient edge down the left of the row. */
+  /** 1px gradient edge down the left of the row ('none' = no edge). */
   chatEdge: string;
   /** Frost the text block for readability over a busy (image) wash. */
   chatFrost?: boolean;
+  /** Defocus (px) for an image wash, so it reads as dispersed light. */
+  chatBlur?: number;
+  /** 1px gradient rim around the row. */
+  chatRim?: string;
 }
 
 /** A preview message: the real backend shape plus the cosmetics the live overlay
@@ -240,6 +244,20 @@ export const SAMPLE_MESSAGES: OverlayMessage[] = [
   base('m8', 'twitch', 'emoteonly', 'EmoteOnly', '#57c2a3',
     [e('Kappa', '25'), e('PogChamp', '305954156'), e('LUL', '425618')],
   ),
+  // A Twitch chat GIF (Tier 2/3 subscribers): the bracketed description Twitch
+  // puts in the text plus the GIPHY asset from the `gifs` tag, taken verbatim
+  // from Twitch's documented example so the preview shows the real shape.
+  base('m8b', 'twitch', 'gifdropper', 'GifDropper', '#f2a65a',
+    [
+      t('this stream is'),
+      {
+        type: 'gif',
+        content: '[Y A Y Yes GIF by Djemilah Birnie]',
+        gif_id: 'joSNxeswxuc74Juo8X',
+        gif_url: 'https://media4.giphy.com/media/joSNxeswxuc74Juo8X/giphy.gif?cid=095d7a5dzizsiwgabonagkmigggv8v1spfai91ac3x0dsiy0&ep=v1_gifs_trending&rid=giphy.gif&ct=g',
+      },
+    ],
+  ),
   base('m9', 'twitch', 'gifterpro', 'GifterPro', '#7bd88f',
     [t('twelve months and he still hasnt beaten the tutorial'), e('PogChamp', '305954156')],
     {
@@ -417,7 +435,7 @@ export const SAMPLE_MESSAGES: OverlayMessage[] = [
   // row inline, 'event' promotes it to the cheer card. The channel-prefix cheermote is
   // deliberate — those are the ones that used to fall through as plain text.
   base('m30', 'twitch', 'bitsbaron', 'BitsBaron', '#f6c445',
-    [cm('mathox1Cheer100', 'mathox1cheer', 100, '100', '#9c3ee8'), t('take my money, this play was unreal')],
+    [cm('mathox1Cheer100', 'mathox1cheer', 100, '100', '#9c3ee8'), t(' take my money, this play was unreal')],
     {
       metadata: {
         is_action: false, is_mentioned: false, is_first_message: false, is_from_shared_chat: false,

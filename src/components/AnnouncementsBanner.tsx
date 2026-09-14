@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { AlertTriangle, AlertOctagon, X, ExternalLink } from 'lucide-react';
 import { Logger } from '../utils/logger';
+import { afterBoot } from '../utils/startupScheduler';
 
 interface AnnouncementAction {
   label: string;
@@ -134,9 +135,15 @@ const AnnouncementsBanner = () => {
   }, []);
 
   useEffect(() => {
-    fetchOnce();
+    // First fetch rides the boot stagger; the 30-min poll cadence is unchanged.
+    const cancel = afterBoot(5000, () => {
+      void fetchOnce();
+    });
     const id = setInterval(fetchOnce, POLL_INTERVAL_MS);
-    return () => clearInterval(id);
+    return () => {
+      cancel();
+      clearInterval(id);
+    };
   }, [fetchOnce]);
 
   const dismiss = (id: string) => {

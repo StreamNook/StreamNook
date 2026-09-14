@@ -101,6 +101,9 @@ pub async fn set_active_twitch_account(
         // against the previous account's token.
         state.twitch_auth.on_account_changed().await;
         crate::services::auth_proxy::clear_entitlement_caches();
+        // GIF eligibility is per ACCOUNT (Twitch's server-side Tier 2/3 gate),
+        // so a cached "allowlisted" would otherwise follow the old account.
+        crate::commands::gifs::clear_config_cache().await;
         // The drops/points credential belongs to the previous account; clear it
         // so the heartbeat doesn't keep crediting the account you switched away
         // from. The new account re-authorizes drops separately when wanted.
@@ -129,6 +132,7 @@ pub async fn sign_out_active_twitch_account(
     }
     if result.is_ok() {
         crate::services::auth_proxy::clear_entitlement_caches();
+        crate::commands::gifs::clear_config_cache().await;
         // The outgoing account's drops/points credential is now wrong whether we
         // promoted another account or fully signed out; clear it.
         let _ = crate::services::drops_auth_service::DropsAuthService::logout().await;

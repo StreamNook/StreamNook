@@ -1,0 +1,231 @@
+/* Prism: white light refracted through glass, as a theme.
+
+   The interface is a dark, neutral material. Somewhere outside the frame a
+   prism is throwing refracted light across it, so colour shows up the way it
+   does in a photograph of glass: as a defocused bloom entering a corner, as a
+   soft streak of separated light lying across a surface, as a narrow catch on
+   an edge that happens to face the light. The palette (themes/index.ts) is
+   deliberately colourless, ivory on near-black, so that when cyan-to-ivory-to-
+   amber light lands on a surface it reads as light and not as a UI colour.
+
+   Where the light lives: the app shell carries the source, a streak and a
+   bloom on the darkest, largest surface in the room, so every translucent
+   panel above it shows that light through its glass. Each glass surface then
+   catches its own smaller share, graded by how much light would reach it.
+
+   Rules this sheet follows, in order of importance:
+   1. Colour behaves like light. Every gradient is a piece of ONE continuum,
+      cobalt > blue > cyan > ice > ivory > yellow > amber > orange > red, with
+      the ivory core standing for the light before it separates.
+   2. Imperfect. No treatment shows the whole spectrum evenly. Dialogs get the
+      full streak; panels and popovers a softer one; cards only a faint one;
+      buttons a warm-leaning catch. Inputs get nothing: a field being
+      typed into must stay plain.
+   3. Nothing symmetric. No colour on one side answered by another on the
+      opposite side, no offsets, no outlines. That is an anaglyph, not light.
+   4. Restraint in COVERAGE, not in strength: text, controls, and chat carry no
+      colour and the interface must look finished with this sheet removed, but
+      where the light does land it is meant to be seen.
+   5. Glassiness-aware. --pr-level scales every wash with --glass-strength:
+      at 100% the surfaces are glass and refract the full light; at 0% they
+      are opaque matte, so the light behind them vanishes on its own (nothing
+      is see-through any more) and what lands on them is the dimmer cast of a
+      lamp on a dark surface, 60% of full. Never zero: a solid Prism is still
+      Prism.
+   6. Static paint only: background gradients, inset highlights, a selection
+      colour. No filters, no animation, nothing on chat rows, so the cost per
+      frame is zero. Every wash sits above the class's own tint layer, so the
+      glassiness slider keeps working underneath.
+
+   applyTheme writes data-theme-effect on <html> for every window;
+   applyGlassStrength writes --glass-strength on the same element, which is
+   why the level and the gradients are declared here and not on the surfaces. */
+
+html[data-theme-effect="prism"] {
+  /* Wavelengths as raw channels, so each use picks its own alpha. */
+  --pr-cobalt: 40, 78, 220;
+  --pr-blue: 70, 130, 255;
+  --pr-cyan: 110, 215, 245;
+  --pr-ice: 190, 240, 255;
+  --pr-ivory: 246, 240, 225;
+  --pr-yellow: 245, 216, 110;
+  --pr-amber: 240, 170, 70;
+  --pr-red: 225, 70, 50;
+
+  /* How much light reaches a surface at the current glassiness (rule 5). */
+  --pr-level: calc(0.6 + 0.4 * var(--glass-strength, 1));
+
+  /* The streak: separated light lying diagonally across a surface, cobalt on
+     the leading edge, the ivory core, a warm trailing edge that fades before
+     red. Defocused, so no stop is a hard line. Three strengths, because the
+     same light reaches different surfaces differently. */
+  --pr-streak: linear-gradient(
+    112deg,
+    transparent 36%,
+    rgba(var(--pr-cobalt), calc(0.16 * var(--pr-level))) 45%,
+    rgba(var(--pr-cyan), calc(0.20 * var(--pr-level))) 50%,
+    rgba(var(--pr-ivory), calc(0.20 * var(--pr-level))) 55%,
+    rgba(var(--pr-yellow), calc(0.16 * var(--pr-level))) 59%,
+    rgba(var(--pr-amber), calc(0.11 * var(--pr-level))) 64%,
+    rgba(var(--pr-red), calc(0.05 * var(--pr-level))) 69%,
+    transparent 76%
+  );
+  --pr-streak-soft: linear-gradient(
+    112deg,
+    transparent 36%,
+    rgba(var(--pr-cobalt), calc(0.10 * var(--pr-level))) 45%,
+    rgba(var(--pr-cyan), calc(0.13 * var(--pr-level))) 50%,
+    rgba(var(--pr-ivory), calc(0.13 * var(--pr-level))) 55%,
+    rgba(var(--pr-yellow), calc(0.10 * var(--pr-level))) 59%,
+    rgba(var(--pr-amber), calc(0.07 * var(--pr-level))) 64%,
+    rgba(var(--pr-red), calc(0.03 * var(--pr-level))) 69%,
+    transparent 76%
+  );
+  --pr-streak-faint: linear-gradient(
+    112deg,
+    transparent 36%,
+    rgba(var(--pr-cobalt), calc(0.06 * var(--pr-level))) 45%,
+    rgba(var(--pr-cyan), calc(0.08 * var(--pr-level))) 50%,
+    rgba(var(--pr-ivory), calc(0.09 * var(--pr-level))) 55%,
+    rgba(var(--pr-yellow), calc(0.07 * var(--pr-level))) 59%,
+    rgba(var(--pr-amber), calc(0.04 * var(--pr-level))) 64%,
+    transparent 74%
+  );
+
+  /* Cool light blooming in through a top-left corner. */
+  --pr-bloom-cool: radial-gradient(
+    64% 48% at 4% 0%,
+    rgba(var(--pr-cobalt), calc(0.30 * var(--pr-level))) 0%,
+    rgba(var(--pr-blue), calc(0.22 * var(--pr-level))) 18%,
+    rgba(var(--pr-cyan), calc(0.16 * var(--pr-level))) 34%,
+    rgba(var(--pr-ivory), calc(0.08 * var(--pr-level))) 52%,
+    transparent 74%
+  );
+  --pr-bloom-cool-soft: radial-gradient(
+    58% 42% at 0% 0%,
+    rgba(var(--pr-cobalt), calc(0.18 * var(--pr-level))) 0%,
+    rgba(var(--pr-cyan), calc(0.12 * var(--pr-level))) 30%,
+    rgba(var(--pr-ivory), calc(0.06 * var(--pr-level))) 50%,
+    transparent 72%
+  );
+  /* The warm tail catching the opposite corner, fainter. */
+  --pr-bloom-warm: radial-gradient(
+    48% 36% at 98% 102%,
+    rgba(var(--pr-amber), calc(0.16 * var(--pr-level))) 0%,
+    rgba(var(--pr-red), calc(0.07 * var(--pr-level))) 40%,
+    transparent 72%
+  );
+  /* Ice arriving from the top-right, for surfaces that face the other way. */
+  --pr-bloom-ice: radial-gradient(
+    60% 50% at 100% 0%,
+    rgba(var(--pr-ice), calc(0.18 * var(--pr-level))) 0%,
+    rgba(var(--pr-ivory), calc(0.08 * var(--pr-level))) 36%,
+    transparent 70%
+  );
+}
+
+/* ── The source: the app shell ───────────────────────────────────────────
+   The room the interface sits in. The bloom and a soft streak lie on the
+   shell itself, so chat, sidebar, and every other glass surface shows that
+   light through its own material, blurred by its own frost. Opaque things
+   (the player, solid panels at 0% glassiness) simply hide it, as they would. */
+html[data-theme-effect="prism"] .sn-app-shell {
+  background-image:
+    var(--pr-bloom-cool),
+    var(--pr-streak-soft),
+    var(--pr-bloom-warm);
+}
+
+/* ── Dialogs: the full streak ────────────────────────────────────────────
+   Big enough to carry the whole thing: cool bloom in the corner, the streak
+   across the upper half, the warm tail below. */
+html[data-theme-effect="prism"] .liquid-glass-panel {
+  background-image:
+    var(--pr-bloom-cool),
+    var(--pr-streak),
+    var(--pr-bloom-warm),
+    linear-gradient(rgba(16, 16, 20, 0.35), rgba(16, 16, 20, 0.35));
+}
+
+html[data-theme-effect="prism"] .glass-modal {
+  background-image:
+    var(--pr-bloom-cool),
+    var(--pr-streak),
+    linear-gradient(
+      color-mix(in srgb, var(--color-background-tertiary) 78%, transparent),
+      color-mix(in srgb, var(--color-background-tertiary) 78%, transparent)
+    );
+}
+
+/* ── Panels and popovers: a softer share ─────────────────────────────────
+   Chat, sidebar cards, and the like sit further from the light: the cool end
+   reaches their corner and a softer streak crosses them. */
+html[data-theme-effect="prism"] .glass-panel {
+  background-image:
+    var(--pr-bloom-cool-soft),
+    var(--pr-streak-soft),
+    linear-gradient(var(--color-background-secondary), var(--color-background-secondary));
+}
+
+/* Popovers face the other way: ice from the top-right, then the streak. */
+html[data-theme-effect="prism"] .sn-popover {
+  background-image:
+    var(--pr-bloom-ice),
+    var(--pr-streak-soft);
+}
+
+/* Settings cards are flat slabs inside a dialog that already carries the
+   full streak, so they take only a faint one: light on light, not a second
+   source. */
+html[data-theme-effect="prism"] .settings-card {
+  background-image: var(--pr-streak-faint);
+}
+
+/* ── Cosmetic-hosting surfaces: no theme light ───────────────────────────
+   A view that previews or displays a USER'S cosmetics (the Profile tab with
+   its atmosphere picker and mock chat row, the badges/profile overlay) has to
+   be a neutral stage: the theme's light would sit under the atmosphere's
+   light and the two would be read as one. `sn-light-off` on the view's root
+   restores every panel inside it to its plain glass, the same rule the
+   design-drift audit applies to theme-independent surfaces. */
+html[data-theme-effect="prism"] .sn-light-off.liquid-glass-panel,
+html[data-theme-effect="prism"] .sn-light-off .liquid-glass-panel {
+  background-image: linear-gradient(rgba(16, 16, 20, 0.35), rgba(16, 16, 20, 0.35));
+}
+html[data-theme-effect="prism"] .sn-light-off.glass-modal,
+html[data-theme-effect="prism"] .sn-light-off .glass-modal {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--color-background-tertiary) 78%, transparent),
+    color-mix(in srgb, var(--color-background-tertiary) 78%, transparent)
+  );
+}
+html[data-theme-effect="prism"] .sn-light-off.glass-panel,
+html[data-theme-effect="prism"] .sn-light-off .glass-panel {
+  background-image: linear-gradient(var(--color-background-secondary), var(--color-background-secondary));
+}
+html[data-theme-effect="prism"] .sn-light-off .sn-popover,
+html[data-theme-effect="prism"] .sn-light-off .settings-card {
+  background-image: none;
+}
+
+/* ── Interactive refraction ──────────────────────────────────────────────
+   A button under the cursor turns an edge toward the light: a narrow diagonal
+   sliver near its right end, cyan into ivory into yellow and gone, over the
+   surface tint the base class already sets. Crisp on purpose; the blooms
+   above are the defocused ones. */
+html[data-theme-effect="prism"] .glass-button:hover {
+  background-image: linear-gradient(
+    104deg,
+    transparent 54%,
+    rgba(var(--pr-cyan), calc(0.22 * var(--pr-level))) 64%,
+    rgba(var(--pr-ivory), calc(0.34 * var(--pr-level))) 70%,
+    rgba(var(--pr-yellow), calc(0.24 * var(--pr-level))) 75%,
+    rgba(var(--pr-amber), calc(0.12 * var(--pr-level))) 82%,
+    transparent 91%
+  );
+}
+
+/* Selected text sits in the ice band. */
+html[data-theme-effect="prism"] ::selection {
+  background: rgba(var(--pr-ice), 0.34);
+}

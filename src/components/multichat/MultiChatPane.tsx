@@ -32,6 +32,9 @@ export interface MultiChatPaneProps {
   provider?: ProviderId;
   /** Whether this pane is the active/focused tab — it owns the keyboard-mod keys. */
   isActive?: boolean;
+  /** Saved message filter bound to this pane (persisted per tab by the window). */
+  filterId?: string | null;
+  onFilterIdChange?: (id: string | null) => void;
 }
 
 const STREAM_POLL_INTERVAL_MS = 30_000;
@@ -44,7 +47,7 @@ interface ChannelUserInfo {
   broadcaster_type?: string;
 }
 
-function TwitchChatPane({ channel, channelId, channelName, isActive }: MultiChatPaneProps) {
+function TwitchChatPane({ channel, channelId, channelName, isActive, filterId, onFilterIdChange }: MultiChatPaneProps) {
   const channelKey = channel.toLowerCase();
 
   const [stream, setStream] = useState<TwitchStream | null>(null);
@@ -241,7 +244,14 @@ function TwitchChatPane({ channel, channelId, channelName, isActive }: MultiChat
     };
   }, [hypeChannelId, isLive, channelKey, channelName]);
 
-  return <ChatWidget channelOverride={channelOverride} hypeTrainOverride={paneHypeTrain} />;
+  return (
+    <ChatWidget
+      channelOverride={channelOverride}
+      hypeTrainOverride={paneHypeTrain}
+      filterId={filterId}
+      onFilterIdChange={onFilterIdChange}
+    />
+  );
 }
 
 // Live channel metadata captured by the backend during channel resolve. Shared by

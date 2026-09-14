@@ -5,6 +5,9 @@ use crate::services::chat_service::{ChatService, SendResult};
 use crate::services::irc_service::IrcService;
 use crate::services::providers::{registry, SendCapability, SendOutcome};
 use anyhow::Result;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tauri::State;
 
 /// The folder chat logs are written to right now (the custom folder when one
@@ -140,6 +143,16 @@ pub async fn report_kick_chatroom(
     crate::services::providers::kick::resolve_pending(&label, chatroom_id, subs, meta).await;
 }
 
+/// The Kick account-sync webview reports the user's followed + subscribed
+/// channels here, read from the website session in page context.
+#[tauri::command]
+pub async fn report_kick_follows(
+    label: String,
+    report: crate::services::providers::kick_account::KickImportReport,
+) {
+    crate::services::providers::kick_account::resolve_pending(&label, report).await;
+}
+
 /// The resolver webview reports the channel's native Kick emotes here, separately
 /// from the chrome above (their fetch is slower, so it must not delay name /
 /// viewers / uptime / chat connect).
@@ -166,10 +179,13 @@ pub fn get_kick_channel_meta(
 /// `slug` is the source identifier (an `@handle`, `UC…` channel id, or video id).
 /// Returns null until the live video has been resolved.
 #[tauri::command]
-pub fn get_youtube_channel_meta(
+pub async fn get_youtube_channel_meta(
     slug: String,
 ) -> Option<crate::services::providers::youtube::YouTubeChannelMeta> {
-    crate::services::providers::youtube::channel_meta(&slug)
+    // Re-resolves past the freshness window instead of serving the cache blindly:
+    // the MultiChat viewer counter polls this, and an ageless read meant it showed
+    // the count captured when chat resolved, unchanged, forever.
+    crate::services::providers::youtube_media::channel_meta_refreshed(&slug).await
 }
 
 /// Live TikTok creator metadata (name / title / viewers / avatar) resolved from the
@@ -191,9 +207,15 @@ pub async fn youtube_connect() -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Sign out of YouTube. Same policy as Kick: credentials and imported channels
+/// go, an open player and read-only chat stay. The auth service already wipes the
+/// webview profile and the moderation cache.
 #[tauri::command]
-pub fn youtube_disconnect() {
+pub fn youtube_disconnect(state: State<'_, AppState>) {
     crate::services::youtube_auth_service::disconnect();
+    if let Err(e) = crate::commands::provider_browse::clear_imported_follows("youtube", &state) {
+        log::warn!("[youtube] could not clear imported follows: {}", e);
+    }
 }
 
 #[tauri::command]
@@ -254,9 +276,29 @@ pub async fn kick_connect() -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Sign out of Kick: credentials, the kick.com browser session, and the channels
+/// that session imported.
+///
+/// Deliberately does NOT stop an open Kick player or an already-joined read-only
+/// chat. Kick streams play fine signed out, so tearing playback down here would
+/// destroy the thing the user is currently watching to make a point about
+/// account state. Sending goes read-only, Following becomes the login wall, and
+/// Twitch (and YouTube) are untouched.
 #[tauri::command]
-pub fn kick_disconnect() {
+pub fn kick_disconnect(app: tauri::AppHandle, state: State<'_, AppState>) {
     crate::services::kick_auth_service::disconnect();
+    // The OAuth token and the site session are two different credentials in two
+    // different places. Clearing only the first left kick.com still logged in, so
+    // "Disconnect" then "Connect" silently reused the old session.
+    let profile = crate::services::providers::kick::account_profile_dir(&app);
+    if let Err(e) = std::fs::remove_dir_all(&profile) {
+        // Non-fatal: Windows refuses while any window still holds the profile, and
+        // the credentials are already gone either way. The next sign-in recreates it.
+        log::debug!("[Kick] could not remove {}: {}", profile.display(), e);
+    }
+    if let Err(e) = crate::commands::provider_browse::clear_imported_follows("kick", &state) {
+        log::warn!("[Kick] could not clear imported follows: {}", e);
+    }
 }
 
 #[tauri::command]
@@ -305,6 +347,50 @@ pub async fn kick_delete_message(message_id: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Whether the connected Kick account can moderate this channel, so the mod
+/// controls can be shown to a moderator who has not spoken yet. One cached probe
+/// per channel; the frontend keeps the badge heuristic as a fallback.
+/// The connected Kick account's standing in this channel: mod rights, how long
+/// they have followed, and sub tenure. One cached request answers all three, so
+/// the composer can tell whether a followers-only rule actually gates YOU.
+#[tauri::command]
+pub async fn kick_viewer_state(
+    channel: String,
+) -> crate::services::providers::kick::KickViewerState {
+    crate::services::providers::kick::viewer_state(&channel).await
+}
+
+/// Recent Kick chat for seeding the pane on join, oldest-first.
+///
+/// Kick's socket only carries NEW traffic, so without this the pane opened empty
+/// and an offline channel stayed empty. Returns an empty list on any failure:
+/// scrollback is a nicety, never a reason to fail opening a channel.
+#[tauri::command]
+pub async fn kick_chat_history(
+    channel: String,
+) -> Vec<crate::models::chat_layout::ChatMessage> {
+    // Backfill goes through the same rule engine as live rows (ignores drop,
+    // highlights stamp), so a hidden user's scrollback is hidden too.
+    let rules = crate::services::chat_rules::ChatRules::snapshot();
+    crate::services::providers::kick::chat_history(&channel)
+        .await
+        .into_iter()
+        .filter_map(|mut m| {
+            if crate::services::chat_rules::ChatRules::evaluate(&mut m, &rules).drop {
+                None
+            } else {
+                m.metadata.from_backfill = true;
+                Some(m)
+            }
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub async fn kick_can_moderate(channel: String) -> bool {
+    crate::services::providers::kick::can_moderate(&channel).await
+}
+
 /// A Kick channel's 7TV emotes (channel set + 7TV globals) as an EmoteSet, for the
 /// emote picker — parity with Twitch's `fetch_channel_emotes`.
 #[tauri::command]
@@ -312,9 +398,89 @@ pub async fn get_kick_channel_emotes(slug: String) -> crate::services::emote_ser
     crate::services::providers::kick_emotes::channel_emote_set(&slug).await
 }
 
+/// A YouTube channel's 7TV emotes (channel set + 7TV globals) as an EmoteSet,
+/// for the emote picker. Separate from `get_youtube_channel_emojis`, which serves
+/// YouTube's OWN channel emoji: a channel can have either, both, or neither.
+#[tauri::command]
+pub async fn get_youtube_channel_emotes(
+    channel: String,
+) -> crate::services::emote_service::EmoteSet {
+    crate::services::providers::youtube_emotes::channel_emote_set(&channel).await
+}
+
 #[tauri::command]
 pub async fn stop_chat() -> Result<(), String> {
     ChatService::stop().await.map_err(|e| e.to_string())
+}
+
+/// Who is signed in on a platform: display name and profile picture.
+///
+/// One call rather than a `*_account_name` plus a separate avatar lookup, because
+/// both come out of the same upstream response. Empty when not connected.
+#[derive(serde::Serialize, Default)]
+pub struct PlatformAccountInfo {
+    pub name: Option<String>,
+    pub avatar_url: Option<String>,
+}
+
+#[tauri::command]
+pub async fn platform_account_info(provider: String) -> PlatformAccountInfo {
+    match provider.as_str() {
+        "kick" => {
+            let (name, avatar_url) = crate::services::kick_auth_service::account_identity().await;
+            PlatformAccountInfo { name, avatar_url }
+        }
+        "youtube" => {
+            let (name, avatar_url) =
+                crate::services::youtube_auth_service::account_identity().await;
+            PlatformAccountInfo { name, avatar_url }
+        }
+        _ => PlatformAccountInfo::default(),
+    }
+}
+
+/// Check whether the connected platform sessions are still accepted, and sign out
+/// any that have been revoked. Returns the provider ids that were signed out.
+///
+/// This is the ONLY thing worth polling about a platform account: `kick_is_connected`
+/// / `youtube_is_connected` are pure in-memory reads that never notice a session
+/// dying server-side, so polling those told us nothing while this told us nothing
+/// at all. Deliberately low-frequency and driven from ONE place per window — a
+/// revoked token is rare, and each check is a real network round trip.
+///
+/// Providers that aren't connected are skipped entirely, so a Twitch-only user
+/// pays nothing.
+#[tauri::command]
+pub async fn validate_platform_sessions(app: tauri::AppHandle) -> Vec<String> {
+    use tauri::Emitter;
+    let mut signed_out: Vec<String> = Vec::new();
+
+    if crate::services::kick_auth_service::is_connected()
+        && crate::services::kick_auth_service::validate_session().await == Some(false)
+    {
+        signed_out.push("kick".to_string());
+    }
+    if crate::services::youtube_auth_service::is_connected()
+        && crate::services::youtube_auth_service::validate_session().await == Some(false)
+    {
+        signed_out.push("youtube".to_string());
+    }
+
+    // Tell every window, so a popout's composer goes read-only without needing a
+    // poll of its own.
+    if !signed_out.is_empty() {
+        let _ = app.emit("platform-account-changed", signed_out.clone());
+    }
+    signed_out
+}
+
+/// Cold-restart the chat backend, tearing down the shared local-WS bridge even
+/// when providers are riding it. This is the watchdog's escalation path, for a
+/// task that is alive but wedged; `stop_chat` is the user-intent path and
+/// deliberately preserves the bridge for other providers.
+#[tauri::command]
+pub async fn restart_chat_bridge() -> Result<(), String> {
+    ChatService::restart_bridge().await.map_err(|e| e.to_string())
 }
 
 /// Recent IRC connection-lifecycle events (connects, auth results, session
@@ -331,6 +497,29 @@ pub async fn debug_break_chat_socket() -> Result<(), String> {
         return Err("debug builds only".into());
     }
     crate::services::irc_service::IrcService::debug_shutdown_socket()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Dev-only: raw PART with no bookkeeping — simulates the server silently
+/// dropping a JOIN, for exercising the refresh probe and nudge-ladder recovery.
+#[tauri::command]
+pub async fn debug_unjoin_channel(channel: String) -> Result<(), String> {
+    if !cfg!(debug_assertions) {
+        return Err("debug builds only".into());
+    }
+    crate::services::irc_service::IrcService::debug_send_part(&channel)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Frontend stale-watchdog stage 1: re-issue JOINs for the desired channels so
+/// a healthy connection re-acks (resetting the frontend's stale timer) and a
+/// deaf or un-JOINed one is flushed out for the stage-2 escalation. Returns how
+/// many channels were nudged.
+#[tauri::command]
+pub async fn nudge_chat_channels() -> Result<usize, String> {
+    crate::services::irc_service::IrcService::nudge_channels()
         .await
         .map_err(|e| e.to_string())
 }
@@ -431,4 +620,197 @@ pub async fn parse_historical_messages(
     }
 
     Ok(IrcService::parse_historical_messages(messages).await)
+}
+
+/// Join backfill: how long a non-windowed recent-messages answer is reused.
+/// The main window and a MultiChat pane ask for the same channel within the
+/// same second; a rejoin inside the window is served without a round trip.
+const HISTORY_CACHE_TTL: Duration = Duration::from_secs(30);
+/// Mirror page size; robotty caps at 800.
+const HISTORY_DEFAULT_LIMIT: u32 = 100;
+const HISTORY_MAX_LIMIT: u32 = 800;
+const RECENT_MESSAGES_BASE: &str = "https://recent-messages.robotty.de/api/v2/recent-messages";
+
+static HISTORY_CACHE: OnceLock<Mutex<HashMap<String, (Instant, Vec<String>)>>> = OnceLock::new();
+
+fn history_cache() -> &'static Mutex<HashMap<String, (Instant, Vec<String>)>> {
+    HISTORY_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cached_history(channel: &str) -> Option<Vec<String>> {
+    let cache = history_cache().lock().ok()?;
+    cache
+        .get(channel)
+        .filter(|(at, _)| at.elapsed() < HISTORY_CACHE_TTL)
+        .map(|(_, lines)| lines.clone())
+}
+
+fn store_history(channel: &str, lines: Vec<String>) {
+    if let Ok(mut cache) = history_cache().lock() {
+        cache.retain(|_, (at, _)| at.elapsed() < HISTORY_CACHE_TTL);
+        cache.insert(channel.to_string(), (Instant::now(), lines));
+    }
+}
+
+/// Twitch logins: letters, digits, underscore. Anything else never reaches
+/// the mirror URL.
+fn valid_channel_login(login: &str) -> bool {
+    !login.is_empty()
+        && login.len() <= 25
+        && login.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Stamp a mirror line as history so the parser and the rows can tell it
+/// from live traffic (the tag the page used to add itself).
+fn mark_historical(line: &str) -> String {
+    match line.strip_prefix('@') {
+        Some(rest) => format!("@historical=1;{rest}"),
+        None => format!("@historical=1 {line}"),
+    }
+}
+
+async fn fetch_recent_messages(
+    channel: &str,
+    limit: u32,
+    after_ms: Option<u64>,
+    before_ms: Option<u64>,
+) -> Vec<String> {
+    let mut url = format!(
+        "{RECENT_MESSAGES_BASE}/{channel}?limit={}&hide_moderation_messages=true&hide_moderated_messages=true",
+        limit.clamp(1, HISTORY_MAX_LIMIT)
+    );
+    if let Some(a) = after_ms {
+        url.push_str(&format!("&after={a}"));
+    }
+    if let Some(b) = before_ms {
+        url.push_str(&format!("&before={b}"));
+    }
+    let resp = match crate::services::http::client().get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("[ChatHistory] {channel}: mirror request failed: {e}");
+            return Vec::new();
+        }
+    };
+    if !resp.status().is_success() {
+        log::warn!("[ChatHistory] {channel}: mirror answered {}", resp.status());
+        return Vec::new();
+    }
+    let body: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("[ChatHistory] {channel}: mirror body unreadable: {e}");
+            return Vec::new();
+        }
+    };
+    body.get("messages")
+        .and_then(|m| m.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.as_str())
+                .map(mark_historical)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The join backfill, fetched and parsed by Rust in one call: the recent
+/// messages mirror (recent-messages.robotty.de) tagged `historical=1`, then
+/// the same parse the live path uses. Until 2026-09-07 the page fetched the
+/// mirror itself, serially after the badge cache init, so history landed one
+/// to two seconds after the first live rows and visibly prepended; now the
+/// store starts this call at acquire time, in parallel with the IRC join,
+/// and paints history and the held live tail together. `limit`, `after_ms`
+/// and `before_ms` bound a reconnect backfill (never cached). A mirror error
+/// is an empty answer, as before: a channel with no history is still a
+/// channel.
+#[tauri::command]
+pub async fn load_channel_history(
+    channel: String,
+    limit: Option<u32>,
+    after_ms: Option<u64>,
+    before_ms: Option<u64>,
+    state: State<'_, AppState>,
+) -> Result<Vec<ChatMessage>, String> {
+    let key = channel.trim().trim_start_matches('#').to_lowercase();
+    if !valid_channel_login(&key) {
+        return Err(format!("bad_channel: {channel}"));
+    }
+    let windowed = limit.is_some() || after_ms.is_some() || before_ms.is_some();
+    let started = Instant::now();
+    let raw = match if windowed { None } else { cached_history(&key) } {
+        Some(lines) => lines,
+        None => {
+            let lines =
+                fetch_recent_messages(&key, limit.unwrap_or(HISTORY_DEFAULT_LIMIT), after_ms, before_ms)
+                    .await;
+            if !windowed {
+                store_history(&key, lines.clone());
+            }
+            lines
+        }
+    };
+    // Same background emote warm as parse_historical_messages: never in front
+    // of the rows, a down provider must not blank the chat.
+    let emote_service = state.emote_service.clone();
+    let warm = key.clone();
+    tokio::spawn(async move {
+        IrcService::fetch_and_store_emotes(&warm, emote_service).await;
+    });
+    let parsed = IrcService::parse_historical_messages(raw).await;
+    log::debug!(
+        "[ChatHistory] {key}: {} rows in {} ms{}",
+        parsed.len(),
+        started.elapsed().as_millis(),
+        if windowed { " (windowed)" } else { "" }
+    );
+    Ok(parsed)
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    #[test]
+    fn historical_tag_lands_in_the_tag_block() {
+        assert_eq!(
+            mark_historical("@id=1;user-id=2 :a!a@a.tmi.twitch.tv PRIVMSG #c :hi"),
+            "@historical=1;id=1;user-id=2 :a!a@a.tmi.twitch.tv PRIVMSG #c :hi"
+        );
+        assert_eq!(
+            mark_historical(":a!a@a.tmi.twitch.tv PRIVMSG #c :hi"),
+            "@historical=1 :a!a@a.tmi.twitch.tv PRIVMSG #c :hi"
+        );
+    }
+
+    #[test]
+    fn channel_logins_are_validated_before_the_url() {
+        assert!(valid_channel_login("summit1g"));
+        assert!(valid_channel_login("a_b_1"));
+        assert!(!valid_channel_login(""));
+        assert!(!valid_channel_login("a/b"));
+        assert!(!valid_channel_login("a?limit=1"));
+        assert!(!valid_channel_login("x".repeat(26).as_str()));
+    }
+}
+
+/// Diagnostic breadcrumb from the Kick resolver's injected script. A bare
+/// "timed out" says nothing about WHERE it stalled — challenge never cleared,
+/// fetch 403'd, or the script never ran at all — so the script reports each
+/// attempt and this lands it in the log.
+#[tauri::command]
+pub fn report_kick_resolve_diag(label: String, note: String) {
+    log::warn!("[Kick][resolve:{}] {}", label, note);
+}
+
+/// The emoji a YouTube channel offers in its live chat, custom ones first.
+///
+/// Mirrors `get_kick_channel_emotes`. YouTube has no emote-set endpoint, but its
+/// live_chat page ships the full list inline (its own picker needs it), so the
+/// chat adapter caches it when it resolves the chat and this hands it over.
+#[tauri::command]
+pub fn get_youtube_channel_emojis(
+    channel: String,
+) -> Vec<crate::services::providers::youtube::YouTubeEmoji> {
+    crate::services::providers::youtube::channel_emojis(&channel)
 }

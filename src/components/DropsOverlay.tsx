@@ -5,7 +5,9 @@ import { Tooltip } from './ui/Tooltip';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function DropsOverlay() {
-  const { showDropsOverlay, setShowDropsOverlay } = useAppStore();
+  // Action without a subscription; only the visibility flag drives re-renders.
+  const { setShowDropsOverlay } = useAppStore.getState();
+  const showDropsOverlay = useAppStore((s) => s.showDropsOverlay);
 
   return (
     <AnimatePresence>

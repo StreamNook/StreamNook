@@ -91,6 +91,24 @@ pub struct VideoPlayerSettings {
     /// and governor target. Default 2.5.
     #[serde(default = "default_ll_target_latency")]
     pub ll_target_latency: f32,
+    /// Scrolling over the player adjusts volume. On by default.
+    #[serde(default = "default_true")]
+    pub scroll_volume: bool,
+    /// Scrolling down over the player opens the channel About drawer. On by
+    /// default. When `scroll_volume` is also on, the plain wheel belongs to
+    /// volume and this moves to Shift + scroll down, so both can coexist.
+    #[serde(default = "default_true")]
+    pub scroll_about_reveal: bool,
+    /// Middle-clicking the player toggles mute. On by default.
+    #[serde(default = "default_true")]
+    pub middle_click_mute: bool,
+    /// How much one wheel notch moves the volume (0.01-0.25). Default 5%.
+    #[serde(default = "default_wheel_volume_step")]
+    pub wheel_volume_step: f32,
+    /// Reopen a VOD where the viewer left off. On by default; off starts every
+    /// VOD from the top (positions are still recorded for the cards).
+    #[serde(default = "default_true")]
+    pub resume_vod_playback: bool,
     /// Ad-free live playback (Android). Routes the playlist through a public
     /// relay and strips ad segments out of what the player is served. On by
     /// default, matching the behavior the phone app shipped with through 7.8.6.
@@ -126,6 +144,10 @@ fn default_ll_target_latency() -> f32 {
     6.0
 }
 
+fn default_wheel_volume_step() -> f32 {
+    0.05
+}
+
 impl Default for VideoPlayerSettings {
     fn default() -> Self {
         Self {
@@ -142,6 +164,11 @@ impl Default for VideoPlayerSettings {
             ad_bypass_enabled: true,
             ad_bypass_proxies: String::new(),
             background_mode: default_background_mode(),
+            scroll_volume: true,
+            scroll_about_reveal: true,
+            middle_click_mute: true,
+            wheel_volume_step: 0.05,
+            resume_vod_playback: true,
         }
     }
 }
@@ -197,12 +224,26 @@ pub struct ChatDesignSettings {
     pub show_timestamps: bool, // Show timestamp next to each message
     #[serde(default)]
     pub show_timestamp_seconds: bool, // Include seconds in timestamps
+    /// "12h" (default) | "24h". Read by irc_service's timestamp formatter.
+    #[serde(default = "default_timestamp_format")]
+    pub timestamp_format: String,
     // The fields below were added to the TS type over time but were missing here,
     // so they silently failed to persist (serde drops unknown fields on save).
     // Each carries a serde default matching the frontend default so old
     // settings.json files (which lack the field) still load.
     #[serde(default = "default_emote_scale")]
     pub emote_scale: f64, // Inline emote size multiplier (0.5-3)
+    /// "always" (default) | "hover" | "never": animated emotes play, play only
+    /// while the row is hovered, or show their first frame. A real CPU lever.
+    #[serde(default = "default_animate_emotes")]
+    pub animate_emotes: String,
+    /// Twitch chat GIFs (Tier 2/3 subscribers): render the asset, or a chip
+    /// that reveals it on click. Default true.
+    #[serde(default = "default_true")]
+    pub show_chat_gifs: bool,
+    /// Opacity of backfilled history rows, 0-100 (100 = same as live).
+    #[serde(default = "default_backfill_opacity")]
+    pub backfill_opacity: u32,
     #[serde(default = "default_emote_margin")]
     pub emote_margin: f64, // Horizontal margin around emotes, rem
     #[serde(default = "default_emote_hover_size")]
@@ -303,7 +344,11 @@ impl Default for ChatDesignSettings {
             mention_animation: true,
             show_timestamps: false,
             show_timestamp_seconds: false,
+            timestamp_format: default_timestamp_format(),
             emote_scale: 1.0,
+            animate_emotes: default_animate_emotes(),
+            show_chat_gifs: true,
+            backfill_opacity: default_backfill_opacity(),
             emote_margin: 0.125,
             emote_hover_size: 96,
             deleted_message_style: "strikethrough".to_string(),
@@ -340,6 +385,11 @@ pub struct LiveNotificationSettings {
     // Notification type toggles
     #[serde(default = "default_true")]
     pub show_live_notifications: bool,
+    /// Go-live notifications for FAVOURITED channels, which may not be followed.
+    /// Separate from `show_live_notifications` so a large favourites list can be
+    /// silenced without losing notifications for the channels you follow.
+    #[serde(default = "default_true")]
+    pub show_favorite_live_notifications: bool,
     #[serde(default = "default_true")]
     pub show_whisper_notifications: bool,
     #[serde(default = "default_true")]
@@ -413,6 +463,7 @@ impl Default for LiveNotificationSettings {
             play_sound: true,
             sound_type: None,
             show_live_notifications: true,
+            show_favorite_live_notifications: true,
             show_whisper_notifications: true,
             show_update_notifications: true,
             show_drops_notifications: true,
@@ -510,6 +561,16 @@ pub struct MultiNookSlot {
     /// save round-trip, so per-tile quality reset to 'best' after every restart.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality: Option<String>,
+    /// Which platform this tile is on ("kick", "youtube", ...). Absent means
+    /// Twitch, matching the bare-key convention in utils/providerKey.ts, so
+    /// every grid saved before this field keeps working untouched.
+    ///
+    /// This struct is TYPED on `Settings` (`multi_nook_slots`), so it never
+    /// reaches the flattened `extra` catch-all: a field the frontend sends but
+    /// this struct does not name is silently dropped on save. See `quality`
+    /// directly above, which is here for exactly that reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -528,6 +589,11 @@ pub struct Settings {
     pub drops: DropsSettings,
     #[serde(default)]
     pub favorite_streamers: Vec<String>,
+    /// Display identity for the entries in `favorite_streamers`. Kept beside it
+    /// rather than replacing it so every existing reader keeps working and no
+    /// settings file in the field needs migrating.
+    #[serde(default)]
+    pub favorite_channels: Vec<FavoriteChannel>,
     #[serde(default)]
     pub chat_design: ChatDesignSettings,
     #[serde(default)]
@@ -578,6 +644,15 @@ pub struct Settings {
     /// `extra` because the window-event handler in main.rs reads it.
     #[serde(default)]
     pub close_to_tray: CloseToTrayMode,
+    /// Channels followed inside StreamNook on platforms whose own follow list we
+    /// can't read (Kick, TikTok). Modelled here rather than left to `extra`
+    /// because the who's-live poller (provider_live_service) reads it.
+    #[serde(default)]
+    pub provider_follows: Vec<ProviderFollow>,
+    /// Which YouTube live-chat view to read. Modelled here rather than left to
+    /// `extra` because the YouTube adapter reads it when it resolves a stream.
+    #[serde(default)]
+    pub youtube_chat_view: YouTubeChatView,
     /// Catch-all for preference groups the frontend manages but this struct does
     /// not model field-by-field: highlight phrases, custom chat commands,
     /// moderation prefs, custom themes, the OLED accent, and any future ones.
@@ -587,6 +662,66 @@ pub struct Settings {
     /// persists across restarts and travels intact in exported backups.
     #[serde(flatten, default)]
     pub extra: HashMap<String, serde_json::Value>,
+}
+
+/// A channel the user follows inside StreamNook, for platforms that don't
+/// expose their own follow list to us. Mirrors the frontend `ProviderFollow`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderFollow {
+    pub provider: String,
+    /// Slug / @handle / UC id — what chat and playback address.
+    pub channel: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// Cached platform user id, filled on the first successful live check (Kick's
+    /// batch live endpoint takes numeric ids, not slugs).
+    #[serde(default)]
+    pub user_id: Option<String>,
+    #[serde(default)]
+    pub added_at: String,
+    /// The user subscribes to this channel on the platform. Imported from the
+    /// account sync; drives the subscriber marker in lists and the player.
+    #[serde(default)]
+    pub subscribed: bool,
+    /// The channel's avatar, captured when the follow was imported.
+    ///
+    /// Both platforms hand us this in the import payload and it used to be
+    /// discarded, after which the offline roster re-fetched the same image one
+    /// channel at a time, on every app start. Stored here it costs nothing to
+    /// draw. Absent for rows imported before this existed, and for any the
+    /// import didn't carry — the per-card resolver still covers those.
+    #[serde(default)]
+    pub avatar: Option<String>,
+    /// Imported from the platform's own follow list rather than added by hand
+    /// here. A re-sync may remove these; hand-added follows are never touched.
+    #[serde(default)]
+    pub imported: bool,
+}
+
+/// Identity for a favourited channel, so an unfollowed favourite can still be
+/// drawn while it is offline (a name and a face; `favorite_streamers` is only
+/// ids). Membership stays in `favorite_streamers` — this is a best-effort
+/// display cache keyed by the SAME string, never a second answer to "is this
+/// favourited".
+///
+/// Rows whose id has left `favorite_streamers` are ignored where they're read
+/// rather than pruned, so nothing has to write settings during startup.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FavoriteChannel {
+    /// The key used in `favorite_streamers`: a Twitch numeric user id, or a
+    /// composite `provider:channel`.
+    pub id: String,
+    /// "twitch" | "kick" | "youtube" | "tiktok".
+    pub provider: String,
+    /// Login / slug / @handle / UC id — what chat and playback address, and
+    /// what the platform's live check accepts.
+    pub channel: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub avatar: Option<String>,
+    #[serde(default)]
+    pub added_at: String,
 }
 
 fn default_theme() -> String {
@@ -607,6 +742,9 @@ impl Default for Settings {
             streamlink: StreamlinkSettings::default(),
             drops: DropsSettings::default(),
             favorite_streamers: vec![],
+            favorite_channels: vec![],
+            provider_follows: vec![],
+            youtube_chat_view: YouTubeChatView::default(),
             chat_design: ChatDesignSettings::default(),
             live_notifications: LiveNotificationSettings::default(),
             last_seen_version: None,
@@ -657,6 +795,27 @@ pub enum CloseToTrayMode {
     Always,
     /// Always quit, even with popouts open.
     Never,
+}
+
+/// Which of YouTube's two live-chat views to read.
+///
+/// `Live` is the unfiltered firehose and stays the default. `Top` is what
+/// youtube.com itself defaults to: YouTube drops messages it judges low quality
+/// (and most of one author's repeats), so a very fast chat stays readable at the
+/// cost of not seeing everything.
+///
+/// Measured by polling both views over the SAME window on one stream: Live 159
+/// messages, Top 129, and every Top id was also in Live. So Top is a strict
+/// subset that dropped about 19% here, not a different feed. Its join backlog is
+/// smaller too (51 rows against 73).
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum YouTubeChatView {
+    /// Every message YouTube publishes.
+    #[default]
+    Live,
+    /// YouTube's own filtered view.
+    Top,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -712,6 +871,43 @@ pub struct AppState {
 #[cfg(test)]
 mod backup_persistence_tests {
     use super::*;
+
+    /// A modeled top-level preference must survive the save/load round-trip, and
+    /// must NOT be swallowed by the flattened `extra` map on the way back.
+    #[test]
+    fn youtube_chat_view_round_trips() {
+        let mut s = Settings::default();
+        assert_eq!(s.youtube_chat_view, YouTubeChatView::Live, "firehose is the default");
+
+        s.youtube_chat_view = YouTubeChatView::Top;
+        let value = serde_json::to_value(&s).expect("serialize");
+        assert_eq!(
+            value.get("youtube_chat_view").and_then(|v| v.as_str()),
+            Some("top"),
+            "kebab-case on the wire, matching the TS YouTubeChatView union",
+        );
+        assert!(
+            value.get("extra").is_none(),
+            "modeled fields serialize at the top level",
+        );
+
+        let back: Settings = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(back.youtube_chat_view, YouTubeChatView::Top);
+        assert!(!back.extra.contains_key("youtube_chat_view"));
+    }
+
+    /// A settings.json written before this setting existed must load, and land on
+    /// the default rather than failing the whole parse.
+    #[test]
+    fn youtube_chat_view_defaults_when_absent() {
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize");
+        value
+            .as_object_mut()
+            .expect("object")
+            .remove("youtube_chat_view");
+        let loaded: Settings = serde_json::from_value(value).expect("older settings still load");
+        assert_eq!(loaded.youtube_chat_view, YouTubeChatView::Live);
+    }
 
     /// Frontend-managed preference groups the struct doesn't model (highlight
     /// phrases, custom themes, the OLED accent, ...) must survive a save/load
@@ -796,4 +992,85 @@ mod backup_persistence_tests {
         let chan = first["channels"][0].as_object().expect("channel object");
         assert_eq!(chan.get("quality").and_then(|v| v.as_str()), Some("720p60"));
     }
+
+    /// A slot's `provider` must survive the save round trip. `multi_nook_slots`
+    /// is a TYPED field, so unlike presets it does NOT ride the flattened
+    /// `extra` catch-all: any key this struct does not name is dropped on save.
+    /// That already happened once with `quality`, and a provider lost here would
+    /// look fine in testing and silently turn every non-Twitch tile back into a
+    /// Twitch one after a restart.
+    #[test]
+    fn multi_nook_slot_provider_round_trips() {
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize defaults");
+        let obj = value.as_object_mut().expect("settings is an object");
+        obj.insert(
+            "multi_nook_slots".into(),
+            serde_json::json!([
+                {
+                    "id": "cell-1",
+                    "channelLogin": "xqc",
+                    "volume": 1.0,
+                    "muted": false,
+                    "isFocused": true,
+                    "provider": "kick"
+                }
+            ]),
+        );
+
+        let parsed: Settings = serde_json::from_value(value).expect("deserialize with slots");
+        assert_eq!(
+            parsed.multi_nook_slots[0].provider.as_deref(),
+            Some("kick"),
+            "provider must deserialize onto the typed slot"
+        );
+
+        let reserialized = serde_json::to_value(&parsed).expect("serialize back");
+        let slots = reserialized
+            .get("multi_nook_slots")
+            .and_then(|v| v.as_array())
+            .expect("slots array survived");
+        let slot = slots[0].as_object().expect("slot object");
+        assert_eq!(
+            slot.get("provider").and_then(|v| v.as_str()),
+            Some("kick"),
+            "provider must survive serialization back to disk"
+        );
+    }
+
+    /// A grid saved before the provider field existed must keep loading, with
+    /// the absent provider meaning Twitch (the bare-key convention).
+    #[test]
+    fn multi_nook_slot_without_provider_still_loads() {
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize defaults");
+        let obj = value.as_object_mut().expect("settings is an object");
+        obj.insert(
+            "multi_nook_slots".into(),
+            serde_json::json!([
+                { "id": "cell-1", "channelLogin": "xqc", "volume": 1.0, "muted": false, "isFocused": true }
+            ]),
+        );
+
+        let parsed: Settings = serde_json::from_value(value).expect("legacy slot must deserialize");
+        assert_eq!(parsed.multi_nook_slots[0].provider, None);
+        let reserialized = serde_json::to_value(&parsed).expect("serialize back");
+        let slot = reserialized["multi_nook_slots"][0]
+            .as_object()
+            .expect("slot object");
+        assert!(
+            !slot.contains_key("provider"),
+            "an absent provider must not be written back as null"
+        );
+    }
+}
+
+fn default_timestamp_format() -> String {
+    "12h".to_string()
+}
+
+fn default_animate_emotes() -> String {
+    "always".to_string()
+}
+
+fn default_backfill_opacity() -> u32 {
+    100
 }

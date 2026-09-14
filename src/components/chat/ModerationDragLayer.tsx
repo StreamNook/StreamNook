@@ -15,6 +15,7 @@ import {
   formatDuration,
   timeoutSecsFromDistance,
 } from '../../utils/timeoutRamp';
+import { kickAppliedSeconds, kickTimeoutMinutes } from '../../utils/kickTimeout';
 
 
 // The timeout ramp now lives in utils/timeoutRamp so the mobile fan-out dials
@@ -56,10 +57,9 @@ export default function ModerationDragLayer() {
   // horizontally just left of the chat panel when chat is right-docked (else
   // screen-centered). Measured in a layout effect so it never flashes elsewhere.
   useLayoutEffect(() => {
-    if (!dragged) {
-      setAnchorStyle(null);
-      return;
-    }
+    // Nothing to measure without a drag; the render below hides the stale
+    // anchor itself, and the next drag re-measures before paint.
+    if (!dragged) return;
     const panel = document.querySelector('[data-chat-panel]') as HTMLElement | null;
     const rect = panel?.getBoundingClientRect();
 
@@ -76,6 +76,11 @@ export default function ModerationDragLayer() {
         : null;
       const msgRect = msgEl?.getBoundingClientRect();
       const anchorY = msgRect && msgRect.height > 0 ? msgRect.top : origin.y;
+      // Layout measurement: read the message row's position after layout and
+      // commit the anchor before paint. The synchronous second render is the
+      // point of useLayoutEffect here. (This keeps the layer out of the
+      // compiler; it only renders while a message is being dragged.)
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAnchorStyle({ top: Math.max(8, anchorY - 10), left: cx, transform: 'translate(-50%, -100%)' });
       return;
     }
@@ -169,8 +174,10 @@ export default function ModerationDragLayer() {
       const { userId, login, displayName, broadcasterId, messageId } = dragged;
       const app = useAppStore.getState();
       // Kick routes ban/timeout/unban to its own moderation API (numeric ids,
-      // duration in minutes). delete/pin buckets never reach Kick (no messageId).
+      // duration in minutes). Delete is provider-branched below; pin is Twitch
+      // only and its bucket is hidden elsewhere for providers.
       const isKick = dragged.provider === 'kick';
+      const isTwitchDrag = (dragged.provider ?? 'twitch') === 'twitch';
       // YouTube routes to the webview-session mod commands (the chatter's channel id +
       // the source slug carried on the drag). Timeout uses YouTube's fixed length.
       const isYouTube = dragged.provider === 'youtube';
@@ -229,13 +236,16 @@ export default function ModerationDragLayer() {
           break;
         case 'timeout': {
           const s = secs ?? 600;
+          // Kick only accepts whole minutes, so report the duration it will
+          // actually apply rather than the one the ramp was sitting on.
+          const applied = isKick ? kickAppliedSeconds(s) : s;
           (isKick
-            ? kickBan(Math.max(1, Math.round(s / 60)))
+            ? kickBan(kickTimeoutMinutes(s))
             : isYouTube
             ? youtubeBan(s)
             : invoke('ban_user', { broadcasterId, targetUserId: userId, duration: s, reason: null })
           )
-            .then(() => app.addToast(`Timed out ${displayName} for ${formatDuration(s)}`, 'success', undo))
+            .then(() => app.addToast(`Timed out ${displayName} for ${formatDuration(applied)}`, 'success', undo))
             .catch((err) => {
               Logger.error('[DragMod] Timeout failed:', err);
               app.addToast(`Couldn't time out ${displayName}`, 'error');
@@ -256,7 +266,7 @@ export default function ModerationDragLayer() {
             });
           break;
         case 'pin':
-          if (messageId) {
+          if (messageId && isTwitchDrag) {
             invoke('pin_chat_message', { broadcasterId, messageId, durationSeconds: null })
               .then(() => {
                 app.addToast(`Pinned a message from ${displayName}`, 'success');
@@ -269,7 +279,7 @@ export default function ModerationDragLayer() {
           }
           break;
         case 'unpin':
-          if (messageId) {
+          if (messageId && isTwitchDrag) {
             invoke('unpin_chat_message', { broadcasterId, messageId })
               .then(() => {
                 app.addToast(`Unpinned the message`, 'success');
@@ -385,8 +395,14 @@ export default function ModerationDragLayer() {
   // Inline pin is always available (ChatMessage); the drag tile is the optional
   // extra — shown unless the setting is 'inline' (button only). Legacy 'drag'
   // and the default 'both' both enable it.
+  // Twitch-only: pinning is Helix, and provider messages DO carry a messageId,
+  // so without this the bucket would appear on Kick/YouTube and pin against a
+  // Twitch channel that happens to share the id.
   const showDragPin =
-    dragged.isModerator && !!dragged.messageId && modPinStyle !== 'inline';
+    dragged.isModerator &&
+    !!dragged.messageId &&
+    (dragged.provider ?? 'twitch') === 'twitch' &&
+    modPinStyle !== 'inline';
   const buckets: Bucket[] = [...(showDragPin ? [pinBucket] : []), ...punitive];
   // Triangle is the ABOVE-CHAT layout only: 3 = apex (Ban / Untimeout) on top,
   // Timeout (left) + Delete (right) as the base; fewer just sit in one centered
@@ -430,7 +446,7 @@ export default function ModerationDragLayer() {
           bigger, translucent tiles, clamped to sit above the player controls.
           Above chat: a compact triangle of opaque tiles where room is tight. */}
       {buckets.length > 0 && (
-      <div className="fixed pointer-events-none" style={anchorStyle ?? undefined}>
+      <div className="fixed pointer-events-none" style={(dragged ? anchorStyle : null) ?? undefined}>
         <motion.div
           ref={columnRef}
           initial={{ scale: 0.92, opacity: 0 }}

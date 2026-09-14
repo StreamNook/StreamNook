@@ -1,10 +1,12 @@
-//! YouTube live chat adapter (read-only).
+//! YouTube live chat adapter.
 //!
 //! Reads a live stream's chat over YouTube's internal "InnerTube" API, the same
 //! private API the website uses, and normalizes each message into the shared
 //! `ChatMessage` published onto the local-WS bus. Anonymous: no YouTube login is
-//! needed to read public live chat. Sending needs the viewer's identity (Data-API
-//! quota or a logged-in session), so `send_capability` reports read-only for now.
+//! needed to read public live chat. SENDING and MODERATING need the viewer's
+//! identity, which comes from the harvested website session (see
+//! `youtube_auth_service`), so `send_capability` reports Sendable once an account
+//! is connected and NeedsLogin otherwise.
 //!
 //! Flow (no browser, plain HTTP — YouTube isn't Cloudflare-gated like Kick):
 //!   1. resolve the currently-live video from a handle / channel id / video id by
@@ -18,23 +20,24 @@
 //! fallback is the same hidden-webview page-context fetch the Kick adapter uses.
 
 use super::{
-    dec_bridge_users, inc_bridge_users, key, publish_chat_message, publish_frame, ChatProvider,
-    SendCapability, SendOutcome,
+    dec_bridge_users, inc_bridge_users, key, publish_chat_message, publish_frame, youtube_emotes,
+    ChatProvider, SendCapability, SendOutcome,
 };
 use crate::models::chat_layout::{
     Badge, ChatMessage, LayoutResult, MessageMetadata, MessageSegment,
 };
+use crate::models::settings::YouTubeChatView;
 use crate::services::youtube_auth_service;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use base64::Engine;
 use futures::FutureExt;
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
@@ -44,6 +47,48 @@ const DEFAULT_POLL_MS: u64 = 5000;
 // After a stream ends / errors, wait this long before re-resolving (catches a
 // channel that drops and comes back, or a brief network blip).
 const RE_RESOLVE_DELAY_SECS: u64 = 15;
+// A poll ERROR used to retry after a flat 3s. That is right for a blip on a busy
+// chat, and badly wrong for a stream whose chat is simply unavailable: that case
+// errors instantly every time, so each retry is a full watch-page fetch plus up
+// to three live_chat fetches every ~4.5 seconds, forever — the fastest recurring
+// network loop in the app, aimed at the endpoint most likely to challenge us for
+// it. So the error path backs off geometrically instead: 3, 6, 12, 24, 30, 30…
+const ERROR_BACKOFF_BASE_SECS: u64 = 3;
+// Capped LOW on purpose. The point of backing off is to stop a permanently-dead
+// stream hammering YouTube every ~4.5s; it is NOT to make a live chat slow to
+// recover. A transient blip must reconnect in seconds, so the ceiling stays close
+// to the original flat retry rather than climbing to half a minute.
+const ERROR_BACKOFF_MAX_SECS: u64 = 12;
+// A round that streamed for at least this long was healthy, whatever ended it, so
+// the next failure starts from the bottom of the backoff rather than the top.
+// A round that streamed even briefly was working, so the NEXT failure starts from
+// the bottom again. This was 60s, which was wrong: a chat that hiccups every
+// half-minute would have ratcheted its retry delay upward forever and felt
+// broken. Recovery should be cheap and forgetting should be fast.
+const HEALTHY_ROUND_SECS: u64 = 10;
+
+/// Next error delay, advancing the streak. Saturates at `ERROR_BACKOFF_MAX_SECS`.
+fn error_backoff(streak: &mut u32) -> u64 {
+    let delay = ERROR_BACKOFF_BASE_SECS
+        .saturating_mul(1u64 << (*streak).min(4))
+        .min(ERROR_BACKOFF_MAX_SECS);
+    *streak = streak.saturating_add(1);
+    delay
+}
+// The FIRST response after a (re)resolve is a BACKLOG, not live traffic. Measured
+// on a busy stream: 76 messages spanning the last ~21 seconds, where a steady-state
+// poll carries 5-16 spanning ~2. Pacing that clump like live chat replays 20 seconds
+// of a stream at ~10x speed the moment you join, which is what "YouTube chat floods"
+// actually was. So the first batch is delivered at once (the way Twitch's history
+// backfill arrives) and trimmed to its newest rows.
+const BACKLOG_KEEP: usize = 30;
+// How many published message ids to remember per connection, so a re-resolve doesn't
+// replay its backlog into the pane a second time. Only the recent tail can ever
+// overlap a fresh backlog, so this is bounded rather than a full history.
+const SEEN_IDS_MAX: usize = 512;
+// Ceiling on the per-message gap when pacing a live batch, so a quiet chat still
+// shows messages promptly instead of trickling them across the whole poll window.
+const MAX_PACE_GAP_MS: u64 = 150;
 
 static FALLBACK_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -139,6 +184,20 @@ impl ChatProvider for YouTubeProvider {
             }
         };
         store_meta(&id_lc, resolved.meta.clone());
+        // 7TV emotes for this channel, if its community uses them. Fetched at
+        // connect (not on first message) so the set is ready before chat starts
+        // flowing, and spawned so a slow 7TV can't delay the connection.
+        if let Some(uc) = resolved.meta.user_id.clone() {
+            let ident = id_lc.clone();
+            tokio::spawn(async move {
+                youtube_emotes::refresh(&ident, &uc).await;
+                // Live 7TV events for this channel (emote-set edits + present
+                // users' cosmetics). Skips itself if the channel isn't on 7TV,
+                // leaving the TTL refetch above as the only source, as before.
+                crate::services::seventv_eventapi::subscribe_channel_on(&ident, &uc, "youtube")
+                    .await;
+            });
+        }
 
         let task = {
             let http = self.http.clone();
@@ -177,6 +236,23 @@ impl ChatProvider for YouTubeProvider {
             }
         }
         Ok(())
+    }
+
+    async fn release_window(&self, window: &str) {
+        let mut conns = self.conns.lock().await;
+        conns.retain(|id_lc, conn| {
+            if !conn.consumers.remove(window) || !conn.consumers.is_empty() {
+                return true;
+            }
+            // Live connection (task Some) released here; a still-resolving one
+            // (task None) is released by connect()'s attach/failure path.
+            if let Some(task) = conn.task.take() {
+                task.abort();
+                dec_bridge_users();
+                log::debug!("[youtube] released '{}' with window '{}'", id_lc, window);
+            }
+            false
+        });
     }
 
     async fn send(&self, channel: &str, text: &str, _reply_to: Option<&str>) -> Result<SendOutcome> {
@@ -357,6 +433,16 @@ static CONTEXT_PARAMS: OnceLock<std::sync::Mutex<HashMap<String, String>>> = Onc
 // Cached probe result per channel, so the gate doesn't re-probe every render.
 static CAN_MOD: OnceLock<std::sync::Mutex<HashMap<String, bool>>> = OnceLock::new();
 
+/// When a moderation probe last FAILED, per channel.
+///
+/// A failed probe must not be cached as `false` — nothing re-probes a cached
+/// answer, so one blip would hide the mod controls for good. But not recording it
+/// at all is the opposite trap: the caller polls every 8s, so a session that
+/// reliably fails would re-probe forever. This is the middle: retry, but no more
+/// than once a minute.
+static CAN_MOD_FAILED_AT: OnceLock<std::sync::Mutex<HashMap<String, Instant>>> = OnceLock::new();
+const CAN_MOD_RETRY_AFTER: Duration = Duration::from_secs(60);
+
 fn store_context_params(channel_key: &str, params: &str) {
     let slug = key::parse_key(channel_key).channel;
     if let Ok(mut m) = CONTEXT_PARAMS
@@ -382,6 +468,18 @@ pub async fn can_moderate(channel: &str) -> bool {
     if !youtube_auth_service::is_connected() {
         return false;
     }
+    // Recently failed: don't re-probe on every 8s tick from the composer.
+    if let Some(true) = CAN_MOD_FAILED_AT
+        .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+        .lock()
+        .ok()
+        .map(|m| {
+            m.get(&slug)
+                .is_some_and(|at| at.elapsed() < CAN_MOD_RETRY_AFTER)
+        })
+    {
+        return false;
+    }
     let Some(meta) = channel_meta(&slug) else {
         return false;
     };
@@ -405,7 +503,21 @@ pub async fn can_moderate(channel: &str) -> bool {
     .await
     {
         Ok(v) => menu_grants_moderation(&v),
-        Err(_) => false,
+        // A failed probe says nothing about whether the user is a moderator. It
+        // used to be cached as `false`, which meant one network blip hid the mod
+        // controls for that channel permanently — nothing re-probes a cached
+        // answer. Report false for THIS call only and leave the cache empty so
+        // the next poll can settle it.
+        Err(e) => {
+            log::debug!("[youtube] moderation probe for '{}' failed: {}", slug, e);
+            if let Ok(mut m) = CAN_MOD_FAILED_AT
+                .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+                .lock()
+            {
+                m.insert(slug, Instant::now());
+            }
+            return false;
+        }
     };
     if let Ok(mut m) = CAN_MOD
         .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
@@ -414,6 +526,22 @@ pub async fn can_moderate(channel: &str) -> bool {
         m.insert(slug, is_mod);
     }
     is_mod
+}
+
+/// Forget cached moderation answers. Called on sign-out: they were computed for
+/// the account that just went away, and a different account has different rights.
+pub fn clear_moderation_cache() {
+    if let Some(m) = CAN_MOD.get() {
+        if let Ok(mut m) = m.lock() {
+            m.clear();
+        }
+    }
+    // Also drop the failure backoff: a new sign-in deserves an immediate probe.
+    if let Some(m) = CAN_MOD_FAILED_AT.get() {
+        if let Ok(mut m) = m.lock() {
+            m.clear();
+        }
+    }
 }
 
 /// True only if the context-menu response offers a REAL moderation action (Remove /
@@ -575,6 +703,11 @@ pub struct YouTubeChannelMeta {
     pub start_time: Option<String>,
     pub title: Option<String>,
     pub profile_pic: Option<String>,
+    /// The game/category YouTube attached to the broadcast, when it attached one.
+    /// Unlike Twitch (where the streamer picks it and it is always right) this is
+    /// inferred by YouTube and is frequently ABSENT even on an obvious gaming
+    /// stream, so every consumer has to treat empty as "unknown", not "none".
+    pub game_name: Option<String>,
     pub is_live: bool,
     // Internal send/moderate context captured at resolve (the cvPair video id + the
     // scraped InnerTube creds). `serde(skip)` keeps them out of the frontend payload.
@@ -588,25 +721,43 @@ pub struct YouTubeChannelMeta {
     pub visitor_data: Option<String>,
 }
 
-static YT_META: OnceLock<std::sync::Mutex<HashMap<String, YouTubeChannelMeta>>> = OnceLock::new();
+static YT_META: OnceLock<std::sync::Mutex<HashMap<String, (YouTubeChannelMeta, Instant)>>> =
+    OnceLock::new();
 
-fn yt_meta_cache() -> &'static std::sync::Mutex<HashMap<String, YouTubeChannelMeta>> {
+fn yt_meta_cache() -> &'static std::sync::Mutex<HashMap<String, (YouTubeChannelMeta, Instant)>> {
     YT_META.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
 fn store_meta(id_lc: &str, meta: YouTubeChannelMeta) {
     if let Ok(mut m) = yt_meta_cache().lock() {
-        m.insert(id_lc.to_string(), meta);
+        m.insert(id_lc.to_string(), (meta, Instant::now()));
     }
 }
 
-/// The cached live metadata for an identifier, if resolved. Returned by the
-/// `get_youtube_channel_meta` command for the chat chrome.
+/// The cached metadata for an identifier, at any age.
+///
+/// Correct for the IDENTITY fields (api key, client version, visitor data), which
+/// don't go stale in a way that matters. NOT correct for liveness — see
+/// `channel_meta_fresh`.
 pub fn channel_meta(identifier: &str) -> Option<YouTubeChannelMeta> {
     yt_meta_cache()
         .lock()
         .ok()
-        .and_then(|m| m.get(&identifier.to_lowercase()).cloned())
+        .and_then(|m| m.get(&identifier.to_lowercase()).map(|(meta, _)| meta.clone()))
+}
+
+/// The cached metadata only if it is younger than `max_age`.
+///
+/// This entry carries `is_live` and a viewer count. Served unconditionally from
+/// cache, as it used to be, a channel whose chat you once opened is reported LIVE
+/// by the who's-live poller for the rest of the session. Callers that care about
+/// liveness use this and re-resolve on `None`.
+pub fn channel_meta_fresh(identifier: &str, max_age: Duration) -> Option<YouTubeChannelMeta> {
+    yt_meta_cache().lock().ok().and_then(|m| {
+        m.get(&identifier.to_lowercase())
+            .filter(|(_, stored)| stored.elapsed() < max_age)
+            .map(|(meta, _)| meta.clone())
+    })
 }
 
 // Original-case identifiers, keyed by their lowercase. Seeded on the first connect
@@ -647,7 +798,7 @@ struct Resolved {
 
 /// Build the watch/live URL for an identifier. The frontend `@`-prefixes handles
 /// so they're never confused with an 11-char video id.
-fn live_page_url(identifier: &str) -> String {
+pub(crate) fn live_page_url(identifier: &str) -> String {
     let id = identifier.trim();
     if let Some(handle) = id.strip_prefix('@') {
         return format!("https://www.youtube.com/@{}/live", handle);
@@ -676,7 +827,7 @@ enum WatchOutcome {
 }
 
 /// GET a YouTube page's HTML, mapping the EU consent interstitial to a clear error.
-async fn fetch_youtube_html(
+pub(crate) async fn fetch_youtube_html(
     http: &reqwest::Client,
     url: &str,
     identifier: &str,
@@ -693,6 +844,63 @@ async fn fetch_youtube_html(
         ));
     }
     Ok(html)
+}
+
+/// Fetch the live page for `identifier`, PARSE it, and cache the metadata.
+///
+/// Parsing here is the point: the metadata cache is written only by the CHAT
+/// connect path, so fetching without parsing answers only for channels whose
+/// chat was opened this session. `live_check` is built on `channel_meta`, so
+/// that leaves the who's-live poller and the favourites sweep blind to every
+/// other YouTube channel, and a MultiNook tile titling itself with a raw
+/// video id.
+///
+/// Accepts any identifier `live_page_url` does: a video id, an `@handle`, or
+/// a `UC` id.
+pub(crate) async fn refresh_channel_meta(
+    http: &reqwest::Client,
+    identifier: &str,
+) -> Result<YouTubeChannelMeta> {
+    let html = fetch_youtube_html(http, &live_page_url(identifier), identifier).await?;
+    let player = extract_json(&html, "ytInitialPlayerResponse");
+    let initial = extract_json(&html, "ytInitialData");
+
+    // Only a real WATCH page carries `videoDetails`. A channel with no live
+    // broadcast serves its browse shell instead, and `extract_meta` defaults
+    // `is_live` to TRUE when the details are missing - so parsing a shell would
+    // invent a live channel, and this feeds the who's-live poller. Refusing here
+    // keeps "we could not tell" distinct from "it is live".
+    if player
+        .as_ref()
+        .and_then(|p| p.get("videoDetails"))
+        .is_none()
+    {
+        return Err(anyhow!("'{}' isn't live right now", identifier));
+    }
+
+    let mut meta = extract_meta(player.as_ref(), initial.as_ref(), &html);
+
+    // The innertube identity fields, read the same way `parse_watch_page` reads
+    // them. Without these the refreshed entry would be POORER than a chat-stored
+    // one, and overwriting the cache with it would break moderation context for
+    // a channel whose chat is open.
+    meta.api_key = json_str_after(&html, "\"INNERTUBE_API_KEY\":\"");
+    meta.client_version = json_str_after(&html, "\"INNERTUBE_CONTEXT_CLIENT_VERSION\":\"")
+        .or_else(|| json_str_after(&html, "\"clientVersion\":\""));
+    meta.visitor_data = json_str_after(&html, "\"visitorData\":\"").map(|v| decode_json_escapes(&v));
+
+    // Belt and braces: anything this page did not carry keeps whatever the cache
+    // already knew, so a refresh can only ever add detail, never remove it.
+    if let Some(prev) = channel_meta(identifier) {
+        meta.api_key = meta.api_key.or(prev.api_key);
+        meta.client_version = meta.client_version.or(prev.client_version);
+        meta.visitor_data = meta.visitor_data.or(prev.visitor_data);
+        meta.profile_pic = meta.profile_pic.or(prev.profile_pic);
+        meta.user_id = meta.user_id.or(prev.user_id);
+    }
+
+    store_meta(&identifier.to_lowercase(), meta.clone());
+    Ok(meta)
 }
 
 /// Parse a fetched page as a live watch page. Returns `Resolved` on success,
@@ -731,6 +939,29 @@ async fn parse_watch_page(
         }
     }
 
+    // An ENDED broadcast still carries a `liveChatRenderer`: it is the chat REPLAY.
+    // Its continuation is a replay token, which `get_live_chat` rejects with HTTP
+    // 400, and the stream loop treats that as a transient error and re-resolves
+    // every few seconds forever. So liveness is checked BEFORE the renderer, not
+    // after: the presence of a chat renderer says nothing about whether the stream
+    // is on air.
+    //
+    // Symptom this fixes, verified on a broadcast that had just ended:
+    //   "couldn't get the Live chat continuation ...; using Top chat (filtered)"
+    //   "stream error: get_live_chat HTTP 400 Bad Request"   (repeating)
+    // The first line is the same signal read a different way: the `live_chat` page
+    // has no live renderer once a stream ends, which is why the fallback engaged.
+    let is_watch = initial
+        .as_ref()
+        .and_then(|d| d.pointer("/contents/twoColumnWatchNextResults"))
+        .is_some();
+    if is_watch && !is_currently_live(html) {
+        return Err(anyhow!(
+            "'{}' isn't live right now (or its chat is unavailable)",
+            identifier
+        ));
+    }
+
     let live_chat_renderer = initial.as_ref().and_then(|d| {
         d.pointer("/contents/twoColumnWatchNextResults/conversationBar/liveChatRenderer")
     });
@@ -745,6 +976,13 @@ async fn parse_watch_page(
             .and_then(|d| d.pointer("/contents/twoColumnWatchNextResults"))
             .is_some();
         if is_watch_page {
+            // YouTube replaces the renderer with a stated reason ("Chat is disabled for
+            // this live stream.", members-only, and so on). Verified live: a 24/7 stream
+            // that PLAYS fine can still have chat switched off, so the generic
+            // "isn't live right now" was blaming the wrong thing and reading as a bug.
+            if let Some(reason) = conversation_bar_message(initial.as_ref()) {
+                return Err(anyhow!("YouTube: {}", reason));
+            }
             return Err(anyhow!(
                 "'{}' isn't live right now (or its chat is unavailable)",
                 identifier
@@ -768,23 +1006,38 @@ async fn parse_watch_page(
         .and_then(|v| v.as_str())
         .map(String::from)
         .or_else(|| json_str_after(html, "\"videoId\":\""));
-    let continuation = match video_id.as_deref() {
-        Some(vid) => match fetch_live_continuation(http, vid).await {
-            Some(live) => {
-                log::info!("[YouTube] '{}' on the FULL Live chat view", identifier);
-                live
+    let continuation = if chat_view() == YouTubeChatView::Top {
+        // Top chat IS the bootstrap token, so asking for it costs nothing: no
+        // live_chat page fetch, no retries.
+        log::info!("[YouTube] '{}' on Top chat (filtered, by setting)", identifier);
+        // ...but the emoji set lives on that page, so skipping it also skipped the
+        // emoji. The picker must not silently depend on a chat-view preference, so
+        // fetch it here purely for the emoji when the watch page didn't carry them.
+        if let Some(vid) = video_id.as_deref() {
+            if channel_emojis(vid).is_empty() {
+                let _ = fetch_live_continuation(http, vid, identifier).await;
             }
+        }
+        bootstrap
+    } else {
+        match video_id.as_deref() {
+            Some(vid) => match fetch_live_continuation(http, vid, identifier).await {
+                Some(live) => {
+                    log::info!("[YouTube] '{}' on the FULL Live chat view", identifier);
+                    live
+                }
+                None => {
+                    log::warn!(
+                        "[YouTube] '{}' couldn't get the Live chat continuation (video {}); using Top chat (filtered)",
+                        identifier, vid
+                    );
+                    bootstrap
+                }
+            },
             None => {
-                log::warn!(
-                    "[YouTube] '{}' couldn't get the Live chat continuation (video {}); using Top chat (filtered)",
-                    identifier, vid
-                );
+                log::warn!("[YouTube] '{}' has no video id; using Top chat bootstrap", identifier);
                 bootstrap
             }
-        },
-        None => {
-            log::warn!("[YouTube] '{}' has no video id; using Top chat bootstrap", identifier);
-            bootstrap
         }
     };
 
@@ -804,6 +1057,22 @@ async fn parse_watch_page(
         },
         meta,
     }))
+}
+
+/// The user's chosen live-chat view. Read per resolve (not cached) so changing it
+/// takes effect on the next channel you open rather than at the next app start;
+/// falls back to the unfiltered firehose before the settings handle is wired.
+fn chat_view() -> YouTubeChatView {
+    super::setting(|s| s.youtube_chat_view).unwrap_or_default()
+}
+
+/// The conversation bar's availability message, present when YouTube swapped the
+/// live-chat renderer for an explanation of why there's no chat.
+fn conversation_bar_message(initial: Option<&Value>) -> Option<String> {
+    let text = initial?.pointer(
+        "/contents/twoColumnWatchNextResults/conversationBar/conversationBarRenderer/availabilityMessage/messageRenderer/text",
+    )?;
+    runs_text(Some(text)).filter(|s| !s.trim().is_empty())
 }
 
 /// Distinct 11-char video ids in document order, capped at `max`. Used to pick the
@@ -919,14 +1188,291 @@ fn bootstrap_continuation(lcr: &Value) -> Option<String> {
 /// Fetch the dedicated live_chat page and pull the "Live chat" view continuation,
 /// which (unlike the watch page's) IS get_live_chat-compatible. None if the page or
 /// the Live view isn't available (the caller falls back to the bootstrap/Top view).
-async fn fetch_live_continuation(http: &reqwest::Client, video_id: &str) -> Option<String> {
+/// One emoji offered in a channel's live chat.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct YouTubeEmoji {
+    pub id: String,
+    /// The `:shortcut:` a user types, else the emoji id.
+    pub name: String,
+    pub url: String,
+    /// False for the channel's own custom emoji — the ones worth showing first.
+    pub is_global: bool,
+    /// Visible but not composable by this account (members-only emoji). See the
+    /// note in `store_channel_emojis`: this is read defensively and stays false
+    /// when YouTube ships no such flag.
+    pub locked: bool,
+}
+
+/// Emoji sets, reachable by EITHER the video id or the channel identifier the
+/// caller happens to hold, in any casing.
+///
+/// This matters more than it looks. The set is discovered while resolving a
+/// VIDEO, but the frontend only ever knows the identifier it connected chat with
+/// (`@handle`, a `UC…` id, or a video id) — and `MainProviderChat` lowercases it
+/// on the way in. Keying by video id alone meant the lookup missed on two counts
+/// at once: wrong value AND wrong case. Every key is stored lowercased and every
+/// lookup lowercases, so any of those spellings finds the same set.
+static EMOJIS: OnceLock<std::sync::Mutex<HashMap<String, std::sync::Arc<Vec<YouTubeEmoji>>>>> =
+    OnceLock::new();
+/// Distinct SETS to keep. Aliases are cheap (they share one Arc), so this bounds
+/// the emoji data rather than the key count.
+const MAX_EMOJI_CHANNELS: usize = 12;
+
+/// Pull `liveChatRenderer.emojis` out of a live_chat page's `ytInitialData`.
+///
+/// YouTube publishes no emote-set endpoint, which is why this looked
+/// un-enumerable — but the live_chat page ships the whole list inline, because
+/// its own emoji picker has to render it. Each entry carries the image, the
+/// `:shortcut:` and whether it is a global (unicode) emoji or one of the
+/// channel's custom ones.
+fn store_channel_emojis(video_id: &str, identifier: &str, init: &Value) {
+    let Some(list) = find_emoji_array(init) else {
+        // Reaching here means the page WAS parsed but carried no emoji array under
+        // any name we recognise. Report the shape so this is one log line to
+        // diagnose instead of a silent empty picker.
+        log::warn!(
+            "[YouTube] no emoji array on the live_chat page for '{}' (identifier '{}'); \
+             emoji-ish keys anywhere in the payload: {:?}",
+            video_id,
+            identifier,
+            emoji_shaped_keys(init),
+        );
+        return;
+    };
+    let mut out: Vec<YouTubeEmoji> = Vec::new();
+    // Borrowed, not consumed: the diagnostic below re-reads the raw entries.
+    for e in &list {
+        let id = e.get("emojiId").and_then(|v| v.as_str()).unwrap_or("");
+        if id.is_empty() {
+            continue;
+        }
+        let url = e
+            .pointer("/image/thumbnails")
+            .and_then(|t| t.as_array())
+            .and_then(|a| a.last())
+            .and_then(|t| t.get("url"))
+            .and_then(|u| u.as_str())
+            .unwrap_or("");
+        if url.is_empty() {
+            continue;
+        }
+        let name = e
+            .pointer("/shortcuts/0")
+            .and_then(|s| s.as_str())
+            .unwrap_or(id)
+            .to_string();
+        // Custom channel emoji carry `isCustomEmoji: true`; unicode ones don't.
+        let is_global = !e
+            .get("isCustomEmoji")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        // Members-only emoji: visible in the picker, not composable unless you
+        // hold the membership. Read defensively across the spellings YouTube has
+        // used rather than betting on one, because the alternative to guessing
+        // wrong here is a picker that lies about what you can send.
+        //
+        // UNVERIFIED against a members-only channel as a non-member. If none of
+        // these keys is ever present, the set is simply entitlement-filtered
+        // upstream (a signed-out viewer already receives no array at all) and
+        // this stays false, which is honest either way. The debug line below
+        // reports the real key names so this can be settled without a code edit.
+        let locked = ["isLocked", "locked", "isMembersOnly"]
+            .iter()
+            .any(|k| e.get(*k).and_then(|v| v.as_bool()).unwrap_or(false));
+        out.push(YouTubeEmoji {
+            id: id.to_string(),
+            name,
+            url: url.to_string(),
+            is_global,
+            locked,
+        });
+    }
+    if out.is_empty() {
+        return;
+    }
+    // Every field name YouTube actually used on a custom entry, so the
+    // members-only question above can be settled from a log instead of a guess.
+    // Debug level: invisible at the default filter, one line under RUST_LOG=debug.
+    if log::log_enabled!(log::Level::Debug) {
+        let keys: std::collections::BTreeSet<&str> = list
+            .iter()
+            .filter(|e| {
+                e.get("isCustomEmoji")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            })
+            .filter_map(|e| e.as_object())
+            .flat_map(|o| o.keys().map(|k| k.as_str()))
+            .collect();
+        log::debug!("[YouTube] custom-emoji entry keys for '{}': {:?}", video_id, keys);
+    }
+    let custom = out.iter().filter(|e| !e.is_global).count();
+    log::info!(
+        "[YouTube] {} emoji for '{}' ({} custom to this channel)",
+        out.len(),
+        video_id,
+        custom
+    );
+    let shared = std::sync::Arc::new(out);
+    // Every spelling the frontend might ask with, all lowercased. `identifier` is
+    // what chat connected with; `video_id` is what this resolve produced. They are
+    // usually different strings, and the frontend only has the former.
+    let keys: Vec<String> = [video_id, identifier]
+        .iter()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    if let Ok(mut m) = EMOJIS
+        .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+        .lock()
+    {
+        // Count DISTINCT sets, not keys: aliases share one Arc, so a two-key entry
+        // must not count double against the cap.
+        let distinct = m
+            .values()
+            .map(|v| std::sync::Arc::as_ptr(v) as usize)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        if distinct >= MAX_EMOJI_CHANNELS && !keys.iter().any(|k| m.contains_key(k)) {
+            if let Some(victim) = m.values().next().cloned() {
+                let ptr = std::sync::Arc::as_ptr(&victim) as usize;
+                m.retain(|_, v| std::sync::Arc::as_ptr(v) as usize != ptr);
+            }
+        }
+        for k in keys {
+            m.insert(k, std::sync::Arc::clone(&shared));
+        }
+    }
+}
+
+/// Locate the emoji array wherever YouTube currently nests it. Searched rather
+/// than pointer-addressed because the path has moved between layouts and a fixed
+/// pointer would silently return nothing after the next reshuffle.
+fn find_emoji_array(root: &Value) -> Option<Vec<Value>> {
+    // Matched on SHAPE, not on the key name.
+    //
+    // The first version looked for a key literally called `emojis`, which is the
+    // same brittleness as a hardcoded pointer wearing a different hat: measured
+    // against a live payload it found nothing, because YouTube nests this under
+    // more than one name across surfaces. An array whose entries carry `emojiId`
+    // plus an image IS the emoji list regardless of what the field is called, so
+    // that is what this looks for. Largest array wins — a category shelf can hold
+    // a handful while the real set holds hundreds.
+    fn is_emoji_entry(v: &Value) -> bool {
+        v.get("emojiId").is_some() && (v.get("image").is_some() || v.get("shortcuts").is_some())
+    }
+
+    let mut best: Option<Vec<Value>> = None;
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        match node {
+            Value::Object(map) => {
+                for v in map.values() {
+                    if let Some(arr) = v.as_array() {
+                        if arr.len() > best.as_ref().map_or(0, |b| b.len())
+                            && arr.iter().any(is_emoji_entry)
+                        {
+                            best = Some(arr.clone());
+                        }
+                    }
+                    stack.push(v);
+                }
+            }
+            Value::Array(items) => stack.extend(items.iter()),
+            _ => {}
+        }
+    }
+    best
+}
+
+/// Field names anywhere in a payload that mention emoji, with what they hold.
+///
+/// If the shape match above ever misses, the next question is always "what is the
+/// field actually called this week" — so answer it in the same log line instead of
+/// costing another round trip.
+fn emoji_shaped_keys(root: &Value) -> Vec<String> {
+    let mut found: std::collections::BTreeSet<String> = Default::default();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        match node {
+            Value::Object(map) => {
+                for (k, v) in map {
+                    if k.to_lowercase().contains("emoji") {
+                        let what = match v {
+                            Value::Array(a) => format!("array[{}]", a.len()),
+                            Value::Object(o) => format!("object{{{}}}", o.len()),
+                            Value::String(_) => "string".to_string(),
+                            _ => "scalar".to_string(),
+                        };
+                        found.insert(format!("{}={}", k, what));
+                    }
+                    stack.push(v);
+                }
+            }
+            Value::Array(items) => stack.extend(items.iter()),
+            _ => {}
+        }
+    }
+    found.into_iter().take(20).collect()
+}
+
+/// The emoji set for a channel's live chat, custom ones first.
+pub fn channel_emojis(channel: &str) -> Vec<YouTubeEmoji> {
+    // Lowercased: the caller may hold a handle, a UC id or a video id, and
+    // `MainProviderChat` lowercases whatever it has before it gets here.
+    let key = channel.trim().to_lowercase();
+    let mut list = EMOJIS
+        .get()
+        .and_then(|m| m.lock().ok())
+        .and_then(|m| m.get(&key).map(|v| v.as_ref().clone()))
+        .unwrap_or_default();
+    // The channel's own emoji are the reason to open this tab; unicode ones are
+    // available from the emoji tab anyway.
+    list.sort_by_key(|e| e.is_global);
+    list
+}
+
+/// Forget a channel's emoji when its chat is gone.
+pub fn clear_channel_emojis(channel: &str) {
+    let key = channel.trim().to_lowercase();
+    if let Some(m) = EMOJIS.get() {
+        if let Ok(mut m) = m.lock() {
+            // Drop every alias of this set, not just the key we were handed.
+            if let Some(victim) = m.get(&key).cloned() {
+                let ptr = std::sync::Arc::as_ptr(&victim) as usize;
+                m.retain(|_, v| std::sync::Arc::as_ptr(v) as usize != ptr);
+            }
+        }
+    }
+}
+
+async fn fetch_live_continuation(
+    http: &reqwest::Client,
+    video_id: &str,
+    identifier: &str,
+) -> Option<String> {
     let url = format!("https://www.youtube.com/live_chat?v={}", video_id);
     // Retry: the live_chat page is the only reliable source of the full-Live-view
     // continuation (the watch page + the get_live_chat response only carry the
     // filtered Top view), so it's worth a few tries. Logs WHERE it fails so a Top-chat
     // fallback is diagnosable.
     for attempt in 0..3 {
-        match http.get(&url).send().await {
+        // Signed in where possible. The continuation comes back either way, but the
+        // channel's EMOJI SET does not: the picker is a chat-authoring feature, and
+        // a signed-out viewer cannot type, so YouTube has no reason to ship it. A
+        // live payload confirmed that — singular per-message `emoji` objects and the
+        // fountain entity, and no array at all. We already hold the session, so use
+        // it and let the page decide what we are entitled to see.
+        let mut req = http.get(&url);
+        if let Some(headers) = crate::services::youtube_auth_service::auth_headers() {
+            for (k, v) in headers {
+                req = req.header(k, v);
+            }
+        }
+        match req.send().await {
             Ok(resp) => {
                 let final_url = resp.url().as_str().to_string();
                 match resp.text().await {
@@ -934,6 +1480,11 @@ async fn fetch_live_continuation(http: &reqwest::Client, video_id: &str) -> Opti
                         if final_url.contains("consent.youtube.com") {
                             log::warn!("[YouTube] live_chat hit consent (attempt {})", attempt);
                         } else if let Some(init) = extract_json(&html, "ytInitialData") {
+                            // This page carries the channel's FULL emoji set, which
+                            // is what YouTube's own picker reads. Harvesting emoji
+                            // from messages only ever learns the ones somebody
+                            // happened to post; this is the actual list.
+                            store_channel_emojis(video_id, identifier, &init);
                             if let Some(c) = live_view_continuation(&init) {
                                 return Some(c);
                             }
@@ -1006,6 +1557,7 @@ fn extract_meta(player: Option<&Value>, initial: Option<&Value>, html: &str) -> 
         .and_then(|d| d.get("videoId"))
         .and_then(|v| v.as_str())
         .map(String::from);
+    let game_name = initial.and_then(find_game_name);
 
     YouTubeChannelMeta {
         user_id,
@@ -1014,12 +1566,56 @@ fn extract_meta(player: Option<&Value>, initial: Option<&Value>, html: &str) -> 
         start_time,
         title,
         profile_pic,
+        game_name,
         is_live,
         video_id,
         api_key: None,
         client_version: None,
         visitor_data: None,
     }
+}
+
+/// Best-effort: the game YouTube attached to this broadcast.
+///
+/// YouTube shows it as a "box art" rich-metadata card under the video. The shape
+/// is not contractual, so this scans for the renderer anywhere in the tree rather
+/// than walking a fixed path, and returns None when nothing matches — which is
+/// simply the previous behavior (empty category), so a shape change costs nothing
+/// beyond the log line.
+fn find_game_name(initial: &Value) -> Option<String> {
+    fn walk(v: &Value, depth: usize) -> Option<String> {
+        if depth > 12 {
+            return None;
+        }
+        match v {
+            Value::Object(map) => {
+                if let Some(rich) = map.get("richMetadataRenderer") {
+                    // Only the box-art variant is a game; the others are playlists,
+                    // articles and "watch on" promos.
+                    let is_box_art = rich
+                        .get("style")
+                        .and_then(|s| s.as_str())
+                        .is_some_and(|s| s.contains("BOX_ART"));
+                    if is_box_art {
+                        if let Some(t) = runs_text(rich.get("title")) {
+                            if !t.is_empty() {
+                                return Some(t);
+                            }
+                        }
+                    }
+                }
+                map.values().find_map(|child| walk(child, depth + 1))
+            }
+            Value::Array(items) => items.iter().find_map(|child| walk(child, depth + 1)),
+            _ => None,
+        }
+    }
+    let found = walk(initial, 0);
+    if found.is_none() {
+        // Expected often: YouTube attaches a game to only some broadcasts.
+        log::debug!("[YouTube] no box-art category on this broadcast");
+    }
+    found
 }
 
 /// Best-effort: the channel owner's avatar from the secondary-info owner renderer.
@@ -1043,6 +1639,49 @@ fn find_owner_avatar(initial: &Value) -> Option<String> {
 
 // --- The long-poll stream loop ----------------------------------------------
 
+/// Bounded FIFO set of message ids already published on a connection. `insert`
+/// reports whether the id is new, so a replayed backlog can be dropped without
+/// growing memory for the whole stream.
+struct SeenIds {
+    set: HashSet<String>,
+    order: VecDeque<String>,
+}
+
+impl SeenIds {
+    fn new() -> Self {
+        Self {
+            set: HashSet::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    /// True if this id hadn't been published yet (and records it).
+    fn insert(&mut self, id: &str) -> bool {
+        if !self.set.insert(id.to_string()) {
+            return false;
+        }
+        self.order.push_back(id.to_string());
+        while self.order.len() > SEEN_IDS_MAX {
+            if let Some(old) = self.order.pop_front() {
+                self.set.remove(&old);
+            }
+        }
+        true
+    }
+}
+
+/// The renderer id of an `addChatItemAction`, used to suppress a replayed backlog.
+/// Moderation actions carry no item id and are never suppressed.
+fn action_item_id(action: &Value) -> Option<&str> {
+    action
+        .pointer("/addChatItemAction/item")?
+        .as_object()?
+        .values()
+        .next()?
+        .get("id")?
+        .as_str()
+}
+
 /// Stream forever: run the live chat poll, and if it ends (stream over / token
 /// expired / error) wait then re-resolve, until the task is aborted on disconnect.
 async fn run_connection(
@@ -1053,6 +1692,12 @@ async fn run_connection(
 ) {
     let id_lc = identifier.to_lowercase();
     let mut next_ctx = Some(initial);
+    // Lives across re-resolves on purpose: each resolve restarts from a bootstrap
+    // continuation, which re-serves the backlog we already showed. Without this, a
+    // single blip repeats ~20 seconds of chat into the pane.
+    let mut seen = SeenIds::new();
+    // Consecutive failing rounds, driving the error backoff.
+    let mut fail_streak: u32 = 0;
     loop {
         let ctx = match next_ctx.take() {
             Some(c) => c,
@@ -1062,6 +1707,19 @@ async fn run_connection(
                     r.ctx
                 }
                 Err(e) => {
+                    // A bare VIDEO id addresses ONE broadcast. Once that broadcast is
+                    // over it never comes back, so re-resolving it is a loop that can
+                    // only fail, forever, logging every time. A @handle or UC id is
+                    // the opposite case: the channel can go live again, so those keep
+                    // retrying.
+                    if is_video_id(&identifier) {
+                        log::info!(
+                            "[YouTube] '{}' is a finished broadcast ({}); ending the chat connection",
+                            identifier,
+                            e
+                        );
+                        return;
+                    }
                     log::info!("[YouTube] re-resolve '{}' failed: {}", identifier, e);
                     tokio::time::sleep(Duration::from_secs(RE_RESOLVE_DELAY_SECS)).await;
                     continue;
@@ -1078,18 +1736,38 @@ async fn run_connection(
         // the conn map, so a later re-acquire finds it and never respawns the stream —
         // YouTube would go silently dead until an app restart. A caught panic recovers
         // like an error: log and re-resolve.
-        let outcome = AssertUnwindSafe(stream_live_chat(&http, ctx, &channel_key))
+        let round_started = std::time::Instant::now();
+        let outcome = AssertUnwindSafe(stream_live_chat(&http, ctx, &channel_key, &mut seen))
             .catch_unwind()
             .await;
+        // A round that ran for a while was genuinely streaming, so whatever ended
+        // it is a fresh problem and the backoff starts over.
+        if round_started.elapsed().as_secs() >= HEALTHY_ROUND_SECS {
+            fail_streak = 0;
+        }
         let delay = match outcome {
-            Ok(Ok(())) => RE_RESOLVE_DELAY_SECS,
+            Ok(Ok(())) => {
+                fail_streak = 0;
+                RE_RESOLVE_DELAY_SECS
+            }
             Ok(Err(e)) => {
-                log::warn!("[YouTube] '{}' stream error: {}", identifier, e);
-                3
+                let delay = error_backoff(&mut fail_streak);
+                log::warn!(
+                    "[YouTube] '{}' stream error: {} (retry in {}s)",
+                    identifier,
+                    e,
+                    delay
+                );
+                delay
             }
             Err(_) => {
-                log::error!("[YouTube] '{}' poll panicked; recovering", identifier);
-                3
+                let delay = error_backoff(&mut fail_streak);
+                log::error!(
+                    "[YouTube] '{}' poll panicked; recovering in {}s",
+                    identifier,
+                    delay
+                );
+                delay
             }
         };
         tokio::time::sleep(Duration::from_secs(delay)).await;
@@ -1102,6 +1780,7 @@ async fn stream_live_chat(
     http: &reqwest::Client,
     mut ctx: LiveContext,
     channel_key: &str,
+    seen: &mut SeenIds,
 ) -> Result<()> {
     let url = format!(
         "https://www.youtube.com/youtubei/v1/live_chat/get_live_chat?key={}&prettyPrint=false",
@@ -1111,6 +1790,8 @@ async fn stream_live_chat(
     // stream-end (we were receiving, then it stopped) from a bad/stale first response
     // (resolve handed us a dud continuation) so the latter re-resolves fast.
     let mut got_chat = false;
+    // The first response of THIS call is the join backlog (see BACKLOG_KEEP).
+    let mut first_batch = true;
     loop {
         let mut client = json!({
             "clientName": "WEB",
@@ -1123,9 +1804,25 @@ async fn stream_live_chat(
         }
         let body = json!({ "context": { "client": client }, "continuation": ctx.continuation });
 
+        // The poll window is measured from the request going OUT, so the round trip
+        // and the dispatch work come out of it rather than being added to it. The old
+        // pacing added its sleeps on top of the request, which stretched the cadence
+        // under load and pulled an even bigger batch on the next poll.
+        let started = tokio::time::Instant::now();
         let resp = http.post(&url).json(&body).send().await?;
         if !resp.status().is_success() {
-            return Err(anyhow!("get_live_chat HTTP {}", resp.status()));
+            let status = resp.status();
+            // A 400 means the token itself was refused, not that the network
+            // blipped: retrying the same continuation in a few seconds just
+            // repeats it. The usual cause is a broadcast that ended mid-poll, so
+            // this exits CLEANLY and lets the caller take the long re-resolve
+            // backoff (where the liveness check reports it properly) instead of
+            // hammering. Everything else stays a fast-retry error.
+            if status == reqwest::StatusCode::BAD_REQUEST {
+                log::info!("[YouTube] continuation refused (400); treating as stream end");
+                return Ok(());
+            }
+            return Err(anyhow!("get_live_chat HTTP {}", status));
         }
         let v: Value = resp.json().await?;
         let Some(lcc) = v.pointer("/continuationContents/liveChatContinuation") else {
@@ -1152,26 +1849,59 @@ async fn stream_live_chat(
         let (next, timeout_ms) = pick_next_continuation(cont);
         let Some(next) = next else { return Ok(()) };
 
-        // Pace the batch across the poll interval. YouTube hands us one big clump per
-        // poll (often a ~10s window), so dumping it all at once then freezing makes a
-        // fast chat lurch. Spreading the messages out, paired with the faster cadence
-        // from the clamp in pick_next_continuation, keeps it flowing like the site. The
-        // per-message gap is capped so a quiet chat still shows messages promptly, and
-        // any leftover time is slept so the overall cadence still honors timeout_ms.
-        match lcc.get("actions").and_then(|a| a.as_array()) {
-            Some(arr) if !arr.is_empty() => {
-                let gap = (timeout_ms / arr.len() as u64).min(150);
-                for action in arr {
-                    process_action(action, channel_key).await;
-                    tokio::time::sleep(Duration::from_millis(gap)).await;
-                }
-                let spent = gap.saturating_mul(arr.len() as u64);
-                if spent < timeout_ms {
-                    tokio::time::sleep(Duration::from_millis(timeout_ms - spent)).await;
-                }
+        let deadline = started + Duration::from_millis(timeout_ms);
+
+        // Drop anything already published on this connection. A re-resolve restarts
+        // from a bootstrap continuation, which re-serves the backlog we just showed;
+        // moderation actions carry no item id and always pass through.
+        let batch: Vec<&Value> = lcc
+            .get("actions")
+            .and_then(|a| a.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter(|a| action_item_id(a).map(|id| seen.insert(id)).unwrap_or(true))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if first_batch {
+            // Join backlog: deliver at once (the frontend coalesces it into a single
+            // render) and keep only the newest rows, so joining looks like arriving
+            // with context instead of a high-speed replay of the last ~20 seconds.
+            first_batch = false;
+            if batch.len() > BACKLOG_KEEP {
+                log::info!(
+                    "[YouTube] trimmed a {}-row join backlog to {}",
+                    batch.len(),
+                    BACKLOG_KEEP
+                );
             }
-            _ => tokio::time::sleep(Duration::from_millis(timeout_ms)).await,
+            for action in batch.iter().skip(batch.len().saturating_sub(BACKLOG_KEEP)) {
+                process_action(action, channel_key).await;
+            }
+        } else if !batch.is_empty() {
+            // Live: spread the batch across what's LEFT of the poll window, so a fast
+            // chat flows instead of arriving in one clump per poll then freezing. The
+            // gap is capped so a quiet chat still shows messages promptly.
+            let remaining = deadline
+                .saturating_duration_since(tokio::time::Instant::now())
+                .as_millis() as u64;
+            let gap = (remaining / batch.len() as u64).min(MAX_PACE_GAP_MS);
+            for action in &batch {
+                process_action(action, channel_key).await;
+                // Never pace past the window: if dispatch ran long, the rest of the
+                // batch goes out at once so the next poll still leaves on time.
+                if tokio::time::Instant::now() >= deadline {
+                    continue;
+                }
+                tokio::time::sleep(Duration::from_millis(gap)).await;
+            }
         }
+        // Whatever the branch did, the next poll goes out on the original cadence: a
+        // batch that overran its window costs nothing extra rather than compounding.
+        // (A past deadline means the request itself took longer than the window, so
+        // polls are already self-spaced by their own duration, so there's no busy loop.)
+        tokio::time::sleep_until(deadline).await;
         ctx.continuation = next;
     }
 }
@@ -1205,6 +1935,15 @@ fn pick_next_continuation(c: &Value) -> (Option<String>, u64) {
 }
 
 /// Dispatch one live-chat action: a new chat item, or a moderation removal.
+/// The top-level key names of a payload, for shape diagnostics that must not log
+/// user content.
+fn action_keys(action: &Value) -> Vec<String> {
+    action
+        .as_object()
+        .map(|o| o.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
 async fn process_action(action: &Value, channel_key: &str) {
     if let Some(item) = action.pointer("/addChatItemAction/item") {
         if let Some(msg) = parse_item(item, channel_key) {
@@ -1222,9 +1961,11 @@ async fn process_action(action: &Value, channel_key: &str) {
         .or_else(|| action.pointer("/removeChatItemAction/targetItemId"))
         .and_then(|x| x.as_str())
     {
-        // TEMP: dump the full action so we can see what extra detail YouTube carries
-        // (deletor name, deleted-state message, etc.) to enrich the mod log.
-        log::info!("[YouTube][moddump] delete: {}", action);
+        // Prints the payload's SHAPE, not its content: we still want to know what
+        // else YouTube carries here (deletor name, deleted-state message) to enrich
+        // the mod log, but dumping the whole action logged deleted message text on
+        // every deletion.
+        log::info!("[YouTube][moddump] delete keys: {:?}", action_keys(action));
         let frame = json!({
             "type": "CLEARMSG",
             "provider": "youtube",
@@ -1242,9 +1983,13 @@ async fn process_action(action: &Value, channel_key: &str) {
         .or_else(|| action.pointer("/removeChatItemByAuthorAction/externalChannelId"))
         .and_then(|x| x.as_str())
     {
-        // TEMP: dump the full action so we can see whether YouTube distinguishes a
-        // timeout from a permanent ban (and any duration / moderator detail) here.
-        log::info!("[YouTube][moddump] author-removal: {}", action);
+        // Shape only (see the delete arm). The open question here is whether
+        // YouTube distinguishes a timeout from a permanent ban at all; the key list
+        // answers that without logging anyone's messages.
+        log::info!(
+            "[YouTube][moddump] author-removal keys: {:?}",
+            action_keys(action)
+        );
         let frame = json!({
             "type": "CLEARCHAT",
             "provider": "youtube",
@@ -1252,7 +1997,102 @@ async fn process_action(action: &Value, channel_key: &str) {
             "target_user_id": uid,
         });
         publish_frame(frame.to_string()).await;
+        return;
     }
+    // A pinned message. Emits the same PINNED/UNPINNED frames Kick does, so the
+    // pinned banner the frontend already renders for every non-Twitch provider
+    // starts working with no frontend change.
+    if let Some(banner) =
+        action.pointer("/addBannerToLiveChatCommand/bannerRenderer/liveChatBannerRenderer")
+    {
+        if let Some(frame) = build_pinned_banner(banner, channel_key) {
+            publish_frame(frame).await;
+        } else {
+            // MEASURE (chat-parity): a banner we could not read. Banners also
+            // carry poll and product shapes, so this says which one arrived.
+            log::info!("[YouTube][discover] unparsed banner: {}", banner);
+        }
+        return;
+    }
+    if action.get("removeBannerForLiveChatCommand").is_some() {
+        let frame = json!({
+            "type": "UNPINNED",
+            "provider": "youtube",
+            "channel": channel_key,
+        });
+        publish_frame(frame.to_string()).await;
+        return;
+    }
+    // Anything else. Renderers already have a discovery log inside `parse_item`,
+    // but ACTIONS had none, which is exactly where the banner (pinned message)
+    // and poll payloads live — so an unhandled one looked identical to one that
+    // never arrived. Ticker items are skipped because they restate a chat item
+    // we already rendered and would flood the log on a busy channel.
+    if let Some(name) = action
+        .as_object()
+        .and_then(|o| o.keys().find(|k| k.as_str() != "clickTrackingParams"))
+    {
+        if name != "addLiveChatTickerItemAction" {
+            log::info!("[YouTube][discover] action {}: {}", name, action);
+        }
+    }
+}
+
+/// Build the shared PINNED frame from a `liveChatBannerRenderer`.
+///
+/// Every key here mirrors `kick.rs build_pinned` exactly, because the frontend
+/// consumes one pin shape for all providers; an invented variant would render
+/// blank fields rather than fail loudly. Returns None for banner kinds that are
+/// not a pinned chat message (polls, product shelves), so the caller can log them.
+fn build_pinned_banner(banner: &Value, channel_key: &str) -> Option<String> {
+    let msg = banner.pointer("/contents/liveChatTextMessageRenderer")?;
+    let message_id = msg.get("id").and_then(|x| x.as_str())?;
+    // parse_runs flattens emoji runs to their alt text, which is the YouTube
+    // equivalent of Kick's strip_emote_tokens for this plain-text surface.
+    let (_segments, plain) = parse_runs(msg.get("message"));
+    let sender_id = msg
+        .get("authorExternalChannelId")
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    let sender_avatar = msg
+        .pointer("/authorPhoto/thumbnails")
+        .and_then(|t| t.as_array())
+        .and_then(|a| a.last())
+        .and_then(|t| t.get("url"))
+        .and_then(|u| u.as_str())
+        .unwrap_or("");
+    // The banner header reads like "Pinned by <name>". It is localized, so the
+    // prefix is stripped only when it is actually there and the whole string is
+    // kept otherwise rather than mangled.
+    let pinned_by = runs_text(banner.pointer("/header/liveChatBannerHeaderRenderer/text"))
+        .map(|t| t.trim_start_matches("Pinned by ").trim().to_string())
+        .unwrap_or_default();
+    let pin = json!({
+        "id": message_id,
+        "message_id": message_id,
+        "type": "youtube",
+        "message_text": plain,
+        "sender_id": sender_id,
+        // Same color derivation the chat row uses, so the banner and the message
+        // agree on who this is.
+        "sender_color": color_for(sender_id),
+        "sender_name": msg
+            .pointer("/authorName/simpleText")
+            .and_then(|x| x.as_str())
+            .unwrap_or(""),
+        "sender_avatar": sender_avatar,
+        "sender_badges": [],
+        "pinned_by": pinned_by,
+        "pinned_by_id": "",
+        "pinned_by_avatar": "",
+        "started_at": msg
+            .get("timestampUsec")
+            .and_then(|x| x.as_str())
+            .map(usec_to_iso)
+            .unwrap_or_default(),
+    });
+    let out = json!({ "type": "PINNED", "provider": "youtube", "channel": channel_key, "pin": pin });
+    Some(out.to_string())
 }
 
 /// Decode one `addChatItemAction.item` renderer into a unified ChatMessage.
@@ -1275,17 +2115,112 @@ fn parse_item(item: &Value, channel_key: &str) -> Option<ChatMessage> {
     if let Some(r) = item.get("liveChatSponsorshipsGiftPurchaseAnnouncementRenderer") {
         return Some(parse_gift_membership(r, channel_key));
     }
+    // The RECEIVING half of a gift membership ("X was gifted a membership by Y").
+    // Twitch shows both the gifter and the recipient; without this YouTube only
+    // ever showed the gifter.
+    if let Some(r) = item.get("liveChatSponsorshipsGiftRedemptionAnnouncementRenderer") {
+        return Some(parse_gift_redemption(r, channel_key));
+    }
+    // MEASURE (chat-parity): the modern ViewModel shape for gift announcements.
+    // On channels that send it, the legacy renderer arm above never fires and the
+    // gift is dropped entirely. Logged in full until a real payload confirms where
+    // the author and count live, then routed like parse_gift_membership.
+    if let Some(vm) = item.get("giftMessageViewModel") {
+        log::info!("[YouTube][discover] giftMessageViewModel: {}", vm);
+        return None;
+    }
+    // Chat mode changes (slow mode on, members-only on, ...). Rendered as a
+    // system row rather than parsed into machine state: the strings are localized
+    // presentation text, so keyword-matching them would break on any non-English
+    // client locale, and a misread would wrongly lock the composer.
+    if let Some(r) = item.get("liveChatModeChangeMessageRenderer") {
+        return parse_mode_change(r, channel_key);
+    }
     // Engagement / system notices and anything else: ignore (logged for discovery).
     if let Some((name, _)) = item.as_object().and_then(|o| o.iter().next()) {
-        if name.as_str() != "liveChatViewerEngagementMessageRenderer" {
+        // Placeholders are deliberately dropped (a real item replaces them) and
+        // arrive constantly, so they are not news.
+        let known_noise = matches!(
+            name.as_str(),
+            "liveChatViewerEngagementMessageRenderer" | "liveChatPlaceholderItemRenderer"
+        );
+        if !known_noise {
             log::info!("[YouTube][discover] renderer {}", name);
         }
     }
     None
 }
 
+/// "X was gifted a membership by Y". Stamped `subgift`, the msg-id Twitch uses
+/// for a single gifted sub, so the existing subscription card renders it with no
+/// frontend change (the same trick the Kick sub path uses).
+fn parse_gift_redemption(r: &Value, channel_key: &str) -> ChatMessage {
+    let (segments, plain) = parse_runs(r.get("message"));
+    let display = r
+        .pointer("/authorName/simpleText")
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    // The runs read "was gifted a membership by <gifter>", so the recipient's
+    // name has to be prepended for the line to make sense on its own.
+    let system = if plain.is_empty() {
+        format!("{} was gifted a membership", display)
+    } else {
+        format!("{} {}", display, plain)
+    };
+    let (segments, plain) = if segments.is_empty() {
+        (
+            vec![MessageSegment::Text {
+                content: system.clone(),
+            }],
+            system.clone(),
+        )
+    } else {
+        (segments, plain)
+    };
+    base_message(
+        r,
+        channel_key,
+        segments,
+        plain,
+        None,
+        Some(("subgift", system)),
+    )
+}
+
+/// A chat mode change, as the yellow system row (`username === 'System'` is what
+/// the frontend keys on). Deliberately NOT a new msg-id: an id ChatMessage.tsx
+/// does not recognize falls through to a plain row.
+fn parse_mode_change(r: &Value, channel_key: &str) -> Option<ChatMessage> {
+    let text = runs_text(r.get("text")).unwrap_or_default();
+    let subtext = runs_text(r.get("subtext")).unwrap_or_default();
+    let line = match (text.is_empty(), subtext.is_empty()) {
+        (true, true) => return None,
+        (false, false) => format!("{} · {}", text, subtext),
+        (true, false) => subtext,
+        (false, true) => text,
+    };
+    let mut msg = base_message(
+        r,
+        channel_key,
+        vec![MessageSegment::Text {
+            content: line.clone(),
+        }],
+        line,
+        None,
+        None,
+    );
+    // These renderers carry no author, so the identity is stamped here.
+    msg.username = "System".to_string();
+    msg.display_name = "YouTube".to_string();
+    msg.badges = Vec::new();
+    msg.tags
+        .insert("display-name".to_string(), "YouTube".to_string());
+    Some(msg)
+}
+
 fn parse_text_message(r: &Value, channel_key: &str) -> ChatMessage {
     let (segments, plain) = parse_runs(r.get("message"));
+    let segments = bake_seventv(segments, channel_key);
     base_message(r, channel_key, segments, plain, None, None)
 }
 
@@ -1303,7 +2238,9 @@ fn parse_paid(r: &Value, channel_key: &str, kind: &str) -> ChatMessage {
         format!("Super Chat · {}", amount_str)
     };
     // The user's comment (empty for many super chats / all stickers).
-    let (mut segments, comment) = parse_runs(r.get("message"));
+    let (segments, comment) = parse_runs(r.get("message"));
+    // A Super Chat comment is user-authored text like any other message.
+    let mut segments = bake_seventv(segments, channel_key);
     // Prepend the donation label so the line reads e.g. "Super Chat · $5.00  <msg>".
     let lead = format!("{}  ", label);
     segments.insert(0, MessageSegment::Text { content: lead.clone() });
@@ -1318,6 +2255,13 @@ fn parse_paid(r: &Value, channel_key: &str, kind: &str) -> ChatMessage {
     let mut msg = base_message(r, channel_key, segments, plain, color, Some((kind, system)));
     // Activity-feed fields: the amount (currency + number) + the raw comment, so the
     // feed shows the value pill + the message (the producer reads these `sc-*` tags).
+    // YouTube's OWN formatted amount ("$2.00", "₹100", "€2,00"). The numeric
+    // tags below are for conversion/sorting; this one is what a card should show,
+    // because reconstructing it from a bare float loses the currency's own
+    // conventions (trailing zeros, comma decimals, symbol placement).
+    if !amount_str.is_empty() {
+        msg.tags.insert("sc-display".to_string(), amount_str.to_string());
+    }
     if !currency.is_empty() {
         msg.tags.insert("sc-currency".to_string(), currency);
     }
@@ -1354,8 +2298,13 @@ fn parse_money(s: &str) -> (String, Option<f64>) {
 }
 
 fn parse_membership(r: &Value, channel_key: &str) -> ChatMessage {
+    // `headerSubtext` is a NEW member ("Welcome to <tier>!"); `headerPrimaryText`
+    // is a milestone ("Member for 6 months"). Which key is present is the only
+    // signal distinguishing them, and the milestone tag below is what lets the
+    // activity feed tell them apart without a msg-id ChatMessage.tsx cannot render.
+    let milestone = runs_text(r.get("headerPrimaryText"));
     let header = runs_text(r.get("headerSubtext"))
-        .or_else(|| runs_text(r.get("headerPrimaryText")))
+        .or_else(|| milestone.clone())
         .unwrap_or_else(|| "New member".to_string());
     let (segments, plain) = parse_runs(r.get("message"));
     let display = r
@@ -1368,7 +2317,13 @@ fn parse_membership(r: &Value, channel_key: &str) -> ChatMessage {
     } else {
         (segments, plain)
     };
-    base_message(r, channel_key, segments, plain, None, Some(("membership", system)))
+    let mut msg = base_message(r, channel_key, segments, plain, None, Some(("membership", system)));
+    // Keeps the recognized `membership` msg-id (so the member card still renders)
+    // while telling the activity feed this is a tenure milestone, not a new member.
+    if let Some(m) = milestone {
+        msg.tags.insert("msg-param-milestone".to_string(), m);
+    }
+    msg
 }
 
 fn parse_gift_membership(r: &Value, channel_key: &str) -> ChatMessage {
@@ -1504,6 +2459,60 @@ fn base_message(
 /// Parse a renderer's `message.runs[]` into text + emoji image segments. Custom
 /// and standard emoji both carry a thumbnail, so they're baked as image segments
 /// (the renderer needs no YouTube emote context, mirroring Kick).
+/// Swap words that name one of the channel's 7TV emotes for emote segments.
+///
+/// Runs over the segments `parse_runs` produced rather than inside it, because
+/// the run parser has no channel context and is shared by every renderer. Only
+/// Text segments are scanned; YouTube's own emoji are already Emote segments and
+/// must not be re-examined.
+///
+/// The frontend renders provider segments verbatim, so this substitution has to
+/// happen here - there is no name-to-emote pass on that side to fall back on.
+fn bake_seventv(segments: Vec<MessageSegment>, channel_key: &str) -> Vec<MessageSegment> {
+    let identifier = key::parse_key(channel_key).channel;
+    // Overwhelmingly the common case: no 7TV set for this channel, so skip the
+    // per-word scan entirely rather than taking the store lock once per word.
+    if !youtube_emotes::has_emotes(&identifier) {
+        return segments;
+    }
+    let mut out: Vec<MessageSegment> = Vec::with_capacity(segments.len());
+    for seg in segments {
+        let MessageSegment::Text { content } = &seg else {
+            out.push(seg);
+            continue;
+        };
+        // Split on spaces, keeping them, so the message reads exactly as sent.
+        let mut buf = String::new();
+        for (i, word) in content.split(' ').enumerate() {
+            if i > 0 {
+                buf.push(' ');
+            }
+            match youtube_emotes::lookup(&identifier, word) {
+                Some(e) => {
+                    if !buf.is_empty() {
+                        out.push(MessageSegment::Text {
+                            content: std::mem::take(&mut buf),
+                        });
+                    }
+                    out.push(MessageSegment::Emote {
+                        content: word.to_string(),
+                        emote_id: Some(e.id),
+                        emote_url: e.url,
+                        is_zero_width: Some(e.zero_width),
+                        modifier_flags: None,
+                        is_personal: None,
+                    });
+                }
+                None => buf.push_str(word),
+            }
+        }
+        if !buf.is_empty() {
+            out.push(MessageSegment::Text { content: buf });
+        }
+    }
+    out
+}
+
 fn parse_runs(message: Option<&Value>) -> (Vec<MessageSegment>, String) {
     let mut segments = Vec::new();
     let mut plain = String::new();
@@ -1543,6 +2552,7 @@ fn parse_runs(message: Option<&Value>) -> (Vec<MessageSegment>, String) {
                     emote_url: url.to_string(),
                     is_zero_width: None,
                     modifier_flags: None,
+                    is_personal: None,
                 });
             }
         }
@@ -1622,7 +2632,7 @@ fn member_months(tooltip: &str) -> String {
 /// Read a JSON string value that immediately follows a `"key":"` marker, up to the
 /// next quote. Used for flat ytcfg values (API key, client version, visitorData)
 /// whose values contain no embedded quotes.
-fn json_str_after(html: &str, marker: &str) -> Option<String> {
+pub(crate) fn json_str_after(html: &str, marker: &str) -> Option<String> {
     let idx = html.find(marker)?;
     let after = &html[idx + marker.len()..];
     let end = after.find('"')?;
@@ -1631,14 +2641,14 @@ fn json_str_after(html: &str, marker: &str) -> Option<String> {
 
 /// Decode the handful of JSON escapes (`=`, `\/`) that can appear in a raw
 /// scraped value like visitorData.
-fn decode_json_escapes(s: &str) -> String {
+pub(crate) fn decode_json_escapes(s: &str) -> String {
     serde_json::from_str::<String>(&format!("\"{}\"", s)).unwrap_or_else(|_| s.to_string())
 }
 
 /// Extract a brace-balanced JSON object that follows a marker (`ytInitialData`,
 /// `ytInitialPlayerResponse`), respecting strings/escapes so nested braces don't
 /// trip it up.
-fn extract_json(html: &str, marker: &str) -> Option<Value> {
+pub(crate) fn extract_json(html: &str, marker: &str) -> Option<Value> {
     let idx = html.find(marker)?;
     let after = &html[idx + marker.len()..];
     let start = after.find('{')?;
@@ -1722,6 +2732,63 @@ fn color_for(channel_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seen_ids_suppress_a_replayed_backlog() {
+        let mut seen = SeenIds::new();
+        assert!(seen.insert("a"));
+        assert!(seen.insert("b"));
+        // A re-resolve re-serves the same backlog: nothing new to publish.
+        assert!(!seen.insert("a"));
+        assert!(!seen.insert("b"));
+        // Chat that arrived during the gap still gets through.
+        assert!(seen.insert("c"));
+    }
+
+    #[test]
+    fn seen_ids_stay_bounded() {
+        let mut seen = SeenIds::new();
+        for i in 0..(SEEN_IDS_MAX + 50) {
+            assert!(seen.insert(&i.to_string()));
+        }
+        assert_eq!(seen.set.len(), SEEN_IDS_MAX);
+        assert_eq!(seen.order.len(), SEEN_IDS_MAX);
+        // The oldest ids aged out; the recent tail (what a fresh backlog overlaps) is kept.
+        assert!(seen.insert("0"));
+        assert!(!seen.insert(&(SEEN_IDS_MAX + 49).to_string()));
+    }
+
+    #[test]
+    fn reads_the_item_id_off_any_renderer() {
+        let add = json!({ "addChatItemAction": { "item": {
+            "liveChatPaidMessageRenderer": { "id": "sc-1" }
+        } } });
+        assert_eq!(action_item_id(&add), Some("sc-1"));
+        // Moderation actions carry no item id, so they're never suppressed.
+        let del = json!({ "markChatItemAsDeletedAction": { "targetItemId": "x" } });
+        assert_eq!(action_item_id(&del), None);
+    }
+
+    #[test]
+    fn surfaces_youtubes_own_chat_unavailable_reason() {
+        // Captured live from a 24/7 stream that PLAYS fine but has chat switched off.
+        let initial = json!({ "contents": { "twoColumnWatchNextResults": {
+            "conversationBar": { "conversationBarRenderer": {
+                "availabilityMessage": { "messageRenderer": { "text": { "runs": [
+                    { "text": "Chat is disabled for this live stream." }
+                ] } } }
+            } }
+        } } });
+        assert_eq!(
+            conversation_bar_message(Some(&initial)).as_deref(),
+            Some("Chat is disabled for this live stream."),
+        );
+        // A live watch page carries a renderer instead, and no message to report.
+        let live = json!({ "contents": { "twoColumnWatchNextResults": {
+            "conversationBar": { "liveChatRenderer": { "continuations": [] } }
+        } } });
+        assert_eq!(conversation_bar_message(Some(&live)), None);
+    }
 
     #[test]
     fn classifies_identifiers() {
@@ -1848,5 +2915,240 @@ mod tests {
             lrc,
             "0ofMyAMxGihDZ3dxQ2dvRFltRnlFZ05tYjI4YUMrcW8zYmtCQlFvRFptOXZJQUU9MAGCAQIIBA%3D%3D"
         );
+    }
+}
+
+#[cfg(test)]
+mod emoji_key_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn payload() -> Value {
+        json!({
+            "contents": { "liveChatRenderer": { "emojis": [
+                {
+                    "emojiId": "UCabc/xyz",
+                    "shortcuts": [":hype:"],
+                    "isCustomEmoji": true,
+                    "image": { "thumbnails": [{ "url": "https://x/small.png" }, { "url": "https://x/big.png" }] }
+                },
+                {
+                    "emojiId": "\u{1F600}",
+                    "shortcuts": [":grinning:"],
+                    "image": { "thumbnails": [{ "url": "https://x/grin.png" }] }
+                }
+            ]}}
+        })
+    }
+
+    /// The whole point of the alias map: chat connects with an identifier, the
+    /// emoji are found while resolving a VIDEO, and the frontend lowercases
+    /// whatever it holds. Every one of those spellings must reach the same set.
+    #[test]
+    fn reachable_by_video_id_identifier_and_any_casing() {
+        store_channel_emojis("AGr94tpNVkw", "UCsomeChannelId", &payload());
+
+        for key in [
+            "AGr94tpNVkw",     // the video id, as resolved
+            "agr94tpnvkw",     // ...lowercased, which is what the frontend sends
+            "UCsomeChannelId", // the identifier chat connected with
+            "ucsomechannelid", // ...lowercased
+        ] {
+            assert_eq!(channel_emojis(key).len(), 2, "lookup failed for '{}'", key);
+        }
+        assert!(channel_emojis("UCsomethingElse").is_empty());
+    }
+
+    #[test]
+    fn custom_emoji_come_first_and_take_the_largest_image() {
+        store_channel_emojis("vid2", "chan2", &payload());
+        let list = channel_emojis("vid2");
+        assert!(!list[0].is_global, "the channel's own emoji should lead");
+        assert_eq!(list[0].name, ":hype:");
+        assert_eq!(list[0].url, "https://x/big.png");
+        assert!(list[1].is_global);
+    }
+
+    /// Clearing one alias must drop the whole set, not orphan its other names.
+    #[test]
+    fn clearing_any_alias_drops_every_alias() {
+        store_channel_emojis("vid3", "UCchan3", &payload());
+        clear_channel_emojis("vid3");
+        assert!(channel_emojis("vid3").is_empty());
+        assert!(channel_emojis("UCchan3").is_empty(), "alias was orphaned");
+    }
+}
+
+#[cfg(test)]
+mod emoji_shape_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The live payload had no key called `emojis` — matching on the NAME is what
+    /// made the picker empty. Matching on the entry shape finds it wherever it is.
+    #[test]
+    fn finds_emoji_entries_under_an_unexpected_key() {
+        let v = json!({
+            "contents": { "liveChatRenderer": { "emojiPicker": { "someRenamedField": [
+                { "emojiId": "a/b", "shortcuts": [":x:"], "isCustomEmoji": true,
+                  "image": { "thumbnails": [{ "url": "https://x/1.png" }] } }
+            ]}}}
+        });
+        let found = find_emoji_array(&v).expect("shape match should find a renamed field");
+        assert_eq!(found.len(), 1);
+    }
+
+    /// A small category shelf must not win over the real set.
+    #[test]
+    fn prefers_the_largest_emoji_array() {
+        let entry = |id: &str| json!({
+            "emojiId": id, "shortcuts": [format!(":{}:", id)],
+            "image": { "thumbnails": [{ "url": "https://x/i.png" }] }
+        });
+        let v = json!({
+            "shelf": { "picks": [entry("a")] },
+            "real":  { "list":  [entry("a"), entry("b"), entry("c")] }
+        });
+        assert_eq!(find_emoji_array(&v).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn ignores_arrays_that_merely_sit_near_the_word_emoji() {
+        let v = json!({ "emojiPickerRenderer": { "categories": [{ "title": "Faces" }] } });
+        assert!(find_emoji_array(&v).is_none());
+    }
+}
+
+#[cfg(test)]
+mod parity_tests {
+    use super::*;
+
+    // A pinned banner as YouTube nests it: the pinned chat message sits under
+    // contents, with the "Pinned by X" header beside it.
+    fn banner() -> Value {
+        serde_json::json!({
+            "header": { "liveChatBannerHeaderRenderer": {
+                "text": { "runs": [{ "text": "Pinned by Streamer" }] }
+            }},
+            "contents": { "liveChatTextMessageRenderer": {
+                "id": "MSG123",
+                "authorExternalChannelId": "UCabc",
+                "authorName": { "simpleText": "Alice" },
+                "authorPhoto": { "thumbnails": [
+                    { "url": "https://small.example/a.jpg" },
+                    { "url": "https://large.example/a.jpg" }
+                ]},
+                "timestampUsec": "1700000000000000",
+                "message": { "runs": [{ "text": "read the rules" }] }
+            }}
+        })
+    }
+
+    #[test]
+    fn pinned_banner_matches_the_shared_pin_shape() {
+        let raw = build_pinned_banner(&banner(), "youtube:chan").expect("banner should parse");
+        let out: Value = serde_json::from_str(&raw).unwrap();
+
+        assert_eq!(out["type"], "PINNED");
+        assert_eq!(out["provider"], "youtube");
+        assert_eq!(out["channel"], "youtube:chan");
+
+        // Every key the frontend's pin consumer reads must be present; a missing
+        // one renders as a blank field rather than failing, so assert the set.
+        let pin = &out["pin"];
+        for key in [
+            "id", "message_id", "type", "message_text", "sender_id", "sender_name",
+            "sender_color", "sender_avatar", "sender_badges", "pinned_by",
+            "pinned_by_id", "pinned_by_avatar", "started_at",
+        ] {
+            assert!(pin.get(key).is_some(), "pin is missing `{key}`");
+        }
+        assert_eq!(pin["message_id"], "MSG123");
+        assert_eq!(pin["message_text"], "read the rules");
+        assert_eq!(pin["sender_name"], "Alice");
+        assert_eq!(pin["pinned_by"], "Streamer");
+        // Largest thumbnail wins, matching the inline-avatar rule.
+        assert_eq!(pin["sender_avatar"], "https://large.example/a.jpg");
+        // The banner and the chat row must agree on the author's color.
+        assert_eq!(pin["sender_color"], color_for("UCabc"));
+    }
+
+    #[test]
+    fn a_non_message_banner_is_rejected_rather_than_half_parsed() {
+        // Poll and product banners share the command but carry different contents.
+        let poll = serde_json::json!({
+            "contents": { "liveChatPollRenderer": { "choices": [] } }
+        });
+        assert!(build_pinned_banner(&poll, "youtube:chan").is_none());
+    }
+
+    #[test]
+    fn gift_redemption_rides_the_subgift_card() {
+        let r = serde_json::json!({
+            "id": "GIFT1",
+            "authorExternalChannelId": "UCrecipient",
+            "authorName": { "simpleText": "Bob" },
+            "timestampUsec": "1700000000000000",
+            "message": { "runs": [{ "text": "was gifted a membership by Carol" }] }
+        });
+        let msg = parse_gift_redemption(&r, "youtube:chan");
+        // `subgift` is a msg-id ChatMessage.tsx already decorates; an unrecognized
+        // one would silently fall through to a plain row.
+        assert_eq!(msg.tags.get("msg-id").map(String::as_str), Some("subgift"));
+        let system = msg.tags.get("system-msg").expect("system message");
+        assert!(system.starts_with("Bob "), "recipient should lead: {system}");
+        assert!(system.contains("Carol"), "gifter should survive: {system}");
+    }
+
+    #[test]
+    fn mode_change_renders_as_the_system_row() {
+        let r = serde_json::json!({
+            "id": "MODE1",
+            "timestampUsec": "1700000000000000",
+            "text": { "runs": [{ "text": "Slow mode is on" }] },
+            "subtext": { "runs": [{ "text": "Send a message every 10 seconds" }] }
+        });
+        let msg = parse_mode_change(&r, "youtube:chan").expect("should parse");
+        // The frontend's yellow system card keys on exactly this username.
+        assert_eq!(msg.username, "System");
+        assert!(msg.content.contains("Slow mode is on"));
+        assert!(msg.content.contains("every 10 seconds"));
+        // No msg-id: an unrecognized event id would render plain instead.
+        assert!(msg.tags.get("msg-id").is_none());
+    }
+
+    #[test]
+    fn mode_change_without_text_is_dropped() {
+        let r = serde_json::json!({ "id": "MODE2" });
+        assert!(parse_mode_change(&r, "youtube:chan").is_none());
+    }
+
+    #[test]
+    fn membership_milestone_is_tagged_but_keeps_the_membership_id() {
+        let milestone = serde_json::json!({
+            "id": "MEM1",
+            "authorExternalChannelId": "UCm",
+            "authorName": { "simpleText": "Dana" },
+            "timestampUsec": "1700000000000000",
+            "headerPrimaryText": { "runs": [{ "text": "Member for 6 months" }] }
+        });
+        let msg = parse_membership(&milestone, "youtube:chan");
+        assert_eq!(msg.tags.get("msg-id").map(String::as_str), Some("membership"));
+        assert_eq!(
+            msg.tags.get("msg-param-milestone").map(String::as_str),
+            Some("Member for 6 months")
+        );
+
+        // A brand-new member carries headerSubtext and must NOT be tagged.
+        let new_member = serde_json::json!({
+            "id": "MEM2",
+            "authorExternalChannelId": "UCn",
+            "authorName": { "simpleText": "Eve" },
+            "timestampUsec": "1700000000000000",
+            "headerSubtext": { "runs": [{ "text": "Welcome to Tier 1!" }] }
+        });
+        let msg = parse_membership(&new_member, "youtube:chan");
+        assert_eq!(msg.tags.get("msg-id").map(String::as_str), Some("membership"));
+        assert!(msg.tags.get("msg-param-milestone").is_none());
     }
 }

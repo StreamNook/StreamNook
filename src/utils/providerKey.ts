@@ -1,13 +1,24 @@
 import type { ProviderId } from '../types/providers';
-import { DEFAULT_PROVIDER, isProviderId } from '../types/providers';
+import { DEFAULT_PROVIDER, isProviderId } from '../types/providers.ts';
 
 // Composite source key "<provider>:<channel>" used across the chat store, the
 // activity store, and the add-source flow. Mirrors the Rust codec in
 // services/providers/key.rs. A bare key (no recognised provider prefix) is
 // treated as a legacy Twitch login so older persisted state keeps working.
 
+/** Platforms whose channel identifier is CASE-SENSITIVE and must never be
+ *  normalised. A YouTube id addresses a specific video — `AGr94tpNVkw` and
+ *  `agr94tpnvkw` are different things, and lowercasing one yields "This video is
+ *  unavailable". Twitch logins and Kick slugs are case-insensitive, so those keep
+ *  being lowercased and their keys stay byte-identical to before. */
+const CASE_SENSITIVE: ProviderId[] = ['youtube'];
+
+export function normalizeChannel(provider: ProviderId, channel: string): string {
+  return CASE_SENSITIVE.includes(provider) ? channel : channel.toLowerCase();
+}
+
 export function makeKey(provider: ProviderId, channel: string): string {
-  return `${provider}:${channel.toLowerCase()}`;
+  return `${provider}:${normalizeChannel(provider, channel)}`;
 }
 
 export interface ParsedKey {

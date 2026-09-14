@@ -1,26 +1,35 @@
 import React from 'react';
 import { Plus, Users } from 'lucide-react';
 import { ChannelItem, DEFAULT_AVATAR } from './channelSearch';
+import { ProviderLogo } from '../ProviderLogo';
+import { Tooltip } from '../ui/Tooltip';
 
-/** One row in a channel smart-list. Renders both live follows and Twitch search
- *  hits identically, with an optional trailing slot for a non-add affordance
- *  (e.g. a check when the channel is already in the preset). */
+/** One row in a channel smart-list. Renders live follows and search hits from
+ *  every platform identically, with an optional trailing slot for a non-add
+ *  affordance (e.g. a check when the channel is already in the preset).
+ *
+ *  A row can be disabled for two different reasons and they read differently to
+ *  the user: `disabled` alone is transient (an add is already in flight), while
+ *  `reason` means this channel can never be added here and says why on hover. */
 export const ChannelResultRow: React.FC<{
   item: ChannelItem;
   index: number;
   highlighted: boolean;
   disabled?: boolean;
+  /** Why this row cannot be picked. Shown on hover; also disables the row. */
+  reason?: string | null;
   /** Override the trailing affordance (defaults to a + add indicator). */
   trailing?: React.ReactNode;
   onSelect: (item: ChannelItem) => void;
   onHover: (index: number) => void;
-}> = ({ item, index, highlighted, disabled = false, trailing, onSelect, onHover }) => {
-  return (
+}> = ({ item, index, highlighted, disabled = false, reason, trailing, onSelect, onHover }) => {
+  const blocked = !!reason;
+  const row = (
     <button
       data-idx={index}
       onClick={() => onSelect(item)}
       onMouseEnter={() => onHover(index)}
-      disabled={disabled}
+      disabled={disabled || blocked}
       className={`w-full px-2.5 py-2 text-left rounded-lg transition-all duration-150 flex items-center gap-3 group disabled:opacity-40 ${
         highlighted ? 'bg-white/[0.06]' : 'hover:bg-white/[0.06]'
       }`}
@@ -57,21 +66,27 @@ export const ChannelResultRow: React.FC<{
       {/* Info */}
       <div className="flex-1 min-w-0">
         <span
-          className={`block text-[13px] font-semibold truncate leading-tight transition-colors ${
+          className={`flex items-center gap-1.5 text-[13px] font-semibold leading-tight transition-colors ${
             highlighted ? 'text-accent' : 'text-textPrimary group-hover:text-accent'
           }`}
         >
-          {item.displayName}
+          {/* Twitch is the unmarked default, same as everywhere else in the app:
+              a mark on every row would be noise rather than information. */}
+          {item.provider && item.provider !== 'twitch' && (
+            <ProviderLogo provider={item.provider} size={11} className="shrink-0" />
+          )}
+          <span className="truncate">{item.displayName}</span>
         </span>
         <span className="block text-[11px] text-textMuted truncate mt-0.5 leading-tight">
           {item.isLive && item.gameName ? item.gameName : item.isLive ? 'Live' : item.login}
         </span>
       </div>
 
-      {/* Trailing affordance, defaults to an add indicator */}
+      {/* Trailing affordance, defaults to an add indicator. A blocked row shows
+          nothing here: an add button that cannot add is worse than no button. */}
       {trailing !== undefined ? (
         trailing
-      ) : (
+      ) : blocked ? null : (
         <div
           className={`w-6 h-6 rounded-full flex items-center justify-center transition-all duration-200 shrink-0 ${
             highlighted ? 'bg-accent/15' : 'bg-transparent group-hover:bg-accent/15'
@@ -84,5 +99,15 @@ export const ChannelResultRow: React.FC<{
         </div>
       )}
     </button>
+  );
+
+  // A disabled button emits no pointer events, so the tooltip has to wrap it
+  // rather than live on it, or the reason can never be read.
+  return blocked ? (
+    <Tooltip content={reason} side="right">
+      <div className="w-full">{row}</div>
+    </Tooltip>
+  ) : (
+    row
   );
 };

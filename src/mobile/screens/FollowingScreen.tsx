@@ -1,5 +1,6 @@
 // Followed live channels: card feed or compact list, user's choice persisted.
 import React, { useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { SettleIn, useSettleIn } from '../ui/SettleIn';
 import { ListBullets, SquaresFour } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
@@ -30,7 +31,6 @@ export const FollowingScreen: React.FC = () => {
   const loadFollowedStreams = useAppStore((s) => s.loadFollowedStreams);
   const startStream = useAppStore((s) => s.startStream);
   const activeHypeTrainChannels = useAppStore((s) => s.activeHypeTrainChannels);
-  const refreshHypeTrainStatuses = useAppStore((s) => s.refreshHypeTrainStatuses);
   const watchStreaks = useAppStore((s) => s.watchStreaks);
   const [firstLoad, setFirstLoad] = useState(followedStreams.length === 0);
   // View choice persists: if a user can choose it, it survives restart.
@@ -55,9 +55,10 @@ export const FollowingScreen: React.FC = () => {
         markFollowingFresh();
         setFirstLoad(false);
       }
-      // Hype train badges ride a separate status poll, same as desktop Home.
-      const ids = useAppStore.getState().followedStreams.map((s) => s.user_id);
-      if (ids.length) void refreshHypeTrainStatuses(ids);
+      // Hype train badges are a section of the Rust-owned Home snapshot; the
+      // followed list is polled for them on its own cadence, this just asks for
+      // a fresh pass now that the list is on screen (floored at 15 s in Rust).
+      void invoke('refresh_home_section', { section: 'hype_trains' }).catch(() => {});
     };
     void boot();
     // Loads once on mount. Staying fresh after that is the resume handler's job
@@ -72,8 +73,7 @@ export const FollowingScreen: React.FC = () => {
     // Shares the throttle with the resume path, so pulling to refresh and then
     // switching away and back does not fetch the same thing twice.
     markFollowingFresh();
-    const ids = useAppStore.getState().followedStreams.map((s) => s.user_id);
-    if (ids.length) await refreshHypeTrainStatuses(ids);
+    await invoke('refresh_home_section', { section: 'hype_trains' }).catch(() => {});
   };
 
   const onPress = (stream: TwitchStream) => {

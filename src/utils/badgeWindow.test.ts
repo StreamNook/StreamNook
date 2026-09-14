@@ -1,10 +1,10 @@
-// Run with: node --test src/utils/badgeWindow.test.ts
+// Run with: npm test
 // Node strips the types natively, so no test runner is needed.
 //
 // Each case is a real window shape seen in production. The clock is fixed so
 // classification is asserted against a known instant, not against today.
 
-import test from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
 
 import {

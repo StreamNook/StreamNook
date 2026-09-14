@@ -62,6 +62,14 @@ declare module 'plyr' {
     };
     pip: boolean;
     speed: number;
+    // Plyr's own DOM handles. Only `container` is typed precisely — it's the
+    // element Plyr fullscreens (position: fixed, z-index 10000000), so overlays
+    // that must stay visible in fullscreen are portaled into it rather than
+    // mounted as siblings of the player.
+    elements: {
+      container: HTMLElement | null;
+      [key: string]: unknown;
+    };
 
     // Methods
     play(): Promise<void>;

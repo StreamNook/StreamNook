@@ -62,7 +62,7 @@ const AboutWidget = ({ onClose }: AboutWidgetProps) => {
           {/* Description */}
           <div className="text-center">
             <p className="leading-relaxed text-textPrimary">
-              A modern Twitch streaming companion for an enhanced viewing experience.
+              A modern streaming companion for Twitch, Kick, and YouTube.
             </p>
           </div>
 

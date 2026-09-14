@@ -370,7 +370,7 @@ interface ToastItemProps {
 const ToastItem = ({ toast, removeToast, getToastIcon, getToastColor, enter }: ToastItemProps) => {
   const [isPaused, setIsPaused] = useState(false);
   const remainingTimeRef = useRef(toast.duration);
-  const startTimeRef = useRef(Date.now());
+  const startTimeRef = useRef(0);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isClickable = toast.type === 'live' && toast.action;

@@ -1,10 +1,10 @@
 use crate::services::ad_detect;
 use crate::services::ll_origin::{
-    self, empty_cors, media_response, opt_raw_query, parse_directive, parse_part_path,
+    self, arc_bytes, empty_cors, media_response, opt_raw_query, parse_directive, parse_part_path,
     playlist_response, LlOrigin,
 };
 use anyhow::Result;
-use log::{debug, info};
+use log::{debug, info, warn};
 use once_cell::sync::Lazy;
 use rand::Rng;
 use reqwest::Client;
@@ -13,6 +13,23 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use warp::Filter;
+
+/// What kind of upstream a tile is serving. Twitch gets SSAI ad detection,
+/// segment projection and the LL-HLS origin; every other platform gets the
+/// plain generic path. Mirrors the solo relay's `UpstreamProfile`, which is
+/// process-global and therefore unusable here: tiles need this per instance,
+/// since one grid can hold a Twitch tile and a Kick tile at once.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TileProfile {
+    Twitch,
+    GenericHls,
+}
+
+/// Re-signs this tile's manifest url. Same shape as the solo relay's
+/// `Refresher`, but held PER TILE: the solo one is a process-global static, so a
+/// grid with two Kick tiles would have them overwrite each other's re-signer.
+pub type TileRefresher =
+    Arc<dyn Fn() -> futures::future::BoxFuture<'static, Option<String>> + Send + Sync>;
 
 /// Represents a single stream proxy instance
 struct StreamInstance {
@@ -25,6 +42,15 @@ struct StreamInstance {
     /// tile's channel is a low-latency broadcast; inactive tiles use the plain
     /// playlist proxy below.
     ll_origin: Arc<LlOrigin>,
+    /// Which upstream treatment this tile gets. See `TileProfile`.
+    profile: TileProfile,
+    /// Re-signs the upstream url when it starts being refused. Kick's master url
+    /// carries a JWT that expires mid-session; without this a tile plays until
+    /// expiry and then stops for good.
+    refresher: Option<TileRefresher>,
+    /// One re-sign at a time per tile. Everyone who queues behind the winner
+    /// gets the winner's url rather than stampeding the platform.
+    resign_lock: Arc<Mutex<()>>,
 }
 
 pub struct MultiNookServer;
@@ -45,7 +71,12 @@ static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
 
 impl MultiNookServer {
     /// Start a new proxy server for a specific stream, or update the URL if one already exists
-    pub async fn start_proxy(stream_id: &str, stream_url: String) -> Result<u16> {
+    pub async fn start_proxy(
+        stream_id: &str,
+        stream_url: String,
+        profile: TileProfile,
+        refresher: Option<TileRefresher>,
+    ) -> Result<u16> {
         // Get-or-create under the registry lock, but probe the LL origin AFTER
         // releasing it: the probe fetches the upstream playlist plus backfill
         // segments, and holding the registry across that would serialize every
@@ -53,7 +84,7 @@ impl MultiNookServer {
         let (port, origin) = {
             let mut registry = STREAM_REGISTRY.lock().await;
 
-            if let Some(instance) = registry.get(stream_id) {
+            if let Some(instance) = registry.get_mut(stream_id) {
                 debug!(
                     "[MultiNook] Updating proxy URL for stream '{}' on port {}",
                     stream_id, instance.port
@@ -61,6 +92,10 @@ impl MultiNookServer {
                 *instance.proxy_url.lock().await = Some(stream_url.clone());
                 // New stream on this tile: clear stale ad-detection state.
                 *instance.ad_state.lock().unwrap() = ad_detect::AdDetectionState::default();
+                // A tile can be retargeted at a different platform (preset load,
+                // swap), so the profile follows the new upstream.
+                instance.profile = profile;
+                instance.refresher = refresher;
                 (instance.port, instance.ll_origin.clone())
             } else {
                 // Start a new server on a random port
@@ -76,6 +111,7 @@ impl MultiNookServer {
                 let ad_state_clone = ad_state.clone();
                 let origin_clone = origin.clone();
                 let sid = stream_id.to_string();
+                let profile_for_filter = profile;
 
                 // Wildcard route like the solo relay: when the LL origin is active the
                 // playlist references relative `part/...` and `seg/...` URIs that must
@@ -87,6 +123,7 @@ impl MultiNookServer {
                     .and(warp::any().map(move || ad_state_clone.clone()))
                     .and(warp::any().map(move || sid.clone()))
                     .and(warp::any().map(move || origin_clone.clone()))
+                    .and(warp::any().map(move || profile_for_filter))
                     .and_then(Self::proxy_handler)
                     .boxed();
 
@@ -107,6 +144,9 @@ impl MultiNookServer {
                         proxy_url,
                         ad_state,
                         ll_origin: origin.clone(),
+                        profile,
+                        refresher,
+                        resign_lock: Arc::new(Mutex::new(())),
                     },
                 );
                 (port, origin)
@@ -118,9 +158,50 @@ impl MultiNookServer {
         // settled answer when `start_multi_nook` tags the proxy URL. On a
         // normal-latency channel the origin stays inactive and the plain playlist
         // proxy serves the tile.
-        origin.start(stream_url).await;
+        // Twitch only: the LL-HLS origin speaks Twitch's low-latency playlist
+        // shape. Probing a Kick playlist with it wastes a fetch at best and
+        // mis-serves the tile at worst.
+        if profile == TileProfile::Twitch {
+            origin.start(stream_url).await;
+        }
 
         Ok(port)
+    }
+
+    /// Re-sign one tile's upstream url after it started being refused, returning
+    /// the fresh url. Mirrors the solo relay's blocking re-sign: one at a time,
+    /// and a caller that queued behind the winner gets the winner's url instead
+    /// of asking the platform again.
+    ///
+    /// The registry lock is never held across the refresher await, or one tile
+    /// re-signing would stall every other tile's requests.
+    async fn resign_tile(stream_id: &str, stale: &str) -> Option<String> {
+        let (refresher, resign_lock, proxy_url) = {
+            let registry = STREAM_REGISTRY.lock().await;
+            let inst = registry.get(stream_id)?;
+            (
+                inst.refresher.clone()?,
+                inst.resign_lock.clone(),
+                inst.proxy_url.clone(),
+            )
+        };
+
+        let _guard = resign_lock.lock().await;
+
+        // Someone else re-signed while we queued: take theirs.
+        if let Some(current) = proxy_url.lock().await.clone() {
+            if current != stale {
+                return Some(current);
+            }
+        }
+
+        let fresh = refresher().await?;
+        *proxy_url.lock().await = Some(fresh.clone());
+        info!(
+            "[MultiNook] '{}' manifest url re-signed after a refused request",
+            stream_id
+        );
+        Some(fresh)
     }
 
     /// Stop a specific stream's proxy server
@@ -206,7 +287,14 @@ impl MultiNookServer {
         // A pivot points the tile at a new region with its own segment numbering;
         // drop the old region's projection map so no synthetic URL survives it.
         crate::services::hls_projection::reset(stream_id);
-        Self::start_proxy(stream_id, playlist_url).await?;
+        let (profile, refresher) = {
+            let registry = STREAM_REGISTRY.lock().await;
+            registry
+                .get(stream_id)
+                .map(|i| (i.profile, i.refresher.clone()))
+                .unwrap_or((TileProfile::Twitch, None))
+        };
+        Self::start_proxy(stream_id, playlist_url, profile, refresher).await?;
         info!(
             "[MultiNook] '{}' upstream swapped by a playback plugin",
             stream_id
@@ -232,7 +320,8 @@ impl MultiNookServer {
         ad_state: Arc<std::sync::Mutex<ad_detect::AdDetectionState>>,
         stream_id: String,
         origin: Arc<LlOrigin>,
-    ) -> Result<warp::http::Response<Vec<u8>>, warp::Rejection> {
+        profile: TileProfile,
+    ) -> Result<warp::http::Response<bytes::Bytes>, warp::Rejection> {
         // Handle CORS preflight instantly without touching upstream.
         if method == warp::http::Method::OPTIONS {
             return Ok(warp::http::Response::builder()
@@ -241,7 +330,7 @@ impl MultiNookServer {
                 .header("Access-Control-Allow-Methods", "GET, OPTIONS")
                 .header("Access-Control-Allow-Headers", "*")
                 .header("Access-Control-Max-Age", "86400")
-                .body(vec![])
+                .body(bytes::Bytes::new())
                 .unwrap());
         }
 
@@ -255,14 +344,14 @@ impl MultiNookServer {
             // Origin-generated init segment (TS transmux path).
             if request_path == "init.mp4" {
                 if let Some(bytes) = origin.get_init() {
-                    return Ok(media_response(bytes.as_ref().clone()));
+                    return Ok(media_response(arc_bytes(bytes)));
                 }
                 return Ok(empty_cors(404));
             }
             if let Some(rest) = request_path.strip_prefix("part/") {
                 if let Some((sn, k)) = parse_part_path(rest) {
                     if let Some(bytes) = origin.get_part(sn, k) {
-                        return Ok(media_response(bytes.as_ref().clone()));
+                        return Ok(media_response(arc_bytes(bytes)));
                     }
                 }
                 return Ok(empty_cors(404));
@@ -301,7 +390,7 @@ impl MultiNookServer {
                             "Cache-Control",
                             "no-cache, no-store, must-revalidate, max-age=0",
                         )
-                        .body(vec![])
+                        .body(bytes::Bytes::new())
                         .unwrap(),
                     None => empty_cors(404),
                 },
@@ -322,28 +411,53 @@ impl MultiNookServer {
             return Ok(empty_cors(404));
         };
 
-        let response = match HTTP_CLIENT.get(&url).send().await {
-            Ok(res) => res,
-            Err(e) => {
-                debug!("[MultiNook] Upstream request failed: {}", e);
-                return Ok(warp::http::Response::builder()
-                    .status(502)
-                    .header("Access-Control-Allow-Origin", "*")
-                    .body(vec![])
-                    .unwrap());
-            }
-        };
+        // At most one re-sign per request. A refused playlist is the signal that
+        // the upstream url expired (Kick's master carries a JWT with a lifetime
+        // shorter than a viewing session); without this the tile would serve the
+        // refusal body and stop for good with no way back.
+        let mut url = url;
+        let mut resigned = false;
+        let (status, mut bytes) = loop {
+            let response = match HTTP_CLIENT.get(&url).send().await {
+                Ok(res) => res,
+                Err(e) => {
+                    debug!("[MultiNook] Upstream request failed: {}", e);
+                    return Ok(warp::http::Response::builder()
+                        .status(502)
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(bytes::Bytes::new())
+                        .unwrap());
+                }
+            };
 
-        let status = response.status();
-        let mut bytes = match response.bytes().await {
-            Ok(b) => b.to_vec(),
-            Err(e) => {
-                debug!("[MultiNook] Failed to read body bytes: {}", e);
-                return Ok(warp::http::Response::builder()
-                    .status(502)
-                    .header("Access-Control-Allow-Origin", "*")
-                    .body(vec![])
-                    .unwrap());
+            let status = response.status();
+            let body = match response.bytes().await {
+                Ok(b) => b.to_vec(),
+                Err(e) => {
+                    debug!("[MultiNook] Failed to read body bytes: {}", e);
+                    return Ok(warp::http::Response::builder()
+                        .status(502)
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(bytes::Bytes::new())
+                        .unwrap());
+                }
+            };
+
+            if status.is_success() || resigned {
+                break (status, body);
+            }
+            warn!(
+                "[MultiNook] '{}' upstream returned {}; attempting to re-sign",
+                stream_id, status
+            );
+            match Self::resign_tile(&stream_id, &url).await {
+                Some(fresh) => {
+                    url = fresh;
+                    resigned = true;
+                }
+                // No refresher (Twitch tiles), or re-signing failed: serve what
+                // the upstream said rather than inventing a different failure.
+                None => break (status, body),
             }
         };
 
@@ -358,7 +472,10 @@ impl MultiNookServer {
         // and the tile stalls shortly after starting. Tile low latency, when enabled, is
         // served by the per-tile parts origin above and never reaches here.
         if let Ok(text) = std::str::from_utf8(&bytes) {
-            {
+            // SSAI marker detection is Twitch-specific; other platforms do not
+            // stitch ads into the media playlist, so running it there only
+            // produces phantom state.
+            if profile == TileProfile::Twitch {
                 let mut st = ad_state.lock().unwrap();
                 if let Some(n) = ad_detect::update(&mut st, text) {
                     info!(
@@ -371,8 +488,13 @@ impl MultiNookServer {
             // solo path: only on a live playlist (not VOD/#EXT-X-ENDLIST) and only when
             // the experimental low-latency engine is off, so our `vseg/` rewrite never
             // races the per-tile origin's `seg/` scheme for the same media sequence.
-            let is_live = !text.contains("#EXT-X-ENDLIST");
-            let stabilize_ok = is_live && crate::services::ll_origin::engine_disabled();
+            let is_live = crate::services::hls_kind::classify(text)
+                == crate::services::hls_kind::PlaylistKind::Live;
+            // Segment projection is part of the Twitch profile too (it exists to
+            // survive Twitch's ad-stitched sequence rewrites).
+            let stabilize_ok = profile == TileProfile::Twitch
+                && is_live
+                && crate::services::ll_origin::engine_disabled();
             let work: String =
                 ad_detect::retarget_playlist(text).unwrap_or_else(|| text.to_string());
             bytes = if stabilize_ok {
@@ -394,7 +516,7 @@ impl MultiNookServer {
             )
             .header("Pragma", "no-cache")
             .header("Expires", "0")
-            .body(bytes)
+            .body(bytes.into())
             .unwrap())
     }
 }

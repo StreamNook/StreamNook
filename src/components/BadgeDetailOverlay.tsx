@@ -1,5 +1,5 @@
 import { X, Gift, ArrowLeft, AlertTriangle, Calendar, ChevronRight, Users, Clock, ArrowUpRight } from 'lucide-react';
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, type JSX } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../stores/AppStore';
@@ -11,14 +11,12 @@ import { BadgeChannelChip } from './badge/BadgeChannelChip';
 import { BadgeChannelCard } from './badge/BadgeChannelCard';
 import { BadgeCategoryCard } from './badge/BadgeCategoryCard';
 import { BadgeSiblingChips } from './badge/BadgeSiblingChips';
+import { BadgeEligibleCategories } from './badge/BadgeEligibleCategories';
 
 import { Logger } from '../utils/logger';
 import { decodeHtmlEntities, deriveBadgeStatus } from '../utils/badgeWindow';
-import { extractChannelLogins } from '../utils/badgeChannels';
-
-// A channel named in earn text, e.g. "/studbudz". Starts with a letter/underscore
-// (so it never matches a date like "/2026") and 4-25 chars (Twitch login length).
-const CHANNEL_MENTION_RE = /(\/[a-zA-Z_][a-zA-Z0-9_]{3,24})\b/g;
+import { extractChannelLogins, splitChannelMentions } from '../utils/badgeChannels';
+import { dedupeResolvedLinks } from '../utils/badgeLinks';
 
 // The sibling-list heading, from our enrichment or from badgebase. Everything
 // after it (up to the next blank line) is the list of related event badges.
@@ -159,8 +157,9 @@ async function recoverCategoryByPrefix(name: string): Promise<TwitchCategory | n
   return null;
 }
 
-// A refined badge link that also carries the category's box art for a cover chip.
-type DisplayLink = ParsedBadgeLink & { boxArtUrl?: string };
+// A refined badge link that also carries the category's box art for a cover chip
+// and the id Twitch resolved it to, which is what identity is judged on.
+type DisplayLink = ParsedBadgeLink & { boxArtUrl?: string; categoryId?: string };
 
 interface BadgeDetailOverlayProps {
   badge: BadgeVersion;
@@ -176,9 +175,10 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
   const [refinedLinks, setRefinedLinks] = useState<DisplayLink[]>([]);
   const [loadingCategories, setLoadingCategories] = useState(false);
 
-  // Get navigation functions from store
+  // Navigation actions only, so no store subscription at all: read them once
+  // (stable for the store's lifetime) instead of re-rendering on every write.
   const { navigateToCategoryByName, openDropsWithSearch, setShowBadgesOverlay, startStream } =
-    useAppStore();
+    useAppStore.getState();
 
   // Deep links for the badge. The campaign category is used verbatim when the
   // relay supplied one; the prose parser is a fallback for badges without a
@@ -253,6 +253,7 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
               ...link,
               name: bestMatch.name,
               boxArtUrl: bestMatch.box_art_url,
+              categoryId: bestMatch.id,
             });
           } else {
             // Event names get mistaken for categories ("La Velada del Año VI"
@@ -263,7 +264,12 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
             const recovered = await recoverCategoryByPrefix(link.name);
             if (recovered) {
               Logger.debug(`[BadgeDetail] Recovered category "${link.name}" -> "${recovered.name}"`);
-              validLinks.push({ ...link, name: recovered.name, boxArtUrl: recovered.box_art_url });
+              validLinks.push({
+                ...link,
+                name: recovered.name,
+                boxArtUrl: recovered.box_art_url,
+                categoryId: recovered.id,
+              });
             } else {
               Logger.debug(`[BadgeDetail] No matching category found for "${link.name}", skipping`);
             }
@@ -315,7 +321,7 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
       }
     }
 
-    setRefinedLinks(validLinks);
+    setRefinedLinks(dedupeResolvedLinks(validLinks));
     setLoadingCategories(false);
   }, []);
 
@@ -329,7 +335,10 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
   }, [parsedLinks, refineLinks]);
 
   // Use refined links if available, otherwise fall back to parsed links
-  const displayLinks: DisplayLink[] = refinedLinks.length > 0 ? refinedLinks : parsedLinks;
+  // Refined links are already deduped; the unrefined fallback is deduped here
+  // so a card can never appear twice even before Twitch has answered.
+  const displayLinks: DisplayLink[] =
+    refinedLinks.length > 0 ? refinedLinks : dedupeResolvedLinks(parsedLinks);
 
   // Handle clicking on a parsed link
   const handleLinkClick = (link: ParsedBadgeLink) => {
@@ -419,6 +428,12 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
   // shapes ("the participating channel StudBudz", "/studbudz", "Ibai's
   // channel"). Capped because a few event badges list dozens of participating
   // streamers, and a wall of cards buries the rest of the panel.
+  // The copy the eligible-categories list is read out of. Both sources are
+  // searched because the list lives in whichever one the enricher filled.
+  const eligibleCategoryText = [badgeBaseInfo?.more_info, badge.description]
+    .filter(Boolean)
+    .join('\n');
+
   const relayChannels = badgeBaseInfo?.enrichment?.channels ?? [];
   const channelLogins = (
     relayChannels.length > 0
@@ -433,15 +448,13 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
   // Render More Info with channel mentions ("/studbudz") turned into clickable
   // avatar chips, keeping the date-highlighting on the surrounding text.
   const renderMoreInfo = (text: string) => {
-    return localizeUtcInText(text)
-      .split(CHANNEL_MENTION_RE)
-      .map((part, i) =>
-        i % 2 === 1 ? (
-          <BadgeChannelChip key={i} login={part.slice(1)} onWatch={handleWatchChannel} />
-        ) : (
-          <span key={i}>{convertTimestampsToLocalJSX(part)}</span>
-        ),
-      );
+    return splitChannelMentions(localizeUtcInText(text)).map((part, i) =>
+      part.login ? (
+        <BadgeChannelChip key={i} login={part.login} onWatch={handleWatchChannel} />
+      ) : (
+        <span key={i}>{convertTimestampsToLocalJSX(part.text)}</span>
+      ),
+    );
   };
 
 
@@ -817,7 +830,7 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.96, y: 12 }}
         transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-        className="liquid-glass-panel w-[90vw] max-h-[85vh] max-w-5xl flex flex-col relative z-10 overflow-hidden"
+        className="sn-light-off liquid-glass-panel w-[90vw] max-h-[85vh] max-w-5xl flex flex-col relative z-10 overflow-hidden"
       >
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-borderSubtle">
@@ -984,6 +997,12 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
                   )}
                 </div>
               )}
+
+              {/* Where it counts, when the copy spells the list out. */}
+              <BadgeEligibleCategories
+                text={eligibleCategoryText}
+                onOpen={(name) => handleLinkClick({ type: 'category', name, originalText: name })}
+              />
 
               {parsedBadge?.siblingText && (
                 <div>

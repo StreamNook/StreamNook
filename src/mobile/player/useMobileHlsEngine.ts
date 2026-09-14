@@ -122,7 +122,7 @@ function reportPausedSoon(reason: string): void {
 
 export type MobilePlayerState = 'idle' | 'loading' | 'playing' | 'stalled' | 'error';
 
-export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement>) {
+export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | null>) {
   const streamUrl = useAppStore((s) => s.streamUrl);
   const playerSettings = useAppStore((s) => s.settings.video_player);
   const [state, setState] = useState<MobilePlayerState>('idle');
@@ -450,7 +450,10 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement>) 
             getLatency: () =>
               typeof hls.latency === 'number' && hls.latency > 0 ? hls.latency : null,
             gain: 0.12,
-            ceiling: 1.08,
+            // ceiling and engageSpan are inherited from the shared governor
+            // defaults (1.05, buffer-aware engage). Phones hit the unbacked
+            // catch-up failure more than desktop, and the buffer-aware engage
+            // span is exactly the fix for it, so no mobile override here.
             band: 0.1,
             floor: 0.8,
             slowRate: 0.97,

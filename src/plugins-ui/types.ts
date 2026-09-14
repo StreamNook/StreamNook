@@ -40,14 +40,6 @@ export interface SlotContribution {
   Component: React.ComponentType;
 }
 
-/**
- * Context the host passes to a per-campaign control rendered in the
- * `drops.card-action` slot. A provider contributes a component here to hang its
- * own control (e.g. a start/stop button) on each Drops-center campaign card; the
- * host stays generic and renders whatever the provider hangs there, passing the
- * campaign it belongs to. The component does its work through its own actions —
- * the host neither knows nor names them.
- */
 /** A channel returned by the host's drops channel picker. */
 export interface PickedDropChannel {
   login: string;
@@ -56,6 +48,14 @@ export interface PickedDropChannel {
 }
 
 export const DROPS_CARD_ACTION_SLOT = 'drops.card-action';
+/**
+ * Context the host passes to a per-campaign control rendered in the
+ * `drops.card-action` slot. A provider contributes a component here to hang its
+ * own control (e.g. a start/stop button) on each Drops-center campaign card; the
+ * host stays generic and renders whatever the provider hangs there, passing the
+ * campaign it belongs to. The component does its work through its own actions —
+ * the host neither knows nor names them.
+ */
 export interface DropCardActionContext {
   campaignId: string;
   campaignName: string;

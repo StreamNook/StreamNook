@@ -63,6 +63,41 @@ pub struct JustlogMessage {
     pub id: Option<String>,
 }
 
+/// Why Twitch's own deep archive (`viewerCardModLogs`) produced what it did.
+///
+/// This exists because every failure mode used to collapse into an empty list,
+/// so "you aren't a moderator here", "your login expired" and "this user never
+/// spoke" were indistinguishable in the UI and all rendered as a blank panel.
+/// Twitch only serves this archive to moderators of the channel in question, so
+/// `NoAccess` is the *normal* outcome for most channels, not an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModLogsStatus {
+    /// Authorized and returned at least one message.
+    Available,
+    /// Authorized, but this user has no retained messages in this channel.
+    NoMessages,
+    /// Twitch returned UNAUTHORIZED: the viewer is not a moderator here (or the
+    /// broadcaster has withheld viewer-card log access from moderators).
+    NoAccess,
+    /// No first-party token available, so the query was never attempted.
+    AuthRequired,
+    /// Caller did not supply both channel id and user id.
+    Skipped,
+    /// Network error, HTTP error, or a response shape we did not recognize.
+    Failed,
+}
+
+/// Result of a user-history lookup: the merged messages plus why the
+/// Twitch-native source contributed what it did. The third-party sources are
+/// deliberately not surfaced individually; they are best-effort supplements and
+/// their individual failures are not actionable by the user.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatLogsResult {
+    pub messages: Vec<JustlogMessage>,
+    pub mod_logs_status: ModLogsStatus,
+}
+
 #[derive(Debug, Deserialize)]
 struct JustlogResponse {
     messages: Vec<JustlogRawMessage>,
@@ -105,8 +140,12 @@ struct BestLogsInstanceList {
 /// four upstream sources, ranked by reliability:
 ///
 /// 1. **Twitch GQL `ViewerCardModLogsMessagesBySender`**: deep per-user
-///    history straight from Twitch. Mod-gated — only works when the
-///    requester is a mod in the channel. Silently empty otherwise.
+///    history straight from Twitch, retained for roughly 3.5 years. Gated on
+///    `moderationSettings.canAccessViewerCardModLogs` — the requester must be a
+///    moderator of the channel, EXCEPT that anyone may always read their own
+///    history anywhere. Denial comes back as a typed `ModLogsStatus::NoAccess`
+///    rather than an empty list, so the UI can say why the panel is bare.
+///    Expect this to be unavailable in most channels a viewer merely watches.
 /// 2. **Twitch GQL `MessageBufferChatHistory`**: Twitch's channel-wide
 ///    chat backlog (the same query the web client uses on channel join).
 ///    Works for ANY logged-in user (not mod-gated). Verified via NodeCapture
@@ -129,9 +168,12 @@ pub async fn fetch_user_chat_logs(
     username: String,
     #[allow(non_snake_case)] channelId: Option<String>,
     #[allow(non_snake_case)] userId: Option<String>,
-) -> Result<Vec<JustlogMessage>, String> {
+) -> Result<ChatLogsResult, String> {
     if channel.is_empty() || username.is_empty() {
-        return Ok(Vec::new());
+        return Ok(ChatLogsResult {
+            messages: Vec::new(),
+            mod_logs_status: ModLogsStatus::Skipped,
+        });
     }
 
     let channel_lower = channel.to_lowercase();
@@ -149,7 +191,7 @@ pub async fn fetch_user_chat_logs(
             (Some(cid), Some(uid)) if !cid.is_empty() && !uid.is_empty() => {
                 fetch_from_twitch_gql(&client, cid, uid).await
             }
-            _ => Ok(Vec::new()),
+            _ => (Vec::new(), ModLogsStatus::Skipped),
         }
     };
 
@@ -170,8 +212,12 @@ pub async fn fetch_user_chat_logs(
     // parallel and merges in when it lands — so the whole popup never blocks on
     // the slow source. Each capped so one bad source can't stall the fast batch.
     let src_cap = std::time::Duration::from_secs(6);
-    let (twitch_modlogs_result, twitch_buffer_result, robotty_result) = tokio::join!(
-        async { tokio::time::timeout(src_cap, twitch_modlogs_fut).await.unwrap_or_else(|_| Ok(Vec::new())) },
+    let ((mut modlogs_msgs, mod_logs_status), twitch_buffer_result, robotty_result) = tokio::join!(
+        async {
+            tokio::time::timeout(src_cap, twitch_modlogs_fut)
+                .await
+                .unwrap_or((Vec::new(), ModLogsStatus::Failed))
+        },
         async { tokio::time::timeout(src_cap, twitch_buffer_fut).await.unwrap_or_else(|_| Ok(Vec::new())) },
         async { tokio::time::timeout(src_cap, fetch_from_robotty(&client, &channel_lower, &username_lower)).await.unwrap_or_else(|_| Ok(Vec::new())) },
     );
@@ -179,22 +225,20 @@ pub async fn fetch_user_chat_logs(
     // Per-source diagnostic. Count: -1 = errored, 0 = empty, >0 = messages.
     let count_of = |r: &Result<Vec<JustlogMessage>, String>| r.as_ref().map(|m| m.len() as i64).unwrap_or(-1);
     let err_of = |r: &Result<Vec<JustlogMessage>, String>| r.as_ref().err().cloned().unwrap_or_default();
-    eprintln!(
-        "[chatlogs/fast] channel={} user={} -> modlogs={} buffer={} robotty={}\n  modlogs_err=[{}]\n  buffer_err=[{}]\n  robotty_err=[{}]",
+    log::info!(
+        "[chatlogs/fast] channel={} user={} -> modlogs={} ({:?}) buffer={} robotty={}\n  buffer_err=[{}]\n  robotty_err=[{}]",
         channel_lower,
         username_lower,
-        count_of(&twitch_modlogs_result),
+        modlogs_msgs.len(),
+        mod_logs_status,
         count_of(&twitch_buffer_result),
         count_of(&robotty_result),
-        err_of(&twitch_modlogs_result),
         err_of(&twitch_buffer_result),
         err_of(&robotty_result),
     );
 
     let mut merged: Vec<JustlogMessage> = Vec::new();
-    if let Ok(mut m) = twitch_modlogs_result {
-        merged.append(&mut m);
-    }
+    merged.append(&mut modlogs_msgs);
     if let Ok(mut m) = twitch_buffer_result {
         merged.append(&mut m);
     }
@@ -202,7 +246,10 @@ pub async fn fetch_user_chat_logs(
         merged.append(&mut m);
     }
 
-    Ok(sort_and_dedupe(merged))
+    Ok(ChatLogsResult {
+        messages: sort_and_dedupe(merged),
+        mod_logs_status,
+    })
 }
 
 /// Deep per-user history: Justlog only (routed via best-logs, with proxy
@@ -234,7 +281,7 @@ pub async fn fetch_user_deep_logs(
         .await
         .unwrap_or_else(|_| Err("justlog: timed out".to_string()));
 
-    eprintln!(
+    log::info!(
         "[chatlogs/deep] channel={} user={} -> justlog={}\n  justlog_err=[{}]",
         channel_lower,
         username_lower,
@@ -402,25 +449,34 @@ async fn fetch_from_twitch_gql(
     client: &reqwest::Client,
     channel_id: &str,
     sender_id: &str,
-) -> Result<Vec<JustlogMessage>, String> {
-    // The viewerCardModLogs root field is mod-gated — non-mods get a
-    // ViewerCardModLogsMessagesError back and we silently fall through.
-    // Authenticated request requires the user's OAuth token; without one
-    // the query returns nothing useful, so skip the round trip.
+) -> (Vec<JustlogMessage>, ModLogsStatus) {
+    // The viewerCardModLogs root field is mod-gated. Non-mods get a
+    // ViewerCardModLogsMessagesError back, which is a normal outcome we report
+    // as NoAccess rather than swallowing. Authenticated request requires a
+    // first-party token; without one there is nothing to try.
     let token = match DropsAuthService::get_token().await {
         Ok(t) if !t.is_empty() => t,
-        _ => return Ok(Vec::new()),
+        _ => return (Vec::new(), ModLogsStatus::AuthRequired),
     };
 
-    // Minimal inline query — only the chat-message variant of the message
-    // node union. We deliberately don't depend on Twitch's persisted-query
-    // hashes (they rotate); shipping the full query text is a few hundred
-    // bytes and is stable.
+    // Minimal inline query — only the chat-message variant of the message node
+    // union. We deliberately don't depend on Twitch's persisted-query hashes
+    // (they rotate); shipping the full query text is a few hundred bytes and is
+    // stable, and Twitch accepts non-persisted documents.
+    //
+    // `first: 500` rather than a page at a time: measured against Twitch, there
+    // is no server-side cap below 1000, and 500 returns a typical user's entire
+    // multi-year history in this channel in one round trip. `pageInfo` is
+    // requested so a genuinely heavy chatter who exceeds it is detectable rather
+    // than silently truncated.
     let query = r#"
         query ViewerCardModLogsMessagesBySender($channelID: ID!, $senderID: ID!) {
           logs: viewerCardModLogs(channelID: $channelID, targetID: $senderID) {
-            messages(first: 50) {
+            messages(first: 500) {
               __typename
+              ... on ViewerCardModLogsMessagesError {
+                code
+              }
               ... on ViewerCardModLogsMessagesConnection {
                 edges {
                   node {
@@ -432,6 +488,7 @@ async fn fetch_from_twitch_gql(
                     }
                   }
                 }
+                pageInfo { hasNextPage }
               }
             }
           }
@@ -447,31 +504,71 @@ async fn fetch_from_twitch_gql(
         }
     });
 
-    let response = client
+    let response = match client
         .post(TWITCH_GQL_URL)
         .headers(gql_headers(&token))
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("Twitch GQL request failed: {}", e))?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("[chatlogs/modlogs] request failed: {}", e);
+            return (Vec::new(), ModLogsStatus::Failed);
+        }
+    };
 
     if !response.status().is_success() {
-        return Err(format!("Twitch GQL HTTP {}", response.status()));
+        log::warn!("[chatlogs/modlogs] HTTP {}", response.status());
+        return (Vec::new(), ModLogsStatus::Failed);
     }
 
-    let json: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse Twitch GQL response: {}", e))?;
+    let json: serde_json::Value = match response.json().await {
+        Ok(j) => j,
+        Err(e) => {
+            log::warn!("[chatlogs/modlogs] parse failed: {}", e);
+            return (Vec::new(), ModLogsStatus::Failed);
+        }
+    };
 
-    // The messages field is a union; on error (non-mod, unauthorized, etc.)
-    // there's no `edges` and we treat it as empty.
-    let edges = match json
-        .pointer("/data/logs/messages/edges")
+    // `messages` is a union. The error variant carries a code — UNAUTHORIZED
+    // when the viewer isn't a moderator of this channel, which is the common
+    // case and must not read as a failure.
+    let messages_node = json.pointer("/data/logs/messages");
+    match messages_node
+        .and_then(|m| m.get("__typename"))
+        .and_then(|t| t.as_str())
+    {
+        Some("ViewerCardModLogsMessagesError") => {
+            let code = messages_node
+                .and_then(|m| m.get("code"))
+                .and_then(|c| c.as_str())
+                .unwrap_or("");
+            log::info!("[chatlogs/modlogs] denied: {}", code);
+            return (Vec::new(), ModLogsStatus::NoAccess);
+        }
+        Some("ViewerCardModLogsMessagesConnection") => {}
+        // Null logs (channel/user not found) or a shape we don't recognize.
+        other => {
+            log::warn!("[chatlogs/modlogs] unexpected union variant: {:?}", other);
+            return (Vec::new(), ModLogsStatus::Failed);
+        }
+    }
+
+    if messages_node
+        .and_then(|m| m.pointer("/pageInfo/hasNextPage"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        log::info!("[chatlogs/modlogs] more than 500 messages available; result truncated");
+    }
+
+    let edges = match messages_node
+        .and_then(|m| m.get("edges"))
         .and_then(|v| v.as_array())
     {
         Some(e) => e,
-        None => return Ok(Vec::new()),
+        None => return (Vec::new(), ModLogsStatus::NoMessages),
     };
 
     let messages: Vec<JustlogMessage> = edges
@@ -500,7 +597,12 @@ async fn fetch_from_twitch_gql(
         })
         .collect();
 
-    Ok(messages)
+    let status = if messages.is_empty() {
+        ModLogsStatus::NoMessages
+    } else {
+        ModLogsStatus::Available
+    };
+    (messages, status)
 }
 
 /// Cached best-logs resolution for a channel: the ordered list of justlog

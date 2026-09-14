@@ -45,6 +45,9 @@ const MSGID_TO_KIND: Record<string, ActivityKind> = {
   superchat: 'superchat',
   supersticker: 'supersticker',
   membership: 'membership',
+  // A tenure milestone ("Member for 6 months"), split from a brand-new member by
+  // the chat store using the milestone tag the YouTube adapter stamps.
+  member_milestone: 'member_milestone',
   membergift: 'giftbomb',
   // TikTok events (stamped by the tiktok adapter): gifts/roses, follows, shares,
   // hearts. The activity kinds + categories already exist for these.

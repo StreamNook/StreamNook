@@ -1436,3 +1436,240 @@ https://x/1080.m3u8\n";
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// VOD metadata (status / length / timeline anchors), web GQL
+// ---------------------------------------------------------------------------
+
+/// What the player needs to know about a VOD beyond its playlist: whether the
+/// broadcast is still being recorded (the playlist is a growing EVENT), how
+/// long it is right now, and where its timeline starts relative to the live
+/// broadcast (`recorded_at`).
+#[derive(Debug, Clone, Serialize)]
+pub struct VodInfo {
+    pub video_id: String,
+    /// "recording" while live, "recorded" when finished, "unknown" if GQL
+    /// gave nothing usable.
+    pub status: String,
+    pub length_seconds: Option<u32>,
+    pub recorded_at: Option<String>,
+    pub owner_login: Option<String>,
+    pub title: Option<String>,
+    pub thumbnail_url: Option<String>,
+}
+
+impl VodInfo {
+    pub fn is_recording(&self) -> bool {
+        self.status == "recording"
+    }
+}
+
+/// The recording VOD of a channel that is live right now, with the broadcast
+/// start so a "behind live" distance can be mapped onto the VOD timeline.
+#[derive(Debug, Clone)]
+pub struct LiveArchive {
+    pub video_id: String,
+    pub length_seconds: u32,
+    /// Broadcast time at VOD position 0 (ISO 8601). Measured 2026-09-06 at
+    /// ~4 s after `stream.createdAt`.
+    pub recorded_at: Option<String>,
+    pub stream_created_at: Option<String>,
+}
+
+impl LiveArchive {
+    /// Seconds of broadcast elapsed at `now`, on the VOD timeline.
+    pub fn elapsed_secs(&self, now: chrono::DateTime<chrono::Utc>) -> Option<f64> {
+        let anchor = self
+            .recorded_at
+            .as_deref()
+            .or(self.stream_created_at.as_deref())?;
+        let start = chrono::DateTime::parse_from_rfc3339(anchor).ok()?;
+        let secs = (now - start.with_timezone(&chrono::Utc)).num_milliseconds() as f64 / 1000.0;
+        Some(secs.max(0.0))
+    }
+
+    /// Clamp an absolute broadcast position onto what the recording can
+    /// serve (its tail runs ~30-40 s behind live, and the reported length
+    /// lags too).
+    pub fn clamp_position(&self, position_secs: f64) -> f64 {
+        let max_pos = (self.length_seconds as f64 - 15.0).max(0.0);
+        if !position_secs.is_finite() {
+            return 0.0;
+        }
+        position_secs.clamp(0.0, max_pos)
+    }
+
+    /// Map a "this far behind live" request onto a VOD position, keeping clear
+    /// of the tail (the recording runs ~30-40 s behind the live edge, and its
+    /// reported length lags too). `behind_secs` None means "from the start".
+    pub fn position_for(&self, now: chrono::DateTime<chrono::Utc>, behind_secs: Option<f64>) -> f64 {
+        let tail_guard = 15.0;
+        let max_pos = (self.length_seconds as f64 - tail_guard).max(0.0);
+        let Some(behind) = behind_secs else {
+            return 0.0;
+        };
+        let Some(elapsed) = self.elapsed_secs(now) else {
+            return 0.0;
+        };
+        (elapsed - behind.max(0.0)).clamp(0.0, max_pos)
+    }
+}
+
+/// One anonymous web-GQL query. VOD metadata is public, so no OAuth is sent:
+/// the answer is the same for everyone and the token stays out of an extra
+/// request.
+async fn gql_web_query(query: &str, variables: Value) -> Result<Value> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .user_agent(auth_proxy::USER_AGENT)
+        .build()?;
+    let body = json!({ "query": query, "variables": variables });
+    let resp: Value = client
+        .post("https://gql.twitch.tv/gql")
+        .header("Client-ID", auth_proxy::TWITCH_WEB_CLIENT_ID)
+        .json(&body)
+        .send()
+        .await
+        .context("GQL request failed")?
+        .json()
+        .await
+        .context("GQL response not JSON")?;
+    Ok(resp)
+}
+
+fn str_field(v: &Value, key: &str) -> Option<String> {
+    v.get(key)
+        .and_then(|x| x.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+/// Status / length / anchors for one VOD. Never fails playback: a GQL hiccup
+/// yields `status: "unknown"` and the player falls back to sniffing the
+/// playlist itself.
+pub async fn fetch_vod_info(vod_id: &str) -> VodInfo {
+    let unknown = VodInfo {
+        video_id: vod_id.to_string(),
+        status: "unknown".to_string(),
+        length_seconds: None,
+        recorded_at: None,
+        owner_login: None,
+        title: None,
+        thumbnail_url: None,
+    };
+    let query = r#"query StreamNookVodInfo($id: ID!) {
+        video(id: $id) {
+            id status lengthSeconds recordedAt title
+            owner { login }
+            previewThumbnailURL(width: 440, height: 248)
+        }
+    }"#;
+    let resp = match gql_web_query(query, json!({ "id": vod_id })).await {
+        Ok(r) => r,
+        Err(e) => {
+            debug!("[Resolver] vod info {} unavailable: {}", vod_id, e);
+            return unknown;
+        }
+    };
+    let Some(video) = resp.pointer("/data/video").filter(|v| !v.is_null()) else {
+        return unknown;
+    };
+    VodInfo {
+        video_id: vod_id.to_string(),
+        status: str_field(video, "status")
+            .map(|s| s.to_lowercase())
+            .unwrap_or_else(|| "unknown".to_string()),
+        length_seconds: video
+            .get("lengthSeconds")
+            .and_then(|v| v.as_u64())
+            .map(|n| n.min(u32::MAX as u64) as u32),
+        recorded_at: str_field(video, "recordedAt"),
+        owner_login: video
+            .get("owner")
+            .and_then(|o| str_field(o, "login"))
+            .map(|s| s.to_lowercase()),
+        title: str_field(video, "title"),
+        thumbnail_url: str_field(video, "previewThumbnailURL"),
+    }
+}
+
+/// The recording VOD of a live channel, or None when the channel is offline
+/// or has VODs disabled (Twitch then returns no `archiveVideo`).
+pub async fn fetch_live_archive(login: &str) -> Result<Option<LiveArchive>> {
+    let query = r#"query StreamNookLiveArchive($login: String!) {
+        user(login: $login) {
+            stream {
+                createdAt
+                archiveVideo { id status lengthSeconds recordedAt }
+            }
+        }
+    }"#;
+    let resp = gql_web_query(query, json!({ "login": login })).await?;
+    let Some(stream) = resp.pointer("/data/user/stream").filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let Some(archive) = stream.get("archiveVideo").filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let Some(video_id) = str_field(archive, "id") else {
+        return Ok(None);
+    };
+    Ok(Some(LiveArchive {
+        video_id,
+        length_seconds: archive
+            .get("lengthSeconds")
+            .and_then(|v| v.as_u64())
+            .map(|n| n.min(u32::MAX as u64) as u32)
+            .unwrap_or(0),
+        recorded_at: str_field(archive, "recordedAt"),
+        stream_created_at: str_field(stream, "createdAt"),
+    }))
+}
+
+#[cfg(test)]
+mod live_archive_tests {
+    use super::*;
+
+    fn archive() -> LiveArchive {
+        LiveArchive {
+            video_id: "1".into(),
+            length_seconds: 24511,
+            recorded_at: Some("2026-09-06T00:14:59Z".into()),
+            stream_created_at: Some("2026-09-06T00:14:55Z".into()),
+        }
+    }
+
+    fn at(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn behind_maps_onto_the_vod_timeline() {
+        // 07:03:59 - 00:14:59 = 24540 s elapsed; 30 min behind = 22740.
+        let now = at("2026-09-06T07:03:59Z");
+        let pos = archive().position_for(now, Some(1800.0));
+        assert!((pos - 22740.0).abs() < 0.5, "got {pos}");
+    }
+
+    #[test]
+    fn from_start_is_zero() {
+        assert_eq!(archive().position_for(at("2026-09-06T07:03:59Z"), None), 0.0);
+    }
+
+    #[test]
+    fn small_behind_clamps_clear_of_the_tail() {
+        // 10 s behind live would land past the tail of the recording; clamp.
+        let pos = archive().position_for(at("2026-09-06T07:03:59Z"), Some(10.0));
+        assert_eq!(pos, 24511.0 - 15.0);
+    }
+
+    #[test]
+    fn missing_anchor_falls_back_to_start() {
+        let mut a = archive();
+        a.recorded_at = None;
+        a.stream_created_at = None;
+        assert_eq!(a.position_for(at("2026-09-06T07:03:59Z"), Some(60.0)), 0.0);
+    }
+}

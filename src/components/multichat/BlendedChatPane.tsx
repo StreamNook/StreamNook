@@ -13,15 +13,16 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as R
 import { invoke } from '@tauri-apps/api/core';
 import ChatMessageList from '../ChatMessageList';
 import { ProviderLogo } from '../ProviderLogo';
-import { useChatConnectionStore, sendChannelMessage } from '../../stores/chatConnectionStore';
+import { useChatConnectionStore, sendChannelMessage, injectSystemMessage, systemSourceFor } from '../../stores/chatConnectionStore';
 import { useChatUserStore } from '../../stores/chatUserStore';
 import { useAppStore } from '../../stores/AppStore';
-import { parseKey } from '../../utils/providerKey';
+import { makeKey, parseKey } from '../../utils/providerKey';
 import { openProfilePopup } from '../../utils/openProfilePopup';
 import { PROVIDERS, PROVIDER_IDS, type ProviderId } from '../../types/providers';
 import { parseMessage, type BackendChatMessage } from '../../services/twitchChat';
 import { initializeBadgeCache } from '../../services/twitchBadges';
 import type { ModerationContext } from '../../hooks/useTwitchChat';
+import { usePlatformAccountStore } from '../../stores/platformAccountStore';
 import HypeTrainBanner from '../HypeTrainBanner';
 import { useBlendedHypeTrains } from './useBlendedHypeTrains';
 import { Logger } from '../../utils/logger';
@@ -82,20 +83,27 @@ async function sendTo(
       },
       reply?.parentId,
     );
-  } else if (prov === 'youtube' && reply) {
-    await invoke('provider_send_message', {
-      provider: prov,
-      channel: c.channel.toLowerCase(),
-      text: `@${reply.parentUser} ${text}`,
-      replyTo: null,
-    });
   } else {
-    await invoke('provider_send_message', {
+    // YouTube live chat has no reply threads, so a reply becomes an @mention.
+    const isYouTubeReply = prov === 'youtube' && !!reply;
+    const outcome = await invoke<{
+      message_id: string | null;
+      is_sent: boolean;
+      drop_reason: string | null;
+    }>('provider_send_message', {
       provider: prov,
       channel: c.channel.toLowerCase(),
-      text,
-      replyTo: reply?.parentId ?? null,
+      text: isYouTubeReply ? `@${reply!.parentUser} ${text}` : text,
+      replyTo: isYouTubeReply ? null : reply?.parentId ?? null,
     });
+    // The platform can accept the request and still refuse the message. Say so
+    // in the pane and rethrow so the composer can restore what was typed.
+    if (outcome && outcome.is_sent === false) {
+      const reason = outcome.drop_reason || 'Message not sent';
+      const key = `${prov}:${c.channel.toLowerCase()}`;
+      injectSystemMessage(key, `Your message was not sent: ${reason}`, undefined, systemSourceFor(key));
+      throw new Error(reason);
+    }
   }
 }
 
@@ -125,9 +133,34 @@ function Check({ checked, indeterminate }: { checked: boolean; indeterminate?: b
   );
 }
 
-export function BlendedChatPane({ channels }: { channels: BlendedChannel[] }) {
-  // Re-render on any chat update across all channels.
-  const revision = useChatConnectionStore((s) => s.revision);
+export function BlendedChatPane({
+  channels,
+  mode = 'all',
+  readOnly = false,
+  transparent = false,
+}: {
+  channels: BlendedChannel[];
+  /** 'mentions' keeps only rows the Rust rule engine stamped as a mention,
+   *  a reply to us, or a highlight match. */
+  mode?: 'all' | 'mentions';
+  /** No composer: the overlay window is a viewer, not a place to type. */
+  readOnly?: boolean;
+  /** No own background: the host paints the (glass) ground. */
+  transparent?: boolean;
+}) {
+  // Re-render when any of THIS blend's sources change. Summing the per-channel
+  // counters (instead of the global revision) keeps the O(all sources) reconcile
+  // below from re-running on flushes of channels this pane doesn't show.
+  const revision = useChatConnectionStore((s) =>
+    channels.reduce((sum, c) => {
+      // Slice keys are the acquisition keys: bare login for Twitch, composite
+      // provider:channel otherwise (mirrors the store's channel map).
+      const prov = provOf(c);
+      const sliceKey =
+        prov === 'twitch' ? c.channel.toLowerCase() : makeKey(prov, c.channel);
+      return sum + (s.revisionByChannel[sliceKey] ?? 0);
+    }, 0),
+  );
   // Twitch Hype Trains across the blended Twitch sources (blended mounts no per-pane
   // poller, so this drives both the banner here and the activity-feed rows).
   const hypeTrains = useBlendedHypeTrains(channels);
@@ -295,6 +328,17 @@ export function BlendedChatPane({ channels }: { channels: BlendedChannel[] }) {
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
 
+  const shownMessages = useMemo(() => {
+    if (mode !== 'mentions') return messages;
+    return messages.filter(
+      (m) =>
+        typeof m !== 'string' &&
+        (m.metadata?.is_mentioned === true ||
+          m.metadata?.is_reply_to_me === true ||
+          !!m.metadata?.highlight),
+    );
+  }, [messages, mode]);
+
   const getMessageId = useCallback(
     (m: string | BackendChatMessage) => (typeof m === 'string' ? m.match(/id=([^;]+)/)?.[1] ?? null : m.id),
     [],
@@ -416,7 +460,7 @@ export function BlendedChatPane({ channels }: { channels: BlendedChannel[] }) {
   // surface. Clicking a reply scrolls the merged feed to the quoted message + flashes
   // it (the same `data-message-id` + `.overflow-y-auto` scroll the main pane uses).
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
-  const highlightTimer = useRef<ReturnType<typeof setTimeout>>();
+  const highlightTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(
     () => () => {
       if (highlightTimer.current) clearTimeout(highlightTimer.current);
@@ -454,8 +498,10 @@ export function BlendedChatPane({ channels }: { channels: BlendedChannel[] }) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [kickConnected, setKickConnected] = useState(false);
-  const [youtubeConnected, setYoutubeConnected] = useState(false);
+  // From the shared event-driven store. Previously two 5s polls per blended pane,
+  // both reading in-memory bools that change only on connect/disconnect.
+  const kickConnected = usePlatformAccountStore((s) => s.kick.connected);
+  const youtubeConnected = usePlatformAccountStore((s) => s.youtube.connected);
   // Right-click-a-name reply target. The send routes to THIS source + account,
   // overriding the multi-select for that one message.
   const [replyingTo, setReplyingTo] = useState<{ messageId: string; username: string; channel: BlendedChannel } | null>(
@@ -528,39 +574,6 @@ export function BlendedChatPane({ channels }: { channels: BlendedChannel[] }) {
     },
     [channels, isOn],
   );
-
-  const hasKick = channels.some((c) => provOf(c) === 'kick');
-
-  useEffect(() => {
-    if (!hasKick) return;
-    let active = true;
-    const check = () =>
-      invoke<boolean>('kick_is_connected')
-        .then((c) => active && setKickConnected(c))
-        .catch(() => {});
-    check();
-    const t = setInterval(check, 5000);
-    return () => {
-      active = false;
-      clearInterval(t);
-    };
-  }, [hasKick]);
-
-  const hasYoutube = channels.some((c) => provOf(c) === 'youtube');
-  useEffect(() => {
-    if (!hasYoutube) return;
-    let active = true;
-    const check = () =>
-      invoke<boolean>('youtube_is_connected')
-        .then((c) => active && setYoutubeConnected(c))
-        .catch(() => {});
-    check();
-    const t = setInterval(check, 5000);
-    return () => {
-      active = false;
-      clearInterval(t);
-    };
-  }, [hasYoutube]);
 
   // Route logins to the Account Connections settings instead of pushing a connect
   // button into the chat space (which shifted the feed). MultiChatWindow listens for
@@ -714,7 +727,7 @@ export function BlendedChatPane({ channels }: { channels: BlendedChannel[] }) {
       : `${selected.length} of ${channels.length} chats`;
 
   return (
-    <div ref={paneRef} className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-secondary">
+    <div ref={paneRef} className={`flex h-full min-h-0 min-w-0 flex-1 flex-col ${transparent ? 'bg-transparent' : 'bg-secondary'}`}>
       {[...hypeTrains.values()].map((t) => (
         <div
           key={t.broadcaster_user_login}
@@ -731,7 +744,7 @@ export function BlendedChatPane({ channels }: { channels: BlendedChannel[] }) {
       ))}
       <div ref={setFeedEl} className="relative min-h-0 flex-1 overflow-hidden">
         <ChatMessageList
-          messages={messages}
+          messages={shownMessages}
           renderToken={revision}
           isPaused={paused}
           onScroll={onScroll}
@@ -746,7 +759,7 @@ export function BlendedChatPane({ channels }: { channels: BlendedChannel[] }) {
           clearedUserContexts={clearedUserContexts}
           emotes={null}
           getMessageId={getMessageId}
-          showSource
+          showSource={channels.length > 1}
         />
         {/* Identical to the core app's paused indicator (ChatWidget) so the resume
             affordance reads the same everywhere. */}
@@ -769,6 +782,7 @@ export function BlendedChatPane({ channels }: { channels: BlendedChannel[] }) {
         )}
       </div>
 
+      {!readOnly && (
       <div className="border-t border-white/5 p-2">
         {replyingTo && (
           <div className="mb-2 flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5">
@@ -929,6 +943,7 @@ export function BlendedChatPane({ channels }: { channels: BlendedChannel[] }) {
           </Tooltip>
         </div>
       </div>
+      )}
     </div>
   );
 }

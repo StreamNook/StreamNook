@@ -540,7 +540,10 @@ impl EventSubService {
         let connected_clone = connected.clone();
 
         tokio::spawn(async move {
-            let mut check_interval = interval(Duration::from_secs(1));
+            // 5s granularity: the deadline itself is keepalive_timeout + 5 (>=15s),
+            // so a 1Hz tick bought nothing but wakeups. Worst added detection
+            // latency is one tick.
+            let mut check_interval = interval(Duration::from_secs(5));
             loop {
                 check_interval.tick().await;
 

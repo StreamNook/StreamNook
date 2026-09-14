@@ -23,9 +23,14 @@ pub struct EmotePos {
     pub start: usize,
     pub end: usize,
     pub url: String,
+    /// A Twitch chat GIF from the `gifs` tag rather than an emote from
+    /// `emotes`. Same position arithmetic, different segment: the span is a
+    /// bracketed description, so it gets no 7TV override and no text parsing.
+    #[serde(default)]
+    pub gif: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct LayoutResult {
     pub height: f32,
     pub width: f32,
@@ -82,6 +87,54 @@ pub struct MessageMetadata {
     /// System message for subscriptions/donations
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_message: Option<String>,
+    /// True when the chat rule engine (services::chat_rules) has evaluated
+    /// this message: the row treats the fields below as authoritative and
+    /// runs no matcher of its own. False on optimistic local rows.
+    #[serde(default)]
+    pub rules_evaluated: bool,
+    /// The message replies to one of ours.
+    #[serde(default)]
+    pub is_reply_to_me: bool,
+    /// First matching user highlight rule (phrase, user, or badge), if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight: Option<HighlightStamp>,
+    /// Built-in event tint (raid, returning chatter, first message, self).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub built_in: Option<BuiltInStamp>,
+    /// Ids of the user's saved filters this message satisfies. A pane bound
+    /// to a filter id shows only rows carrying it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filter_ids: Vec<String>,
+    /// Low-trust status of the sender in this channel, from EventSub
+    /// `channel.suspicious_user.*`: "monitored" | "restricted". Moderators only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suspicious: Option<String>,
+    /// Row came from a history backfill, not live delivery. Lets the list
+    /// dim scrollback (`chat_design.backfill_opacity`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_backfill: bool,
+}
+
+/// A matched highlight rule, stamped by the Rust rule engine.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct HighlightStamp {
+    pub rule_id: String,
+    /// "phrase" | "user" | "badge"
+    pub kind: String,
+    pub color: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sound_id: Option<String>,
+    #[serde(default)]
+    pub cooldown_ms: u64,
+}
+
+/// A built-in event highlight, stamped by the Rust rule engine.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct BuiltInStamp {
+    /// "raider" | "returning" | "first_time" | "self"
+    pub kind: String,
+    pub color: String,
+    pub label: String,
 }
 
 /// Represents a parsed segment of a chat message
@@ -103,6 +156,12 @@ pub enum MessageSegment {
         /// renderer applies these effects to the preceding emote.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         modifier_flags: Option<u32>,
+        /// Set on a 7TV PERSONAL emote — one belonging to the sender rather than
+        /// the room, which therefore renders in channels that never added it.
+        /// Carried so a renderer can offer to suppress them; absent means the
+        /// emote came from the channel's own sets.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        is_personal: Option<bool>,
     },
     Emoji {
         content: String,
@@ -120,6 +179,16 @@ pub enum MessageSegment {
         tier: String,          // e.g., "100" (tier ID for URL)
         color: String,         // e.g., "#9c3ee8" (tier color)
         cheermote_url: String, // Animated GIF URL
+    },
+    /// A Twitch chat GIF (GIPHY-backed, sent by Tier 2 and 3 subscribers).
+    /// The message text carries a bracketed description at the GIF's span,
+    /// e.g. `[Y A Y Yes GIF by Djemilah Birnie]`; that stays in `content` for
+    /// search, logs and tooltips while the renderer draws the asset. Twitch
+    /// requires the URL be used exactly as sent.
+    Gif {
+        content: String,
+        gif_id: String,
+        gif_url: String,
     },
 }
 
@@ -146,10 +215,16 @@ pub struct ChatMessage {
     /// Source channel name for multi-stream chat routing
     #[serde(default)]
     pub channel: String,
-    /// Legacy field for backwards compatibility - will be deprecated
-    #[serde(default)]
+    /// Native-emote positions, kept internally for segment parsing but never
+    /// serialized: the frontend derives its copy from the `emotes` IRC tag and
+    /// has no reader of this field, which only duplicated `segments` on the
+    /// wire for every message.
+    #[serde(default, skip_serializing)]
     pub emotes: Vec<EmotePos>,
     pub tags: HashMap<String, String>,
+    /// Placeholder only - the frontend's ResizeObserver measurement is
+    /// authoritative and nothing reads this off the wire, so it stays local.
+    #[serde(default, skip_serializing)]
     pub layout: LayoutResult,
     /// Pre-parsed message segments ready for rendering
     /// This is the "endgame" - all parsing done in Rust, zero regex on main thread

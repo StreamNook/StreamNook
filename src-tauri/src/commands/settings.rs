@@ -4,7 +4,49 @@ use crate::services::live_notification_service::LiveNotification;
 use log::debug;
 use regex::Regex;
 use std::fs;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, State};
+
+// The debounced flusher snapshots the CURRENT in-memory settings from here at
+// flush time (the same Arc the managed AppState holds), never a caller-supplied
+// snapshot buffered earlier: two direct writers exist (import_settings, and
+// window-state-style immediate paths), and a stale buffered flush would clobber
+// them. Registered once from main() before the AppState is managed.
+static SETTINGS_SOURCE: OnceLock<Arc<Mutex<Settings>>> = OnceLock::new();
+static SETTINGS_DIRTY: AtomicBool = AtomicBool::new(false);
+static SETTINGS_FLUSH_TASK_STARTED: AtomicBool = AtomicBool::new(false);
+
+pub fn register_settings_source(source: Arc<Mutex<Settings>>) {
+    let _ = SETTINGS_SOURCE.set(source);
+}
+
+fn ensure_settings_flush_task() {
+    if SETTINGS_FLUSH_TASK_STARTED
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        if tokio::runtime::Handle::try_current().is_err() {
+            SETTINGS_FLUSH_TASK_STARTED.store(false, Ordering::SeqCst);
+            return;
+        }
+        tokio::spawn(async {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                if !SETTINGS_DIRTY.load(Ordering::Acquire) {
+                    continue;
+                }
+                let flushed = tokio::task::spawn_blocking(flush_settings_now).await;
+                match flushed {
+                    Ok(Ok(())) => {}
+                    // flush_settings_now restored the dirty flag itself.
+                    Ok(Err(e)) => debug!("[Settings] debounced flush failed (will retry): {}", e),
+                    Err(_) => SETTINGS_DIRTY.store(true, Ordering::Release),
+                }
+            }
+        });
+    }
+}
 
 /// Get the settings file path in the same directory as cache
 fn get_settings_path() -> Result<std::path::PathBuf, String> {
@@ -19,6 +61,57 @@ pub async fn load_settings(state: State<'_, AppState>) -> Result<Settings, Strin
     Ok(settings.clone())
 }
 
+/// Immediate serialize + write of the given settings to settings.json. Escape
+/// hatch for paths that must hit disk NOW (import_settings) and the fallback
+/// when the debounced flusher isn't available yet. Pretty formatting is kept
+/// deliberately: settings.json is a user-visible file.
+pub fn write_settings_to_disk_sync(settings: &Settings) -> Result<(), String> {
+    let settings_path = get_settings_path()?;
+    let json = serde_json::to_string_pretty(settings)
+        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+    fs::write(&settings_path, json).map_err(|e| format!("Failed to write settings file: {}", e))
+}
+
+/// Persist settings to settings.json, debounced. Callers have already updated
+/// the managed AppState settings before calling (every current call site does),
+/// so this only marks dirty; the 2s flusher snapshots the live state at flush
+/// time. The snapshot argument is written directly only when the debounced
+/// path isn't up yet (no registered source or no async runtime).
+pub fn write_settings_to_disk(settings: &Settings) -> Result<(), String> {
+    if SETTINGS_SOURCE.get().is_none() || tokio::runtime::Handle::try_current().is_err() {
+        return write_settings_to_disk_sync(settings);
+    }
+    SETTINGS_DIRTY.store(true, Ordering::Release);
+    ensure_settings_flush_task();
+    Ok(())
+}
+
+/// Synchronous flush-if-dirty of the live in-memory settings. Called on every
+/// exit path so a pending debounced write can never be lost.
+pub fn flush_settings_now() -> Result<(), String> {
+    if !SETTINGS_DIRTY.swap(false, Ordering::AcqRel) {
+        return Ok(());
+    }
+    let source = match SETTINGS_SOURCE.get() {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+    let snapshot = match source.lock() {
+        Ok(guard) => guard.clone(),
+        Err(e) => {
+            SETTINGS_DIRTY.store(true, Ordering::Release);
+            return Err(e.to_string());
+        }
+    };
+    match write_settings_to_disk_sync(&snapshot) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            SETTINGS_DIRTY.store(true, Ordering::Release);
+            Err(e)
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn save_settings(
     mut settings: Settings,
@@ -26,6 +119,12 @@ pub async fn save_settings(
 ) -> Result<(), String> {
     {
         let mut state_settings = state.settings.lock().unwrap();
+        // `provider_follows` is backend-owned for the same reason `drops` is
+        // (below): it is written by the follow commands and read by the
+        // who's-live poller, so the frontend's copy can be stale. Worse, it is
+        // `#[serde(default)]`, so a frontend save that omits the key would
+        // silently deserialize to an empty list and wipe every follow.
+        settings.provider_follows = state_settings.provider_follows.clone();
         // `drops` is owned by the drops service: it's written only through
         // update_drops_settings (the plugin's Autopilot panel writes through that
         // path too), which keeps state.settings.drops authoritative. A frontend
@@ -37,15 +136,12 @@ pub async fn save_settings(
         settings.drops = state_settings.drops.clone();
         *state_settings = settings.clone();
     }
+    // Recompile chat rules if their groups changed (hash-gated, cheap).
+    crate::services::chat_rules::ChatRules::refresh(&settings);
+    crate::services::streamer_mode::StreamerMode::refresh(&settings);
 
     // Save to our custom location in the same directory as cache
-    let settings_path = get_settings_path()?;
-    let json = serde_json::to_string_pretty(&settings)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-
-    fs::write(&settings_path, json).map_err(|e| format!("Failed to write settings file: {}", e))?;
-
-    Ok(())
+    write_settings_to_disk(&settings)
 }
 
 /// Top-level keys tied to *this machine's* session, never written into a backup
@@ -141,10 +237,11 @@ pub async fn import_settings(path: String, state: State<'_, AppState>) -> Result
         let mut state_settings = state.settings.lock().unwrap();
         *state_settings = imported.clone();
     }
-    let settings_path = get_settings_path()?;
-    let json = serde_json::to_string_pretty(&imported)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    fs::write(&settings_path, json).map_err(|e| format!("Failed to write settings file: {}", e))?;
+    crate::services::chat_rules::ChatRules::refresh(&imported);
+    crate::services::streamer_mode::StreamerMode::refresh(&imported);
+    // Immediate direct write, deliberately not debounced: the frontend reloads
+    // right after this returns and must find the imported file on disk.
+    write_settings_to_disk_sync(&imported)?;
 
     Ok(())
 }
@@ -266,6 +363,7 @@ pub async fn send_test_notification(
         stream_title: Some(random_message),
         stream_url: format!("https://twitch.tv/{}", mock_streamer_login),
         is_test: true,
+        source: None,
     };
 
     // Emit the notification event to the frontend (for in-app notification)

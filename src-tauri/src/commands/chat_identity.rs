@@ -272,6 +272,23 @@ async fn try_gql_badge_fetch(username: &str) -> Result<Option<Vec<ChatIdentityBa
     Ok(Some(sorted_badges))
 }
 
+/// The signed-in user's full global badge collection as "set_id/version"
+/// strings, via the badge picker's `ChatSettings_Badges` query. This is the
+/// only GQL source left for the global collection since Twitch dropped
+/// `user.globalBadgeCollection` (2026-09); badge_service.rs merges it into the
+/// profile overlay's earned set. Answers for the TOKEN's user only.
+pub(crate) async fn fetch_badge_collection_ids(
+    username: &str,
+    token: &str,
+) -> Result<Vec<String>, String> {
+    let client = crate::services::http::client().clone();
+    let (available, _selected) = fetch_badge_collection(&client, username, token).await?;
+    Ok(available
+        .into_iter()
+        .map(|b| format!("{}/{}", b.set_id, b.version))
+        .collect())
+}
+
 /// Fetch available badges and selected badge via ChatSettings_Badges query
 /// Returns (available_badges, selected_badge_set_id)
 async fn fetch_badge_collection(

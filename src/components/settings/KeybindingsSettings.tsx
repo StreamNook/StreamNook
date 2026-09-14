@@ -33,12 +33,12 @@ import { SettingsSection } from './_primitives';
 const DISCOURAGED_BINDINGS = new Set(['F12', 'F5', 'Ctrl+R', 'Ctrl+Shift+R', 'Ctrl+Shift+I']);
 
 const CATEGORY_ORDER: { id: KeybindCategory; description: string }[] = [
-  { id: 'Application', description: 'App-wide commands available everywhere.' },
-  { id: 'Navigation', description: 'Jump between the main surfaces of StreamNook.' },
-  { id: 'Player', description: 'Active while a stream or VOD is playing.' },
-  { id: 'Moderation', description: 'For channels you moderate. Focus a message with J/K, then act on it. Action keys need a focused message.' },
-  { id: 'Chat', description: 'Chat compose field. These keys are fixed for now.' },
-  { id: 'Multi-view', description: 'MultiChat windows. These keys are fixed for now.' },
+  { id: 'Application', description: 'Shortcuts that work anywhere in StreamNook.' },
+  { id: 'Navigation', description: 'Jump between the main screens of StreamNook without reaching for the mouse.' },
+  { id: 'Player', description: 'Control playback while a stream or VOD is playing.' },
+  { id: 'Moderation', description: 'Act on chat in channels you moderate: move the focus with J and K, then press an action key on the focused message.' },
+  { id: 'Chat', description: 'Shortcuts inside the chat box. These are fixed for now and cannot be rebound.' },
+  { id: 'Multi-view', description: 'Shortcuts inside MultiChat windows. These are fixed for now and cannot be rebound.' },
 ];
 
 export default function KeybindingsSettings() {
@@ -93,6 +93,7 @@ export default function KeybindingsSettings() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search shortcuts by name, action, category, or key…"
+          aria-label="Search shortcuts"
           className="w-full rounded-lg border border-white/10 bg-black/30 py-2 pl-9 pr-9 text-sm text-textPrimary placeholder:text-textMuted focus:border-accent/60 focus:outline-none"
         />
         {query && (

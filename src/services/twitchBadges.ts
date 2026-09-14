@@ -45,30 +45,39 @@ export async function fetchChannelBadges(channelId: string, _clientId?: string, 
  * @deprecated Badge info is now included in the UserBadgesResponse from getAllUserBadges()
  * This stub returns null to maintain backwards compatibility
  */
-export function getBadgeInfo(_badgeKey: string, _channelId?: string): any | null {
-  Logger.warn('[twitchBadges] getBadgeInfo() is deprecated. Use getAllUserBadges() instead');
-  return null;
-}
 
-/**
- * @deprecated Badge initialization is now automatic
- */
-export async function initializeBadges(_clientId: string, _token: string, channelId?: string): Promise<void> {
-  Logger.warn('[twitchBadges] initializeBadges() is deprecated. Badges initialize automatically');
-  // Pre-fetch channel badges if provided
-  if (channelId) {
-    const { prefetchChannelBadges } = await import('./badgeService');
-    await prefetchChannelBadges(channelId);
+// Prebuilt lookup indexes. Global badges come from `commands/badges.rs`
+// (universal cache); channel badges are per-room-id and must be fetched
+// separately - many chat-visible badges (subscriber, bits, etc.) are
+// channel-scoped. getBadgeInfoFromCache runs per badge of every parsed
+// message (and parseMessage runs per row), so the nested set/version array
+// scans were O(sets x versions) on the chat hot path; these make it two Map
+// hits with the info objects constructed once at index time.
+type BadgeVersionInfo = Record<string, unknown>;
+type BadgeIndex = Map<string, Map<string, BadgeVersionInfo>>;
+let globalBadgeIndex: BadgeIndex | null = null;
+const channelBadgeIndexes = new Map<string, BadgeIndex>();
+
+function buildBadgeIndex(payload: any): BadgeIndex {
+  const index: BadgeIndex = new Map();
+  if (!payload?.data) return index;
+  for (const badgeSet of payload.data) {
+    const versions = new Map<string, BadgeVersionInfo>();
+    for (const v of badgeSet.versions ?? []) {
+      versions.set(v.id, {
+        image_url_1x: v.image_url_1x,
+        image_url_2x: v.image_url_2x,
+        image_url_4x: v.image_url_4x,
+        title: v.title,
+        description: v.description,
+        click_action: v.click_action,
+        click_url: v.click_url,
+      });
+    }
+    index.set(badgeSet.set_id, versions);
   }
+  return index;
 }
-
-// In-memory cache for badge metadata
-// Global badges come from `commands/badges.rs` (universal cache)
-let globalBadgesCache: any = null;
-
-// Channel badges are per-room-id and must be fetched separately.
-// IMPORTANT: Many chat-visible badges (subscriber, bits, etc.) are channel-scoped.
-const channelBadgesCache = new Map<string, any>();
 
 /**
  * Initialize badge cache from Rust.
@@ -95,7 +104,7 @@ export async function initializeBadgeCache(channelId?: string): Promise<void> {
     }
 
     if (globalBadges) {
-      globalBadgesCache = globalBadges;
+      globalBadgeIndex = buildBadgeIndex(globalBadges);
       Logger.debug('[BadgeCache] Loaded global badges into memory cache');
     } else {
       Logger.warn('[BadgeCache] Failed to load global badges even after prefetch');
@@ -106,15 +115,10 @@ export async function initializeBadgeCache(channelId?: string): Promise<void> {
     // ------------------------------------------------------------
     if (channelId) {
       try {
-        // Fetch credentials + channel badges in one shot.
-        const [clientId, token] = await invoke<[string, string]>('get_twitch_credentials');
-        const channelBadges = await invoke<any>('fetch_channel_badges', {
-          channelId,
-          clientId,
-          token,
-        });
+        // Rust attaches the credentials itself.
+        const channelBadges = await invoke<any>('fetch_channel_badges', { channelId });
 
-        channelBadgesCache.set(channelId, channelBadges);
+        channelBadgeIndexes.set(channelId, buildBadgeIndex(channelBadges));
         Logger.debug('[BadgeCache] Loaded channel badges into memory cache for:', channelId);
       } catch (e) {
         Logger.warn('[BadgeCache] Failed to fetch channel badges:', e);
@@ -155,51 +159,13 @@ export function parseBadges(badgeString: string, channelId?: string): Array<{ ke
 }
 
 /**
- * Get badge info from in-memory cache (synchronous)
+ * Get badge info from in-memory cache (synchronous). Channel badges win
+ * (subscriber, bits, etc.), then the global set.
  */
 function getBadgeInfoFromCache(setId: string, versionId: string, channelId?: string): any | null {
-  // 1) Channel badges first (subscriber, bits, etc.)
   if (channelId) {
-    const channelBadges = channelBadgesCache.get(channelId);
-    if (channelBadges?.data) {
-      for (const badgeSet of channelBadges.data) {
-        if (badgeSet.set_id === setId) {
-          const badgeVersion = badgeSet.versions.find((v: any) => v.id === versionId);
-          if (badgeVersion) {
-            return {
-              image_url_1x: badgeVersion.image_url_1x,
-              image_url_2x: badgeVersion.image_url_2x,
-              image_url_4x: badgeVersion.image_url_4x,
-              title: badgeVersion.title,
-              description: badgeVersion.description,
-              click_action: badgeVersion.click_action,
-              click_url: badgeVersion.click_url,
-            };
-          }
-        }
-      }
-    }
+    const hit = channelBadgeIndexes.get(channelId)?.get(setId)?.get(versionId);
+    if (hit) return hit;
   }
-
-  // 2) Global badges fallback
-  if (!globalBadgesCache || !globalBadgesCache.data) return null;
-
-  for (const badgeSet of globalBadgesCache.data) {
-    if (badgeSet.set_id === setId) {
-      const badgeVersion = badgeSet.versions.find((v: any) => v.id === versionId);
-      if (badgeVersion) {
-        return {
-          image_url_1x: badgeVersion.image_url_1x,
-          image_url_2x: badgeVersion.image_url_2x,
-          image_url_4x: badgeVersion.image_url_4x,
-          title: badgeVersion.title,
-          description: badgeVersion.description,
-          click_action: badgeVersion.click_action,
-          click_url: badgeVersion.click_url,
-        };
-      }
-    }
-  }
-
-  return null;
+  return globalBadgeIndex?.get(setId)?.get(versionId) ?? null;
 }

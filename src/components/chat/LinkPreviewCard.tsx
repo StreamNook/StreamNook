@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, memo } from 'react';
 import { Play, ExternalLink, Eye, ShieldCheck, Instagram } from 'lucide-react';
-import { Tooltip } from '../ui/Tooltip';
+import { Tooltip, type TooltipChildProps } from '../ui/Tooltip';
 import { DiscordGlyph } from '../ui/DiscordGlyph';
 import { useAppStore, type MediaInfo } from '../../stores/AppStore';
 import { playTwitchMediaInMain } from '../../utils/playTwitchMediaInMain';
@@ -262,7 +262,7 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
   // The card IS the link now: the inline URL in the message body is suppressed
   // once a card represents it, so every resolved card opens the link on click
   // and reveals the full URL on hover.
-  const wrap = (node: React.ReactElement) => (
+  const wrap = (node: React.ReactElement<TooltipChildProps>) => (
     <Tooltip content={url} side="top">
       {node}
     </Tooltip>

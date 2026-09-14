@@ -19,6 +19,11 @@ static EMOJI_CACHE: Lazy<Mutex<LruCache<String, String>>> = Lazy::new(|| {
     ))
 });
 
+/// Emoji entries resident in the LRU (try-lock). Diagnostics for the resource line.
+pub fn emoji_cache_len() -> Option<usize> {
+    EMOJI_CACHE.try_lock().ok().map(|c| c.len())
+}
+
 #[command]
 pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
@@ -94,22 +99,36 @@ pub fn start_titlebar_drag(window: Window) -> Result<(), String> {
         let _ = window;
         Ok(())
     }
+    // The desktop body below is kept at its upstream indentation on purpose:
+    // it is merged textually from the desktop repo on every sync, and
+    // re-indenting it would turn every upstream hunk into a conflict.
     #[cfg(desktop)]
     {
-        if window.is_maximized().unwrap_or(false) {
-            // Read the pre-maximize size BEFORE unmaximizing. Tauri setters are queued on
-            // the event loop, so outer_size() straight after unmaximize() can still report
-            // the maximized size.
-            if let Some((mut rw, mut rh)) = restore_rect_size(&window) {
-                // A build before the logical-units fix could have persisted a restore rect
-                // larger than the screen. Never restore into one.
-                if let Ok(Some(monitor)) = window.current_monitor() {
-                    let work = monitor.work_area();
-                    rw = rw.min(work.size.width);
-                    rh = rh.min(work.size.height);
-                }
+    if window.is_maximized().unwrap_or(false) {
+        // Read the pre-maximize size BEFORE unmaximizing. Tauri setters are queued on
+        // the event loop, so outer_size() straight after unmaximize() can still report
+        // the maximized size.
+        if let Some((mut rw, mut rh)) = restore_rect_size(&window) {
+            let cursor = window.cursor_position().map_err(|e| e.to_string())?;
 
-                let cursor = window.cursor_position().map_err(|e| e.to_string())?;
+            // A poisoned restore rect (persisted by an older build, or inflated by a
+            // mis-scaled resize) must never round-trip. current_monitor() can be None
+            // while the window straddles monitors, so fall back to the monitor under
+            // the cursor, then the primary — the clamp must never silently no-op.
+            let monitor = window
+                .current_monitor()
+                .ok()
+                .flatten()
+                .or_else(|| window.monitor_from_point(cursor.x, cursor.y).ok().flatten())
+                .or_else(|| window.primary_monitor().ok().flatten());
+
+            if let Some(monitor) = monitor {
+                let work = monitor.work_area();
+                // 90% cap: the restore is always visibly smaller than maximized, so a
+                // work-area-sized rcNormalPosition self-heals on the first drag.
+                rw = rw.min(work.size.width * 9 / 10);
+                rh = rh.min(work.size.height * 9 / 10);
+
                 let pos = window.outer_position().map_err(|e| e.to_string())?;
                 let size = window.outer_size().map_err(|e| e.to_string())?;
 
@@ -124,19 +143,75 @@ pub fn start_titlebar_drag(window: Window) -> Result<(), String> {
                 let x = (cursor.x - frac_x * rw as f64).round() as i32;
                 let y = (cursor.y - grab_y).round() as i32;
 
+                // rcNormalPosition is an OUTER rect but set_size takes the INNER size;
+                // subtract the frame delta measured now (the same invisible resize
+                // border applies whether maximized or restored on a borderless window).
+                let inner = window.inner_size().map_err(|e| e.to_string())?;
+                let frame_w = size.width.saturating_sub(inner.width);
+                let frame_h = size.height.saturating_sub(inner.height);
+
                 // Queued setters, so they apply in this order on the event loop.
                 window.unmaximize().map_err(|e| e.to_string())?;
                 window
-                    .set_size(tauri::PhysicalSize::new(rw, rh))
+                    .set_size(tauri::PhysicalSize::new(
+                        rw.saturating_sub(frame_w),
+                        rh.saturating_sub(frame_h),
+                    ))
                     .map_err(|e| e.to_string())?;
                 window
                     .set_position(tauri::PhysicalPosition::new(x, y))
                     .map_err(|e| e.to_string())?;
             } else {
+                // No monitor info at all: don't guess a rect, just unmaximize and drag.
                 window.unmaximize().map_err(|e| e.to_string())?;
             }
+        } else {
+            window.unmaximize().map_err(|e| e.to_string())?;
         }
-        window.start_dragging().map_err(|e| e.to_string())
+    }
+    let result = window.start_dragging().map_err(|e| e.to_string());
+
+    // start_dragging() returns as soon as the OS move loop is POSTED, not when the
+    // drag ends, so the frontend gets its drag-over signal from a watcher thread
+    // instead of the invoke resolving. The frontend suppresses aspect-ratio resizes
+    // between the invoke and this event: a setSize inside the modal move loop
+    // corrupts the loop's cached rect and commits a bogus size on mouse-up.
+    #[cfg(windows)]
+    if result.is_ok() {
+        use tauri::Emitter;
+        let win = window.clone();
+        std::thread::spawn(move || {
+            use windows::Win32::UI::Input::KeyboardAndMouse::{
+                GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON,
+            };
+            use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTON};
+            // Swapped mouse buttons report the physical left button as VK_RBUTTON.
+            let vk = if unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0 {
+                VK_RBUTTON
+            } else {
+                VK_LBUTTON
+            };
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                let down = (unsafe { GetAsyncKeyState(vk.0 as i32) } as u16) & 0x8000 != 0;
+                if !down || std::time::Instant::now() > deadline {
+                    break;
+                }
+            }
+            // The modal loop is over: recover any wedged unresizable state and let
+            // the frontend resume aspect-ratio adjustments.
+            let _ = win.set_resizable(true);
+            let _ = win.emit("titlebar-drag-ended", ());
+        });
+    }
+    #[cfg(not(windows))]
+    {
+        use tauri::Emitter;
+        let _ = window.emit("titlebar-drag-ended", ());
+    }
+
+    result
     }
 }
 
@@ -168,6 +243,25 @@ fn restore_rect_size(window: &Window) -> Option<(u32, u32)> {
 #[cfg(not(windows))]
 fn restore_rect_size(_window: &Window) -> Option<(u32, u32)> {
     None
+}
+
+/// Flush every debounced persistent store to disk right now.
+///
+/// Desktop flushes these on `RunEvent::Exit`, which Android never delivers:
+/// the OS kills a backgrounded process outright, so anything still sitting in
+/// a debounce window (up to ~2 s of settings writes) is lost. The mobile shell
+/// calls this from its `visibilitychange` handler, the last reliable signal
+/// before the process can die. Every flush is a no-op when nothing is dirty.
+#[cfg(mobile)]
+#[command]
+pub fn flush_persistent_stores() -> Result<(), String> {
+    let _ = crate::commands::settings::flush_settings_now();
+    let _ = crate::services::universal_cache_service::flush_manifest_now();
+    let _ = crate::services::mod_log_storage_service::ModLogStorageService::flush_now();
+    let _ = crate::services::whisper_storage_service::WhisperStorageService::flush_now();
+    let _ = crate::services::vod_progress_service::flush_now();
+    let _ = crate::services::chat_logger_service::ChatLoggerService::flush_all();
+    Ok(())
 }
 
 #[command]

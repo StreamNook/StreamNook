@@ -1310,6 +1310,7 @@ export default function GameDetailPanel({
             <ChannelPickerModal
                 isOpen
                 onClose={closePicker}
+                campaignId={picker.campaign.id}
                 campaignName={picker.campaign.name}
                 gameName={picker.campaign.game_name}
                 gameId={picker.campaign.game_id}

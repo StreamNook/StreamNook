@@ -72,6 +72,11 @@ const TRUSTED_BASE_DOMAINS: readonly string[] = [
   'steampowered.com',
   'steamcommunity.com',
   'instagram.com',
+  // Image hosts StreamNook can upload to (utils/imageUploadHosts): their
+  // links must render as image cards, for the sender and everyone else.
+  'nuuls.com',
+  'catbox.moe',
+  'uguu.se',
   // Widened to auto-expand as a generic card (OG-friendly, well-known).
   'bsky.app',
   'vimeo.com',

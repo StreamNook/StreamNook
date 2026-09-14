@@ -29,6 +29,12 @@ const CACHE_EXPIRY_DAYS = 7;
 // Kept >= the live preview hold (8s) so the entry outlasts its own preview.
 const TEST_NOTIFICATION_TTL_MS = 8000;
 
+/** How long the same channel is suppressed after a go-live announcement.
+ *  Module scope, not component state: the listener must not re-arm on every
+ *  render, and there is only ever one Dynamic Island. */
+const GO_LIVE_DEDUPE_MS = 5 * 60_000;
+const recentGoLive = new Map<string, number>();
+
 interface LiveNotificationFromBackend {
     streamer_name: string;
     streamer_login: string;
@@ -38,6 +44,10 @@ interface LiveNotificationFromBackend {
     stream_title?: string;
     stream_url: string;
     is_test?: boolean;
+    /** Which watcher raised this. Absent = the follow poller. 'favorite' = the
+     *  favorites sweep, which has its own setting: a channel you favorited but
+     *  don't follow must not be silenced by the follows toggle, or the reverse. */
+    source?: string;
 }
 
 interface WhisperFromBackend {
@@ -224,6 +234,7 @@ const DynamicIsland = () => {
     const soundEnabled = settings.live_notifications?.play_sound ?? true;
     const notificationsEnabled = settings.live_notifications?.enabled ?? true;
     const showLiveNotifications = settings.live_notifications?.show_live_notifications ?? true;
+    const showFavoriteLiveNotifications = settings.live_notifications?.show_favorite_live_notifications ?? true;
     const showWhisperNotifications = settings.live_notifications?.show_whisper_notifications ?? true;
     const showUpdateNotifications = settings.live_notifications?.show_update_notifications ?? true;
     const showDropsNotifications = settings.live_notifications?.show_drops_notifications ?? true;
@@ -440,10 +451,35 @@ const DynamicIsland = () => {
     // Listen for live notifications
     useEffect(() => {
         const unlisten = listen<LiveNotificationFromBackend>('streamer-went-live', (event) => {
-            // Check if notifications are enabled
-            if (!notificationsEnabled || !showLiveNotifications) return;
-
             const data = event.payload;
+
+            // Two watchers emit this event now, and each has its own toggle:
+            // the follow poller (no `source`) and the favorites sweep. Gating
+            // both on `show_live_notifications` would mean turning off
+            // notifications for your follows also silenced your favorites.
+            if (!notificationsEnabled) return;
+            const typeEnabled = data.source === 'favorite'
+                ? showFavoriteLiveNotifications
+                : showLiveNotifications;
+            if (!typeEnabled) return;
+
+            // A channel you both follow AND favorite is announced by BOTH
+            // watchers, so without this it pops twice. Suppressing a repeat of
+            // the same channel for a few minutes also damps a stream that drops
+            // and comes straight back, which used to announce itself again.
+            // Test notifications are exempt: the point of the button is that it
+            // fires every time it is pressed.
+            if (!data.is_test) {
+                const now = Date.now();
+                const key = data.streamer_login.toLowerCase();
+                const last = recentGoLive.get(key);
+                if (last !== undefined && now - last < GO_LIVE_DEDUPE_MS) return;
+                recentGoLive.set(key, now);
+                // Bounded: without a sweep this grows for the life of the session.
+                for (const [k, t] of recentGoLive) {
+                    if (now - t >= GO_LIVE_DEDUPE_MS) recentGoLive.delete(k);
+                }
+            }
 
             // Test notifications mirror whichever surfaces the user has enabled
             // so the "Test" button previews their actual setup:
@@ -528,7 +564,7 @@ const DynamicIsland = () => {
         return () => {
             unlisten.then((fn) => fn());
         };
-    }, [addNotification, notificationsEnabled, showLiveNotifications, useDynamicIsland, useToast, addToast, startStream, soundEnabled, playNotificationSound, sendNativeNotification]);
+    }, [addNotification, notificationsEnabled, showLiveNotifications, showFavoriteLiveNotifications, useDynamicIsland, useToast, addToast, startStream, soundEnabled, playNotificationSound, sendNativeNotification]);
 
     // Listen for whisper notifications
     useEffect(() => {

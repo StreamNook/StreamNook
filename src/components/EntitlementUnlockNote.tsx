@@ -8,7 +8,7 @@ import {
   getUserCosmeticSlugs,
   getCosmeticBySlug,
 } from '../services/supabaseService';
-import { COSMETIC_ASSET_BY_SLUG } from './cosmeticAssets';
+import { COSMETIC_ASSET_CHAT_BY_SLUG } from './cosmeticAssets';
 
 // Paid tiers worth celebrating, highest first (a subscriber payment also grants
 // the supporter badge, so prefer announcing the higher tier). The free default
@@ -96,7 +96,7 @@ export const EntitlementUnlockNote = () => {
     return () => clearTimeout(t);
   }, [unlocked]);
 
-  const asset = unlocked ? COSMETIC_ASSET_BY_SLUG[unlocked.slug] : null;
+  const asset = unlocked ? COSMETIC_ASSET_CHAT_BY_SLUG[unlocked.slug] : null;
 
   return (
     <AnimatePresence>

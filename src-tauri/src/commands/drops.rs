@@ -6,7 +6,7 @@ lazy_static::lazy_static! { static ref HTTP_CLIENT: reqwest::Client = crate::ser
 use crate::models::drops::*;
 use crate::models::settings::AppState;
 use crate::services::drops_auth_service::{DropsAuthService, DropsDeviceCodeInfo};
-use log::debug;
+use log::{debug, error, warn};
 use tauri::{AppHandle, Emitter, State};
 
 #[tauri::command]
@@ -31,20 +31,13 @@ pub async fn update_drops_settings(
         app_settings.drops = settings.clone();
     }
 
-    // Save to disk
+    // Save to disk through the shared (debounced) settings writer; the state
+    // update above is what the flusher snapshots.
     let settings_to_save = {
         let app_settings = state.settings.lock().map_err(|e| e.to_string())?;
         app_settings.clone()
     };
-
-    // Use the save_settings logic to persist to file
-    let app_dir = crate::services::cache_service::get_app_data_dir()
-        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    let settings_path = app_dir.join("settings.json");
-    let json = serde_json::to_string_pretty(&settings_to_save)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    std::fs::write(&settings_path, json)
-        .map_err(|e| format!("Failed to write settings file: {}", e))?;
+    crate::commands::settings::write_settings_to_disk(&settings_to_save)?;
 
     // Keep the realtime points socket in line with the automation master toggle so
     // the plugin's background earns start (or stop) producing channel-points
@@ -102,6 +95,22 @@ pub async fn get_drops_inventory(state: State<'_, AppState>) -> Result<Inventory
 pub async fn get_drop_progress(state: State<'_, AppState>) -> Result<Vec<DropProgress>, String> {
     let drops_service = state.drops_service.lock().await;
     Ok(drops_service.get_drop_progress().await)
+}
+
+/// Which of these channels are currently offering the campaign, straight from
+/// Twitch. The channel picker uses it so an allow-listed streamer is offered
+/// when Twitch says the drop is earnable there and hidden when it isn't.
+#[tauri::command]
+pub async fn get_campaign_eligible_channels(
+    campaign_id: String,
+    channel_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    let drops_service = state.drops_service.lock().await;
+    drops_service
+        .campaign_eligible_channels(&campaign_id, &channel_ids)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -303,7 +312,7 @@ pub async fn refresh_followed_channel_points(
     // Collect off-lock so the network walk never stalls chat/automation, which also
     // hold the drops service mutex.
     let mut found: Vec<(String, String, i32)> = Vec::new(); // (channel_id, login, balance)
-    for chunk in channels.chunks(35) {
+    for chunk in channels.chunks(crate::services::twitch_limits::GQL_MAX_BATCHED_OPERATIONS) {
         let body: Vec<serde_json::Value> = chunk
             .iter()
             .map(|(login, _id)| {
@@ -325,32 +334,63 @@ pub async fn refresh_followed_channel_points(
         {
             Ok(r) => r,
             Err(e) => {
-                debug!("[ChannelPoints] balance batch failed: {}", e);
+                error!("[ChannelPoints] balance batch failed: {}", e);
                 continue;
             }
         };
 
+        // Status first: an over-cap batch returns 400 with valid JSON, so
+        // json() succeeds and the failure would pass unlogged.
+        let status = resp.status();
         let parsed: serde_json::Value = match resp.json().await {
             Ok(v) => v,
             Err(e) => {
-                debug!("[ChannelPoints] balance batch parse failed: {}", e);
+                error!("[ChannelPoints] balance batch parse failed: {}", e);
                 continue;
             }
         };
 
-        // Batched responses come back in request order; zip by index.
-        if let Some(arr) = parsed.as_array() {
-            for (idx, item) in arr.iter().enumerate() {
-                let Some((login, channel_id)) = chunk.get(idx) else {
-                    continue;
-                };
-                if let Some(bal) = item
-                    .pointer("/data/user/channel/self/communityPoints/balance")
-                    .and_then(|v| v.as_i64())
-                {
-                    if bal > 0 {
-                        found.push((channel_id.clone(), login.clone(), bal as i32));
-                    }
+        if !status.is_success() {
+            error!(
+                "[ChannelPoints] balance batch HTTP {} for {} operations (cap is {}): {}",
+                status,
+                chunk.len(),
+                crate::services::twitch_limits::GQL_MAX_BATCHED_OPERATIONS,
+                parsed
+            );
+            continue;
+        }
+
+        // Results map to requests BY INDEX, sound only while lengths agree;
+        // a short array would misattribute balances.
+        let Some(arr) = parsed.as_array() else {
+            error!(
+                "[ChannelPoints] balance batch returned a non-array body, skipping {} channels: {}",
+                chunk.len(),
+                parsed
+            );
+            continue;
+        };
+        if arr.len() != chunk.len() {
+            error!(
+                "[ChannelPoints] balance batch length mismatch (sent {}, got {}); \
+                 refusing to map positionally",
+                chunk.len(),
+                arr.len()
+            );
+            continue;
+        }
+
+        for (idx, item) in arr.iter().enumerate() {
+            let Some((login, channel_id)) = chunk.get(idx) else {
+                continue;
+            };
+            if let Some(bal) = item
+                .pointer("/data/user/channel/self/communityPoints/balance")
+                .and_then(|v| v.as_i64())
+            {
+                if bal > 0 {
+                    found.push((channel_id.clone(), login.clone(), bal as i32));
                 }
             }
         }
@@ -784,6 +824,22 @@ pub async fn get_active_prediction(
         .json()
         .await
         .map_err(|e| format!("Failed to parse prediction response: {}", e))?;
+
+    // Twitch REMOVED `Channel.activePredictionEvent`, so this query now fails
+    // validation and the branch below can never be taken. Surface that instead of
+    // reporting "no active prediction", which is what made it look like a working
+    // late-join path for as long as it did.
+    //
+    // Nothing depends on it any more: the predictions-channel-v1 topic sends the
+    // full event on `event-updated`, which fires on every bet, so an already
+    // running prediction reaches the overlay within seconds of subscribing.
+    if let Some(errors) = result.get("errors") {
+        warn!(
+            "[Prediction] get_active_prediction is no longer supported by Twitch              (PubSub is the only source): {}",
+            errors
+        );
+        return Ok(None);
+    }
 
     // Check if there's an active prediction
     if let Some(prediction) = result["data"]["channel"]["activePredictionEvent"].as_object() {

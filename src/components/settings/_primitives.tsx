@@ -1,4 +1,6 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { CircleHelp, RotateCcw } from 'lucide-react';
+import { Tooltip } from '../ui/Tooltip';
 
 interface SettingsSectionProps {
   label: string;
@@ -8,6 +10,12 @@ interface SettingsSectionProps {
   bare?: boolean;
 }
 
+/** Deterministic id from a section label, so the "On this page" strip can
+ *  target sections that never declared one. Explicit ids still win (the
+ *  search index deep-links to those). */
+export const sectionIdFromLabel = (label: string): string =>
+  `settings-section-${label.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
+
 export const SettingsSection = ({
   label,
   description,
@@ -15,7 +23,7 @@ export const SettingsSection = ({
   id,
   bare = false,
 }: SettingsSectionProps) => (
-  <section id={id}>
+  <section id={id ?? sectionIdFromLabel(label)} data-settings-section={label}>
     <div className="px-1 pb-2.5">
       <h3 className="text-[12px] font-semibold uppercase tracking-[0.14em] text-textPrimary">
         {label}
@@ -39,18 +47,28 @@ interface SettingsRowProps {
   /** Small inline element after the title (e.g. a source-scope indicator). */
   titleBadge?: ReactNode;
   description?: string;
+  /** The longer explanation, behind a small help glyph beside the title. Keeps
+   *  the row to one short line while the detail stays one hover away, so a
+   *  tab full of rows reads as a list of settings rather than a wall of prose. */
+  help?: ReactNode;
   control?: ReactNode;
   children?: ReactNode;
   disabled?: boolean;
+  /** Restores this row's setting to its default. Pass it ONLY while the setting
+   *  actually differs from the default — the affordance's presence is the signal
+   *  that something was changed here, so an always-present one says nothing. */
+  onReset?: () => void;
 }
 
 export const SettingsRow = ({
   title,
   titleBadge,
   description,
+  help,
   control,
   children,
   disabled = false,
+  onReset,
 }: SettingsRowProps) => (
   <div
     className={`settings-row -mx-4 px-4 py-3 ${
@@ -62,6 +80,29 @@ export const SettingsRow = ({
         <div className="text-[13px] font-medium text-textPrimary">
           {title}
           {titleBadge && <span className="ml-1.5 align-middle">{titleBadge}</span>}
+          {help && (
+            <Tooltip content={<span className="block max-w-[34ch] text-left leading-relaxed">{help}</span>}>
+              <span
+                tabIndex={0}
+                aria-label="More about this setting"
+                className="ml-1.5 inline-flex align-middle text-textMuted hover:text-textSecondary transition-colors cursor-help"
+              >
+                <CircleHelp size={12} />
+              </span>
+            </Tooltip>
+          )}
+          {onReset && (
+            <Tooltip content="Reset to default">
+              <button
+                type="button"
+                onClick={onReset}
+                aria-label="Reset to default"
+                className="ml-1.5 inline-flex align-middle text-textMuted hover:text-textPrimary transition-colors"
+              >
+                <RotateCcw size={11} />
+              </button>
+            </Tooltip>
+          )}
         </div>
         {description && (
           <p className="mt-0.5 text-[12px] leading-relaxed text-textSecondary">

@@ -7,92 +7,75 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
 // ============================================================================
-// GQL STRUCTS (for fetching user's displayBadges when no IRC data available)
+// GQL STRUCTS (per-user badge lookup)
 // ============================================================================
+//
+// Inline query, not a persisted hash. Twitch rotates persisted-query hashes
+// without notice (the old `ViewerCard` hash died 2026-09 with
+// `PersistedQueryNotFound`), and an inline query keeps working as long as the
+// fields exist. Anonymous with the web client id: `user.displayBadges` and
+// `channelViewer.earnedBadges` are both public.
+
+const BADGE_LOOKUP_QUERY: &str = r#"
+query StreamNookBadgeLookup($id: ID!, $login: String!, $channelID: ID!, $channelLogin: String!) {
+    user(id: $id) {
+        displayBadges(channelID: $channelID) { setID version }
+    }
+    channelViewer(userLogin: $login, channelLogin: $channelLogin) {
+        earnedBadges { setID version }
+    }
+}
+"#;
 
 #[derive(Debug, Serialize)]
-struct GQLRequest {
-    #[serde(rename = "operationName")]
-    operation_name: String,
-    variables: GQLVariables,
-    extensions: GQLExtensions,
+struct BadgeLookupRequest {
+    query: &'static str,
+    variables: BadgeLookupVariables,
 }
 
-#[derive(Debug, Serialize, Clone)]
-struct GQLVariables {
+#[derive(Debug, Serialize)]
+struct BadgeLookupVariables {
+    id: String,
+    login: String,
     #[serde(rename = "channelID")]
     channel_id: String,
     #[serde(rename = "channelLogin")]
     channel_login: String,
-    #[serde(rename = "hasChannelID")]
-    has_channel_id: bool,
-    #[serde(rename = "targetUserID")]
-    target_user_id: Option<String>,
-    #[serde(rename = "targetLogin")]
-    target_login: String,
-    #[serde(rename = "giftRecipientLogin")]
-    gift_recipient_login: String,
-    #[serde(rename = "isViewerBadgeCollectionEnabled")]
-    is_viewer_badge_collection_enabled: bool,
-    #[serde(rename = "withStandardGifting")]
-    with_standard_gifting: bool,
-    #[serde(rename = "badgeSourceChannelID")]
-    badge_source_channel_id: String,
-    #[serde(rename = "badgeSourceChannelLogin")]
-    badge_source_channel_login: String,
-}
-
-#[derive(Debug, Serialize, Clone)]
-struct GQLExtensions {
-    #[serde(rename = "persistedQuery")]
-    persisted_query: PersistedQuery,
-}
-
-#[derive(Debug, Serialize, Clone)]
-struct PersistedQuery {
-    version: i32,
-    #[serde(rename = "sha256Hash")]
-    sha256_hash: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct GQLResponse {
     data: Option<GQLData>,
+    #[serde(default)]
+    errors: Vec<GQLError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GQLError {
+    #[serde(default)]
+    message: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct GQLData {
-    #[serde(rename = "targetUser", default)]
-    target_user: Option<TargetUser>,
+    #[serde(default)]
+    user: Option<TargetUser>,
     #[serde(rename = "channelViewer", default)]
     channel_viewer: Option<ChannelViewer>,
 }
 
+// Twitch answers `null` (not `[]`) for an empty badge list, so these are
+// Option<Vec>: `#[serde(default)]` alone only covers a MISSING field.
 #[derive(Debug, Deserialize)]
 struct TargetUser {
     #[serde(rename = "displayBadges", default)]
-    display_badges: Vec<GQLBadge>,
+    display_badges: Option<Vec<GQLBadge>>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ChannelViewer {
     #[serde(rename = "earnedBadges", default)]
-    earned_badges: Vec<EarnedBadge>,
-}
-
-#[derive(Debug, Deserialize)]
-struct EarnedBadge {
-    #[serde(rename = "setID")]
-    set_id: String,
-    version: String,
-    #[serde(default)]
-    title: Option<String>,
-    #[serde(rename = "image1x", default)]
-    image_1x: Option<String>,
-    #[serde(rename = "image2x", default)]
-    image_2x: Option<String>,
-    #[serde(rename = "image4x", default)]
-    image_4x: Option<String>,
+    earned_badges: Option<Vec<GQLBadge>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -102,51 +85,12 @@ struct GQLBadge {
     version: String,
 }
 
-// ============================================================================
-// GQL STRUCTS (for fetching user's global badge collection)
-// ============================================================================
-
-#[derive(Debug, Serialize)]
-struct BadgeCollectionGQLRequest {
-    #[serde(rename = "operationName")]
-    operation_name: String,
-    variables: BadgeCollectionVariables,
-    extensions: GQLExtensions,
-}
-
-#[derive(Debug, Serialize, Clone)]
-struct BadgeCollectionVariables {
-    login: String,
-}
-
+/// `id.twitch.tv/oauth2/validate` body: the subset we need to learn which
+/// Twitch user a Drops token belongs to.
 #[derive(Debug, Deserialize)]
-struct BadgeCollectionGQLResponse {
-    data: Option<BadgeCollectionGQLData>,
-}
-
-#[derive(Debug, Deserialize)]
-struct BadgeCollectionGQLData {
-    user: Option<BadgeCollectionUser>,
-}
-
-#[derive(Debug, Deserialize)]
-struct BadgeCollectionUser {
-    #[serde(rename = "globalBadgeCollection", default)]
-    global_badge_collection: Vec<BadgeCollectionItem>,
-}
-
-#[derive(Debug, Deserialize)]
-struct BadgeCollectionItem {
-    badge: BadgeCollectionBadge,
-}
-
-#[derive(Debug, Deserialize)]
-struct BadgeCollectionBadge {
-    #[serde(rename = "setID")]
-    set_id: String,
-    version: String,
+struct TokenValidation {
     #[serde(default)]
-    title: Option<String>,
+    user_id: String,
 }
 
 // ============================================================================
@@ -185,6 +129,37 @@ pub enum BadgeProvider {
     Chatsen,
     Chatty,
     DankChat,
+    Moltorino,
+}
+
+impl BadgeProvider {
+    /// The canonical lowercase id this provider carries EVERYWHERE it crosses a
+    /// boundary: the serde wire form (`rename_all = "lowercase"` above), the
+    /// `<provider>:<id>` loadout key the Identity API dispatches on, and the
+    /// overlay's per-provider badge toggles.
+    ///
+    /// `format!("{:?}", provider)` yields PascalCase and must never reach any of
+    /// those. `get_user_profile_complete` used to send the Debug form while every
+    /// other command sent the serde form, so the profile card held two spellings
+    /// of one provider: it grouped third-party badges under a catch-all "Other"
+    /// whenever the cosmetics cache answered first, and built `FFZ:ffz-3` style
+    /// loadout keys that matched nothing whenever the Rust profile answered
+    /// first, hiding a member's curated badge outright.
+    ///
+    /// Pinned to the serde form by `provider_key_matches_the_serde_wire_form`.
+    pub fn as_key(&self) -> &'static str {
+        match self {
+            BadgeProvider::Twitch => "twitch",
+            BadgeProvider::FFZ => "ffz",
+            BadgeProvider::BTTV => "bttv",
+            BadgeProvider::Chatterino => "chatterino",
+            BadgeProvider::Homies => "homies",
+            BadgeProvider::Chatsen => "chatsen",
+            BadgeProvider::Chatty => "chatty",
+            BadgeProvider::DankChat => "dankchat",
+            BadgeProvider::Moltorino => "moltorino",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,6 +300,130 @@ struct DankChatBadge {
     users: Vec<String>,
 }
 
+// Moltorino (MoltoBenne's Chatterino7 fork): GET https://api.moltorino.com/badges.
+// One JSON snapshot of the whole supporter roster: `badges` is the tier list in
+// TIER ORDER (developer, top_donor, founder, supporter) and each tier carries its
+// holders. Moltorino's own client shows only the FIRST tier a user appears in,
+// so a user gets at most one badge here too. Feed facts, asset sizes and the
+// client rules are mirrored in the tier handling below.
+//
+// Every asset is an animated webp of 120-160 frames (1x 118 KB, 2x 353 KB,
+// 3x 962 KB), which is why the chat row renders third-party badges at 2x.
+const MOLTORINO_BADGES_URL: &str = "https://api.moltorino.com/badges";
+/// The roster changes a few times a week, not a few times an hour, and the
+/// feed is `no-store` with no ETag, so a refresh is always a full 20 KB read.
+/// Six hours is plenty for a badge nobody is waiting on.
+const MOLTORINO_REFRESH: Duration = Duration::from_secs(6 * 60 * 60);
+/// Bounds copied from Moltorino's own parser so a runaway feed cannot balloon
+/// the index: it caps at 64 tiers and 250,000 assignments.
+const MOLTORINO_MAX_TIERS: usize = 64;
+const MOLTORINO_MAX_ASSIGNMENTS: usize = 250_000;
+
+#[derive(Debug, Clone, Deserialize)]
+struct MoltorinoBadgesResponse {
+    #[serde(default)]
+    version: Option<i64>,
+    #[serde(default)]
+    badges: Vec<MoltorinoBadge>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct MoltorinoBadge {
+    id: String,
+    #[serde(default)]
+    tooltip: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    images: MoltorinoImages,
+    #[serde(default)]
+    users: Vec<MoltorinoUser>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct MoltorinoImages {
+    #[serde(rename = "1x", default)]
+    x1: String,
+    #[serde(rename = "2x", default)]
+    x2: String,
+    #[serde(rename = "3x", default)]
+    x3: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct MoltorinoUser {
+    id: String,
+}
+
+impl MoltorinoBadge {
+    /// Display title: the feed's tooltip, or the tier id when that is blank.
+    fn title(&self) -> String {
+        if self.tooltip.trim().is_empty() {
+            self.id.clone()
+        } else {
+            self.tooltip.clone()
+        }
+    }
+
+    /// (1x, 2x, 4x) URLs with the same fall-through the other providers use:
+    /// a missing larger variant falls back to the next smaller one.
+    fn image_urls(&self) -> Option<(String, String, String)> {
+        let x1 = self.images.x1.trim();
+        if x1.is_empty() {
+            return None;
+        }
+        let x2 = if self.images.x2.trim().is_empty() { x1 } else { self.images.x2.trim() };
+        let x3 = if self.images.x3.trim().is_empty() { x2 } else { self.images.x3.trim() };
+        Some((x1.to_string(), x2.to_string(), x3.to_string()))
+    }
+}
+
+/// Moltorino accepts only numeric Twitch ids of 1-32 digits; anything else in
+/// the feed is a typo or a future key space and must not reach the index.
+fn is_valid_moltorino_user_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 32 && id.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// One gallery tile per Moltorino tier, in tier order. Holder counts follow
+/// the same one-badge-per-user rule as the chat index, so a user listed under
+/// two tiers is counted (and flagged `owned`) only for the higher one.
+fn moltorino_gallery_tiles(
+    feed: &MoltorinoBadgesResponse,
+    viewer_user_id: Option<&str>,
+) -> Vec<ThirdPartyGalleryBadge> {
+    let mut tiles = Vec::new();
+    let mut assigned: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for badge in feed.badges.iter().take(MOLTORINO_MAX_TIERS) {
+        let Some((x1, x2, x4)) = badge.image_urls() else {
+            continue;
+        };
+        let mut user_count = 0usize;
+        let mut owned = false;
+        for user in &badge.users {
+            let uid = user.id.trim();
+            if !is_valid_moltorino_user_id(uid) || !assigned.insert(uid) {
+                continue;
+            }
+            user_count += 1;
+            if viewer_user_id == Some(uid) {
+                owned = true;
+            }
+        }
+        tiles.push(ThirdPartyGalleryBadge {
+            id: format!("moltorino-{}", badge.id),
+            provider: BadgeProvider::Moltorino,
+            title: badge.title(),
+            image_1x: x1,
+            image_2x: x2,
+            image_4x: x4,
+            user_count,
+            owned,
+            click_url: Some("https://moltorino.com/".to_string()),
+        });
+    }
+    tiles
+}
+
 // ============================================================================
 // TWITCH HELIX STRUCTS
 // ============================================================================
@@ -364,7 +463,302 @@ struct ThirdPartyCache {
     chatsen: Option<Vec<ChatsenBadge>>,
     chatty: Option<Vec<ChattyBadge>>,
     dankchat: Option<Vec<DankChatBadge>>,
+    moltorino: Option<MoltorinoBadgesResponse>,
+    /// Moltorino refreshes on its own, slower clock (`MOLTORINO_REFRESH`);
+    /// the seven feeds above share `last_updated`.
+    moltorino_last_updated: SystemTime,
+    /// Inverted index over every provider feed: user_id -> the badges that
+    /// user holds. Rebuilt once per feed refresh so per-chatter lookups are a
+    /// single HashMap get instead of a scan over every holder list. One
+    /// Arc<UserBadge> exists per distinct badge, shared across its holders.
+    by_user: HashMap<String, Vec<Arc<UserBadge>>>,
     last_updated: SystemTime,
+}
+
+impl ThirdPartyCache {
+    /// Build the user_id -> badges index from the current provider feeds.
+    /// Providers run in the same order the old per-chatter scan checked them
+    /// (FFZ, BTTV, Chatterino, Homies, Moltorino, Chatsen, Chatty, DankChat), and within
+    /// a provider in feed order, so each user's Vec preserves the exact badge
+    /// order the scan produced. A holder is skipped when they already carry a
+    /// badge with the same title (case-insensitive), which reproduces the
+    /// scan's keep-first title dedupe (FFZ badges re-hosted by Chatty,
+    /// duplicate per-user feed entries sharing one title).
+    fn build_by_user_index(&self) -> HashMap<String, Vec<Arc<UserBadge>>> {
+        let mut by_user: HashMap<String, Vec<Arc<UserBadge>>> = HashMap::new();
+
+        fn push(
+            by_user: &mut HashMap<String, Vec<Arc<UserBadge>>>,
+            user_id: String,
+            badge: &Arc<UserBadge>,
+            title_lower: &str,
+        ) {
+            let entry = by_user.entry(user_id).or_default();
+            if entry
+                .iter()
+                .any(|b| b.badge_info.title.to_lowercase() == title_lower)
+            {
+                return;
+            }
+            entry.push(Arc::clone(badge));
+        }
+
+        // FFZ. `users` is keyed by badge_id (as a string) -> [numeric user_id],
+        // so the holder key is each numeric id rendered back to a String.
+        if let Some(ffz) = &self.ffz {
+            for badge in &ffz.badges {
+                let image_url = badge
+                    .urls
+                    .get("4")
+                    .or_else(|| badge.urls.get("2"))
+                    .or_else(|| badge.urls.get("1"))
+                    .cloned()
+                    .unwrap_or_default();
+                let arc = Arc::new(UserBadge {
+                    badge_info: BadgeInfo {
+                        id: format!("ffz-{}", badge.id),
+                        set_id: "ffz".to_string(),
+                        version: badge.id.to_string(),
+                        title: badge
+                            .title
+                            .clone()
+                            .or_else(|| badge.name.clone())
+                            .unwrap_or_else(|| format!("FFZ Badge {}", badge.id)),
+                        description: String::new(),
+                        image_1x: badge.urls.get("1").cloned().unwrap_or_default(),
+                        image_2x: badge.urls.get("2").cloned().unwrap_or_default(),
+                        image_4x: image_url,
+                        click_action: None,
+                        click_url: Some("https://www.frankerfacez.com/badges".to_string()),
+                    },
+                    provider: BadgeProvider::FFZ,
+                });
+                let title_lower = arc.badge_info.title.to_lowercase();
+                if let Some(holders) = ffz.users.get(&badge.id.to_string()) {
+                    for uid in holders {
+                        push(&mut by_user, uid.to_string(), &arc, &title_lower);
+                    }
+                }
+            }
+        }
+
+        // BetterTTV. One feed entry per holder; `provider_id` is the Twitch
+        // user id and the SVG is the only image (no size variants).
+        if let Some(bttv) = &self.bttv {
+            for badge in bttv {
+                let arc = Arc::new(UserBadge {
+                    badge_info: BadgeInfo {
+                        id: format!("bttv-{}", badge.badge.description),
+                        set_id: "bttv".to_string(),
+                        version: "1".to_string(),
+                        title: badge.badge.description.clone(),
+                        description: String::new(),
+                        image_1x: badge.badge.svg.clone(),
+                        image_2x: badge.badge.svg.clone(),
+                        image_4x: badge.badge.svg.clone(),
+                        click_action: None,
+                        click_url: Some("https://betterttv.com".to_string()),
+                    },
+                    provider: BadgeProvider::BTTV,
+                });
+                let title_lower = arc.badge_info.title.to_lowercase();
+                push(&mut by_user, badge.provider_id.clone(), &arc, &title_lower);
+            }
+        }
+
+        // Chatterino badges
+        if let Some(chatterino) = &self.chatterino {
+            for badge in &chatterino.badges {
+                let arc = Arc::new(UserBadge {
+                    badge_info: BadgeInfo {
+                        id: format!("chatterino-{}", badge.tooltip),
+                        set_id: "chatterino".to_string(),
+                        version: "1".to_string(),
+                        title: badge.tooltip.clone(),
+                        description: String::new(),
+                        image_1x: badge.image1.clone(),
+                        image_2x: badge.image2.clone().unwrap_or_else(|| badge.image1.clone()),
+                        image_4x: badge
+                            .image3
+                            .clone()
+                            .or_else(|| badge.image2.clone())
+                            .unwrap_or_else(|| badge.image1.clone()),
+                        click_action: None,
+                        click_url: Some("https://chatterino.com/".to_string()),
+                    },
+                    provider: BadgeProvider::Chatterino,
+                });
+                let title_lower = arc.badge_info.title.to_lowercase();
+                for uid in &badge.users {
+                    push(&mut by_user, uid.clone(), &arc, &title_lower);
+                }
+            }
+        }
+
+        // Homies badges
+        if let Some(homies) = &self.homies {
+            for badge in &homies.badges {
+                let arc = Arc::new(UserBadge {
+                    badge_info: BadgeInfo {
+                        id: format!("homies-{}", badge.tooltip),
+                        set_id: "homies".to_string(),
+                        version: "1".to_string(),
+                        title: badge.tooltip.clone(),
+                        description: String::new(),
+                        image_1x: badge.image1.clone(),
+                        image_2x: badge.image2.clone().unwrap_or_else(|| badge.image1.clone()),
+                        image_4x: badge
+                            .image3
+                            .clone()
+                            .or_else(|| badge.image2.clone())
+                            .unwrap_or_else(|| badge.image1.clone()),
+                        click_action: None,
+                        click_url: Some("https://chatterinohomies.com/".to_string()),
+                    },
+                    provider: BadgeProvider::Homies,
+                });
+                let title_lower = arc.badge_info.title.to_lowercase();
+                for uid in &badge.users {
+                    push(&mut by_user, uid.clone(), &arc, &title_lower);
+                }
+            }
+        }
+
+        // Moltorino supporter badges. Tiers arrive in tier order and a user
+        // gets only the FIRST tier they appear in (Moltorino's own rule), so
+        // one badge per holder even when the feed lists them under several.
+        // Sits after Homies: both are Chatterino forks, and the title dedupe
+        // above cannot collide ("Moltorino ..." titles are unique to this feed).
+        if let Some(moltorino) = &self.moltorino {
+            let mut assigned: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            let mut assignments = 0usize;
+            for badge in moltorino.badges.iter().take(MOLTORINO_MAX_TIERS) {
+                let Some((x1, x2, x4)) = badge.image_urls() else {
+                    continue;
+                };
+                let arc = Arc::new(UserBadge {
+                    badge_info: BadgeInfo {
+                        id: format!("moltorino-{}", badge.id),
+                        set_id: "moltorino".to_string(),
+                        version: "1".to_string(),
+                        title: badge.title(),
+                        description: badge.description.clone(),
+                        image_1x: x1,
+                        image_2x: x2,
+                        image_4x: x4,
+                        click_action: None,
+                        click_url: Some("https://moltorino.com/".to_string()),
+                    },
+                    provider: BadgeProvider::Moltorino,
+                });
+                let title_lower = arc.badge_info.title.to_lowercase();
+                for user in &badge.users {
+                    if assignments >= MOLTORINO_MAX_ASSIGNMENTS {
+                        break;
+                    }
+                    let uid = user.id.trim();
+                    if !is_valid_moltorino_user_id(uid) || !assigned.insert(uid) {
+                        continue;
+                    }
+                    assignments += 1;
+                    push(&mut by_user, uid.to_string(), &arc, &title_lower);
+                }
+            }
+        }
+
+        // Chatsen badges
+        if let Some(chatsen) = &self.chatsen {
+            for badge in chatsen {
+                let image = badge.mipmap.last().cloned().unwrap_or_default();
+                let arc = Arc::new(UserBadge {
+                    badge_info: BadgeInfo {
+                        id: format!("chatsen-{}", badge.id),
+                        set_id: "chatsen".to_string(),
+                        version: "1".to_string(),
+                        title: badge.name.clone(),
+                        description: String::new(),
+                        image_1x: badge.mipmap.first().cloned().unwrap_or_default(),
+                        image_2x: image.clone(),
+                        image_4x: image,
+                        click_action: None,
+                        click_url: Some("https://chatsen.app".to_string()),
+                    },
+                    provider: BadgeProvider::Chatsen,
+                });
+                let title_lower = arc.badge_info.title.to_lowercase();
+                for uid in &badge.users {
+                    push(&mut by_user, uid.clone(), &arc, &title_lower);
+                }
+            }
+        }
+
+        // Chatty (tduva) badges
+        if let Some(chatty) = &self.chatty {
+            for badge in chatty {
+                let image_4x = badge
+                    .image_url_4
+                    .clone()
+                    .or_else(|| badge.image_url_2.clone())
+                    .unwrap_or_else(|| badge.image_url.clone());
+                let arc = Arc::new(UserBadge {
+                    badge_info: BadgeInfo {
+                        id: format!(
+                            "chatty-{}-{}",
+                            badge.id,
+                            badge.version.clone().unwrap_or_default()
+                        ),
+                        set_id: "chatty".to_string(),
+                        version: badge.version.clone().unwrap_or_else(|| "1".to_string()),
+                        title: badge.meta_title.clone().unwrap_or_else(|| badge.id.clone()),
+                        description: String::new(),
+                        image_1x: badge.image_url.clone(),
+                        image_2x: badge
+                            .image_url_2
+                            .clone()
+                            .unwrap_or_else(|| badge.image_url.clone()),
+                        image_4x,
+                        click_action: None,
+                        click_url: badge
+                            .meta_url
+                            .clone()
+                            .or_else(|| Some("https://chatty.github.io".to_string())),
+                    },
+                    provider: BadgeProvider::Chatty,
+                });
+                let title_lower = arc.badge_info.title.to_lowercase();
+                for uid in &badge.userids {
+                    push(&mut by_user, uid.clone(), &arc, &title_lower);
+                }
+            }
+        }
+
+        // DankChat (flex3r) badges
+        if let Some(dankchat) = &self.dankchat {
+            for badge in dankchat {
+                let arc = Arc::new(UserBadge {
+                    badge_info: BadgeInfo {
+                        id: format!("dankchat-{}", badge.badge_type),
+                        set_id: "dankchat".to_string(),
+                        version: "1".to_string(),
+                        title: badge.badge_type.clone(),
+                        description: String::new(),
+                        image_1x: badge.url.clone(),
+                        image_2x: badge.url.clone(),
+                        image_4x: badge.url.clone(),
+                        click_action: None,
+                        click_url: Some("https://github.com/flex3r/DankChat".to_string()),
+                    },
+                    provider: BadgeProvider::DankChat,
+                });
+                let title_lower = arc.badge_info.title.to_lowercase();
+                for uid in &badge.users {
+                    push(&mut by_user, uid.clone(), &arc, &title_lower);
+                }
+            }
+        }
+
+        by_user
+    }
 }
 
 struct BadgeCache {
@@ -388,6 +782,9 @@ impl BadgeCache {
                 chatsen: None,
                 chatty: None,
                 dankchat: None,
+                moltorino: None,
+                moltorino_last_updated: UNIX_EPOCH,
+                by_user: HashMap::new(),
                 last_updated: UNIX_EPOCH,
             },
             // Cache last badge string for up to 1000 users
@@ -404,13 +801,30 @@ pub struct BadgeService {
     cache: Arc<RwLock<BadgeCache>>,
     client_id: String,
     http_client: reqwest::Client,
+    /// (drops token, Twitch user id that token belongs to). The global badge
+    /// collection query (`ChatSettings_Badges`) only ever answers for the
+    /// token's OWN user, so before attributing its result to a profile we
+    /// confirm the profile is that user. Cached per token: one validate call
+    /// per login, not one per profile open.
+    drops_identity: RwLock<Option<(String, String)>>,
 }
 
 impl BadgeService {
+    /// (channel badge sets, user badge strings) resident in the LRUs, or
+    /// `None` while the cache is write-locked. Diagnostics for the resource line.
+    pub fn cache_counts(&self) -> Option<(usize, usize)> {
+        self.cache
+            .try_read()
+            .ok()
+            .map(|c| (c.channel_badges.len(), c.user_badge_strings.len()))
+    }
+
+
     pub fn new(client_id: String) -> Self {
         Self {
             cache: Arc::new(RwLock::new(BadgeCache::new())),
             client_id,
+            drops_identity: RwLock::new(None),
             http_client: reqwest::Client::builder()
                 .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
                 .timeout(Duration::from_secs(30))
@@ -444,7 +858,7 @@ impl BadgeService {
             .map_err(|e| format!("Failed to parse badges: {}", e))?;
 
         let mut cache = self.cache.write().await;
-        cache.global_badges = Some(badges.clone());
+        cache.global_badges = Some(badges);
 
         Ok(())
     }
@@ -452,6 +866,11 @@ impl BadgeService {
     pub async fn get_global_badges(&self) -> Option<HelixBadgesResponse> {
         let cache = self.cache.read().await;
         cache.global_badges.clone()
+    }
+
+    /// Cheap existence probe: no clone of the full Helix response.
+    async fn has_global_badges(&self) -> bool {
+        self.cache.read().await.global_badges.is_some()
     }
 
     // ========================================================================
@@ -485,7 +904,7 @@ impl BadgeService {
         let mut cache = self.cache.write().await;
         cache
             .channel_badges
-            .put(channel_id.to_string(), badges.clone());
+            .put(channel_id.to_string(), badges);
 
         Ok(())
     }
@@ -493,6 +912,11 @@ impl BadgeService {
     pub async fn get_channel_badges(&self, channel_id: &str) -> Option<HelixBadgesResponse> {
         let mut cache = self.cache.write().await;
         cache.channel_badges.get(channel_id).cloned()
+    }
+
+    /// Cheap existence probe: read lock + peek, no write lock, no entry clone.
+    async fn has_channel_badges(&self, channel_id: &str) -> bool {
+        self.cache.read().await.channel_badges.peek(channel_id).is_some()
     }
 
     // ========================================================================
@@ -510,6 +934,16 @@ impl BadgeService {
                 return Ok(());
             }
         }
+
+        // Moltorino rides this gate but on its own, slower clock: it is only
+        // re-read once `MOLTORINO_REFRESH` has passed, at whichever 10-minute
+        // boundary comes next.
+        let moltorino_due = cache
+            .third_party
+            .moltorino_last_updated
+            .elapsed()
+            .map(|e| e >= MOLTORINO_REFRESH)
+            .unwrap_or(true);
 
         drop(cache); // Release lock during network calls
 
@@ -627,16 +1061,107 @@ impl BadgeService {
             None
         };
 
-        // Update cache
+        // Fetch Moltorino supporter badges (single JSON snapshot, ~20 KB). A
+        // hobby API run by one person: identify ourselves honestly instead of
+        // the browser UA the client carries for Chatsen.
+        let moltorino_badges = if moltorino_due {
+            match self
+                .http_client
+                .get(MOLTORINO_BADGES_URL)
+                .header(
+                    "User-Agent",
+                    concat!(
+                        "StreamNook/",
+                        env!("CARGO_PKG_VERSION"),
+                        " (+https://streamnook.app)"
+                    ),
+                )
+                .header("Accept", "application/json")
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => {
+                    response.json::<MoltorinoBadgesResponse>().await.ok()
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        // Update cache. A provider that failed this round (network, 5xx, a
+        // body that no longer parses) keeps its LAST GOOD list instead of being
+        // wiped to None: overwriting it made every badge from that provider
+        // vanish from profiles and the picker for the whole cache window, with
+        // nothing in the log to say why (seen 2026-09-05 as "not all my
+        // third-party badges are there to select").
         let mut cache = self.cache.write().await;
-        cache.third_party.ffz = ffz_badges;
-        cache.third_party.bttv = bttv_badges;
-        cache.third_party.chatterino = chatterino_badges;
-        cache.third_party.homies = homies_badges;
-        cache.third_party.chatsen = chatsen_badges;
-        cache.third_party.chatty = chatty_badges;
-        cache.third_party.dankchat = dankchat_badges;
-        cache.third_party.last_updated = SystemTime::now();
+        let mut failed: Vec<&str> = Vec::new();
+        macro_rules! keep_last_good {
+            ($field:ident, $fresh:expr, $name:literal) => {
+                match $fresh {
+                    Some(v) => cache.third_party.$field = Some(v),
+                    None => {
+                        if cache.third_party.$field.is_none() {
+                            failed.push($name);
+                        } else {
+                            failed.push(concat!($name, " (kept previous)"));
+                        }
+                    }
+                }
+            };
+        }
+        keep_last_good!(ffz, ffz_badges, "ffz");
+        keep_last_good!(bttv, bttv_badges, "bttv");
+        keep_last_good!(chatterino, chatterino_badges, "chatterino");
+        keep_last_good!(homies, homies_badges, "homies");
+        keep_last_good!(chatsen, chatsen_badges, "chatsen");
+        keep_last_good!(chatty, chatty_badges, "chatty");
+        keep_last_good!(dankchat, dankchat_badges, "dankchat");
+        // Moltorino keeps its last good roster too, but a failure must NOT
+        // back-date the shared stamp below: that would re-read all seven other
+        // feeds every minute for as long as one hobby API is down. Instead its
+        // own clock is set so the next attempt lands at the next 10-minute gate.
+        if moltorino_due {
+            match moltorino_badges {
+                Some(feed) => {
+                    log::debug!(
+                        "[BadgeService] Moltorino roster v{}: {} tiers, {} assignments",
+                        feed.version.unwrap_or(-1),
+                        feed.badges.len(),
+                        feed.badges.iter().map(|b| b.users.len()).sum::<usize>()
+                    );
+                    cache.third_party.moltorino = Some(feed);
+                    cache.third_party.moltorino_last_updated = SystemTime::now();
+                }
+                None => {
+                    log::warn!(
+                        "[BadgeService] Moltorino badge feed failed to refresh{}; retrying at the next gate",
+                        if cache.third_party.moltorino.is_some() { " (kept previous)" } else { "" }
+                    );
+                    cache.third_party.moltorino_last_updated = SystemTime::now()
+                        .checked_sub(MOLTORINO_REFRESH.saturating_sub(cache_duration))
+                        .unwrap_or(UNIX_EPOCH);
+                }
+            }
+        }
+        // Rebuild the inverted per-user index once per refresh (~10 min) so
+        // per-chatter lookups never scan the full holder lists.
+        let by_user = cache.third_party.build_by_user_index();
+        cache.third_party.by_user = by_user;
+        if failed.is_empty() {
+            cache.third_party.last_updated = SystemTime::now();
+        } else {
+            log::warn!(
+                "[BadgeService] Third-party badge providers failed to refresh: {}; retrying in 60s",
+                failed.join(", ")
+            );
+            // Back-date the stamp so the next lookup retries after a minute
+            // instead of serving the stale set for the full window.
+            cache.third_party.last_updated = SystemTime::now()
+                .checked_sub(cache_duration.saturating_sub(Duration::from_secs(60)))
+                .unwrap_or(UNIX_EPOCH);
+        }
 
         Ok(())
     }
@@ -690,19 +1215,23 @@ impl BadgeService {
             .put(user_id.to_string(), badge_string.to_string());
     }
 
-    /// Get a user's cached badge string
+    /// Get a user's cached badge string. Read lock + peek: recency is already
+    /// refreshed by `store_user_badge_string` on every IRC message, so losing
+    /// read-side LRU promotion on a 1000-entry cache is a fine trade for not
+    /// serializing every chatter lookup through the write lock.
     pub async fn get_user_badge_string(&self, user_id: &str) -> Option<String> {
-        let mut cache = self.cache.write().await;
-        cache.user_badge_strings.get(user_id).cloned()
+        let cache = self.cache.read().await;
+        cache.user_badge_strings.peek(user_id).cloned()
     }
 
     // ========================================================================
     // GQL FALLBACK (for fetching user's displayBadges when no IRC data)
     // ========================================================================
 
-    /// Fetch display badges AND earned badges from Twitch GQL ViewerCard query (anonymous mode)
-    /// This is used as a fallback when we don't have IRC badge data for a user
-    /// Returns (display_badges, earned_badges)
+    /// Fetch a user's display badges and channel-earned badges from Twitch GQL
+    /// (anonymous, inline query). Used when we have no IRC badge data for a user
+    /// and for the profile overlay. Returns (display_badges, earned_badges) as
+    /// "set_id/version" strings.
     async fn fetch_badges_from_gql(
         &self,
         user_id: &str,
@@ -710,36 +1239,22 @@ impl BadgeService {
         channel_id: &str,
         channel_name: &str,
     ) -> Result<(Vec<String>, Vec<String>), String> {
-        let request = GQLRequest {
-            operation_name: "ViewerCard".to_string(),
-            variables: GQLVariables {
+        let request = BadgeLookupRequest {
+            query: BADGE_LOOKUP_QUERY,
+            variables: BadgeLookupVariables {
+                id: user_id.to_string(),
+                login: username.to_lowercase(),
                 channel_id: channel_id.to_string(),
-                channel_login: channel_name.to_string(),
-                has_channel_id: true,
-                target_user_id: Some(user_id.to_string()),
-                target_login: username.to_string(),
-                gift_recipient_login: username.to_string(),
-                is_viewer_badge_collection_enabled: true,
-                with_standard_gifting: true,
-                badge_source_channel_id: channel_id.to_string(),
-                badge_source_channel_login: channel_name.to_string(),
-            },
-            extensions: GQLExtensions {
-                persisted_query: PersistedQuery {
-                    version: 1,
-                    sha256_hash: "80c53fe04c79a6414484104ea573c28d6a8436e031a235fc6908de63f51c74fd"
-                        .to_string(),
-                },
+                channel_login: channel_name.to_lowercase(),
             },
         };
 
-        // Use anonymous mode with public Twitch client ID
         let response = self
             .http_client
             .post("https://gql.twitch.tv/gql")
             .header("Accept-Language", "en-US")
             .header("Client-ID", env!("TWITCH_WEB_CLIENT_ID"))
-            .json(&vec![request])
+            .json(&request)
             .send()
             .await
             .map_err(|e| format!("Failed to send GQL request: {}", e))?;
@@ -756,153 +1271,144 @@ impl BadgeService {
             .await
             .map_err(|e| format!("Failed to read GQL response: {}", e))?;
 
-        // Parse response - it's an array with one item
-        let gql_responses: Vec<GQLResponse> =
-            serde_json::from_str(&response_text).map_err(|e| {
-                format!(
-                    "Failed to parse GQL response: {} - Raw: {}",
-                    e,
-                    &response_text[..200.min(response_text.len())]
-                )
-            })?;
+        let gql_response: GQLResponse = serde_json::from_str(&response_text).map_err(|e| {
+            format!(
+                "Failed to parse GQL response: {} - Raw: {}",
+                e,
+                &response_text[..200.min(response_text.len())]
+            )
+        })?;
 
-        let gql_data = gql_responses
-            .into_iter()
-            .next()
-            .and_then(|r| r.data)
-            .ok_or_else(|| "No data in GQL response".to_string())?;
+        let gql_data = match gql_response.data {
+            Some(data) => data,
+            None => {
+                let messages: Vec<String> =
+                    gql_response.errors.into_iter().map(|e| e.message).collect();
+                return Err(format!(
+                    "No data in GQL response (errors: {})",
+                    messages.join("; ")
+                ));
+            }
+        };
 
-        // Extract display badges from targetUser.displayBadges
-        let display_badges: Vec<String> = gql_data
-            .target_user
-            .as_ref()
-            .map(|u| {
-                u.display_badges
-                    .iter()
-                    .map(|b| format!("{}/{}", b.set_id, b.version))
-                    .collect()
-            })
-            .unwrap_or_default();
+        // A partial error (e.g. an unrelated field failing an integrity check)
+        // still ships the badge fields, so only surface it at debug.
+        if !gql_response.errors.is_empty() {
+            log::debug!(
+                "[BadgeService] Badge lookup returned partial errors: {:?}",
+                gql_response.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+            );
+        }
 
-        // Extract earned badges from channelViewer.earnedBadges
-        let earned_badges: Vec<String> = gql_data
-            .channel_viewer
-            .as_ref()
-            .map(|cv| {
-                cv.earned_badges
-                    .iter()
-                    .map(|b| format!("{}/{}", b.set_id, b.version))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let to_ids = |badges: Option<Vec<GQLBadge>>| -> Vec<String> {
+            badges
+                .unwrap_or_default()
+                .into_iter()
+                .map(|b| format!("{}/{}", b.set_id, b.version))
+                .collect()
+        };
+
+        let display_badges = to_ids(gql_data.user.and_then(|u| u.display_badges));
+        let earned_badges = to_ids(gql_data.channel_viewer.and_then(|cv| cv.earned_badges));
 
         Ok((display_badges, earned_badges))
     }
 
-    /// Fetch ALL global badges a user has earned from Twitch GQL
-    /// This uses the globalBadgeCollection query to get the full list of earned badges
-    pub async fn fetch_global_badge_collection_from_gql(
-        &self,
-        username: &str,
-        token: &str,
-    ) -> Result<Vec<String>, String> {
-        // Use full query text instead of persisted query hash (matches working pattern in drops.rs)
-        let query = r#"
-        query GetGlobalBadgeCollection($login: String!) {
-            user(login: $login) {
-                globalBadgeCollection {
-                    badge {
-                        setID
-                        version
-                        title
-                    }
-                }
+    /// Resolve which Twitch user the current Drops token belongs to, cached per
+    /// token so a re-login is picked up and a stable login costs one call.
+    async fn drops_token_user_id(&self, token: &str) -> Result<String, String> {
+        if let Some((cached_token, cached_user)) = self.drops_identity.read().await.as_ref() {
+            if cached_token == token {
+                return Ok(cached_user.clone());
             }
         }
-        "#;
 
-        let request_body = serde_json::json!({
-            "operationName": "GetGlobalBadgeCollection",
-            "query": query,
-            "variables": {
-                "login": username.to_lowercase()
-            }
-        });
-
-        // Use authenticated mode with OAuth token for accessing badge collection
         let response = self
             .http_client
-            .post("https://gql.twitch.tv/gql")
-            .header("Accept-Language", "en-US")
-            .header("Client-Id", env!("TWITCH_WEB_CLIENT_ID"))
+            .get("https://id.twitch.tv/oauth2/validate")
             .header("Authorization", format!("OAuth {}", token))
-            .json(&request_body)
             .send()
             .await
-            .map_err(|e| format!("Failed to send GQL request: {}", e))?;
+            .map_err(|e| format!("Failed to validate drops token: {}", e))?;
 
         if !response.status().is_success() {
             return Err(format!(
-                "GQL request failed with status: {}",
+                "Drops token validation failed with status: {}",
                 response.status()
             ));
         }
 
-        let response_text = response
-            .text()
+        let validation: TokenValidation = response
+            .json()
             .await
-            .map_err(|e| format!("Failed to read GQL response: {}", e))?;
+            .map_err(|e| format!("Failed to parse token validation: {}", e))?;
 
-        log::debug!(
-            "[BadgeService] Badge collection GQL raw response (first 500 chars): {}",
-            &response_text[..500.min(response_text.len())]
-        );
+        if validation.user_id.is_empty() {
+            return Err("Token validation returned no user_id".to_string());
+        }
 
-        // Parse response - single object (not array) when using inline query
-        let gql_response: BadgeCollectionGQLResponse = serde_json::from_str(&response_text)
+        *self.drops_identity.write().await =
+            Some((token.to_string(), validation.user_id.clone()));
+        Ok(validation.user_id)
+    }
+
+    /// Fetch ALL global badges the SIGNED-IN user has earned, as
+    /// "set_id/version" strings.
+    ///
+    /// Twitch removed `user.globalBadgeCollection` from its GQL schema
+    /// (observed 2026-09-05), so the only remaining source for the full global
+    /// collection is the badge picker's own `ChatSettings_Badges` query, which
+    /// answers for the token's user and nobody else. It rides the Drops token
+    /// (Android client) the way chat_identity.rs already does. Errors out,
+    /// rather than returning someone else's badges, when `user_id` is not the
+    /// token's user or when no Drops token is stored.
+    pub async fn fetch_current_user_global_collection(
+        &self,
+        user_id: &str,
+        username: &str,
+    ) -> Result<Vec<String>, String> {
+        let token = crate::services::drops_auth_service::DropsAuthService::get_token()
+            .await
+            .map_err(|e| format!("No drops token for badge collection: {}", e))?;
+
+        let token_user = self.drops_token_user_id(&token).await?;
+        if token_user != user_id {
+            return Err(format!(
+                "Global badge collection is only readable for the signed-in user (token user {}, requested {})",
+                token_user, user_id
+            ));
+        }
+
+        let ids = crate::commands::chat_identity::fetch_badge_collection_ids(username, &token)
+            .await
             .map_err(|e| {
-                format!(
-                    "Failed to parse GQL badge collection response: {} - Raw: {}",
-                    e,
-                    &response_text[..500.min(response_text.len())]
-                )
+                log::warn!(
+                    "[BadgeService] ChatSettings_Badges collection fetch failed for the signed-in user: {}",
+                    e
+                );
+                e
             })?;
 
-        let gql_data = gql_response.data.ok_or_else(|| {
-            format!(
-                "No data in GQL badge collection response. Raw: {}",
-                &response_text[..500.min(response_text.len())]
-            )
-        })?;
-
-        let earned_badges: Vec<String> = gql_data
-            .user
-            .as_ref()
-            .map(|u| {
-                u.global_badge_collection
-                    .iter()
-                    .map(|item| format!("{}/{}", item.badge.set_id, item.badge.version))
-                    .collect()
-            })
-            .unwrap_or_default();
-
         log::debug!(
-            "[BadgeService] Fetched {} global earned badges for user",
-            earned_badges.len()
+            "[BadgeService] Fetched {} global earned badges for the signed-in user",
+            ids.len()
         );
 
-        Ok(earned_badges)
+        Ok(ids)
     }
 
     /// Fetch ALL earned badges from both channel-specific and global sources
-    /// This merges channelViewer.earnedBadges with globalBadgeCollection for complete coverage
+    /// This merges channelViewer.earnedBadges with the signed-in user's global
+    /// badge collection for complete coverage. For any OTHER user only the
+    /// channel-earned set is available (Twitch no longer exposes third-party
+    /// global collections).
     /// NOTE: This is only used for profile overlays, not for normal chat!
     async fn fetch_all_earned_badges(
         &self,
         channel_earned_ids: Vec<String>,
+        user_id: &str,
         username: &str,
         channel_id: &str,
-        token: &str,
     ) -> Vec<UserBadge> {
         let mut all_badge_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -911,9 +1417,9 @@ impl BadgeService {
             all_badge_ids.insert(badge_id);
         }
 
-        // 2. Fetch global badge collection (ALL earned global badges)
+        // 2. Fetch the global badge collection (signed-in user only)
         match self
-            .fetch_global_badge_collection_from_gql(username, token)
+            .fetch_current_user_global_collection(user_id, username)
             .await
         {
             Ok(global_badge_ids) => {
@@ -921,8 +1427,15 @@ impl BadgeService {
                     all_badge_ids.insert(badge_id);
                 }
             }
-            Err(_) => {
-                // Silently fail - this is just supplemental data
+            Err(e) => {
+                // Expected for other users' profiles (not the token's user), so
+                // this stays at debug; a failure for the signed-in user is
+                // logged at WARN by fetch_current_user_global_collection.
+                log::debug!(
+                    "[BadgeService] Global badge collection unavailable for {}: {}",
+                    username,
+                    e
+                );
             }
         }
 
@@ -951,11 +1464,11 @@ impl BadgeService {
         token: &str,
     ) -> Result<UserBadgesResponse, String> {
         // Ensure badge metadata is fetched
-        if self.get_global_badges().await.is_none() {
+        if !self.has_global_badges().await {
             self.fetch_global_badges(token).await?;
         }
 
-        if self.get_channel_badges(channel_id).await.is_none() {
+        if !self.has_channel_badges(channel_id).await {
             self.fetch_channel_badges(channel_id, token).await?;
         }
 
@@ -1008,11 +1521,11 @@ impl BadgeService {
         token: &str,
     ) -> Result<UserBadgesResponse, String> {
         // Ensure badge metadata is fetched
-        if self.get_global_badges().await.is_none() {
+        if !self.has_global_badges().await {
             self.fetch_global_badges(token).await?;
         }
 
-        if self.get_channel_badges(channel_id).await.is_none() {
+        if !self.has_channel_badges(channel_id).await {
             self.fetch_channel_badges(channel_id, token).await?;
         }
 
@@ -1022,7 +1535,13 @@ impl BadgeService {
             .await
         {
             Ok(result) => result,
-            Err(_) => {
+            Err(e) => {
+                log::warn!(
+                    "[BadgeService] GQL badge lookup failed for {} in {}: {}",
+                    username,
+                    channel_name,
+                    e
+                );
                 // Fall back to IRC cache if available
                 if let Some(badge_str) = self.get_user_badge_string(user_id).await {
                     let display = self.resolve_badge_string(&badge_str, channel_id).await;
@@ -1049,7 +1568,7 @@ impl BadgeService {
 
         // Fetch all earned badges (merges channel + global)
         let earned_badges = self
-            .fetch_all_earned_badges(channel_earned_ids, username, channel_id, token)
+            .fetch_all_earned_badges(channel_earned_ids, user_id, username, channel_id)
             .await;
 
         // Fetch third-party badges
@@ -1191,216 +1710,17 @@ impl BadgeService {
     }
 
     async fn get_third_party_badges_for_user(&self, user_id: &str) -> Vec<UserBadge> {
+        // Single lookup in the inverted index built at feed-refresh time (see
+        // ThirdPartyCache::build_by_user_index). Provider order and the
+        // duplicate-title collapse are baked into the index, so this is just a
+        // clone-out of the user's shared Arc entries.
         let cache = self.cache.read().await;
-        let mut badges = Vec::new();
-
-        // FFZ badges
-        if let Some(ffz) = &cache.third_party.ffz {
-            if let Some(badge_ids) = ffz.users.get(user_id) {
-                for &badge_id in badge_ids {
-                    if let Some(badge) = ffz.badges.iter().find(|b| b.id == badge_id) {
-                        let image_url = badge
-                            .urls
-                            .get("4")
-                            .or_else(|| badge.urls.get("2"))
-                            .or_else(|| badge.urls.get("1"))
-                            .cloned()
-                            .unwrap_or_default();
-
-                        badges.push(UserBadge {
-                            badge_info: BadgeInfo {
-                                id: format!("ffz-{}", badge_id),
-                                set_id: "ffz".to_string(),
-                                version: badge_id.to_string(),
-                                title: badge
-                                    .title
-                                    .clone()
-                                    .or_else(|| badge.name.clone())
-                                    .unwrap_or_else(|| format!("FFZ Badge {}", badge_id)),
-                                description: String::new(),
-                                image_1x: badge.urls.get("1").cloned().unwrap_or_default(),
-                                image_2x: badge.urls.get("2").cloned().unwrap_or_default(),
-                                image_4x: image_url,
-                                click_action: None,
-                                click_url: Some("https://www.frankerfacez.com/badges".to_string()),
-                            },
-                            provider: BadgeProvider::FFZ,
-                        });
-                    }
-                }
-            }
-        }
-
-        // BetterTTV badges. One feed entry per holder; `provider_id` is the
-        // Twitch user id and the SVG is the only image (no size variants).
-        if let Some(bttv) = &cache.third_party.bttv {
-            for badge in bttv {
-                if badge.provider_id == user_id {
-                    badges.push(UserBadge {
-                        badge_info: BadgeInfo {
-                            id: format!("bttv-{}", badge.badge.description),
-                            set_id: "bttv".to_string(),
-                            version: "1".to_string(),
-                            title: badge.badge.description.clone(),
-                            description: String::new(),
-                            image_1x: badge.badge.svg.clone(),
-                            image_2x: badge.badge.svg.clone(),
-                            image_4x: badge.badge.svg.clone(),
-                            click_action: None,
-                            click_url: Some("https://betterttv.com".to_string()),
-                        },
-                        provider: BadgeProvider::BTTV,
-                    });
-                }
-            }
-        }
-
-        // Chatterino badges
-        if let Some(chatterino) = &cache.third_party.chatterino {
-            for badge in &chatterino.badges {
-                if badge.users.iter().any(|u| u == user_id) {
-                    badges.push(UserBadge {
-                        badge_info: BadgeInfo {
-                            id: format!("chatterino-{}", badge.tooltip),
-                            set_id: "chatterino".to_string(),
-                            version: "1".to_string(),
-                            title: badge.tooltip.clone(),
-                            description: String::new(),
-                            image_1x: badge.image1.clone(),
-                            image_2x: badge.image2.clone().unwrap_or_else(|| badge.image1.clone()),
-                            image_4x: badge
-                                .image3
-                                .clone()
-                                .or_else(|| badge.image2.clone())
-                                .unwrap_or_else(|| badge.image1.clone()),
-                            click_action: None,
-                            click_url: Some("https://chatterino.com/".to_string()),
-                        },
-                        provider: BadgeProvider::Chatterino,
-                    });
-                }
-            }
-        }
-
-        // Homies badges
-        if let Some(homies) = &cache.third_party.homies {
-            for badge in &homies.badges {
-                if badge.users.iter().any(|u| u == user_id) {
-                    badges.push(UserBadge {
-                        badge_info: BadgeInfo {
-                            id: format!("homies-{}", badge.tooltip),
-                            set_id: "homies".to_string(),
-                            version: "1".to_string(),
-                            title: badge.tooltip.clone(),
-                            description: String::new(),
-                            image_1x: badge.image1.clone(),
-                            image_2x: badge.image2.clone().unwrap_or_else(|| badge.image1.clone()),
-                            image_4x: badge
-                                .image3
-                                .clone()
-                                .or_else(|| badge.image2.clone())
-                                .unwrap_or_else(|| badge.image1.clone()),
-                            click_action: None,
-                            click_url: Some("https://chatterinohomies.com/".to_string()),
-                        },
-                        provider: BadgeProvider::Homies,
-                    });
-                }
-            }
-        }
-
-        // Chatsen badges
-        if let Some(chatsen) = &cache.third_party.chatsen {
-            for badge in chatsen {
-                if badge.users.iter().any(|u| u == user_id) {
-                    let image = badge.mipmap.last().cloned().unwrap_or_default();
-                    badges.push(UserBadge {
-                        badge_info: BadgeInfo {
-                            id: format!("chatsen-{}", badge.id),
-                            set_id: "chatsen".to_string(),
-                            version: "1".to_string(),
-                            title: badge.name.clone(),
-                            description: String::new(),
-                            image_1x: badge.mipmap.first().cloned().unwrap_or_default(),
-                            image_2x: image.clone(),
-                            image_4x: image,
-                            click_action: None,
-                            click_url: Some("https://chatsen.app".to_string()),
-                        },
-                        provider: BadgeProvider::Chatsen,
-                    });
-                }
-            }
-        }
-
-        // Chatty (tduva) badges
-        if let Some(chatty) = &cache.third_party.chatty {
-            for badge in chatty {
-                if badge.userids.iter().any(|u| u == user_id) {
-                    let image_4x = badge
-                        .image_url_4
-                        .clone()
-                        .or_else(|| badge.image_url_2.clone())
-                        .unwrap_or_else(|| badge.image_url.clone());
-                    badges.push(UserBadge {
-                        badge_info: BadgeInfo {
-                            id: format!(
-                                "chatty-{}-{}",
-                                badge.id,
-                                badge.version.clone().unwrap_or_default()
-                            ),
-                            set_id: "chatty".to_string(),
-                            version: badge.version.clone().unwrap_or_else(|| "1".to_string()),
-                            title: badge.meta_title.clone().unwrap_or_else(|| badge.id.clone()),
-                            description: String::new(),
-                            image_1x: badge.image_url.clone(),
-                            image_2x: badge
-                                .image_url_2
-                                .clone()
-                                .unwrap_or_else(|| badge.image_url.clone()),
-                            image_4x,
-                            click_action: None,
-                            click_url: badge
-                                .meta_url
-                                .clone()
-                                .or_else(|| Some("https://chatty.github.io".to_string())),
-                        },
-                        provider: BadgeProvider::Chatty,
-                    });
-                }
-            }
-        }
-
-        // DankChat (flex3r) badges
-        if let Some(dankchat) = &cache.third_party.dankchat {
-            for badge in dankchat {
-                if badge.users.iter().any(|u| u == user_id) {
-                    badges.push(UserBadge {
-                        badge_info: BadgeInfo {
-                            id: format!("dankchat-{}", badge.badge_type),
-                            set_id: "dankchat".to_string(),
-                            version: "1".to_string(),
-                            title: badge.badge_type.clone(),
-                            description: String::new(),
-                            image_1x: badge.url.clone(),
-                            image_2x: badge.url.clone(),
-                            image_4x: badge.url.clone(),
-                            click_action: None,
-                            click_url: Some("https://github.com/flex3r/DankChat".to_string()),
-                        },
-                        provider: BadgeProvider::DankChat,
-                    });
-                }
-            }
-        }
-
-        // Collapse duplicate titles so a profile shows each distinct badge once.
-        // Covers FFZ badges re-hosted by Chatty (same title via two providers) and a
-        // user matching multiple per-user entries that share one title.
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        badges.retain(|b| seen.insert(b.badge_info.title.to_lowercase()));
-
-        badges
+        cache
+            .third_party
+            .by_user
+            .get(user_id)
+            .map(|arcs| arcs.iter().map(|arc| (**arc).clone()).collect())
+            .unwrap_or_default()
     }
 
     /// Build the full distinct badge set for every third-party provider, for the
@@ -1604,6 +1924,11 @@ impl BadgeService {
             }
         }
 
+        // Moltorino
+        if let Some(moltorino) = &cache.third_party.moltorino {
+            out.extend(moltorino_gallery_tiles(moltorino, viewer_user_id));
+        }
+
         // Collapse entries that share a (provider, title) into one tile. Some feeds
         // (notably Chatty's FFZ re-host) emit one entry PER USER under the same title
         // (e.g. 122x "FFZ:AP Supporter"), which would otherwise flood the gallery.
@@ -1611,7 +1936,7 @@ impl BadgeService {
         let mut deduped: Vec<ThirdPartyGalleryBadge> = Vec::with_capacity(out.len());
         let mut index: HashMap<(String, String), usize> = HashMap::new();
         for badge in out {
-            let key = (format!("{:?}", badge.provider), badge.title.clone());
+            let key = (badge.provider.as_key().to_string(), badge.title.clone());
             if let Some(&i) = index.get(&key) {
                 deduped[i].user_count += badge.user_count;
                 deduped[i].owned = deduped[i].owned || badge.owned;
@@ -1661,6 +1986,7 @@ impl BadgeService {
         cache.third_party.chatsen = None;
         cache.third_party.chatty = None;
         cache.third_party.dankchat = None;
+        cache.third_party.by_user.clear();
         cache.third_party.last_updated = UNIX_EPOCH;
         cache.user_badge_strings.clear();
     }
@@ -1668,5 +1994,197 @@ impl BadgeService {
     pub async fn clear_channel_cache(&self, channel_id: &str) {
         let mut cache = self.cache.write().await;
         cache.channel_badges.pop(channel_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn by_user_index_resolves_ffz_holder() {
+        let mut users = HashMap::new();
+        // ffz.users is keyed by badge_id (string) -> numeric holder ids
+        users.insert("3".to_string(), vec![11111u32]);
+
+        let mut urls = HashMap::new();
+        urls.insert("1".to_string(), "https://example.test/badge/1".to_string());
+
+        let third_party = ThirdPartyCache {
+            ffz: Some(FFZBadgesResponse {
+                badges: vec![FFZBadge {
+                    id: 3,
+                    title: Some("Developer".to_string()),
+                    name: None,
+                    urls,
+                }],
+                users,
+            }),
+            bttv: None,
+            chatterino: None,
+            homies: None,
+            chatsen: None,
+            chatty: None,
+            dankchat: None,
+            moltorino: None,
+            moltorino_last_updated: UNIX_EPOCH,
+            by_user: HashMap::new(),
+            last_updated: UNIX_EPOCH,
+        };
+
+        let index = third_party.build_by_user_index();
+
+        let held = index.get("11111").expect("holder should resolve");
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].badge_info.id, "ffz-3");
+        assert_eq!(held[0].badge_info.title, "Developer");
+        assert_eq!(held[0].provider, BadgeProvider::FFZ);
+
+        assert!(index.get("99999").is_none());
+    }
+
+    /// A trimmed copy of the live feed (version 369, 2026-09-07) with the
+    /// shapes that matter: tier order, a holder listed under two tiers, a
+    /// non-numeric id, and a tier with no images.
+    const MOLTORINO_FIXTURE: &str = r#"{
+      "version": 369,
+      "generatedAt": "2026-09-07T00:12:49.620Z",
+      "badges": [
+        {
+          "id": "developer",
+          "tooltip": "Moltorino Developer",
+          "description": "Given to people who help build and maintain Moltorino.",
+          "images": {
+            "1x": "https://api.moltorino.com/badges/assets/developer/1x.webp?v=369",
+            "2x": "https://api.moltorino.com/badges/assets/developer/2x.webp?v=369",
+            "3x": "https://api.moltorino.com/badges/assets/developer/3x.webp?v=369"
+          },
+          "users": [ { "id": "506954718", "username": "moltobenne_" } ]
+        },
+        {
+          "id": "broken",
+          "tooltip": "No Images",
+          "images": {},
+          "users": [ { "id": "777" } ]
+        },
+        {
+          "id": "supporter",
+          "tooltip": "Moltorino Supporter",
+          "description": "Thanks for supporting Moltorino.",
+          "images": {
+            "1x": "https://api.moltorino.com/badges/assets/supporter/1x.webp?v=369",
+            "2x": "https://api.moltorino.com/badges/assets/supporter/2x.webp?v=369",
+            "3x": "https://api.moltorino.com/badges/assets/supporter/3x.webp?v=369"
+          },
+          "users": [
+            { "id": "506954718", "username": "moltobenne_" },
+            { "id": "249031143", "username": "br_winters" },
+            { "id": "not-a-number", "username": "typo" }
+          ]
+        }
+      ],
+      "users": [ { "id": "1051860673", "username": "omarbasilz", "decorations": false } ]
+    }"#;
+
+    fn moltorino_cache(feed: MoltorinoBadgesResponse) -> ThirdPartyCache {
+        ThirdPartyCache {
+            ffz: None,
+            bttv: None,
+            chatterino: None,
+            homies: None,
+            chatsen: None,
+            chatty: None,
+            dankchat: None,
+            moltorino: Some(feed),
+            moltorino_last_updated: UNIX_EPOCH,
+            by_user: HashMap::new(),
+            last_updated: UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn moltorino_feed_parses_with_unknown_fields() {
+        let feed: MoltorinoBadgesResponse =
+            serde_json::from_str(MOLTORINO_FIXTURE).expect("feed should parse");
+        assert_eq!(feed.version, Some(369));
+        assert_eq!(feed.badges.len(), 3);
+        assert_eq!(feed.badges[0].users[0].id, "506954718");
+    }
+
+    #[test]
+    fn moltorino_holder_gets_one_badge_highest_tier_first() {
+        let feed: MoltorinoBadgesResponse = serde_json::from_str(MOLTORINO_FIXTURE).unwrap();
+        let index = moltorino_cache(feed).build_by_user_index();
+
+        // Listed under developer AND supporter: only the first tier sticks.
+        let dev = index.get("506954718").expect("developer should resolve");
+        assert_eq!(dev.len(), 1);
+        assert_eq!(dev[0].badge_info.id, "moltorino-developer");
+        assert_eq!(dev[0].badge_info.title, "Moltorino Developer");
+        assert_eq!(dev[0].provider, BadgeProvider::Moltorino);
+        assert_eq!(
+            dev[0].badge_info.image_4x,
+            "https://api.moltorino.com/badges/assets/developer/3x.webp?v=369"
+        );
+
+        let sup = index.get("249031143").expect("supporter should resolve");
+        assert_eq!(sup.len(), 1);
+        assert_eq!(sup[0].badge_info.id, "moltorino-supporter");
+
+        // A tier with no images never reaches the index; nor does a bad id.
+        assert!(index.get("777").is_none());
+        assert!(index.get("not-a-number").is_none());
+    }
+
+    #[test]
+    fn moltorino_gallery_counts_holders_and_ownership() {
+        let feed: MoltorinoBadgesResponse = serde_json::from_str(MOLTORINO_FIXTURE).unwrap();
+        let tiles = moltorino_gallery_tiles(&feed, Some("249031143"));
+        let ids: Vec<&str> = tiles.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["moltorino-developer", "moltorino-supporter"]);
+        assert_eq!(tiles[0].user_count, 1);
+        assert!(!tiles[0].owned);
+        // The duplicate holder and the bad id are not counted.
+        assert_eq!(tiles[1].user_count, 1);
+        assert!(tiles[1].owned);
+    }
+
+    #[test]
+    fn moltorino_provider_serializes_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&BadgeProvider::Moltorino).unwrap(),
+            "\"moltorino\""
+        );
+        // The Debug form differs, which is exactly why `as_key` exists: shipping
+        // this string to the page gave the profile card a second spelling of
+        // every provider. See BadgeProvider::as_key.
+        assert_eq!(format!("{:?}", BadgeProvider::Moltorino), "Moltorino");
+    }
+
+    /// `as_key` is the id the page, the loadout keys and the overlay toggles all
+    /// match on, so it must stay identical to what serde puts on the wire. A new
+    /// variant that forgets an arm here (or spells it in PascalCase) fails this
+    /// instead of silently dropping that provider's badges on one surface.
+    #[test]
+    fn provider_key_matches_the_serde_wire_form() {
+        for provider in [
+            BadgeProvider::Twitch,
+            BadgeProvider::FFZ,
+            BadgeProvider::BTTV,
+            BadgeProvider::Chatterino,
+            BadgeProvider::Homies,
+            BadgeProvider::Chatsen,
+            BadgeProvider::Chatty,
+            BadgeProvider::DankChat,
+            BadgeProvider::Moltorino,
+        ] {
+            let wire = serde_json::to_string(&provider).unwrap();
+            assert_eq!(
+                format!("\"{}\"", provider.as_key()),
+                wire,
+                "as_key drifted from the serde form for {:?}",
+                provider
+            );
+        }
     }
 }

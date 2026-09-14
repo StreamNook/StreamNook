@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { ensureLastWhisperListener, getLastWhisperFrom } from './lastWhisper';
 import { open as openExternalUrl } from '@tauri-apps/plugin-shell';
 import { useAppStore } from '../stores/AppStore';
 import { Logger } from './logger';
@@ -606,6 +607,123 @@ export const handleSlashCommand = async (
         await openInBrowser(`https://www.twitch.tv/popout/${channelLogin}/chat?popout=`);
         return true;
       }
+      case 'r': {
+        const last = getLastWhisperFrom();
+        const text = argsWithoutCommand.join(' ').trim();
+        if (!last) {
+          addToast('No whisper to reply to yet', 'info');
+          return true;
+        }
+        if (!text) {
+          addToast(`Usage: /r <message>  (replies to ${last.name})`, 'info');
+          return true;
+        }
+        const user = await lookupUser(last.login);
+        if (!user) {
+          addToast(`Could not find ${last.name}`, 'error');
+          return true;
+        }
+        await invoke('send_whisper', { toUserId: user.id, message: text });
+        addToast(`Whisper sent to ${last.name}`, 'success');
+        return true;
+      }
+      case 'clip': {
+        try {
+          await useAppStore.getState().createClip();
+        } catch (err) {
+          Logger.error('[Command Handler] /clip failed:', err);
+          addToast('Could not create a clip', 'error');
+        }
+        return true;
+      }
+      case 'chatters': {
+        if (!broadcasterId || !broadcasterLogin) {
+          emitSystemMessage('No channel open.');
+          return true;
+        }
+        try {
+          const res = await invoke<unknown>('get_channel_chatters', {
+            broadcasterId,
+            channelLogin: broadcasterLogin,
+          });
+          const count = countChatters(res);
+          emitSystemMessage(
+            count === null
+              ? 'Chatter count unavailable for this channel.'
+              : `${count.toLocaleString()} chatter${count === 1 ? '' : 's'} connected.`,
+          );
+        } catch (err) {
+          Logger.error('[Command Handler] /chatters failed:', err);
+          emitSystemMessage('Chatter count needs moderator access on this channel.');
+        }
+        return true;
+      }
+      case 'ignore': {
+        const target = (argsWithoutCommand[0] || '').replace('@', '').toLowerCase();
+        if (!target) {
+          addToast('Usage: /ignore <user>', 'info');
+          return true;
+        }
+        const { withHiddenUser } = await import('./chatFilters');
+        const st = useAppStore.getState();
+        st.updateSettings({
+          ...st.settings,
+          chat_filters: withHiddenUser(st.settings.chat_filters, target, 'global', true),
+        });
+        emitSystemMessage(`Hiding ${target} everywhere. Undo in Settings > Chat > Hidden Users.`);
+        return true;
+      }
+      case 'settitle': {
+        const title = argsWithoutCommand.join(' ').trim();
+        if (!title || !broadcasterId) {
+          addToast('Usage: /settitle <title>', 'info');
+          return true;
+        }
+        try {
+          await invoke('update_channel_info', { broadcasterId, title, gameName: null });
+          addToast('Stream title updated', 'success');
+        } catch (err) {
+          addToast(typeof err === 'string' ? err : 'Could not update the title', 'error');
+        }
+        return true;
+      }
+      case 'setgame': {
+        const gameName = argsWithoutCommand.join(' ').trim();
+        if (!gameName || !broadcasterId) {
+          addToast('Usage: /setgame <category>', 'info');
+          return true;
+        }
+        try {
+          await invoke('update_channel_info', { broadcasterId, title: null, gameName });
+          addToast(`Category set to ${gameName}`, 'success');
+        } catch (err) {
+          addToast(typeof err === 'string' ? err : 'Could not update the category', 'error');
+        }
+        return true;
+      }
+      case 'overlay': {
+        const channelLogin = (argsWithoutCommand[0] || broadcasterLogin || '').replace('@', '').toLowerCase();
+        if (!channelLogin) {
+          addToast('Usage: /overlay [channel]', 'info');
+          return true;
+        }
+        try {
+          const { openChatOverlayWindow } = await import('./chatOverlayWindow');
+          let channelId: string | undefined;
+          const currentStream = useAppStore.getState().currentStream;
+          if (currentStream?.user_login?.toLowerCase() === channelLogin) {
+            channelId = currentStream.user_id;
+          } else {
+            const lookup = await invoke<UserLookupResult | null>('get_user_by_login', { login: channelLogin }).catch(() => null);
+            channelId = lookup?.id;
+          }
+          await openChatOverlayWindow({ channel: channelLogin, channelId });
+        } catch (err) {
+          Logger.error('[Command Handler] /overlay failed:', err);
+          addToast('Failed to open chat overlay', 'error');
+        }
+        return true;
+      }
       case 'popup': {
         const channelLogin = (argsWithoutCommand[0] || broadcasterLogin || '').replace('@', '').toLowerCase();
         if (!channelLogin) {
@@ -626,7 +744,8 @@ export const handleSlashCommand = async (
             const lookup = await invoke<UserLookupResult | null>('get_user_by_login', { login: channelLogin }).catch(() => null);
             channelId = lookup?.id;
           }
-          await openMultiChatWindow({ channel: channelLogin, channelId });
+          // Chatterino parity: /popup always opens a NEW window.
+          await openMultiChatWindow({ channel: channelLogin, channelId, newWindow: true });
         } catch (err) {
           Logger.error('[Command Handler] /popup failed:', err);
           addToast('Failed to open MultiChat window', 'error');
@@ -1054,3 +1173,26 @@ export const handleSlashCommand = async (
   
   return false;
 };
+
+
+ensureLastWhisperListener();
+
+/** Best-effort chatter count from either Helix chatters shape. */
+function countChatters(res: unknown): number | null {
+  if (!res || typeof res !== 'object') return null;
+  const r = res as Record<string, unknown>;
+  if (typeof r.total === 'number') return r.total;
+  if (Array.isArray(r.data)) return r.data.length;
+  if (Array.isArray(res)) {
+    let n = 0;
+    for (const group of res as unknown[]) {
+      if (group && typeof group === 'object') {
+        for (const v of Object.values(group as Record<string, unknown>)) {
+          if (Array.isArray(v)) n += v.length;
+        }
+      }
+    }
+    return n;
+  }
+  return null;
+}

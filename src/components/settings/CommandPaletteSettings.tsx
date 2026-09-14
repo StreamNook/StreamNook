@@ -104,11 +104,11 @@ function SectionsWalkthrough() {
         <SectionRow name="Quick Actions" desc="Verbs that always apply: open Drops/Badges/Whispers, surprise-me, refresh follows, sleep timers, feedback links." />
         <SectionRow name="Current Stream" desc="Only useful while watching a stream: pop chat out, theatre mode, restart/stop, follow/unfollow, view drops for this game, browse other streams of this game." />
         <SectionRow name="Share" desc="Copy stream URL, markdown link, share text, embed iframe; open VODs / Clips / Schedule / About on twitch.tv." />
-        <SectionRow name="Settings" desc="Every settings tab and section is searchable. Type 'ad block' to land on Integrations, TTV LOL." />
+        <SectionRow name="Settings" desc="Every settings tab and section is searchable. Type 'ad block' to land on the ad blocking panel under Integrations." />
         <SectionRow name="Categories" desc="Type a game name. Each match expands to Browse {Game} and View drops for {Game}." />
         <SectionRow name="Followed Channels" desc="Live snapshot of your following list. Selecting starts watching." />
         <SectionRow name="Recent Chatters" desc="People who've spoken in the current chat. Selecting opens whispers with them." />
-        <SectionRow name="Streamers" desc="Twitch live + offline search results, debounced 250ms once you type 2+ characters." />
+        <SectionRow name="Streamers" desc="Live and offline Twitch channels matching what you typed. Results appear once you have typed 2 or more characters." />
         <SectionRow name="Snippets" desc="Copypastas + Twitch slash-command snippets. Selecting copies the body to your clipboard. Star to favorite; set an alias for instant matching." />
         <SectionRow name="Recent" desc="Your last 6 picks, surfaced when the palette is empty." />
       </div>
@@ -189,6 +189,7 @@ function SnippetManager() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search snippets…"
+          aria-label="Search snippets"
           className="flex-1 min-w-[200px] rounded-md border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-textPrimary placeholder:text-textMuted focus:border-accent/60 focus:outline-none"
         />
         <CategoryPill label="All" active={categoryFilter === 'All'} onClick={() => setCategoryFilter('All')} />
@@ -302,19 +303,25 @@ function SnippetRow({
 
           {isEditing && isCustom ? (
             <div className="space-y-2 mt-2">
-              <input
-                value={titleDraft}
-                onChange={(e) => setTitleDraft(e.target.value)}
-                placeholder="Title"
-                className="w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-sm text-textPrimary"
-              />
-              <textarea
-                value={contentDraft}
-                onChange={(e) => setContentDraft(e.target.value)}
-                placeholder="Content"
-                rows={3}
-                className="w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-sm text-textPrimary font-mono"
-              />
+              <label className="block">
+                <span className="mb-1 block text-[11px] text-textMuted">Title</span>
+                <input
+                  value={titleDraft}
+                  onChange={(e) => setTitleDraft(e.target.value)}
+                  placeholder="Title"
+                  className="w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-sm text-textPrimary"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[11px] text-textMuted">Content</span>
+                <textarea
+                  value={contentDraft}
+                  onChange={(e) => setContentDraft(e.target.value)}
+                  placeholder="Content"
+                  rows={3}
+                  className="w-full rounded-md border border-white/10 bg-black/30 px-2.5 py-1.5 text-sm text-textPrimary font-mono"
+                />
+              </label>
             </div>
           ) : (
             <pre className="mt-1 whitespace-pre-wrap text-[12px] text-textSecondary leading-relaxed line-clamp-3 font-sans">
@@ -446,27 +453,36 @@ function AddCustomForm({ onDone }: { onDone: () => void }) {
         <h4 className="text-sm font-semibold text-textPrimary">New custom snippet</h4>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Title (shown in palette)"
-          className="rounded-md border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-textPrimary"
-        />
-        <Dropdown
-          value={category}
-          onChange={setCategory}
-          className="w-full"
-          ariaLabel="Snippet category"
-          options={SNIPPET_CATEGORIES.map((c) => ({ value: c as Snippet['category'], label: String(c) }))}
-        />
+        <label className="flex flex-col">
+          <span className="mb-1 block text-xs text-textMuted">Title</span>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Shown in the palette"
+            className="rounded-md border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-textPrimary"
+          />
+        </label>
+        <div>
+          <span className="mb-1 block text-xs text-textMuted">Category</span>
+          <Dropdown
+            value={category}
+            onChange={setCategory}
+            className="w-full"
+            ariaLabel="Snippet category"
+            options={SNIPPET_CATEGORIES.map((c) => ({ value: c as Snippet['category'], label: String(c) }))}
+          />
+        </div>
       </div>
-      <textarea
-        value={content}
-        onChange={(e) => setContent(e.target.value)}
-        placeholder="Content (what gets copied to your clipboard)."
-        rows={4}
-        className="w-full rounded-md border border-white/10 bg-black/30 px-3 py-2 text-sm text-textPrimary font-mono"
-      />
+      <label className="block">
+        <span className="mb-1 block text-xs text-textMuted">Content</span>
+        <textarea
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          placeholder="What gets copied to your clipboard when you pick this snippet"
+          rows={4}
+          className="w-full rounded-md border border-white/10 bg-black/30 px-3 py-2 text-sm text-textPrimary font-mono"
+        />
+      </label>
       <div className="flex items-center gap-2">
         <label className="text-xs text-textMuted">Alias (optional):</label>
         <input

@@ -19,6 +19,46 @@ const originalConsole = {
   error: console.error.bind(console),
 };
 
+// Because those bindings are taken at module load (before logService's
+// initLogCapture patches console), Logger output never reaches the patched
+// console and was invisible to the backend log file. warn/error forward
+// directly instead (their only path, so no duplicate lines); info goes
+// through a small batch queue gated on diagnosticsEnabled; debug never
+// forwards (per-frame firehose). forwardToRust's failure handler uses its own
+// native console binding, so there is no recursion.
+import { forwardToRust } from '../services/logService';
+
+const INFO_FLUSH_MS = 500;
+const INFO_FLUSH_CAP = 200;
+let pendingInfo: unknown[][] = [];
+let infoFlushTimer: ReturnType<typeof setInterval> | null = null;
+
+const flushInfoQueue = (): void => {
+  if (pendingInfo.length === 0) {
+    if (infoFlushTimer !== null) {
+      clearInterval(infoFlushTimer);
+      infoFlushTimer = null;
+    }
+    return;
+  }
+  const batch = pendingInfo.slice(0, INFO_FLUSH_CAP);
+  const dropped = pendingInfo.length - batch.length;
+  pendingInfo = [];
+  for (const args of batch) {
+    void forwardToRust('info', args);
+  }
+  if (dropped > 0) {
+    void forwardToRust('warn', [`[Logger] dropped ${dropped} queued info lines (flood cap)`]);
+  }
+};
+
+const queueInfoForward = (args: unknown[]): void => {
+  pendingInfo.push(args);
+  if (infoFlushTimer === null) {
+    infoFlushTimer = setInterval(flushInfoQueue, INFO_FLUSH_MS);
+  }
+};
+
 // Diagnostics state - defaults to enabled for safety
 let diagnosticsEnabled = true;
 
@@ -114,6 +154,9 @@ export const Logger = {
     if (consoleVerbose) {
       originalConsole.info(...args);
     }
+    if (diagnosticsEnabled) {
+      queueInfoForward(args);
+    }
   },
 
   /**
@@ -122,6 +165,7 @@ export const Logger = {
    */
   warn: (...args: unknown[]): void => {
     originalConsole.warn(...args);
+    void forwardToRust('warn', args);
   },
 
   /**
@@ -130,6 +174,7 @@ export const Logger = {
    */
   error: (...args: unknown[]): void => {
     originalConsole.error(...args);
+    void forwardToRust('error', args);
   },
 };
 

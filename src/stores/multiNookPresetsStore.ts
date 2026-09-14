@@ -4,11 +4,13 @@ import { useAppStore } from './AppStore';
 import { usemultiNookStore } from './multiNookStore';
 import { MultiNookPreset, MultiNookPresetChannel, MultiNookPresetIcon, MultiNookSlot } from '../types';
 import { Logger } from '../utils/logger';
+import { makeKey } from '../utils/providerKey';
 
 /** Strip a live grid slot down to the lean, persistable preset-channel shape:
  *  identity, display metadata, and preferred quality, no transient view state. */
 export function slotToPresetChannel(slot: MultiNookSlot): MultiNookPresetChannel {
   return {
+    provider: slot.provider,
     channelLogin: slot.channelLogin,
     channelId: slot.channelId,
     channelName: slot.channelName,
@@ -17,12 +19,16 @@ export function slotToPresetChannel(slot: MultiNookSlot): MultiNookPresetChannel
   };
 }
 
-/** Drop duplicate logins, preserving first-seen order. */
+/** Drop duplicate channels, preserving first-seen order. Keyed by
+ *  provider+channel, not a bare login: the same name on two platforms is two
+ *  different channels, and case folding a bare login would also destroy a
+ *  case-sensitive id (see utils/providerKey.ts). */
 function dedupeChannels(channels: MultiNookPresetChannel[]): MultiNookPresetChannel[] {
   const seen = new Set<string>();
   return channels.filter((ch) => {
-    const key = ch.channelLogin.toLowerCase();
-    if (!key || seen.has(key)) return false;
+    if (!ch.channelLogin) return false;
+    const key = makeKey(ch.provider ?? 'twitch', ch.channelLogin);
+    if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });

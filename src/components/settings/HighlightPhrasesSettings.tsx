@@ -1,8 +1,8 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Dropdown } from '../ui/Dropdown';
 import { ChevronDown, ChevronUp, Plus, Trash2, Volume2 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
-import { validateHighlightPhrase } from '../../utils/chatHighlightMatcher';
 import { SOUND_LABELS, playSound, type SoundId } from '../../utils/notificationSound';
 import { SettingsSection } from './_primitives';
 import type { HighlightPhrase } from '../../types';
@@ -34,12 +34,42 @@ const HighlightPhrasesSettings = () => {
     [settings.chat_highlights],
   );
 
+  // Merge, never replace: the same object carries users, badges, built_in
+  // and appearance, which this panel must not wipe.
   const writePhrases = (next: HighlightPhrase[]) => {
     updateSettings({
       ...settings,
-      chat_highlights: { phrases: next },
+      chat_highlights: { ...settings.chat_highlights, phrases: next },
     });
   };
+
+  // Regex phrases are validated by Rust, the dialect that actually runs them
+  // (no lookaround, no backreferences). Errors keyed by phrase id.
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const next: Record<string, string> = {};
+      for (const p of phrases) {
+        if (!p.is_regex || !p.pattern.trim()) continue;
+        try {
+          const err = await invoke<string | null>('validate_chat_phrase', {
+            pattern: p.pattern,
+            isRegex: true,
+            wholeWord: p.whole_word,
+            caseSensitive: p.case_sensitive,
+          });
+          if (err) next[p.id] = err;
+        } catch {
+          // Validation is advisory; the engine skips a bad pattern anyway.
+        }
+      }
+      if (!cancelled) setErrors(next);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [phrases]);
 
   const updatePhrase = (id: string, patch: Partial<HighlightPhrase>) => {
     writePhrases(phrases.map((p) => (p.id === id ? { ...p, ...patch } : p)));
@@ -86,7 +116,7 @@ const HighlightPhrasesSettings = () => {
         )}
 
         {phrases.map((phrase, idx) => {
-          const error = validateHighlightPhrase(phrase);
+          const error = errors[phrase.id] ?? null;
           return (
             <div
               key={phrase.id}
@@ -196,6 +226,7 @@ const HighlightPhrasesSettings = () => {
                     options={[
                       { value: '', label: 'None' },
                       ...SOUND_OPTIONS.map((id) => ({ value: id, label: SOUND_LABELS[id] })),
+                      ...(settings.chat_highlights?.custom_sounds ?? []).map((s) => ({ value: s.id, label: s.name || 'Custom sound' })),
                     ]}
                   />
                 </label>

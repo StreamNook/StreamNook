@@ -66,6 +66,41 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Player',
+    section: 'Mouse Controls',
+    sectionId: 'settings-section-mouse-controls',
+    title: 'Scroll to change volume',
+    description: 'Scroll the mouse wheel over the video to change volume up or down, louder quieter, one handed mouse only control.'
+  },
+  {
+    tab: 'Player',
+    section: 'Mouse Controls',
+    sectionId: 'settings-section-mouse-controls',
+    title: 'Scroll to open Channel About',
+    description: "Scroll down over the player (with Shift when the wheel is set to volume) to slide the channel's About panel up over the stream."
+  },
+  {
+    tab: 'Player',
+    section: 'Mouse Controls',
+    sectionId: 'settings-section-mouse-controls',
+    title: 'Middle-click to mute',
+    description: 'Click the scroll wheel or middle mouse button over the player to mute and unmute the stream without the keyboard.'
+  },
+  {
+    tab: 'Player',
+    section: 'Mouse Controls',
+    sectionId: 'settings-section-mouse-controls',
+    title: 'Volume Step',
+    description: 'How much one mouse wheel notch changes the volume, from 1 to 25 percent. Also used by the volume up and volume down keyboard shortcuts.'
+  },
+  {
+    tab: 'Player',
+    section: 'Mouse Controls',
+    sectionId: 'settings-section-mouse-controls',
+    title: 'Resume VODs where you left off',
+    description: 'Reopening a past broadcast picks up at your last position.'
+  },
+  {
+    tab: 'Player',
     section: 'Auto-Switch',
     sectionId: 'settings-section-auto-switch',
     title: 'Auto-Switch',
@@ -75,36 +110,36 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Player',
     section: 'Auto-Switch',
     sectionId: 'settings-section-auto-switch',
-    title: 'Enable Auto-Switch',
-    description: 'Automatically switch when the current stream goes offline.'
+    title: 'Move to another stream when this one ends',
+    description: 'When the channel you are watching goes offline, StreamNook picks a new live stream and starts it for you.'
   },
   {
     tab: 'Player',
     section: 'Auto-Switch',
     sectionId: 'settings-section-auto-switch',
-    title: 'Switch To',
-    description: 'Switch to the highest viewer stream in the same game/category, or one of your live followed streamers.'
+    title: 'Where to go next',
+    description: 'The most-watched live stream in the same category, or one of your followed channels that is live right now.'
   },
   {
     tab: 'Player',
     section: 'Auto-Switch',
     sectionId: 'settings-section-auto-switch',
-    title: 'Show Notification',
-    description: 'Display a toast when auto-switching streams.'
+    title: 'Tell me when it switches',
+    description: 'A toast names the new channel each time StreamNook switches for you.'
   },
   {
     tab: 'Player',
     section: 'Auto-Switch',
     sectionId: 'settings-section-auto-switch',
-    title: 'Auto-Redirect on Raid',
-    description: 'Automatically follow raids to the target channel (requires login).'
+    title: 'Follow raids automatically',
+    description: 'When the streamer raids another channel, StreamNook jumps there with them (you need to be signed in).'
   },
   {
     tab: 'Player',
     section: 'Auto-Switch',
     sectionId: 'settings-section-auto-switch',
-    title: 'Stay in Offline Chat',
-    description: "Don't auto-switch when a stream ends, stay in the chat room instead."
+    title: 'Stay in chat after the stream ends',
+    description: "Keeps you in the channel's chat when the stream goes offline instead of switching you away."
   },
   {
     tab: 'Player',
@@ -117,22 +152,22 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Player',
     section: 'Streaming',
     sectionId: 'settings-section-streaming',
-    title: 'Allow h265 + AV1 codecs',
-    description: 'Request AV1 and HEVC stream variants in addition to h264. Turn off if you see decode errors on older hardware.'
+    title: 'Allow AV1 and h265 streams',
+    description: 'Asks Twitch for AV1 and h265 (HEVC) versions of the stream alongside h264, which some channels offer at better quality for the same bandwidth.'
   },
   {
     tab: 'Player',
     section: 'Streaming',
     sectionId: 'settings-section-streaming',
-    title: 'Connection Timeout',
-    description: 'How long to keep retrying to resolve a stream before giving up.'
+    title: 'Keep trying for a set time',
+    description: 'How long StreamNook keeps trying to open a stream before giving up, which helps when a channel has only just gone live.'
   },
   {
     tab: 'Player',
     section: 'Streaming',
     sectionId: 'settings-section-streaming',
-    title: 'Auto-Retry Delay',
-    description: 'Seconds to wait between resolve attempts while a stream is not available yet.'
+    title: 'Pause between attempts',
+    description: 'How long to wait between attempts while a stream is not available yet (0 means a single attempt).'
   },
   {
     tab: 'Player',
@@ -145,43 +180,43 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Player',
     section: 'Video Player',
     sectionId: 'settings-section-video-player',
-    title: 'Autoplay',
-    description: 'Automatically play a stream when loaded.'
+    title: 'Play as soon as a stream opens',
+    description: 'The stream starts playing the moment it loads, with no need to press play.'
   },
   {
     tab: 'Player',
     section: 'Video Player',
     sectionId: 'settings-section-video-player',
-    title: 'Live Edge Gap',
-    description: 'How far behind the live edge to ride. Lower is closer to live and reduces delay; the lowest gaps need Low Latency on. Catch up to live, latency target.'
+    title: 'How close to live to stay',
+    description: 'How far behind the live edge the player rides; lower is closer to live (reopen the stream to apply).'
   },
   {
     tab: 'Player',
     section: 'Video Player',
     sectionId: 'settings-section-video-player',
     title: 'Low Latency',
-    description: 'Use the low-latency engine to hold a tight live edge gap on channels that support it. Turn off if a stream stutters or will not play.'
+    description: 'Uses the low-latency engine to hold a tight live edge gap smoothly on channels that support it.'
   },
   {
     tab: 'Player',
     section: 'Video Player',
     sectionId: 'settings-section-video-player',
-    title: 'Max Buffer Length',
-    description: 'Maximum amount of video to buffer ahead (higher = more stable, but more delay).'
+    title: 'Buffer up to a set length',
+    description: 'How much video the player keeps loaded ahead of playback; more is steadier on a shaky connection but adds delay.'
   },
   {
     tab: 'Player',
     section: 'Video Player',
     sectionId: 'settings-section-video-player',
-    title: 'Default Stream Quality',
-    description: 'Quality to use when starting streams (you can change quality anytime using the player controls).'
+    title: 'Quality to start streams at',
+    description: 'Every stream opens at this quality, and you can change it anytime from the player controls.'
   },
   {
     tab: 'Player',
     section: 'Video Player',
     sectionId: 'settings-section-video-player',
-    title: 'Lock Aspect Ratio (16:9)',
-    description: 'Prevent letterboxing by constraining window resize to maintain video aspect ratio.'
+    title: 'Keep the window at 16:9',
+    description: "Resizing the window snaps to the video's shape, so you never see black bars around the picture."
   },
   {
     tab: 'Player',
@@ -194,15 +229,15 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Player',
     section: 'Video Player',
     sectionId: 'settings-section-video-player',
-    title: 'Start Muted',
-    description: 'Begin playback with audio muted.'
+    title: 'Start streams muted',
+    description: 'Every stream opens silent until you unmute it.'
   },
   {
     tab: 'Player',
     section: 'Video Player',
     sectionId: 'settings-section-video-player',
-    title: 'Default Volume',
-    description: 'Initial volume level when starting playback.'
+    title: 'Starting volume',
+    description: 'The volume every stream opens at before you adjust it.'
   },
   {
     tab: 'Player',
@@ -215,8 +250,8 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Player',
     section: 'Audio Boost',
     sectionId: 'settings-section-audio-boost',
-    title: 'Enable Audio Boost',
-    description: 'Run the stream audio through a compressor and a makeup-gain stage.'
+    title: 'Turn on Audio Boost',
+    description: "Evens out the stream's loudness and lifts it, on top of the normal volume slider."
   },
   {
     tab: 'Player',
@@ -243,15 +278,15 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Player',
     section: 'Song Identification',
     sectionId: 'settings-section-song-id',
-    title: 'Listen Time',
-    description: 'How many seconds of audio the song identifier fingerprints. Longer captures match more accurately, especially over talking or noise. Shazam, music recognition.'
+    title: 'Listen time',
+    description: 'How many seconds of audio to fingerprint; longer matches more reliably over talking or noise, but the result takes a little longer to appear.'
   },
   {
     tab: 'Player',
     section: 'Song Identification',
     sectionId: 'settings-section-song-id',
-    title: 'Retries on No Match',
-    description: 'How many extra times the song identifier listens again when the first try finds no song. Music recognition, Shazam.'
+    title: 'Retries when nothing matches',
+    description: 'If the first listen finds nothing, StreamNook listens again this many times.'
   },
 
   // === Theme ===
@@ -259,7 +294,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Theme',
     section: 'Theme',
     title: 'Theme',
-    description: 'Pick a color theme or build your own. Themes set the palette only; font and glassiness are chosen separately, so you can use any font with any theme.'
+    description: 'Pick a color theme or build your own. Themes set the palette only; font and glassiness are chosen separately, so you can use any font with any theme. Signature themes: Frosted Glass, Standard Issue, OLED, Prism (spectral dispersion, refracted light, iridescent, optical).'
   },
   {
     tab: 'Theme',
@@ -292,8 +327,8 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Chat',
     section: 'Chat Placement',
-    title: 'Placement',
-    description: 'Choose where to display the chat window or hide it completely.'
+    title: 'Where chat sits',
+    description: 'Dock chat to the left, right, or bottom of the player, or hide it to give the video the whole window.'
   },
   {
     tab: 'Chat',
@@ -305,7 +340,14 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Chat',
     section: 'Channel Points',
     title: 'Auto-claim bonus chests',
-    description: 'Automatically collect the bonus chest on the stream you are watching. When off, a claim button appears on the points icon.'
+    description: 'Collects the bonus chest on the stream you are watching the moment it appears.'
+  },
+  {
+    tab: 'Chat',
+    section: 'YouTube Chat',
+    sectionId: 'settings-section-youtube-chat',
+    title: 'Which chat to read',
+    description: "Live chat shows everything, while Top chat is YouTube's own filtered view that keeps a very fast chat readable."
   },
   {
     tab: 'Chat',
@@ -340,28 +382,28 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Chat Events',
     sectionId: 'settings-section-chat-events',
     title: 'When both are running',
-    description: 'A channel can run a poll and a prediction at the same time. Both cards show either way, stacked. Pick which one sits on top.'
+    description: 'Pick which card sits on top when a poll and a prediction run at the same time.'
   },
   {
     tab: 'Chat',
     section: 'Chat Events',
     sectionId: 'settings-section-chat-events',
     title: 'Channel point redemptions',
-    description: 'Drop a chat row when someone redeems a reward that does not post its own message, such as a no-input reward.'
+    description: 'Shows a chat row when someone redeems a reward that does not post its own message, like a no-input reward.'
   },
   {
     tab: 'Chat',
     section: 'Chat Events',
     sectionId: 'settings-section-chat-events',
     title: 'Collapse gift-sub floods',
-    description: 'When someone gifts a batch of subs, show one row with the recipients attached instead of a separate row per gift.'
+    description: "Shows one 'gifting N subs' row with the recipients attached when someone gifts a batch, instead of a row per gift."
   },
   {
     tab: 'Chat',
     section: 'Chat Events',
     sectionId: 'settings-section-chat-events',
     title: 'Chat replay on clips',
-    description: 'Show the chat that was live while a clip was recorded, beside the clip. VOD chat replay for clips, historical chat, clip chat, past chat.'
+    description: 'Shows the chat that was live while a clip was recorded, beside the clip.'
   },
   {
     tab: 'Chat',
@@ -373,13 +415,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Chat',
     section: 'Chat Logging',
     title: 'Save chat logs',
-    description: 'Write chat to plain text files as you watch: one folder per channel, one file per day.'
+    description: 'Writes chat to plain text files as you watch: one folder per channel, one file per day.'
   },
   {
     tab: 'Chat',
     section: 'Chat Logging',
     title: 'Log folder',
-    description: 'The folder chat logs are written to. Browse to pick a custom location or open the current one.'
+    description: 'Where the files are written. Browse to pick your own folder, Reset to go back to the default.'
   },
   {
     tab: 'Chat',
@@ -402,92 +444,98 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Chat',
     section: 'Chat Design',
-    title: 'Show Message Dividers',
-    description: 'Display subtle lines between chat messages.'
+    title: 'Lines between messages',
+    description: 'Draws a thin line between messages so a fast chat is easier to scan.'
   },
   {
     tab: 'Chat',
     section: 'Chat Design',
-    title: 'Alternating Backgrounds',
-    description: 'Alternate message background colors using your theme palette.'
+    title: 'Striped message rows',
+    description: "Gives every other message a slightly different background, in your theme's colors, so rows are easier to follow."
   },
   {
     tab: 'Chat',
     section: 'Chat Design',
-    title: 'Message Spacing',
-    description: 'Space between chat messages.'
+    title: 'Message spacing',
+    description: 'Blank space between one message and the next; more room means fewer messages on screen.'
   },
   {
     tab: 'Chat',
     section: 'Chat Design',
-    title: 'Font Size',
-    description: 'Chat message text size.'
+    title: 'Text size',
+    description: 'Size of message text, with room to go large when MultiChat fills a whole monitor.'
   },
   {
     tab: 'Chat',
     section: 'Chat Design',
-    title: 'Font Weight',
-    description: 'Boldness of chat message text.'
+    title: 'Activity feed size',
+    description: 'Text size for the MultiChat activity feed, where subs, raids, and gifts land.'
   },
   {
     tab: 'Chat',
     section: 'Chat Design',
-    title: 'Mention Animation',
-    description: "Flash animation when you're mentioned or replied to."
+    title: 'Text weight',
+    description: 'How heavy the message text is, from light to bold.'
   },
   {
     tab: 'Chat',
     section: 'Chat Design',
-    title: 'Show Timestamps',
-    description: 'Display the time each message was sent next to the username.'
+    title: 'Flash when you are mentioned',
+    description: 'Briefly flashes any message that mentions or replies to you, so you spot it in a fast chat.'
   },
   {
     tab: 'Chat',
     section: 'Chat Design',
-    title: 'Include Seconds',
-    description: 'Show seconds in timestamps (e.g., 7:42:30 PM instead of 7:42 PM).'
+    title: 'Show timestamps',
+    description: 'Shows the time each message was sent, next to the name.'
   },
   {
     tab: 'Chat',
     section: 'Chat Design',
-    title: 'Pins Start Collapsed',
-    description: 'Show the pinned message as its compact one-line bar when you enter a channel instead of fully expanded.'
+    title: 'Include seconds',
+    description: 'Shows seconds too, so 7:42 PM reads 7:42:30 PM.'
   },
   {
     tab: 'Chat',
     section: 'Chat Design',
-    title: 'Collapsed Pinned Message',
-    description: 'When a pinned message is collapsed, shrink it to a thin one-line bar (sender + truncated text) instead of hiding it entirely.'
+    title: 'Pins start collapsed',
+    description: 'Shows the pinned message as a compact one-line bar when you enter a channel.'
   },
   {
     tab: 'Chat',
     section: 'Chat Design',
-    title: 'Name Separator',
-    description: 'Glyph between the username and the message: colon, dot, arrow, pipe, or dash. Makes the name read as a prefix (name: message).'
+    title: 'Collapsed pin style',
+    description: 'Shrinks a collapsed pin to a thin one-line bar you can click to expand, or hides it completely.'
   },
   {
     tab: 'Chat',
     section: 'Chat Design',
-    title: 'Name Style',
-    description: 'Make the username stand out as a prefix: accent bar, frosted chip or tag, brackets [name], or a small color dot.'
+    title: 'Name separator',
+    description: 'The mark between a name and its message, like a colon or an arrow.'
   },
   {
     tab: 'Chat',
     section: 'Chat Design',
-    title: 'Prefix Color',
-    description: "Color for the username separator and name style: the chatter's own color, or your theme accent."
+    title: 'Name style',
+    description: 'How names stand out from the message: plain, or with a bar, chip, brackets, or dot.'
   },
   {
     tab: 'Chat',
     section: 'Chat Design',
-    title: '@ Mention Color',
-    description: 'Color used for messages that mention you.'
+    title: 'Prefix color',
+    description: "Colors the separator, bar, dot, brackets, or chip with the chatter's own color or your theme accent."
   },
   {
     tab: 'Chat',
     section: 'Chat Design',
-    title: 'Reply Thread Color',
-    description: 'Color used for replies in threads.'
+    title: 'Mention color',
+    description: 'The highlight color on messages that mention you.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Chat Design',
+    title: 'Reply thread color',
+    description: 'The color that marks replies in a thread.'
   },
   {
     tab: 'Chat',
@@ -498,20 +546,20 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Chat',
     section: 'Link Previews',
-    title: 'Preview Mode',
-    description: 'Off keeps links as plain text. Card + Link shows the preview and keeps the link in chat. Clean shows only the preview card and hides the link.'
+    title: 'How links show',
+    description: 'Off keeps links as plain text, Card + Link adds a preview card under the link, and Clean shows only the card.'
   },
   {
     tab: 'Chat',
     section: 'Link Previews',
-    title: 'Shorten Links',
-    description: 'Display links as a clean compact label (site plus a short path) instead of the full raw URL.'
+    title: 'Shorten links',
+    description: 'Shows each link as a compact label, the site plus a short path, instead of the full raw URL.'
   },
   {
     tab: 'Chat',
     section: 'Link Previews',
-    title: 'Trusted Sources',
-    description: 'Sites that expand into a preview automatically. Add or remove your own trusted sites.'
+    title: 'Trusted sites',
+    description: 'Links from trusted sites expand into a preview on their own; every other link shows a Load preview button instead.'
   },
   {
     tab: 'Chat',
@@ -522,20 +570,20 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Chat',
     section: 'Emotes',
-    title: 'Emote Size',
-    description: 'Multiplier for inline emote size. 1.00x matches the default.'
+    title: 'Emote size',
+    description: 'Scales emotes in chat relative to the text, with 1.00x being the default size.'
   },
   {
     tab: 'Chat',
     section: 'Emotes',
-    title: 'Emote Hover Size',
-    description: 'How large an emote grows in its hover preview. Hover the sample to try the chosen size.'
+    title: 'Emote hover size',
+    description: 'How large an emote grows when you hover it, in chat and in the emote menu.'
   },
   {
     tab: 'Chat',
     section: 'Emotes',
-    title: 'Emote Spacing',
-    description: 'Horizontal space around emotes. Negative values let them overlap for an inline feel.'
+    title: 'Emote spacing',
+    description: 'Space on each side of an emote; go negative to let neighboring emotes overlap.'
   },
   {
     tab: 'Chat',
@@ -546,20 +594,38 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Chat',
     section: 'Chat Input',
-    title: 'Bypass duplicate-message check',
-    description: 'Append an invisible character when you send the same message twice so Twitch does not reject the second send. Useful for repeating an emote.'
+    title: 'Send the same message twice',
+    description: 'Adds an invisible character when you repeat a message, so Twitch does not reject the second send.'
   },
   {
     tab: 'Chat',
     section: 'Chat Input',
-    title: 'Quick Send (Ctrl+Enter keeps message)',
-    description: 'Hold Ctrl while pressing Enter to send the message and leave it in the input box so you can re-send fast.'
+    title: 'Ctrl+Enter sends and keeps the text',
+    description: 'Sends the message and leaves it in the box, so you can send it again straight away.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Chat Input',
+    title: 'Check spelling as you type',
+    description: 'Underline misspelled words in the message box and offer corrections when you right-click one. Emotes, chatters, commands and links are left alone.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Chat Input',
+    title: 'Spell check dictionary',
+    description: 'Words you have taught the spell checker so it stops flagging them. Add or remove entries here.'
   },
   {
     tab: 'Chat',
     section: 'Chat Input',
     title: 'Hide the placeholder text',
     description: 'Leave the message box empty instead of prompting you to send a message. Notices you can act on, like read-only or subscriber-only mode, still show.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Chat Input',
+    title: 'Hide the command button',
+    description: 'Removes the slash button from inside the message box. It opens a browsable menu of every command you can run here, with examples; typing / still opens the quick list.'
   },
   {
     tab: 'Chat',
@@ -584,22 +650,22 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Chat',
     section: 'Emote Tab Completion',
     sectionId: 'settings-section-emote-tab-completion',
-    title: 'Enable Tab Completion',
-    description: 'Press Tab while typing a partial emote name to insert the best-matching emote.'
+    title: 'Complete emote names with Tab',
+    description: 'Press Tab while typing to insert the best-matching emote, and Tab again to cycle to the next match.'
   },
   {
     tab: 'Chat',
     section: 'Emote Tab Completion',
     sectionId: 'settings-section-emote-tab-completion',
-    title: 'Match Mode',
-    description: 'Whether the tab carousel ranks matches by prefix (starts with) or by substring (contains).'
+    title: 'How names match',
+    description: 'Starts With needs the emote to begin with what you typed; Contains matches it anywhere in the name.'
   },
   {
     tab: 'Chat',
     section: 'Emote Tab Completion',
     sectionId: 'settings-section-emote-tab-completion',
-    title: 'Include Chat Users',
-    description: 'Also cycle through display names of users currently in chat.'
+    title: 'Complete chatter names too',
+    description: 'Also cycles through the names of people currently in chat.'
   },
   {
     tab: 'Chat',
@@ -611,19 +677,19 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Chat',
     section: 'Render Style',
     title: 'Deleted messages',
-    description: 'How banned, timed-out, and deleted messages render: strikethrough, dimmed, keep, or hidden.'
+    description: 'What happens to a message once it is deleted or its sender is timed out or banned: crossed out, dimmed, left as is, or removed.'
   },
   {
     tab: 'Chat',
     section: 'Render Style',
     title: 'Hide shared chat messages',
-    description: 'Suppress messages flagged as coming from another room in a Twitch shared-chat session.'
+    description: "Hides messages that came from the other channel in a Twitch Shared Chat, so you only see this channel's own chatters."
   },
   {
     tab: 'Chat',
     section: 'Render Style',
     title: 'Paint @mentions inline',
-    description: 'Render an @ mentioned name with their 7TV paint. Off renders mentions in their flat color only.'
+    description: "Draws a mentioned name in that person's 7TV paint instead of a flat color."
   },
   {
     tab: 'Chat',
@@ -635,19 +701,67 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Chat',
     section: 'Render Style',
     title: 'FFZ emote effects',
-    description: 'Apply FrankerFaceZ modifiers (wide, flips, rainbow, shake) to the emote before them.'
+    description: 'Applies FrankerFaceZ modifiers (wide, flips, rainbow, shake) to the emote before them, the way FFZ does.'
   },
   {
     tab: 'Chat',
     section: 'Render Style',
     title: 'BetterTTV emote modifiers',
-    description: 'Apply BetterTTV modifiers (w! wide, h!/v! flips, c! cursed, p! party, s! shake, l!/r! rotate) to the emote after them.'
+    description: 'Applies BetterTTV modifiers (w! wide, h! and v! flips, c! cursed, p! party, s! shake) to the emote after them, the way BetterTTV does.'
   },
   {
     tab: 'Chat',
     section: 'Render Style',
     title: 'Giant emotes',
-    description: 'Render the last emote of a Gigantify power-up message at 4x below the message.'
+    description: 'Draws the last emote of a "Gigantify an Emote" power-up message at 4x below the message, like Twitch does.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Hidden Users & Bots',
+    sectionId: 'settings-section-chat-filters',
+    title: 'Hide known bots',
+    description: 'Hide chat messages from StreamElements, Nightbot, Moobot and other well-known bots in every channel. Local only; nothing is sent to the platform.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Hidden Users & Bots',
+    sectionId: 'settings-section-chat-filters',
+    title: 'Hidden everywhere',
+    description: 'Users whose messages never appear in your chat, on any platform. Add names here or from a user card in chat.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Hidden Users & Bots',
+    sectionId: 'settings-section-chat-filters',
+    title: 'Hidden in one channel',
+    description: 'Users hidden only in a single channel, added from their user card while watching. Remove a name to see their messages again.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Chat Placement',
+    title: 'Chat over fullscreen video',
+    description: 'Float the chat panel over the video while the player is fullscreen, as a translucent column. Opacity, width, side, and hide-with-controls options.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Hidden Users & Bots',
+    sectionId: 'settings-section-chat-filters',
+    title: 'Ignored phrases',
+    description: 'Hide any message containing a word, phrase or regular expression, in every channel. Evaluated before the message reaches chat.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Message Filters',
+    sectionId: 'settings-section-chat-query',
+    title: 'Saved filters',
+    description: 'Saved message filters (mods only, subs only, mentions, redemptions, links, custom expressions). Apply one to a chat pane from its header.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Message Filters',
+    sectionId: 'settings-section-chat-query',
+    title: 'Search history size',
+    description: 'How many recent messages per channel Ctrl+F can search. Kept in the Rust backend, not in the chat view.'
   },
   {
     tab: 'Chat',
@@ -695,19 +809,19 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Chat',
     section: 'Render Style',
     title: '7TV emote update notices',
-    description: "Show a chat notice when a channel's 7TV emote set changes live (a mod adds, removes, or renames an emote)."
+    description: 'Shows a chat notice when a mod adds, removes, or renames a 7TV emote in the channel.'
   },
   {
     tab: 'Chat',
     section: 'Render Style',
     title: 'Smooth scroll on Resume',
-    description: 'Animate the scroll when you click Resume. New-message auto-scroll stays instant.'
+    description: 'Animates the scroll back to the bottom when you click Resume; auto-scroll for new messages stays instant.'
   },
   {
     tab: 'Chat',
     section: 'Render Style',
     title: 'Message buffer',
-    description: 'How many messages to keep in the local scrollback per channel. Higher = more history, more memory.'
+    description: 'How many messages each chat keeps on screen to scroll back through; more history uses more memory.'
   },
   {
     tab: 'Chat',
@@ -719,7 +833,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Chat',
     section: '7TV Cosmetics',
     title: 'Paint drop shadows',
-    description: 'Some 7TV paints stack heavy drop shadows for readability. Drop to One or None if they feel too noisy.'
+    description: 'Some paints stack several drop shadows for readability; keep them all, just one, or none if names look too noisy.'
   },
   {
     tab: 'Chat',
@@ -822,6 +936,76 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
 
   // === Moderation ===
   {
+    tab: 'Chat',
+    section: 'Chat Design',
+    title: 'Timestamp clock',
+    description: '12-hour or 24-hour timestamps next to chat messages.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Chat Design',
+    title: 'Animate emotes',
+    description: 'Play animated emotes always, only on hover, or never (first frame). Never is lightest on the GPU.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Chat Design',
+    title: 'History opacity',
+    description: 'Dim the scrollback loaded on join so live messages stand out.'
+  },
+  {
+    tab: 'Chat',
+    section: 'User Cards',
+    title: 'Pronouns',
+    description: 'Show pronouns from pronouns.alejo.io on the user card. Off by default; one small third-party request per person.'
+  },
+  {
+    tab: 'Chat',
+    section: 'User Cards',
+    title: 'Private notes',
+    description: 'A private note on each user, kept across renames, shown on the user card.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Custom Sounds',
+    sectionId: 'settings-section-custom-sounds',
+    title: 'Custom highlight sounds',
+    description: 'Use your own audio files as highlight sounds; they appear in every highlight sound picker.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Image Uploads',
+    sectionId: 'settings-section-image-uploads',
+    title: 'Paste images to upload',
+    description: 'Paste a screenshot into the chat box and StreamNook uploads it to a host you pick (nuuls, catbox, Litterbox, uguu or your own) and inserts the link.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Image Uploads',
+    sectionId: 'settings-section-image-uploads',
+    title: 'Image host',
+    description: 'Choose where pasted images are uploaded: i.nuuls.com, catbox.moe, Litterbox (72 h), uguu.se (3 h), or a custom multipart uploader. Includes a one-click test upload.'
+  },
+  {
+    tab: 'Moderation',
+    section: 'Moderation Actions',
+    title: 'Timeout presets',
+    description: 'Custom timeout durations on the message hover dock and drag dial.'
+  },
+  {
+    tab: 'Moderation',
+    section: 'Streamer Mode',
+    sectionId: 'settings-section-streamer-mode',
+    title: 'Streamer mode',
+    description: 'Hide viewer counts, link previews, restricted users and highlight sounds while live. Auto-detects OBS, Streamlabs, XSplit, Twitch Studio and vMix.'
+  },
+  {
+    tab: 'Moderation',
+    section: 'AutoMod',
+    title: 'AutoMod held messages',
+    description: 'Messages AutoMod is holding show in a strip above the chat input for moderators, with Allow and Deny. Restricted and monitored chatters are labelled in chat.'
+  },
+  {
     tab: 'Moderation',
     section: 'Reasons',
     sectionId: 'settings-section-mod-reasons',
@@ -844,20 +1028,20 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Moderation',
     section: 'Moderation Actions',
-    title: 'Action Style',
-    description: 'Choose how moderation actions are triggered in chat: buttons, drag, or both.'
+    title: 'How you act on a message',
+    description: 'Buttons show delete, timeout, and ban when you hover a message; Drag lets you pick a message up and drop it on a color-coded action bucket; Both gives you both.'
   },
   {
     tab: 'Moderation',
     section: 'Moderation Actions',
-    title: 'Drag Style',
-    description: 'Where the action buckets appear: a vertical bucket column beside chat, or a compact bucket cluster above the message.'
+    title: 'Where the drop buckets appear',
+    description: 'Beside chat puts a column of bigger tiles to the left of chat, clear of the player controls; Above chat puts a compact cluster right above the message for when space is tight.'
   },
   {
     tab: 'Moderation',
     section: 'Moderation Actions',
-    title: 'Pin Action',
-    description: 'The inline Pin button next to Copy is always available to mods; this toggles whether a Pin tile also appears in the drag-to-moderate gesture.'
+    title: 'Pin from the drag gesture too',
+    description: 'Moderators always get a Pin button beside Copy on a message; this adds a Pin tile to the drag buckets as well.'
   },
   {
     tab: 'Moderation',
@@ -880,8 +1064,8 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Moderation',
     section: 'Mod Logs',
-    title: 'Show Mod Logs panel',
-    description: 'Display the recent moderation actions sidebar inside chat (timeouts, bans, deletions).'
+    title: 'Show the mod log beside chat',
+    description: 'Adds a panel inside chat that lists recent timeouts, bans, and deleted messages as they happen.'
   },
   {
     tab: 'Moderation',
@@ -899,7 +1083,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Moderation',
     section: 'Message Visibility',
     title: 'Hide strikethrough on removed messages',
-    description: 'Suppress the strikethrough overlay on banned, timed-out, or deleted messages so your backlog stays pristine.'
+    description: 'Banned, timed-out, and deleted messages stay exactly as they were, with no line through them.'
   },
   {
     tab: 'Moderation',
@@ -923,13 +1107,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Moderation',
     section: 'Mass Actions',
     title: '/nuke',
-    description: 'Mass-action by phrase or /regex/flags: delete, ban, or timeout matching messages across a lookback window. Bulk purge spam.'
+    description: 'Bans, times out, or deletes every recent message that matches a word or /regex/flags, typed as /nuke <pattern> <action> <past[:future]>.'
   },
   {
     tab: 'Moderation',
     section: 'Mass Actions',
     title: '/undo',
-    description: 'Reverses the most recent /nuke on this channel. Bans and timeouts are reversible; deletes are permanent.'
+    description: 'Reverses the most recent /nuke in this channel. Bans and timeouts are lifted; deleted messages stay gone because Twitch cannot restore them.'
   },
 
   // === Overlay ===
@@ -948,8 +1132,30 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Overlay',
     section: 'Sources',
+    sectionId: 'settings-section-sources',
     title: 'Sources',
     description: 'Choose which platforms feed the overlay (Twitch, Kick, YouTube, TikTok) and whether to tag each message with its source platform.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Sources',
+    sectionId: 'settings-section-sources',
+    title: 'Source tag',
+    description: 'Shows which platform each message came from, as a dot, an icon, or the platform name.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Layout',
+    sectionId: 'settings-section-layout',
+    title: 'Presets',
+    description: 'Common sizes to start from, then fine-tune below.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Layout',
+    sectionId: 'settings-section-layout',
+    title: 'Width',
+    description: 'How wide the overlay is; long messages wrap sooner in a narrow one.'
   },
   {
     tab: 'Overlay',
@@ -960,8 +1166,8 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Overlay',
     section: 'Typography',
-    title: 'Justify text',
-    description: 'Align overlay messages left, centered, or right. Justification, text alignment, centre, middle, position.'
+    title: 'Text alignment',
+    description: 'Left, center, or right; event cards line up the same way.'
   },
   {
     tab: 'Overlay',
@@ -972,18 +1178,21 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Overlay',
     section: 'Emotes & Badges',
+    sectionId: 'settings-section-emotes-and-badges',
     title: 'Emotes and Badges',
     description: 'Emote size on the overlay and whether chatter badges are shown: platform badges, third-party badges (7TV, FFZ, Chatterino), the StreamNook member badge, 7TV paints, and atmospheres.'
   },
   {
     tab: 'Overlay',
     section: 'Emotes & Badges',
+    sectionId: 'settings-section-emotes-and-badges',
     title: 'Giant emotes',
     description: 'Render the last emote of a Gigantify power-up message at 4x below the message on the overlay.'
   },
   {
     tab: 'Overlay',
     section: 'Emotes & Badges',
+    sectionId: 'settings-section-emotes-and-badges',
     title: 'Giant emote placement',
     description: 'Where a Gigantify power-up emote lands on the overlay: left, centered, or right below the message, or inline next to the username.'
   },
@@ -1002,108 +1211,154 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Overlay',
     section: 'Chatters',
+    sectionId: 'settings-section-chatters',
     title: 'Profile pictures',
     description: 'Show or hide chatter avatars (profile pictures) on the overlay. YouTube and TikTok send them. Pfp, user photo, author image.'
   },
   {
     tab: 'Overlay',
     section: 'Chatters',
+    sectionId: 'settings-section-chatters',
     title: '@ before usernames',
     description: 'Show or strip the leading @ on usernames on the overlay. YouTube handles arrive as @name; turn off to remove the at sign.'
   },
   {
     tab: 'Overlay',
     section: 'Messages',
-    title: 'Reply context',
-    description: 'Show or hide the small "Replying to" line above reply messages on the overlay. Reply thread, reply preview.'
+    sectionId: 'settings-section-messages',
+    title: 'Replies',
+    description: 'How a reply renders on the overlay: the "Replying to" context line, just the @username in front of the message the way old Twitch chat did, or nothing. Reply thread, reply preview, reply context.'
   },
   {
     tab: 'Overlay',
     section: 'Messages',
+    sectionId: 'settings-section-messages',
+    title: 'Links',
+    description: 'Give links on the overlay their own accent color or leave them in the body text color, and turn the underline on or off. Blue links, url color, hyperlink styling.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Emotes & badges',
+    sectionId: 'settings-section-emotes-and-badges',
+    title: '7TV personal emotes',
+    description: "Show or hide 7TV personal emotes on the overlay. A subscriber's own set works in every channel, so chatters show emotes your channel never added. Unknown emotes, random emotes, emotes not in my channel."
+  },
+  {
+    tab: 'Overlay',
+    section: 'Events',
+    sectionId: 'settings-section-events',
+    title: 'Custom event text',
+    description: 'Write your own wording for subs, gifts, raids, bits, milestones, follows and announcements on the overlay, using {username}, {months}, {streak}, {tier}, {recipient}, {count}, {bits} and {viewers} tokens. Custom message, event template, resub message, welcome message.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Messages',
+    sectionId: 'settings-section-messages',
     title: 'Restore chat on reload',
     description: 'Bring back the last on-screen messages after an OBS browser source reload instead of clearing. Off by default: clear on reload, OBS refresh, restart, stream start, keep buffer, persistence, blank overlay.'
   },
   {
     tab: 'Overlay',
     section: 'Chatters',
+    sectionId: 'settings-section-chatters',
     title: 'First-time chatters',
     description: 'Mark the first message someone ever sends in the channel on the overlay: Twitch style (pink outline like Twitch chat) or StreamNook style (purple highlight like the app chat). First message highlight, new chatter, first time chat border.'
   },
   {
     tab: 'Overlay',
     section: 'Chatters',
+    sectionId: 'settings-section-chatters',
     title: 'Fill the highlight',
     description: 'Nearly transparent color-matched tint inside the first-time chatter outline on the overlay. Fill, background tint, highlight.'
   },
   {
     tab: 'Overlay',
     section: 'Chatters',
+    sectionId: 'settings-section-chatters',
     title: 'First-time highlight animation',
     description: 'Border accent when a first-time chatter\'s message lands on the overlay: Sheen (glint sweep), Pulse (border breathes), or Chase (spark orbits the ring). Plays once, or repeats every 5 seconds with the repeat toggle. Animation, sweep, shimmer, border flash, loop.'
   },
   {
     tab: 'Overlay',
     section: 'Events',
+    sectionId: 'settings-section-events',
     title: 'Bits messages',
     description: 'Show a Twitch cheer on the overlay inline like a normal message, or promote it to an event card like subs and raids. Bits, cheer, gem, tier.'
   },
   {
     tab: 'Overlay',
     section: 'Events',
+    sectionId: 'settings-section-events',
     title: 'Event style',
     description: 'How subs, gifts, raids, and other events look on the overlay: Plain per-platform tint, Outline thin ring in the platform color, or the StreamNook signature gradient wash.'
   },
   {
     tab: 'Overlay',
     section: 'Events',
+    sectionId: 'settings-section-events',
     title: 'Show events',
     description: 'Per-source event filter: choose which event types each platform shows on the overlay, separately for Twitch, YouTube, TikTok, and Kick. Hide subs, gifts, raids, bits, follows, milestones, or announcements per platform.'
   },
   {
     tab: 'Overlay',
     section: 'Events',
+    sectionId: 'settings-section-events',
     title: 'Fill the outline',
     description: 'Nearly transparent color-matched tint inside the Outline event ring on the overlay. Fill, background tint.'
   },
   {
     tab: 'Overlay',
     section: 'Chatters',
+    sectionId: 'settings-section-chatters',
     title: 'Highlight color',
     description: 'Custom accent color for the first-time chatter highlight on the overlay (outline, fill, bar, and label together). Default is Twitch pink or StreamNook purple.'
   },
   {
     tab: 'Overlay',
     section: 'Messages',
+    sectionId: 'settings-section-messages',
     title: 'Message bubbles',
     description: 'Each overlay chat message sits in its own bubble with adjustable shape (rounded, pill, speech), corner radius, color, and opacity. Chat bubble, pill, messenger style, message background.'
   },
   {
     tab: 'Overlay',
     section: 'Messages',
+    sectionId: 'settings-section-messages',
     title: 'Max lines per message',
     description: 'Clamp long overlay messages to a number of lines with an ellipsis so walls of text and copypasta can\'t fill the canvas. Truncate, line limit.'
   },
   {
     tab: 'Overlay',
     section: 'Messages',
+    sectionId: 'settings-section-messages',
     title: 'Remove messages after',
-    description: 'Auto-remove overlay messages a number of seconds after they appear, so a quiet stream doesn\'t show stale chat forever. Expire, auto clear, hide after inactivity, message lifetime.'
+    description: 'Takes a message off the overlay once it has been up this long, so a quiet stream never shows stale chat.'
   },
   {
     tab: 'Overlay',
     section: 'Filters',
+    sectionId: 'settings-section-filters',
     title: 'Hide messages containing',
     description: 'Hide overlay messages containing chosen words or phrases, case-insensitive. Profanity filter, banned words, phrase blocklist, spoiler shield.'
   },
   {
     tab: 'Overlay',
+    section: 'Filters',
+    sectionId: 'settings-section-filters',
+    title: 'Hide command messages',
+    description: 'Keeps chat commands like !title off the overlay; choose which ones below.'
+  },
+  {
+    tab: 'Overlay',
     section: 'Events',
+    sectionId: 'settings-section-events',
     title: 'Outline color',
     description: 'One fixed ring color for Outline-style events on the overlay, or the default where each event uses its platform\'s color.'
   },
   {
     tab: 'Overlay',
     section: 'Events',
+    sectionId: 'settings-section-events',
     title: 'Event outline animation',
     description: 'Border accent when an Outline-style event lands on the overlay: Sheen (glint sweep), Pulse (border breathes), or Chase (spark orbits the ring). Plays once, or repeats every 5 seconds with the repeat toggle. Animation, sweep, shimmer, border flash, loop.'
   },
@@ -1126,15 +1381,15 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Interface',
     section: 'Sidebar',
     sectionId: 'settings-section-sidebar',
-    title: 'Sidebar Display Mode',
-    description: 'Choose how the sidebar appears (expanded, compact, hidden, or disabled).'
+    title: 'How the sidebar appears',
+    description: 'Choose Expanded, Compact (profile pictures only, hover for details), Hidden (slides in from the left edge), or Disabled.'
   },
   {
     tab: 'Interface',
     section: 'Sidebar',
     sectionId: 'settings-section-sidebar',
-    title: 'Expand on Hover',
-    description: 'Sidebar expands when you hover over it.'
+    title: 'Expand when you hover',
+    description: 'Move your cursor over the compact sidebar to open it fully, and it folds back when you leave.'
   },
   {
     tab: 'Interface',
@@ -1145,31 +1400,45 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Interface',
+    section: 'Discover Feed',
+    sectionId: 'settings-section-discover',
+    title: 'Personalized recommendations',
+    description: 'Opt in to account-personalized Discover recommendations, or stay anonymous. Privacy, tracking, tailored suggestions.'
+  },
+  {
+    tab: 'Interface',
+    section: 'Discover Feed',
+    sectionId: 'settings-section-discover',
+    title: 'Languages',
+    description: 'Filter the Discover tab and sidebar recommended streams by broadcast language: only show streams in english, french, german, spanish, or any other language you pick.'
+  },
+  {
+    tab: 'Interface',
     section: 'Motion',
     sectionId: 'settings-section-motion',
-    title: 'Animations',
-    description: 'Choose how much the interface animates: Full, Reduced (fades only), or Off (instant and snappy, best for low-end PCs). Reduce motion, accessibility, performance, disable animations and transitions.'
+    title: 'How much the interface animates',
+    description: 'Full plays every animation, Reduced keeps quick fades only, Off makes everything instant.'
   },
   {
     tab: 'Interface',
     section: 'Closing the Window',
     sectionId: 'settings-section-window-close',
-    title: 'Close button',
-    description: 'Choose what the window close button does: quit, always minimize to the system tray, or only minimize while MultiChat popouts are open. Close to tray, minimize to tray, keep running in background, X button.'
+    title: 'What the close button does',
+    description: 'Closing the window quits StreamNook, unless MultiChat popouts are still open, in which case it minimizes to the system tray so they keep working.'
   },
   {
     tab: 'Interface',
     section: 'Keep on Top',
     sectionId: 'settings-section-window-on-top',
     title: 'Keep on top in Compact View',
-    description: 'While Compact View is active, float the small player above other applications so clicking your browser does not bury it. Always on top, pin, stay in front, overlay, floating player, mini player over browser, disappears behind, sinks, second monitor, picture in picture alternative.'
+    description: 'While Compact View is active, the small player floats above other apps so clicking your browser does not bury it.'
   },
   {
     tab: 'Interface',
     section: 'Settings Window',
     sectionId: 'settings-section-settings-window',
-    title: 'Compact settings window',
-    description: 'Show settings in a centered window, or turn off for a full-page settings layout that fills the entire app.'
+    title: 'Keep settings in a centered window',
+    description: 'Settings open in a centered window; turn this off to open them as a full page that fills the app.'
   },
   {
     tab: 'Interface',
@@ -1179,7 +1448,17 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     description: 'Choose the window size when entering Compact View mode. Perfect for fitting the app on a second monitor.'
   },
 
+  // === Profile ===
+  {
+    tab: 'Profile',
+    section: 'Accounts',
+    title: 'Platform accounts',
+    description: 'Connect or disconnect Kick and YouTube. Sign in, link platform, add account, multi-platform, Kick account, YouTube account, followed channels, subscriptions.'
+  },
+
   // === Integrations ===
+  // Platform accounts used to be indexed here; they moved to Profile → Accounts
+  // with the Twitch ones, so searching "Kick" lands where the accounts are.
   {
     tab: 'Integrations',
     section: 'Discord Rich Presence',
@@ -1203,8 +1482,8 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Notifications',
     section: 'Notifications',
-    title: 'Enable Notifications',
-    description: 'Master toggle for all notification types.'
+    title: 'Show notifications',
+    description: 'Turn this off to silence every notification at once; your choices below stay saved for when you turn it back on.'
   },
   {
     tab: 'Notifications',
@@ -1215,26 +1494,26 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Notifications',
     section: 'Notification Methods',
-    title: 'Dynamic Island',
-    description: 'Show notifications in the notification center at the top.'
+    title: 'Show in the Dynamic Island',
+    description: 'Notifications appear in the notification center at the top of the window.'
   },
   {
     tab: 'Notifications',
     section: 'Notification Methods',
-    title: 'Toast Notifications',
-    description: 'Show popup toasts at the corner of the screen.'
+    title: 'Show toast popups',
+    description: 'Each notification also pops up as a small card at the edge of the window you choose below.'
   },
   {
     tab: 'Notifications',
     section: 'Notification Methods',
-    title: 'Toast Position',
-    description: 'Which corner toast notifications appear in.'
+    title: 'Where toasts appear',
+    description: 'Click a spot on the mini screen to move toasts to that corner or edge.'
   },
   {
     tab: 'Notifications',
     section: 'Notification Methods',
-    title: 'Edge Spacing',
-    description: 'How far toasts sit from the edge of the screen.'
+    title: 'Distance from the edge',
+    description: 'How far toasts sit from the top or bottom edge of the window; raise it to push them further in.'
   },
   {
     tab: 'Notifications',
@@ -1245,50 +1524,56 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Notifications',
     section: 'Notification Types',
-    title: 'Live Stream Notifications',
-    description: 'Get notified when followed streamers go live.'
+    title: 'When a followed channel goes live',
+    description: 'You get a notification the moment someone you follow starts streaming, and clicking it opens the stream.'
   },
   {
     tab: 'Notifications',
     section: 'Notification Types',
-    title: 'Whisper Notifications',
-    description: 'Get notified when you receive whispers.'
+    title: 'When a favorite channel goes live',
+    description: 'Channels you have favorited notify you even if you do not follow them on Twitch.'
   },
   {
     tab: 'Notifications',
     section: 'Notification Types',
-    title: 'Update Notifications',
-    description: 'Get notified when a new app update is available.'
+    title: 'When you get a whisper',
+    description: 'A notification shows each new whisper, and clicking it opens the conversation.'
   },
   {
     tab: 'Notifications',
     section: 'Notification Types',
-    title: 'Quick Update on Toast Click',
-    description: 'Clicking the update toast immediately starts the update.'
+    title: 'When an app update is ready',
+    description: 'You hear about new StreamNook versions as soon as they are available, and clicking takes you to the Updates page.'
   },
   {
     tab: 'Notifications',
     section: 'Notification Types',
-    title: 'Drops Notifications',
-    description: 'Get notified when a drop is claimed.'
+    title: 'Update straight from the toast',
+    description: 'Clicking the update toast starts installing right away instead of opening the Updates page first.'
   },
   {
     tab: 'Notifications',
     section: 'Notification Types',
-    title: 'Favorite Category Drops',
-    description: 'Notify when favorited categories have new drops on startup.'
+    title: 'When a drop is claimed',
+    description: 'A notification confirms each drop StreamNook claims for you.'
   },
   {
     tab: 'Notifications',
     section: 'Notification Types',
-    title: 'Channel Points Notifications',
-    description: 'Get notified when channel points are claimed.'
+    title: 'New drops in favorite categories',
+    description: 'At startup, StreamNook checks your favorite categories and tells you when they have new drops to earn.'
   },
   {
     tab: 'Notifications',
     section: 'Notification Types',
-    title: 'Badge Notifications',
-    description: 'Get notified when new badges become available.'
+    title: 'When channel points are claimed',
+    description: 'A notification confirms each channel points bonus claimed for you.'
+  },
+  {
+    tab: 'Notifications',
+    section: 'Notification Types',
+    title: 'When new badges appear',
+    description: 'You hear about new badges as soon as they become available to earn.'
   },
   {
     tab: 'Notifications',
@@ -1299,20 +1584,20 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Notifications',
     section: 'Sound',
-    title: 'Notification Sound',
-    description: 'Play a subtle sound for notifications.'
+    title: 'Play a sound',
+    description: 'A soft sound plays with each notification, in the style you pick below.'
   },
   {
     tab: 'Notifications',
     section: 'Sound',
-    title: 'Sound Style',
-    description: 'All sounds are designed to be pleasant and non-intrusive.'
+    title: 'Which sound to play',
+    description: 'Every option is soft and short, so none of them will startle you.'
   },
   {
     tab: 'Notifications',
     section: 'Sound',
-    title: 'Test Notification',
-    description: 'Send a test notification to preview your settings.'
+    title: 'Send a test',
+    description: 'Fires a sample notification so you can check the position, sound, and style you picked.'
   },
   {
     tab: 'Notifications',
@@ -1331,20 +1616,20 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Cache',
     section: 'Cache',
-    title: 'Enable Cache',
-    description: 'Cache emotes and badges to speed up loading.'
+    title: 'Load emotes and badges from disk',
+    description: 'Stores a copy on this PC after the first download so later channel loads are near instant. Off means every launch fetches them again.'
   },
   {
     tab: 'Cache',
     section: 'Cache',
-    title: 'Cache Expiry',
-    description: 'How long to keep cached data before refreshing.'
+    title: 'Refresh stored data after a number of days',
+    description: 'Anything older than this is fetched again the next time it is needed, so new emotes and badge art show up on their own.'
   },
   {
     tab: 'Cache',
     section: 'Cache',
-    title: 'Cache Maintenance',
-    description: 'View cache statistics or delete all cached emotes and badges.'
+    title: 'See what is stored, or clear it',
+    description: 'View cache info shows a count of what is on disk, Open folder reveals the files, and Clear cache deletes every stored emote and badge so they download fresh.'
   },
   {
     tab: 'Cache',
@@ -1355,8 +1640,8 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Cache',
     section: 'Emote Prefetch',
-    title: 'Followed channels',
-    description: 'Scan all the channels you follow and download their emotes ahead of time.'
+    title: 'Download emotes for every channel you follow',
+    description: 'Scan your follows to see how many emotes are missing and how much space they need, then download them in the background while you do something else.'
   },
 
   // === Command Palette ===
@@ -1372,6 +1657,18 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'What lives in the palette',
     title: 'What lives in the palette',
     description: 'Overview of palette sections and available actions: quick actions, current stream, share, settings, categories, snippets.'
+  },
+  {
+    tab: 'Command Palette',
+    section: 'What lives in the palette',
+    title: 'Settings',
+    description: "Every settings tab and section is searchable. Type 'ad block' to land on the ad blocking panel under Integrations."
+  },
+  {
+    tab: 'Command Palette',
+    section: 'What lives in the palette',
+    title: 'Streamers',
+    description: 'Live and offline Twitch channels matching what you typed. Results appear once you have typed 2 or more characters.'
   },
   {
     tab: 'Command Palette',
@@ -1432,6 +1729,18 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     title: 'Join the Discord',
     description: 'Open the StreamNook community Discord invite.'
   },
+  {
+    tab: 'Support',
+    section: 'Diagnostics',
+    title: 'Keep a detailed log for bug reports',
+    description: 'Records connection, playback, and chat activity to streamnook.log on this PC so a problem can be traced after the fact.'
+  },
+  {
+    tab: 'Support',
+    section: 'Diagnostics',
+    title: 'Find the log file',
+    description: 'Opens the folder that holds streamnook.log so you can attach it to a bug report.'
+  },
 
   // === Backup ===
   {
@@ -1443,19 +1752,19 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Backup',
     section: 'Backup and restore',
-    title: 'Export settings',
-    description: 'Save a backup of all your preferences to a file you choose.'
+    title: 'Save a backup',
+    description: 'Writes a copy of your settings file wherever you like, such as a USB drive or a cloud-synced folder.'
   },
   {
     tab: 'Backup',
     section: 'Backup and restore',
-    title: 'Import settings',
-    description: 'Restore your preferences from a previously exported backup file.'
+    title: 'Restore from a backup',
+    description: 'Pick a backup file and StreamNook swaps in those preferences, then reloads itself so everything picks them up.'
   },
   {
     tab: 'Backup',
     section: 'Settings file',
-    title: 'Settings folder',
-    description: 'Open the folder on this PC where StreamNook stores settings.json.'
+    title: 'Where your settings file lives',
+    description: 'The folder on this PC that holds your settings file.'
   },
 ];

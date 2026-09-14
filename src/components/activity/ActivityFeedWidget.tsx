@@ -24,7 +24,7 @@ type ActivityScope = 'combined' | 'current';
 const PROVIDER_EVENT_KINDS: Partial<Record<ProviderId, ActivityKind[]>> = {
   twitch: ['sub', 'resub', 'subgift', 'giftbomb', 'bits', 'raid', 'channelpoints', 'hypetrain', 'stream_online', 'stream_offline'],
   kick: ['sub', 'resub', 'subgift', 'giftbomb', 'follow', 'host'],
-  youtube: ['superchat', 'supersticker', 'membership', 'giftbomb'],
+  youtube: ['superchat', 'supersticker', 'membership', 'member_milestone', 'subgift', 'giftbomb'],
   tiktok: ['gift', 'like', 'follow', 'share'],
 };
 

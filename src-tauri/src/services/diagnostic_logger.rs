@@ -27,13 +27,22 @@ pub fn init_logging() {
         builder.parse_default_env();
     } else {
         builder.filter_level(LevelFilter::Info);
+        // Third-party crates that warn about things we cannot act on. fontdb
+        // reports every malformed face in C:\Windows\Fonts on each launch,
+        // which is pure noise in a log a user sends us. RUST_LOG still wins.
+        builder.filter_module("fontdb", LevelFilter::Error);
     }
     builder
         .format_timestamp_millis()
-        .format_module_path(true)
-        .init();
+        .format_module_path(true);
 
-    println!("[DiagnosticLogger] Logging system initialized (terminal: info; file capture: full)");
+    // Fan out to stderr (dev) AND the persistent streamnook.log file sink.
+    // Release builds have no stderr (windows_subsystem = "windows"), so the
+    // file is the only place a shipped build's logs survive.
+    let stderr_logger = builder.build();
+    crate::services::file_log::install(stderr_logger, std::env::var("RUST_LOG").is_ok());
+
+    println!("[DiagnosticLogger] Logging system initialized (terminal: info; file: streamnook.log)");
 }
 
 /// Set whether diagnostic logging is enabled.
@@ -43,18 +52,29 @@ pub fn set_diagnostics_enabled(enabled: bool) {
 
     // Update the log level filter. "Enabled" raises to Info (not Debug — debug
     // is the firehose that floods the terminal); disabled drops to Warn.
+    // RUST_LOG wins. Without this the runtime toggle forced Info on every
+    // startup, so a developer setting RUST_LOG=...=debug got NOTHING and had no
+    // way to tell the filter was being overridden — debug diagnostics simply
+    // never appeared.
+    if std::env::var("RUST_LOG").is_ok() {
+        return;
+    }
     let level = if enabled {
         LevelFilter::Info
     } else {
         LevelFilter::Warn
     };
 
-    log::set_max_level(level);
-
     if enabled {
-        println!("[DiagnosticLogger] Diagnostics ENABLED - showing all logs");
+        crate::services::file_log::set_file_level(level);
+        log::set_max_level(crate::services::file_log::global_level());
+        // Logged AFTER raising the level so the transition lands in the file.
+        log::info!("[DiagnosticLogger] Diagnostics ENABLED - showing all logs");
     } else {
-        println!("[DiagnosticLogger] Diagnostics DISABLED - only warnings/errors");
+        // Logged BEFORE dropping the level for the same reason.
+        log::info!("[DiagnosticLogger] Diagnostics DISABLED - only warnings/errors");
+        crate::services::file_log::set_file_level(level);
+        log::set_max_level(crate::services::file_log::global_level());
     }
 }
 

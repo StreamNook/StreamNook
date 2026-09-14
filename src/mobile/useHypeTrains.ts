@@ -8,12 +8,15 @@
 // `CategoryStreamsScreen` did not even pass the prop. Following worked purely
 // because `FollowingScreen` does its own fetch.
 //
-// Desktop has one owner for this: `Home.tsx` refreshes the UNION of following,
-// recommended, category and search results, debounced 2s so the request does not
-// compete with HLS segments. The mobile shell has no equivalent single place --
-// every screen owns its own list -- so this hook is that owner, per screen.
+// Desktop has one owner for this: `Home.tsx` hands the Rust-owned Home
+// snapshot (services::home_snapshot) the ids it has on screen beyond the
+// followed list via `set_home_extra_channels`, debounced 2s so the request does
+// not compete with HLS segments, and the snapshot's hype-train poll covers them
+// from then on. The mobile shell has no equivalent single place -- every screen
+// owns its own list -- so this hook is that owner, per screen. Statuses arrive
+// as `home-snapshot` events the store applies to `activeHypeTrainChannels`.
 import { useEffect, useRef } from 'react';
-import { useAppStore } from '../stores/AppStore';
+import { invoke } from '@tauri-apps/api/core';
 import type { TwitchStream } from '../types';
 
 // Matches desktop. The delay is not politeness, it is to keep this off the wire
@@ -21,7 +24,6 @@ import type { TwitchStream } from '../types';
 const DEBOUNCE_MS = 2000;
 
 export function useHypeTrains(streams: TwitchStream[]): void {
-  const refreshHypeTrainStatuses = useAppStore((s) => s.refreshHypeTrainStatuses);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Key on the SET of ids, not the array. A list re-fetched with the same
@@ -35,10 +37,10 @@ export function useHypeTrains(streams: TwitchStream[]): void {
     if (!key) return;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
-      void refreshHypeTrainStatuses(key.split(','));
+      void invoke('set_home_extra_channels', { channelIds: key.split(',') }).catch(() => {});
     }, DEBOUNCE_MS);
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [key, refreshHypeTrainStatuses]);
+  }, [key]);
 }

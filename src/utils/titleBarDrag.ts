@@ -1,5 +1,6 @@
 import type React from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { Logger } from './logger';
 
 /**
@@ -15,8 +16,25 @@ import { Logger } from './logger';
  */
 const DRAG_THRESHOLD_PX = 5;
 
+/**
+ * True from the drag hand-off until shortly after the OS modal move loop ends.
+ * A setSize issued inside that loop corrupts its cached rect and commits a bogus
+ * size on mouse-up, so the aspect-ratio lock checks this before resizing. The
+ * Rust side polls the mouse button and emits `titlebar-drag-ended` on release
+ * (with a 120s deadline, mirrored by the safety cap below); the 300ms grace on
+ * the event covers the resize listener's trailing debounce.
+ */
+let dragActiveUntil = 0;
+export const isTitlebarDragActive = () => Date.now() < dragActiveUntil;
+
+void listen('titlebar-drag-ended', () => {
+  dragActiveUntil = Date.now() + 300;
+});
+
 const beginDrag = () => {
+  dragActiveUntil = Date.now() + 120_000;
   invoke('start_titlebar_drag').catch((error) => {
+    dragActiveUntil = 0;
     Logger.error('[TitleBar] Failed to start window drag:', error);
   });
 };

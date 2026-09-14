@@ -29,6 +29,10 @@ export interface OpenMultiChatOptions {
   /** Replace the popout's entire tab set with exactly these channels (a fresh
    *  view) instead of merging/appending into whatever was already open. */
   replace?: boolean;
+  /** Open a SEPARATE MultiChat window instead of focusing the default one.
+   *  Each window is its own WebView2 renderer (roughly 150 MB), so this is a
+   *  deliberate user action, never an implicit fallback. */
+  newWindow?: boolean;
   /** Display title (defaults to `StreamNook MultiChat` or includes the channel
    *  name when one is pre-loaded). */
   title?: string;
@@ -53,23 +57,27 @@ const WINDOW_ID = 'default';
 const WINDOW_LABEL = `multichat-${WINDOW_ID}`;
 const STORAGE_PREFIX = 'streamnook.multichat.';
 const KEEP_STORAGE_KEY = `${STORAGE_PREFIX}${WINDOW_ID}`;
+/** Extra windows are `multichat-w2`, `multichat-w3`, ... (first free id). */
+const EXTRA_ID_PREFIX = 'w';
+const MAX_EXTRA_WINDOWS = 8;
 // Last window position + size (physical px), so a reopen lands on the same monitor in
 // the same spot. Deliberately uses a hyphen (not the `streamnook.multichat.` dot
 // prefix) so the orphan-storage sweep below doesn't wipe it. The popout writes it on
 // move/resize; this spawner reads it at creation.
 export const MULTICHAT_GEOMETRY_KEY = 'streamnook.multichat-geometry';
 
-/** Sweep orphan `streamnook.multichat.<random>` keys left behind by the
- *  pre-stable-id era. Cheap to run on every spawn; only touches our own
- *  prefix. */
-function cleanupOrphanStorage(): void {
+/** Sweep orphan `streamnook.multichat.<id>` keys: the pre-stable-id random
+ *  ids, and extra windows (`w2`, `w3`, ...) that are no longer open. The
+ *  default window's state is always kept. Cheap to run on every spawn. */
+function cleanupOrphanStorage(openIds: Set<string>): void {
   try {
     const orphans: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key && key.startsWith(STORAGE_PREFIX) && key !== KEEP_STORAGE_KEY) {
-        orphans.push(key);
-      }
+      if (!key || !key.startsWith(STORAGE_PREFIX) || key === KEEP_STORAGE_KEY) continue;
+      const id = key.slice(STORAGE_PREFIX.length);
+      if (openIds.has(id)) continue;
+      orphans.push(key);
     }
     for (const key of orphans) localStorage.removeItem(key);
     if (orphans.length > 0) {
@@ -86,7 +94,31 @@ export async function openMultiChatWindow(options: OpenMultiChatOptions = {}): P
     const { getCurrentWindow } = await import('@tauri-apps/api/window');
     const { emit } = await import('@tauri-apps/api/event');
 
-    cleanupOrphanStorage();
+    // Which MultiChat windows exist right now (labels `multichat-<id>`).
+    const openIds = new Set<string>();
+    try {
+      for (const w of await WebviewWindow.getAll()) {
+        if (w.label.startsWith('multichat-')) openIds.add(w.label.slice('multichat-'.length));
+      }
+    } catch (err) {
+      Logger.debug('[MultiChat] getAll failed:', err);
+    }
+    cleanupOrphanStorage(openIds);
+
+    // Target window: the default (focus + add if it exists) or the first free
+    // extra id when the caller asked for a separate window.
+    let windowId = WINDOW_ID;
+    if (options.newWindow) {
+      let n = 2;
+      while (openIds.has(`${EXTRA_ID_PREFIX}${n}`) && n <= MAX_EXTRA_WINDOWS + 1) n += 1;
+      if (n > MAX_EXTRA_WINDOWS + 1) {
+        Logger.warn(`[MultiChat] ${MAX_EXTRA_WINDOWS} extra windows already open`);
+        return;
+      }
+      windowId = `${EXTRA_ID_PREFIX}${n}`;
+    }
+    const windowLabel = `multichat-${windowId}`;
+    const isExtra = windowId !== WINDOW_ID;
 
     // Normalize to a single channel list, lowercased. `channels` (multi) wins
     // over the single-channel fields; either way the rest of the flow is uniform.
@@ -104,7 +136,7 @@ export async function openMultiChatWindow(options: OpenMultiChatOptions = {}): P
     // If a popout already exists, focus it and ask it to add each requested
     // channel as a tab. The popout listens for `multichat-add-channel` and
     // routes each through its add/dedup path, so channels already open are no-ops.
-    const existing = await WebviewWindow.getByLabel(WINDOW_LABEL);
+    const existing = isExtra ? null : await WebviewWindow.getByLabel(WINDOW_LABEL);
     if (existing) {
       try {
         if (await existing.isMinimized()) await existing.unminimize();
@@ -136,7 +168,7 @@ export async function openMultiChatWindow(options: OpenMultiChatOptions = {}): P
       return;
     }
 
-    const params = new URLSearchParams({ id: WINDOW_ID });
+    const params = new URLSearchParams({ id: windowId });
     if (options.replace) params.set('replace', '1');
     if (channelList.length === 1) {
       // Single channel: use the discrete params (keeps the URL readable).
@@ -158,7 +190,13 @@ export async function openMultiChatWindow(options: OpenMultiChatOptions = {}): P
     let height = options.height ?? DEFAULT_HEIGHT;
     let placed = false;
     try {
+      // Extra windows cascade off the saved spot instead of covering it.
       const geo = JSON.parse(localStorage.getItem(MULTICHAT_GEOMETRY_KEY) || 'null');
+      if (geo && isExtra && typeof geo.x === 'number' && typeof geo.y === 'number') {
+        const step = 36 * Math.max(1, openIds.size);
+        geo.x += step;
+        geo.y += step;
+      }
       if (geo && ['x', 'y', 'width', 'height'].every((k) => typeof geo[k] === 'number')) {
         const { availableMonitors } = await import('@tauri-apps/api/window');
         const monitors = await availableMonitors().catch(() => []);
@@ -209,7 +247,7 @@ export async function openMultiChatWindow(options: OpenMultiChatOptions = {}): P
           ? `StreamNook MultiChat — ${channelList[0].channelName}`
           : 'StreamNook MultiChat');
 
-    const win = new WebviewWindow(WINDOW_LABEL, {
+    const win = new WebviewWindow(windowLabel, {
       url: `${window.location.origin}/#/multichat?${params.toString()}`,
       title,
       width,
@@ -234,7 +272,7 @@ export async function openMultiChatWindow(options: OpenMultiChatOptions = {}): P
       Logger.error('[MultiChat] Failed to open MultiChat window:', e);
     });
 
-    Logger.debug(`[MultiChat] Opened window ${WINDOW_LABEL} for channel ${options.channel ?? '(empty)'}`);
+    Logger.debug(`[MultiChat] Opened window ${windowLabel} for channel ${options.channel ?? '(empty)'}`);
   } catch (err) {
     Logger.error('[MultiChat] openMultiChatWindow failed:', err);
     throw err;

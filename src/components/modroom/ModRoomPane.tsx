@@ -21,6 +21,9 @@ import {
 import { useModRoomStore, type ResolvedPayload } from '../../stores/modRoomStore';
 import { StreamNookBadge } from '../StreamNookBadge';
 import { Tooltip } from '../ui/Tooltip';
+import SpellcheckUnderlay from '../chat/SpellcheckUnderlay';
+import { useSpellcheck } from '../../hooks/useSpellcheck';
+import { warmSpellcheck } from '../../utils/spellcheck';
 import { AtmosphereBackground } from '../AtmosphereBackground';
 import { MajorCologneChrome } from '../MajorCologneChrome';
 import { MAJOR_COLOGNE_THEME_ID } from '../../services/cologneEvent';
@@ -423,6 +426,13 @@ const ModRoomPane = ({ channelId, channelLogin, emotes, onStatus, onUsernameClic
   const listRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Spell check for the mod-room composer. Everything runs locally against a
+  // bundled dictionary — nothing about the draft leaves this process, which
+  // matters here because the room itself is end-to-end encrypted.
+  const spellcheckEnabled = useAppStore((s) => s.settings.chat_input?.spellcheck_enabled) ?? true;
+  const spellUnderlayRef = useRef<HTMLDivElement>(null);
+  const spellRanges = useSpellcheck(draft, { enabled: spellcheckEnabled, emoteKey: null });
   const lastTypingSent = useRef(0);
   const nearBottomRef = useRef(true);
 
@@ -961,6 +971,8 @@ const ModRoomPane = ({ channelId, channelLogin, emotes, onStatus, onUsernameClic
               />
             )}
           </button>
+          {/* Wrapper so the spell-check underlay can lay over the textarea. */}
+          <div className="relative flex min-w-0 flex-1">
           <textarea
             ref={textareaRef}
             value={draft}
@@ -968,11 +980,28 @@ const ModRoomPane = ({ channelId, channelLogin, emotes, onStatus, onUsernameClic
             onChange={(e) => handleDraftChange(e.target.value)}
             onKeyDown={handleComposerKeyDown}
             onPaste={handlePaste}
+            onFocus={warmSpellcheck}
+            spellCheck={false}
+            data-spellcheck={spellcheckEnabled ? 'true' : undefined}
+            onScroll={(e) => {
+              if (spellUnderlayRef.current) {
+                spellUnderlayRef.current.scrollTop = e.currentTarget.scrollTop;
+              }
+            }}
             rows={1}
             placeholder={state !== 'connected' ? 'Connecting...' : key ? 'Encrypted message' : 'Securing room...'}
             disabled={state !== 'connected' || !key}
-            className="glass-input max-h-28 min-h-[34px] flex-1 resize-none px-3 py-2 text-sm placeholder-textSecondary"
+            className="glass-input max-h-28 min-h-[34px] w-full resize-none px-3 py-2 text-sm placeholder-textSecondary"
           />
+          {spellRanges.length > 0 && (
+            <SpellcheckUnderlay
+              innerRef={spellUnderlayRef}
+              text={draft}
+              ranges={spellRanges}
+              className="px-3 py-2 text-sm"
+            />
+          )}
+          </div>
           <button
             onClick={() => void handleSend()}
             disabled={state !== 'connected' || !key || !draft.trim()}

@@ -1,12 +1,19 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { isWindowHidden } from '../../utils/windowVisibility';
 import Hls from 'hls.js';
 import Plyr from 'plyr';
-import 'plyr/dist/plyr.css';
+// Plyr's stylesheet ships ONCE, from globals.css, and its position there is
+// load-bearing: the app's `.video-player-container` overrides beat Plyr's own
+// selectors on equal specificity by SOURCE ORDER. A second copy here rode the
+// lazy MultiNook chunk, which loads after globals, so vendor styling won on
+// every tile (the control bar reverted to Plyr's gradient plus a 35px top pad,
+// and the range tracks brightened). See the note at the top of globals.css.
 import { usemultiNookStore } from '../../stores/multiNookStore';
 import { useAppStore } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
 import { syncTauriWindowFullscreen } from '../../utils/windowFullscreen';
 import { startLatencyGovernor } from '../../utils/liveLatencyGovernor';
+import { createLiveEdgeTracker } from '../../utils/liveEdge';
 import { multiNookHlsRegistry } from './useMultiNookSync';
 
 interface UseMultiNookPlayerProps {
@@ -36,6 +43,8 @@ export const useMultiNookPlayer = ({
   const [error, setError] = useState<string | null>(null);
   const [showControls, setShowControls] = useState(false);
   const progressUpdateIntervalRef = useRef<number | null>(null);
+  /** Per-tile smoothed distance from the live edge (see utils/liveEdge). */
+  const liveEdgeRef = useRef(createLiveEdgeTracker());
   
   // Handlers for cleanup
   const onPlayingRef = useRef<(() => void) | null>(null);
@@ -61,7 +70,7 @@ export const useMultiNookPlayer = ({
     if (!video) return;
 
     // Docked/hidden tiles and a backgrounded window do no DOM work at all.
-    if (isMinimizedRef.current || (typeof document !== 'undefined' && document.hidden)) {
+    if (isMinimizedRef.current || isWindowHidden()) {
       progressUpdateIntervalRef.current = requestAnimationFrame(updateLiveTimeDisplay);
       return;
     }
@@ -76,19 +85,17 @@ export const useMultiNookPlayer = ({
     // Update time display to show "LIVE"
     const currentTimeDisplay = container.querySelector('.plyr__time--current');
     if (currentTimeDisplay) {
-      const buffered = video.buffered;
+      // Smoothed, with hysteresis: the raw `buffered.end - currentTime` is a
+      // sawtooth swinging by a whole segment, which flipped this label between
+      // LIVE and a timestamp several times a minute on a healthy stream. Same
+      // tracker the solo player uses. See utils/liveEdge.
       let nextText = 'LIVE';
-      let atLive = true;
-      if (buffered.length > 0) {
-        const bufferedEnd = buffered.end(buffered.length - 1);
-        const timeFromLive = bufferedEnd - video.currentTime;
-        if (timeFromLive >= 5) {
-          const behindSeconds = Math.floor(timeFromLive);
-          const mins = Math.floor(behindSeconds / 60);
-          const secs = behindSeconds % 60;
-          nextText = `-${mins}:${secs.toString().padStart(2, '0')}`;
-          atLive = false;
-        }
+      const atLive = !liveEdgeRef.current.isBehind(video);
+      if (!atLive) {
+        const behindSeconds = Math.floor(liveEdgeRef.current.behind(video));
+        const mins = Math.floor(behindSeconds / 60);
+        const secs = behindSeconds % 60;
+        nextText = `-${mins}:${secs.toString().padStart(2, '0')}`;
       }
       // Compare against what is ACTUALLY in the DOM, never against a cached
       // copy of our own last write. Plyr writes its own playback time into this
@@ -345,9 +352,19 @@ export const useMultiNookPlayer = ({
           playerRef.current.on('volumechange', () => {
             if (!playerRef.current) return;
             // Prevent syncing changes if we are minimized (docked streams are forced mute)
-            const currentState = usemultiNookStore.getState().slots.find(s => s.id === streamId);
+            const store = usemultiNookStore.getState();
+            const currentState = store.slots.find(s => s.id === streamId);
             if (currentState?.isMinimized) return;
-            
+
+            // Toolbar mute-all forces the player muted without touching slot.muted
+            // (that state is what unmute-all restores), so never sync the forced
+            // mute back. A hands-on unmute of this tile while mute-all is engaged
+            // is an explicit break-out: lift the global mute and sync normally.
+            if (store.isAllMuted) {
+              if (playerRef.current.muted) return;
+              store.setAllMuted(false);
+            }
+
             const newVol = playerRef.current.volume;
             const newMuted = playerRef.current.muted;
             usemultiNookStore.getState().updateSlot(streamId, { volume: newVol, muted: newMuted });
@@ -355,7 +372,7 @@ export const useMultiNookPlayer = ({
 
           playerRef.current.on('controlsshown', () => setShowControls(true));
           playerRef.current.on('controlshidden', () => setShowControls(false));
-          
+
           // Initial state
           setShowControls(true);
         }
@@ -494,9 +511,17 @@ export const useMultiNookPlayer = ({
           // Sync backwards to store
           playerRef.current.on('volumechange', () => {
             if (!playerRef.current) return;
-            const currentState = usemultiNookStore.getState().slots.find(s => s.id === streamId);
+            const store = usemultiNookStore.getState();
+            const currentState = store.slots.find(s => s.id === streamId);
             if (currentState?.isMinimized) return;
-            
+
+            // Same mute-all guard as the hls path: never sync the forced mute
+            // back; a hands-on unmute of this tile breaks out of mute-all.
+            if (store.isAllMuted) {
+              if (playerRef.current.muted) return;
+              store.setAllMuted(false);
+            }
+
             const newVol = playerRef.current.volume;
             const newMuted = playerRef.current.muted;
             usemultiNookStore.getState().updateSlot(streamId, { volume: newVol, muted: newMuted });

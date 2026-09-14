@@ -71,7 +71,15 @@ export function StyledChatName({
       }}
       // inline-block, not inline-flex: a flex container with centered items
       // gets a synthesized baseline, floating the name above the message text.
-      className={`inline-block ${interactive ? 'cursor-pointer' : ''} ${interactive && !isChip ? 'hover:underline' : ''}`}
+      //
+      // But inline-block is also ATOMIC — it cannot break internally. A long
+      // handle (YouTube's are unbounded, and the @ prefix adds to it) became one
+      // unbreakable box that couldn't fit beside the message start, so the whole
+      // name wrapped onto its own line and pushed the body down with it.
+      // `max-w-full` + anywhere-wrapping lets the name break inside itself
+      // instead, so the message keeps flowing next to it. Short names are
+      // unaffected: there is nothing to break.
+      className={`inline-block max-w-full [overflow-wrap:anywhere] ${interactive ? 'cursor-pointer' : ''} ${interactive && !isChip ? 'hover:underline' : ''}`}
       onClick={onClick}
       onContextMenu={onContextMenu}
       data-no-drag="true"

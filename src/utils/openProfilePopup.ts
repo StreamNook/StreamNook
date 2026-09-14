@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { Logger } from './logger';
+import { historyKey } from './chatterIdentity';
 
 /**
  * Open the cursor-anchored user-profile popout window (the `/#/profile`
@@ -22,6 +23,8 @@ export async function openProfilePopup(opts: {
    *  card's Moderator Actions zone (it also needs the resolved channel id as the
    *  broadcaster target, which the page derives from `channelId`). */
   isModerator?: boolean;
+  /** Which platform this chatter is on. Absent means Twitch. */
+  provider?: import('../types/providers').ProviderId;
   clientX?: number;
   clientY?: number;
 }): Promise<boolean> {
@@ -126,8 +129,14 @@ export async function openProfilePopup(opts: {
     // are channel-scoped: with no channel the profile page falls back to the
     // viewed user's OWN channel, where everyone reads as the broadcaster. Run
     // both lookups together so we don't stack two round-trips.
-    const needUser = !userId && !!opts.username;
-    const needChannel = !channelId && !!opts.channelName;
+    //
+    // Twitch only. `get_user_by_login` is Helix, so asking it about a Kick slug or
+    // a YouTube UC id returns a same-named Twitch account or nothing — either way
+    // the wrong person. Non-Twitch ids arrive already canonical from the message,
+    // so there is nothing to resolve.
+    const isTwitch = (opts.provider ?? 'twitch') === 'twitch';
+    const needUser = isTwitch && !userId && !!opts.username;
+    const needChannel = isTwitch && !channelId && !!opts.channelName;
     if (needUser || needChannel) {
       const [userInfo, channelInfo] = await Promise.all([
         needUser
@@ -150,10 +159,21 @@ export async function openProfilePopup(opts: {
 
     const windowLabel = `profile-${userId || opts.username}-${Date.now()}`;
 
+    // Seed only. This rides in the popout's URL, so it must stay small: the
+    // backing store keeps up to 200 messages per user and serializing all of
+    // them would put tens of KB into a query string. The profile page polls
+    // `get_user_message_history` for the full set once it mounts, so the seed
+    // exists purely to avoid an empty first paint.
+    const HISTORY_SEED_LIMIT = 40;
     let messageHistory: unknown[] = [];
     if (userId) {
       try {
-        messageHistory = await invoke<unknown[]>('get_user_message_history', { userId });
+        messageHistory = await invoke<unknown[]>('get_user_message_history_limited', {
+          // Namespaced for non-Twitch platforms, matching how the message was
+          // stored; the bare id would read a different (or empty) bucket.
+          userId: historyKey(userId, opts.provider ?? 'twitch'),
+          limit: HISTORY_SEED_LIMIT,
+        });
       } catch {
         /* no history is fine */
       }
@@ -168,6 +188,7 @@ export async function openProfilePopup(opts: {
       channelId: channelId || '',
       channelName: opts.channelName || '',
       isModerator: opts.isModerator ? '1' : '',
+      provider: opts.provider ?? 'twitch',
       messageHistory: JSON.stringify(messageHistory),
     });
 

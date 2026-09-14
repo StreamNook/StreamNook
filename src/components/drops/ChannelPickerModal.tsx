@@ -35,11 +35,14 @@ export interface PickableChannel {
 interface ChannelPickerModalProps {
   isOpen: boolean;
   onClose: () => void;
+  /** The campaign's id, used to ask Twitch which of the allow-listed channels
+   *  are actually offering the drop right now. */
+  campaignId: string;
   campaignName: string;
   gameName: string;
-  /** The campaign's category id. A drop only credits while the channel is live
-   *  under this category, so ACL picks are filtered on it (being allow-listed
-   *  isn't enough). */
+  /** The campaign's category id. Usually a drop only credits while the channel
+   *  is live under this category, so it is the fallback filter for ACL picks
+   *  when the eligibility lookup can't be reached. */
   gameId?: string;
   allowedChannels: AllowedChannel[];
   isAclBased: boolean;
@@ -71,6 +74,7 @@ function streamToChannel(s: TwitchStream): PickableChannel {
 export default function ChannelPickerModal({
   isOpen,
   onClose,
+  campaignId,
   campaignName,
   gameName,
   gameId,
@@ -80,12 +84,14 @@ export default function ChannelPickerModal({
   onPick,
 }: ChannelPickerModalProps) {
   const [channels, setChannels] = useState<PickableChannel[]>([]);
+  const [eligibleIds, setEligibleIds] = useState<Set<string> | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setIsLoading(true);
     setError(null);
+    setEligibleIds(null);
     try {
       let result: PickableChannel[];
       if (isAclBased && allowedChannels.length > 0) {
@@ -97,6 +103,19 @@ export default function ChannelPickerModal({
         const logins = allowedChannels.map(ch => ch.name);
         const streams = await invoke<TwitchStream[]>('check_streams_online', { userLogins: logins });
         result = (streams || []).map(streamToChannel);
+
+        // Which of those are actually earning this drop right now, per Twitch.
+        // Failing this lookup leaves the list on the category fallback below
+        // rather than emptying the picker.
+        try {
+          const eligible = await invoke<string[]>('get_campaign_eligible_channels', {
+            campaignId,
+            channelIds: result.map(c => c.userId),
+          });
+          setEligibleIds(new Set(eligible || []));
+        } catch (err) {
+          Logger.warn('[ChannelPicker] eligibility lookup failed, using category match:', err);
+        }
       } else {
         // Open campaign: list whoever is live in the game right now.
         const [streams] = await invoke<[TwitchStream[], string | null]>('get_streams_by_game_name', {
@@ -134,7 +153,7 @@ export default function ChannelPickerModal({
     } finally {
       setIsLoading(false);
     }
-  }, [isAclBased, allowedChannels, gameName]);
+  }, [isAclBased, allowedChannels, gameName, campaignId]);
 
   useEffect(() => {
     if (isOpen) load();
@@ -142,22 +161,25 @@ export default function ChannelPickerModal({
 
   if (!isOpen) return null;
 
-  // Live channels that can earn this drop right now. A drop credits only while
-  // the channel is live UNDER THE CAMPAIGN'S CATEGORY:
+  // Live channels that can earn this drop right now.
   //  - Open campaigns already fetched only channels live in the campaign's game.
-  //  - ACL campaigns: the allow-list is the FIRST gate; the channel must ALSO be
-  //    live under the campaign category. For an umbrella event (e.g. a "Special
-  //    Events" drop) most of the roster is live in some other category at any
-  //    given time and earns nothing for THIS drop — listing them made the picker
-  //    offer channels that can't credit (a live-but-Just-Chatting allow-listed
-  //    streamer would show, get picked, and never progress). Match by category id
-  //    when both sides have it, else fall back to the category name.
-  const inCampaignCategory = (c: PickableChannel): boolean => {
+  //  - ACL campaigns: the allow-list is the FIRST gate, and being on it is not
+  //    always enough — an allow-listed streamer live in some other category
+  //    usually earns nothing for THIS drop, so listing the whole live roster
+  //    offered channels that can't credit. But "same category" is not the rule
+  //    either: a creator campaign like Ironmouse's subathon is filed under
+  //    Special Events and credits on her channel whatever she is playing, so
+  //    the category test hid the ONLY channel that could earn it. Twitch answers
+  //    this per channel (`viewerDropCampaigns`), so that answer decides.
+  //  - Category match is the fallback for when that lookup fails, since a stale
+  //    heuristic beats an empty picker.
+  const isEarnable = (c: PickableChannel): boolean => {
     if (!isAclBased) return true; // open campaign list is already category-correct
+    if (eligibleIds) return eligibleIds.has(c.userId);
     if (gameId && c.currentGameId) return c.currentGameId === gameId;
     return !!c.currentGame && !!gameName && c.currentGame.toLowerCase() === gameName.toLowerCase();
   };
-  const earnable = channels.filter(c => c.isLive && inCampaignCategory(c));
+  const earnable = channels.filter(c => c.isLive && isEarnable(c));
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 sm:p-6">

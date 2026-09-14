@@ -36,20 +36,6 @@ export {
  * @deprecated Use getAllUserBadges() instead
  * This function is no longer needed as third-party badges are included automatically
  */
-export async function getAllThirdPartyBadges(_userId: string): Promise<any[]> {
-  Logger.warn('[thirdPartyBadges] getAllThirdPartyBadges() is deprecated. Use getAllUserBadges() from badgeService.ts');
-  // Return empty array to maintain compatibility
-  // Real implementation should use getAllUserBadges()
-  return [];
-}
-
-/**
- * @deprecated Third-party badge databases are now pre-fetched automatically
- */
-export async function preloadThirdPartyBadgeDatabases(): Promise<void> {
-  Logger.warn('[thirdPartyBadges] preloadThirdPartyBadgeDatabases() is deprecated. Databases are pre-fetched automatically');
-  // No-op, databases are loaded automatically by Rust backend
-}
 
 /**
  * @deprecated Use clearBadgeCache() from badgeService.ts

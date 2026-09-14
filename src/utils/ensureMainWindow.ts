@@ -69,11 +69,24 @@ export async function ensureMainAlive(): Promise<void> {
           center: true,
           resizable: true,
           decorations: false,
+          // Same hidden-until-first-paint gate as the config-defined window:
+          // App's mount effect restores saved geometry and reveals, so the
+          // recreated main appears painted instead of as a blank shell.
+          visible: false,
+          backgroundColor: '#0c0c0d',
         });
         win.once('tauri://error', (e) => {
           Logger.error('[ensureMain] create main failed:', e);
           finish();
         });
+        // Popout-side net for the gate: if the new window's JS dies before its
+        // own reveal, this shows it anyway (the command is idempotent and this
+        // popout is guaranteed alive to send it).
+        setTimeout(() => {
+          void import('@tauri-apps/api/core')
+            .then(({ invoke }) => invoke('reveal_main_window'))
+            .catch(() => {});
+        }, 3000);
       } catch (e) {
         Logger.error('[ensureMain] create main threw:', e);
         finish();

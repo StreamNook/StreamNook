@@ -212,78 +212,15 @@ pub async fn clear_channel_badge_cache_unified(channel_id: String) -> Result<(),
     Ok(())
 }
 
-/// Store a user's badge string from IRC for later profile lookups
-#[tauri::command]
-pub async fn store_user_badge_string(user_id: String, badge_string: String) -> Result<(), String> {
-    let service_lock = get_service().await?;
-
-    // Auto-initialize if not ready yet
-    {
-        let service_guard = service_lock.read().await;
-        if service_guard.is_none() {
-            drop(service_guard);
-            initialize_badge_service().await;
-        }
-    }
-
-    let service_guard = service_lock.read().await;
-    let service = service_guard
-        .as_ref()
-        .ok_or_else(|| "Badge service not initialized".to_string())?;
-
-    service
-        .store_user_badge_string(&user_id, &badge_string)
-        .await;
-    Ok(())
-}
-
-/// Get a user's cached badge string
-#[tauri::command]
-pub async fn get_user_badge_string(user_id: String) -> Result<Option<String>, String> {
-    let service_lock = get_service().await?;
-    let service_guard = service_lock.read().await;
-
-    let service = service_guard
-        .as_ref()
-        .ok_or_else(|| "Badge service not initialized".to_string())?;
-
-    Ok(service.get_user_badge_string(&user_id).await)
-}
-
-/// Resolve a badge string to full badge info using Helix metadata
-#[tauri::command]
-pub async fn resolve_badge_string(
-    badge_string: String,
-    channel_id: String,
-) -> Result<Vec<crate::services::badge_service::UserBadge>, String> {
-    let service_lock = get_service().await?;
-
-    // Auto-initialize if not ready yet
-    {
-        let service_guard = service_lock.read().await;
-        if service_guard.is_none() {
-            drop(service_guard);
-            initialize_badge_service().await;
-        }
-    }
-
-    let service_guard = service_lock.read().await;
-    let service = service_guard
-        .as_ref()
-        .ok_or_else(|| "Badge service not initialized".to_string())?;
-
-    Ok(service
-        .resolve_badge_string(&badge_string, &channel_id)
-        .await)
-}
-
 /// Get the current user's global badge collection (all earned global badges)
 /// Returns a list of badge IDs in "set_id/version" format (e.g., "bungie_ally_badge/1")
-/// Used for cross-referencing badge drop ownership
+/// Used for cross-referencing badge drop ownership. Only answers for the
+/// signed-in user (the Drops token's owner); errors for anyone else.
 #[tauri::command]
-pub async fn get_global_badge_collection(username: String) -> Result<Vec<String>, String> {
-    use crate::services::drops_auth_service::DropsAuthService;
-
+pub async fn get_global_badge_collection(
+    user_id: String,
+    username: String,
+) -> Result<Vec<String>, String> {
     let service_lock = get_service().await?;
 
     // Auto-initialize if not ready yet
@@ -300,13 +237,8 @@ pub async fn get_global_badge_collection(username: String) -> Result<Vec<String>
         .as_ref()
         .ok_or_else(|| "Badge service not initialized".to_string())?;
 
-    // Get OAuth token from DropsAuthService (same as drops.rs uses for internal GQL)
-    let token = DropsAuthService::get_token()
-        .await
-        .map_err(|e| format!("Failed to get drops auth token: {}", e))?;
-
     service
-        .fetch_global_badge_collection_from_gql(&username, &token)
+        .fetch_current_user_global_collection(&user_id, &username)
         .await
 }
 
@@ -491,4 +423,9 @@ pub async fn ingest_badge_drops(
 
     feed::persist().await;
     Ok(())
+}
+
+/// Badge cache counts for the resource line, without waiting on the service lock.
+pub fn cache_counts() -> Option<(usize, usize)> {
+    BADGE_SERVICE.try_read().ok().and_then(|g| g.as_ref().and_then(|s| s.cache_counts()))
 }

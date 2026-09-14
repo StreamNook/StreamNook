@@ -9,6 +9,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { compareVersions, type PluginInfo, type SourceInfo, type IndexEntry } from '../../types/plugins';
 import { usePluginUpdates } from '../../stores/pluginUpdatesStore';
+import { afterBoot } from '../../utils/startupScheduler';
 
 const CHECK_INTERVAL_MS = 30 * 60 * 1000; // re-check every 30 minutes
 const MIN_GAP_MS = 2 * 60 * 1000; // throttle focus/interval re-checks
@@ -56,7 +57,10 @@ export default function PluginUpdatesChecker() {
       }
     };
 
-    void check(true);
+    // The first sweep is a catalog crawl across every source — nothing on
+    // screen needs it at launch, so it rides the last boot stagger tier.
+    // Event-driven force checks (install/enable/disable) stay immediate.
+    const cancelFirst = afterBoot(10000, () => void check(true));
     const interval = window.setInterval(() => void check(), CHECK_INTERVAL_MS);
     const onFocus = () => void check();
     window.addEventListener('focus', onFocus);
@@ -68,6 +72,7 @@ export default function PluginUpdatesChecker() {
 
     return () => {
       alive = false;
+      cancelFirst();
       window.clearInterval(interval);
       window.removeEventListener('focus', onFocus);
       unlisten?.();

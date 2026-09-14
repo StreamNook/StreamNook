@@ -148,7 +148,28 @@ impl ChatService {
         })
     }
 
+    /// Stop chat because the USER is done with it (stopped a stream, `/disconnect`).
+    ///
+    /// A full `IrcService::stop()` aborts the shared local-WS bridge, which every
+    /// Kick/YouTube/TikTok pane in every window is also riding. So when providers
+    /// still hold the bridge, clear only the Twitch IRC half — the same condition
+    /// `IrcService::start` already uses before choosing `stop_irc_only`.
+    ///
+    /// Recovery from a WEDGED backend is a different intent and must NOT come
+    /// through here: it needs the unconditional teardown. See `restart_bridge`.
     pub async fn stop() -> Result<()> {
+        if crate::services::providers::has_active_bridge_users() {
+            IrcService::stop_twitch_only().await;
+            return Ok(());
+        }
+        IrcService::stop().await
+    }
+
+    /// Force the one true teardown, bridge included, regardless of provider
+    /// consumers. The chat watchdog escalates here when two reconnects have failed
+    /// to revive a wedged task and `start_chat`'s idempotent path cannot fix it.
+    /// Provider slices are re-established by the frontend's own `reconnectAll`.
+    pub async fn restart_bridge() -> Result<()> {
         IrcService::stop().await
     }
 
@@ -161,7 +182,10 @@ impl ChatService {
         // tear-down + re-fetch which masked the gap; with idempotent `start`,
         // additional-channel JOINs (channel switching, MultiChat tabs, etc.)
         // now route through this path.
-        IrcService::fetch_and_store_emotes(channel, state.emote_service.clone()).await;
+        // Deferred: this runs on channel switches and MultiChat tab opens, where
+        // a user is waiting on the pane. The disk seed lands before we return;
+        // the provider refresh follows.
+        IrcService::seed_emotes_deferring_refresh(channel, state.emote_service.clone()).await;
         Ok(())
     }
 

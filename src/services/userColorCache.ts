@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useState } from 'react';
+import { boundedSet } from '../utils/boundedMap';
 import { Logger } from '../utils/logger';
 
 /**
@@ -16,7 +17,9 @@ import { Logger } from '../utils/logger';
  */
 
 // user_id -> hex color, or null once fetched with no color (avoids refetch).
+// Session-long; bounded so gift waves across many channels can't grow it forever.
 const colorCache = new Map<string, string | null>();
+const COLOR_CACHE_MAX = 2000;
 const subscribers = new Map<string, Set<() => void>>();
 const pending = new Set<string>();
 let flushScheduled = false;
@@ -38,14 +41,14 @@ async function flush(): Promise<void> {
       const result = await invoke<Record<string, string>>('get_user_chat_colors', { userIds: chunk });
       for (const id of chunk) {
         const color = result?.[id];
-        colorCache.set(id, color && color.length > 0 ? color : null);
+        boundedSet(colorCache, id, color && color.length > 0 ? color : null, COLOR_CACHE_MAX);
         notify(id);
       }
     } catch (e) {
       Logger.debug('[userColorCache] batch failed', e);
       // Cache a sentinel so a failing endpoint isn't hammered; caller falls back.
       for (const id of chunk) {
-        if (!colorCache.has(id)) colorCache.set(id, null);
+        if (!colorCache.has(id)) boundedSet(colorCache, id, null, COLOR_CACHE_MAX);
         notify(id);
       }
     }

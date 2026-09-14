@@ -136,8 +136,42 @@ enum SubOutcome {
     Transient, // network / 5xx / parse: leave tracked, retry on reconnect
 }
 
-/// POST a channel.moderate v2 subscription bound to this websocket session.
+/// Every topic subscribed per moderated channel. `channel.moderate` is the
+/// gate: a 403 there means "not a mod" and prunes the channel. The others
+/// need scopes older tokens may lack (`moderator:manage:automod`,
+/// `moderator:read:suspicious_users`); a 401/403 on them skips the topic
+/// for this session without touching the channel.
+const TOPICS: &[(&str, &str)] = &[
+    ("channel.moderate", "2"),
+    ("automod.message.hold", "2"),
+    ("automod.message.update", "2"),
+    ("channel.suspicious_user.message", "1"),
+    ("channel.suspicious_user.update", "1"),
+];
+
+/// Subscribe every topic for one channel. Returns the created ids, or
+/// `Forbidden` when the gate topic itself is refused.
+async fn subscribe_all(
+    broadcaster_id: &str,
+    moderator_user_id: &str,
+    session_id: &str,
+) -> Result<Vec<String>, SubOutcome> {
+    let mut ids = Vec::new();
+    for (i, (topic, version)) in TOPICS.iter().enumerate() {
+        match create_subscription(topic, version, broadcaster_id, moderator_user_id, session_id).await {
+            SubOutcome::Created(id) => ids.push(id),
+            SubOutcome::Forbidden if i == 0 => return Err(SubOutcome::Forbidden),
+            SubOutcome::Transient if i == 0 => return Err(SubOutcome::Transient),
+            _ => {} // optional topic unavailable (scope); keep going
+        }
+    }
+    Ok(ids)
+}
+
+/// POST one EventSub subscription bound to this websocket session.
 async fn create_subscription(
+    sub_type: &str,
+    version: &str,
     broadcaster_id: &str,
     moderator_user_id: &str,
     session_id: &str,
@@ -152,8 +186,8 @@ async fn create_subscription(
     let client_id = env!("TWITCH_APP_CLIENT_ID");
     let client = crate::services::http::client().clone();
     let body = serde_json::json!({
-        "type": "channel.moderate",
-        "version": "2",
+        "type": sub_type,
+        "version": version,
         "condition": {
             "broadcaster_user_id": broadcaster_id,
             "moderator_user_id": moderator_user_id
@@ -182,8 +216,8 @@ async fn create_subscription(
         match id {
             Some(id) => {
                 debug!(
-                    "[EventSub Mod] subscribed channel.moderate for {}",
-                    broadcaster_id
+                    "[EventSub Mod] subscribed {} for {}",
+                    sub_type, broadcaster_id
                 );
                 SubOutcome::Created(id)
             }
@@ -191,14 +225,14 @@ async fn create_subscription(
         }
     } else if status == 403 || status == 401 {
         debug!(
-            "[EventSub Mod] not authorized for {} (HTTP {}), skipping",
-            broadcaster_id, status
+            "[EventSub Mod] {} not authorized for {} (HTTP {}), skipping",
+            sub_type, broadcaster_id, status
         );
         SubOutcome::Forbidden
     } else {
         debug!(
-            "[EventSub Mod] subscribe for {} failed (HTTP {})",
-            broadcaster_id, status
+            "[EventSub Mod] {} subscribe for {} failed (HTTP {})",
+            sub_type, broadcaster_id, status
         );
         SubOutcome::Transient
     }
@@ -305,21 +339,21 @@ async fn connect_and_run(
         .unwrap_or_default();
 
     // Active subscription ids for THIS session, keyed by channel name.
-    let mut active: HashMap<String, String> = HashMap::new();
+    let mut active: HashMap<String, Vec<String>> = HashMap::new();
 
     // (Re)subscribe the full desired set (covers reconnect + channels added while
     // the socket was down). Prune channels we don't moderate.
     {
         let snapshot: Vec<ChannelSub> = subs.read().await.values().cloned().collect();
         for sub in snapshot {
-            match create_subscription(&sub.broadcaster_id, &moderator_user_id, &session_id).await {
-                SubOutcome::Created(id) => {
-                    active.insert(sub.channel_name.clone(), id);
+            match subscribe_all(&sub.broadcaster_id, &moderator_user_id, &session_id).await {
+                Ok(ids) => {
+                    active.insert(sub.channel_name.clone(), ids);
                 }
-                SubOutcome::Forbidden => {
+                Err(SubOutcome::Forbidden) => {
                     subs.write().await.remove(&sub.channel_name);
                 }
-                SubOutcome::Transient => {}
+                Err(_) => {}
             }
         }
     }
@@ -358,16 +392,18 @@ async fn connect_and_run(
                 match cmd {
                     Some(Cmd::Subscribe(sub)) => {
                         if !active.contains_key(&sub.channel_name) {
-                            match create_subscription(&sub.broadcaster_id, &moderator_user_id, &session_id).await {
-                                SubOutcome::Created(id) => { active.insert(sub.channel_name.clone(), id); }
-                                SubOutcome::Forbidden => { subs.write().await.remove(&sub.channel_name); }
-                                SubOutcome::Transient => {}
+                            match subscribe_all(&sub.broadcaster_id, &moderator_user_id, &session_id).await {
+                                Ok(ids) => { active.insert(sub.channel_name.clone(), ids); }
+                                Err(SubOutcome::Forbidden) => { subs.write().await.remove(&sub.channel_name); }
+                                Err(_) => {}
                             }
                         }
                     }
                     Some(Cmd::Unsubscribe(name)) => {
-                        if let Some(id) = active.remove(&name) {
-                            delete_subscription(&id).await;
+                        if let Some(ids) = active.remove(&name) {
+                            for id in ids {
+                                delete_subscription(&id).await;
+                            }
                         }
                         if subs.read().await.is_empty() {
                             return Ok(()); // no channels left; drop the socket
@@ -391,15 +427,66 @@ fn handle_text(txt: &str, app_handle: &AppHandle) -> bool {
         .unwrap_or("")
     {
         "notification" => {
-            if v.pointer("/metadata/subscription_type")
+            let sub_type = v
+                .pointer("/metadata/subscription_type")
                 .and_then(|s| s.as_str())
-                == Some("channel.moderate")
-            {
-                if let Some(event) = v.pointer("/payload/event") {
+                .unwrap_or("");
+            let Some(event) = v.pointer("/payload/event") else {
+                return false;
+            };
+            match sub_type {
+                "channel.moderate" => {
                     // Same event name the stream EventSub service used; the main
                     // window and each popout feed their own mod-log store.
                     let _ = app_handle.emit("eventsub://channel-moderate", event);
                 }
+                "automod.message.hold" => {
+                    if let Some(row) = crate::services::automod_queue::AutomodQueue::from_hold_event(event) {
+                        let _ = app_handle.emit("eventsub://automod-hold", &row);
+                        crate::services::automod_queue::AutomodQueue::hold(row);
+                    }
+                }
+                "automod.message.update" => {
+                    if let Some((channel, message_id, status)) =
+                        crate::services::automod_queue::AutomodQueue::update(event)
+                    {
+                        let _ = app_handle.emit(
+                            "eventsub://automod-update",
+                            serde_json::json!({
+                                "channel": channel,
+                                "message_id": message_id,
+                                "status": status,
+                                "moderator": event.pointer("/moderator_user_name").and_then(|x| x.as_str()),
+                            }),
+                        );
+                    }
+                }
+                "channel.suspicious_user.message" => {
+                    let status = crate::services::suspicious_users::SuspiciousUsers::note(event);
+                    // Restricted users never reach IRC: their message enters chat
+                    // through the ordinary publish path (rule engine stamps it).
+                    if status.as_deref() == Some("restricted") {
+                        if let Some(msg) = crate::services::suspicious_users::SuspiciousUsers::synthesize(event) {
+                            tauri::async_runtime::spawn(async move {
+                                crate::services::providers::publish_chat_message(&msg).await;
+                            });
+                        }
+                    }
+                }
+                "channel.suspicious_user.update" => {
+                    let status = crate::services::suspicious_users::SuspiciousUsers::note(event);
+                    let _ = app_handle.emit(
+                        "eventsub://suspicious-user-update",
+                        serde_json::json!({
+                            "channel": event.pointer("/broadcaster_user_login").and_then(|x| x.as_str()).map(|s| s.to_lowercase()),
+                            "user_id": event.pointer("/user_id").and_then(|x| x.as_str()),
+                            "user_login": event.pointer("/user_login").and_then(|x| x.as_str()),
+                            "status": status,
+                            "moderator": event.pointer("/moderator_user_name").and_then(|x| x.as_str()),
+                        }),
+                    );
+                }
+                _ => {}
             }
             false
         }

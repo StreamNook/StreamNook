@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { helixGet } from '../services/helix';
 import { Trophy, TrendingUp, ExternalLink, RefreshCw } from 'lucide-react';
 import { ChannelPointsBalance } from '../types';
 import { useAppStore } from '../stores/AppStore';
@@ -18,7 +19,10 @@ const ChannelPointsLeaderboard = ({ onStreamClick, onTotalsChange }: ChannelPoin
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [profilePics, setProfilePics] = useState<Record<string, string>>({});
-  const { followedStreams, startStream } = useAppStore();
+  // Action without a subscription; only the followed-streams list (read for
+  // live status and click-through) drives re-renders.
+  const { startStream } = useAppStore.getState();
+  const followedStreams = useAppStore((s) => s.followedStreams);
 
   useEffect(() => {
     // On open, pull every followed channel's balance (throttled backend-side);
@@ -68,8 +72,6 @@ const ChannelPointsLeaderboard = ({ onStreamClick, onTotalsChange }: ChannelPoin
 
   const fetchProfilePictures = async (balanceData: ChannelPointsBalance[]) => {
     try {
-      // Get Twitch credentials
-      const [clientId, token] = await invoke<[string, string]>('get_twitch_credentials');
 
       // Twitch's /users endpoint caps at 100 logins per request. The list now
       // spans every followed channel, so chunk it: one oversized request 400s
@@ -89,20 +91,14 @@ const ChannelPointsLeaderboard = ({ onStreamClick, onTotalsChange }: ChannelPoin
           .map((name) => `login=${encodeURIComponent(name)}`)
           .join('&');
 
-        const response = await fetch(`https://api.twitch.tv/helix/users?${queryParams}`, {
-          headers: {
-            'Client-ID': clientId,
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        if (!response.ok) {
+        let data: { data?: Array<{ profile_image_url?: string; login?: string }> };
+        try {
+          data = await helixGet('users', queryParams);
+        } catch (e) {
           // Keep the pictures the other chunks resolved rather than losing all.
-          Logger.error('Failed to fetch profile pictures chunk:', response.status);
+          Logger.error('Failed to fetch profile pictures chunk:', e);
           continue;
         }
-
-        const data = await response.json();
         if (data.data && Array.isArray(data.data)) {
           data.data.forEach((user: { profile_image_url?: string; login?: string }) => {
             if (user.profile_image_url && user.login) {

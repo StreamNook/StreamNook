@@ -127,10 +127,7 @@ const itemV = {
 const useCountUp = (target: number, durationMs = 900): number => {
   const [value, setValue] = useState(0);
   useEffect(() => {
-    if (!target || target <= 0) {
-      setValue(target || 0);
-      return;
-    }
+    if (!target || target <= 0) return;
     let raf = 0;
     let start = 0;
     const tick = (ts: number) => {
@@ -143,7 +140,9 @@ const useCountUp = (target: number, durationMs = 900): number => {
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [target, durationMs]);
-  return value;
+  // A non-positive target has nothing to count towards; derive the rest state
+  // instead of writing it back through the effect.
+  return target > 0 ? value : 0;
 };
 
 const StatTile = ({

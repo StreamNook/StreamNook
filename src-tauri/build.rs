@@ -59,5 +59,66 @@ fn main() {
         println!("cargo:rerun-if-env-changed={}", key);
     }
 
+    ensure_potoken_bundle(&manifest_dir);
+
     tauri_build::build()
+}
+
+/// Keep the PO token bundle present and in step with its source.
+///
+/// `youtube_potoken.rs` embeds `potoken/mint.bundle.js` with `include_str!`, so it
+/// must exist BEFORE this crate compiles, and it must match `mint.mjs` or playback
+/// resolves through stale logic.
+///
+/// The bundle is generated (esbuild) and deliberately NOT committed: ~700KB of
+/// minified output that rewrites wholesale on any source edit, which buries real
+/// diffs in the history and cannot be merged by hand.
+///
+/// Built HERE rather than trusting that `npm run build:potoken` already ran. The
+/// npm prebuild hook does cover `npm run tauri build`, but a bare `cargo build`
+/// does not, and that failure surfaces as an unexplained `include_str!` error
+/// pointing at a file nobody deleted. Regenerating costs ~100ms and only happens
+/// when the source is newer than the output.
+fn ensure_potoken_bundle(manifest_dir: &str) {
+    let src = Path::new(manifest_dir).join("potoken").join("mint.mjs");
+    let out = Path::new(manifest_dir).join("potoken").join("mint.bundle.js");
+    // Rebuild whenever the source changes, not just when the output is absent.
+    println!("cargo:rerun-if-changed=potoken/mint.mjs");
+    if !src.exists() {
+        return;
+    }
+
+    let up_to_date = match (fs::metadata(&out), fs::metadata(&src)) {
+        (Ok(o), Ok(s)) => match (o.modified(), s.modified()) {
+            (Ok(om), Ok(sm)) => om >= sm,
+            _ => false,
+        },
+        _ => false,
+    };
+    if up_to_date {
+        return;
+    }
+
+    let root = Path::new(manifest_dir).parent().unwrap_or(Path::new(".."));
+    let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
+    let ran = std::process::Command::new(npm)
+        .args(["run", "build:potoken"])
+        .current_dir(root)
+        .status();
+
+    match ran {
+        Ok(status) if status.success() => {}
+        _ => {
+            // A stale bundle still builds and still plays; a missing one cannot
+            // compile at all, so only that case is fatal, and it says what to run.
+            if !out.exists() {
+                panic!(
+                    "potoken/mint.bundle.js is missing and `npm run build:potoken`                      could not generate it. Run that from the project root, then build again."
+                );
+            }
+            println!(
+                "cargo:warning=could not regenerate potoken/mint.bundle.js;                  building with the existing one"
+            );
+        }
+    }
 }

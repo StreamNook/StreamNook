@@ -90,6 +90,8 @@ export function cosmeticFromAtmosphere(atm: Atmosphere): CosmeticDefinition {
       swatch: atm.swatch,
       chatEdge: atm.chatEdge,
       chatFrost: atm.chatFrost ?? false,
+      chatBlur: atm.chatBlur ?? 0,
+      chatRim: atm.chatRim ?? null,
       renderer: atm.kind === 'cologne-chrome' ? 'cologne-chrome' : undefined,
       accoladeId,
     },

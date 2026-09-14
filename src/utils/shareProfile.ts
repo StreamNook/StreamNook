@@ -1,3 +1,4 @@
+import { Logger } from './logger';
 // Profile card capture/share pipeline.
 //
 // True screen capture via Tauri commands — NOT a DOM-clone re-render. The
@@ -291,7 +292,7 @@ export async function captureProfileCard(
       ),
     };
   } catch (e) {
-    console.warn('[shareProfile] WebP capture failed, falling back to GIF:', e);
+    Logger.warn('[shareProfile] WebP capture failed, falling back to GIF:', e);
     const blob = await captureGIF(element, rect);
     return {
       blob,

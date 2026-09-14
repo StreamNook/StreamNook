@@ -1,9 +1,9 @@
-// Run with: node --test src/utils/messageRepeat.test.ts
+// Run with: npm test
 //
 // The normalizer decides what counts as "the same message", so a mistake here
 // either folds messages that aren't the same or fails to fold a real wave.
 
-import test from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
 
 import { normalizeForRepeat, isPrivilegedChatter } from './messageRepeat.ts';

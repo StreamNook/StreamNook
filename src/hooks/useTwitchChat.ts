@@ -16,13 +16,13 @@
 // New code (MultiChat tabs, etc.) should call the store directly via
 // `useChannelChat(channel)` + `acquireChannel` / `releaseChannel`.
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   acquireChannel,
   releaseChannel,
   sendChannelMessage,
   setChannelPaused,
-  useChannelChat,
+  useChannelChatMeta,
   type ClearedUserEntry,
   type RoomState,
   type SendUserInfo,
@@ -34,29 +34,27 @@ import { Logger } from '../utils/logger';
 // keep working: ChatWidget pulls this from various places.
 export type { ModerationContext, ClearedUserEntry, RoomState } from '../stores/chatConnectionStore';
 
+// C7 checkpoint C: the snapshot fields (messages, renderToken, deletion
+// marks, liveMessageCount) left this shape - the self-subscribing
+// ChatMessagesPanel and PausedNewCount own them now, so the widget's parent
+// no longer re-renders per chat flush. This hook returns actions + the
+// low-frequency meta the chrome renders.
 export interface UseTwitchChatReturn {
-  messages: any[];
   connectChat: (channel: string, roomId?: string) => Promise<void>;
+  // `userInfo` is optional only so this shares a call signature with the
+  // provider send path (which needs no Twitch identity). The Twitch send below
+  // still requires it and bails without it, so no caller behavior changes.
   sendMessage: (
     messageText: string,
-    userInfo: SendUserInfo,
+    userInfo?: SendUserInfo,
     replyParentMsgId?: string,
     senderAccount?: SendAsAccount | null,
   ) => Promise<void>;
   isConnected: boolean;
   error: string | null;
   setPaused: (paused: boolean) => void;
-  deletedMessageIds: Set<string>;
-  clearedUserContexts: Map<string, ClearedUserEntry>;
   roomState: RoomState;
   userBadges: string | null;
-  /** Monotonic count of live messages received on the active channel. Reliable
-   *  baseline for the "N new since paused" badge (unlike `messages.length`,
-   *  which is capped and trimmed). */
-  liveMessageCount: number;
-  /** Re-render signal for the memoized message list. See ChannelChatSnapshot —
-   *  `messages` identity is NOT a reliable change signal. */
-  renderToken: number;
 }
 
 export const useTwitchChat = (): UseTwitchChatReturn => {
@@ -66,8 +64,12 @@ export const useTwitchChat = (): UseTwitchChatReturn => {
   // ref-counted store so multiple consumers (MultiChat + main app) share one
   // underlying IRC connection.
   const currentChannelRef = useRef<string | null>(null);
+  // Render-side mirror of the ref: the meta selector needs the channel during
+  // render, and a ref must not be read there. Set alongside the ref on every
+  // successful switch.
+  const [activeChannel, setActiveChannel] = useState<string | null>(null);
 
-  const snapshot = useChannelChat(currentChannelRef.current);
+  const meta = useChannelChatMeta(activeChannel);
 
   const connectChat = useCallback(async (channel: string, roomId?: string) => {
     const targetKey = channel.toLowerCase();
@@ -90,6 +92,7 @@ export const useTwitchChat = (): UseTwitchChatReturn => {
     try {
       await acquireChannel(targetKey, roomId ?? null);
       currentChannelRef.current = targetKey;
+      setActiveChannel(targetKey);
       if (previous) {
         await releaseChannel(previous);
       }
@@ -103,13 +106,19 @@ export const useTwitchChat = (): UseTwitchChatReturn => {
   const sendMessage = useCallback(
     async (
       messageText: string,
-      userInfo: SendUserInfo,
+      userInfo?: SendUserInfo,
       replyParentMsgId?: string,
       senderAccount?: SendAsAccount | null,
     ) => {
       const channel = currentChannelRef.current;
       if (!channel) {
         Logger.warn('[useTwitchChat] sendMessage called with no active channel');
+        return;
+      }
+      // A Twitch send needs the sender identity for the optimistic echo, so a
+      // missing one is a caller bug rather than something to paper over.
+      if (!userInfo) {
+        Logger.warn('[useTwitchChat] sendMessage called without user info');
         return;
       }
       await sendChannelMessage(channel, messageText, userInfo, replyParentMsgId, senderAccount);
@@ -136,17 +145,12 @@ export const useTwitchChat = (): UseTwitchChatReturn => {
   }, []);
 
   return {
-    messages: snapshot.messages,
     connectChat,
     sendMessage,
-    isConnected: snapshot.isConnected,
-    error: snapshot.error,
+    isConnected: meta.isConnected,
+    error: meta.error,
     setPaused,
-    deletedMessageIds: snapshot.deletedMessageIds,
-    clearedUserContexts: snapshot.clearedUserContexts,
-    roomState: snapshot.roomState,
-    userBadges: snapshot.userBadges,
-    liveMessageCount: snapshot.liveMessageCount,
-    renderToken: snapshot.renderToken,
+    roomState: meta.roomState,
+    userBadges: meta.userBadges,
   };
 };

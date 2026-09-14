@@ -9,7 +9,7 @@ export interface Emote {
   id: string;
   name: string;
   url: string;
-  provider: 'twitch' | 'bttv' | '7tv' | 'ffz' | 'kick';
+  provider: 'twitch' | 'bttv' | '7tv' | 'ffz' | 'kick' | 'youtube';
   isZeroWidth?: boolean;
   localUrl?: string;
   /** Type of emote: "globals", "subscriptions", "bitstier", "follower", "channelpoints", etc. */
@@ -24,6 +24,14 @@ export interface Emote {
   modifierFlags?: number;
   /** FFZ effect emote composable only by FFZ subscribers (rendering ungated) */
   ffzSubOnly?: boolean;
+  /** Composition is gated for this account (YouTube members-only emoji). Shown
+   *  in the grid with the same lock treatment as `ffzSubOnly`. */
+  locked?: boolean;
+  /** Badge text for the lock, e.g. "Members only". Only read when `locked`. */
+  lockedLabel?: string;
+  /** What to put in the composer when it differs from the display name. YouTube
+   *  unicode emoji insert the literal character; everything else inserts `name`. */
+  insertText?: string;
 }
 
 export interface EmoteSet {
@@ -33,12 +41,69 @@ export interface EmoteSet {
   ffz: Emote[];
   /** Kick's own native emotes (channel sub set + Global + Emojis). Empty for Twitch. */
   kick: Emote[];
+  /** YouTube custom emoji, learned from chat rather than fetched: YouTube exposes
+   *  no channel emote-set endpoint, so this fills in as the channel uses them. */
+  youtube: Emote[];
+  /** Whether the 7TV rows are this channel's real dictionary. Rust sets it false
+   *  when the channel document fetch failed and the rows are a fallback (globals
+   *  only, or a disk copy), so a picker should keep retrying. Absent on sets that
+   *  predate the flag; treat absent as true. */
+  seven_tv_ok?: boolean;
 }
 
 // Module-level registry of cached emote files (cacheKey -> localPath).
 // For 7TV the key is `${id}@${tier}` (see emoteCacheKey); other providers key
 // by bare id since they have a single canonical URL.
 const cachedEmoteFiles: Map<string, string> = new Map();
+
+// Lazily-built per-set name indexes, keyed by set identity. Emote sets are only
+// ever replaced wholesale (never mutated in place), so a WeakMap entry lives
+// exactly as long as its set and a refresh/channel switch drops it with the
+// old object. Insertion is first-wins in the same provider order as the
+// name-lookup chains this replaces.
+const emoteLookupCache = new WeakMap<
+  EmoteSet,
+  { byName: Map<string, Emote>; lowerNames: Set<string> }
+>();
+const LOOKUP_ORDER = ['7tv', 'bttv', 'ffz', 'twitch', 'kick', 'youtube'] as const;
+
+export function getEmoteLookup(set: EmoteSet): { byName: Map<string, Emote>; lowerNames: Set<string> } {
+  let entry = emoteLookupCache.get(set);
+  if (!entry) {
+    const byName = new Map<string, Emote>();
+    const lowerNames = new Set<string>();
+    for (const provider of LOOKUP_ORDER) {
+      for (const e of set[provider] ?? []) {
+        if (!byName.has(e.name)) byName.set(e.name, e);
+        lowerNames.add(e.name.toLowerCase());
+      }
+    }
+    entry = { byName, lowerNames };
+    emoteLookupCache.set(set, entry);
+  }
+  return entry;
+}
+
+/**
+ * Shape emote rows from Rust for the page: camelCase the flags and attach a
+ * local URL ONLY when the file is already cached (a Map lookup, never a fetch);
+ * the browser loads from the CDN when localUrl is undefined. Used for whole sets
+ * and for the rows a live 7TV delta adds, so both paths produce identical rows.
+ */
+export function enhanceRustEmotes(emotes: any[]): Emote[] {
+  return emotes.map((emote) => {
+    // 7TV is looked up at the per-DPI tier so the cached size matches what renders.
+    const localPath = cachedEmoteFiles.get(emoteCacheKey(emote.id, emote.provider));
+    const zeroWidth = emote.is_zero_width !== undefined ? emote.is_zero_width : emote.isZeroWidth;
+    return {
+      ...emote,
+      isZeroWidth: zeroWidth,
+      modifierFlags: emote.modifier_flags ?? emote.modifierFlags,
+      ffzSubOnly: emote.ffz_sub_only ?? emote.ffzSubOnly,
+      localUrl: localPath ? convertFileSrc(localPath) : undefined,
+    } as Emote;
+  });
+}
 
 // --- Per-DPI emote sizing -------------------------------------------------
 // 7TV serves discrete size tiers (1x..4x). We cache AND render the smallest
@@ -166,6 +231,10 @@ const BURST_CONCURRENT = 5;
 const BURST_DELAY_MS = 15;
 let burstRefs = 0;
 const downloadQueue: Array<{ id: string, url: string }> = [];
+// Membership mirror of downloadQueue. The queue can hold a whole channel set
+// (thousands) while queueEmoteForCaching is called per rendered emote, so the
+// dedupe check must be O(1), not a queue scan.
+const queuedIds = new Set<string>();
 let activeDownloads = 0;
 let processingScheduled = false;
 let lastDownloadTime = 0;
@@ -226,6 +295,7 @@ function pumpQueue() {
     while (activeDownloads < currentConcurrency() && downloadQueue.length > 0) {
       const next = downloadQueue.shift();
       if (!next) break;
+      queuedIds.delete(next.id);
       activeDownloads++;
       lastDownloadTime = Date.now();
       void downloadEmoteIfNeeded(next.id, next.url)
@@ -292,7 +362,7 @@ async function downloadEmoteIfNeeded(id: string, url: string): Promise<string | 
 }
 
 export function queueEmoteForCaching(id: string, url: string, priority: boolean = false) {
-  if (cachedEmoteFiles.has(id) || pendingDownloads.has(id) || downloadQueue.some(item => item.id === id)) {
+  if (cachedEmoteFiles.has(id) || pendingDownloads.has(id) || queuedIds.has(id)) {
     return;
   }
 
@@ -302,6 +372,7 @@ export function queueEmoteForCaching(id: string, url: string, priority: boolean 
   } else {
     downloadQueue.push({ id, url });
   }
+  queuedIds.add(id);
   // Drain the queue: idle-gated trickle normally, fast burst while a picker is open.
   pumpQueue();
 }
@@ -461,21 +532,7 @@ export async function fetchAllEmotes(channelName?: string, channelId?: string): 
 
     // Enhance with local URLs ONLY if they're already cached (non-blocking lookup)
     // The browser will load from CDN if localUrl is undefined
-    const enhanceWithLocalUrls = (emotes: any[]) => {
-      return emotes.map(emote => {
-        // Only use cached path if it's already in memory - no blocking. 7TV is
-        // looked up at the per-DPI tier so the cached size matches what renders.
-        const localPath = cachedEmoteFiles.get(emoteCacheKey(emote.id, emote.provider));
-        const zeroWidth = emote.is_zero_width !== undefined ? emote.is_zero_width : emote.isZeroWidth;
-        return {
-          ...emote,
-          isZeroWidth: zeroWidth,
-          modifierFlags: emote.modifier_flags ?? emote.modifierFlags,
-          ffzSubOnly: emote.ffz_sub_only ?? emote.ffzSubOnly,
-          localUrl: localPath ? convertFileSrc(localPath) : undefined
-        };
-      });
-    };
+    const enhanceWithLocalUrls = enhanceRustEmotes;
 
     const enhancedSet: EmoteSet = {
       twitch: enhanceWithLocalUrls(emoteSet.twitch),
@@ -483,6 +540,9 @@ export async function fetchAllEmotes(channelName?: string, channelId?: string): 
       '7tv': enhanceWithLocalUrls(emoteSet['7tv']),
       ffz: enhanceWithLocalUrls(emoteSet.ffz),
       kick: enhanceWithLocalUrls(emoteSet.kick ?? []),
+      // Learned from chat, not fetched — merged in by the picker at render time.
+      youtube: [],
+      seven_tv_ok: emoteSet.seven_tv_ok ?? true,
     };
 
     // Count how many emotes got local URLs
@@ -513,6 +573,7 @@ export async function fetchAllEmotes(channelName?: string, channelId?: string): 
       '7tv': [],
       ffz: [],
       kick: [],
+      youtube: [],
     };
   }
 }
@@ -547,10 +608,49 @@ export async function fetchKickChannelEmotes(slug: string): Promise<EmoteSet> {
       '7tv': enhance(emoteSet['7tv']),
       ffz: enhance(emoteSet.ffz),
       kick: enhance(emoteSet.kick),
+      youtube: [],
     };
   } catch (error) {
     Logger.warn('[EmoteService] Failed to fetch Kick channel emotes:', error);
-    return { twitch: [], bttv: [], '7tv': [], ffz: [], kick: [] };
+    return { twitch: [], bttv: [], '7tv': [], ffz: [], kick: [], youtube: [] };
+  }
+}
+
+/**
+ * A YouTube channel's 7TV emotes for the picker. Separate from the channel's
+ * OWN emoji (seeded into providerEmoteStore from the chat page) — a channel can
+ * have either, both, or neither, so the picker merges the two.
+ */
+export async function fetchYouTubeChannelEmotes(channel: string): Promise<EmoteSet> {
+  await ensureEmoteFileCache();
+  try {
+    const emoteSet = await invoke<EmoteSet>('get_youtube_channel_emotes', { channel });
+    Logger.info(
+      `[EmoteService] YouTube 7TV emotes for "${channel}": ${emoteSet['7tv']?.length ?? 0}`,
+    );
+    const enhance = (emotes: any[]) =>
+      (emotes ?? []).map((emote) => {
+        const localPath = cachedEmoteFiles.get(emoteCacheKey(emote.id, emote.provider));
+        const zeroWidth = emote.is_zero_width !== undefined ? emote.is_zero_width : emote.isZeroWidth;
+        return {
+          ...emote,
+          isZeroWidth: zeroWidth,
+          modifierFlags: emote.modifier_flags ?? emote.modifierFlags,
+          ffzSubOnly: emote.ffz_sub_only ?? emote.ffzSubOnly,
+          localUrl: localPath ? convertFileSrc(localPath) : undefined,
+        };
+      });
+    return {
+      twitch: [],
+      bttv: [],
+      '7tv': enhance(emoteSet['7tv']),
+      ffz: [],
+      kick: [],
+      youtube: [],
+    };
+  } catch (error) {
+    Logger.warn('[EmoteService] Failed to fetch YouTube channel emotes:', error);
+    return { twitch: [], bttv: [], '7tv': [], ffz: [], kick: [], youtube: [] };
   }
 }
 

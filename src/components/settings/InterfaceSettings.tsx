@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { Eye, EyeOff, Columns, X, Sparkles, Gauge, Zap } from 'lucide-react';
 import CompactViewSettings from './CompactViewSettings';
 import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
+import { GlassMultiSelect } from '../ui/GlassMultiSelect';
+import { DISCOVERY_LANGUAGES } from '../../utils/discoveryLanguages';
 import { useAppStore } from '../../stores/AppStore';
 import type { MotionMode, CloseToTrayMode } from '../../types';
 
@@ -78,7 +80,7 @@ const InterfaceSettings = () => {
             case 'never':
                 return 'Closing the window always quits StreamNook, even while MultiChat popouts are open.';
             default:
-                return 'Closing the window quits StreamNook, unless MultiChat popouts are still open — then it minimizes to the system tray so they keep working.';
+                return 'Closing the window quits StreamNook, unless MultiChat popouts are still open, in which case it minimizes to the system tray so they keep working.';
         }
     })();
 
@@ -91,11 +93,11 @@ const InterfaceSettings = () => {
     const motionDescription = (() => {
         switch (motionMode) {
             case 'full':
-                return 'All animations and transitions play normally.';
+                return 'Every animation and transition plays normally.';
             case 'reduced':
-                return 'Keeps quick fades but removes sliding, scaling, and bouncing motion. Easier on the eyes and lighter on slower machines.';
+                return 'Keeps quick fades but removes sliding, scaling, and bouncing, which is easier on the eyes and lighter on slower PCs.';
             case 'off':
-                return 'Turns animations off for an instant, snappy feel. Best on low-end PCs, since the frosted-glass blur is expensive to animate. Loading spinners still spin.';
+                return 'Turns animations off for an instant, snappy feel, and loading spinners still spin.';
         }
     })();
 
@@ -123,24 +125,44 @@ const InterfaceSettings = () => {
         saveSidebarSettings(sidebarMode, expandOnHover, enabled);
     };
 
+    const applyDiscoveryLanguages = async (languages: string[]) => {
+        // Read the store fresh at write time so rapid toggles never clobber a
+        // setting changed elsewhere in the meantime. The await is load-bearing:
+        // updateSettings commits to the store only after the save completes,
+        // and the reload below reads the filter back out of the store.
+        const current = useAppStore.getState().settings;
+        await updateSettings({ ...current, discovery_languages: languages });
+        void useAppStore.getState().loadRecommendedStreams();
+    };
+
+    const applyDiscoveryPersonalized = async (enabled: boolean) => {
+        const current = useAppStore.getState().settings;
+        await updateSettings({ ...current, discovery_personalized: enabled });
+        void useAppStore.getState().loadRecommendedStreams();
+    };
+
     const modeDescription = (() => {
         switch (sidebarMode) {
             case 'expanded':
-                return 'The sidebar is always fully visible showing streamer names, game categories, and viewer counts.';
+                return 'The sidebar stays fully open, with streamer names, categories, and viewer counts always in view.';
             case 'compact':
-                return `Shows only profile pictures. ${expandOnHover ? 'Hovers to reveal full details.' : 'Click the arrow to expand.'}`;
+                return `Only profile pictures show, ${expandOnHover ? 'and hovering reveals the full details' : 'and the arrow expands it when you need more'}.`;
             case 'hidden':
-                return 'The sidebar is completely hidden until you move your cursor to the left edge of the window. It will stay visible while your cursor is within the sidebar area.';
+                return 'The sidebar stays out of the way until you move your cursor to the left edge of the window, and it stays open while your cursor is over it.';
             case 'disabled':
-                return 'The sidebar is completely disabled and will not appear at all. Use this option if you prefer a cleaner interface without the streams list.';
+                return 'The sidebar never appears, for the cleanest possible layout without the streams list.';
         }
     })();
 
     return (
         <div className="space-y-8">
-            <SettingsSection id="settings-section-sidebar" label="Sidebar">
+            <SettingsSection
+                id="settings-section-sidebar"
+                label="Sidebar"
+                description="How much of the streams list stays on screen while you watch."
+            >
                 <SettingsRow
-                    title="Sidebar Display Mode"
+                    title="How the sidebar appears"
                     description={modeDescription}
                 >
                     <div className="grid grid-cols-4 gap-2">
@@ -167,8 +189,8 @@ const InterfaceSettings = () => {
 
                 {sidebarMode === 'compact' && (
                     <SettingsRow
-                        title="Expand on Hover"
-                        description="Sidebar expands when you hover over it"
+                        title="Expand when you hover"
+                        description="Move your cursor over the compact sidebar to open it fully, and it folds back when you leave."
                         control={
                             <Toggle
                                 enabled={expandOnHover}
@@ -190,10 +212,46 @@ const InterfaceSettings = () => {
                 />
             </SettingsSection>
 
-            <SettingsSection id="settings-section-motion" label="Motion">
+            <SettingsSection
+                id="settings-section-discover"
+                label="Discover Feed"
+                description="What the Discover tab and the sidebar's Recommended section show."
+            >
                 <SettingsRow
-                    title="Animations"
+                    title="Personalized recommendations"
+                    description="Use your Twitch account to tailor Discover to what you watch. When off, recommendations are anonymous and based only on your region."
+                    control={
+                        <Toggle
+                            enabled={settings.discovery_personalized ?? false}
+                            onChange={() => void applyDiscoveryPersonalized(!(settings.discovery_personalized ?? false))}
+                        />
+                    }
+                />
+
+                <SettingsRow
+                    title="Languages"
+                    description="Only show recommended streams in these languages. Empty means any language."
+                    onReset={(settings.discovery_languages?.length ?? 0) > 0 ? () => void applyDiscoveryLanguages([]) : undefined}
+                    control={
+                        <GlassMultiSelect
+                            values={settings.discovery_languages ?? []}
+                            onChange={(v) => void applyDiscoveryLanguages(v)}
+                            options={DISCOVERY_LANGUAGES}
+                            emptyLabel="Any language"
+                        />
+                    }
+                />
+            </SettingsSection>
+
+            <SettingsSection
+                id="settings-section-motion"
+                label="Motion"
+                description="How much the interface moves, from full animation to instant."
+            >
+                <SettingsRow
+                    title="How much the interface animates"
                     description={motionDescription}
+                    help="Off is the best choice on a low-end PC, since the frosted-glass blur is expensive to animate."
                 >
                     <div className="grid grid-cols-3 gap-2">
                         {MOTION_MODE_OPTIONS.map(({ value, label, hint, Icon }) => {
@@ -218,9 +276,13 @@ const InterfaceSettings = () => {
                 </SettingsRow>
             </SettingsSection>
 
-            <SettingsSection id="settings-section-window-close" label="Closing the Window">
+            <SettingsSection
+                id="settings-section-window-close"
+                label="Closing the Window"
+                description="Whether the close button quits StreamNook or tucks it into the system tray."
+            >
                 <SettingsRow
-                    title="Close button"
+                    title="What the close button does"
                     description={closeToTrayDescription}
                 >
                     <SegmentedSelect<CloseToTrayMode>
@@ -235,10 +297,15 @@ const InterfaceSettings = () => {
                 </SettingsRow>
             </SettingsSection>
 
-            <SettingsSection id="settings-section-settings-window" label="Settings Window">
+            <SettingsSection
+                id="settings-section-settings-window"
+                label="Settings Window"
+                description="How much room this settings screen takes up."
+            >
                 <SettingsRow
-                    title="Compact settings window"
-                    description="Show settings in a centered window. Turn this off to open settings as a full page that fills the entire app, giving long tabs more room so you can see all the options at once with less scrolling."
+                    title="Keep settings in a centered window"
+                    description="Settings open in a centered window; turn this off to open them as a full page that fills the app."
+                    help="The full page gives long tabs more room, so you see more options at once with less scrolling."
                     control={
                         <Toggle
                             enabled={compactSettingsWindow}
@@ -248,10 +315,15 @@ const InterfaceSettings = () => {
                 />
             </SettingsSection>
 
-            <SettingsSection id="settings-section-window-on-top" label="Keep on Top">
+            <SettingsSection
+                id="settings-section-window-on-top"
+                label="Keep on Top"
+                description="Keep the small Compact View player visible over whatever else you are doing."
+            >
                 <SettingsRow
                     title="Keep on top in Compact View"
-                    description="While Compact View is active, float the small player above other applications so clicking your browser or another window does not bury it. Releases as soon as you leave Compact View."
+                    description="While Compact View is active, the small player floats above other apps so clicking your browser does not bury it."
+                    help="The window drops back to normal as soon as you leave Compact View."
                     control={
                         <Toggle
                             enabled={keepOnTopInCompact}

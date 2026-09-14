@@ -4,10 +4,10 @@ use anyhow::Result;
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::RwLock;
-use tokio::time::{interval, Duration};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LiveNotification {
@@ -20,11 +20,20 @@ pub struct LiveNotification {
     pub stream_url: String,
     #[serde(default)]
     pub is_test: bool,
+    /// Which watcher raised this. `None` = the follow poller (every existing
+    /// emitter). `Some("favorite")` = the favourites sweep, which the frontend
+    /// gates on its own setting — a channel you favourited but don't follow
+    /// must not be silenced by the follows toggle, and vice versa.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 pub struct LiveNotificationService {
     currently_live: Arc<RwLock<HashSet<String>>>,
     running: Arc<RwLock<bool>>,
+    /// The first observed list seeds `currently_live` without notifying, so
+    /// enabling the feature mid-session never announces everyone already live.
+    seeded: AtomicBool,
 }
 
 impl LiveNotificationService {
@@ -32,94 +41,61 @@ impl LiveNotificationService {
         Self {
             currently_live: Arc::new(RwLock::new(HashSet::new())),
             running: Arc::new(RwLock::new(false)),
+            seeded: AtomicBool::new(false),
         }
     }
 
-    pub async fn start(&self, app_handle: AppHandle, app_state: AppState) -> Result<()> {
-        // Check if already running
-        {
-            let mut running = self.running.write().await;
-            if *running {
-                return Ok(());
-            }
-            *running = true;
-        }
-
-        let currently_live = self.currently_live.clone();
-        let running = self.running.clone();
-
-        tokio::spawn(async move {
-            let mut check_interval = interval(Duration::from_secs(60)); // Check every minute
-            let mut first_run = true;
-
-            loop {
-                check_interval.tick().await;
-
-                // Check if we should stop
-                {
-                    let is_running = running.read().await;
-                    if !*is_running {
-                        break;
-                    }
-                }
-
-                // Check if notifications are enabled
-                let notifications_enabled = {
-                    let settings = app_state.settings.lock().unwrap();
-                    settings.live_notifications.enabled
-                };
-
-                if !notifications_enabled {
-                    continue;
-                }
-
-                // Get followed streams
-                match TwitchService::get_followed_streams(&app_state).await {
-                    Ok(streams) => {
-                        let mut live_set = currently_live.write().await;
-
-                        // On first run, just populate the set without sending notifications
-                        if first_run {
-                            for stream in streams {
-                                live_set.insert(stream.user_login.clone());
-                            }
-                            first_run = false;
-                            continue;
-                        }
-
-                        let mut new_live_streamers = Vec::new();
-
-                        for stream in &streams {
-                            // Check if this is a new live stream
-                            if !live_set.contains(&stream.user_login) {
-                                live_set.insert(stream.user_login.clone());
-                                new_live_streamers.push(stream.clone());
-                            }
-                        }
-
-                        // Remove streamers who are no longer live
-                        let current_live_logins: HashSet<String> =
-                            streams.iter().map(|s| s.user_login.clone()).collect();
-
-                        live_set.retain(|login| current_live_logins.contains(login));
-
-                        // Send in-app notifications for new live streamers
-                        for stream in new_live_streamers {
-                            if let Err(e) = Self::send_notification(&app_handle, &stream).await {
-                                error!("Failed to send live notification: {}", e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to fetch followed streams: {}", e);
-                    }
-                }
-            }
-
-            debug!("Live notification service stopped");
-        });
-
+    /// Arm the service. The followed-streams poll that used to live here
+    /// moved to `services::home_snapshot`, which calls `observe` with every
+    /// fresh list, so one Helix call a minute serves notifications, Sidebar
+    /// and Home instead of three separate fetches.
+    pub async fn start(&self, _app_handle: AppHandle, _app_state: AppState) -> Result<()> {
+        let mut running = self.running.write().await;
+        *running = true;
         Ok(())
+    }
+
+    /// Diff a fresh followed-live list against the last one and notify for
+    /// every channel that just went live. Fed by the Home snapshot poll.
+    pub async fn observe(
+        &self,
+        app_handle: &AppHandle,
+        app_state: &AppState,
+        streams: &[crate::models::stream::TwitchStream],
+    ) {
+        if !*self.running.read().await {
+            return;
+        }
+        let notifications_enabled = match app_state.settings.lock() {
+            Ok(settings) => settings.live_notifications.enabled,
+            Err(_) => false,
+        };
+        if !notifications_enabled {
+            return;
+        }
+        let mut live_set = self.currently_live.write().await;
+        if !self.seeded.swap(true, Ordering::SeqCst) {
+            for stream in streams {
+                live_set.insert(stream.user_login.clone());
+            }
+            return;
+        }
+        let mut new_live_streamers = Vec::new();
+        for stream in streams {
+            if !live_set.contains(&stream.user_login) {
+                live_set.insert(stream.user_login.clone());
+                new_live_streamers.push(stream.clone());
+            }
+        }
+        let current_live_logins: HashSet<String> =
+            streams.iter().map(|s| s.user_login.clone()).collect();
+        live_set.retain(|login| current_live_logins.contains(login));
+        drop(live_set);
+        for stream in new_live_streamers {
+            if let Err(e) = Self::send_notification(app_handle, &stream).await {
+                error!("Failed to send live notification: {}", e);
+            }
+        }
     }
 
     pub async fn stop(&self) -> Result<()> {
@@ -154,6 +130,7 @@ impl LiveNotificationService {
             stream_title: Some(stream.title.clone()),
             stream_url: format!("https://twitch.tv/{}", stream.user_login),
             is_test: false,
+            source: None,
         };
 
         // Emit event to frontend (for in-app notifications)

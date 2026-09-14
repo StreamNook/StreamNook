@@ -152,6 +152,9 @@ struct UpdateManifest {
     bundle_name: Option<String>,
     #[serde(default)]
     sha256: Option<String>,
+    /// Detached minisign signature over the bundle. See BundleUpdateStatus.
+    #[serde(default)]
+    signature: Option<String>,
     #[serde(default)]
     size: Option<u64>,
     #[serde(default)]
@@ -159,6 +162,179 @@ struct UpdateManifest {
     #[serde(default)]
     #[allow(dead_code)]
     min_supported: Option<String>,
+}
+
+// ── Update artifact verification ────────────────────────────────────────────
+//
+// The updater downloads a 7z, swaps StreamNook.exe, and restarts. Whatever can
+// answer for the update URL therefore gets code execution on every install, so
+// this is the highest-consequence check in the app.
+//
+// A hash alone does not provide that. `sha256` and the bundle both come from the
+// same host, so whoever can serve a malicious bundle can serve a matching hash;
+// it detects corruption, not tampering. A minisign signature does, because the
+// secret key exists only in CI and is never on the update host.
+
+/// Pinned minisign public key for update bundles, in the same spirit as the
+/// plugin operator key in `plugin_host::install::OFFICIAL_INDEX`: compiled in,
+/// never fetched, so trust does not depend on the server being honest.
+///
+/// Key `3C746A225DA1775E`, generated 2026-08-30. Its secret half exists only as
+/// the `UPDATE_SIGNING_KEY` CI secret and in Brandon's own backup; it has never
+/// been committed and must never reach the host serving updates.
+///
+/// Rotating means shipping a new value here, so every installed client keeps
+/// trusting the old key until it updates. That is survivable only while
+/// `ENFORCE_UPDATE_SIGNATURE` is false, which is the other reason not to flip
+/// that until signing has been proven across a release or two.
+const UPDATE_PUBKEY: Option<&str> =
+    Some("RWRed6FdImp0PGduGf4cCJdsO5sRuovojn1yv+FUgHJBJQVCT71Rv3+b");
+
+/// Whether a missing or unverifiable signature ABORTS the update.
+///
+/// Shipped false first (v8.5.3 to v8.6.0) because verification going live and
+/// the signing pipeline going live cannot be made simultaneous across an
+/// already-installed user base, and a wrong CI side would have bricked the
+/// update path for everyone at once. Flipped 2026-09-07 after three
+/// consecutive real releases logged `Update signature verified` on an
+/// installed client and the live manifest carried a signature. From here an
+/// unsigned bundle, a bundle with no published hash, or a build with no
+/// pinned key all abort. See Brain runbook StreamNook_Update_Signing.
+const ENFORCE_UPDATE_SIGNATURE: bool = true;
+
+/// Verify a downloaded bundle before anything is unpacked or executed.
+///
+/// A signature that is PRESENT and WRONG always aborts, in both modes. That is
+/// not a configuration question: it means someone tampered with the bundle or
+/// the key rotated without the client knowing, and neither is survivable by
+/// carrying on. Only ABSENT verification material is downgraded to a warning,
+/// and only while `ENFORCE_UPDATE_SIGNATURE` is false.
+fn verify_update_bundle(
+    bytes: &[u8],
+    expected_sha256: Option<&str>,
+    signature: Option<&str>,
+) -> Result<(), String> {
+    // Hash: corruption check. Always fatal on mismatch.
+    match expected_sha256 {
+        Some(expected) => {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(bytes);
+            let got: String = hasher
+                .finalize()
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect();
+            if !got.eq_ignore_ascii_case(expected.trim()) {
+                return Err(format!(
+                    "Update integrity check failed (expected {}, got {}). Aborting.",
+                    expected, got
+                ));
+            }
+        }
+        None if ENFORCE_UPDATE_SIGNATURE => {
+            return Err("Update has no published hash. Aborting.".to_string());
+        }
+        None => log::warn!("Update has no published SHA-256; integrity not verified"),
+    }
+
+    // Signature: authenticity check. This is the part a hostile update host
+    // cannot satisfy.
+    match (UPDATE_PUBKEY, signature) {
+        (Some(pubkey), Some(sig)) => {
+            crate::plugin_host::signing::verify_minisign(bytes, sig, pubkey)
+                .map_err(|e| format!("Update signature verification failed: {e}. Aborting."))?;
+            log::info!("Update signature verified");
+        }
+        (Some(_), None) if ENFORCE_UPDATE_SIGNATURE => {
+            return Err("Update is unsigned. Aborting.".to_string());
+        }
+        (Some(_), None) => {
+            log::warn!("Update is unsigned; accepting it because enforcement is off")
+        }
+        (None, _) if ENFORCE_UPDATE_SIGNATURE => {
+            // Refuse rather than silently accept anything: enforcement on with no
+            // pinned key is a build mistake, and treating it as "allow" would be
+            // the exact opt-in-verification bug this replaces.
+            return Err("Update signing key is not configured in this build. Aborting.".to_string());
+        }
+        (None, _) => log::warn!("No pinned update key in this build; signature not checked"),
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod update_verification_tests {
+    use super::{verify_update_bundle, ENFORCE_UPDATE_SIGNATURE, UPDATE_PUBKEY};
+
+    const BYTES: &[u8] = b"pretend this is StreamNook.7z";
+    // sha256 of BYTES, lowercase hex.
+    fn good_hash() -> String {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(BYTES);
+        h.finalize().iter().map(|b| format!("{:02x}", b)).collect()
+    }
+
+    /// A matching hash must clear the integrity step. With enforcement on the
+    /// call still fails, but on the NEXT step (no signature), never on the hash.
+    fn assert_hash_accepted(expected: &str) {
+        match verify_update_bundle(BYTES, Some(expected), None) {
+            Ok(()) => assert!(!ENFORCE_UPDATE_SIGNATURE, "enforcing must not accept an unsigned bundle"),
+            Err(err) => {
+                assert!(ENFORCE_UPDATE_SIGNATURE, "got: {err}");
+                assert!(err.contains("unsigned"), "failed on the wrong step: {err}");
+            }
+        }
+    }
+
+    #[test]
+    fn accepts_a_matching_hash() {
+        assert_hash_accepted(&good_hash());
+    }
+
+    #[test]
+    fn rejects_a_mismatched_hash_in_either_mode() {
+        let bad = "0".repeat(64);
+        let err = verify_update_bundle(BYTES, Some(&bad), None).unwrap_err();
+        assert!(err.contains("integrity check failed"), "got: {err}");
+    }
+
+    #[test]
+    fn hash_comparison_ignores_case_and_surrounding_space() {
+        let padded = format!("  {}  ", good_hash().to_uppercase());
+        assert_hash_accepted(&padded);
+    }
+
+    /// The regression this whole stage exists to prevent: verification must not
+    /// be something the manifest can opt out of by omitting a field.
+    #[test]
+    fn unverifiable_bundles_are_refused_once_enforcement_is_on() {
+        if !ENFORCE_UPDATE_SIGNATURE {
+            // Enforcement is still off by design for the first release. Assert
+            // the intended end state is reachable rather than silently passing:
+            // with no pinned key, enforcement must refuse rather than allow.
+            assert!(
+                UPDATE_PUBKEY.is_none(),
+                "a key is pinned, so ENFORCE_UPDATE_SIGNATURE should now be flipped to true",
+            );
+            return;
+        }
+        assert!(verify_update_bundle(BYTES, None, None).is_err(), "no hash must abort");
+        assert!(
+            verify_update_bundle(BYTES, Some(&good_hash()), None).is_err(),
+            "an unsigned bundle must abort when enforcing",
+        );
+    }
+
+    #[test]
+    fn a_present_but_invalid_signature_always_aborts_when_a_key_is_pinned() {
+        let Some(_) = UPDATE_PUBKEY else { return }; // nothing to check yet
+        let err = verify_update_bundle(BYTES, Some(&good_hash()), Some("not-a-signature"))
+            .unwrap_err();
+        assert!(err.contains("signature"), "got: {err}");
+    }
 }
 
 /// Check for updates via the self-hosted streamnook.app manifest (primary path).
@@ -212,25 +388,36 @@ async fn check_for_bundle_update_streamnook() -> Result<BundleUpdateStatus, Stri
         },
         release_notes: manifest.notes.clone(),
         sha256: manifest.sha256.clone(),
+        signature: manifest.signature.clone(),
     })
 }
 
-/// Check for bundle updates. Tries the self-hosted manifest first and falls back
-/// to the GitHub release path if streamnook.app is unreachable, so a website
-/// outage never blocks updates.
+/// Check for bundle updates via the self-hosted manifest.
+///
+/// The GitHub-release fallback that used to sit here was RETIRED, deliberately.
+/// It published neither a hash nor a signature, so it was an unverified route to
+/// code execution: the updater swaps StreamNook.exe and restarts, and that path
+/// would install whatever it was handed. Keeping it as a fallback would also have
+/// meant an attacker could DEGRADE to it simply by making the primary manifest
+/// unreachable, which turns the signature requirement into a suggestion.
+///
+/// The cost is that updates pause while streamnook.app is unreachable. That is
+/// the right trade: an update deferred by a few hours is a non-event, and the
+/// manifest is served by Cloudflare, not the homelab.
+///
+/// This does NOT affect a user's FIRST download, which is a manual install and
+/// never touches the updater. See `docs` / the update-signing runbook: first-run
+/// trust is an Authenticode question, not a minisign one.
 #[tauri::command]
 pub async fn check_for_bundle_update() -> Result<BundleUpdateStatus, String> {
-    match check_for_bundle_update_streamnook().await {
-        Ok(status) => Ok(status),
-        Err(e) => {
-            log::warn!("Update manifest unavailable ({e}); falling back to GitHub release");
-            check_for_bundle_update_github().await
-        }
-    }
+    check_for_bundle_update_streamnook().await
 }
 
-/// Legacy GitHub-release update check, kept as the fallback for the self-hosted
-/// manifest above.
+/// Legacy GitHub-release update check. RETIRED as an update source (see
+/// `check_for_bundle_update`) and kept only because the component-version
+/// bookkeeping below is still referenced elsewhere. It must never be reachable
+/// from the install path again.
+#[allow(dead_code)]
 async fn check_for_bundle_update_github() -> Result<BundleUpdateStatus, String> {
     // Fetch remote version info
     let mut builder = reqwest::Client::builder().user_agent("StreamNook");
@@ -286,7 +473,12 @@ async fn check_for_bundle_update_github() -> Result<BundleUpdateStatus, String> 
             None
         },
         release_notes: None,
+        // The GitHub fallback publishes neither. Once ENFORCE_UPDATE_SIGNATURE
+        // is on, this path stops being able to install, which is the intended
+        // end state: it is currently an unverified route to code execution.
+        // Until then it is reported, not silently trusted.
         sha256: None,
+        signature: None,
     };
 
     // Set deterministic download URLs since we bypassed the API
@@ -415,26 +607,7 @@ async fn install_bundle_from_status(
         }
     }
 
-    // Verify the download against the manifest's SHA-256 before doing anything
-    // with it. The streamnook.app manifest carries the hash; the GitHub fallback
-    // does not (sha256 = None), in which case this is skipped. A mismatch aborts
-    // the update so a corrupted or tampered bundle never gets unpacked or run.
-    if let Some(expected) = status.sha256.as_deref() {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(&bytes);
-        let got: String = hasher
-            .finalize()
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect();
-        if !got.eq_ignore_ascii_case(expected) {
-            return Err(format!(
-                "Update integrity check failed (expected {}, got {}). Aborting.",
-                expected, got
-            ));
-        }
-    }
+    verify_update_bundle(&bytes, status.sha256.as_deref(), status.signature.as_deref())?;
 
     std::fs::write(&bundle_path, &bytes).map_err(|e| format!("Failed to save bundle: {}", e))?;
 
@@ -662,6 +835,14 @@ pub async fn restart_to_apply_update(app_handle: tauri::AppHandle) -> Result<(),
                 StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED,
             );
         }
+        // Same skipped-RunEvent::Exit reason: flush every debounced store
+        // manually before the hard exit.
+        let _ = crate::commands::settings::flush_settings_now();
+        let _ = crate::services::universal_cache_service::flush_manifest_now();
+        let _ = crate::services::mod_log_storage_service::ModLogStorageService::flush_now();
+        let _ = crate::services::whisper_storage_service::WhisperStorageService::flush_now();
+        let _ = crate::services::vod_progress_service::flush_now();
+        let _ = crate::services::chat_logger_service::ChatLoggerService::flush_all();
         std::process::exit(0);
     }
 

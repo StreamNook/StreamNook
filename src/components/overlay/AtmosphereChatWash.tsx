@@ -16,7 +16,12 @@ export interface AtmosphereWashData {
   image?: string;
   layers?: string;
   layers2?: string;
+  /** 'none' = no edge drawn. */
   chatEdge: string;
+  /** Defocus (px) for the image wash; absent or 0 = sharp. */
+  chatBlur?: number;
+  /** 1px gradient rim around the row; absent = none. */
+  chatRim?: string;
 }
 
 // Explicit overhang (not a % inset): wide enough left/right to cover the translate
@@ -56,13 +61,26 @@ export const AtmosphereChatWash = ({
     <>
       {/* Fills the whole message row (the aurora as a backdrop), animated faster
           than the profile so the drift is legible at this small size. */}
-      <div ref={hostRef} style={{ pointerEvents: 'none', position: 'absolute', inset: 0, zIndex: -10, overflow: 'hidden' }}>
+      <div ref={hostRef} style={{ pointerEvents: 'none', position: 'absolute', inset: 0, zIndex: -10, overflow: 'hidden', borderRadius: 'inherit' }}>
         {/* Static base — a normal (non-composited) paint, cheap to keep mounted
             always so the row's tint never flickers as the curtains come and go. */}
         <div style={{ position: 'absolute', inset: 0, backgroundColor: atm.baseColor, backgroundImage: atm.baseLayers, opacity: 0.85 }} />
         {active &&
           (atm.image ? (
-            <div style={{ position: 'absolute', inset: 0, backgroundImage: `url(${atm.image})`, backgroundSize: 'cover', backgroundPosition: 'center' }} />
+            // A blurred image is overhung by twice its radius so the blur's
+            // soft edge falls outside the clipped row instead of showing as a
+            // fuzzy border. A static filter rasterizes once per row; no per-frame
+            // cost.
+            <div
+              style={{
+                position: 'absolute',
+                inset: atm.chatBlur ? -atm.chatBlur * 2 : 0,
+                backgroundImage: `url(${atm.image})`,
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+                filter: atm.chatBlur ? `blur(${atm.chatBlur}px)` : undefined,
+              }}
+            />
           ) : (
             <>
               <div className="sn-aurora-1" style={{ position: 'absolute', ...LAYER_BOX, backgroundImage: atm.layers, backgroundRepeat: 'repeat', animationDuration: '9s' }} />
@@ -71,9 +89,31 @@ export const AtmosphereChatWash = ({
               )}
             </>
           ))}
+        {/* The rim: a 1px gradient ring following the row's corners. Drawn by
+            painting the gradient across the whole box and masking everything
+            but the outer 1px away (padding-box XOR content-box), which is the
+            only way a gradient border keeps a border-radius. Static paint. */}
+        {atm.chatRim && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              borderRadius: 'inherit',
+              padding: 1,
+              background: atm.chatRim,
+              WebkitMask: 'linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)',
+              WebkitMaskComposite: 'xor',
+              mask: 'linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)',
+              maskComposite: 'exclude',
+            }}
+          />
+        )}
       </div>
-      {/* 1px aurora-gradient edge down the left of the row. */}
-      <div style={{ pointerEvents: 'none', position: 'absolute', top: 0, bottom: 0, left: 0, width: '1px', background: atm.chatEdge }} />
+      {/* 1px aurora-gradient edge down the left of the row, unless the
+          atmosphere opts out with 'none'. */}
+      {atm.chatEdge && atm.chatEdge !== 'none' && (
+        <div style={{ pointerEvents: 'none', position: 'absolute', top: 0, bottom: 0, left: 0, width: '1px', background: atm.chatEdge }} />
+      )}
     </>
   );
 };

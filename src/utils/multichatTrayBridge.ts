@@ -17,10 +17,15 @@ import { Logger } from './logger';
 const hash = window.location.hash;
 const isPopout = hash.startsWith('#/multichat') || hash.startsWith('#/profile');
 
-/** The core app's X button (with popouts open) goes to chat-only mode. Stop
- *  everything that costs CPU/network, THEN destroy the main window to actually free
- *  its memory — same outcome as Go Live. Chat (IRC) is intentionally left alive
- *  because the popouts are subscribed to it; main recreates on demand. */
+/** The core app's X button was intercepted (popouts open, or the "Always
+ *  minimize" close mode). Stop everything that costs CPU/network, THEN destroy the
+ *  main window to actually free its memory — same outcome as Go Live. Chat (IRC)
+ *  is intentionally left alive because popouts may be subscribed to it; main
+ *  recreates on demand from the tray.
+ *
+ *  Under "Always minimize" with no popouts this destroy leaves the process with
+ *  zero windows. Rust's ExitRequested handler in main.rs keeps it alive in that
+ *  mode; without it Tauri exits on the last window and the tray icon dies too. */
 async function stopStreamButKeepChat(): Promise<void> {
   // Lazy import to avoid pulling AppStore into the popout bundle's chunking.
   const { useAppStore } = await import('../stores/AppStore');

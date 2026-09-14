@@ -25,6 +25,10 @@ pub struct TwitchStream {
     // "Speedrun"). Powers the category tag filter.
     #[serde(default)]
     pub tags: Option<Vec<String>>,
+    // Broadcast language in Helix form ("en", "fr", "zh-hk"). GQL paths must
+    // normalize their enum spelling (FR, ZH_HK) to this form.
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -107,6 +111,17 @@ pub struct TwitchVideo {
     #[serde(rename = "type")]
     pub video_type: String,
     pub duration: String,
+    /// "recording" while the broadcast is still live (the VOD is still
+    /// growing), "recorded" once finished. Absent from Helix rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Length in whole seconds, the number `duration` is formatted from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length_seconds: Option<u32>,
+    /// The viewer's stored watch position for this video, joined on by
+    /// `vod_progress_service::attach`. Absent when never watched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<crate::services::vod_progress_service::VodProgressSummary>,
 }
 
 /// Aggregated reaction ("likes") counts for one clip, from Twitch's clip

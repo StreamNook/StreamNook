@@ -1,8 +1,9 @@
 use crate::services::ll_origin::{
-    empty_cors, media_response, opt_raw_query, parse_directive, parse_part_path, playlist_response,
+    arc_bytes, empty_cors, media_response, opt_raw_query, parse_directive, parse_part_path,
+    playlist_response,
 };
 use anyhow::Result;
-use log::{error, info};
+use log::{error, info, warn};
 use once_cell::sync::Lazy;
 // rand 0.10 moved random_range onto the RngExt extension trait.
 use rand::RngExt;
@@ -19,6 +20,100 @@ static SERVER_HANDLE: Lazy<Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>> =
     Lazy::new(|| Arc::new(Mutex::new(None)));
 static PROXY_URL: Lazy<Arc<Mutex<Option<String>>>> = Lazy::new(|| Arc::new(Mutex::new(None)));
 static CURRENT_PORT: Lazy<Arc<Mutex<Option<u16>>>> = Lazy::new(|| Arc::new(Mutex::new(None)));
+
+/// How to obtain a FRESH signed manifest url for whatever is playing.
+///
+/// Kick's playback url is an IVS master carrying a JWT with an expiry. When it
+/// lapses mid-session the origin starts refusing every fetch and playback simply
+/// stops — there was recovery machinery for this (`qualities_for(slug, force)`)
+/// but nothing ever called it with `force`, so an expired url was terminal.
+///
+/// Registered by the playback starter rather than resolved here, so this file
+/// stays provider-agnostic.
+type Refresher = Arc<dyn Fn() -> futures::future::BoxFuture<'static, Option<String>> + Send + Sync>;
+static REFRESHER: Lazy<Arc<Mutex<Option<Refresher>>>> = Lazy::new(|| Arc::new(Mutex::new(None)));
+/// One re-resolve at a time; a refusal usually arrives on several requests at once.
+static REFRESHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Register (or clear) how to re-sign the current stream's manifest url.
+pub async fn set_manifest_refresher(f: Option<Refresher>) {
+    *REFRESHER.lock().await = f;
+}
+
+/// An upstream refused us. If the stream knows how to re-sign itself, do it once
+/// and swap the new url in; later requests read it from the same holder.
+///
+/// Returns whether a refresh was started, purely for logging.
+async fn refresh_manifest_after_refusal(status: u16) -> bool {
+    use std::sync::atomic::Ordering;
+    let Some(refresher) = REFRESHER.lock().await.clone() else {
+        return false;
+    };
+    if REFRESHING.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    warn!(
+        "[StreamServer] upstream returned {}; re-signing the manifest url",
+        status
+    );
+    tokio::spawn(async move {
+        match refresher().await {
+            Some(fresh) => {
+                *PROXY_URL.lock().await = Some(fresh);
+                info!("[StreamServer] manifest url re-signed; playback should recover");
+            }
+            None => warn!("[StreamServer] could not re-sign the manifest url"),
+        }
+        REFRESHING.store(false, Ordering::SeqCst);
+    });
+    true
+}
+/// One re-sign at a time, and the WINNER's url is handed to everyone who queued
+/// behind it. Separate from `REFRESHING` (which guards the fire-and-forget
+/// segment path) because the playlist path needs the resulting url, not just to
+/// know that a refresh started.
+static RESIGN_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+/// Re-sign now and hand back the fresh url.
+///
+/// Unlike `refresh_manifest_after_refusal`, this AWAITS the result so the caller
+/// can retry its fetch inline. Callers queued behind the lock re-read the holder
+/// first: if the winner already replaced the stale url, they reuse it rather than
+/// re-signing again (a refusal usually arrives on several requests at once).
+async fn resign_blocking(stale: &str) -> Option<String> {
+    let _guard = RESIGN_LOCK.lock().await;
+    if let Some(current) = PROXY_URL.lock().await.clone() {
+        if current != stale {
+            return Some(current);
+        }
+    }
+    let refresher = REFRESHER.lock().await.clone()?;
+    let fresh = refresher().await?;
+    *PROXY_URL.lock().await = Some(fresh.clone());
+    info!("[StreamServer] manifest url re-signed for a refused playlist request");
+    Some(fresh)
+}
+
+/// Local request path -> upstream url, against a given manifest url.
+///
+/// Pulled out of the handler so the same mapping can be re-applied to a freshly
+/// re-signed manifest on retry; the query string carries the upstream's auth and
+/// must ride along on variant and chunk requests too.
+fn map_upstream_url(manifest_url: &str, request_path: &str) -> String {
+    if request_path == "stream.m3u8" || request_path.is_empty() {
+        return manifest_url.to_string();
+    }
+    let (url_without_query, query) = match manifest_url.find('?') {
+        Some(q_idx) => (&manifest_url[..q_idx], &manifest_url[q_idx..]),
+        None => (manifest_url, ""),
+    };
+    let base_url = match url_without_query.rfind('/') {
+        Some(last_slash) => &url_without_query[..=last_slash],
+        None => url_without_query,
+    };
+    format!("{}{}{}", base_url, request_path, query)
+}
+
 /// Serializes solo `start_proxy_server` calls end to end. The existence check,
 /// `ll_origin::start` (a multi-second backfill await), and the SERVER_HANDLE write
 /// are otherwise non-atomic, so two concurrent cold starts (e.g. a fast channel
@@ -62,6 +157,34 @@ fn reset_ad_state() {
     crate::services::hls_projection::reset(SOLO_STREAM_ID);
 }
 
+/// Build the relay's playlist/segment response with the headers the player
+/// needs. Shared by the Twitch path and the generic-HLS early return.
+fn finish_playlist_response(
+    status: warp::http::StatusCode,
+    request_path: &str,
+    bytes: Vec<u8>,
+) -> Result<warp::http::Response<bytes::Bytes>, warp::Rejection> {
+    let content_type = if request_path.ends_with(".ts") {
+        "video/MP2T"
+    } else {
+        "application/x-mpegURL"
+    };
+    Ok(warp::http::Response::builder()
+        .status(status)
+        .header("Content-Type", content_type)
+        .header("Access-Control-Allow-Origin", "*")
+        .header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        .header("Access-Control-Allow-Headers", "*")
+        .header(
+            "Cache-Control",
+            "no-cache, no-store, must-revalidate, max-age=0",
+        )
+        .header("Pragma", "no-cache")
+        .header("Expires", "0")
+        .body(bytes.into())
+        .unwrap())
+}
+
 /// Fold a relayed media playlist into the solo stream's ad-detection state.
 /// Read-only and for the core's own playback only: the relay serves the
 /// playlist untouched and only RECORDS whether ad markers are present, which
@@ -81,6 +204,198 @@ fn detect_ads_in_playlist(playlist: &str) {
 /// The stream id the solo relay session is addressed by in the plugin
 /// protocol (`set_upstream`). MultiNook tiles use their own per-tile ids.
 pub const SOLO_STREAM_ID: &str = "solo";
+
+/// Which upstream the relay is serving, which decides how much of the
+/// playlist pipeline runs.
+///
+/// `Twitch` is the full path. `GenericHls` (Kick, YouTube) skips the three
+/// Twitch-CONTRACTUAL steps — SSAI ad detection, `vseg/` segment projection
+/// (which exists to absorb Twitch re-signing its segment paths), and the LL
+/// origin probe (keyed on `#EXT-X-TWITCH-PREFETCH`). It deliberately KEEPS the
+/// TARGETDURATION retarget: that is pure `#EXTINF` math, and these platforms
+/// over-declare it the same way Twitch does (Kick ships `TARGETDURATION:6` for
+/// ~2.35s segments), so the latency win applies verbatim.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum UpstreamProfile {
+    Twitch,
+    GenericHls,
+}
+
+static UPSTREAM_PROFILE: Lazy<std::sync::Mutex<UpstreamProfile>> =
+    Lazy::new(|| std::sync::Mutex::new(UpstreamProfile::Twitch));
+
+/// Set by the start path before the relay is handed a new upstream.
+pub fn set_upstream_profile(profile: UpstreamProfile) {
+    if let Ok(mut p) = UPSTREAM_PROFILE.lock() {
+        *p = profile;
+    }
+    // A new stream means the previous stream's segment URLs are meaningless.
+    if let Ok(mut m) = pseg_map().lock() {
+        m.clear();
+    }
+}
+
+/// Absolute segment URLs, addressed by a relay-local index.
+///
+/// Twitch's media playlists use RELATIVE segment URIs, so they resolve against
+/// this relay and inherit its CORS header for free. YouTube's are ABSOLUTE
+/// googlevideo URLs, which the player would fetch directly — and googlevideo
+/// sends no `access-control-allow-origin`, so the browser blocks it and playback
+/// never starts. Rewriting those to `pseg/<n>` routes the bytes back through
+/// here, where the header is ours to set.
+///
+/// Rust is not a browser and has no CORS rules, so fetching them from this side
+/// is exactly the part that is allowed.
+#[derive(Default)]
+struct PsegMap {
+    /// index -> already-downloaded bytes, for segments fetched ahead of the
+    /// player. warp 0.4 offers no public streaming body (its `wrap_stream` is
+    /// crate-private), so a segment must be whole before it can be served —
+    /// which serialises a full download in front of playback and shows up as a
+    /// stall while the buffer fills. Prefetching moves that download to BEFORE
+    /// the request instead of during it, using the playlist as the schedule: it
+    /// names precisely which segments the player is about to ask for.
+    /// Bodies are `Bytes`, so a cache hit serves by refcount instead of copying.
+    cache: std::collections::HashMap<u32, bytes::Bytes>,
+    /// Indices already being fetched, so a prefetch and a live request can't
+    /// download the same segment twice.
+    inflight: std::collections::HashSet<u32>,
+    /// index -> absolute URL.
+    by_index: std::collections::HashMap<u32, String>,
+    /// absolute URL -> index, so a segment that survives a playlist refresh keeps
+    /// the SAME local URI. Handing the player a new URI for a segment it already
+    /// has would make it re-download the sliding window on every refresh.
+    by_url: std::collections::HashMap<String, u32>,
+    next: u32,
+}
+
+impl PsegMap {
+    fn clear(&mut self) {
+        self.by_index.clear();
+        self.by_url.clear();
+        self.cache.clear();
+        self.inflight.clear();
+        // `next` deliberately keeps counting: reusing indices across streams
+        // could hand the player a cached URI pointing at different bytes.
+    }
+
+    fn intern(&mut self, url: &str) -> u32 {
+        if let Some(i) = self.by_url.get(url) {
+            return *i;
+        }
+        let idx = self.next;
+        self.next = self.next.wrapping_add(1);
+        self.by_url.insert(url.to_string(), idx);
+        self.by_index.insert(idx, url.to_string());
+        // Bound it. A live window is a handful of segments; this keeps enough
+        // history for a slow client without growing across a long session.
+        if self.by_index.len() > 512 {
+            let cutoff = idx.saturating_sub(256);
+            self.by_index.retain(|k, _| *k > cutoff);
+            self.by_url.retain(|_, v| *v > cutoff);
+        }
+        idx
+    }
+
+    /// Drop prefetched bodies the player has moved past. Bytes are the expensive
+    /// thing here, so this window is much tighter than the URL map's: a live
+    /// playlist only ever references a handful of segments at once.
+    fn trim_cache(&mut self, newest: u32) {
+        const KEEP: u32 = 8;
+        let cutoff = newest.saturating_sub(KEEP);
+        self.cache.retain(|k, _| *k > cutoff);
+    }
+}
+
+/// Fetch a segment into the cache unless it is already there or already being
+/// fetched. Called for every segment a freshly-rewritten playlist names, so the
+/// bytes are usually resident before the player asks for them.
+fn prefetch_segment(index: u32) {
+    let url = {
+        let Ok(mut m) = pseg_map().lock() else { return };
+        if m.cache.contains_key(&index) || m.inflight.contains(&index) {
+            return;
+        }
+        let Some(url) = m.by_index.get(&index).cloned() else {
+            return;
+        };
+        m.inflight.insert(index);
+        url
+    };
+    tokio::spawn(async move {
+        let fetched = match HTTP_CLIENT.get(&url).send().await {
+            // The reqwest body is already one contiguous `Bytes`; store it as is.
+            Ok(res) if res.status().is_success() => res.bytes().await.ok(),
+            // A failure here is not worth reporting: the player will request the
+            // segment itself in a moment and that path logs properly.
+            _ => None,
+        };
+        if let Ok(mut m) = pseg_map().lock() {
+            m.inflight.remove(&index);
+            if let Some(bytes) = fetched {
+                m.cache.insert(index, bytes);
+                m.trim_cache(index);
+            }
+        }
+    });
+}
+
+static PSEG: Lazy<std::sync::Mutex<PsegMap>> = Lazy::new(|| std::sync::Mutex::new(PsegMap::default()));
+
+fn pseg_map() -> &'static std::sync::Mutex<PsegMap> {
+    &PSEG
+}
+
+/// Rewrite absolute `http(s)://` segment URIs in a media playlist to `pseg/<n>`.
+/// Comment lines are left alone, so tags keep whatever absolute URLs they carry
+/// (a `#EXT-X-MAP` URI is handled by the same rule when it stands on its own).
+fn rewrite_absolute_segments(playlist: &str) -> String {
+    let mut out = String::with_capacity(playlist.len());
+    let mut seen_indices: Vec<u32> = Vec::new();
+    for line in playlist.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+            let idx = match pseg_map().lock() {
+                Ok(mut m) => m.intern(trimmed),
+                Err(_) => {
+                    out.push_str(line);
+                    out.push('\n');
+                    continue;
+                }
+            };
+            seen_indices.push(idx);
+            out.push_str(&format!("pseg/{}", idx));
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+
+    // Prefetch ONLY the newest few segments, never the whole playlist. A live
+    // YouTube playlist carries the entire DVR window — dozens of segments — and
+    // firing a download for each one saturates the connection and starves the
+    // single segment the player is actually waiting for. The player consumes
+    // from the live edge, so the tail is the only part worth fetching early.
+    const PREFETCH_AHEAD: usize = 3;
+    let start = seen_indices.len().saturating_sub(PREFETCH_AHEAD);
+    for idx in &seen_indices[start..] {
+        prefetch_segment(*idx);
+    }
+    out
+}
+
+/// `pseg/<n>` -> the absolute URL it stands for.
+fn pseg_target(request_path: &str) -> Option<String> {
+    let n: u32 = request_path.strip_prefix("pseg/")?.parse().ok()?;
+    pseg_map().lock().ok()?.by_index.get(&n).cloned()
+}
+
+pub fn upstream_profile() -> UpstreamProfile {
+    UPSTREAM_PROFILE
+        .lock()
+        .map(|p| *p)
+        .unwrap_or(UpstreamProfile::Twitch)
+}
 
 /// The channel the solo relay is currently serving, when it is a live stream
 /// (None for VOD/clip playback and when stopped). This is what makes the solo
@@ -145,7 +460,16 @@ pub async fn swap_upstream(playlist_url: String) -> Result<()> {
 }
 
 impl StreamServer {
+    /// Serve `stream_url` through the relay, probing the low-latency origin
+    /// (the live default).
     pub async fn start_proxy_server(stream_url: String) -> Result<u16> {
+        Self::start_proxy_server_with(stream_url, true).await
+    }
+
+    /// `probe_ll: false` for VOD playlists: they never carry the prefetch
+    /// tags the origin keys on, and a recording VOD playlist is thousands of
+    /// lines, so the probe would only pay one big fetch to learn "inactive".
+    pub async fn start_proxy_server_with(stream_url: String, probe_ll: bool) -> Result<u16> {
         // The upstream media-playlist URL the LL-HLS origin will poll. `reset_ad_state`
         // (below) stops any prior origin; `ll_origin::start` probes this URL and, if it's
         // a low-latency broadcast, builds the live edge before we return — so the player
@@ -167,11 +491,19 @@ impl StreamServer {
             reset_ad_state();
             // Bring up the parts-based LL-HLS origin for the new stream (a no-op unless
             // the experimental setting enabled it and the channel is low-latency).
-            let outcome = crate::services::ll_origin::start(upstream).await;
-            log::debug!(
-                "[StreamServer] LL origin start (reuse): active={}",
-                outcome.active
-            );
+            // Skipped outright for non-Twitch upstreams: the origin keys on
+            // `#EXT-X-TWITCH-PREFETCH`, which they never emit (Kick ships plain
+            // `#EXT-X-PREFETCH`), so probing only costs a multi-second backfill
+            // fetch to reach the same "inactive" answer.
+            if probe_ll && upstream_profile() == UpstreamProfile::Twitch {
+                let outcome = crate::services::ll_origin::start(upstream).await;
+                log::debug!(
+                    "[StreamServer] LL origin start (reuse): active={}",
+                    outcome.active
+                );
+            } else {
+                crate::services::ll_origin::stop();
+            }
             // Return the existing port by parsing it from a static variable
             return Self::get_current_port().await;
         }
@@ -181,8 +513,10 @@ impl StreamServer {
 
         *PROXY_URL.lock().await = Some(stream_url);
         reset_ad_state();
-        let outcome = crate::services::ll_origin::start(upstream).await;
-        log::debug!("[StreamServer] LL origin start: active={}", outcome.active);
+        if probe_ll && upstream_profile() == UpstreamProfile::Twitch {
+            let outcome = crate::services::ll_origin::start(upstream).await;
+            log::debug!("[StreamServer] LL origin start: active={}", outcome.active);
+        }
 
         // Store the port
         *CURRENT_PORT.lock().await = Some(port);
@@ -220,13 +554,12 @@ impl StreamServer {
 
         Ok(port)
     }
-
     async fn dynamic_proxy_handler(
         path: warp::path::FullPath,
         method: warp::http::Method,
         raw_query: String,
         proxy_url: Arc<Mutex<Option<String>>>,
-    ) -> Result<warp::http::Response<Vec<u8>>, warp::Rejection> {
+    ) -> Result<warp::http::Response<bytes::Bytes>, warp::Rejection> {
         // None means stop() already ran. The abort only kills the accept loop;
         // hyper's per-connection tasks survive it, so the player's keep-alive
         // connection can still deliver a final poll. A warp rejection here would
@@ -255,7 +588,7 @@ impl StreamServer {
                 .header("Access-Control-Allow-Methods", "GET, OPTIONS")
                 .header("Access-Control-Allow-Headers", "*")
                 .header("Access-Control-Max-Age", "86400")
-                .body(vec![])
+                .body(bytes::Bytes::new())
                 .unwrap());
         }
 
@@ -273,7 +606,7 @@ impl StreamServer {
                         "\"ev\":\"o_init\",\"len\":{}",
                         bytes.len()
                     ));
-                    return Ok(media_response(bytes.as_ref().clone()));
+                    return Ok(media_response(arc_bytes(bytes)));
                 }
                 return Ok(empty_cors(404));
             }
@@ -289,7 +622,7 @@ impl StreamServer {
                             "\"ev\":\"o_part\",\"sn\":{sn},\"k\":{k},\"len\":{},\"h\":{h}",
                             bytes.len()
                         ));
-                        return Ok(media_response(bytes.as_ref().clone()));
+                        return Ok(media_response(arc_bytes(bytes)));
                     }
                     crate::services::ll_diagnostics::event(&format!(
                         "\"ev\":\"o_part_miss\",\"sn\":{sn},\"k\":{k}"
@@ -352,43 +685,128 @@ impl StreamServer {
                         "Cache-Control",
                         "no-cache, no-store, must-revalidate, max-age=0",
                     )
-                    .body(vec![])
+                    .body(bytes::Bytes::new())
                     .unwrap(),
                 None => empty_cors(404),
             });
         }
 
-        // Map the local path to the upstream Twitch CDN
-        let fetch_url = if request_path == "stream.m3u8" || request_path.is_empty() {
-            manifest_url.clone()
-        } else {
-            // Extract query parameters from manifest_url (vital for Twitch auth on variant playlists!)
-            let (url_without_query, query) = if let Some(q_idx) = manifest_url.find('?') {
-                (&manifest_url[..q_idx], &manifest_url[q_idx..])
-            } else {
-                (manifest_url.as_str(), "")
-            };
+        // A segment we rewrote out of a playlist whose URLs were absolute. Its
+        // real URL is already complete and signed, so it is fetched verbatim —
+        // NOT joined against the manifest base and NOT given the manifest's query
+        // (that convention is Twitch's, and appending it here would corrupt an
+        // already-signed googlevideo URL).
+        // Already fetched ahead of the request: hand it straight over. This is
+        // the path that removes the startup stall.
+        if let Some(index) = request_path
+            .strip_prefix("pseg/")
+            .and_then(|s| s.parse::<u32>().ok())
+        {
+            let hit = pseg_map()
+                .lock()
+                .ok()
+                .and_then(|m| m.cache.get(&index).cloned());
+            if let Some(bytes) = hit {
+                return Ok(media_response(bytes));
+            }
+        }
 
-            // It's a chunk or variant request. Join with base URL of manifest_url (without query)
-            let base_url = if let Some(last_slash) = url_without_query.rfind('/') {
-                &url_without_query[..=last_slash]
-            } else {
-                url_without_query
-            };
-            format!("{}{}{}", base_url, request_path, query)
-        };
+        if let Some(target) = pseg_target(request_path) {
+            return Ok(match HTTP_CLIENT.get(&target).send().await {
+                Ok(res) if res.status().is_success() => match res.bytes().await {
+                    // `media_response` sniffs TS vs fMP4 and carries the CORS
+                    // headers — the reason this detour exists at all.
+                    Ok(bytes) => {
+                        // Keep it: hls.js re-requests a segment after a recovered
+                        // error, and a second surface on the same stream would
+                        // otherwise pay for the same download again. The clone is
+                        // a refcount, not a copy.
+                        if let Some(index) = request_path
+                            .strip_prefix("pseg/")
+                            .and_then(|s| s.parse::<u32>().ok())
+                        {
+                            if let Ok(mut m) = pseg_map().lock() {
+                                m.cache.insert(index, bytes.clone());
+                                m.trim_cache(index);
+                            }
+                        }
+                        media_response(bytes)
+                    }
+                    Err(e) => {
+                        error!("[StreamServer] segment body failed: {}", e);
+                        empty_cors(502)
+                    }
+                },
+                Ok(res) => {
+                    // A 403 is the one to read carefully. Two very different
+                    // causes: a signed URL that simply expired (harmless — the
+                    // next playlist refresh replaces it), or YouTube's
+                    // Proof-of-Origin enforcement, which lets a live stream play
+                    // for roughly 30 seconds and THEN starts refusing. The
+                    // sequence number distinguishes them: failures that begin
+                    // partway into a stream, at a consistent offset, are the
+                    // latter and are not fixable by retrying.
+                    let sq = target
+                        .split("/sq/")
+                        .nth(1)
+                        .and_then(|s| s.split('/').next())
+                        .unwrap_or("?");
+                    error!(
+                        "[StreamServer] segment returned {} (sq={})",
+                        res.status(),
+                        sq
+                    );
+                    // 403/401 on a SIGNED url is the expiry case, which is
+                    // recoverable by re-signing rather than terminal.
+                    if matches!(res.status().as_u16(), 401 | 403) {
+                        refresh_manifest_after_refusal(res.status().as_u16()).await;
+                    }
+                    empty_cors(res.status().as_u16())
+                }
+                Err(e) => {
+                    error!("[StreamServer] segment request failed: {}", e);
+                    empty_cors(502)
+                }
+            });
+        }
 
-        let response = match HTTP_CLIENT.get(&fetch_url).send().await {
+        // Map the local path to the upstream CDN.
+        let fetch_url = map_upstream_url(&manifest_url, &request_path);
+
+        let mut response = match HTTP_CLIENT.get(&fetch_url).send().await {
             Ok(res) => res,
             Err(e) => {
                 error!("[StreamServer] Upstream request failed: {}", e);
                 return Ok(warp::http::Response::builder()
                     .status(502)
                     .header("Access-Control-Allow-Origin", "*")
-                    .body(vec![])
+                    .body(bytes::Bytes::new())
                     .unwrap());
             }
         };
+
+        // An expiring upstream token starts refusing EVERY fetch once it lapses
+        // (Kick's IVS master carries a JWT with an expiry). The segment path
+        // already re-signed on a refusal, but this playlist path did not, so a
+        // lapsed token surfaced to hls.js as a fatal levelLoadError and playback
+        // stopped on a channel that was still perfectly live. Re-sign and retry
+        // inline so the refusal never reaches the player.
+        if matches!(response.status().as_u16(), 401 | 403) {
+            if let Some(fresh) = resign_blocking(&manifest_url).await {
+                let retry_url = map_upstream_url(&fresh, &request_path);
+                match HTTP_CLIENT.get(&retry_url).send().await {
+                    Ok(res) => {
+                        info!(
+                            "[StreamServer] re-signed after {}; retry returned {}",
+                            response.status().as_u16(),
+                            res.status().as_u16()
+                        );
+                        response = res;
+                    }
+                    Err(e) => error!("[StreamServer] re-signed retry failed: {}", e),
+                }
+            }
+        }
 
         let status = response.status();
         let mut bytes = match response.bytes().await {
@@ -398,7 +816,7 @@ impl StreamServer {
                 return Ok(warp::http::Response::builder()
                     .status(502)
                     .header("Access-Control-Allow-Origin", "*")
-                    .body(vec![])
+                    .body(bytes::Bytes::new())
                     .unwrap());
             }
         };
@@ -415,6 +833,24 @@ impl StreamServer {
         // reaches here.
         if !request_path.ends_with(".ts") {
             if let Ok(text) = std::str::from_utf8(&bytes) {
+                // Non-Twitch upstreams: retarget only. Ad detection would be
+                // scanning for markers that platform never emits, and the
+                // `vseg/` projection would rewrite segment URLs that are already
+                // absolute, stable, and CORS-open (so the player fetches them
+                // straight from the CDN and they never come back through here).
+                let generic = upstream_profile() == UpstreamProfile::GenericHls;
+                if generic {
+                    let work = crate::services::ad_detect::retarget_playlist(text)
+                        .unwrap_or_else(|| text.to_string());
+                    // Absolute segment URLs would be fetched straight from the
+                    // CDN by the player. That is fine when the CDN is CORS-open
+                    // (Kick's IVS is) and fatal when it is not (googlevideo sends
+                    // no CORS header at all), so route them back through here.
+                    // Same bytes, same network path — they simply arrive from an
+                    // origin whose headers we control.
+                    bytes = rewrite_absolute_segments(&work).into_bytes();
+                    return finish_playlist_response(status, request_path, bytes);
+                }
                 detect_ads_in_playlist(text);
                 #[cfg(target_os = "android")]
                 let filtered = crate::services::ad_bypass::filter_and_escalate(text);
@@ -430,7 +866,12 @@ impl StreamServer {
                 // would hand the player two URLs for one media sequence and trip the
                 // exact refresh-mismatch we fix, so we only stabilize when the engine
                 // is off (the whole-segment path).
-                let is_live = !text.contains("#EXT-X-ENDLIST");
+                // `hls_kind` tells a recording VOD (`PLAYLIST-TYPE:EVENT`, no
+                // ENDLIST, only grows) apart from a live window: it is a VOD
+                // for the relay's purposes, and stabilizing it broke seeking
+                // past the projection's retention window (GitHub #216).
+                let is_live = crate::services::hls_kind::classify(text)
+                    == crate::services::hls_kind::PlaylistKind::Live;
                 let stabilize_ok = is_live && crate::services::ll_origin::engine_disabled();
                 let work: String = crate::services::ad_detect::retarget_playlist(text)
                     .unwrap_or_else(|| text.to_string());
@@ -463,11 +904,11 @@ impl StreamServer {
             )
             .header("Pragma", "no-cache")
             .header("Expires", "0")
-            .body(bytes) // Return perfectly preserved source bytes!
+            .body(bytes.into()) // Return perfectly preserved source bytes!
             .unwrap())
     }
 
-    async fn proxy_handler() -> Result<warp::http::Response<Vec<u8>>, warp::Rejection> {
+    async fn proxy_handler() -> Result<warp::http::Response<bytes::Bytes>, warp::Rejection> {
         let url = PROXY_URL
             .lock()
             .await
@@ -481,7 +922,7 @@ impl StreamServer {
                 return Ok(warp::http::Response::builder()
                     .status(502)
                     .header("Access-Control-Allow-Origin", "*")
-                    .body(vec![])
+                    .body(bytes::Bytes::new())
                     .unwrap());
             }
         };
@@ -494,7 +935,7 @@ impl StreamServer {
                 return Ok(warp::http::Response::builder()
                     .status(502)
                     .header("Access-Control-Allow-Origin", "*")
-                    .body(vec![])
+                    .body(bytes::Bytes::new())
                     .unwrap());
             }
         };
@@ -544,7 +985,7 @@ impl StreamServer {
             )
             .header("Pragma", "no-cache")
             .header("Expires", "0")
-            .body(rewritten_bytes)
+            .body(rewritten_bytes.into())
             .unwrap())
     }
 

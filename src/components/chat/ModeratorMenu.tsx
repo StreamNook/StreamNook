@@ -30,8 +30,10 @@ const ModeratorMenu: React.FC<ModeratorMenuProps> = ({
   isBroadcaster,
   roomState,
 }) => {
-  const { settings, updateSettings, openSettings, openEmoteSets } = useAppStore();
-  const addToast = useAppStore((s) => s.addToast);
+  // Actions without a subscription (stable for the store's lifetime); the only
+  // reactive settings read is the mod-logs flag, so subscribe to just that.
+  const { updateSettings, openSettings, openEmoteSets, addToast } = useAppStore.getState();
+  const showModLogs = useAppStore((s) => s.settings.show_mod_logs);
   const [isOpen, setIsOpen] = useState(false);
   const [isConfirmingClear, setIsConfirmingClear] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -440,9 +442,12 @@ const ModeratorMenu: React.FC<ModeratorMenuProps> = ({
               <MenuToggleItem 
                 icon={<Shield size={14} className="text-accent" />} 
                 label="Show Mod Logs Pane" 
-                isActive={settings.show_mod_logs ?? false}
+                isActive={showModLogs ?? false}
                 onClick={async () => {
                   try {
+                    // Read the full settings fresh at click time; only the
+                    // mod-logs flag is subscribed above.
+                    const settings = useAppStore.getState().settings;
                     await updateSettings({ ...settings, show_mod_logs: !settings.show_mod_logs });
                   } catch (e) {
                     Logger.error('[ModeratorMenu] Failed to update settings:', e);

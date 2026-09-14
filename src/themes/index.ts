@@ -61,6 +61,10 @@ export interface Theme {
     description: string;
     category: 'signature' | 'universal' | 'modern' | 'classic' | 'cozy';
     palette: ThemePalette;
+    /** A light treatment that goes beyond the palette. applyTheme writes it to
+     *  `data-theme-effect` on <html>, and styles/theme-prism.css keys off it.
+     *  Palette-only themes leave it unset. */
+    effect?: 'prism';
 }
 
 // ============================================
@@ -247,6 +251,65 @@ export const frostedGlass: Theme = {
             yellow: '#ffc06b',
             orange: '#ff9f6b',
             red: '#ff6b6b',
+        },
+    },
+};
+
+// Prism - white light refracted through glass. The palette is deliberately
+// colorless: near-black, smoke, and warm ivory, with the accent being the
+// ivory of the light itself before it separates. Spectral color never lives in
+// a token; it appears as light on the surfaces, in styles/theme-prism.css,
+// keyed off `effect`. Semantic colors are picked from the same continuum
+// (cyan for info, amber for warning, vermilion for error) so the rare moments
+// they show still read as wavelengths.
+export const prism: Theme = {
+    id: 'prism',
+    name: 'Prism',
+    description: 'Ivory on near-black, colorless on purpose. Refracted light reaches the glass in places: a defocused wash in a dialog corner, an icy edge on focus, a cyan-to-amber sliver under the cursor.',
+    category: 'signature',
+    effect: 'prism',
+    palette: {
+        background: '#08080a',
+        backgroundSecondary: 'rgba(239, 233, 220, 0.035)',
+        backgroundTertiary: '#141416',
+
+        surface: 'rgba(239, 233, 220, 0.09)',
+        surfaceHover: 'rgba(239, 233, 220, 0.15)',
+        surfaceActive: 'rgba(239, 233, 220, 0.22)',
+
+        textPrimary: '#efe9dc',
+        textSecondary: '#b5afa3',
+        textMuted: 'rgba(181, 175, 163, 0.6)',
+
+        accent: '#e7dfcc',
+        accentHover: '#fbf5e6',
+        accentMuted: 'rgba(231, 223, 204, 0.5)',
+
+        border: 'rgba(239, 233, 220, 0.28)',
+        borderLight: 'rgba(239, 233, 220, 0.18)',
+        borderSubtle: 'rgba(239, 233, 220, 0.09)',
+
+        success: '#7fd39a',
+        warning: '#f0c35a',
+        error: '#ee5d4c',
+        info: '#7cc8e6',
+
+        scrollbarThumb: 'rgba(239, 233, 220, 0.28)',
+        scrollbarTrack: 'transparent',
+
+        glassOpacity: '0.09',
+        glassHoverOpacity: '0.15',
+        glassActiveOpacity: '0.22',
+
+        highlight: {
+            pink: '#ff7aa8',
+            purple: '#a98cff',
+            blue: '#5b8dff',
+            cyan: '#7fe3ff',
+            green: '#7fd39a',
+            yellow: '#f5d86a',
+            orange: '#f79b3c',
+            red: '#ee5d4c',
         },
     },
 };
@@ -1204,6 +1267,7 @@ export const themes: Theme[] = [
     frostedGlass,
     standardIssue,
     oledTheme,
+    prism,
     // Universal
     dracula,
     nord,
@@ -1229,7 +1293,7 @@ export const themes: Theme[] = [
 ];
 
 export const themeCategories = [
-    { id: 'signature', name: 'Signature', description: 'The StreamNook original' },
+    { id: 'signature', name: 'Signature', description: 'The StreamNook originals' },
     { id: 'universal', name: 'Universal', description: 'The Big Three - most popular everywhere' },
     { id: 'modern', name: 'Modern & Soothing', description: 'Atmospheric and moody' },
     { id: 'classic', name: 'Classics', description: 'Strict and functional' },
@@ -1595,6 +1659,11 @@ export const applyTheme = (theme: Theme): void => {
     // Store theme id on body for potential CSS-based theme detection
     document.body.setAttribute('data-theme', theme.id);
 
+    // Treatments beyond the palette (Prism's refracted light) key off <html>,
+    // so every window that applies a theme picks them up. Cleared explicitly:
+    // switching from Prism to a palette-only theme must drop the light.
+    if (theme.effect) root.setAttribute('data-theme-effect', theme.effect);
+    else root.removeAttribute('data-theme-effect');
     // Announce the palette so platform chrome can follow it.
     //
     // Android draws the app BEHIND the status and navigation bars, so nothing

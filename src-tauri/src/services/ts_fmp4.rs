@@ -1117,29 +1117,29 @@ fn skip_scaling_list(r: &mut BitReader, size: u32) -> Option<()> {
 // ──────────────────────────── MP4 box building ────────────────────────────
 
 /// is_leading/depends_on/is_depended_on/redundancy/padding/non_sync/priority.
-const SAMPLE_FLAGS_SYNC: u32 = 0x0200_0000; // depends on nothing, sync
-const SAMPLE_FLAGS_NON_SYNC: u32 = 0x0101_0000; // depends on others, non-sync
+pub(crate) const SAMPLE_FLAGS_SYNC: u32 = 0x0200_0000; // depends on nothing, sync
+pub(crate) const SAMPLE_FLAGS_NON_SYNC: u32 = 0x0101_0000; // depends on others, non-sync
 
 #[derive(Clone)]
-struct TrunSample {
-    duration: u32,
-    size: u32,
-    flags: u32,
-    cts: i32,
+pub(crate) struct TrunSample {
+    pub(crate) duration: u32,
+    pub(crate) size: u32,
+    pub(crate) flags: u32,
+    pub(crate) cts: i32,
 }
 
-struct TrackRun {
-    track_id: u32,
+pub(crate) struct TrackRun {
+    pub(crate) track_id: u32,
     /// In this track's own timescale.
-    tfdt: u64,
+    pub(crate) tfdt: u64,
     /// When set, flags live in the tfhd default and the trun omits per-sample
     /// flags (audio: every frame is a sync sample).
-    default_flags: Option<u32>,
-    samples: Vec<TrunSample>,
-    data: Vec<u8>,
+    pub(crate) default_flags: Option<u32>,
+    pub(crate) samples: Vec<TrunSample>,
+    pub(crate) data: Vec<u8>,
 }
 
-fn mp4_box(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+pub(crate) fn mp4_box(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
     let mut b = Vec::with_capacity(8 + payload.len());
     b.extend_from_slice(&((8 + payload.len()) as u32).to_be_bytes());
     b.extend_from_slice(kind);
@@ -1147,7 +1147,7 @@ fn mp4_box(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
     b
 }
 
-fn full_box(kind: &[u8; 4], version: u8, flags: u32, payload: &[u8]) -> Vec<u8> {
+pub(crate) fn full_box(kind: &[u8; 4], version: u8, flags: u32, payload: &[u8]) -> Vec<u8> {
     let mut p = Vec::with_capacity(4 + payload.len());
     p.push(version);
     p.extend_from_slice(&flags.to_be_bytes()[1..]);
@@ -1155,7 +1155,7 @@ fn full_box(kind: &[u8; 4], version: u8, flags: u32, payload: &[u8]) -> Vec<u8> 
     mp4_box(kind, &p)
 }
 
-fn build_fragment(seq: u32, tracks: &[TrackRun]) -> Vec<u8> {
+pub(crate) fn build_fragment(seq: u32, tracks: &[TrackRun]) -> Vec<u8> {
     // moof layout must be sized before trun data offsets are known, so each
     // trun is written with a placeholder and patched once the moof length is.
     let mfhd = full_box(b"mfhd", 0, 0, &seq.to_be_bytes());
@@ -1288,7 +1288,7 @@ fn build_init(sps: &[u8], pps: &[u8], dims: (u16, u16), aac: Option<AacConfig>) 
     out
 }
 
-fn unity_matrix() -> [u8; 36] {
+pub(crate) fn unity_matrix() -> [u8; 36] {
     let mut m = [0u8; 36];
     m[0..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
     m[16..20].copy_from_slice(&0x0001_0000u32.to_be_bytes());
@@ -1297,7 +1297,7 @@ fn unity_matrix() -> [u8; 36] {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_trak(
+pub(crate) fn build_trak(
     track_id: u32,
     dims: (u16, u16),
     timescale: u32,
@@ -1368,7 +1368,7 @@ fn build_trak(
     mp4_box(b"trak", &trak_payload)
 }
 
-fn build_trex(track_id: u32) -> Vec<u8> {
+pub(crate) fn build_trex(track_id: u32) -> Vec<u8> {
     let mut p = track_id.to_be_bytes().to_vec();
     p.extend_from_slice(&1u32.to_be_bytes()); // default_sample_description_index
     p.extend_from_slice(&0u32.to_be_bytes()); // default_sample_duration

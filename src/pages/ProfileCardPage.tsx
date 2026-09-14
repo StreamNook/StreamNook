@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import type { ProviderId } from '../types/providers';
 import UserProfileCard from '../components/UserProfileCard';
 
 const ProfileCardPage = () => {
@@ -19,6 +20,9 @@ const ProfileCardPage = () => {
   const isModerator = params.get('isModerator') === '1';
   const messageHistoryStr = params.get('messageHistory') || '[]';
   const messageHistory = JSON.parse(messageHistoryStr);
+  // Which platform this chatter is on. Absent defaults to Twitch, so a popout URL
+  // from before this existed still resolves correctly.
+  const provider = (params.get('provider') || 'twitch') as ProviderId;
 
   // Enable window dragging
   useEffect(() => {
@@ -64,6 +68,7 @@ const ProfileCardPage = () => {
         channelName={channelName}
         isModerator={isModerator}
         broadcasterId={channelId}
+        provider={provider}
       />
     </div>
   );

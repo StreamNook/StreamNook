@@ -25,9 +25,8 @@ export function ProviderChatPane({ channel, provider, channelName }: ProviderCha
   const snapshot = useChannelChat(makeKey(provider, channel));
   const meta = PROVIDERS[provider];
 
-  // The store appends messages in place (stable array ref) for perf, so array
-  // identity is not a usable change signal. `renderToken` is that signal now, so
-  // the defensive copy this used to make on every message is gone.
+  // The store writes a fresh array per change (copy-on-write), so the array
+  // is safe to hand down as-is; `renderToken` remains the channel-wide signal.
   const messages = snapshot.messages;
 
   const getMessageId = useCallback(

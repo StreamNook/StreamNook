@@ -21,12 +21,14 @@ import {
   Square,
 } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
-import { useMultiNookPresetsStore } from '../../stores/multiNookPresetsStore';
+import { useMultiNookPresetsStore, slotToPresetChannel } from '../../stores/multiNookPresetsStore';
 import { usemultiNookStore } from '../../stores/multiNookStore';
 import { MultiNookPreset, MultiNookPresetChannel, MultiNookPresetIcon } from '../../types';
-import { ChannelItem, useChannelSearch, DEFAULT_AVATAR } from './channelSearch';
+import { ChannelItem, useChannelSearch, DEFAULT_AVATAR, itemKey, parseTypedChannel } from './channelSearch';
 import { ChannelResultRow } from './ChannelResultRow';
 import { Logger } from '../../utils/logger';
+import { makeKey } from '../../utils/providerKey';
+import { GRID_PICKER_PROVIDERS, gridRefusal } from '../../types/providers';
 
 const MAX_NAME_LEN = 40;
 
@@ -108,13 +110,9 @@ const MultiNookPresets: React.FC = () => {
   }, []);
 
   const openSaveCurrent = useCallback(() => {
-    const seed = usemultiNookStore.getState().slots.map((s) => ({
-      channelLogin: s.channelLogin,
-      channelId: s.channelId,
-      channelName: s.channelName,
-      profileImageUrl: s.profileImageUrl,
-      quality: s.quality,
-    }));
+    // One definition of the preset-channel shape, so it cannot drift from
+    // slotToPresetChannel and silently drop a field (it just did, with provider).
+    const seed = usemultiNookStore.getState().slots.map(slotToPresetChannel);
     setView({ mode: 'editor', editingId: null, seed, seedName: suggestNameFromSlots() });
   }, []);
 
@@ -511,9 +509,13 @@ const PresetEditorView: React.FC<{
   const blurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Channels already in the preset are excluded from the finder so you can't add
-  // a duplicate. The shared hook powers the same live-following + Twitch search
-  // the toolbar's Add Stream uses.
-  const exclude = useMemo(() => new Set(channels.map((c) => c.channelLogin.toLowerCase())), [channels]);
+  // a duplicate. Keyed COMPOSITE (provider:login), matching multiNookPresetsStore's
+  // own dedupe: a bare login would refuse a Kick channel because a same-named
+  // Twitch one is already in the list, and the click would just do nothing.
+  const exclude = useMemo(
+    () => new Set(channels.map((c) => makeKey(c.provider ?? 'twitch', c.channelLogin))),
+    [channels],
+  );
 
   const {
     searchInput,
@@ -529,26 +531,36 @@ const PresetEditorView: React.FC<{
     listRef,
     refreshFollowing,
     reset,
-  } = useChannelSearch(exclude);
+  } = useChannelSearch({ excludeKeys: exclude, providers: GRID_PICKER_PROVIDERS });
 
   useEffect(() => {
     const t = setTimeout(() => nameRef.current?.focus({ preventScroll: true }), 60);
     return () => clearTimeout(t);
   }, []);
 
+  // Identity is provider-composite here for the same reason it is in the store:
+  // the same login on two platforms is two different channels.
   const addChannel = (ch: MultiNookPresetChannel) => {
+    const key = makeKey(ch.provider ?? 'twitch', ch.channelLogin);
     setChannels((prev) =>
-      prev.some((c) => c.channelLogin.toLowerCase() === ch.channelLogin.toLowerCase()) ? prev : [...prev, ch],
+      prev.some((c) => makeKey(c.provider ?? 'twitch', c.channelLogin) === key) ? prev : [...prev, ch],
     );
   };
 
-  const removeChannel = (login: string) => {
-    setChannels((prev) => prev.filter((c) => c.channelLogin.toLowerCase() !== login.toLowerCase()));
+  const removeChannel = (ch: MultiNookPresetChannel) => {
+    const key = makeKey(ch.provider ?? 'twitch', ch.channelLogin);
+    setChannels((prev) => prev.filter((c) => makeKey(c.provider ?? 'twitch', c.channelLogin) !== key));
   };
 
   const handleSelectChannel = (item: ChannelItem) => {
     addChannel({
+      // undefined for Twitch, never an explicit 'twitch'. Absent means Twitch by
+      // convention, and writing it out would change the byte identity of every
+      // preset row already on disk.
+      provider: item.provider,
       channelLogin: item.login,
+      // A search row with no platform id falls back to its login (channelSearch
+      // resultToItem), so that sentinel means "no real id", not "id equals name".
       channelId: item.source === 'search' && item.id === item.login ? undefined : item.id,
       channelName: item.displayName,
       profileImageUrl: item.avatarUrl,
@@ -571,9 +583,17 @@ const PresetEditorView: React.FC<{
       if (target) {
         handleSelectChannel(target);
       } else if (searchInput.trim() && !isSearching) {
-        // Fallback: stash the raw login (no metadata) when search surfaced nothing.
-        const login = searchInput.trim();
-        addChannel({ channelLogin: login, channelName: login });
+        // Fallback: stash the raw channel (no metadata) when search surfaced
+        // nothing. Read through parseTypedChannel so the app's own `kick:xqc`
+        // form is understood; without it that text persists to disk forever as a
+        // Twitch channel literally named "kick:xqc".
+        const typed = parseTypedChannel(searchInput);
+        if (!typed) return;
+        addChannel({
+          provider: typed.provider === 'twitch' ? undefined : typed.provider,
+          channelLogin: typed.channel,
+          channelName: typed.channel,
+        });
         setSearchInput('');
       }
     }
@@ -710,10 +730,11 @@ const PresetEditorView: React.FC<{
                 <div className="space-y-0.5">
                   {followingItems.map((item, i) => (
                     <ChannelResultRow
-                      key={`f-${item.id}`}
+                      key={`f-${itemKey(item)}`}
                       item={item}
                       index={i}
                       highlighted={highlightIndex === i}
+                      reason={gridRefusal(item.provider ?? 'twitch')}
                       onSelect={handleSelectChannel}
                       onHover={setHighlightIndex}
                     />
@@ -734,10 +755,11 @@ const PresetEditorView: React.FC<{
                     const idx = followingItems.length + i;
                     return (
                       <ChannelResultRow
-                        key={`s-${item.id}`}
+                        key={`s-${itemKey(item)}`}
                         item={item}
                         index={idx}
                         highlighted={highlightIndex === idx}
+                        reason={gridRefusal(item.provider ?? 'twitch')}
                         onSelect={handleSelectChannel}
                         onHover={setHighlightIndex}
                       />
@@ -772,7 +794,7 @@ const PresetEditorView: React.FC<{
           <div className="space-y-0.5 pb-1">
             {channels.map((ch) => (
               <div
-                key={ch.channelLogin}
+                key={makeKey(ch.provider ?? 'twitch', ch.channelLogin)}
                 className="group flex items-center gap-2.5 rounded-lg px-1.5 py-1.5 hover:bg-white/[0.05] transition-colors"
               >
                 <img
@@ -789,7 +811,7 @@ const PresetEditorView: React.FC<{
                 </span>
                 <Tooltip content="Remove" delay={200} side="bottom">
                   <button
-                    onClick={() => removeChannel(ch.channelLogin)}
+                    onClick={() => removeChannel(ch)}
                     className="w-6 h-6 flex items-center justify-center rounded-md text-textMuted hover:text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
                   >
                     <X size={13} />

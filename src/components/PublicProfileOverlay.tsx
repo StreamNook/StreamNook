@@ -2,6 +2,7 @@ import { useEffect, useState, useSyncExternalStore, type CSSProperties } from 'r
 import { motion, AnimatePresence, useDragControls } from 'framer-motion';
 import { X, User, Eye } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { helixGet } from '../services/helix';
 import { useAppStore } from '../stores/AppStore';
 import { Logger } from '../utils/logger';
 import ProfileOverview from './settings/ProfileOverview';
@@ -221,17 +222,27 @@ const PublicProfileOverlay = () => {
   useSyncExternalStore(subscribeStreamNookRegistryVersion, getStreamNookRegistryVersion, getStreamNookRegistryVersion);
   useSyncExternalStore(subscribeCosmeticsVersion, getCosmeticsVersion, getCosmeticsVersion);
 
+  // Reset the viewed-profile state the moment the target changes, during
+  // render rather than in an effect (React's adjust-state-on-prop-change
+  // pattern), so the previous member's profile never paints under the new id.
+  const [renderedUserId, setRenderedUserId] = useState(userId);
+  if (userId !== renderedUserId) {
+    setRenderedUserId(userId);
+    if (userId) {
+      setLoading(true);
+      setError(false);
+      setInfo(null);
+      setCounts({ paints: 0, badges: 0, sn: 0 });
+      setNamePaint(null);
+      setTheme(null);
+      setHiddenSections([]);
+      setWornBadges({ seventv: null, twitch: null, thirdParty: [], bttvPro: null });
+    }
+  }
+
   useEffect(() => {
     if (!userId) return;
     let alive = true;
-    setLoading(true);
-    setError(false);
-    setInfo(null);
-    setCounts({ paints: 0, badges: 0, sn: 0 });
-    setNamePaint(null);
-    setTheme(null);
-    setHiddenSections([]);
-    setWornBadges({ seventv: null, twitch: null, thirdParty: [], bttvPro: null });
 
     (async () => {
       try {
@@ -297,11 +308,7 @@ const PublicProfileOverlay = () => {
 
         // Resolve the viewed user's login + avatar + name from their id (the
         // badge only carries the id). One Helix lookup with the viewer's creds.
-        const [clientId, token] = await invoke<[string, string]>('get_twitch_credentials');
-        const res = await fetch(`https://api.twitch.tv/helix/users?id=${encodeURIComponent(userId)}`, {
-          headers: { 'Client-ID': clientId, Authorization: `Bearer ${token}` },
-        });
-        const data = await res.json();
+        const data = await helixGet<{ data?: Array<{ login?: string; display_name?: string; profile_image_url?: string }> }>('users', `id=${encodeURIComponent(userId)}`).catch(() => null);
         const u = data?.data?.[0];
         if (!u?.login) {
           if (alive) { setError(true); setLoading(false); }
@@ -455,7 +462,7 @@ const PublicProfileOverlay = () => {
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.97 }}
           transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-          className="fixed left-[calc(50%-380px)] top-12 z-[60] flex max-h-[86vh] w-[760px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-white/10 bg-[rgba(14,14,18,0.96)] shadow-[0_24px_60px_-15px_rgba(0,0,0,0.8)] backdrop-blur-2xl"
+          className="sn-light-off fixed left-[calc(50%-380px)] top-12 z-[60] flex max-h-[86vh] w-[760px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-white/10 bg-[rgba(14,14,18,0.96)] shadow-[0_24px_60px_-15px_rgba(0,0,0,0.8)] backdrop-blur-2xl"
           style={panelStyle}
         >
           {/* Whole-overlay backdrop. Only the Atmosphere (subscriber tier) fills

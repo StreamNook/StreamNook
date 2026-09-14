@@ -509,8 +509,17 @@ impl AccountStore {
         // default profile.
         let _ = Self::save(&[]);
 
+        // The other platforms are accounts too, and a forced re-auth that left
+        // them signed in was an odd half-measure: the app would claim to be
+        // connected to Kick and YouTube while insisting Twitch start over. Each
+        // service owns its own teardown (tokens, cookies, webview profile), and
+        // the two live under DIFFERENT roots — Kick's under app-local data,
+        // YouTube's under config — so this delegates rather than deleting paths.
+        crate::services::kick_auth_service::disconnect();
+        crate::services::youtube_auth_service::disconnect();
+
         debug!(
-            "[accounts] reset_all: cleared {} account(s) for forced re-auth",
+            "[accounts] reset_all: cleared {} account(s) + platform sessions for forced re-auth",
             accounts.len()
         );
     }

@@ -8,6 +8,7 @@
 
 import { useEffect, useMemo, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { helixGet } from '../../services/helix';
 import {
   acquireChannel,
   releaseChannel,
@@ -39,6 +40,8 @@ const toOverlayAtmosphere = (atm: Atmosphere | null | undefined): OverlayAtmosph
     layers2: atm.layers2,
     chatEdge: atm.chatEdge,
     chatFrost: atm.chatFrost,
+    chatBlur: atm.chatBlur,
+    chatRim: atm.chatRim,
   };
 };
 
@@ -70,12 +73,8 @@ async function resolveTwitchId(login: string): Promise<string | null> {
   const cached = twitchIdCache.get(key);
   if (cached !== undefined) return cached;
   try {
-    const [clientId, token] = await invoke<[string, string]>('get_twitch_credentials');
-    const resp = await fetch(`https://api.twitch.tv/helix/users?login=${encodeURIComponent(key)}`, {
-      headers: { 'Client-ID': clientId, Authorization: `Bearer ${token}` },
-    });
-    if (resp.ok) {
-      const data = await resp.json();
+    {
+      const data = await helixGet<{ data?: Array<{ id?: string }> }>('users', `login=${encodeURIComponent(key)}`);
       const id = (data?.data?.[0]?.id as string | undefined) ?? null;
       twitchIdCache.set(key, id);
       return id;

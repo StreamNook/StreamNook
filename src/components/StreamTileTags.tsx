@@ -21,11 +21,15 @@ export const StreamTileTags = ({ tags, selectedTags, onToggleTag }: StreamTileTa
     const [visibleCount, setVisibleCount] = useState<number | null>(null);
     const [expanded, setExpanded] = useState(false);
 
-    // Re-measure from scratch whenever the tag set changes.
-    useLayoutEffect(() => {
+    // Re-measure from scratch whenever the tag set changes. Done during render
+    // (adjust-state-on-prop-change) so the measuring pass is the very next
+    // render, not one commit later.
+    const [measuredTags, setMeasuredTags] = useState(tags);
+    if (tags !== measuredTags) {
+        setMeasuredTags(tags);
         setVisibleCount(null);
         setExpanded(false);
-    }, [tags]);
+    }
 
     // Measure which tags sit on the first line; reserve room for the chip if any wrap.
     useLayoutEffect(() => {
@@ -48,6 +52,10 @@ export const StreamTileTags = ({ tags, selectedTags, onToggleTag }: StreamTileTa
             const rightEdge = last.offsetLeft + last.offsetWidth;
             if (el.clientWidth - rightEdge < CHIP_RESERVE) count -= 1;
         }
+        // Layout measurement: read where the chips wrapped, then commit the
+        // count before paint. The synchronous second render is the point of
+        // useLayoutEffect here, not an accident.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setVisibleCount(Math.max(1, count));
     });
 

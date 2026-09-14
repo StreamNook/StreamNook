@@ -5,7 +5,8 @@ import {
   isUserCosmeticsHardFailed,
   subscribeToCosmetics,
 } from '../services/cosmeticsCache';
-import { isStreamNookUser, getProfilePrefs, whenAtmospheresReady, subscribeAtmospheresVersion, subscribeStreamNookRegistryVersion, subscribeToProfileThemeChanges } from '../services/supabaseService';
+import { isStreamNookUser, getProfilePrefs, whenAtmospheresReady, subscribeAtmospheresVersion, subscribeStreamNookRegistryVersion, subscribeToProfileThemeChanges, getOwnedCosmeticSlugs, isCosmeticsRegistryLoaded } from '../services/supabaseService';
+import { resolveEntitlement } from '../services/cosmetics/ownership';
 import { getAtmosphere } from '../services/atmospheres';
 import { parseCologneTheme, type CologneCosmetics } from '../services/cologneEvent';
 import {
@@ -93,18 +94,13 @@ interface ChatUserStore {
 // Module-scope batched-update coalescer for cosmetic resolutions.
 //
 // 7TV's batched GraphQL request (see seventvService.requestUserCosmeticsBatched)
-// can fan out from a single network round-trip into N user resolutions, all
-// firing within the same microtask. Without coalescing, each resolution did
-// its own store.setState — that's N Map clones AND N rounds of selector
-// evaluation across every ChatMessage subscriber. For a 50-user batch with
-// 50 mounted ChatMessage components, that's 2500 selector calls and 50
-// commit phases, producing visible chat-stuttering bursts.
+// fans one network round-trip out into N user resolutions in the same
+// microtask. One setState each would mean N Map clones and N rounds of selector
+// evaluation across every mounted ChatMessage, which stutters visibly.
 //
-// With this coalescer, all updates enqueued within the same microtask drain
-// into ONE setState: one Map clone, one subscriber notification cycle, one
-// React commit. Each ChatMessage that subscribes to a specific userId still
-// re-renders if its user's paint/badge actually changed; unrelated users
-// pay nothing.
+// Coalesced, everything enqueued in the same microtask drains into ONE
+// setState: one clone, one notification cycle, one commit. A ChatMessage still
+// re-renders when its own user's paint or badge changed; others pay nothing.
 type CosmeticUpdate = { paint: any; seventvBadge: any };
 const pendingCosmeticUpdates = new Map<string, CosmeticUpdate>();
 let pendingFlushScheduled = false;
@@ -135,49 +131,38 @@ function enqueueCosmeticUpdate(userId: string, paint: any, seventvBadge: any) {
   scheduleStoreFlush();
 }
 
-// ── Mobile fast-path upsert coalescer ────────────────────────────────────────
-// The addUser fast path fires on essentially EVERY chat message once a user's
-// cosmetics resolve, and it used to clone `users` AND `usernameToId` each time:
-// at the 1500-user mobile cap in a busy chat that is thousands of 3000-entry
-// map copies a minute, all on the same thread that answers taps. That is the
-// mechanism behind "the longer you watch, the less the app responds — but
-// scrolling still works": scrolling is compositor-side, tap handling is JS.
-//
-// A microtask coalescer (like the cosmetic one above) cannot help here because
-// each IRC message arrives in its own task; this one batches on a short timer
-// instead. Everything the fast path writes is freshness metadata (lastSeen,
-// current color), so a quarter-second of staleness is invisible, and the flush
-// is skip-if-missing so it can never resurrect a user that eviction or a
-// channel switch removed between enqueue and flush.
-const pendingUserUpserts = new Map<string, ChatUser>();
-let userUpsertTimer: ReturnType<typeof setTimeout> | null = null;
-const USER_UPSERT_FLUSH_MS = 250;
+// ── Identity changes (color / rename) ────────────────────────────────────────
+// Same coalescing contract as the cosmetics above, but for the rare mid-session
+// identity change (a /color, a display-name edit). Its own pending map + flush:
+// the cosmetics flush hard-codes {paint, seventvBadge} and would clobber a
+// same-microtask cosmetics resolution (and un-flip the cosmeticsResolved
+// sentinel) if identity fields were routed through it. Each flush spreads the
+// CURRENT record at flush time and writes only its own fields, so the two
+// coalescers compose in either order.
+type IdentityUpdate = { username: string; displayName: string; color: string };
+const pendingIdentityUpdates = new Map<string, IdentityUpdate>();
+let pendingIdentityFlushScheduled = false;
 
-function flushUserUpserts() {
-  userUpsertTimer = null;
-  if (pendingUserUpserts.size === 0) return;
-  const batch = new Map(pendingUserUpserts);
-  pendingUserUpserts.clear();
-  useChatUserStore.setState((state) => {
-    const newUsers = new Map(state.users);
-    const newUsernameToId = new Map(state.usernameToId);
-    let touched = false;
-    for (const [uid, u] of batch) {
-      const current = newUsers.get(uid);
-      if (!current) continue; // evicted or channel-switched away; slow path re-adds
-      newUsers.set(uid, { ...current, ...u });
-      newUsernameToId.set(u.username.toLowerCase(), uid);
-      touched = true;
-    }
-    return touched ? { users: newUsers, usernameToId: newUsernameToId } : state;
+function scheduleIdentityFlush() {
+  if (pendingIdentityFlushScheduled) return;
+  pendingIdentityFlushScheduled = true;
+  queueMicrotask(() => {
+    pendingIdentityFlushScheduled = false;
+    if (pendingIdentityUpdates.size === 0) return;
+    const updates = new Map(pendingIdentityUpdates);
+    pendingIdentityUpdates.clear();
+    useChatUserStore.setState((state) => {
+      const newUsers = new Map(state.users);
+      const newUsernameToId = new Map(state.usernameToId);
+      for (const [uid, identity] of updates) {
+        const current = newUsers.get(uid);
+        if (!current) continue;
+        newUsers.set(uid, { ...current, ...identity, lastSeen: Date.now() });
+        newUsernameToId.set(identity.username.toLowerCase(), uid);
+      }
+      return { users: newUsers, usernameToId: newUsernameToId };
+    });
   });
-}
-
-function enqueueUserUpsert(userId: string, user: ChatUser) {
-  pendingUserUpserts.set(userId, user);
-  if (userUpsertTimer === null) {
-    userUpsertTimer = setTimeout(flushUserUpserts, USER_UPSERT_FLUSH_MS);
-  }
 }
 
 // ── StreamNook third-party badge loadout ─────────────────────────────────────
@@ -191,10 +176,9 @@ let pendingThirdPartyFlushScheduled = false;
 
 // Non-members whose real provider badges have already been resolved this session.
 // The Rust lookup reads only the prefetched provider databases, so a non-member's
-// result can't change within a session — resolving them once is enough. Without
-// this guard a non-member re-triggers the Rust IPC lookup on EVERY message until
-// their (separate) 7TV cosmetics resolve flips the cosmeticsResolved fast path,
-// which floods a busy channel with thousands of redundant cross-process calls.
+// result cannot change within a session. Without this guard they re-trigger the
+// Rust IPC lookup on EVERY message until their separate 7TV cosmetics resolve
+// flips the fast path, flooding a busy channel with redundant IPC.
 // Members are intentionally NOT gated here (they go through their own identity
 // resolve cache, so a live loadout edit still re-resolves). Pruned alongside the
 // user map (eviction + channel switch) so it never outgrows the tracked users.
@@ -366,9 +350,52 @@ function scheduleAtmosphereFlush() {
   });
 }
 
+/**
+ * Whether this member may actually WEAR the atmosphere they have selected.
+ *
+ * `user_profile_prefs` is world-writable under the anon key that ships in the
+ * bundle, and nothing on the render path re-checked ownership, so anyone could
+ * set their theme to a paid atmosphere and have it paint in every StreamNook
+ * user's chat. Rendering is the last place that can refuse, so it refuses here.
+ *
+ * Deliberately per-CLASS, not per-item, for subscriber atmospheres: a viewer has
+ * no way to see whether someone else is currently subscribed, and a strict
+ * owned-only check would blank a real subscriber whose per-item ownership row
+ * has not been granted yet (that RPC runs on their login, not ours).
+ *
+ * Accolade-gated atmospheres pass through unchecked ON PURPOSE. A viewer cannot
+ * verify another member's accolades (they are not loaded cross-user, and adding
+ * a fetch here would put a network round trip on the chat render path). Those
+ * close when `user_accolades` stops being anon-writable, which makes the
+ * accolade itself trustworthy. Do not "fix" this asymmetry by granting accolade
+ * atmospheres into `user_cosmetics`: that converts a forgeable accolade into a
+ * permanent ownership row and defeats this gate entirely.
+ */
+export function mayWearAtmosphere(userId: string, id: string | null): boolean {
+  if (!id) return true; // clearing is always allowed
+  // Our own accounts paint immediately. The server already gated the write, and
+  // gating here would make a member's own pick stop previewing.
+  if (ownAtmosphereAccounts.has(userId)) return true;
+  // Missing data must never read as "not owned", or a paying member is blanked
+  // during the registry load window or a Supabase outage.
+  if (!isCosmeticsRegistryLoaded()) return true;
+
+  const atm = getAtmosphere(id);
+  if (!atm) return true; // unknown to the catalog; nothing will paint anyway
+  if (atm.unlock?.kind === 'accolade') return true;
+
+  // Cologne carries '+coin' / '+border' modifiers on the id; ownership is
+  // recorded against the base atmosphere.
+  const baseId = id.split('+')[0];
+  const owned = getOwnedCosmeticSlugs(userId);
+  const { everSubscribed } = resolveEntitlement({ ownedSlugs: owned, activeSubscription: false });
+  return owned.has(baseId) || everSubscribed;
+}
+
 function pushAtmosphere(userId: string, id: string | null) {
-  atmosphereCache.set(userId, id);
-  pendingAtmosphereUpdates.set(userId, id);
+  const effective = mayWearAtmosphere(userId, id) ? id : null;
+  atmosphereCache.set(userId, effective);
+  pendingAtmosphereUpdates.set(userId, effective);
   scheduleAtmosphereFlush();
   if (ownAtmosphereAccounts.has(userId)) persistOwnAtmosphere(userId);
 }
@@ -525,6 +552,22 @@ function pushCologne(userId: string, cosmetics: CologneCosmetics | null) {
 // clone volume proportionally. Desktop keeps 8000 unchanged.
 const MAX_TRACKED_USERS = IS_MOBILE ? 1500 : 8000;
 const USER_EVICT_SLACK = 1000;
+const MATCH_SCAN_CAP = 200;
+
+// Lowercased name pairs, keyed by user-object identity. Identity changes
+// (rename, color) replace the ChatUser object via the identity coalescer, so a
+// stale entry can never be served; the in-place lastSeen bump never touches
+// names. Kills the 2-per-user toLowerCase() allocations the autocomplete scan
+// paid on every keystroke.
+const lowerNameCache = new WeakMap<ChatUser, { u: string; d: string }>();
+function lowerNames(user: ChatUser): { u: string; d: string } {
+  let l = lowerNameCache.get(user);
+  if (!l) {
+    l = { u: user.username.toLowerCase(), d: user.displayName.toLowerCase() };
+    lowerNameCache.set(user, l);
+  }
+  return l;
+}
 
 function evictStaleUsers(
   users: Map<string, ChatUser>,
@@ -574,27 +617,24 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
       existingUser !== undefined &&
       (existingUser.paint !== undefined || existingUser.seventvBadge !== undefined);
     if (cosmeticsResolved) {
-      if (IS_MOBILE) {
-        // See the coalescer above: one batched clone per quarter second instead
-        // of two full map clones per message.
-        enqueueUserUpsert(user.userId, {
-          ...existingUser!,
-          ...user,
-          lastSeen: Date.now(),
+      const identityChanged =
+        existingUser!.username !== user.username ||
+        existingUser!.displayName !== user.displayName ||
+        existingUser!.color !== user.color;
+      if (identityChanged) {
+        pendingIdentityUpdates.set(user.userId, {
+          username: user.username,
+          displayName: user.displayName,
+          color: user.color,
         });
+        scheduleIdentityFlush();
         return;
       }
-      set((state) => {
-        const newUsers = new Map(state.users);
-        const newUsernameToId = new Map(state.usernameToId);
-        newUsers.set(user.userId, {
-          ...existingUser!,
-          ...user,
-          lastSeen: Date.now(),
-        });
-        newUsernameToId.set(user.username.toLowerCase(), user.userId);
-        return { users: newUsers, usernameToId: newUsernameToId };
-      });
+      // Metadata-only bump. lastSeen has NO reactive readers (only call-time
+      // sorts: eviction, @-autocomplete, command palette), so mutate in place —
+      // no Map clones, no subscriber fan-out. This bypassing of setState is
+      // deliberate; do not "fix" it back into a store update.
+      existingUser!.lastSeen = Date.now();
       return;
     }
 
@@ -685,12 +725,17 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
     const matches: ChatUser[] = [];
     for (const user of users.values()) {
       const nick = overrides[user.userId]?.nickname?.toLowerCase();
+      const lower = lowerNames(user);
       if (
-        user.username.toLowerCase().startsWith(queryLower) ||
-        user.displayName.toLowerCase().startsWith(queryLower) ||
+        lower.u.startsWith(queryLower) ||
+        lower.d.startsWith(queryLower) ||
         (nick && nick.startsWith(queryLower))
       ) {
         matches.push(user);
+        // Runs per keystroke over up to ~9k users. Cap the collect: past this
+        // many matches (single-letter queries), the top-`limit` by recency is
+        // close enough for autocomplete and the full sort isn't worth it.
+        if (matches.length >= MATCH_SCAN_CAP) break;
       }
     }
 
@@ -705,9 +750,6 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
     // so drop the resolved-guard too: a chatter reappearing in the next channel
     // re-resolves cleanly instead of being skipped with no badges.
     thirdPartyNonMemberResolved.clear();
-    // Upserts queued for the channel being left would only be skipped at flush
-    // time anyway (their users are gone); clearing saves the no-op pass.
-    pendingUserUpserts.clear();
     // The atmosphere / Cologne theme cache deliberately PERSISTS across channels:
     // a member's wash paints instantly when they reappear instead of re-fetching
     // every switch. It is kept fresh by the live theme bridge below (a push on any

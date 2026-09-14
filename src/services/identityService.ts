@@ -9,6 +9,7 @@
 // are reserved for later). `customized=false` ⇒ show everything (the default).
 
 import { invoke } from '@tauri-apps/api/core';
+import { boundedSet } from '../utils/boundedMap';
 import { Logger } from '../utils/logger';
 
 export interface IdentityLoadout {
@@ -20,6 +21,7 @@ export interface IdentityLoadout {
 }
 
 const TTL = 5 * 60 * 1000; // 5 minutes
+const IDENTITY_CACHE_MAX = 1000;
 const cache = new Map<string, { data: IdentityLoadout; ts: number }>();
 const pending = new Map<string, Promise<IdentityLoadout>>();
 
@@ -76,12 +78,12 @@ export function seedOwnIdentitiesFromCache(userIds: string[]): void {
     const entry = store[userId];
     if (!entry) continue;
     if (entry.loadout && !cache.has(userId)) {
-      cache.set(userId, { data: entry.loadout, ts: 0 });
+      boundedSet(cache, userId, { data: entry.loadout, ts: 0 }, IDENTITY_CACHE_MAX);
       version++;
       listeners.forEach((l) => l());
     }
     if (entry.resolved && !resolvedCache.has(userId)) {
-      resolvedCache.set(userId, { data: entry.resolved, ts: 0 });
+      boundedSet(resolvedCache, userId, { data: entry.resolved, ts: 0 }, IDENTITY_CACHE_MAX);
       notifyResolved(userId);
     }
   }
@@ -92,7 +94,7 @@ export function seedOwnIdentitiesFromCache(userIds: string[]): void {
 const listeners = new Set<() => void>();
 let version = 0;
 const publish = (userId: string, data: IdentityLoadout) => {
-  cache.set(userId, { data, ts: Date.now() });
+  boundedSet(cache, userId, { data, ts: Date.now() }, IDENTITY_CACHE_MAX);
   version++;
   listeners.forEach((l) => l());
   if (ownIdentityAccounts.has(userId)) persistOwnIdentity(userId);
@@ -139,7 +141,7 @@ export async function getIdentityWithCache(userId: string): Promise<IdentityLoad
     } catch (e) {
       Logger.warn('[identityService] get failed, defaulting to show-all:', e);
       const fallback = defaultLoadout(userId);
-      cache.set(userId, { data: fallback, ts: Date.now() });
+      boundedSet(cache, userId, { data: fallback, ts: Date.now() }, IDENTITY_CACHE_MAX);
       return fallback;
     } finally {
       pending.delete(userId);
@@ -229,7 +231,7 @@ export function clearResolvedIdentity(userId: string): void {
  * re-reads synchronously from the now-fresh cache.
  */
 export function setResolvedIdentityFromWrite(userId: string, data: ResolvedIdentity): void {
-  resolvedCache.set(userId, { data, ts: Date.now() });
+  boundedSet(resolvedCache, userId, { data, ts: Date.now() }, IDENTITY_CACHE_MAX);
   notifyResolved(userId);
 }
 
@@ -244,13 +246,13 @@ export async function getResolvedIdentity(userId: string): Promise<ResolvedIdent
   const p = (async () => {
     try {
       const data = (await invoke('get_streamnook_identity_resolved', { userId })) as ResolvedIdentity;
-      resolvedCache.set(userId, { data, ts: Date.now() });
+      boundedSet(resolvedCache, userId, { data, ts: Date.now() }, IDENTITY_CACHE_MAX);
       notifyResolved(userId);
       return data;
     } catch (e) {
       Logger.warn('[identityService] resolved get failed:', e);
       const fb = defaultResolved(userId);
-      resolvedCache.set(userId, { data: fb, ts: Date.now() });
+      boundedSet(resolvedCache, userId, { data: fb, ts: Date.now() }, IDENTITY_CACHE_MAX);
       return fb;
     } finally {
       resolvedPending.delete(userId);

@@ -5,13 +5,28 @@ import { invoke } from '@tauri-apps/api/core';
 import { MultiNookSlot } from '../../types';
 import { useMultiNookPlayer } from './useMultiNookPlayer';
 import { usemultiNookStore } from '../../stores/multiNookStore';
+import { useAppStore } from '../../stores/AppStore';
+import { buildProviderUrl } from '../../utils/streamProvider';
 import { useChannelSocial } from '../../hooks/useChannelSocial';
+import {
+  ignoresPlayerMouse,
+  createWheelAccumulator,
+  stepVolume,
+  toggleVolumeMute,
+  scrollVolumeOn,
+  WHEEL_VOLUME_STEP,
+} from '../../utils/playerMouseControls';
+import { playerOverlayButtonOn } from '../../utils/playerOverlayButtons';
+import { PlayerVolumeOsd } from '../PlayerVolumeOsd';
+import { useVolumeOsd } from '../../hooks/useVolumeOsd';
 import StreamTitleWithEmojis from '../StreamTitleWithEmojis';
 import { Tooltip } from '../ui/Tooltip';
 import { TwitchVerifiedMark } from '../ui/TwitchGlyph';
+import { ProviderLogo } from '../ProviderLogo';
 import { GripHorizontal, Undo2, Loader2, RefreshCcw, EyeOff, WifiOff, Maximize2, Minimize2 } from 'lucide-react';
 import { Heart, HeartBreak, X as XIcon } from 'phosphor-react';
 import { Logger } from '../../utils/logger';
+import { canGridProvider } from '../../types/providers';
 
 interface MultiNookCellProps {
   slot: MultiNookSlot;
@@ -35,7 +50,7 @@ const clearPendingFocusToggle = () => {
 };
 
 const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, gridSpanClass = '', customStyle = {}, isMaximized = false }) => {
-  const { id, channelLogin, channelName, channelId, volume, muted, isFocused, streamUrl, isMinimized = false, loadError, profileImageUrl, title, broadcasterType } = slot;
+  const { id, provider, channelLogin, channelName, channelId, volume, muted, isFocused, streamUrl, isMinimized = false, loadError, profileImageUrl, title, broadcasterType } = slot;
   // Actions only, so read them without subscribing. A bare `usemultiNookStore()`
   // here subscribed this tile to the WHOLE store, which meant any mutation
   // (including a volume drag on a sibling tile) re-rendered every tile in the
@@ -46,18 +61,30 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
   // Offline tiles show the offline overlay instead of an endless loading spinner.
   const isLoading = !streamUrl && !loadError;
 
+  // Toolbar mute-all overrides this tile's audio without touching slot.muted,
+  // so unmuting restores the focus/mute mix that was playing before. Selector
+  // subscription: the tile only re-renders when the flag itself flips.
+  const isAllMuted = usemultiNookStore((s) => s.isAllMuted);
+
   const { videoRef, playerRef, isPlaying, isBuffering, error } = useMultiNookPlayer({
     streamUrl,
     streamId: id,
     volume,
-    muted,
+    muted: muted || isAllMuted,
     isMinimized,
   });
 
+  // Volume readout for this tile's wheel/middle-click changes.
+  const { osd, showOsd } = useVolumeOsd();
+
   // Follow + subscribe controls. Only the focused, non-docked tile activates the
   // hook so we make one follow/subscription lookup at a time instead of one per
-  // tile across the whole grid.
+  // tile across the whole grid. Visibility additionally honors the same
+  // Player Overlay Buttons setting as the single-stream player.
+  // The tile passes its OWN provider to useChannelSocial below, so the overlay is
+  // correct for this channel regardless of what the solo player last had.
   const socialEnabled = isFocused && !isMinimized;
+  const playerOverlayButtons = useAppStore((s) => s.settings.player_overlay_buttons);
   const {
     isFollowing,
     followLoading,
@@ -69,19 +96,35 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
     cumulativeMonths,
     subscriberBadgeUrl,
     handleSubscribeClick,
+    offersMembership,
   } = useChannelSocial({
+    provider: provider ?? 'twitch',
     userId: channelId,
     userLogin: channelLogin,
     userName: channelName,
     enabled: socialEnabled,
   });
+  const showFollowButton = socialEnabled && playerOverlayButtonOn(playerOverlayButtons, 'follow');
+  const showSubscribeButton =
+    socialEnabled && offersMembership && playerOverlayButtonOn(playerOverlayButtons, 'subscribe');
 
   // Available stream qualities for the focused tile's gear menu
   const [availableQualities, setAvailableQualities] = useState<string[]>([]);
   useEffect(() => {
     if (!socialEnabled) return;
+    // A tile the grid refuses should never exist, so this is belt and braces
+    // for any provider added to GRID_BLOCKED later: get_stream_qualities
+    // resolves playback, and resolving is the expensive, side-effectful half of
+    // an adapter. Cheap to keep, and it means a refused provider can never reach
+    // the backend from here.
+    //
+    // Note this is a FRONTEND guard on purpose. The solo player calls the very
+    // same command (AppStore.getStreamQualities), where resolving is correct and
+    // expected, so refusing inside the Rust command would break the solo quality
+    // menu to protect the grid.
+    if (!canGridProvider(provider ?? 'twitch')) return;
     let cancelled = false;
-    invoke<string[]>('get_stream_qualities', { url: `https://twitch.tv/${channelLogin}` })
+    invoke<string[]>('get_stream_qualities', { url: buildProviderUrl(provider ?? 'twitch', channelLogin) })
       .then((qs) => {
         if (!cancelled && qs?.length) setAvailableQualities(qs);
       })
@@ -89,7 +132,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
     return () => {
       cancelled = true;
     };
-  }, [socialEnabled, channelLogin]);
+  }, [socialEnabled, channelLogin, provider]);
 
   // Inject a Quality submenu into this tile's Plyr settings gear — mirrors the
   // single player. Selecting a quality restarts only this tile's proxy via
@@ -243,6 +286,71 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
     el.addEventListener('dblclick', onDblCapture, { capture: true });
     return () => el.removeEventListener('dblclick', onDblCapture, { capture: true });
   }, [id, toggleMaximizeSlot]);
+
+  // Mouse volume for this tile: wheel to change it, middle click to mute. Scoped
+  // to the hovered cell, so each tile is adjusted independently. Persistence
+  // rides the volumechange handler inside useMultiNookPlayer — nothing extra is
+  // written here. Settings are read at event time so a change applies without
+  // rebinding.
+  useEffect(() => {
+    const el = cellRef.current;
+    if (!el) return;
+    const accumulate = createWheelAccumulator();
+    const playerSettings = () => useAppStore.getState().settings.video_player;
+    const volumeTarget = () => playerRef.current ?? videoRef.current;
+
+    // Shift is not special here: the channel About reveal doesn't exist in
+    // MultiNook, so there's nothing for it to disambiguate and Shift + scroll
+    // just adjusts volume like a plain scroll.
+    const onWheel = (e: WheelEvent) => {
+      const s = playerSettings();
+      if (!scrollVolumeOn(s)) return;
+      if (e.deltaY === 0) return; // horizontal scroll isn't ours
+      if (ignoresPlayerMouse(e.target)) return;
+      const target = volumeTarget();
+      if (!target) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const steps = accumulate(e, performance.now());
+      if (steps === 0) return;
+      const next = stepVolume(target, steps, s?.wheel_volume_step ?? WHEEL_VOLUME_STEP);
+      showOsd(next.volume, next.muted);
+    };
+
+    // Middle click also steps aside for tile controls, which sit on top of the
+    // video and have their own meaning. Suppressing the default on mousedown
+    // kills the autoscroll ring without stopping the auxclick that follows.
+    const middleClickBlocked = (e: MouseEvent) => {
+      if (e.button !== 1) return true;
+      if (!(playerSettings()?.middle_click_mute ?? true)) return true;
+      const target = e.target as HTMLElement;
+      return ignoresPlayerMouse(target) || !!target.closest?.('button');
+    };
+
+    const onMouseDown = (e: MouseEvent) => {
+      if (middleClickBlocked(e)) return;
+      e.preventDefault();
+    };
+
+    const onAuxClick = (e: MouseEvent) => {
+      if (middleClickBlocked(e)) return;
+      const target = volumeTarget();
+      if (!target) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const next = toggleVolumeMute(target);
+      showOsd(next.volume, next.muted);
+    };
+
+    el.addEventListener('wheel', onWheel, { passive: false });
+    el.addEventListener('mousedown', onMouseDown, { capture: true });
+    el.addEventListener('auxclick', onAuxClick);
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('mousedown', onMouseDown, { capture: true });
+      el.removeEventListener('auxclick', onAuxClick);
+    };
+  }, [playerRef, videoRef, showOsd]);
 
   // Map dnd-kit's drag offset cleanly to Framer Motion's coordinate space
   const x = transform ? Math.round(transform.x) : 0;
@@ -410,8 +518,15 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
                   {channelName || channelLogin}
                 </h3>
               </Tooltip>
-              {broadcasterType === 'partner' && (
+              {/* Twitch's partner mark, on Twitch tiles only: broadcasterType is a
+                  Helix field and means nothing on another platform. */}
+              {(provider ?? 'twitch') === 'twitch' && broadcasterType === 'partner' && (
                 <TwitchVerifiedMark size={14} className="text-[#9146FF] shrink-0" />
+              )}
+              {/* Which platform this tile is. Only shown when it is NOT the
+                  default, so an all-Twitch grid looks exactly as it always has. */}
+              {provider && provider !== 'twitch' && (
+                <ProviderLogo provider={provider} size={13} className="shrink-0" />
               )}
               {isFocused && (
                 <Tooltip content="Focused Stream" delay={200} side="right">
@@ -430,9 +545,9 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
 
           {/* Controls Overlay - Top Right */}
           <div className="flex items-center gap-1.5 shrink-0">
-            {/* Follow + Subscribe — focused tile only */}
-            {socialEnabled && (
-              <>
+            {/* Follow + Subscribe — focused tile only, honoring the Player
+                Overlay Buttons setting like the single-stream player */}
+            {showFollowButton && (
                 <Tooltip
                   content={
                     checkingFollowStatus
@@ -463,7 +578,8 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
                     )}
                   </button>
                 </Tooltip>
-
+            )}
+            {showSubscribeButton && (
                 <Tooltip
                   content={
                     isSubscribed
@@ -494,7 +610,6 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
                     )}
                   </button>
                 </Tooltip>
-              </>
             )}
 
             {/* Spotlight this stream (fills the space) / restore the grid */}
@@ -538,6 +653,8 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
           </div>
         </div>
       </div>
+
+      <PlayerVolumeOsd osd={osd} />
     </motion.div>
   );
 };

@@ -4,7 +4,7 @@
 // because the whole feature is gated behind a connected 7TV account anyway and
 // the authed path is the only one that supports GraphQL variables. The exact
 // v4 schema shapes used here were confirmed by live introspection of
-// https://7tv.io/v4/gql (see Brain/references/SevenTV_v4_GQL_Editor_API.md).
+// https://7tv.io/v4/gql rather than taken from documentation.
 import { invoke } from '@tauri-apps/api/core';
 import { Logger } from '../utils/logger';
 

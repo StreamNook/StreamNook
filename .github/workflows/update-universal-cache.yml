@@ -20,6 +20,8 @@ permissions:
 
 jobs:
   update-cache:
+    # Ports inherit this file on sync merges; only run it in the desktop repo.
+    if: github.repository == 'winters27/StreamNook'
     runs-on: ubuntu-latest
     
     steps:

@@ -48,6 +48,16 @@ pub struct BundleUpdateStatus {
     /// against this before swapping the exe. None = no integrity check.
     #[serde(default)]
     pub sha256: Option<String>,
+    /// Detached minisign signature over the bundle bytes, as the text content of
+    /// a `.minisig` file.
+    ///
+    /// This is the only integrity control that survives a compromise of the
+    /// update host. `sha256` proves the bytes match what the manifest CLAIMS,
+    /// but both come from the same server, so whoever can serve a malicious
+    /// bundle can serve a matching hash. The signing key lives only in CI, so a
+    /// signature cannot be forged by anyone who merely controls the host.
+    #[serde(default)]
+    pub signature: Option<String>,
 }
 
 /// Details about which components changed
@@ -151,6 +161,7 @@ impl ComponentManifest {
             component_changes,
             release_notes: None,
             sha256: None,
+            signature: None,
         }
     }
 }

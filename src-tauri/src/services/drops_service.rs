@@ -899,7 +899,7 @@ impl DropsService {
                                         });
                                     }
                                 }
-                                info!(
+                                debug!(
                                     "[Drops/ACL] details campaign '{}' game '{}': is_acl_based={}, raw_channels={}, parsed_channels={}, allow.isEnabled={:?}",
                                     campaign_json["name"].as_str().unwrap_or("unknown"),
                                     campaign_json["game"]["name"].as_str().unwrap_or("?"),
@@ -1059,6 +1059,81 @@ impl DropsService {
 
         debug!("Returning {} total campaigns (unfiltered)", result.len());
         Ok(result)
+    }
+
+    /// Of the given channels, the ones where Twitch itself is offering this
+    /// campaign right now.
+    ///
+    /// `channel.viewerDropCampaigns` is Twitch's own answer to "can this drop be
+    /// earned here, right now", so it settles a question the app cannot answer
+    /// from campaign fields alone. Being on a campaign's allow-list is usually
+    /// not enough - an allow-listed streamer live in some other category earns
+    /// nothing (measured across Apex/ALGS, Albion and EVE rosters: every
+    /// out-of-category channel is refused, every in-category one offered). But
+    /// creator campaigns break that rule: `Ironmouse Subathon 2026` is filed
+    /// under Special Events and Twitch offers it on her channel whatever she is
+    /// playing. Guessing either way is wrong for the other case, so ask.
+    ///
+    /// One aliased document covers a whole chunk of channels, so a roster costs
+    /// a request per 50 live channels rather than one per channel.
+    pub async fn campaign_eligible_channels(
+        &self,
+        campaign_id: &str,
+        channel_ids: &[String],
+    ) -> Result<Vec<String>> {
+        // Channel ids are numeric and go into the query text, so anything else
+        // is dropped rather than escaped.
+        let ids: Vec<&String> = channel_ids
+            .iter()
+            .filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()))
+            .collect();
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let token = DropsAuthService::get_token().await?;
+        let mut eligible = Vec::new();
+
+        for chunk in ids.chunks(50) {
+            let fields: String = chunk
+                .iter()
+                .enumerate()
+                .map(|(i, id)| format!("c{i}: channel(id: \"{id}\") {{ id viewerDropCampaigns {{ id }} }} "))
+                .collect();
+            let query = format!("query {{ {fields}}}");
+
+            let response = self
+                .client
+                .post("https://gql.twitch.tv/gql")
+                .headers(self.create_gql_headers(&token))
+                .json(&serde_json::json!({ "query": query }))
+                .send()
+                .await?;
+
+            let body: serde_json::Value = response.json().await?;
+            if let Some(errors) = body.get("errors") {
+                return Err(anyhow::anyhow!("GraphQL errors: {:?}", errors));
+            }
+
+            for (i, id) in chunk.iter().enumerate() {
+                let campaigns = &body["data"][format!("c{i}")]["viewerDropCampaigns"];
+                let offered = campaigns
+                    .as_array()
+                    .map(|list| list.iter().any(|c| c["id"].as_str() == Some(campaign_id)))
+                    .unwrap_or(false);
+                if offered {
+                    eligible.push((*id).clone());
+                }
+            }
+        }
+
+        debug!(
+            "[Drops/Eligibility] campaign {}: {} of {} channels are offering it",
+            campaign_id,
+            eligible.len(),
+            ids.len()
+        );
+        Ok(eligible)
     }
 
     /// Builds the drop-progress map from campaign data. Account-wide progress

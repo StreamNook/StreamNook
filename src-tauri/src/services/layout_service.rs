@@ -100,6 +100,11 @@ impl LayoutService {
                     // Cheermotes render as GIF + number, approximate width ~40px
                     text.push_str("          "); // 10 spaces ≈ 40px
                 }
+                MessageSegment::Gif { .. } => {
+                    // A Twitch chat GIF renders 80px tall with its own aspect;
+                    // GIPHY assets run about 1.5:1, so ~120px wide (30 spaces).
+                    text.push_str("                              ");
+                }
             }
         }
         (text, has_links)
@@ -211,13 +216,14 @@ impl LayoutService {
 
         // === Calculate content height ===
 
-        // Count emotes and emojis in segments for height calculation
-        let (segment_emote_count, segment_emoji_count) =
-            segments.iter().fold((0, 0), |(e, j), seg| match seg {
-                MessageSegment::Emote { .. } => (e + 1, j),
-                MessageSegment::Emoji { .. } => (e, j + 1),
-                MessageSegment::Cheermote { .. } => (e + 1, j), // Cheermotes count as emotes for height
-                _ => (e, j),
+        // Count emotes, emojis and GIFs in segments for height calculation
+        let (segment_emote_count, segment_emoji_count, segment_gif_count) =
+            segments.iter().fold((0, 0, 0), |(e, j, g), seg| match seg {
+                MessageSegment::Emote { .. } => (e + 1, j, g),
+                MessageSegment::Emoji { .. } => (e, j + 1, g),
+                MessageSegment::Cheermote { .. } => (e + 1, j, g), // Cheermotes count as emotes for height
+                MessageSegment::Gif { .. } => (e, j, g + 1),
+                _ => (e, j, g),
             });
 
         let total_emotes = if segment_emote_count > 0 {
@@ -300,7 +306,16 @@ impl LayoutService {
         };
 
         // Content height = lines * effective line height
-        let content_height = (line_count as f32) * effective_line_height;
+        let mut content_height = (line_count as f32) * effective_line_height;
+
+        // A Twitch chat GIF is a fixed 80px inline-block (ChatMessage.tsx `h-20`
+        // plus the line box's descent slack), far taller than any emote row.
+        // Only the line holding it grows, and messages carry one in practice,
+        // so grow the message by the difference once rather than per line.
+        const GIF_ROW_HEIGHT: f32 = 86.0;
+        if segment_gif_count > 0 {
+            content_height += (GIF_ROW_HEIGHT - effective_line_height).max(0.0);
+        }
 
         // === Add vertical padding ===
         // Frontend ChatMessage.tsx uses:

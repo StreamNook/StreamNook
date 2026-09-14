@@ -4,10 +4,12 @@ import { CSS } from '@dnd-kit/utilities';
 import { usemultiNookStore } from '../../stores/multiNookStore';
 import { useTutorialStore } from '../../stores/tutorialStore';
 import { MultiNookSlot } from '../../types';
-import { Plus, Maximize2, Minimize2, MessageSquare, MessageSquareOff, Loader2, X, ArrowLeft, RefreshCcw, ShieldCheck, Search, Radio } from 'lucide-react';
+import { makeKey } from '../../utils/providerKey';
+import { GRID_PICKER_PROVIDERS, gridRefusal } from '../../types/providers';
+import { Plus, Maximize2, Minimize2, MessageSquare, MessageSquareOff, Loader2, X, ArrowLeft, RefreshCcw, ShieldCheck, Search, Radio, Volume2, VolumeX } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
 import { useAppStore } from '../../stores/AppStore';
-import { ChannelItem, useChannelSearch } from './channelSearch';
+import { ChannelItem, useChannelSearch, itemKey, parseTypedChannel } from './channelSearch';
 import { ChannelResultRow } from './ChannelResultRow';
 import MultiNookPresets from './MultiNookPresets';
 
@@ -22,7 +24,7 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
   dockDropId = 'dock-drop-zone',
   dockedPrefix = 'docked::',
 }) => {
-  const { slots, addSlot, undockSlot, swapDockedSlot, isChatHidden, toggleChatHidden, toggleMultiNook, resyncAllSlots } = usemultiNookStore();
+  const { slots, addSlot, undockSlot, swapDockedSlot, isChatHidden, toggleChatHidden, toggleMultiNook, resyncAllSlots, isAllMuted, toggleAllMuted } = usemultiNookStore();
   const minimizedSlots = slots.filter(s => s.isMinimized);
   const { isDocked: isTutorialDocked, setIsDocked: setTutorialDocked } = useTutorialStore();
 
@@ -40,13 +42,17 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
   const [isAdding, setIsAdding] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const searchContainerRef = useRef<HTMLDivElement>(null);
-
   // Channels already in the grid, excluded from every list so you can't add a
-  // duplicate. Left unmemoized: the React Compiler auto-memoizes it, and a manual
-  // useMemo here can't be preserved once it's passed into the search hook.
-  const existingLogins = new Set(slots.map((s) => s.channelLogin.toLowerCase()));
+  // duplicate. Keyed COMPOSITE (provider:login), matching the store's slotKey:
+  // a bare login would make one Twitch tile hide the same-named Kick channel,
+  // which is exactly the pair the composite key exists to keep apart.
+  //
+  // Deliberately NOT wrapped in useMemo: react-hooks/preserve-manual-memoization
+  // rejects memoizing on `slots` here and is an error in this repo, so a fresh
+  // Set per render is the shape the lint allows.
+  const existingKeys = new Set(slots.map((s) => makeKey(s.provider ?? 'twitch', s.channelLogin)));
 
-  // Shared finder: live following + debounced Twitch search + keyboard navigation.
+  // Shared finder: live following + debounced multi-platform search + keyboard nav.
   const {
     searchInput,
     setSearchInput,
@@ -61,7 +67,7 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
     listRef,
     refreshFollowing,
     reset: resetSearch,
-  } = useChannelSearch(existingLogins);
+  } = useChannelSearch({ excludeKeys: existingKeys, providers: GRID_PICKER_PROVIDERS });
 
   // Focus input when the panel opens, and refresh the live-following list so it's
   // current the moment the panel appears.
@@ -97,7 +103,7 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
   const handleSelectItem = async (item: ChannelItem) => {
     if (!item.login) return;
     setIsAdding(true);
-    await addSlot(item.login);
+    await addSlot(item.login, item.provider ?? 'twitch');
     closeSearch();
     setIsAdding(false);
   };
@@ -123,9 +129,18 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
         e.preventDefault();
         await handleSelectItem(target);
       } else if (searchInput.trim() && !isSearching) {
-        // Fallback: add the raw text as a login (exact channel not surfaced by search)
+        // Fallback for a channel the search did not surface. Typed text carries no
+        // platform, so it is read through parseTypedChannel: a bare name is
+        // Twitch, and the app's own `kick:xqc` form adds a Kick channel instead
+        // of a Twitch channel literally named "kick:xqc".
+        const typed = parseTypedChannel(searchInput);
+        if (!typed) {
+          useAppStore.getState().addToast(`"${searchInput.trim()}" is not a channel name`, 'info');
+          return;
+        }
+        e.preventDefault();
         setIsAdding(true);
-        await addSlot(searchInput.trim());
+        await addSlot(typed.channel, typed.provider);
         closeSearch();
         setIsAdding(false);
       }
@@ -337,11 +352,12 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
                         <div className="space-y-0.5">
                           {followingItems.map((item, i) => (
                             <ChannelResultRow
-                              key={`f-${item.id}`}
+                              key={`f-${itemKey(item)}`}
                               item={item}
                               index={i}
                               highlighted={highlightIndex === i}
                               disabled={isAdding}
+                              reason={gridRefusal(item.provider ?? 'twitch')}
                               onSelect={handleSelectItem}
                               onHover={setHighlightIndex}
                             />
@@ -350,7 +366,7 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
                       </>
                     )}
 
-                    {/* Twitch search (debounced) — only while typing */}
+                    {/* Channel search across every platform the grid accepts (debounced) */}
                     {query && (searchItems.length > 0 || isSearching) && (
                       <>
                         <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
@@ -365,11 +381,12 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
                             const idx = followingItems.length + i;
                             return (
                               <ChannelResultRow
-                                key={`s-${item.id}`}
+                                key={`s-${itemKey(item)}`}
                                 item={item}
                                 index={idx}
                                 highlighted={highlightIndex === idx}
                                 disabled={isAdding}
+                                reason={gridRefusal(item.provider ?? 'twitch')}
                                 onSelect={handleSelectItem}
                                 onHover={setHighlightIndex}
                               />
@@ -385,7 +402,7 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
                         isSearching ? (
                           <div className="px-4 py-5 flex items-center justify-center gap-2.5">
                             <Loader2 size={14} className="text-accent animate-spin" />
-                            <span className="text-xs text-textSecondary font-medium">Searching Twitch...</span>
+                            <span className="text-xs text-textSecondary font-medium">Searching...</span>
                           </div>
                         ) : (
                           <div className="px-4 py-5 text-center">
@@ -420,6 +437,23 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
                 className={`w-8 h-8 flex items-center justify-center transition-all duration-200 glass-button text-textSecondary hover:text-accent active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed`}
               >
                 <RefreshCcw size={15} />
+              </button>
+            </Tooltip>
+
+            {/* Mute All Toggle — cuts audio on every tile at once. Per-tile mute
+                state is untouched, so unmuting restores the previous audio focus. */}
+            <Tooltip content={isAllMuted ? 'Unmute All' : 'Mute All'} delay={200} side="bottom">
+              <button
+                onClick={toggleAllMuted}
+                disabled={slots.length === 0}
+                aria-pressed={isAllMuted}
+                className={`w-8 h-8 flex items-center justify-center transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${
+                  isAllMuted
+                    ? 'glass-button-active text-error drop-shadow-md'
+                    : 'glass-button text-textSecondary hover:text-error'
+                }`}
+              >
+                {isAllMuted ? <VolumeX size={15} /> : <Volume2 size={15} />}
               </button>
             </Tooltip>
 

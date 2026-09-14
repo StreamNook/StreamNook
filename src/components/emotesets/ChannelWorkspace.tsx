@@ -26,6 +26,8 @@ interface Props {
   onChannelsChanged: () => void;
 }
 
+type SetsFetch = { list: ChannelSet[] } | { error: unknown };
+
 export default function ChannelWorkspace({ channel, initialTab, onChannelsChanged }: Props) {
   const addToast = useAppStore((s) => s.addToast);
 
@@ -44,32 +46,61 @@ export default function ChannelWorkspace({ channel, initialTab, onChannelsChange
   const [setMenuOpen, setSetMenuOpen] = useState(false);
   const [detail, setDetail] = useState<DetailContext | null>(null);
 
-  const loadSets = useCallback(async () => {
-    setSetsError(null);
+  // Fetch and apply are separate so state is only ever written from a
+  // promise continuation, never synchronously inside an effect body.
+  const fetchSets = useCallback(async (): Promise<SetsFetch> => {
     try {
       // Personal set is editable only on your own channel.
       const list = await getChannelSets(channel.seventvUserId, undefined, channel.isSelf);
+      return { list };
+    } catch (error) {
+      return { error };
+    }
+  }, [channel.seventvUserId, channel.isSelf]);
+
+  const applySets = useCallback((result: SetsFetch) => {
+    if ('list' in result) {
+      const list = result.list;
       setSets(list);
       setWorkingSetId((prev) => {
         if (prev && list.some((s) => s.id === prev)) return prev;
         const active = list.find((s) => s.isActive);
         return active?.id ?? list[0]?.id ?? null;
       });
-    } catch (e) {
-      if (e instanceof SevenTVSessionExpired) {
-        addToast('Your 7TV session expired. Reconnect your 7TV account.', 'error');
-      }
-      setSetsError(e instanceof Error ? e.message : String(e));
-      setSets([]);
+      return;
     }
-  }, [channel.seventvUserId, channel.isSelf, addToast]);
+    const e = result.error;
+    if (e instanceof SevenTVSessionExpired) {
+      addToast('Your 7TV session expired. Reconnect your 7TV account.', 'error');
+    }
+    setSetsError(e instanceof Error ? e.message : String(e));
+    setSets([]);
+  }, [addToast]);
 
-  useEffect(() => {
+  // A different channel is a fresh workspace: clear the set list during
+  // render (adjust-state-on-prop-change) so the previous channel's sets never
+  // paint while the new ones load.
+  const channelKey = `${channel.seventvUserId}:${channel.isSelf ? 1 : 0}`;
+  const [loadedChannelKey, setLoadedChannelKey] = useState(channelKey);
+  if (channelKey !== loadedChannelKey) {
+    setLoadedChannelKey(channelKey);
     setSets(null);
     setWorkingSetId(null);
     setEmoteCount(null);
-    loadSets();
-  }, [loadSets]);
+    setSetsError(null);
+  }
+
+  useEffect(() => {
+    // A fetch that resolves after the channel changed (or the workspace
+    // unmounted) is dropped rather than applied to the wrong channel.
+    let alive = true;
+    void fetchSets().then((result) => {
+      if (alive) applySets(result);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [fetchSets, applySets]);
 
   const workingSet = useMemo(
     () => sets?.find((s) => s.id === workingSetId) || null,
@@ -77,9 +108,10 @@ export default function ChannelWorkspace({ channel, initialTab, onChannelsChange
   );
 
   const onSetsMutated = useCallback(() => {
-    loadSets();
+    setSetsError(null);
+    void fetchSets().then(applySets);
     onChannelsChanged();
-  }, [loadSets, onChannelsChanged]);
+  }, [fetchSets, applySets, onChannelsChanged]);
 
   const tabs: { id: WorkspaceTab; label: string; icon: ReactNode; show: boolean }[] = [
     { id: 'emotes', label: 'Emotes', icon: <SevenTVLogo className="h-3.5 w-auto" />, show: true },

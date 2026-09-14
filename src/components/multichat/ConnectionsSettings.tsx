@@ -6,19 +6,20 @@
 // ship. This scales as platforms light up — no more per-composer connect chips
 // being the only way in.
 
-import { useCallback, useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { useCallback } from 'react';
 import { ProviderLogo } from '../ProviderLogo';
 import { PROVIDERS, PROVIDER_IDS, type ProviderId } from '../../types/providers';
 import { useAppStore } from '../../stores/AppStore';
-import { Logger } from '../../utils/logger';
+import { useFollowsStore } from '../../stores/followsStore';
+import { usePlatformAccountStore } from '../../stores/platformAccountStore';
 
-type Status = 'native' | 'connected' | 'disconnected' | 'soon';
+type Status = 'native' | 'connected' | 'disconnected' | 'anonymous' | 'soon';
 
 const DOT: Record<Status, string> = {
   native: '#53fc18',
   connected: '#53fc18',
   disconnected: 'rgba(255,255,255,0.25)',
+  anonymous: '#53fc18',
   soon: 'rgba(245,158,11,0.7)',
 };
 
@@ -26,89 +27,55 @@ const LABEL: Record<Status, string> = {
   native: 'Connected · managed in the main app',
   connected: 'Connected',
   disconnected: 'Not connected',
+  anonymous: 'Reading anonymously · no sign-in needed',
   soon: 'Coming soon',
 };
 
 export default function ConnectionsSettings() {
   const currentUser = useAppStore((s) => s.currentUser);
-  const [kickConnected, setKickConnected] = useState(false);
-  const [kickName, setKickName] = useState<string | null>(null);
-  const [kickBusy, setKickBusy] = useState(false);
-  const [youtubeConnected, setYoutubeConnected] = useState(false);
-  const [youtubeName, setYoutubeName] = useState<string | null>(null);
-  const [youtubeBusy, setYoutubeBusy] = useState(false);
+  // All of this used to be local state kept current by a 5s poll of
+  // `kick_is_connected` / `youtube_is_connected`. It now comes from the shared
+  // store, which is event-driven, so this panel costs nothing while it is open.
+  const kick = usePlatformAccountStore((s) => s.kick);
+  const youtube = usePlatformAccountStore((s) => s.youtube);
+  const connectPlatform = usePlatformAccountStore((s) => s.connect);
+  const disconnectPlatform = usePlatformAccountStore((s) => s.disconnect);
+  const resyncYoutube = usePlatformAccountStore((s) => s.resyncYoutube);
+  const { connected: kickConnected, name: kickName, busy: kickBusy, step: kickStep } = kick;
+  const {
+    connected: youtubeConnected,
+    name: youtubeName,
+    busy: youtubeBusy,
+    step: youtubeStep,
+  } = youtube;
 
-  useEffect(() => {
-    let active = true;
-    const check = async () => {
-      try {
-        const c = await invoke<boolean>('kick_is_connected');
-        if (!active) return;
-        setKickConnected(c);
-        if (c) {
-          const n = await invoke<string | null>('kick_account_name');
-          if (active) setKickName(n);
-        } else {
-          setKickName(null);
-        }
-      } catch {
-        /* ignore */
-      }
-      try {
-        const y = await invoke<boolean>('youtube_is_connected');
-        if (!active) return;
-        setYoutubeConnected(y);
-        if (y) {
-          const n = await invoke<string | null>('youtube_account_name');
-          if (active) setYoutubeName(n);
-        } else {
-          setYoutubeName(null);
-        }
-      } catch {
-        /* ignore */
-      }
-    };
-    void check();
-    const t = setInterval(() => void check(), 5000);
-    return () => {
-      active = false;
-      clearInterval(t);
-    };
-  }, []);
+  // Connecting is ONE action per platform however many credentials it takes, and
+  // the flow itself lives in the store so this panel and Settings > Profile >
+  // Accounts cannot drift into two different ways of connecting the same account.
+  const connectKick = useCallback(() => void connectPlatform('kick'), [connectPlatform]);
+  const disconnectKick = useCallback(() => void disconnectPlatform('kick'), [disconnectPlatform]);
+  const connectYoutube = useCallback(() => void connectPlatform('youtube'), [connectPlatform]);
+  const disconnectYoutube = useCallback(
+    () => void disconnectPlatform('youtube'),
+    [disconnectPlatform],
+  );
 
-  const connectKick = useCallback(() => {
-    setKickBusy(true);
-    void invoke('kick_connect')
-      .then(() => setKickConnected(true))
-      .catch((e) => Logger.warn('[Kick] connect failed:', e))
-      .finally(() => setKickBusy(false));
-  }, []);
-
-  const disconnectKick = useCallback(() => {
-    void invoke('kick_disconnect')
-      .then(() => setKickConnected(false))
-      .catch(() => {});
-  }, []);
-
-  const connectYoutube = useCallback(() => {
-    setYoutubeBusy(true);
-    void invoke('youtube_connect')
-      .then(() => setYoutubeConnected(true))
-      .catch((e) => Logger.warn('[YouTube] connect failed:', e))
-      .finally(() => setYoutubeBusy(false));
-  }, []);
-
-  const disconnectYoutube = useCallback(() => {
-    void invoke('youtube_disconnect')
-      .then(() => setYoutubeConnected(false))
-      .catch(() => {});
-  }, []);
+  // Connecting Kick brings the follow list with it, so the row can report how
+  // many channels came across rather than making that a second thing to do.
+  const follows = useFollowsStore((s) => s.follows);
+  const kickFollowCount = follows.filter((f) => f.provider === 'kick').length;
+  const youtubeFollowCount = follows.filter((f) => f.provider === 'youtube').length;
 
   const statusFor = (p: ProviderId): Status => {
     if (p === 'twitch') return 'native';
     if (p === 'kick') return kickConnected ? 'connected' : 'disconnected';
     if (p === 'youtube') return youtubeConnected ? 'connected' : 'disconnected';
-    return PROVIDERS[p].enabled ? 'disconnected' : 'soon';
+    // A read-only adapter with no sign-in (TikTok) is working as designed, not
+    // "not connected"; only platforms without an adapter are still upcoming.
+    if (PROVIDERS[p].chatEnabled) {
+      return PROVIDERS[p].send === 'none' ? 'anonymous' : 'disconnected';
+    }
+    return 'soon';
   };
 
   // Subtitle, naming the connected account where we know it.
@@ -117,10 +84,20 @@ export default function ConnectionsSettings() {
       return currentUser?.display_name ? `Connected as ${currentUser.display_name}` : LABEL.native;
     }
     if (p === 'kick' && status === 'connected') {
-      return kickName ? `Connected as ${kickName}` : 'Connected';
+      const who = kickName ? `Connected as ${kickName}` : 'Connected';
+      // Naming the follow count here is what tells the user the connection
+      // actually brought their channels across, with no second row to explain.
+      return kickFollowCount > 0
+        ? `${who} · ${kickFollowCount} channel${kickFollowCount === 1 ? '' : 's'}`
+        : who;
     }
     if (p === 'youtube' && status === 'connected') {
-      return youtubeName ? `Connected as ${youtubeName}` : 'Connected';
+      const who = youtubeName ? `Connected as ${youtubeName}` : 'Connected';
+      // Same reasoning as Kick: naming the count is what tells the user the
+      // connection actually brought their channels across.
+      return youtubeFollowCount > 0
+        ? `${who} · ${youtubeFollowCount} channel${youtubeFollowCount === 1 ? '' : 's'}`
+        : who;
     }
     return LABEL[status];
   };
@@ -128,8 +105,8 @@ export default function ConnectionsSettings() {
   return (
     <div className="space-y-4">
       <p className="text-xs text-textSecondary">
-        Connect your platform accounts to read and send chat across MultiChat. More platforms unlock as their
-        integrations ship.
+        Connect your platform accounts to browse, watch, and chat across StreamNook. More platforms
+        unlock as their integrations ship.
       </p>
 
       <div className="hairline-y overflow-hidden rounded-lg border border-borderSubtle">
@@ -150,7 +127,11 @@ export default function ConnectionsSettings() {
                     className="inline-block h-1.5 w-1.5 rounded-full"
                     style={{ backgroundColor: DOT[status] }}
                   />
-                  {subtitleFor(p, status)}
+                  {p === 'kick' && kickStep
+                    ? kickStep
+                    : p === 'youtube' && youtubeStep
+                      ? youtubeStep
+                      : subtitleFor(p, status)}
                 </div>
               </div>
 
@@ -167,7 +148,7 @@ export default function ConnectionsSettings() {
                 ) : (
                   <button
                     type="button"
-                    onClick={connectKick}
+                    onClick={() => void connectKick()}
                     disabled={kickBusy}
                     className="glass-button-secondary shrink-0 px-3 py-1 text-xs font-semibold transition-colors disabled:opacity-60"
                     style={{ color: '#53fc18' }}
@@ -177,17 +158,27 @@ export default function ConnectionsSettings() {
                 ))}
               {p === 'youtube' &&
                 (youtubeConnected ? (
-                  <button
-                    type="button"
-                    onClick={disconnectYoutube}
-                    className="glass-button-secondary shrink-0 px-3 py-1 text-xs font-medium text-textSecondary transition-colors hover:text-red-400"
-                  >
-                    Disconnect
-                  </button>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => void resyncYoutube()}
+                      disabled={youtubeBusy}
+                      className="glass-button-secondary px-3 py-1 text-xs font-medium text-textSecondary transition-colors hover:text-textPrimary disabled:opacity-60"
+                    >
+                      Sync
+                    </button>
+                    <button
+                      type="button"
+                      onClick={disconnectYoutube}
+                      className="glass-button-secondary px-3 py-1 text-xs font-medium text-textSecondary transition-colors hover:text-red-400"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
                 ) : (
                   <button
                     type="button"
-                    onClick={connectYoutube}
+                    onClick={() => void connectYoutube()}
                     disabled={youtubeBusy}
                     className="glass-button-secondary shrink-0 px-3 py-1 text-xs font-semibold transition-colors disabled:opacity-60"
                     style={{ color: '#ff4d4d' }}
@@ -205,6 +196,7 @@ export default function ConnectionsSettings() {
           );
         })}
       </div>
+
     </div>
   );
 }

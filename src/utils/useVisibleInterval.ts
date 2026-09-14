@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { isWindowHidden, onWindowVisibility } from './windowVisibility';
 
 /**
  * setInterval-style polling that skips ticks while the StreamNook window is
@@ -9,20 +10,23 @@ import { useEffect, useRef } from 'react';
  * Don't use it for things that need to run regardless of visibility (e.g.
  * background heartbeats Twitch needs to see — those should stay in Rust).
  *
- * `fn` is captured by ref so its identity doesn't need to be stable across
- * renders, which lets callers pass an inline async function without forcing
- * a wrapping useCallback.
+ * `fn` is captured by ref (synced in an effect, never on the render path) so
+ * its identity doesn't need to be stable across renders, which lets callers
+ * pass an inline async function without forcing a wrapping useCallback.
  */
 export function useVisibleInterval(fn: () => void | Promise<void>, ms: number) {
   const fnRef = useRef(fn);
-  fnRef.current = fn;
+  useEffect(() => {
+    fnRef.current = fn;
+  });
 
   useEffect(() => {
     let cancelled = false;
 
     const run = () => {
       if (cancelled) return;
-      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      // Rust-aware: a minimized window still reads as visible to Chromium here.
+      if (isWindowHidden()) return;
       // We don't await — preserves setInterval's fire-and-forget semantics and
       // matches the existing setInterval call sites this hook replaces.
       void fnRef.current();
@@ -33,14 +37,13 @@ export function useVisibleInterval(fn: () => void | Promise<void>, ms: number) {
     // When the window becomes visible after being hidden, fire immediately
     // so the UI doesn't have to wait up to `ms` for the next tick.
     const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') run();
+      if (!isWindowHidden()) run();
     };
-    document.addEventListener('visibilitychange', onVisibilityChange);
-
+    const off = onWindowVisibility(onVisibilityChange);
     return () => {
       cancelled = true;
       clearInterval(id);
-      document.removeEventListener('visibilitychange', onVisibilityChange);
+      off();
     };
   }, [ms]);
 }

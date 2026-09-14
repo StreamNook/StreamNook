@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, type JSX } from 'react';
 import { Package, Gift, Check, Clock, AlertCircle, ChevronDown, ChevronRight, Search, Filter, Sparkles, Ban, Star } from 'lucide-react';
 import type { InventoryItem, DropProgress, CampaignStatus, CompletedDrop, TimeBasedDrop } from '../../types';
 import { Tooltip } from '../ui/Tooltip';

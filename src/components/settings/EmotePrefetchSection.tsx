@@ -87,11 +87,12 @@ const EmotePrefetchSection = () => {
   return (
     <SettingsSection
       label="Emote Prefetch"
-      description="Download every emote from all the channels you follow so the emote menu opens instantly with nothing left to fetch. It dedupes shared emotes and skips anything already cached. Best run while you're away from your desk."
+      description="Download every emote from the channels you follow ahead of time, so the emote menu opens instantly in any of their chats."
     >
       <SettingsRow
-        title="Followed channels"
-        description="Scan your follows to see how much there is to cache, then download in the background."
+        title="Download emotes for every channel you follow"
+        description="Scan your follows to see how many emotes are missing and how much space they need, then download them in the background while you do something else."
+        help="1. Scan follows. 2. Check the count and size. 3. Download. Shared emotes are stored once and anything already cached is skipped, so a rerun only fetches what is new. Best started when you are away from your desk."
       >
         {progress?.warning && (
           <div className="mb-3 flex items-start gap-2 text-[12px] text-amber-400/90 bg-amber-400/10 rounded-lg px-3 py-2">

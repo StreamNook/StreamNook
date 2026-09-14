@@ -7,6 +7,9 @@ import { useAppStore } from '../stores/AppStore';
 import { getAppleEmojiUrl } from '../services/emojiService';
 import WhisperImportWizard from './WhisperImportWizard';
 import { Tooltip } from './ui/Tooltip';
+import SpellcheckUnderlay from './chat/SpellcheckUnderlay';
+import { useSpellcheck } from '../hooks/useSpellcheck';
+import { warmSpellcheck } from '../utils/spellcheck';
 import type { WhisperConversation, Whisper, UserInfo } from '../types';
 
 import { Logger } from '../utils/logger';
@@ -228,6 +231,12 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
     const sendingRef = useRef(false);
 
     const { currentUser, settings, setProfileModalUser } = useAppStore();
+
+    // Spell check for the whisper composer. No channel here, so there's no emote
+    // set to consult — only the custom dictionary and the chatter list apply.
+    const spellcheckEnabled = settings.chat_input?.spellcheck_enabled ?? true;
+    const spellUnderlayRef = useRef<HTMLDivElement>(null);
+    const spellRanges = useSpellcheck(message, { enabled: spellcheckEnabled, emoteKey: null });
 
     // Listen for auto-import whisper data event
     useEffect(() => {
@@ -596,28 +605,35 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                 }
 
                 if (existing) {
-                    // Check for duplicate message before adding
+                    // Conversations live in React state: build a new object and a
+                    // new message array rather than pushing into the old ones, so
+                    // memoized consumers (and the compiler) see the change.
                     const messageExists = existing.messages.some(m => m.id === whisperMessage.id);
-                    if (!messageExists) {
-                        existing.messages.push(whisperMessage);
-                        existing.last_message_timestamp = Date.now();
-                        if (activeConversation !== existingKey && activeConversation !== data.from_user_id) {
-                            existing.unread_count += 1;
-                        }
-                    }
+                    const updated: WhisperConversation = messageExists
+                        ? { ...existing }
+                        : {
+                            ...existing,
+                            messages: [...existing.messages, whisperMessage],
+                            last_message_timestamp: Date.now(),
+                            unread_count:
+                                activeConversation !== existingKey && activeConversation !== data.from_user_id
+                                    ? existing.unread_count + 1
+                                    : existing.unread_count,
+                        };
 
                     // If the conversation was found by username key, migrate it to use numeric ID
                     if (existingKey !== data.from_user_id) {
-                        // Update the user_id in the conversation object
-                        existing.user_id = data.from_user_id;
+                        updated.user_id = data.from_user_id;
                         // Update profile image if we have it and they don't
-                        if (profileImageUrl && !existing.profile_image_url) {
-                            existing.profile_image_url = profileImageUrl;
+                        if (profileImageUrl && !updated.profile_image_url) {
+                            updated.profile_image_url = profileImageUrl;
                         }
                         // Remove old key and add with new numeric ID key
                         newConversations.delete(existingKey);
-                        newConversations.set(data.from_user_id, existing);
+                        newConversations.set(data.from_user_id, updated);
                         Logger.debug(`[Whispers] Migrated conversation key from "${existingKey}" to "${data.from_user_id}"`);
+                    } else {
+                        newConversations.set(existingKey, updated);
                     }
                 } else {
                     newConversations.set(data.from_user_id, {
@@ -943,8 +959,12 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                 const n = new Map(prev);
                 const existing = n.get(activeConversation);
                 if (existing && !existing.messages.some(m => m.id === messageId)) {
-                    existing.messages.push(sentMessage);
-                    existing.last_message_timestamp = Date.now();
+                    // New object + array: state is never mutated in place.
+                    n.set(activeConversation, {
+                        ...existing,
+                        messages: [...existing.messages, sentMessage],
+                        last_message_timestamp: Date.now(),
+                    });
                 }
                 return n;
             });
@@ -1412,23 +1432,44 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                                     <button onClick={() => setShowEmojiPicker(!showEmojiPicker)} className={`p-2.5 rounded-xl transition-colors flex-shrink-0 ${showEmojiPicker ? 'text-accent bg-accent/10 border border-transparent shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--color-accent)_35%,transparent)]' : 'text-textSecondary hover:text-accent hover:bg-surface-hover border border-transparent'}`}>
                                         <Smile size={20} />
                                     </button>
+                                    {/* Wrapper so the spell-check underlay can sit
+                                        over the textarea; the textarea keeps the
+                                        `flex-1` sizing it had on its own. */}
+                                    <div className="relative flex-1 flex">
                                     <textarea
                                         ref={inputRef}
                                         value={message}
                                         onChange={(e) => setMessage(e.target.value)}
                                         onKeyDown={handleKeyDown}
+                                        onFocus={warmSpellcheck}
+                                        spellCheck={false}
+                                        data-spellcheck={spellcheckEnabled ? 'true' : undefined}
                                         placeholder="Type a message..."
                                         disabled={isSending}
                                         maxLength={500}
                                         rows={1}
-                                        className="flex-1 glass-input rounded-xl px-4 py-3 text-sm transition-all duration-200 disabled:opacity-50 resize-none min-h-[44px] max-h-[120px] shadow-sm"
+                                        className="w-full glass-input rounded-xl px-4 py-3 text-sm transition-all duration-200 disabled:opacity-50 resize-none min-h-[44px] max-h-[120px] shadow-sm"
                                         style={{ height: 'auto' }}
+                                        onScroll={(e) => {
+                                            if (spellUnderlayRef.current) {
+                                                spellUnderlayRef.current.scrollTop = e.currentTarget.scrollTop;
+                                            }
+                                        }}
                                         onInput={(e) => {
                                             const target = e.target as HTMLTextAreaElement;
                                             target.style.height = 'auto';
                                             target.style.height = Math.min(target.scrollHeight, 120) + 'px';
                                         }}
                                     />
+                                    {spellRanges.length > 0 && (
+                                        <SpellcheckUnderlay
+                                            innerRef={spellUnderlayRef}
+                                            text={message}
+                                            ranges={spellRanges}
+                                            className="rounded-xl px-4 py-3 text-sm"
+                                        />
+                                    )}
+                                    </div>
                                     <button onClick={handleSend} disabled={!message.trim() || isSending} className="p-2.5 glass-button hover:text-accent disabled:opacity-40 disabled:hover:text-textPrimary disabled:cursor-not-allowed text-textPrimary rounded-xl transition-colors flex-shrink-0">
                                         {isSending ? <Loader2 size={20} className="animate-spin text-accent" /> : <Send size={20} className={`${message.trim() ? 'text-accent drop-shadow-[0_0_8px_rgba(var(--color-accent-rgb),0.4)]' : ''} transition-all`} />}
                                     </button>

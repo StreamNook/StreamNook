@@ -71,7 +71,56 @@ pub fn store_native(slug: &str, emotes: Vec<KickNativeEmoteEntry>) {
     }
 }
 
+/// Rewrite bare Kick emote names in an outgoing message into the
+/// `[emote:{id}:{name}]` token Kick's own client sends.
+///
+/// Kick only renders a native emote when the message carries that token; a bare
+/// name arrives as plain text for every other viewer. The emote picker inserts
+/// bare names (a raw token in the composer would be unreadable), so the
+/// substitution happens here, on the way out.
+///
+/// 7TV names are deliberately left alone: they are matched by NAME on the
+/// receiving side, so tokenizing them would break them.
+pub fn inline_native_emotes(slug: &str, text: &str) -> String {
+    let Ok(store) = native_store().lock() else {
+        return text.to_string();
+    };
+    let Some(emotes) = store.get(&slug.to_lowercase()) else {
+        return text.to_string();
+    };
+    if emotes.is_empty() {
+        return text.to_string();
+    }
+
+    // Split on whitespace but keep it, so the message reads back exactly as typed.
+    let mut out = String::with_capacity(text.len());
+    for part in text.split_inclusive(char::is_whitespace) {
+        let trailing_len = part.len() - part.trim_end().len();
+        let (word, tail) = part.split_at(part.len() - trailing_len);
+        // Never touch a word that already looks tokenized.
+        if word.is_empty() || word.contains('[') || word.contains(']') {
+            out.push_str(part);
+            continue;
+        }
+        // Kick emote names are case-sensitive, so only an exact match qualifies.
+        match emotes.iter().find(|e| e.name == word) {
+            Some(e) => out.push_str(&format!("[emote:{}:{}]", e.id, e.name)),
+            None => out.push_str(word),
+        }
+        out.push_str(tail);
+    }
+    out
+}
+
 // Re-fetch a channel's 7TV set at most this often (it changes rarely).
+/// 7TV's user endpoint is SLOW for large sets — measured 57s for xqc's 2.4MB
+/// (1000 emotes), and 71s for the equivalent Twitch document. The previous 6s
+/// budget could only ever fetch small channels, so big ones silently fell back
+/// to globals. This runs in a background task, so waiting is free.
+const SEVENTV_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// How soon to retry after a channel-set fetch failed (vs the full TTL).
+const RETRY_AFTER: Duration = Duration::from_secs(30);
 const TTL: Duration = Duration::from_secs(10 * 60);
 
 /// Look up a single word against a channel's 7TV emotes. Cheap (one uncontended
@@ -218,7 +267,18 @@ pub async fn refresh(slug: &str, user_id: u64) {
     // Globals first so the channel set overrides on name collisions.
     fetch_into(&client, "https://7tv.io/v3/emote-sets/global", "/emotes", &mut map).await;
     let chan_url = format!("https://7tv.io/v3/users/kick/{user_id}");
-    if let Some(user) = fetch_json(&client, &chan_url).await {
+    // Whether the CHANNEL half resolved. A failed fetch and a channel with no
+    // 7TV set both leave the map holding globals only, but they need opposite
+    // treatment: the first should be retried soon, the second is the final answer.
+    let mut channel_ok = false;
+    let fetched = fetch_user(&client, &chan_url).await;
+    if let Ok(none_or_user) = &fetched {
+        // Reached 7TV and got a definitive answer, even if that answer is
+        // "this channel has no set".
+        channel_ok = true;
+        let _ = none_or_user;
+    }
+    if let Ok(Some(user)) = fetched {
         if user
             .pointer("/emote_set/emotes")
             .and_then(|e| e.as_array())
@@ -233,23 +293,77 @@ pub async fn refresh(slug: &str, user_id: u64) {
         }
     }
 
+    // A channel-set fetch that failed leaves ONLY the globals in `map`. Writing
+    // that would clobber a good set with a worse one — observed live: xqc's 999
+    // emotes were replaced by the 45 globals when one of three concurrent
+    // refreshes lost its channel fetch. Same discipline `store_native` already
+    // uses: never let a partial result overwrite a fuller one.
+    if let Ok(s) = store().lock() {
+        if s.get(&slug).is_some_and(|c| c.map.len() > map.len()) {
+            log::debug!(
+                "[Kick] 7TV refresh for {} returned {} vs {} cached; keeping the cached set",
+                slug,
+                map.len(),
+                s.get(&slug).map(|c| c.map.len()).unwrap_or(0)
+            );
+            return;
+        }
+    }
     let count = map.len();
+    // A partial result is still worth serving (globals beat nothing), but it must
+    // not sit for the whole TTL: backdating `fetched_at` makes the next call retry
+    // in RETRY_AFTER instead of ten minutes. Seen live on xqc, whose 999-emote set
+    // failed to fetch three times in a row and would otherwise have left that chat
+    // with 45 emotes until the TTL lapsed.
+    let stamp = if channel_ok {
+        Instant::now()
+    } else {
+        log::warn!(
+            "[Kick] 7TV channel set for {} did not resolve; serving {} global(s) and retrying shortly",
+            slug,
+            count
+        );
+        Instant::now()
+            .checked_sub(TTL - RETRY_AFTER)
+            .unwrap_or_else(Instant::now)
+    };
     if let Ok(mut s) = store().lock() {
         s.insert(
             slug.clone(),
             ChannelEmotes {
                 map,
-                fetched_at: Instant::now(),
+                fetched_at: stamp,
             },
         );
     }
     log::info!("[Kick] 7TV emotes for {slug} (user {user_id}): {count} loaded");
 }
 
+/// Fetch a 7TV USER document, keeping the distinction `fetch_json` throws away.
+///
+/// A channel that simply is not on 7TV answers 404, which is a FINAL answer and
+/// must be cached like any other; a timeout or a 5xx is transient and should be
+/// retried shortly. Collapsing both to `None` meant either caching "no emotes"
+/// for ten minutes after a blip, or retrying forever for a channel that will
+/// never have a set.
+async fn fetch_user(client: &reqwest::Client, url: &str) -> Result<Option<Value>, ()> {
+    let resp = match client.get(url).timeout(SEVENTV_TIMEOUT).send().await {
+        Ok(r) => r,
+        Err(_) => return Err(()),
+    };
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None); // not on 7TV: final
+    }
+    if !resp.status().is_success() {
+        return Err(()); // 5xx / rate limit: transient
+    }
+    resp.json().await.map(Some).map_err(|_| ())
+}
+
 async fn fetch_json(client: &reqwest::Client, url: &str) -> Option<Value> {
     let resp = client
         .get(url)
-        .timeout(Duration::from_secs(6))
+        .timeout(SEVENTV_TIMEOUT)
         .send()
         .await
         .ok()?;
@@ -296,5 +410,115 @@ async fn fetch_into(
 ) {
     if let Some(v) = fetch_json(client, url).await {
         collect_emotes(&v, pointer, map);
+    }
+}
+
+/// Fetch a channel's native Kick emotes over plain HTTP.
+///
+/// `kick.com/emotes/{slug}` was long treated as reachable only from a browser
+/// page context, but the edge is keying on Chrome's client hints rather than on
+/// being a real browser — send those and it answers normally. Returns None on
+/// any failure so the caller can fall back to the webview resolver.
+pub async fn fetch_native_via_http(slug: &str) -> Option<Vec<KickNativeEmoteEntry>> {
+    let url = format!("https://kick.com/emotes/{}", slug);
+    let resp = crate::services::providers::kick::browser_get(&url, slug).await?;
+    let sets: Value = resp.json().await.ok()?;
+    let arr = sets.as_array()?.clone();
+
+    let mut out = Vec::new();
+    for set in arr {
+        let label = set
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "Emotes".to_string());
+        if let Some(emotes) = set.get("emotes").and_then(|v| v.as_array()) {
+            for e in emotes {
+                let (Some(id), Some(name)) = (e.get("id"), e.get("name").and_then(|v| v.as_str()))
+                else {
+                    continue;
+                };
+                let id = id
+                    .as_str()
+                    .map(|s| s.to_string())
+                    .or_else(|| id.as_u64().map(|n| n.to_string()));
+                if let Some(id) = id {
+                    out.push(KickNativeEmoteEntry {
+                        id,
+                        name: name.to_string(),
+                        set: label.clone(),
+                    });
+                }
+            }
+        }
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn seed(slug: &str) {
+        store_native(
+            slug,
+            vec![
+                KickNativeEmoteEntry {
+                    id: "37225".into(),
+                    name: "KEKW".into(),
+                    set: "Global".into(),
+                },
+                KickNativeEmoteEntry {
+                    id: "42".into(),
+                    name: "kekw".into(),
+                    set: "Global".into(),
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn tokenizes_exact_native_names_only() {
+        seed("chan_exact");
+        // Exact match is tokenized; the differently-cased entry keeps its own id,
+        // proving the lookup is case-sensitive rather than first-wins.
+        assert_eq!(
+            inline_native_emotes("chan_exact", "KEKW"),
+            "[emote:37225:KEKW]"
+        );
+        assert_eq!(inline_native_emotes("chan_exact", "kekw"), "[emote:42:kekw]");
+        // A name that only differs by case from both entries is left alone.
+        assert_eq!(inline_native_emotes("chan_exact", "KeKw"), "KeKw");
+        // Substrings inside a larger word must not be rewritten.
+        assert_eq!(inline_native_emotes("chan_exact", "KEKWow"), "KEKWow");
+    }
+
+    #[test]
+    fn preserves_surrounding_text_and_whitespace() {
+        seed("chan_ws");
+        assert_eq!(
+            inline_native_emotes("chan_ws", "hello  KEKW\tworld\n"),
+            "hello  [emote:37225:KEKW]\tworld\n"
+        );
+    }
+
+    #[test]
+    fn leaves_already_tokenized_and_unknown_channels_untouched() {
+        seed("chan_tok");
+        // An existing token must not be re-wrapped.
+        assert_eq!(
+            inline_native_emotes("chan_tok", "[emote:37225:KEKW]"),
+            "[emote:37225:KEKW]"
+        );
+        // No stored set for the slug: pass the text through verbatim.
+        assert_eq!(inline_native_emotes("never_resolved", "KEKW"), "KEKW");
+    }
+}
+
+/// Drop a channel's cached 7TV set so the next `refresh` re-fetches instead of
+/// returning early on the TTL. Used when 7TV pushes an emote-set update.
+pub fn invalidate(slug: &str) {
+    if let Ok(mut s) = store().lock() {
+        s.remove(&slug.to_lowercase());
     }
 }

@@ -39,8 +39,8 @@ interface UserCosmeticsResponse {
 }
 
 // Cache for 7TV user data.
-//   - Successful lookups (user is on 7TV, with or without inventory; or user
-//     genuinely not on 7TV) ride the full TTL — they're stable answers.
+//   - Successful lookups (on 7TV with or without inventory, or genuinely not
+//     on 7TV) ride the full TTL: they are stable answers.
 //   - Hard failures (network error, 5xx, retry-exhausted) get a much shorter
 //     TTL so a transient 7TV blip can't strand a real user without a paint
 //     for 5 minutes. The next request retries.
@@ -211,6 +211,115 @@ const fullUserSelection = /* GraphQL */ `{
   }
 }`;
 
+// What CHAT needs from a user: which cosmetics are they WEARING. The definitions
+// themselves come from the shared catalog below, not from this query.
+const activeOnlyUserSelection = /* GraphQL */ `{
+  id
+  style {
+    activePaint { id }
+    activeBadge { id description }
+  }
+}`;
+
+// ---------------------------------------------------------------------------
+// Shared cosmetic DEFINITIONS catalog.
+//
+// Paints and badges are a small, shared, PUBLIC set: measured 2026-08-29 at
+// 1013 paints + 127 badges, ~1MB, one request, 1.9s. Nothing about it is
+// per-user, so it is cached once and reused for every chatter.
+//
+// This exists because the per-user query used to carry a full definition for
+// every cosmetic the user OWNED in order to render the single one they were
+// wearing. A chatter with fifty paints shipped fifty definitions, of which
+// forty-nine were discarded, and that payload is what pinned the batch size:
+// each user scored ~71 against 7TV's ~400 query-complexity ceiling, so only
+// five fitted in a request.
+const CATALOG_KEY = 'sn-7tv-cosmetic-catalog-v1';
+// Definitions change when 7TV ships new cosmetics, which is not often. A stale
+// entry costs nothing: an id we do not recognise triggers a refresh below.
+const CATALOG_TTL_MS = 24 * 60 * 60 * 1000;
+
+const paintCatalog = new Map<string, PaintV4>();
+const badgeCatalog = new Map<string, BadgeV4>();
+let catalogPromise: Promise<void> | null = null;
+let catalogFetchedAt = 0;
+let catalogRefreshInFlight = false;
+
+const catalogQuery = /* GraphQL */ `{
+  paints { paints ${fullPaintQueryFields} }
+  badges { badges ${fullBadgeQueryFields} }
+}`;
+
+function seedCatalogFromStorage(): boolean {
+  try {
+    const raw = localStorage.getItem(CATALOG_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as { at?: number; paints?: PaintV4[]; badges?: BadgeV4[] };
+    if (!parsed?.paints?.length) return false;
+    parsed.paints.forEach((p) => paintCatalog.set(p.id, p));
+    parsed.badges?.forEach((b) => badgeCatalog.set(b.id, b));
+    catalogFetchedAt = parsed.at ?? 0;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function fetchCatalog(): Promise<void> {
+  const response = await requestGql({ query: catalogQuery });
+  const paints = response?.data?.paints?.paints;
+  const badges = response?.data?.badges?.badges;
+  // A degraded response must never empty a catalog we already have: a chatter
+  // resolving against nothing renders with no paint at all, which looks like
+  // their cosmetic was removed.
+  if (!Array.isArray(paints) || paints.length === 0) return;
+  paintCatalog.clear();
+  paints.forEach((p: PaintV4) => paintCatalog.set(p.id, p));
+  if (Array.isArray(badges) && badges.length > 0) {
+    badgeCatalog.clear();
+    badges.forEach((b: BadgeV4) => badgeCatalog.set(b.id, b));
+  }
+  catalogFetchedAt = Date.now();
+  // Loud on purpose. This should fire ONCE per launch (or once a day). If it
+  // repeats, an id we keep failing to find is driving a refetch loop, and each
+  // pass parses ~1MB and rewrites the same to localStorage.
+  Logger.info(`[7TV] cosmetic catalog fetched: ${paints.length} paints, ${badges?.length ?? 0} badges`);
+  try {
+    localStorage.setItem(
+      CATALOG_KEY,
+      JSON.stringify({ at: catalogFetchedAt, paints, badges: badges ?? [] }),
+    );
+  } catch {
+    // Over quota, or storage disabled. The in-memory catalog still serves this
+    // session; the next launch just pays the fetch again.
+  }
+}
+
+/** Resolve once per session. Disk-seeded launches never wait on the network. */
+function ensureCatalog(): Promise<void> {
+  if (catalogPromise) return catalogPromise;
+  const seeded = seedCatalogFromStorage();
+  const fresh = seeded && Date.now() - catalogFetchedAt < CATALOG_TTL_MS;
+  catalogPromise = fresh
+    ? Promise.resolve()
+    : fetchCatalog().catch((e) => {
+        Logger.warn('[7TV] cosmetic catalog fetch failed:', e);
+      });
+  return catalogPromise;
+}
+
+/** An id we have never seen means 7TV shipped a cosmetic since our snapshot. */
+function refreshCatalogForUnknownId(id: string): void {
+  if (catalogRefreshInFlight) return;
+  catalogRefreshInFlight = true;
+  Logger.info(`[7TV] cosmetic id ${id} missing from catalog; refreshing`);
+  void fetchCatalog()
+    .catch(() => {})
+    .finally(() => {
+      catalogRefreshInFlight = false;
+    });
+}
+
 // Remove newlines and extra spaces from GraphQL query
 const cleanQuery = (query: string): string => {
   return query.replace(/\n/g, '').replace(/\s+/g, ' ');
@@ -366,6 +475,74 @@ export function queueCosmeticForCaching(id: string, url: string) {
 // Parse a single user's GraphQL payload (the `userByConnection` value) into
 // the frontend-facing cosmetics shape. Extracted so both single-fetch and
 // batched-fetch paths can share it.
+/** Point a paint's image layers at their on-disk copies, where we have them. */
+function applyPaintLocalFiles(paintData: any, cachedFiles: Record<string, string>): void {
+  if (!paintData?.data?.layers) return;
+  for (const layer of paintData.data.layers) {
+    if (layer.ty?.__typename === 'PaintLayerTypeImage' && layer.ty.images) {
+      const localPath = cachedFiles[layer.id];
+      if (localPath) {
+        const localUrl = convertFileSrc(localPath);
+        layer.ty.images.forEach((img: any) => {
+          img.localUrl = localUrl;
+        });
+      }
+    }
+  }
+}
+
+/**
+ * Build a chatter's cosmetics from their ACTIVE ids plus the shared catalog.
+ *
+ * Returns the same shape as `parseUserCosmetics`, carrying only the worn
+ * cosmetic. Safe because every consumer selects with `.find(x => x.selected)`
+ * and none iterates the inventory; the surfaces that genuinely list what a user
+ * OWNS go through `fetchUserInventory` instead.
+ *
+ * Definitions are CLONED out of the catalog. It is shared across every chatter,
+ * so stamping `selected` or a `localUrl` onto the stored object would leak one
+ * user's render state onto everyone else wearing the same paint.
+ */
+function buildCosmeticsFromCatalog(
+  data: any,
+  cachedFiles: Record<string, string>,
+): UserCosmeticsResponse {
+  const seventvUserId = data.id;
+  const activePaintId = data.style?.activePaint?.id;
+  const activeBadge = data.style?.activeBadge;
+
+  const paints: PaintV4[] = [];
+  if (activePaintId) {
+    const def = paintCatalog.get(activePaintId);
+    if (def) {
+      const paintData: any = structuredClone(def);
+      paintData.selected = true;
+      applyPaintLocalFiles(paintData, cachedFiles);
+      paints.push(paintData);
+    } else {
+      refreshCatalogForUnknownId(activePaintId);
+    }
+  }
+
+  const badges: BadgeV4[] = [];
+  if (activeBadge?.id) {
+    const def = badgeCatalog.get(activeBadge.id);
+    if (!def) refreshCatalogForUnknownId(activeBadge.id);
+    // With no definition the badge still renders: getBadgeImageUrl falls back to
+    // the CDN path built from the id, so an unknown badge shows art rather than
+    // disappearing while the catalog refreshes.
+    const badgeData: any = def
+      ? structuredClone(def)
+      : { id: activeBadge.id, name: '', description: activeBadge.description ?? '', images: [] };
+    badgeData.selected = true;
+    const localPath = cachedFiles[badgeData.id];
+    if (localPath) badgeData.localUrl = convertFileSrc(localPath);
+    badges.push(badgeData);
+  }
+
+  return { paints, badges, seventvUserId };
+}
+
 function parseUserCosmetics(
   data: any,
   cachedFiles: Record<string, string>,
@@ -419,22 +596,33 @@ function parseUserCosmetics(
   };
 }
 
-// Batch coordinator: collects twitchIds requested within the current tick and
-// fires a single aliased GraphQL query at microtask boundary. A flood of 50
-// new chatters (hype train, channel switch, replay) collapses from 50 parallel
-// HTTP round-trips into one. Microtask drain means there's no human-visible
-// delay; the batch fires at end-of-tick.
+// Batch coordinator: collects twitchIds requested inside a short window and
+// fires a single aliased GraphQL query. A flood of 50 new chatters (hype train,
+// channel switch, replay) collapses from 50 parallel HTTP round-trips into one.
+//
+// The window is a TIMER, not a microtask. A microtask drains at the end of the
+// CURRENT task, and live chat delivers one message per task, so every live
+// chatter landed in a batch of exactly one and paid a full round-trip of their
+// own. On a large channel the diag line below read "resolved 1/1" for hundreds
+// of consecutive chunks and never once read 5/5. Scrollback still drains at
+// end-of-tick, because those rows render together and trip the size threshold.
 //
 // 7TV's `users.userByConnection` is a per-user field, so we use GraphQL
 // aliasing (`u_<id>: users { userByConnection(...) { ... } }`) to multiplex N
 // users into one request. Chunked at BATCH_MAX_SIZE to stay under 7TV's
-// server-side query-complexity limit (about 400). Each aliased user with the
-// full paint field selection scores about 71, so 5 users (about 355) is the
-// largest chunk that passes. 6 or more is rejected outright with
-// "Query is too complex." and the ENTIRE batch returns null, stranding every
-// user in it without cosmetics. Do NOT raise this without re-checking 7TV's
-// live complexity ceiling first.
-const BATCH_MAX_SIZE = 5;
+// server-side query-complexity limit (about 400). Over the limit is rejected
+// outright with "Query is too complex." and the ENTIRE batch returns null,
+// stranding every user in it without cosmetics.
+//
+// This was 5, because each user then carried the full paint field selection and
+// scored about 71. Asking only for the ACTIVE ids and resolving definitions from
+// the shared catalog drops that to roughly a tenth. Ceiling re-measured against
+// live 7TV on 2026-08-29 with the active-only selection: 40 passed, 45 was
+// rejected. 30 keeps a quarter of that headroom.
+//
+// Do NOT raise this without re-measuring, and do NOT put the full definition
+// selection back into the per-user query without lowering it again.
+const BATCH_MAX_SIZE = 30;
 // Cap parallel in-flight chunks so an extreme cold-start burst (e.g.
 // scrollback dump from a 10k-viewer hype-train channel join → 40+ chunks)
 // doesn't fire dozens of concurrent HTTP requests at 7TV. Five is the
@@ -451,15 +639,55 @@ let batchScheduled = false;
 // "kick:12345"); a 7TV account's cosmetics are user-level and resolve from any
 // linked platform. Twitch stays a BARE numeric id, so its query, cache key, and
 // alias are all byte-identical to before — the no-prefix path is unchanged.
-const cosmeticPlatform = (id: string): { platform: string; platformId: string } =>
-  id.startsWith('kick:')
-    ? { platform: 'KICK', platformId: id.slice(5) }
-    : { platform: 'TWITCH', platformId: id };
+const cosmeticPlatform = (id: string): { platform: string; platformId: string } => {
+  if (id.startsWith('kick:')) return { platform: 'KICK', platformId: id.slice(5) };
+  // YouTube was falling through to the TWITCH arm, so a `youtube:UC…` id was sent
+  // to 7TV as a Twitch user id — never a match, and a wasted lookup on every
+  // YouTube chatter.
+  // 7TV names this platform GOOGLE, not YOUTUBE. Verified against the live v4
+  // schema: the Platform enum is TWITCH, DISCORD, GOOGLE, KICK, and sending
+  // YOUTUBE fails the whole query with "enumeration type Platform does not
+  // contain the value YOUTUBE" — so YouTube chatters resolved NO cosmetics at all.
+  if (id.startsWith('youtube:')) return { platform: 'GOOGLE', platformId: id.slice(8) };
+  return { platform: 'TWITCH', platformId: id };
+};
 
 // GraphQL aliases must match /[_A-Za-z][_0-9A-Za-z]*/, so a "kick:123" id can't be
 // used raw. Sanitize to a stable token used identically when building the query
 // and when reading the response back. Bare numeric Twitch ids are unaffected.
 const cosmeticAlias = (id: string): string => `u_${id.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+
+// How long ids accumulate before a drain. Cosmetics paint onto a row that has
+// already rendered, so this is invisible to the reader, and it is the whole
+// difference between one request per chatter and one request per chunk.
+const BATCH_WINDOW_MS = 150;
+// One full parallel wave. A queue this size is already worth sending, so waiting
+// out the timer would only delay it.
+const BATCH_DRAIN_THRESHOLD = MAX_PARALLEL_CHUNKS * BATCH_MAX_SIZE;
+let batchTimer: ReturnType<typeof setTimeout> | null = null;
+
+const scheduleDrain = (immediate: boolean) => {
+  if (immediate) {
+    if (batchTimer !== null) {
+      // A pending timer is the only thing that scheduled this drain, so cancel
+      // it and clear the flag before re-scheduling, or nothing would drain.
+      clearTimeout(batchTimer);
+      batchTimer = null;
+      batchScheduled = false;
+    }
+    if (!batchScheduled) {
+      batchScheduled = true;
+      queueMicrotask(drainBatch);
+    }
+    return;
+  }
+  if (batchScheduled) return;
+  batchScheduled = true;
+  batchTimer = setTimeout(() => {
+    batchTimer = null;
+    void drainBatch();
+  }, BATCH_WINDOW_MS);
+};
 
 const requestUserCosmeticsBatched = (
   twitchId: string,
@@ -471,10 +699,7 @@ const requestUserCosmeticsBatched = (
       batchQueue.set(twitchId, resolvers);
     }
     resolvers.push(resolve);
-    if (!batchScheduled) {
-      batchScheduled = true;
-      queueMicrotask(drainBatch);
-    }
+    scheduleDrain(batchQueue.size >= BATCH_DRAIN_THRESHOLD);
   });
 };
 
@@ -486,6 +711,9 @@ const drainBatch = async () => {
   // so a batch that drains mid-init doesn't render image paints/badges without
   // their local files.
   if (filesInitializationPromise) await filesInitializationPromise;
+  // Definitions must be in hand before ids can be resolved into cosmetics. Costs
+  // nothing on a disk-seeded launch, and one fetch on a cold one.
+  await ensureCatalog();
 
   // Snapshot the queue and clear it so new requests during this drain start a
   // fresh batch (will get their own microtask).
@@ -511,7 +739,7 @@ const drainBatch = async () => {
     const query = `{ ${chunk
       .map((id) => {
         const { platform, platformId } = cosmeticPlatform(id);
-        return `${cosmeticAlias(id)}: users { userByConnection(platform: ${platform}, platformId: "${platformId}") ${fullUserSelection} }`;
+        return `${cosmeticAlias(id)}: users { userByConnection(platform: ${platform}, platformId: "${platformId}") ${activeOnlyUserSelection} }`;
       })
       .join(' ')} }`;
 
@@ -539,13 +767,13 @@ const drainBatch = async () => {
         const userByConnection = response.data[cosmeticAlias(id)]?.userByConnection;
         if (userByConnection) resolved++;
         const result = userByConnection
-          ? parseUserCosmetics(userByConnection, cachedFiles)
+          ? buildCosmeticsFromCatalog(userByConnection, cachedFiles)
           : { paints: [], badges: [], seventvUserId: undefined };
         snapshot.get(id)?.forEach((r) => r(result));
       }
       // [7TV-diag] If this drops to 0/N while MultiChat is open, 7TV is silently
       // returning empty user entries (soft throttling) rather than erroring.
-      Logger.warn(`[7TV-diag] chunk resolved ${resolved}/${chunk.length} user(s) with a 7TV connection`);
+      Logger.debug(`[7TV-diag] chunk resolved ${resolved}/${chunk.length} user(s) with a 7TV connection`);
     } catch (error) {
       Logger.error('[7TV] Batch cosmetics fetch failed:', error);
       for (const id of chunk) {
@@ -647,6 +875,31 @@ export async function getUserCosmetics(twitchId: string): Promise<UserCosmeticsR
  */
 export function invalidateUserCosmeticsCache(twitchId: string): void {
   userCache.delete(twitchId);
+}
+
+/**
+ * Everything a user OWNS, not just what they are wearing.
+ *
+ * The batched chat path deliberately fetches only active ids, so it cannot
+ * answer "what does this account own". The cosmetics picker and the attainables
+ * overlay genuinely need that, and they are opened one account at a time by a
+ * human, so the heavy query is affordable exactly there and nowhere else.
+ */
+export async function fetchUserInventory(
+  twitchId: string,
+): Promise<UserCosmeticsResponse | null> {
+  const { platform, platformId } = cosmeticPlatform(twitchId);
+  const query = `{ ${cosmeticAlias(twitchId)}: users { userByConnection(platform: ${platform}, platformId: "${platformId}") ${fullUserSelection} } }`;
+  try {
+    const response = await requestGql({ query });
+    const user = response?.data?.[cosmeticAlias(twitchId)]?.userByConnection;
+    if (!user) return null;
+    if (filesInitializationPromise) await filesInitializationPromise;
+    return parseUserCosmetics(user, cachedCosmeticFiles || {});
+  } catch (e) {
+    Logger.warn('[7TV] inventory fetch failed:', e);
+    return null;
+  }
 }
 
 // Legacy function for backwards compatibility — unwraps to the historical

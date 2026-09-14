@@ -1,9 +1,9 @@
 [package]
 name = "StreamNook"
-version = "8.4.2"
+version = "8.6.1"
 description = "StreamNook"
 authors = ["Brandon Winters"]
-license = ""
+license = "PolyForm-Noncommercial-1.0.0"
 repository = "github.com/winters27/streamnook"
 edition = "2021"
 
@@ -47,6 +47,8 @@ anyhow = "1.0.100"
 async-trait = "0.1.83"
 confy = "2.0.0"
 warp = { version = "0.4.2", features = ["server", "websocket"] }
+# Ref-counted response bodies for the media relays; already in the lock via warp/hyper.
+bytes = "1"
 futures = "0.3"
 futures-util = { version = "0.3.31", features = ["sink"] }
 rand = "0.10.2"
@@ -69,6 +71,10 @@ urlencoding = "2.1.3"
 chrono = { version = "0.4.42", features = ["serde"] }
 flate2 = "1.0"
 scraper = "0.27.0"
+# Allowlist HTML sanitizer for streamer-authored panel descriptions, which are
+# rendered with dangerouslySetInnerHTML and would otherwise execute in a webview
+# that holds the user's Twitch token.
+ammonia = "4.1"
 once_cell = "1.21.3"
 sevenz-rust = "0.6"
 cosmic-text = "0.19.0"
@@ -143,11 +149,14 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Dwm",
     "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_ProcessStatus",
     "Win32_System_SystemInformation",
     "Win32_System_IO",
     "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
 ] }
 
 
@@ -172,3 +181,13 @@ custom-protocol = ["tauri/custom-protocol"]
 # a Chromium WebView). NEVER add this to `default`: the shipped build must not be
 # remotely inspectable.
 devtools = ["tauri/devtools"]
+[profile.release]
+# opt-level 3: chat parsing and song-id FFT are CPU-hot, size-opt would cost them.
+# panic stays "unwind": tokio tasks and warp handlers contain isolated panics
+# today; abort would turn any one of them into a full-process death.
+# strip is ~free on windows-msvc (debug info lives in the PDB) but helps any
+# future cross-compile.
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

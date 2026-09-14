@@ -239,3 +239,8 @@ async fn lookup_over_socket(user_id: &str) -> Option<BttvProBadge> {
         .await
         .unwrap_or(None)
 }
+
+/// Resident BTTV Pro lookups (try-lock). Diagnostics for the resource line.
+pub fn cache_len() -> Option<usize> {
+    CACHE.try_lock().ok().map(|c| c.len())
+}

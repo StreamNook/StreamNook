@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Dropdown } from '../ui/Dropdown';
 import { Tooltip } from '../ui/Tooltip';
+import { Toggle } from '../ui/Toggle';
 import { useAppStore } from '../../stores/AppStore';
 import {
   ToastPosition,
@@ -113,6 +114,7 @@ const NotificationsSettings = () => {
     enabled: true,
     play_sound: true,
     show_live_notifications: true,
+    show_favorite_live_notifications: true,
     show_whisper_notifications: true,
     show_update_notifications: true,
     show_drops_notifications: true,
@@ -156,26 +158,15 @@ const NotificationsSettings = () => {
     }
   };
 
-  const Toggle = ({ enabled, onChange, disabled = false }: { enabled: boolean; onChange: () => void; disabled?: boolean }) => (
-    <button
-      onClick={onChange}
-      disabled={disabled}
-      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ${disabled ? 'opacity-50 cursor-not-allowed' : ''
-        } ${enabled && !disabled ? 'bg-accent' : 'bg-gray-600'}`}
-    >
-      <span
-        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${enabled ? 'translate-x-6' : 'translate-x-1'
-          }`}
-      />
-    </button>
-  );
-
   return (
     <div className="space-y-8">
-      <SettingsSection label="Notifications">
+      <SettingsSection
+        label="Notifications"
+        description="Turn everything on or off here, then choose where alerts show and which ones you want below."
+      >
         <SettingsRow
-          title="Enable Notifications"
-          description="Master toggle for all notification types"
+          title="Show notifications"
+          description="Turn this off to silence every notification at once; your choices below stay saved for when you turn it back on."
           control={
             <Toggle
               enabled={liveNotifications.enabled}
@@ -187,10 +178,13 @@ const NotificationsSettings = () => {
 
       {liveNotifications.enabled && (
         <>
-          <SettingsSection label="Notification Methods">
+          <SettingsSection
+            label="Notification Methods"
+            description="Where notifications show up: in the Dynamic Island at the top of the window, as toast popups, or both."
+          >
             <SettingsRow
-              title="Dynamic Island"
-              description="Show notifications in the notification center at the top"
+              title="Show in the Dynamic Island"
+              description="Notifications appear in the notification center at the top of the window."
               control={
                 <Toggle
                   enabled={liveNotifications.use_dynamic_island ?? true}
@@ -202,8 +196,8 @@ const NotificationsSettings = () => {
             />
 
             <SettingsRow
-              title="Toast Notifications"
-              description="Show popup toasts on screen"
+              title="Show toast popups"
+              description="Each notification also pops up as a small card at the edge of the window you choose below."
               control={
                 <Toggle
                   enabled={liveNotifications.use_toast ?? true}
@@ -217,8 +211,8 @@ const NotificationsSettings = () => {
             {(liveNotifications.use_toast ?? true) && (
               <>
                 <SettingsRow
-                  title="Toast Position"
-                  description="Which corner or edge toasts appear at"
+                  title="Where toasts appear"
+                  description="Click a spot on the mini screen to move toasts to that corner or edge."
                 >
                   <ToastPositionPicker
                     value={liveNotifications.toast_position ?? DEFAULT_TOAST_POSITION}
@@ -228,8 +222,8 @@ const NotificationsSettings = () => {
                 </SettingsRow>
 
                 <SettingsRow
-                  title={`Edge Spacing: ${liveNotifications.toast_edge_offset ?? DEFAULT_TOAST_EDGE_OFFSET}px`}
-                  description="How far toasts sit from the top or bottom edge. Raise it to push them further from that edge."
+                  title={`Distance from the edge: ${liveNotifications.toast_edge_offset ?? DEFAULT_TOAST_EDGE_OFFSET}px`}
+                  description="How far toasts sit from the top or bottom edge of the window; raise it to push them further in."
                 >
                   <input
                     type="range"
@@ -247,10 +241,13 @@ const NotificationsSettings = () => {
             )}
           </SettingsSection>
 
-          <SettingsSection label="Notification Types">
+          <SettingsSection
+            label="Notification Types"
+            description="Pick which events are worth a notification."
+          >
             <SettingsRow
-              title="Live Stream Notifications"
-              description="Get notified when followed streamers go live"
+              title="When a followed channel goes live"
+              description="You get a notification the moment someone you follow starts streaming, and clicking it opens the stream."
               control={
                 <Toggle
                   enabled={liveNotifications.show_live_notifications ?? true}
@@ -262,8 +259,21 @@ const NotificationsSettings = () => {
             />
 
             <SettingsRow
-              title="Whisper Notifications"
-              description="Get notified when you receive whispers"
+              title="When a favorite channel goes live"
+              description="Channels you have favorited notify you even if you do not follow them on Twitch."
+              control={
+                <Toggle
+                  enabled={liveNotifications.show_favorite_live_notifications ?? true}
+                  onChange={() => updateLiveNotifications({
+                    show_favorite_live_notifications: !(liveNotifications.show_favorite_live_notifications ?? true)
+                  })}
+                />
+              }
+            />
+
+            <SettingsRow
+              title="When you get a whisper"
+              description="A notification shows each new whisper, and clicking it opens the conversation."
               control={
                 <Toggle
                   enabled={liveNotifications.show_whisper_notifications ?? true}
@@ -275,8 +285,8 @@ const NotificationsSettings = () => {
             />
 
             <SettingsRow
-              title="Update Notifications"
-              description="Get notified when a new app update is available"
+              title="When an app update is ready"
+              description="You hear about new StreamNook versions as soon as they are available, and clicking takes you to the Updates page."
               control={
                 <Toggle
                   enabled={liveNotifications.show_update_notifications ?? true}
@@ -289,8 +299,8 @@ const NotificationsSettings = () => {
 
             {(liveNotifications.show_update_notifications ?? true) && (liveNotifications.use_toast ?? true) && (
               <SettingsRow
-                title="Quick Update on Toast Click"
-                description="Clicking the update toast immediately starts the update"
+                title="Update straight from the toast"
+                description="Clicking the update toast starts installing right away instead of opening the Updates page first."
                 control={
                   <Toggle
                     enabled={liveNotifications.quick_update_on_toast ?? false}
@@ -303,8 +313,8 @@ const NotificationsSettings = () => {
             )}
 
             <SettingsRow
-              title="Drops Notifications"
-              description="Get notified when a drop is claimed"
+              title="When a drop is claimed"
+              description="A notification confirms each drop StreamNook claims for you."
               control={
                 <Toggle
                   enabled={liveNotifications.show_drops_notifications ?? true}
@@ -317,8 +327,8 @@ const NotificationsSettings = () => {
 
             {(liveNotifications.show_drops_notifications ?? true) && (
               <SettingsRow
-                title="Favorite Category Drops"
-                description="Notify when favorited categories have new drops on startup"
+                title="New drops in favorite categories"
+                description="At startup, StreamNook checks your favorite categories and tells you when they have new drops to earn."
                 control={
                   <Toggle
                     enabled={liveNotifications.show_favorite_drops_notifications ?? true}
@@ -331,8 +341,8 @@ const NotificationsSettings = () => {
             )}
 
             <SettingsRow
-              title="Channel Points Notifications"
-              description="Get notified when channel points are claimed"
+              title="When channel points are claimed"
+              description="A notification confirms each channel points bonus claimed for you."
               control={
                 <Toggle
                   enabled={liveNotifications.show_channel_points_notifications ?? true}
@@ -344,8 +354,8 @@ const NotificationsSettings = () => {
             />
 
             <SettingsRow
-              title="Badge Notifications"
-              description="Get notified when new badges become available"
+              title="When new badges appear"
+              description="You hear about new badges as soon as they become available to earn."
               control={
                 <Toggle
                   enabled={liveNotifications.show_badge_notifications ?? true}
@@ -357,10 +367,13 @@ const NotificationsSettings = () => {
             />
           </SettingsSection>
 
-          <SettingsSection label="Sound">
+          <SettingsSection
+            label="Sound"
+            description="A quiet sound with each notification, if you want one."
+          >
             <SettingsRow
-              title="Notification Sound"
-              description="Play a subtle sound for notifications"
+              title="Play a sound"
+              description="A soft sound plays with each notification, in the style you pick below."
               control={
                 <Toggle
                   enabled={liveNotifications.play_sound}
@@ -371,8 +384,8 @@ const NotificationsSettings = () => {
 
             {liveNotifications.play_sound && (
               <SettingsRow
-                title="Sound Style"
-                description="All sounds are designed to be pleasant and non-intrusive"
+                title="Which sound to play"
+                description="Every option is soft and short, so none of them will startle you."
               >
                 <Dropdown
                   value={liveNotifications.sound_type || 'boop'}
@@ -391,8 +404,8 @@ const NotificationsSettings = () => {
             )}
 
             <SettingsRow
-              title="Test Notification"
-              description="Send a test notification to preview your settings"
+              title="Send a test"
+              description="Fires a sample notification so you can check the position, sound, and style you picked."
               control={
                 <button
                   onClick={handleTestNotification}
@@ -436,7 +449,7 @@ const NotificationsSettings = () => {
                 About Notifications
               </p>
               <p className="text-xs text-textSecondary">
-                Choose how you receive notifications: the Dynamic Island (notification center at the top), Toast popups (positioned at any corner or edge you like), or both. Click on notifications to take action. Live notifications start the stream, whisper notifications open the conversation, and update notifications take you to the Updates page.
+                Notifications can show in the Dynamic Island (the notification center at the top), as toast popups at any corner or edge you like, or both. Clicking one takes action: a live notification starts the stream, a whisper opens the conversation, and an update takes you to the Updates page.
               </p>
             </div>
           </div>

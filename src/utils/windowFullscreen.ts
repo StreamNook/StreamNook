@@ -16,6 +16,14 @@ let restoreMaximizedAfterFullscreen = false;
  * screen. Both the single player and MultiNook tiles share this bridge.
  */
 export const syncTauriWindowFullscreen = async (entering: boolean): Promise<void> => {
+  // Flag first, before any await: the chat overlay keys off this and must
+  // flip in the same frame Plyr swaps its fullscreen class.
+  try {
+    const { useAppStore } = await import('../stores/AppStore');
+    useAppStore.setState({ isPlayerFullscreen: entering, playerOverlayVisible: true });
+  } catch {
+    /* store not ready: nothing to overlay yet */
+  }
   try {
     const { getCurrentWindow, currentMonitor, PhysicalPosition } = await import('@tauri-apps/api/window');
     const win = getCurrentWindow();

@@ -7,6 +7,23 @@ import { Tooltip } from './ui/Tooltip';
 import { useAppStore } from '../stores/AppStore';
 import { LinkPreviewCard } from './chat/LinkPreviewCard';
 import { isTrustedHost } from '../services/linkPreviewService';
+import { formatViewerCount } from '../utils/streamStats';
+
+/** One live channel from Twitch's "Viewers of X also watch" set. Mirrors the
+ *  Rust SimilarChannel struct. */
+interface SimilarChannel {
+  user_id: string;
+  user_login: string;
+  display_name: string;
+  profile_image_url?: string;
+  viewer_count: number;
+  game_name?: string;
+  thumbnail_url?: string;
+}
+
+// Session-lifetime cache: About drawers reopen constantly and the set changes
+// slowly, so one fetch per channel per session is plenty.
+const similarCache = new Map<string, SimilarChannel[]>();
 
 // ============================================================================
 // Social Media SVG Icons (matching Twitch's native icon set)
@@ -214,12 +231,19 @@ interface StreamerAboutPanelProps {
    *  About reveal) own the single scroller and read its scroll position directly,
    *  instead of nesting a second overflow that the host can't see. */
   scrollRef?: React.Ref<HTMLDivElement>;
+  /** Called after a "Viewers also watch" card starts a new stream, so a modal
+   *  host can close itself. The player About reveal doesn't need it: it already
+   *  auto-closes when the channel changes. */
+  onChannelSwitch?: () => void;
 }
 
-const StreamerAboutPanel = memo(({ channelLogin, hideHero, scrollRef }: StreamerAboutPanelProps) => {
+const StreamerAboutPanel = memo(({ channelLogin, hideHero, scrollRef, onChannelSwitch }: StreamerAboutPanelProps) => {
   const [aboutData, setAboutData] = useState<ChannelAboutData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [similarStreams, setSimilarStreams] = useState<SimilarChannel[] | null>(
+    () => similarCache.get(channelLogin.toLowerCase()) ?? null
+  );
   // Social links reuse the chat link-preview system when previews are enabled.
   const linkPreviews = useAppStore((s) => s.settings.chat_design?.link_previews ?? true);
   const trustedDomains = useAppStore((s) => s.settings.chat_design?.link_preview_trusted_domains);
@@ -255,6 +279,35 @@ const StreamerAboutPanel = memo(({ channelLogin, hideHero, scrollRef }: Streamer
     fetchData();
     return () => { cancelled = true; };
   }, [channelLogin]);
+
+  // "Viewers also watch": independent of the about fetch so a failure here can
+  // never affect the rest of the panel. Best-effort; empty result hides the row.
+  useEffect(() => {
+    const key = channelLogin.toLowerCase();
+    const cached = similarCache.get(key);
+    if (cached) {
+      setSimilarStreams(cached);
+      return;
+    }
+    let cancelled = false;
+    setSimilarStreams(null);
+    invoke<SimilarChannel[]>('get_similar_channels', { channelLogin: key })
+      .then((rows) => {
+        const filtered = rows.filter((r) => r.user_login.toLowerCase() !== key);
+        similarCache.set(key, filtered);
+        if (!cancelled) setSimilarStreams(filtered);
+      })
+      .catch((err) => {
+        Logger.debug('[StreamerAboutPanel] Similar channels unavailable:', err);
+        if (!cancelled) setSimilarStreams([]);
+      });
+    return () => { cancelled = true; };
+  }, [channelLogin]);
+
+  const handleSimilarClick = (stream: SimilarChannel) => {
+    void useAppStore.getState().startStream(stream.user_login);
+    onChannelSwitch?.();
+  };
 
   // Format follower count
   const formatFollowers = (count: number): string => {
@@ -362,6 +415,48 @@ const StreamerAboutPanel = memo(({ channelLogin, hideHero, scrollRef }: Streamer
                   ))}
                 </div>
               )
+            )}
+
+            {/* Viewers also watch — live channels adjacent to this one */}
+            {similarStreams && similarStreams.length > 0 && (
+              <div className="space-y-2">
+                <h4 className="text-[11px] font-semibold uppercase tracking-wider text-textSecondary/80 px-1">
+                  Viewers also watch
+                </h4>
+                <div className="flex gap-2 overflow-x-auto scrollbar-none pb-1">
+                  {similarStreams.map((stream) => (
+                    <button
+                      key={stream.user_id || stream.user_login}
+                      onClick={() => handleSimilarClick(stream)}
+                      className="flex-shrink-0 w-[150px] text-left glass-panel border border-borderSubtle/20 rounded-lg p-2 hover:border-accent/30 hover:bg-white/[0.03] transition-all duration-200 group"
+                    >
+                      <div className="flex items-center gap-2">
+                        {stream.profile_image_url && (
+                          <img
+                            src={stream.profile_image_url}
+                            alt=""
+                            className="w-8 h-8 rounded-full object-cover flex-shrink-0"
+                          />
+                        )}
+                        <div className="min-w-0">
+                          <div className="text-xs font-semibold text-textPrimary truncate group-hover:text-accent transition-colors">
+                            {stream.display_name}
+                          </div>
+                          {stream.game_name && (
+                            <div className="text-[10px] text-textSecondary truncate">
+                              {stream.game_name}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-textSecondary">
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0" />
+                        {formatViewerCount(stream.viewer_count)} viewers
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
 
             {/* Divider before panels */}

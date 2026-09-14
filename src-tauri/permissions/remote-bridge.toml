@@ -1,0 +1,40 @@
+# The ONLY commands reachable from the remote pages StreamNook loads in its
+# hidden/overlay webviews (twitch.tv, kick.com, and youtube.com/accounts.google.com
+# for the YouTube sign-in overlay). Each one is a narrow, one-way reporting callback
+# invoked by an injected script; none of them read credentials or take destructive
+# action.
+#
+# accounts.google.com is on that origin list for the URL bar, not for a feature:
+# the login overlay shows the live URL so the user can confirm they are typing a
+# Google password into Google. Suppressing the report there would blank the bar on
+# exactly the page where it matters most. The YouTube cookie HARVEST needs no entry
+# at all, here or in the capability: it reads the WebView2 cookie manager from Rust
+# (that is how it sees HttpOnly cookies), so no page script is involved.
+#
+# Keep this list minimal. Everything omitted here is denied to remote origins,
+# which is the point: the app's other ~400 commands include token getters and
+# account mutators that must never be callable by page script.
+#
+# Derived by grepping `__TAURI_INTERNALS__.invoke` across src-tauri/src.
+# The 7TV login windows are deliberately absent: they signal via a URL hash
+# rather than IPC, so they need no native surface at all.
+
+[[permission]]
+identifier = "remote-bridge"
+description = "Narrow reporting callbacks used by injected scripts on twitch.tv and kick.com."
+
+[permission.commands]
+allow = [
+  "emit_whisper_progress",
+  "receive_whisper_export",
+  "receive_badge_data",
+  "receive_update_result",
+  "close_login_overlay",
+  "report_login_popup_url",
+  "report_kick_chatroom",
+  "report_kick_emotes",
+  # Reports the signed-in user's own followed/subscribed channels back from the
+  # kick.com page context. Read-only and one-way, like the others here.
+  "report_kick_follows",
+  "report_kick_resolve_diag",
+]

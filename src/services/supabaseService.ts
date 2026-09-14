@@ -1,10 +1,14 @@
 import { createClient, RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
+import { invoke } from '@tauri-apps/api/core';
 import type { TwitchUser } from '../types';
+import { getClientConfig } from './clientConfig';
 
 import { Logger } from '../utils/logger';
 // Shared service reached by both shells, so a platform branch here is legitimate.
 import { IS_MOBILE } from '../utils/platform';
 import type { Atmosphere } from './atmospheres';
+import { DEV_ATMOSPHERES } from './devAtmospheres';
+import { DEV_COSMETICS, isDevCosmetic, readDevActiveCosmetic, writeDevActiveCosmetic } from './devCosmetics';
 import type { ActiveEquipment, CosmeticSlot, CosmeticType } from './cosmetics/types';
 import { SLOT_FOR_TYPE } from './cosmetics/types';
 // Supabase client singleton
@@ -269,6 +273,24 @@ export const updatePresence = async (userId: string, displayName: string, appVer
  * @param appVersion - Optional app version
  */
 export const upsertUser = async (user: TwitchUser, appVersion?: string): Promise<void> => {
+    // Server-authoritative path. The server takes the user id from the bearer
+    // token, so this can only ever write the caller's own row.
+    const synced = await writeViaApi('/api/v1/user/sync', {
+        username: user.login || user.username,
+        display_name: user.display_name || user.username,
+        avatar_url: user.profile_image_url ?? null,
+        app_version: appVersion ?? null,
+        platform: clientPlatform(),
+    });
+    if (synced.handled) {
+        // recordClient is folded into the sync endpoint; presence is separate and
+        // still ours to send. Sent regardless of whether the row write succeeded:
+        // presence and liveness must not disappear just because the sync failed,
+        // or a broken cohort goes invisible instead of looking broken.
+        await updatePresence(user.user_id, user.display_name || user.username, appVersion);
+        return;
+    }
+
     if (!supabase) {
         Logger.debug('[Supabase] Skipping user upsert - not configured');
         return;
@@ -294,16 +316,113 @@ export const upsertUser = async (user: TwitchUser, appVersion?: string): Promise
             });
 
         if (error) {
+            // Deliberately does NOT return. The client-record and presence calls
+            // below have nothing to do with whether the `users` row was written,
+            // and bailing here makes a client that cannot write `users` also stop
+            // refreshing last_seen, stop recording which client it is, and never
+            // join presence. That cohort then goes INVISIBLE rather than looking
+            // broken, which is the worst possible failure for the adoption
+            // measurement that gates revoking the anon write.
             Logger.error('[Supabase] Failed to upsert user:', error);
-            return;
+        } else {
+            Logger.debug('[Supabase] User upserted:', user.display_name || user.username);
         }
 
-        Logger.debug('[Supabase] User upserted:', user.display_name || user.username);
+        // Which client they signed in from. Not awaited: it is telemetry, and
+        // presence is what the user actually notices.
+        void recordClient(user.user_id);
 
         // Also update presence with user info
         await updatePresence(user.user_id, user.display_name || user.username, appVersion);
     } catch (error) {
         Logger.error('[Supabase] Failed to upsert user:', error);
+    }
+};
+
+/**
+ * Which StreamNook client this is.
+ *
+ * Read off the user agent rather than an OS plugin, matching how the Android
+ * port decides its own layout: the Android System WebView always says "Android"
+ * in its UA, so this is synchronous and needs no extra capability entry. Shared
+ * code, so the Android build reports itself correctly with no separate branch.
+ */
+const clientPlatform = (): string =>
+    typeof navigator !== 'undefined' && /android|iphone|ipad|ipod/i.test(navigator.userAgent)
+        ? (/android/i.test(navigator.userAgent) ? 'android' : 'ios')
+        : 'desktop';
+
+/**
+ * Record which client a member signed in from.
+ *
+ * Presence answers "who is on Android right now"; this answers "who uses
+ * Android". Without a persisted row an offline Android user looks like a
+ * desktop one.
+ *
+ * Fire-and-forget: telemetry must never be able to fail a sign-in.
+ */
+const recordClient = async (twitchUserId: string): Promise<void> => {
+    if (!supabase || !twitchUserId) return;
+    try {
+        const { error } = await supabase.rpc('record_client', {
+            p_user_id: twitchUserId,
+            p_platform: clientPlatform(),
+        });
+        if (error) Logger.debug('[Supabase] Could not record client:', error);
+    } catch (e) {
+        Logger.debug('[Supabase] Could not record client:', e);
+    }
+};
+
+/**
+ * Record that a member has a non-Twitch platform account connected.
+ *
+ * The `users` table only holds the Twitch account someone signed in with, so
+ * Kick and YouTube connections would otherwise go unrecorded.
+ *
+ * Keyed on the Twitch identity, like every other per-member table here. With no
+ * Twitch user signed in there is no member to attach the link to, so this is a
+ * no-op and the caller retries on its next read.
+ *
+ * Fire-and-forget: telemetry must never be able to fail a sign-in.
+ */
+export const recordLinkedAccount = async (
+    twitchUserId: string,
+    provider: string,
+    name: string | null,
+    avatarUrl: string | null,
+): Promise<void> => {
+    if (!supabase || !twitchUserId) return;
+    try {
+        const { error } = await supabase.rpc('record_linked_account', {
+            p_user_id: twitchUserId,
+            p_provider: provider,
+            p_name: name,
+            p_avatar: avatarUrl,
+        });
+        if (error) Logger.debug(`[Supabase] Could not record ${provider} link:`, error);
+    } catch (e) {
+        Logger.debug(`[Supabase] Could not record ${provider} link:`, e);
+    }
+};
+
+/**
+ * Stamp a platform account as disconnected. The row stays, so the dashboard can
+ * tell someone who is connected from someone who tried it and dropped it.
+ */
+export const clearLinkedAccount = async (
+    twitchUserId: string,
+    provider: string,
+): Promise<void> => {
+    if (!supabase || !twitchUserId) return;
+    try {
+        const { error } = await supabase.rpc('clear_linked_account', {
+            p_user_id: twitchUserId,
+            p_provider: provider,
+        });
+        if (error) Logger.debug(`[Supabase] Could not clear ${provider} link:`, error);
+    } catch (e) {
+        Logger.debug(`[Supabase] Could not clear ${provider} link:`, e);
     }
 };
 
@@ -678,26 +797,25 @@ export const getProfileViews = async (userId: string): Promise<number | null> =>
 };
 
 /**
- * Get the award-badge ids this user has earned (seasonal / limited, etc.).
- * Returns [] when Supabase is unconfigured or the table is missing, so the UI
- * shows everything locked rather than breaking.
+ * Earned accolade ids for a member (seasonal, limited, and so on).
+ *
+ * Returns [] only when Supabase is unconfigured or no user is signed in.
+ * A failed READ REJECTS rather than resolving to []: both callers apply the
+ * result as the new earned set, so an empty answer on a flaky moment would
+ * un-light every medallion until the next window focus. A rejection leaves
+ * what is on screen alone; callers catch it.
  */
 export const getAccolades = async (userId: string): Promise<string[]> => {
     if (!supabase || !userId) return [];
-    try {
-        const { data, error } = await supabase
-            .from('user_accolades')
-            .select('accolade_id')
-            .eq('twitch_user_id', userId);
-        if (error) {
-            Logger.error('[Supabase] Failed to get award badges:', error.message);
-            return [];
-        }
-        return (data || []).map((r: { accolade_id: string }) => r.accolade_id);
-    } catch (error) {
-        Logger.error('[Supabase] Failed to get award badges:', error);
-        return [];
+    const { data, error } = await supabase
+        .from('user_accolades')
+        .select('accolade_id')
+        .eq('twitch_user_id', userId);
+    if (error) {
+        Logger.warn('[Supabase] Failed to get accolades (keeping the current set):', error.message);
+        throw new Error(error.message);
     }
+    return (data || []).map((r: { accolade_id: string }) => r.accolade_id);
 };
 
 /**
@@ -1124,8 +1242,60 @@ export const getProfilePrefs = async (userId: string): Promise<ProfilePrefs> => 
     }
 };
 
+/**
+ * Send a privileged write through the StreamNook API instead of Supabase.
+ *
+ * Returns false when the caller should fall back to the legacy direct write:
+ * either the switch is off, or the request never reached the server. A server
+ * REFUSAL (4xx) returns true, because the server deciding "no" is a real answer
+ * and must not be retried against a table that would happily accept it.
+ *
+ * Identity is not passed. The server derives the acting user from the bearer
+ * token that `streamnook_api_post` attaches in Rust, which is the entire point:
+ * these tables are world-writable by user id under the anon key, so a body-
+ * supplied id is exactly the hole being closed.
+ */
+interface ApiWriteResult {
+    /** False means the legacy direct-Supabase path should run instead. */
+    handled: boolean;
+    /** Only meaningful when handled: whether the server accepted the write. */
+    ok: boolean;
+    error?: string;
+}
+
+const writeViaApi = async (path: string, body: Record<string, unknown>): Promise<ApiWriteResult> => {
+    const { writeViaApi: enabled } = await getClientConfig();
+    if (!enabled) return { handled: false, ok: false };
+    try {
+        const res = await invoke<{ status: number; ok: boolean; body: string }>(
+            'streamnook_api_post',
+            { path, body },
+        );
+        if (!res.ok) {
+            Logger.warn(`[StreamNookAPI] ${path} -> ${res.status} ${res.body}`);
+            // Surface it through the existing health channel so a refusal is
+            // visible rather than silently dropping the user's change. 403 is the
+            // server declining on entitlement, which is the same user-facing
+            // shape as an RLS denial.
+            reportWriteIssue({
+                kind: res.status === 403 ? 'rls_denied' : 'other',
+                lastSeen: new Date().toISOString(),
+                detail: `${path} ${res.status}: ${res.body.slice(0, 200)}`,
+            });
+        }
+        return { handled: true, ok: res.ok, error: res.ok ? undefined : res.body.slice(0, 200) };
+    } catch (e) {
+        // Transport failure only (no token, offline, command denied). The legacy
+        // path is still open until the anon policies are revoked, so use it.
+        Logger.warn(`[StreamNookAPI] ${path} unavailable, falling back:`, e);
+        return { handled: false, ok: false };
+    }
+};
+
 export const setProfileTheme = async (userId: string, theme: string): Promise<void> => {
-    if (!supabase || !userId) return;
+    if (!userId) return;
+    if ((await writeViaApi('/api/cosmetics/theme', { theme })).handled) return;
+    if (!supabase) return;
     try {
         const { error } = await supabase.from('user_profile_prefs').upsert(
             {
@@ -1438,6 +1608,11 @@ const loadCosmetics = async (): Promise<void> => {
             for (const row of (catalogRes.data || []) as CosmeticCatalogEntry[]) {
                 nextCatalog.set(row.slug, row);
             }
+            // Dev builds get candidate badge slots merged in after the live rows
+            // (see devCosmetics.ts). Tree-shaken out of production.
+            if (import.meta.env.DEV) {
+                for (const c of DEV_COSMETICS) nextCatalog.set(c.slug, c);
+            }
 
             const nextEnt = new Map<string, Set<string>>();
             for (const row of (entRes.data || []) as { twitch_user_id: string; slug: string }[]) {
@@ -1450,6 +1625,10 @@ const loadCosmetics = async (): Promise<void> => {
             for (const row of (activeRes.data || []) as { twitch_user_id: string; active_slug: string | null }[]) {
                 if (row.active_slug) nextActive.set(row.twitch_user_id, row.active_slug);
             }
+            // A dev badge equipped locally is restored over the server's answer,
+            // since the server never heard about it. Dev builds only.
+            const devActive = readDevActiveCosmetic();
+            if (devActive) nextActive.set(devActive.userId, devActive.slug);
 
             cosmeticsCatalog = nextCatalog;
             cosmeticsEntitlements = nextEnt;
@@ -1500,8 +1679,14 @@ export const subscribeToCosmeticsRegistry = (
         let connectedOnce = false;
         cosmeticsChannel = supabase
             .channel('cosmetics-registry')
+            // Every event, not just INSERT: the Discord bot takes badges back
+            // (Uplift when a boost ends, Kindred when a recruit leaves inside
+            // the dwell period), and a DELETE that nobody listens for leaves
+            // the revoked badge on screen until the next restart. Supabase
+            // sends DELETE events regardless of RLS (primary key only), and
+            // the handler just re-pulls, so the payload shape does not matter.
             .on('postgres_changes', {
-                event: 'INSERT',
+                event: '*',
                 schema: 'public',
                 table: 'user_cosmetics',
             }, () => { loadCosmetics(); })
@@ -1553,7 +1738,9 @@ export const getUserCosmeticSlugs = (userId: string | undefined | null): Set<str
 export const getOwnedCosmeticSlugs = (userId: string | undefined | null): Set<string> => {
     const owned = new Set<string>();
     for (const cosmetic of cosmeticsCatalog.values()) {
-        if (cosmetic.is_default) owned.add(cosmetic.slug);
+        // Dev-only candidate slots always count as owned on a dev build; that
+        // is what they are for. isDevCosmetic is always false in production.
+        if (cosmetic.is_default || isDevCosmetic(cosmetic.slug)) owned.add(cosmetic.slug);
     }
     if (userId) {
         const explicit = cosmeticsEntitlements.get(userId);
@@ -1561,6 +1748,14 @@ export const getOwnedCosmeticSlugs = (userId: string | undefined | null): Set<st
     }
     return owned;
 };
+
+/** Whether the cosmetics registry has actually loaded.
+ *
+ *  Needed because an empty registry and "this member owns nothing" are the same
+ *  answer from `getOwnedCosmeticSlugs`, and any gate that treats missing data as
+ *  "not owned" would blank a paying member's cosmetics during the load window or
+ *  a Supabase outage. Callers must allow rather than deny when this is false. */
+export const isCosmeticsRegistryLoaded = (): boolean => cosmeticsCatalog.size > 0;
 
 // Cosmetic kinds that own their own equip slot (see CosmeticSlot / SLOT_FOR_TYPE
 // in services/cosmetics/types). `user_cosmetic_active` predates that model: it is
@@ -1647,6 +1842,8 @@ interface AtmosphereRow {
     motion: string;
     chat_edge: string;
     chat_frost: boolean | null;
+    chat_blur: number | null;
+    chat_rim: string | null;
     unlock_kind: string;
     unlock_accolade_id: string | null;
     sort_order: number;
@@ -1670,6 +1867,8 @@ const rowToAtmosphere = (row: AtmosphereRow): Atmosphere => ({
     motion: row.motion === 'drift' ? 'drift' : 'aurora',
     chatEdge: row.chat_edge,
     chatFrost: !!row.chat_frost,
+    chatBlur: typeof row.chat_blur === 'number' && row.chat_blur > 0 ? row.chat_blur : undefined,
+    chatRim: row.chat_rim || undefined,
     unlock: row.unlock_kind === 'accolade' && row.unlock_accolade_id
         ? { kind: 'accolade', accoladeId: row.unlock_accolade_id }
         : { kind: 'subscriber' },
@@ -1693,6 +1892,12 @@ const loadAtmospheres = async (): Promise<void> => {
             const next = new Map<string, Atmosphere>();
             for (const row of (res.data || []) as AtmosphereRow[]) {
                 next.set(row.id, rowToAtmosphere(row));
+            }
+            // Dev builds get candidate slots merged in after the live rows, so an
+            // asset can be judged in the real app before it ships (see
+            // devAtmospheres.ts). Tree-shaken out of production.
+            if (import.meta.env.DEV) {
+                for (const a of DEV_ATMOSPHERES) next.set(a.id, a);
             }
             atmospheresCatalog = next;
             atmospheresLoaded = true;
@@ -1973,7 +2178,8 @@ export const setActiveCosmetic = async (
     userId: string,
     slug: string | null,
 ): Promise<{ ok: boolean; error?: string }> => {
-    if (!supabase) return { ok: false, error: 'supabase not configured' };
+    // No early `!supabase` bail: the API path below does not need the Supabase
+    // client, and returning here would make it unreachable.
     if (!userId) return { ok: false, error: 'no userId' };
     // Defence in depth alongside the picker's own filter: this row is the badge
     // slot, so refuse to write a cosmetic that belongs to a different one rather
@@ -1988,6 +2194,37 @@ export const setActiveCosmetic = async (
     if (slug) cosmeticsActive.set(userId, slug);
     else cosmeticsActive.delete(userId);
     bumpCosmeticsVersion();
+
+    // Dev-only candidate badges equip LOCALLY: the server would refuse a slug
+    // it has no row for. Persisted so a reload keeps it; cleared the moment a
+    // real badge is chosen, so the server path below takes over again.
+    if (isDevCosmetic(slug)) {
+        writeDevActiveCosmetic(userId, slug);
+        return { ok: true };
+    }
+    if (isDevCosmetic(prev)) writeDevActiveCosmetic(userId, null);
+
+    const rollback = () => {
+        if (prev) cosmeticsActive.set(userId, prev);
+        else cosmeticsActive.delete(userId);
+        bumpCosmeticsVersion();
+    };
+
+    // Server-authoritative path. The server re-checks that the caller owns the
+    // cosmetic, which the anon policy's `USING (true)` never did.
+    const api = await writeViaApi('/api/cosmetics/equip', { slug });
+    if (api.handled) {
+        if (!api.ok) {
+            rollback();
+            return { ok: false, error: api.error ?? 'equip refused' };
+        }
+        return { ok: true };
+    }
+
+    if (!supabase) {
+        rollback();
+        return { ok: false, error: 'supabase not configured' };
+    }
 
     try {
         const { error } = await supabase

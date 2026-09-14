@@ -254,6 +254,7 @@ const UserCommandsSettings = () => {
                     value={command.trigger}
                     onChange={(e) => updateCommand(command.id, { trigger: sanitizeTrigger(e.target.value) })}
                     placeholder="lurk"
+                    aria-label="Trigger"
                     maxLength={32}
                     className="flex-1 bg-transparent text-textPrimary text-sm px-1.5 py-1.5 focus:outline-none"
                     spellCheck={false}
@@ -287,24 +288,30 @@ const UserCommandsSettings = () => {
                 </div>
               </div>
 
-              <textarea
-                value={command.expansion}
-                onChange={(e) => updateCommand(command.id, { expansion: e.target.value })}
-                placeholder="What this command sends to chat. Supports {1}, {2}, {*}, {user}, {channel}."
-                rows={2}
-                className="w-full glass-input text-textPrimary text-sm px-2.5 py-1.5 resize-y"
-                spellCheck={false}
-              />
+              <label className="block">
+                <span className="mb-1 block text-[11px] text-textMuted">Message it sends</span>
+                <textarea
+                  value={command.expansion}
+                  onChange={(e) => updateCommand(command.id, { expansion: e.target.value })}
+                  placeholder="What this command sends to chat. Supports {1}, {2}, {*}, {user}, {channel}."
+                  rows={2}
+                  className="w-full glass-input text-textPrimary text-sm px-2.5 py-1.5 resize-y"
+                  spellCheck={false}
+                />
+              </label>
 
-              <input
-                type="text"
-                value={command.description ?? ''}
-                onChange={(e) => updateCommand(command.id, { description: e.target.value })}
-                placeholder="Description (optional, shown in the command picker)"
-                maxLength={120}
-                className="w-full glass-input text-textPrimary text-xs px-2.5 py-1.5"
-                spellCheck={false}
-              />
+              <label className="block">
+                <span className="mb-1 block text-[11px] text-textMuted">Description (optional)</span>
+                <input
+                  type="text"
+                  value={command.description ?? ''}
+                  onChange={(e) => updateCommand(command.id, { description: e.target.value })}
+                  placeholder="Shown next to the command in the picker"
+                  maxLength={120}
+                  className="w-full glass-input text-textPrimary text-xs px-2.5 py-1.5"
+                  spellCheck={false}
+                />
+              </label>
 
               <div className="flex items-center gap-4 pt-1 text-xs text-textSecondary">
                 <label className="inline-flex items-center gap-1.5 cursor-pointer">

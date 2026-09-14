@@ -25,7 +25,7 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -39,6 +39,28 @@ const READ_TIMEOUT_SECS: u64 = 100;
 const RECONNECT_DELAY_SECS: u64 = 3;
 
 static FALLBACK_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// What the connected account is IN a given channel. One request answers all of
+/// it, so it is fetched and cached together rather than per-question.
+#[derive(Clone, Default, serde::Serialize)]
+pub struct KickViewerState {
+    pub can_moderate: bool,
+    /// When we started following, if we do. Drives whether a followers-only
+    /// requirement actually gates us.
+    pub following_since: Option<String>,
+    pub subscribed_for: i64,
+}
+
+/// Cached viewer state per channel, with the time each was taken. Negatives are
+/// cached too, so a probe that fails (signed out, bot-defense block) backs off
+/// for the full window instead of retrying on every render.
+static KICK_CAN_MOD: OnceLock<std::sync::Mutex<HashMap<String, (KickViewerState, Instant)>>> =
+    OnceLock::new();
+const MOD_TTL: Duration = Duration::from_secs(300);
+
+fn mod_cache() -> &'static std::sync::Mutex<HashMap<String, (KickViewerState, Instant)>> {
+    KICK_CAN_MOD.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
 
 struct Connection {
     consumers: HashSet<String>,
@@ -98,11 +120,11 @@ impl ChatProvider for KickProvider {
         inc_bridge_users();
 
         // Resolve the chatroom id (+ meta, sub badges, native emotes) outside the
-        // lock via the hidden webview. Kick's endpoints sit behind Cloudflare, which
-        // 403s a plain reqwest, so a real (Chromium) page context is what clears
-        // them. The webview is kept deliberately light: it fetches what we need at
-        // document-start and is closed the moment the data is in.
-        let resolved = resolve_via_webview(&slug).await;
+        // lock. One plain request with browser headers handles this in the normal
+        // case; the hidden webview is the fallback for when the edge challenges
+        // us, and it stays deliberately light (fetch at document-start, close the
+        // moment the data is in).
+        let resolved = resolve_channel(&slug).await;
         let chatroom_id = match resolved {
             Ok(id) => id,
             Err(e) => {
@@ -153,8 +175,40 @@ impl ChatProvider for KickProvider {
                     dec_bridge_users();
                 }
             }
+            // Nobody is watching this channel any more, so its cached room state
+            // must go too: a rejoin re-seeds it, and keeping it would replay stale
+            // modes to the next client that attaches.
+            crate::services::irc_service::remove_provider_room_state(&key::make_key("kick", &slug))
+                .await;
         }
         Ok(())
+    }
+
+    async fn release_window(&self, window: &str) {
+        let mut dropped: Vec<String> = Vec::new();
+        let mut conns = self.conns.lock().await;
+        conns.retain(|slug, conn| {
+            if !conn.consumers.remove(window) || !conn.consumers.is_empty() {
+                return true;
+            }
+            // Same discipline as disconnect(): a LIVE connection (task Some) is
+            // released here; a still-resolving one (task None) is released by
+            // connect()'s own attach/failure path when it finds the slot gone, so
+            // we must not double-release it. Either way the slot goes.
+            if let Some(task) = conn.task.take() {
+                task.abort();
+                dec_bridge_users();
+                log::debug!("[Kick] released '{}' with window '{}'", slug, window);
+            }
+            dropped.push(slug.clone());
+            false
+        });
+        // Outside the retain closure, which is synchronous.
+        drop(conns);
+        for slug in dropped {
+            crate::services::irc_service::remove_provider_room_state(&key::make_key("kick", &slug))
+                .await;
+        }
     }
 
     async fn send(&self, channel: &str, text: &str, reply_to: Option<&str>) -> Result<SendOutcome> {
@@ -174,9 +228,13 @@ impl ChatProvider for KickProvider {
             return Ok(drop("Kick channel isn't resolved yet — try again in a moment"));
         };
 
+        // Kick renders a native emote only from its `[emote:id:name]` token, so
+        // bare names picked from the emote picker are tokenized on the way out.
+        let content = super::kick_emotes::inline_native_emotes(&slug, text);
+
         let mut body = json!({
             "broadcaster_user_id": broadcaster_user_id,
-            "content": text,
+            "content": content,
             "type": "user",
         });
         // Kick replies carry the parent message's UUID; the API renders the reply chip.
@@ -222,6 +280,127 @@ impl ChatProvider for KickProvider {
 // Needs the `moderation:ban` scope (granted on a fresh Kick connect). The broadcaster
 // and target are addressed by numeric Kick user id; the frontend passes the channel's
 // broadcaster id (the resolved meta user_id) + the chatter's user id.
+
+/// Channel avatars (and banners) by slug, for follow rows and offline cards.
+///
+/// Uses `/api/v2/channels/{slug}`, NOT `/api/v1/users/{slug}`. Both carry a
+/// picture, but v1 hands back a PRESIGNED S3 url with `X-Amz-Expires=1200` — it
+/// stops working after twenty minutes, so anything cached from it turns into a
+/// wall of broken images. The v2 channel document returns a plain, permanent
+/// `files.kick.com` url.
+///
+/// Slugs with no avatar are simply absent, so the caller keeps its placeholder.
+pub async fn channel_avatars(slugs: &[String]) -> HashMap<String, String> {
+    use futures::stream::{self, StreamExt};
+    // Modest concurrency: this runs for a whole follow list, and Kick's edge is
+    // the same one the resolver depends on.
+    const CONCURRENCY: usize = 4;
+    // Owned per task: borrowing `slugs` across the awaits inside `buffer_unordered`
+    // is not a general-enough lifetime for the spawned futures.
+    let owned: Vec<String> = slugs.to_vec();
+    let pairs = stream::iter(owned.into_iter().map(|slug| async move {
+        let slug_lc = slug.to_lowercase();
+        // Kick's channel endpoint is SLUG-only. An all-numeric value is a
+        // broadcaster id, which 404s every time — skip it rather than issue a
+        // request that cannot succeed (and log a warning for each one).
+        if slug_lc.is_empty() || slug_lc.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        if let Some(hit) = avatar_cache().lock().ok().and_then(|c| c.get(&slug_lc).cloned()) {
+            return Some((slug, hit));
+        }
+        let url = format!("https://kick.com/api/v2/channels/{}", slug_lc);
+        let resp = browser_get(&url, &slug_lc).await?;
+        let v: Value = resp.json().await.ok()?;
+        let pic = v
+            .pointer("/user/profile_pic")
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.is_empty())?
+            .to_string();
+        if let Ok(mut c) = avatar_cache().lock() {
+            c.insert(slug_lc, pic.clone());
+        }
+        Some((slug, pic))
+    }))
+    .buffer_unordered(CONCURRENCY)
+    .collect::<Vec<_>>()
+    .await;
+    pairs.into_iter().flatten().collect()
+}
+
+/// Resolved channel avatars by slug. Permanent urls, so this never expires
+/// within a session.
+static KICK_AVATARS: OnceLock<std::sync::Mutex<HashMap<String, String>>> = OnceLock::new();
+
+fn avatar_cache() -> &'static std::sync::Mutex<HashMap<String, String>> {
+    KICK_AVATARS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Whether the connected Kick account can moderate `slug`.
+///
+/// Asks the same in-room endpoint the profile card uses, which reports the
+/// viewer's role in that channel. This replaces inferring mod status from our
+/// own badges in the message buffer: that heuristic cannot know anything until
+/// you have SPOKEN in the channel, so a moderator who is just watching had no
+/// mod controls at all.
+///
+/// Answers are cached for 5 minutes INCLUDING negatives, which doubles as the
+/// backoff against Kick's bot defense — a failing probe cannot be re-issued in a
+/// loop. The caller keeps the badge heuristic as a fallback, so a promotion
+/// mid-session still takes effect before this expires.
+pub async fn can_moderate(slug: &str) -> bool {
+    viewer_state(slug).await.can_moderate
+}
+
+/// The connected account's standing in `slug`: mod rights, follow age, sub tenure.
+pub async fn viewer_state(slug: &str) -> KickViewerState {
+    let slug_lc = slug.to_lowercase();
+    if let Some((state, at)) = mod_cache()
+        .lock()
+        .ok()
+        .and_then(|m| m.get(&slug_lc).cloned())
+    {
+        if at.elapsed() < MOD_TTL {
+            return state;
+        }
+    }
+    let Some(me) = crate::services::kick_auth_service::account_name().await else {
+        return KickViewerState::default(); // not signed in: no identity to ask about
+    };
+    let url = format!(
+        "https://kick.com/api/v2/channels/{}/users/{}",
+        slug_lc,
+        me.to_lowercase()
+    );
+    let state = match browser_get(&url, &slug_lc).await {
+        Some(resp) => match resp.json::<Value>().await {
+            Ok(v) => KickViewerState {
+                can_moderate: v.get("is_moderator").and_then(|x| x.as_bool()).unwrap_or(false)
+                    || v.get("is_channel_owner").and_then(|x| x.as_bool()).unwrap_or(false)
+                    || v.get("is_staff").and_then(|x| x.as_bool()).unwrap_or(false),
+                following_since: v
+                    .get("following_since")
+                    .and_then(|x| x.as_str())
+                    .map(str::to_string),
+                subscribed_for: v.get("subscribed_for").and_then(|x| x.as_i64()).unwrap_or(0),
+            },
+            Err(_) => KickViewerState::default(),
+        },
+        None => KickViewerState::default(),
+    };
+    log::info!(
+        "[Kick] viewer_state '{}' as '{}': mod={} following_since={:?} subscribed_for={}",
+        slug_lc,
+        me,
+        state.can_moderate,
+        state.following_since,
+        state.subscribed_for
+    );
+    if let Ok(mut m) = mod_cache().lock() {
+        m.insert(slug_lc, (state.clone(), Instant::now()));
+    }
+    state
+}
 
 /// Ban (duration None) or time out (duration Some(minutes), 1..=10080) a Kick user.
 pub async fn ban_user(
@@ -313,6 +492,11 @@ struct ResolvedChannel {
     chatroom_id: u64,
     sub_badges: Vec<(u32, String)>, // (months, badge image src)
     meta: Option<KickChannelMeta>,
+    /// Raw chatroom settings object, when the resolve path saw one. Seeds the
+    /// initial ROOMSTATE so modes are known on join rather than only after the
+    /// next change event. The webview path leaves this None; the live event
+    /// corrects state either way.
+    chatroom_settings: Option<Value>,
 }
 
 /// Subscriber-badge entry deserialized from the report command.
@@ -341,6 +525,13 @@ pub struct KickChannelMeta {
     pub title: Option<String>,
     pub profile_pic: Option<String>,
     pub is_live: bool,
+    /// The channel's IVS master-playlist URL. Captured during the same resolve
+    /// because kick.com/api is Cloudflare-gated and this is the ONLY way to get
+    /// it; the master itself is then plain-fetchable (no Cloudflare). Skipped in
+    /// the serialized meta the chat chrome consumes — it's a playback detail,
+    /// carries a signed token, and has no business in the frontend's chat meta.
+    #[serde(default, skip_serializing)]
+    pub playback_url: Option<String>,
 }
 
 // Per-channel live metadata captured during resolve, keyed by lowercase slug.
@@ -357,6 +548,107 @@ pub fn channel_meta(slug: &str) -> Option<KickChannelMeta> {
         .lock()
         .ok()
         .and_then(|m| m.get(&slug.to_lowercase()).cloned())
+}
+
+/// Resolve a channel through the hidden webview if we don't already hold a
+/// usable record, and return the cached meta either way.
+///
+/// This exists so the WATCH path can obtain `playback_url` without opening chat:
+/// the chat adapter populates the same cache as a side effect of connecting, so
+/// a channel you're already chatting in resolves for free. `require_playback`
+/// forces a re-resolve when a cached record predates playback capture (or when
+/// its signed master URL is stale), since a meta entry without a playback URL is
+/// useless to the player.
+pub async fn ensure_resolved(slug: &str, require_playback: bool) -> Result<KickChannelMeta> {
+    let slug_lc = slug.to_lowercase();
+    if let Some(meta) = channel_meta(&slug_lc) {
+        if !require_playback || meta.playback_url.is_some() {
+            return Ok(meta);
+        }
+    }
+    resolve_channel(&slug_lc).await?;
+    channel_meta(&slug_lc)
+        .ok_or_else(|| anyhow!("Kick channel '{}' resolved but reported no metadata", slug))
+}
+
+/// Resolve a channel, cheapest path first. Returns its chatroom id.
+///
+/// A plain HTTP request carrying Chrome.s client hints is the PRIMARY path, and
+/// the browser exists only as the fallback for when that gets challenged. Doing
+/// it the other way round — which is what this used to do — makes every channel
+/// open pay for a webview and wait on a bot challenge that can never clear.
+pub(crate) async fn resolve_channel(slug: &str) -> Result<u64> {
+    let slug_lc = slug.to_lowercase();
+    // Deliberately loud: if this line is absent from the log, the running binary
+    // predates the http path and the app needs a real rebuild, not more theories.
+    log::info!("[Kick] resolving '{}' (http first)", slug_lc);
+    if let Some(resolved) = resolve_via_http(&slug_lc).await {
+        let chatroom_id = resolved.chatroom_id;
+        commit_resolved(&slug_lc, resolved);
+        log::debug!("[Kick] resolved '{}' over http (no webview needed)", slug_lc);
+        // Native emotes are a separate, slower endpoint; fetch them in the
+        // background so they never delay chat connect or playback.
+        let slug_owned = slug_lc.clone();
+        tokio::spawn(async move {
+            if let Some(emotes) = kick_emotes::fetch_native_via_http(&slug_owned).await {
+                kick_emotes::store_native(&slug_owned, emotes);
+            }
+        });
+        return Ok(chatroom_id);
+    }
+    log::debug!("[Kick] http resolve failed for '{}'; falling back to webview", slug_lc);
+    resolve_via_webview(&slug_lc).await
+}
+
+/// Store a resolved channel's badges + meta and warm its 7TV emote set. Shared
+/// by both resolve paths so they can never drift.
+fn commit_resolved(slug_lc: &str, resolved: ResolvedChannel) {
+    // Seed the room modes we already learned during resolve, so a channel that is
+    // (say) subscriber-only says so immediately instead of only after the next
+    // ChatroomUpdatedEvent, which may never come.
+    if let Some(settings) = &resolved.chatroom_settings {
+        let key = key::make_key("kick", slug_lc);
+        let rs = build_roomstate(settings, &key);
+        tokio::spawn(async move {
+            crate::services::irc_service::cache_provider_room_state(&key, rs.clone()).await;
+            super::publish_frame(rs).await;
+        });
+    }
+    if !resolved.sub_badges.is_empty() {
+        if let Ok(mut m) = sub_badges_cache().lock() {
+            m.insert(slug_lc.to_string(), resolved.sub_badges);
+        }
+    }
+    if let Some(meta) = resolved.meta {
+        let uid = meta.user_id;
+        if let Ok(mut m) = kick_meta_cache().lock() {
+            m.insert(slug_lc.to_string(), meta);
+        }
+        if let Some(uid) = uid {
+            let slug_owned = slug_lc.to_string();
+            tokio::spawn(async move {
+                kick_emotes::refresh(&slug_owned, uid).await;
+                // Live 7TV events for this channel (emote-set edits + present
+                // users' cosmetics), the same feed Twitch channels get. Skips
+                // itself when the channel isn't on 7TV, leaving the TTL refetch
+                // above as the only source, exactly as before.
+                crate::services::seventv_eventapi::subscribe_channel_on(
+                    &slug_owned,
+                    &uid.to_string(),
+                    "kick",
+                )
+                .await;
+            });
+        }
+    }
+}
+
+/// Drop a channel's cached meta so the next `ensure_resolved` re-runs the
+/// webview. Used when a signed playback URL stops working mid-session.
+pub fn invalidate_meta(slug: &str) {
+    if let Ok(mut m) = kick_meta_cache().lock() {
+        m.remove(&slug.to_lowercase());
+    }
 }
 
 static PENDING: OnceLock<Mutex<HashMap<String, oneshot::Sender<ResolvedChannel>>>> = OnceLock::new();
@@ -397,6 +689,9 @@ pub async fn resolve_pending(
             chatroom_id,
             sub_badges,
             meta,
+            // The webview resolver does not report chatroom settings; the live
+            // ChatroomUpdatedEvent fills them in on the next change.
+            chatroom_settings: None,
         });
     }
 }
@@ -418,6 +713,27 @@ async fn resolve_via_webview(_slug: &str) -> Result<u64> {
     Err(anyhow::anyhow!(
         "Kick channel resolution is not available on mobile"
     ))
+}
+
+/// Tears the hidden resolver webview down when it leaves scope, however it
+/// leaves: normal return, panic, or the task being aborted (dropping the future
+/// drops this too).
+///
+/// The emote wait runs in a DETACHED task, so a panic in `store_native` or a
+/// runtime shutdown mid-wait used to strand a hidden 1280x800 WebView2 for the
+/// life of the process. `destroy()` rather than `close()` for the same reason
+/// `kick_account.rs:145` and `youtube_auth_service.rs:408` use it: `close()` is
+/// a request the page can defer, and this one is pointed at kick.com.
+#[cfg(desktop)]
+struct ResolverWindow(Option<tauri::WebviewWindow>);
+
+#[cfg(desktop)]
+impl Drop for ResolverWindow {
+    fn drop(&mut self) {
+        if let Some(win) = self.0.take() {
+            let _ = win.destroy();
+        }
+    }
 }
 
 #[cfg(desktop)]
@@ -453,6 +769,7 @@ async fn resolve_via_webview(slug: &str) -> Result<u64> {
     pending_emotes().lock().await.insert(label.clone(), tx_emotes);
 
     let profile = kick_resolve_profile_dir(&app);
+    take_profile_reset(&profile);
     let script = kick_resolve_script(&slug_lc, &label);
     let parsed = "https://kick.com/"
         .parse()
@@ -463,11 +780,14 @@ async fn resolve_via_webview(slug: &str) -> Result<u64> {
         .initialization_script(&script)
         .visible(false)
         .skip_taskbar(true)
-        // Don't steal focus, and keep the viewport tiny: the resolver only needs a
-        // page context to run one fetch, so a 1x1 viewport means none of the
-        // homepage's below-the-fold images/video ever lazy-load.
         .focused(false)
-        .inner_size(1.0, 1.0)
+        // A REAL viewport, even though the window is never shown. This used to be
+        // 1x1 to stop the homepage lazy-loading images, but bot-defense scripts
+        // fingerprint window/screen geometry and a one-pixel viewport is about the
+        // loudest possible "I am automation" signal — which is how the resolver
+        // ends up sitting through a challenge that never clears. Ordinary laptop
+        // dimensions cost a few images and look like a browser.
+        .inner_size(1280.0, 800.0)
         .build()
     {
         Ok(w) => w,
@@ -481,7 +801,7 @@ async fn resolve_via_webview(slug: &str) -> Result<u64> {
     // Wait only for the channel chrome (chatroom id + meta + sub badges) — NOT the
     // native emotes — so chat connect and the name/viewers/uptime resolve as fast
     // as the channel API fetch.
-    let result = timeout(Duration::from_secs(30), rx).await;
+    let result = timeout(Duration::from_secs(45), rx).await;
     pending().lock().await.remove(&label);
 
     match result {
@@ -511,26 +831,79 @@ async fn resolve_via_webview(slug: &str) -> Result<u64> {
             let slug_owned = slug_lc.clone();
             let label_owned = label.clone();
             tokio::spawn(async move {
+                // Owns the window for the rest of this task: it is destroyed on
+                // the way out whatever happens below.
+                let _win = ResolverWindow(Some(win));
                 if let Ok(Ok(emotes)) = timeout(Duration::from_secs(15), rx_emotes).await {
                     kick_emotes::store_native(&slug_owned, emotes);
                 }
                 pending_emotes().lock().await.remove(&label_owned);
-                let _ = win.close();
             });
             Ok(resolved.chatroom_id)
         }
         other => {
-            // Chrome never arrived: drop the emote channel + close the webview now.
+            // Chrome never arrived: drop the emote channel + destroy the webview now.
             pending_emotes().lock().await.remove(&label);
-            let _ = win.close();
+            drop(ResolverWindow(Some(win)));
             match other {
                 Ok(Err(_)) => Err(anyhow!("Kick resolver channel closed for '{}'", slug)),
-                _ => Err(anyhow!(
-                    "Kick channel lookup for '{}' timed out (Cloudflare challenge?)",
-                    slug
-                )),
+                _ => {
+                    // Most often a wedged bot-challenge state in the browser
+                    // profile. Ask the next attempt to start from a clean one, so
+                    // a retry usually just works instead of failing forever.
+                    request_profile_reset();
+                    Err(anyhow!(
+                        "Kick channel lookup for '{}' timed out (Cloudflare challenge?)",
+                        slug
+                    ))
+                }
             }
         }
+    }
+}
+
+/// The persistent WebView2 profile for kick.com. Shared by the playback
+/// resolver and the account sync, so signing in once also clears Cloudflare for
+/// the resolver and survives restarts.
+pub fn resolve_profile_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
+    kick_resolve_profile_dir(app)
+}
+
+/// A SEPARATE profile for account sign-in.
+///
+/// It deliberately does not share the resolver's profile. Signing in runs the
+/// gauntlet of Kick's bot defense, and a failed run can leave the profile with
+/// challenge state that then breaks the resolver — which would take playback
+/// down with it. Playback needs no login, so the two stay isolated and a bad
+/// sign-in can only ever cost you sign-in.
+pub fn account_profile_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
+    use tauri::Manager;
+    let base = app
+        .path()
+        .app_local_data_dir()
+        .unwrap_or_else(|_| std::env::temp_dir());
+    let dir = base.join("platform_web_profiles").join("kick-account");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+/// Set when a resolve times out, so the next attempt starts from a clean browser
+/// profile. A wedged challenge state is the documented cause of exactly this
+/// symptom, and wiping the profile is the documented cure — doing it
+/// automatically means the user never has to know that.
+static RESET_PROFILE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn request_profile_reset() {
+    RESET_PROFILE.store(true, Ordering::Relaxed);
+}
+
+/// Wipe the resolver's browser profile if a previous attempt asked for it.
+/// Best-effort: a locked file just means we retry with what's there.
+fn take_profile_reset(dir: &std::path::Path) {
+    if RESET_PROFILE.swap(false, Ordering::Relaxed) {
+        log::warn!("[Kick] resolver timed out previously; clearing browser profile before retry");
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::create_dir_all(dir);
     }
 }
 
@@ -574,7 +947,10 @@ fn kick_resolve_script(slug: &str, label: &str) -> String {
       start_time: st,
       title: (ls && ls.session_title) || null,
       profile_pic: (data && data.user && data.user.profile_pic) || null,
-      is_live: !!ls
+      is_live: !!ls,
+      // The IVS master URL for the player. Free here (same response), and
+      // unreachable any other way: this endpoint is Cloudflare-gated.
+      playback_url: (data && data.playback_url) || null
     }};
   }}
   // Kick's OWN emotes (channel sub set + Global + Emojis) from a SEPARATE,
@@ -624,17 +1000,31 @@ fn kick_resolve_script(slug: &str, label: &str) -> String {
   // not retry waiting for it or chat connect would stall. Retries cover only a
   // failed/incomplete fetch (a Cloudflare interstitial that hasn't cleared yet).
   // Native emotes are fetched + reported separately so they never delay the chrome.
+  // Leave a breadcrumb in the app log. A bare "timed out" can't distinguish a
+  // challenge that never cleared from a 403 from a script that never ran, and
+  // guessing between those has already cost us a round trip.
+  function diag(note) {{
+    try {{ window.__TAURI_INTERNALS__.invoke('report_kick_resolve_diag', {{ label: label, note: String(note) }}); }} catch (e) {{}}
+  }}
+
   function tryFetch(tries) {{
-    if (tries > 6) return;
+    if (tries > 6) {{ diag('gave up after 7 attempts'); return; }}
     fetch('https://kick.com/api/v2/channels/' + slug + '?_cb=' + Date.now(), {{ headers: {{ 'Accept': 'application/json' }}, cache: 'no-store' }})
       .then(function(r) {{ if (!r.ok) throw r.status; return r.json(); }})
       .then(function(data) {{
         var id = data && data.chatroom && data.chatroom.id;
-        if (!id) {{ setTimeout(function() {{ tryFetch(tries + 1); }}, 800); return; }}
+        if (!id) {{
+          diag('attempt ' + tries + ': 200 but no chatroom id (challenge page?)');
+          setTimeout(function() {{ tryFetch(tries + 1); }}, 800);
+          return;
+        }}
         reportChannel(id, extract(data), extractMeta(data));
         fetchEmotes(0).then(reportEmotes);
       }})
-      .catch(function() {{ setTimeout(function() {{ tryFetch(tries + 1); }}, 1000); }});
+      .catch(function(err) {{
+        diag('attempt ' + tries + ' failed: ' + err);
+        setTimeout(function() {{ tryFetch(tries + 1); }}, 1000);
+      }});
   }}
   // Fire at document-start (this script is an initialization script, so it runs
   // before the page's own scripts). fetch() needs only the origin + cookies, NOT a
@@ -750,6 +1140,25 @@ async fn connect_and_stream(chatroom_id: u64, channel_id: Option<u64>, channel_k
                         let unpin = json!({ "type": "UNPINNED", "provider": "kick", "channel": channel_key });
                         publish_frame(unpin.to_string()).await;
                     }
+                    // Chat mode changes (slow / subscribers / followers / emotes).
+                    // Normalized into the SAME ROOMSTATE frame Twitch's IRC path
+                    // emits, so the composer gating and mode indicators the
+                    // frontend already has start working with no frontend change.
+                    "App\\Events\\ChatroomUpdatedEvent" => {
+                        if let Some(data) = frame
+                            .get("data")
+                            .and_then(|d| d.as_str())
+                            .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                        {
+                            let rs = build_roomstate(&data, channel_key);
+                            crate::services::irc_service::cache_provider_room_state(
+                                channel_key,
+                                rs.clone(),
+                            )
+                            .await;
+                            publish_frame(rs).await;
+                        }
+                    }
                     name => {
                         // Surface any other Kick event ONCE per occurrence so a live
                         // run reveals the real payload shapes (follows, host/raid,
@@ -781,6 +1190,85 @@ async fn connect_and_stream(chatroom_id: u64, channel_id: Option<u64>, channel_k
 
 /// Decode one `ChatMessageEvent` Pusher frame into a unified ChatMessage. The
 /// frame's `data` field is a JSON-encoded string (double-encoded).
+/// Ceiling on seeded scrollback. Enough to arrive with context, short enough
+/// that a busy channel does not open with a wall of stale chat.
+const HISTORY_MAX: usize = 40;
+
+/// Recent chat for a channel, newest-last, for seeding the pane on join.
+///
+/// Kick keeps a short scrollback that the site itself renders when you open a
+/// channel; without it our pane opened empty and an OFFLINE channel stayed empty
+/// forever, since the socket only ever carries new traffic.
+///
+/// Two hops because the history route is addressed by the NUMERIC channel id and
+/// the slug form returns a 500, which is what made this look unavailable.
+///
+/// Each entry is re-wrapped as a Pusher-shaped frame so `parse_chat_message`
+/// handles it: the REST payload carries the same `content` / `sender.identity` /
+/// `created_at` fields, just not double-encoded. Reusing the parser means emote
+/// tokens, badges, colours and reply parents all render exactly as live messages
+/// do, rather than through a second half-equivalent code path.
+pub async fn chat_history(slug: &str) -> Vec<ChatMessage> {
+    let slug_lc = slug.to_lowercase();
+    let channel_id = match browser_get(
+        &format!("https://kick.com/api/v2/channels/{}", slug_lc),
+        &slug_lc,
+    )
+    .await
+    {
+        Some(resp) => match resp.json::<Value>().await {
+            Ok(v) => match v.get("id").and_then(|i| i.as_u64()) {
+                Some(id) => id,
+                None => {
+                    log::warn!("[Kick] history for '{}': channel record had no id", slug_lc);
+                    return Vec::new();
+                }
+            },
+            Err(e) => {
+                log::warn!("[Kick] history for '{}': channel record did not parse: {}", slug_lc, e);
+                return Vec::new();
+            }
+        },
+        None => return Vec::new(),
+    };
+
+    let url = format!("https://kick.com/api/v2/channels/{}/messages", channel_id);
+    let Some(resp) = browser_get(&url, &slug_lc).await else {
+        return Vec::new();
+    };
+    let body: Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("[Kick] history for '{}' did not parse: {}", slug_lc, e);
+            return Vec::new();
+        }
+    };
+
+    let channel_key = key::make_key("kick", &slug_lc);
+    let Some(rows) = body.pointer("/data/messages").and_then(|m| m.as_array()) else {
+        log::warn!("[Kick] history for '{}' carried no messages array", slug_lc);
+        return Vec::new();
+    };
+
+    // Kick returns newest FIRST; the pane appends downward, so flip it.
+    let mut out: Vec<ChatMessage> = rows
+        .iter()
+        .rev()
+        .filter_map(|row| {
+            let framed = json!({ "data": serde_json::to_string(row).ok()? });
+            parse_chat_message(&framed, &channel_key)
+        })
+        .collect();
+    out.truncate(HISTORY_MAX);
+    log::info!(
+        "[Kick] history for '{}': {} message(s) of {} returned",
+        slug_lc,
+        out.len(),
+        rows.len()
+    );
+    out
+}
+
 fn parse_chat_message(frame: &Value, channel_key: &str) -> Option<ChatMessage> {
     let data_str = frame.get("data")?.as_str()?;
     let data: Value = serde_json::from_str(data_str).ok()?;
@@ -846,11 +1334,15 @@ fn parse_chat_message(frame: &Value, channel_key: &str) -> Option<ChatMessage> {
                     .unwrap_or("")
                     .to_string(),
                 parent_display_name: parent_name.clone(),
-                parent_msg_body: m
-                    .pointer("/original_message/content")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("")
-                    .to_string(),
+                // The reply preview is a plain-text surface, so Kick's inline
+                // `[emote:id:name]` tokens are reduced to their names the same way
+                // the pinned banner does it. Left raw, the preview literally read
+                // "[emote:37225:KEKW]".
+                parent_msg_body: strip_emote_tokens(
+                    m.pointer("/original_message/content")
+                        .and_then(|c| c.as_str())
+                        .unwrap_or(""),
+                ),
                 parent_user_id: parent_id,
                 parent_user_login: parent_name.to_lowercase(),
             }
@@ -912,15 +1404,22 @@ fn build_event_message(
     display_name: &str,
     msg_id: &str,
     system_msg: &str,
+    // The actor's Kick id when the payload carries one. Empty for events with no
+    // single actor (and for shapes that omit it), which is why it is not required.
+    // Without it the activity feed cannot key 7TV cosmetics for this row.
+    user_id: &str,
 ) -> ChatMessage {
     let id = format!("kick-evt-{}", FALLBACK_SEQ.fetch_add(1, Ordering::Relaxed));
     let mut tags = HashMap::new();
     tags.insert("display-name".to_string(), display_name.to_string());
     tags.insert("msg-id".to_string(), msg_id.to_string());
     tags.insert("system-msg".to_string(), system_msg.to_string());
+    if !user_id.is_empty() {
+        tags.insert("user-id".to_string(), user_id.to_string());
+    }
     ChatMessage {
         id,
-        user_id: String::new(),
+        user_id: user_id.to_string(),
         username: display_name.to_lowercase(),
         display_name: display_name.to_string(),
         color: None,
@@ -962,6 +1461,19 @@ fn name_from(v: Option<&Value>) -> Option<String> {
         .map(String::from)
 }
 
+/// The actor's Kick id out of the same value `name_from` reads, when the payload
+/// carries one. Kick sends ids as numbers in some shapes and strings in others,
+/// and several event payloads only carry a username, so this is best-effort:
+/// an id enables 7TV cosmetics on the activity row, and its absence just leaves
+/// the row plain (which is today's behavior).
+fn id_from(v: Option<&Value>) -> Option<String> {
+    let v = v?;
+    let id = v.get("id").or_else(|| v.get("user_id"))?;
+    id.as_u64()
+        .map(|n| n.to_string())
+        .or_else(|| id.as_str().map(String::from))
+}
+
 /// Decode `App\Events\SubscriptionEvent` (a subscribe or resub). Like the chat
 /// event, `data` is a double-encoded JSON string. Documented shape (KickLib /
 /// kick.py): `{ chatroom_id, username, months }`; tolerant of a nested
@@ -975,6 +1487,10 @@ fn parse_subscription(frame: &Value, channel_key: &str) -> Option<ChatMessage> {
     let username = name_from(data.get("username"))
         .or_else(|| name_from(data.get("subscriber")))
         .or_else(|| name_from(data.get("user")))?;
+    let user_id = id_from(data.get("subscriber"))
+        .or_else(|| id_from(data.get("user")))
+        .or_else(|| id_from(Some(&data)))
+        .unwrap_or_default();
     let months = data
         .get("months")
         .or_else(|| data.get("duration"))
@@ -988,7 +1504,7 @@ fn parse_subscription(frame: &Value, channel_key: &str) -> Option<ChatMessage> {
     } else {
         ("sub", format!("{} subscribed!", username))
     };
-    let mut msg = build_event_message(channel_key, &username, msg_id, &system_msg);
+    let mut msg = build_event_message(channel_key, &username, msg_id, &system_msg, &user_id);
     // Carry the cumulative months in the Twitch tag vocabulary so the activity feed's
     // generic producer surfaces the resub duration (like Twitch), not just "resubbed".
     msg.tags
@@ -1027,7 +1543,16 @@ fn parse_gifted_subs(frame: &Value, channel_key: &str) -> Option<ChatMessage> {
             format!("{} gifted {} subscriptions!", gifter, recipients.len()),
         )
     };
-    Some(build_event_message(channel_key, &gifter, msg_id, &system_msg))
+    // The gifter is the actor on this row, so their id (when the payload carries
+    // one) is what the activity feed keys cosmetics on.
+    let gifter_id = id_from(data.get("gifter")).unwrap_or_default();
+    Some(build_event_message(
+        channel_key,
+        &gifter,
+        msg_id,
+        &system_msg,
+        &gifter_id,
+    ))
 }
 
 /// Decode `App\Events\MessageDeletedEvent` into a `CLEARMSG` control frame (a
@@ -1186,6 +1711,49 @@ fn build_pinned(frame: &Value, channel_key: &str) -> Option<String> {
     Some(out.to_string())
 }
 
+/// Build a ROOMSTATE control frame from Kick chatroom settings.
+///
+/// Emits exactly the shape `irc_service` produces for Twitch, because the store
+/// merges ROOMSTATE partially (absent keys keep their previous value) and gates
+/// the composer on it. `r9k` is omitted: Kick has no unique-chat mode, and
+/// sending `false` would clear a value that was never ours to set.
+///
+/// Tolerant of BOTH shapes Kick uses for these settings, since the same fields
+/// arrive nested from the Pusher event and flat from the REST channel payload:
+///   nested: `{"slow_mode": {"enabled": true, "message_interval": 6}}`
+///   flat:   `{"slow_mode": true, "message_interval": 6}`
+fn build_roomstate(s: &Value, channel_key: &str) -> String {
+    let on = |k: &str| -> bool {
+        match s.get(k) {
+            Some(Value::Bool(b)) => *b,
+            Some(v) => v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(false),
+            None => false,
+        }
+    };
+    // The detail number lives inside the mode object when nested, and as a
+    // sibling key when flat.
+    let num = |nested_in: &str, nested_key: &str, flat: &str| -> u64 {
+        s.get(nested_in)
+            .and_then(|v| v.get(nested_key))
+            .and_then(|x| x.as_u64())
+            .or_else(|| s.get(flat).and_then(|x| x.as_u64()))
+            .unwrap_or(0)
+    };
+    json!({
+        "type": "ROOMSTATE",
+        "provider": "kick",
+        "channel": channel_key,
+        "slow": if on("slow_mode") { num("slow_mode", "message_interval", "message_interval") } else { 0 },
+        "subs_only": on("subscribers_mode"),
+        // -1 is "off" and 0 is "any follower", matching Twitch's followers-only tag.
+        "followers_only": if on("followers_mode") {
+            num("followers_mode", "min_duration", "following_min_duration") as i64
+        } else { -1 },
+        "emote_only": on("emotes_mode"),
+    })
+    .to_string()
+}
+
 /// Replace Kick's inline `[emote:<id>:<name>]` tokens with just the emote name,
 /// for plain-text surfaces like the pinned-message banner.
 fn strip_emote_tokens(content: &str) -> String {
@@ -1342,6 +1910,7 @@ fn parse_segments(content: &str, slug: &str) -> (Vec<MessageSegment>, String) {
                     emote_url: format!("https://files.kick.com/emotes/{}/fullsize", id),
                     is_zero_width: None,
                     modifier_flags: None,
+                    is_personal: None,
                 });
                 plain.push_str(name);
             } else {
@@ -1391,6 +1960,7 @@ fn push_text_run(segments: &mut Vec<MessageSegment>, plain: &mut String, text: &
                     emote_url: e.url,
                     is_zero_width: Some(e.zero_width),
                     modifier_flags: None,
+                    is_personal: None,
                 });
             }
             None => buf.push_str(&word),
@@ -1425,5 +1995,323 @@ mod tests {
         let (segs, plain) = parse_segments("just talking", "test");
         assert_eq!(plain, "just talking");
         assert_eq!(segs.len(), 1);
+    }
+}
+
+// --- Fast path: plain HTTP with browser headers ------------------------------
+//
+// Primary because it is a single request with no browser, no challenge to clear,
+// and no profile state to go stale.
+//
+// The earlier belief that `kick.com/api` is "Cloudflare-403 to plain clients"
+// was measured WITHOUT these headers. Kick's edge keys on the Chrome client
+// hints (`sec-ch-ua*`) and fetch metadata that a real browser sends; supply the
+// full set and the same endpoint answers 200, `playback_url` included (verified
+// 2026-08-20). The hidden webview stays as the fallback for the day that stops
+// being true.
+
+/// Chrome's client hints and fetch metadata, which are what the edge actually
+/// checks. Derived from the UA's major version so the two can never disagree.
+fn browser_headers(slug: &str) -> reqwest::header::HeaderMap {
+    use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, REFERER, USER_AGENT};
+    const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36";
+    const CH_UA: &str = "\"Chromium\";v=\"150\", \"Not(A:Brand\";v=\"24\", \"Google Chrome\";v=\"150\"";
+
+    let mut h = HeaderMap::new();
+    h.insert(USER_AGENT, HeaderValue::from_static(UA));
+    h.insert(ACCEPT, HeaderValue::from_static("application/json"));
+    h.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"));
+    h.insert("sec-ch-ua", HeaderValue::from_static(CH_UA));
+    h.insert("sec-ch-ua-mobile", HeaderValue::from_static("?0"));
+    h.insert("sec-ch-ua-platform", HeaderValue::from_static("\"Windows\""));
+    h.insert("sec-fetch-dest", HeaderValue::from_static("empty"));
+    h.insert("sec-fetch-mode", HeaderValue::from_static("cors"));
+    h.insert("sec-fetch-site", HeaderValue::from_static("same-origin"));
+    if let Ok(v) = HeaderValue::from_str(&format!("https://kick.com/{}", slug)) {
+        h.insert(REFERER, v);
+    }
+    h
+}
+
+static HTTP_RESOLVE: once_cell::sync::Lazy<reqwest::Client> = once_cell::sync::Lazy::new(|| {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(12))
+        // rustls, NOT the platform TLS stack, and this is load-bearing. Kick's
+        // edge fingerprints the TLS handshake: with Windows' Schannel the exact
+        // same request 403s, and over rustls it returns 200. Measured on all
+        // three combinations — schannel/h1: 403, rustls/h1: 403,
+        // rustls/h2: 200 — so the HTTP version matters too and must be left to
+        // negotiate up to h2, the way a browser does. Do not "simplify" either
+        // half of this back to the default client.
+        .use_rustls_tls()
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+});
+
+#[derive(serde::Deserialize)]
+struct HttpChannel {
+    #[serde(default)]
+    id: Option<u64>,
+    #[serde(default)]
+    user_id: Option<u64>,
+    #[serde(default)]
+    playback_url: Option<String>,
+    #[serde(default)]
+    user: Option<HttpUser>,
+    #[serde(default)]
+    chatroom: Option<HttpChatroom>,
+    #[serde(default)]
+    livestream: Option<HttpLivestream>,
+    #[serde(default)]
+    subscriber_badges: Vec<HttpSubBadge>,
+}
+
+#[derive(serde::Deserialize)]
+struct HttpUser {
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    profile_pic: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct HttpChatroom {
+    #[serde(default)]
+    id: Option<u64>,
+    // MEASURE (chat-parity): the chatroom object also carries the room's mode
+    // settings (slow/subscribers/followers/emotes), but the exact field names and
+    // whether they are flat booleans or nested objects has never been captured
+    // from a live payload. Collected here so one resolve reveals the real shape;
+    // once `build_roomstate` is written against it, this and its log can go.
+    #[serde(flatten)]
+    settings: serde_json::Map<String, Value>,
+}
+
+#[derive(serde::Deserialize)]
+struct HttpLivestream {
+    #[serde(default)]
+    viewer_count: Option<u64>,
+    #[serde(default)]
+    start_time: Option<String>,
+    #[serde(default)]
+    session_title: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct HttpSubBadge {
+    #[serde(default)]
+    months: Option<u32>,
+    #[serde(default)]
+    badge_image: Option<HttpBadgeImage>,
+}
+
+#[derive(serde::Deserialize)]
+struct HttpBadgeImage {
+    #[serde(default)]
+    src: Option<String>,
+}
+
+/// One plain request for the channel record. Returns None on any failure so the
+/// caller falls through to the webview resolver.
+async fn resolve_via_http(slug: &str) -> Option<ResolvedChannel> {
+    let url = format!("https://kick.com/api/v2/channels/{}", slug);
+    let resp = browser_get(&url, slug).await?;
+    // Log every failure mode explicitly. Swallowing these with `?` is what made
+    // "it fell back to the webview" impossible to explain from the outside.
+    let data: HttpChannel = match resp.json().await {
+        Ok(d) => d,
+        Err(e) => {
+            log::warn!("[Kick] http resolve for '{}': response did not parse: {}", slug, e);
+            return None;
+        }
+    };
+    let Some(chatroom_id) = data.chatroom.as_ref().and_then(|c| c.id) else {
+        log::warn!("[Kick] http resolve for '{}': 200 but no chatroom.id", slug);
+        return None;
+    };
+    // The chatroom object carries the room's mode settings alongside its id.
+    // `build_roomstate` reads both the flat shape seen here and the nested shape
+    // the Pusher event uses, so whichever Kick sends is handled. Logged once per
+    // resolve while the exact field names are still being confirmed live.
+    let chatroom_settings = data.chatroom.as_ref().map(|c| c.settings.clone()).filter(|s| !s.is_empty());
+    if let Some(s) = &chatroom_settings {
+        // Shape confirmed live 2026-08-25 (flat booleans with the numbers as
+        // sibling keys), so this is debug now rather than a line on every open.
+        log::debug!(
+            "[Kick] chatroom settings for '{}': {}",
+            slug,
+            Value::Object(s.clone())
+        );
+    }
+
+    // Kick sends start_time as "YYYY-MM-DD HH:MM:SS" (UTC, no zone). Normalize to
+    // ISO-UTC so the uptime ticker doesn't read it as local time — the same
+    // normalization the injected script does.
+    let start_time = data.livestream.as_ref().and_then(|l| l.start_time.clone()).map(|raw| {
+        if raw.contains('T') {
+            raw
+        } else {
+            format!("{}Z", raw.replace(' ', "T"))
+        }
+    });
+
+    let meta = KickChannelMeta {
+        user_id: data.user_id,
+        channel_id: data.id,
+        username: data.user.as_ref().and_then(|u| u.username.clone()),
+        viewer_count: data.livestream.as_ref().and_then(|l| l.viewer_count),
+        start_time,
+        title: data.livestream.as_ref().and_then(|l| l.session_title.clone()),
+        profile_pic: data.user.as_ref().and_then(|u| u.profile_pic.clone()),
+        is_live: data.livestream.is_some(),
+        playback_url: data.playback_url,
+    };
+
+    let sub_badges = data
+        .subscriber_badges
+        .into_iter()
+        .filter_map(|b| {
+            let src = b.badge_image.and_then(|i| i.src)?;
+            Some((b.months.unwrap_or(0), src))
+        })
+        .collect();
+
+    Some(ResolvedChannel {
+        chatroom_id,
+        sub_badges,
+        meta: Some(meta),
+        chatroom_settings: chatroom_settings.map(Value::Object),
+    })
+}
+
+/// GET a kick.com URL with the browser headers its edge checks for, returning
+/// the response only when it succeeded. Shared by the channel resolve and the
+/// native-emote fetch so both present identically.
+/// `browser_get` plus caller-supplied headers — used by the account sync to
+/// attach the session cookie and bearer it read from the webview.
+pub(crate) async fn browser_get_with(
+    url: &str,
+    slug: &str,
+    extra: &[(&str, String)],
+) -> Option<reqwest::Response> {
+    let mut headers = browser_headers(slug);
+    for (name, value) in extra {
+        if let (Ok(n), Ok(v)) = (
+            reqwest::header::HeaderName::from_bytes(name.as_bytes()),
+            reqwest::header::HeaderValue::from_str(value),
+        ) {
+            headers.insert(n, v);
+        }
+    }
+    let resp = match HTTP_RESOLVE.get(url).headers(headers).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("[Kick] request to {} failed: {}", url, e);
+            return None;
+        }
+    };
+    if !resp.status().is_success() {
+        log::warn!("[Kick] {} returned {}", url, resp.status());
+        return None;
+    }
+    Some(resp)
+}
+
+pub(crate) async fn browser_get(url: &str, slug: &str) -> Option<reqwest::Response> {
+    let resp = match HTTP_RESOLVE.get(url).headers(browser_headers(slug)).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("[Kick] request to {} failed: {}", url, e);
+            return None;
+        }
+    };
+    if !resp.status().is_success() {
+        log::warn!("[Kick] {} returned {}", url, resp.status());
+        return None;
+    }
+    Some(resp)
+}
+
+#[cfg(test)]
+mod roomstate_tests {
+    use super::*;
+
+    fn parse(frame: &str) -> Value {
+        serde_json::from_str(frame).unwrap()
+    }
+
+    #[test]
+    fn reads_the_nested_pusher_shape() {
+        let data = serde_json::json!({
+            "id": 281473,
+            "slow_mode": { "enabled": true, "message_interval": 6 },
+            "subscribers_mode": { "enabled": true },
+            "followers_mode": { "enabled": true, "min_duration": 10 },
+            "emotes_mode": { "enabled": false }
+        });
+        let out = parse(&build_roomstate(&data, "kick:xqc"));
+
+        assert_eq!(out["type"], "ROOMSTATE");
+        assert_eq!(out["channel"], "kick:xqc");
+        assert_eq!(out["slow"], 6);
+        assert_eq!(out["subs_only"], true);
+        assert_eq!(out["followers_only"], 10);
+        assert_eq!(out["emote_only"], false);
+        // Kick has no unique-chat mode; sending r9k would clear a value the
+        // store merges from elsewhere.
+        assert!(out.get("r9k").is_none());
+    }
+
+    #[test]
+    fn reads_the_flat_rest_shape() {
+        let data = serde_json::json!({
+            "id": 281473,
+            "slow_mode": true,
+            "message_interval": 6,
+            "subscribers_mode": false,
+            "followers_mode": true,
+            "following_min_duration": 10,
+            "emotes_mode": true
+        });
+        let out = parse(&build_roomstate(&data, "kick:xqc"));
+
+        assert_eq!(out["slow"], 6);
+        assert_eq!(out["subs_only"], false);
+        assert_eq!(out["followers_only"], 10);
+        assert_eq!(out["emote_only"], true);
+    }
+
+    #[test]
+    fn off_modes_use_the_twitch_sentinels() {
+        let data = serde_json::json!({
+            "slow_mode": { "enabled": false, "message_interval": 6 },
+            "subscribers_mode": { "enabled": false },
+            "followers_mode": { "enabled": false, "min_duration": 10 },
+            "emotes_mode": { "enabled": false }
+        });
+        let out = parse(&build_roomstate(&data, "kick:xqc"));
+
+        // Slow off is 0 seconds and followers-only off is -1 minutes, matching
+        // the tags the frontend already interprets for Twitch. A stale interval
+        // must not leak through while the mode is off.
+        assert_eq!(out["slow"], 0);
+        assert_eq!(out["followers_only"], -1);
+    }
+
+    #[test]
+    fn followers_only_with_no_minimum_is_zero_not_off() {
+        // "Any follower may chat" is 0; only -1 means the mode is off.
+        let data = serde_json::json!({ "followers_mode": { "enabled": true } });
+        let out = parse(&build_roomstate(&data, "kick:xqc"));
+        assert_eq!(out["followers_only"], 0);
+    }
+
+    #[test]
+    fn an_empty_payload_reports_every_mode_off() {
+        let out = parse(&build_roomstate(&serde_json::json!({}), "kick:xqc"));
+        assert_eq!(out["slow"], 0);
+        assert_eq!(out["subs_only"], false);
+        assert_eq!(out["followers_only"], -1);
+        assert_eq!(out["emote_only"], false);
     }
 }

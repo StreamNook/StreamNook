@@ -29,7 +29,7 @@ import {
   DEFAULT_FONT_ID,
   OLED_THEME_ID,
 } from '../themes';
-import streamNookLogoUrl from '../assets/streamnook-logo.png';
+import streamNookLogoUrl from '../assets/streamnook-logo-128.webp';
 import { loadWindowSurface } from './loader';
 
 interface WindowRoute {

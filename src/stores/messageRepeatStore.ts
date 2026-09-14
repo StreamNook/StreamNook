@@ -35,10 +35,14 @@ interface MessageRepeatState {
   clear: () => void;
 }
 
-// Cap on tracked runs so a long session can't grow this unbounded. Runs live
-// for seconds, so only a handful are ever active; this is a generous backstop
-// that prunes the oldest inserted anchors.
-const MAX_ANCHORS = 100;
+// Cap on tracked runs so a long session can't grow this unbounded. The bound
+// must comfortably exceed the largest visible buffer (message_buffer_cap maxes
+// at 1000, plus the paused cushion, times MultiChat panes): evicting an anchor
+// whose row is still on screen silently strips its xN badge, and every message
+// folded into it vanishes with no trace. At 100 this fired constantly in fast
+// chats; entries are tiny (a count plus up to 20 names), so a generous cap
+// costs almost nothing.
+const MAX_ANCHORS = 4096;
 
 // How many names the tooltip is worth holding. A 200-person wave doesn't need
 // 200 names retained, and this bounds a single entry's memory.
