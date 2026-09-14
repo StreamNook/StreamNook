@@ -44,6 +44,7 @@ import { useAppStore } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
 import { MOD_PREFIX, staticModifierStyle } from '../../utils/emoteModifiers';
 import { PROVIDERS } from '../../types/providers';
+import { IS_MOBILE } from '../../utils/platform';
 
 type ProviderTab = 'twitch' | 'bttv' | '7tv' | 'ffz' | 'favorites' | 'emoji' | 'kick' | 'youtube' | 'gifs';
 
@@ -242,12 +243,11 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
 const WIDTH_BLOCK_ROWS = 8;
 const WIDTH_ROW_PX = 52;
 const TWITCH_BLOCK_ROWS = 6;
-// Image plus padding, with no name label under it. The other providers render
-// through EmoteGridItem, which never had a label and puts the name in the
-// tooltip; the Twitch and Kick grid is hand-rolled and had simply never been
-// brought in line, so the same picker read two different ways depending on
-// which tab you were on. Dropping the label took this row from 60.
-const TWITCH_ROW_PX = 42;
+// Desktop keeps the name label under each Twitch / Kick emote (60 px rows).
+// The phone drops the label so the grid fits the narrow picker: image plus
+// padding only, matching EmoteGridItem, which never had a label and puts the
+// name in the tooltip.
+const TWITCH_ROW_PX = IS_MOBILE ? 42 : 60;
 const TWITCH_COLS = 7;
 
 const LazyEmoteBlock = memo(
@@ -939,6 +939,9 @@ export function EmotePickerPanel({
                                       else target.style.display = 'none';
                                     }}
                                   />
+                                  {!IS_MOBILE && (
+                                    <span className="text-xs text-textSecondary truncate w-full text-center">{emote.name}</span>
+                                  )}
                                 </button>
                               </Tooltip>
                               <Tooltip content={isFavorited ? 'Remove from favorites' : 'Add to favorites'}>

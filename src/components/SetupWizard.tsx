@@ -497,15 +497,19 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                 ...settings,
                 setup_complete: true,
             });
-            // Backstop marker, read by the wizard gate in App.tsx. settings.setup_complete
-            // is the source of truth, but on Android it has been observed reverting to
-            // false between launches, which reopens the wizard forever and makes the app
-            // unusable. Recording completion here too survives that. Key must match
-            // SETUP_COMPLETE_MARKER in App.tsx.
-            try {
-                localStorage.setItem('streamnook-setup-complete', 'true');
-            } catch {
-                // localStorage unavailable; the settings flag is still the primary path
+            // Mobile-only backstop marker, read by the wizard gate in App.tsx.
+            // settings.setup_complete is the source of truth, but on Android it has
+            // been observed reverting to false between launches, which reopens the
+            // wizard forever and makes the app unusable. Recording completion here
+            // too survives that. Key must match SETUP_COMPLETE_MARKER in App.tsx.
+            // Desktop never writes or reads it: a settings reset that clears
+            // setup_complete must bring the wizard back there.
+            if (IS_MOBILE) {
+                try {
+                    localStorage.setItem('streamnook-setup-complete', 'true');
+                } catch {
+                    // localStorage unavailable; the settings flag is still the primary path
+                }
             }
             if (isFirstTimeSetup) {
                 try {

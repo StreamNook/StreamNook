@@ -1078,22 +1078,28 @@ function App() {
   useEffect(() => {
     if (settings.quality === undefined) return; // wait until settings hydrate
     if (settings.setup_complete) {
-      // Backstop: settings.setup_complete has been observed reverting to false on
-      // Android between launches even after the wizard writes it (root cause not
-      // yet identified — nothing in loadSettings or the updateSettings callers
-      // accounts for it). Without this marker the wizard reopens on every launch
-      // and the app is unusable, so record completion somewhere that survives
-      // independently of the settings file.
-      try { localStorage.setItem(SETUP_COMPLETE_MARKER, 'true'); } catch { /* private mode */ }
+      // Mobile-only backstop: settings.setup_complete has been observed reverting
+      // to false on Android between launches even after the wizard writes it
+      // (root cause not yet identified; nothing in loadSettings or the
+      // updateSettings callers accounts for it). Without this marker the wizard
+      // reopens on every launch and the app is unusable, so record completion
+      // somewhere that survives independently of the settings file. Desktop
+      // deliberately does not use it: a settings reset or restore that clears
+      // setup_complete must bring the wizard back.
+      if (IS_MOBILE) {
+        try { localStorage.setItem(SETUP_COMPLETE_MARKER, 'true'); } catch { /* private mode */ }
+      }
       Logger.debug('[App] Setup already complete, skipping wizard');
       return;
     }
-    try {
-      if (localStorage.getItem(SETUP_COMPLETE_MARKER) === 'true') {
-        Logger.debug('[App] Setup marked complete locally, skipping wizard');
-        return;
-      }
-    } catch { /* private mode */ }
+    if (IS_MOBILE) {
+      try {
+        if (localStorage.getItem(SETUP_COMPLETE_MARKER) === 'true') {
+          Logger.debug('[App] Setup marked complete locally, skipping wizard');
+          return;
+        }
+      } catch { /* private mode */ }
+    }
     Logger.debug('[App] Setup not complete - showing wizard');
     setShowSetupWizard(true);
   }, [settings.quality, settings.setup_complete]);
