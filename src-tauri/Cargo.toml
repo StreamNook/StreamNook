@@ -108,7 +108,10 @@ tauri-plugin-clipboard-manager = "2.3.2"
 # survive encoding without quantization banding. libwebp itself is built from
 # vendored C source by libwebp-sys2 via the cc crate — no CMake required, just
 # the MSVC toolchain that StreamNook already needs for its other native deps.
-xcap = "0.0.14"
+# xcap moved under the Windows target for the macOS port: 0.0.14 does not
+# compile on modern rustc (E0282 in xcap-0.0.14/src/macos/boxed.rs). The
+# upgrade to 0.9.x is a genuine refactor - its accessors became fallible -
+# so it is tracked as its own change instead of riding along with the port.
 # png for the static-paint capture path (capture_screen_region). The
 # animated path uses direct DXGI Output Duplication and feeds raw RGBA
 # straight to the WebP encoder, no decode step needed.
@@ -123,6 +126,7 @@ webp-animation = "0.9"
 # GPU-side via CopySubresourceRegion into a staging texture sized
 # exactly to the card — no full-monitor readback, no third-party binary.
 [target.'cfg(windows)'.dependencies]
+xcap = "0.0.14"
 webview2-com = "0.38"
 windows = { version = "0.61", features = [
     "Win32_System_Com",

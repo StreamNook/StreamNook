@@ -8,6 +8,7 @@ import { getPlayerControls, isPlayerControllable } from './playerControls';
 import { getChatModController } from './chatModController';
 import { getChatSearchController } from './chatSearchController';
 import { getPaneFocusController } from './paneFocusController';
+import { IS_MAC } from '../utils/platform';
 import type { BindableCommand } from './types';
 
 const app = () => useAppStore.getState();
@@ -141,10 +142,16 @@ function build(): BindableCommand[] {
     {
       id: 'window.toggleFullscreen',
       label: 'Toggle full screen',
-      description: 'Fill the whole screen (over the taskbar) with the app, chat and all.',
+      description: IS_MAC
+        ? 'Fill the whole screen with the app, chat and all. The green window button does this too.'
+        : 'Fill the whole screen (over the taskbar) with the app, chat and all.',
       category: 'Application',
       context: 'global',
-      defaultBindings: ['F11'],
+      // F11 is taken on macOS: the system binds it to Show Desktop / Mission
+      // Control, so ours would fight the OS for it. Ctrl+Cmd+F is the platform
+      // convention for full screen. `Meta` is this registry's canonical name for
+      // Cmd (see chord.ts), and modifier order is Ctrl, Alt, Shift, Meta.
+      defaultBindings: IS_MAC ? ['Ctrl+Meta+F'] : ['F11'],
       keywords: 'fullscreen full screen borderless taskbar immersive window maximize theater theatre cinema',
       run: () => app().toggleWindowFullscreen(),
     },

@@ -1,6 +1,7 @@
 import { Window } from '@tauri-apps/api/window';
 import { Gift, User, Settings, Store, Proportions, MessageCircle, Pickaxe, Clock, Tv, Download, LogIn, Sparkles, Check, Pin, PinOff, Home } from 'lucide-react';
 import { Minus, X, CornersOut, CornersIn, ArrowsOut, ArrowsIn, Medal } from 'phosphor-react';
+import { IS_MAC, MAC_TRAFFIC_LIGHT_INSET_PX } from '../utils/platform';
 import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -486,17 +487,24 @@ const TitleBar = () => {
 
   return (
     <>
+      {/* macOS decorates this window with an Overlay title bar, so AppKit
+          draws real traffic lights at the leading edge. Reserve their footprint
+          rather than drawing anything underneath them. */}
       <div
-        onMouseDown={onTitleBarMouseDown}
+        onMouseDown={IS_MAC ? undefined : onTitleBarMouseDown}
+        data-tauri-drag-region={IS_MAC ? true : undefined}
         className="relative flex items-center justify-between h-[40px] px-3 select-none bg-secondary backdrop-blur-md border-b border-borderSubtle z-50"
+        style={IS_MAC ? { paddingLeft: MAC_TRAFFIC_LIGHT_INSET_PX } : undefined}
       >
         {/* Dynamic Island is rendered at the app root (App.tsx), not here, so it
             can lift above the Settings blur overlay. It still pins to the top
             center via fixed positioning, so it visually sits in this title bar. */}
 
         <div className="flex items-center gap-2.5" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-          {/* Penrose Logo */}
-          <PenroseLogo onClick={() => setShowAbout(true)} />
+          {/* Penrose Logo. On macOS the leading edge belongs to the traffic
+              lights, so About moves to the trailing edge instead — into the slot
+              the full-screen button vacates there. */}
+          {!IS_MAC && <PenroseLogo onClick={() => setShowAbout(true)} />}
 
           {/* Which platform the app is in. Lives here because the title bar is
               the only chrome mounted in every view: a quiet mark-and-name
@@ -874,6 +882,12 @@ const TitleBar = () => {
 
           {/* Window controls — kept adjacent but not grouped into a pill */}
           <div className="flex items-center gap-1">
+          {/* macOS already has full screen on the green traffic light, so a
+              second control for it is redundant chrome. The slot goes to About,
+              which lost its home on the leading edge to the traffic lights. */}
+          {IS_MAC ? (
+            <PenroseLogo onClick={() => setShowAbout(true)} />
+          ) : (
           <Tooltip content={isWindowFullscreen ? "Exit full screen (F11)" : "Full screen (F11)"} delay={200}>
             <button
               onClick={() => toggleWindowFullscreen()}
@@ -887,6 +901,15 @@ const TitleBar = () => {
               )}
             </button>
           </Tooltip>
+          )}
+          {/* Minimise / zoom / close are AppKit's job on macOS: the window is
+              decorated with an Overlay title bar, so the real traffic lights are
+              already floating at the leading edge. Drawing our own cluster next
+              to them would give the window two of every control. The full-screen
+              button above stays on both platforms because it drives StreamNook's
+              own theatre mode, not the window zoom. */}
+          {!IS_MAC && (
+            <>
           <Tooltip content="Minimize" delay={200}>
             <button
               onClick={handleMinimize}
@@ -919,6 +942,8 @@ const TitleBar = () => {
               <X size={14} />
             </button>
           </Tooltip>
+            </>
+          )}
           </div>
         </div>
       </div>

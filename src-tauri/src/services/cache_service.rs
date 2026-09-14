@@ -23,25 +23,55 @@ pub struct BadgeCache {
     pub data: String, // JSON string of badge data
 }
 
-/// Get the StreamNook main directory in AppData/Local
+/// Get the StreamNook main directory (AppData/Local on Windows, the platform
+/// data directory elsewhere).
+///
+/// # Why this is cfg-split
+///
+/// The Windows branch is deliberately byte-for-byte unchanged. 41 call sites
+/// hang off this function (settings, caches, cookie jars, chat logs, drops, the
+/// account store, the plugin registry, 7TV cosmetics), so relocating it would
+/// strand every existing install's data.
+///
+/// Off Windows the original was silently catastrophic. `LOCALAPPDATA` and
+/// `USERPROFILE` are both unset there, so it fell through to the literal string
+/// `C:\Users\Default\AppData\Local`. Backslashes are ordinary filename
+/// characters on POSIX, so that is not a path: it is one absurd directory
+/// *name*, resolved relative to whatever CWD the process was launched with.
+/// Launched from Finder the CWD is `/`, so `create_dir_all` needs root, fails,
+/// and every settings read and write fails with it.
+///
+/// That is the bug where the app reopened into the welcome flow while still
+/// signed in: Twitch tokens live under a different (already correct) path, so
+/// login survived while every setting reset.
 pub fn get_app_data_dir() -> Result<PathBuf> {
     // Use AppData/Local instead of Program Files (no admin rights needed)
-    let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| {
-        // Fallback to %USERPROFILE%\AppData\Local
-        let user_profile =
-            std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
-        format!("{}\\AppData\\Local", user_profile)
-    });
+    #[cfg(windows)]
+    let base: PathBuf = {
+        let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| {
+            // Fallback to %USERPROFILE%\AppData\Local
+            let user_profile = std::env::var("USERPROFILE")
+                .unwrap_or_else(|_| "C:\\Users\\Default".to_string());
+            format!("{}\\AppData\\Local", user_profile)
+        });
+        PathBuf::from(local_app_data)
+    };
+
+    // macOS -> ~/Library/Application Support, Linux -> $XDG_DATA_HOME or
+    // ~/.local/share. `dirs` is already a dependency of this crate.
+    #[cfg(not(windows))]
+    let base: PathBuf =
+        dirs::data_dir().context("could not resolve the platform data directory")?;
 
     // Check if we're in development mode by looking for TAURI_ENV or checking debug assertions
     let app_dir = if cfg!(debug_assertions) {
         // debug!("[CacheService] Running in DEBUG mode, using com.streamnook.dev");
         // In development, use com.streamnook.dev
-        PathBuf::from(local_app_data).join("com.streamnook.dev")
+        base.join("com.streamnook.dev")
     } else {
         // debug!("[CacheService] Running in RELEASE mode, using StreamNook");
         // In production, use StreamNook (without space, matching the actual folder name)
-        PathBuf::from(local_app_data).join("StreamNook")
+        base.join("StreamNook")
     };
 
     // Create the directory if it doesn't exist

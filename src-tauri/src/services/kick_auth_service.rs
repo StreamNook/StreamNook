@@ -451,22 +451,13 @@ async fn accept_redirect(listener: TcpListener) -> Result<(String, String)> {
 }
 
 fn open_in_browser(url: &str) -> Result<()> {
-    #[cfg(windows)]
-    {
-        // NOT `cmd /C start`: cmd treats the `&` between OAuth query params as a
-        // command separator and truncates the URL at the first `&`. rundll32's
-        // FileProtocolHandler takes the URL as a single arg and opens it verbatim.
-        std::process::Command::new("rundll32.exe")
-            .args(["url.dll,FileProtocolHandler", url])
-            .spawn()
-            .map_err(|e| anyhow!("couldn't open the browser for Kick login: {}", e))?;
-        Ok(())
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = url;
-        Err(anyhow!("Kick login is only wired for Windows right now"))
-    }
+    // Was a Windows-only `rundll32` call with a `not(windows)` arm that just
+    // returned "Kick login is only wired for Windows right now" — which meant the
+    // consent leg could never even START off Windows. The quoting hazard that
+    // forced rundll32 (and the reason `cmd /C start` is wrong) is documented on
+    // `platform::browser::open_in_browser`.
+    crate::platform::browser::open_in_browser(url)
+        .map_err(|e| anyhow!("couldn't open the browser for Kick login: {}", e))
 }
 
 // --- App access token (client credentials) ---------------------------------

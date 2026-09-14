@@ -2407,14 +2407,32 @@ const VideoPlayer = () => {
   }, [showStats]);
 
   // Start overlay hide timer - use ref to avoid dependency issues
+  /// True while one of Plyr's settings menus (Quality, Speed, Captions, our
+  /// injected Quality submenu) is open.
+  ///
+  /// Plyr marks the open menu with `aria-expanded="true"` on its toggle, which
+  /// is the only reliable signal — the menu itself is only visually hidden, so
+  /// checking for its presence in the DOM is always true.
+  const isPlayerMenuOpen = useCallback(
+    () => !!containerRef.current?.querySelector('.plyr__menu [aria-expanded="true"]'),
+    [],
+  );
+
   const startOverlayHideTimer = useCallback(() => {
     if (overlayTimerRef.current) {
       clearTimeout(overlayTimerRef.current);
     }
     overlayTimerRef.current = setTimeout(() => {
+      // Never time the overlay out from under an open menu: the menu lives
+      // inside the overlay, so hiding it mid-interaction cancels whatever the
+      // user was in the middle of choosing.
+      if (isPlayerMenuOpen()) {
+        startOverlayHideTimer();
+        return;
+      }
       setShowOverlay(false);
     }, OVERLAY_HIDE_DELAY);
-  }, []);
+  }, [isPlayerMenuOpen]);
 
   // Snap the playhead back to the live edge (used by the stats panel's "Go Live"
   // button and after scrubbing into the DVR window). Never seek to an unbuffered
@@ -2508,6 +2526,16 @@ const VideoPlayer = () => {
     };
 
     const handleMouseLeave = () => {
+      // An open Plyr menu can extend past the player's bounds, and moving the
+      // pointer onto that overflowing part makes WebKit fire `mouseleave` on
+      // the container. Hiding here would tear the menu out from under the
+      // cursor — which is exactly why the quality menu could not be used on
+      // macOS: the menu opened, and reaching for an option dismissed it.
+      //
+      // Guarded rather than made macOS-only on purpose: nothing about the
+      // reasoning is platform-specific, Windows just happens not to trigger it.
+      if (isPlayerMenuOpen()) return;
+
       // Hide immediately when mouse leaves (unless timer is still running)
       // Clear any existing timer and hide
       if (overlayTimerRef.current) {
@@ -2530,7 +2558,7 @@ const VideoPlayer = () => {
         overlayTimerRef.current = null;
       }
     };
-  }, [startOverlayHideTimer]);
+  }, [startOverlayHideTimer, isPlayerMenuOpen]);
 
   // NOTE: PIP exit handling is done in App.tsx, not here
   // App.tsx correctly differentiates between "Back to tab" (returns to stream view)

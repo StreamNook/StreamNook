@@ -30,6 +30,8 @@ use std::time::Duration;
 use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter};
 use webp_animation::{Encoder, EncoderOptions, EncodingConfig, EncodingType};
+// Windows-only: see the xcap note in Cargo.toml.
+#[cfg(windows)]
 use xcap::Monitor;
 
 #[cfg(windows)]
@@ -80,6 +82,21 @@ pub async fn capture_screen_region(
     Ok(Response::new(bytes))
 }
 
+#[cfg(not(windows))]
+fn capture_png_blocking(x: i32, y: i32, width: u32, height: u32) -> Result<Vec<u8>, String> {
+    // Off Windows this goes through `platform::capture`, which shells out to
+    // macOS's own `screencapture`. xcap is not an option here: the pinned
+    // 0.0.14 does not compile for macOS, and 0.9.x is a breaking refactor of a
+    // shipping Windows feature.
+    //
+    // The command stays registered (and stays in the ACL) either way, so the
+    // frontend gets a real error rather than a silent invoke denial — and a
+    // missing Screen Recording permission is reported AS a permission problem
+    // instead of a generic failure.
+    crate::platform::capture::capture_region_png(x, y, width, height).map_err(|e| e.to_string())
+}
+
+#[cfg(windows)]
 fn capture_png_blocking(x: i32, y: i32, width: u32, height: u32) -> Result<Vec<u8>, String> {
     let monitors = Monitor::all().map_err(|e| format!("enumerate monitors: {e}"))?;
     if monitors.is_empty() {
@@ -474,6 +491,7 @@ fn apply_rounded_corner_alpha(img: &mut RgbaImage, radius: u32) {
 
 // xcap helpers for the static path.
 
+#[cfg(windows)]
 fn capture_monitor_region(
     monitor: &Monitor,
     x: i32,
@@ -501,6 +519,7 @@ fn capture_monitor_region(
     Ok(image::imageops::crop_imm(&captured, local_x, local_y, crop_w, crop_h).to_image())
 }
 
+#[cfg(windows)]
 fn pick_monitor_idx(monitors: &[Monitor], x: i32, y: i32) -> usize {
     monitors
         .iter()
@@ -509,6 +528,7 @@ fn pick_monitor_idx(monitors: &[Monitor], x: i32, y: i32) -> usize {
         .unwrap_or(0)
 }
 
+#[cfg(windows)]
 fn contains_point(monitor: &Monitor, x: i32, y: i32) -> bool {
     let mx = monitor.x();
     let my = monitor.y();

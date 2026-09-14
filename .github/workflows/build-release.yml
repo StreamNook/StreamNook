@@ -38,8 +38,152 @@ jobs:
           # Force-push dev to main (dev is source of truth)
           git push origin origin/dev:main --force
 
-  build:
+  # macOS build. Runs in parallel with the Windows job; `build` consumes this
+  # job's outputs to write the per-platform update manifest, so a macOS failure
+  # holds the release rather than shipping a manifest that promises a macOS
+  # build nobody produced.
+  build-macos:
     needs: merge-to-main
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    outputs:
+      BUNDLE_NAME: ${{ steps.pack.outputs.BUNDLE_NAME }}
+      SHA256: ${{ steps.pack.outputs.SHA256 }}
+      SIZE: ${{ steps.pack.outputs.SIZE }}
+      SIGNATURE: ${{ steps.sign.outputs.SIGNATURE }}
+      DOWNLOAD_URL: ${{ steps.pack.outputs.DOWNLOAD_URL }}
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # Both halves of the universal binary. `universal-apple-darwin` is not
+          # a toolchain of its own: tauri builds each arch and `lipo`s them, so
+          # both must be installed or the build fails at the second one.
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          key: macos
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Tauri app (universal)
+        run: npm run tauri build -- --target universal-apple-darwin
+        env:
+          # Same values the Windows job uses; the client IDs are public by
+          # construction (see the comment on the Windows build step).
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          TWITCH_APP_CLIENT_ID: "1qgws7yzcp21g5ledlzffw3lmqdvie"
+          TWITCH_APP_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
+          TWITCH_ANDROID_CLIENT_ID: "kd1unb4b3q4t58fwlpcbzcbnm76a8fp"
+          TWITCH_WEB_CLIENT_ID: "kimne78kx3ncx6brgo4mv6wki5h1ko"
+          KICK_APP_CLIENT_ID: "01KMKM0HVR6HY0BMA101JFCTW3"
+          KICK_APP_CLIENT_SECRET: ${{ secrets.KICK_APP_CLIENT_SECRET }}
+
+      - name: Pack the .app into a tarball
+        id: pack
+        run: |
+          set -euo pipefail
+          version=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          app_dir="src-tauri/target/universal-apple-darwin/release/bundle/macos"
+          test -d "$app_dir/StreamNook.app" || { echo "no .app at $app_dir"; exit 1; }
+          bundle="StreamNook.app.tar.gz"
+          # -C so the archive root IS StreamNook.app, not the path to it: the
+          # updater untars straight over the installed bundle.
+          #
+          # macOS tar writes ._* AppleDouble entries for extended attributes,
+          # which are noise at best and confuse strict extractors. COPYFILE_DISABLE
+          # suppresses them.
+          COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$app_dir" StreamNook.app
+          echo "BUNDLE_NAME=$bundle" >> "$GITHUB_OUTPUT"
+          echo "SHA256=$(shasum -a 256 "$bundle" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "SIZE=$(stat -f%z "$bundle")" >> "$GITHUB_OUTPUT"
+          echo "DOWNLOAD_URL=https://streamnook.app/download/mac" >> "$GITHUB_OUTPUT"
+          echo "Packed $bundle ($(du -h "$bundle" | cut -f1)) for v$version"
+
+      - name: Sign the tarball with the update key
+        id: sign
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          bundle="${{ steps.pack.outputs.BUNDLE_NAME }}"
+          if [ -z "${UPDATE_SIGNING_KEY:-}" ]; then
+            echo "UPDATE_SIGNING_KEY not set - publishing an UNSIGNED macOS update"
+            echo "SIGNATURE=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The SAME key that signs the Windows bundle. The client pins one
+          # public half as a compile-time const; a second key would mean a second
+          # pinned constant, and the value of pinning is that there is one secret
+          # to protect.
+          brew install minisign
+          printf '%s' "$UPDATE_SIGNING_KEY" > ./update.key
+          trap 'rm -f ./update.key' EXIT
+          minisign -S -s ./update.key -m "$bundle" -x "$bundle.minisig"
+          # Collapse to one line: the manifest carries it as a JSON string, and
+          # the client verifies the signature bytes, not the comment lines.
+          echo "SIGNATURE<<EOF" >> "$GITHUB_OUTPUT"
+          cat "$bundle.minisig" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          echo "Signed $bundle"
+
+      - name: Attach macOS artifacts to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          bundle="${{ steps.pack.outputs.BUNDLE_NAME }}"
+          # The Windows job creates the release; retry briefly so job ordering
+          # does not decide whether the macOS artifact lands.
+          for i in $(seq 1 30); do
+            gh release view "v$version" >/dev/null 2>&1 && break
+            echo "waiting for release v$version ($i/30)"; sleep 10
+          done
+          gh release upload "v$version" "$bundle" --clobber
+          [ -f "$bundle.minisig" ] && gh release upload "v$version" "$bundle.minisig" --clobber || true
+
+      - name: Push macOS bundle to Cloudflare R2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          bundle="${{ steps.pack.outputs.BUNDLE_NAME }}"
+          npx --yes wrangler@4 r2 object put "streamnook-downloads/mac/$bundle" \
+            --file="$bundle" \
+            --content-type="application/gzip" \
+            --remote
+          echo "Uploaded mac/$bundle to R2"
+
+      # NOT NOTARIZED YET. minisign proves the bundle came from us; Gatekeeper
+      # does not care about minisign and wants a Developer ID signature plus
+      # notarization, which needs the paid Apple Developer Program.
+      #
+      # Consequence, precisely: an update installed BY THE UPDATER works, because
+      # a programmatic download carries no com.apple.quarantine attribute. A
+      # bundle a human downloads from the website WILL be quarantined and
+      # Gatekeeper-blocked. So this pipeline is correct for updates and not yet
+      # correct for first-time installs.
+
+  build:
+    needs: [merge-to-main, build-macos]
     runs-on: windows-latest
     permissions:
       contents: write
@@ -436,18 +580,60 @@ jobs:
             Write-Host "UPDATE_SIGNING_KEY not set - publishing an UNSIGNED update"
           }
 
+          $winSha = (Get-FileHash "$bundleName" -Algorithm SHA256).Hash.ToLower()
+          $winSize = (Get-Item "$bundleName").Length
+
+          # Per-platform builds, keyed <os>-<arch> to match std::env::consts and
+          # the plugin index's own `platforms` map.
+          $platforms = [ordered]@{
+            "windows-x86_64" = [ordered]@{
+              download_url = "https://streamnook.app/download"
+              bundle_name  = $bundleName
+              sha256       = $winSha
+              signature    = $signature
+              size         = $winSize
+            }
+          }
+
+          # macOS comes from the build-macos job. Only published if that job
+          # actually produced a bundle: an entry pointing at a build that does
+          # not exist is worse than no entry, because the client would offer an
+          # update and then fail to download it.
+          $macBundle = "${{ needs.build-macos.outputs.BUNDLE_NAME }}"
+          $macSha    = "${{ needs.build-macos.outputs.SHA256 }}"
+          if ($macBundle -and $macSha) {
+            $macEntry = [ordered]@{
+              download_url = "${{ needs.build-macos.outputs.DOWNLOAD_URL }}"
+              bundle_name  = $macBundle
+              sha256       = $macSha
+              signature    = "${{ needs.build-macos.outputs.SIGNATURE }}"
+              size         = [int64]"${{ needs.build-macos.outputs.SIZE }}"
+            }
+            # Universal binary: one artifact serves both Mac architectures, so
+            # both keys point at it rather than shipping two identical files.
+            $platforms["macos-aarch64"] = $macEntry
+            $platforms["macos-x86_64"]  = $macEntry
+            Write-Host "Manifest includes macOS: $macBundle"
+          } else {
+            Write-Host "WARN: no macOS bundle from build-macos - manifest is Windows-only"
+          }
+
+          # The flat fields stay, and stay describing the WINDOWS bundle. Every
+          # client already installed reads them and knows nothing about
+          # `platforms`; dropping them strands that entire population.
           $manifest = [ordered]@{
             version       = $version
             download_url  = "https://streamnook.app/download"
             bundle_name   = $bundleName
-            sha256        = (Get-FileHash "$bundleName" -Algorithm SHA256).Hash.ToLower()
+            sha256        = $winSha
             signature     = $signature
-            size          = (Get-Item "$bundleName").Length
+            size          = $winSize
+            platforms     = $platforms
             notes         = (Get-Content ./changelog_section.md -Raw).TrimEnd()
             min_supported = "0.0.0"
             published_at  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
           }
-          $manifest | ConvertTo-Json -Depth 4 | Out-File -FilePath ./latest.json -Encoding utf8 -NoNewline
+          $manifest | ConvertTo-Json -Depth 6 | Out-File -FilePath ./latest.json -Encoding utf8 -NoNewline
           npx --yes wrangler@4 r2 object put "streamnook-downloads/latest.json" `
             --file="latest.json" `
             --content-type="application/json" `

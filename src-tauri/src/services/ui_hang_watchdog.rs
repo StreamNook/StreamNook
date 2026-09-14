@@ -582,7 +582,102 @@ pub fn start_for_hwnd(hwnd_raw: isize) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Non-Windows: same PURPOSE, different mechanism.
+//
+// Everything above probes the Win32 message pump, which is how Windows itself
+// decides whether to paint "(Not Responding)". There is no such thing to probe
+// on macOS or Linux, so this is not a port — it is a second implementation of
+// the same intent, built on a main-thread round-trip. See
+// `platform::responsiveness` for why that catches the same class of fault.
+//
+// These were previously empty stubs, and both `start_for_hwnd` call sites in
+// main.rs are `#[cfg(windows)]`, so off Windows the app simply had NO hang
+// detection at all — silently.
+// ---------------------------------------------------------------------------
+
 #[cfg(not(windows))]
-pub fn set_active_overlay(_ctx: Option<String>) {}
+mod portable {
+    use crate::platform::responsiveness::{
+        probe_main_thread, HangState, Probe, Transition,
+    };
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
+    use std::time::Duration;
+
+    /// How long the main thread gets to answer before a probe counts as missed.
+    /// Generous on purpose: a legitimate synchronous layout or a native file
+    /// dialog can hold the thread for a while without being wedged, and
+    /// `HangState` needs several consecutive misses anyway.
+    const PROBE_DEADLINE: Duration = Duration::from_millis(2500);
+    const PROBE_INTERVAL: Duration = Duration::from_secs(1);
+
+    fn overlay_ctx() -> &'static Mutex<Option<String>> {
+        static CTX: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+        CTX.get_or_init(|| Mutex::new(None))
+    }
+
+    /// Record which overlay is mounted, so a hang report can name it. This is
+    /// the same context the Windows reporter captures; without it a freeze
+    /// report cannot distinguish "wedged during the Twitch login overlay" from
+    /// "wedged at idle".
+    pub fn set_active_overlay(ctx: Option<String>) {
+        if let Ok(mut slot) = overlay_ctx().lock() {
+            *slot = ctx;
+        }
+    }
+
+    pub fn start(app: tauri::AppHandle) {
+        std::thread::Builder::new()
+            .name("ui-hang-watchdog".into())
+            .spawn(move || {
+                let mut state = HangState::new();
+                loop {
+                    std::thread::sleep(PROBE_INTERVAL);
+                    let probe = probe_main_thread(&app, PROBE_DEADLINE);
+                    match state.observe(probe) {
+                        Transition::Steady => {}
+                        Transition::HangStarted { missed } => {
+                            crate::platform::responsiveness::record_hang();
+                            let ctx = overlay_ctx()
+                                .lock()
+                                .ok()
+                                .and_then(|c| c.clone())
+                                .unwrap_or_else(|| "none".into());
+                            log::error!(
+                                "[UiHang] UI thread unresponsive: {missed} consecutive \
+                                 missed probes ({}ms deadline each), overlay = {ctx}",
+                                PROBE_DEADLINE.as_millis()
+                            );
+                        }
+                        Transition::Recovered { missed } => {
+                            log::warn!(
+                                "[UiHang] UI thread recovered after {missed} missed \
+                                 probes (~{}s)",
+                                missed as u64 * PROBE_INTERVAL.as_secs()
+                            );
+                        }
+                    }
+                    let _ = probe;
+                    if matches!(probe, Probe::Responsive) && state.is_hung() {
+                        // Defensive: observe() should already have cleared this.
+                        debug_assert!(false, "state left hung after a responsive probe");
+                    }
+                }
+            })
+            .ok();
+    }
+}
+
 #[cfg(not(windows))]
-pub fn start_for_hwnd(_hwnd_raw: isize) {}
+pub fn set_active_overlay(ctx: Option<String>) {
+    portable::set_active_overlay(ctx);
+}
+
+/// Start the portable watchdog. Takes an `AppHandle` rather than an HWND
+/// because the probe asks the main thread to run a closure; there is no window
+/// handle involved.
+#[cfg(not(windows))]
+pub fn start(app: tauri::AppHandle) {
+    portable::start(app);
+}

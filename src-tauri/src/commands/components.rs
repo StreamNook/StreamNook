@@ -144,9 +144,10 @@ fn remote_is_newer(remote: &str, current: &str) -> bool {
 /// be renamed, or be archived without breaking any installed client.
 const UPDATE_MANIFEST_URL: &str = "https://streamnook.app/api/v1/update";
 
-#[derive(serde::Deserialize)]
-struct UpdateManifest {
-    version: String,
+/// One downloadable build. Everything here is per-platform; only `version` and
+/// `notes` are shared across them.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+struct UpdateArtifact {
     download_url: String,
     #[serde(default)]
     bundle_name: Option<String>,
@@ -157,11 +158,99 @@ struct UpdateManifest {
     signature: Option<String>,
     #[serde(default)]
     size: Option<u64>,
+}
+
+#[derive(serde::Deserialize)]
+struct UpdateManifest {
+    version: String,
+    /// Per-platform builds, keyed `<os>-<arch>` (`windows-x86_64`,
+    /// `macos-aarch64`, `macos-x86_64`, `linux-x86_64`).
+    ///
+    /// Deliberately the SAME key space the plugin index uses
+    /// (`plugin_host::install::IndexEntry::platforms`). One scheme used twice
+    /// beats two schemes that mean the same thing.
+    #[serde(default)]
+    platforms: std::collections::HashMap<String, UpdateArtifact>,
+
+    // ── Legacy flat fields ──────────────────────────────────────────────────
+    //
+    // These describe a Windows x86_64 bundle and MUST stay. Every client
+    // already installed in the wild reads them and knows nothing about
+    // `platforms`; removing them would strand that entire population on their
+    // current build with no way to update. The pipeline keeps writing them for
+    // Windows, and `artifact_for_platform` treats them as the windows-x86_64
+    // entry when the map has none.
+    download_url: String,
+    #[serde(default)]
+    bundle_name: Option<String>,
+    #[serde(default)]
+    sha256: Option<String>,
+    #[serde(default)]
+    signature: Option<String>,
+    #[serde(default)]
+    size: Option<u64>,
+
     #[serde(default)]
     notes: Option<String>,
     #[serde(default)]
     #[allow(dead_code)]
     min_supported: Option<String>,
+}
+
+/// The `<os>-<arch>` key for the running platform.
+///
+/// Same construction as `plugin_host::install::IndexEntry::artifact_for_platform`,
+/// deliberately: the update manifest and the plugin index share a key space.
+fn current_update_target() -> String {
+    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// Default artifact filename when the manifest does not name one.
+fn default_bundle_name() -> &'static str {
+    if cfg!(target_os = "macos") {
+        // A .app is a directory, so it travels as a tarball. NOT a .dmg: a dmg
+        // is a delivery format for a human clicking a download link, and asking
+        // an updater to mount a disk image to extract one bundle is strictly
+        // more that can fail.
+        "StreamNook.app.tar.gz"
+    } else if cfg!(target_os = "linux") {
+        "StreamNook.AppImage"
+    } else {
+        "StreamNook.7z"
+    }
+}
+
+impl UpdateManifest {
+    /// The build for the platform we are running on, or `None` if the manifest
+    /// does not publish one.
+    ///
+    /// `None` means "no update offered", which is the correct and SAFE answer.
+    /// The alternative — falling back to the flat fields on any platform —
+    /// would hand a macOS client `StreamNook.7z` and have it try to install a
+    /// Windows build over itself. The legacy fallback is therefore gated to
+    /// `windows-x86_64` and nothing else.
+    fn artifact_for_platform(&self) -> Option<UpdateArtifact> {
+        self.artifact_for_target(&current_update_target())
+    }
+
+    /// Resolution logic, taking the target explicitly.
+    ///
+    /// Split out from `artifact_for_platform` so it can be tested for EVERY
+    /// platform from any one of them. Reading `std::env::consts` inside would
+    /// mean the macOS safety rule below could only ever be tested on macOS,
+    /// which is precisely the platform where nobody was running the tests.
+    fn artifact_for_target(&self, target: &str) -> Option<UpdateArtifact> {
+        if let Some(found) = self.platforms.get(target) {
+            return Some(found.clone());
+        }
+        (target == "windows-x86_64").then(|| UpdateArtifact {
+            download_url: self.download_url.clone(),
+            bundle_name: self.bundle_name.clone(),
+            sha256: self.sha256.clone(),
+            signature: self.signature.clone(),
+            size: self.size,
+        })
+    }
 }
 
 // ── Update artifact verification ────────────────────────────────────────────
@@ -265,6 +354,145 @@ fn verify_update_bundle(
 }
 
 #[cfg(test)]
+mod update_manifest_tests {
+    use super::{UpdateArtifact, UpdateManifest};
+
+    /// A manifest as the pipeline wrote it BEFORE per-platform builds existed:
+    /// flat fields only, describing a Windows bundle.
+    fn legacy_manifest() -> UpdateManifest {
+        serde_json::from_str(
+            r#"{
+                "version": "8.6.1",
+                "download_url": "https://streamnook.app/d/StreamNook.7z",
+                "bundle_name": "StreamNook.7z",
+                "sha256": "abc123",
+                "signature": "RWQlegacysig",
+                "size": 12345
+            }"#,
+        )
+        .expect("legacy manifest must still parse")
+    }
+
+    fn modern_manifest() -> UpdateManifest {
+        serde_json::from_str(
+            r#"{
+                "version": "8.7.0",
+                "download_url": "https://streamnook.app/d/StreamNook.7z",
+                "bundle_name": "StreamNook.7z",
+                "sha256": "winhash",
+                "size": 111,
+                "platforms": {
+                    "windows-x86_64": {
+                        "download_url": "https://streamnook.app/d/win/StreamNook.7z",
+                        "bundle_name": "StreamNook.7z",
+                        "sha256": "winhash2",
+                        "size": 222
+                    },
+                    "macos-aarch64": {
+                        "download_url": "https://streamnook.app/d/mac/StreamNook.app.tar.gz",
+                        "bundle_name": "StreamNook.app.tar.gz",
+                        "sha256": "machash",
+                        "signature": "RWQmac",
+                        "size": 333
+                    }
+                }
+            }"#,
+        )
+        .expect("modern manifest parses")
+    }
+
+    #[test]
+    fn a_legacy_manifest_still_updates_windows_clients() {
+        // Every client already installed reads the flat fields. If this ever
+        // returns None, that entire population is stranded on its current build.
+        let a = legacy_manifest()
+            .artifact_for_target("windows-x86_64")
+            .expect("windows must resolve from the flat fields");
+        assert_eq!(a.download_url, "https://streamnook.app/d/StreamNook.7z");
+        assert_eq!(a.sha256.as_deref(), Some("abc123"));
+        assert_eq!(a.size, Some(12345));
+    }
+
+    #[test]
+    fn a_legacy_manifest_offers_macos_nothing_rather_than_a_windows_build() {
+        // THE safety property. Falling back to the flat fields here would hand
+        // a Mac StreamNook.7z and have it install a Windows build over itself.
+        for target in ["macos-aarch64", "macos-x86_64", "linux-x86_64"] {
+            assert!(
+                legacy_manifest().artifact_for_target(target).is_none(),
+                "{target} must get no artifact from a Windows-only manifest"
+            );
+        }
+    }
+
+    #[test]
+    fn a_platform_entry_wins_over_the_legacy_fields() {
+        let a = modern_manifest()
+            .artifact_for_target("windows-x86_64")
+            .expect("resolves");
+        assert_eq!(a.download_url, "https://streamnook.app/d/win/StreamNook.7z");
+        assert_eq!(
+            a.sha256.as_deref(),
+            Some("winhash2"),
+            "the platforms entry must take precedence, not merge with the flat fields"
+        );
+    }
+
+    #[test]
+    fn macos_resolves_to_its_own_tarball_and_signature() {
+        let a = modern_manifest()
+            .artifact_for_target("macos-aarch64")
+            .expect("macOS resolves");
+        assert!(a.download_url.ends_with("StreamNook.app.tar.gz"));
+        assert_eq!(a.sha256.as_deref(), Some("machash"));
+        assert_eq!(
+            a.signature.as_deref(),
+            Some("RWQmac"),
+            "each platform carries its OWN detached signature; a shared one              would not verify against a different artifact's bytes"
+        );
+    }
+
+    #[test]
+    fn an_unpublished_platform_gets_no_update() {
+        assert!(modern_manifest()
+            .artifact_for_target("linux-aarch64")
+            .is_none());
+    }
+
+    #[test]
+    fn the_key_space_matches_the_plugin_index() {
+        // Both are built from std::env::consts, so a key that works for one
+        // must work for the other. Drift here would be silent.
+        let target = super::current_update_target();
+        assert!(
+            target.contains('-'),
+            "target must be `<os>-<arch>`, got {target}"
+        );
+        let (os, arch) = target.split_once('-').unwrap();
+        assert_eq!(os, std::env::consts::OS);
+        assert_eq!(arch, std::env::consts::ARCH);
+    }
+
+    #[test]
+    fn default_bundle_name_is_platform_appropriate() {
+        let name = super::default_bundle_name();
+        if cfg!(target_os = "macos") {
+            assert_eq!(name, "StreamNook.app.tar.gz");
+        } else if cfg!(target_os = "windows") {
+            assert_eq!(name, "StreamNook.7z");
+        }
+        assert!(!name.is_empty());
+    }
+
+    #[test]
+    fn a_defaulted_artifact_carries_no_download_url() {
+        // `unwrap_or_default()` at the call site must not fabricate a plausible
+        // URL; an empty one cannot be downloaded by accident.
+        assert!(UpdateArtifact::default().download_url.is_empty());
+    }
+}
+
+#[cfg(test)]
 mod update_verification_tests {
     use super::{verify_update_bundle, ENFORCE_UPDATE_SIGNATURE, UPDATE_PUBKEY};
 
@@ -356,9 +584,23 @@ async fn check_for_bundle_update_streamnook() -> Result<BundleUpdateStatus, Stri
         .map_err(|e| format!("Failed to parse update manifest: {}", e))?;
 
     let current_version = get_current_app_version();
-    let update_available = remote_is_newer(&manifest.version, &current_version);
 
-    let download_size = manifest
+    // Resolve OUR platform's build first. A manifest that ships no build for
+    // this platform is not an update, however new its version number is.
+    let artifact = manifest.artifact_for_platform();
+    let update_available =
+        artifact.is_some() && remote_is_newer(&manifest.version, &current_version);
+    if artifact.is_none() {
+        log::info!(
+            "[Update] manifest {} publishes no build for {}-{}; not offering an update",
+            manifest.version,
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        );
+    }
+    let artifact = artifact.unwrap_or_default();
+
+    let download_size = artifact
         .size
         .map(|s| format!("{:.1} MB", s as f64 / 1_048_576.0));
 
@@ -366,12 +608,12 @@ async fn check_for_bundle_update_streamnook() -> Result<BundleUpdateStatus, Stri
         update_available,
         current_version: current_version.clone(),
         latest_version: manifest.version.clone(),
-        download_url: Some(manifest.download_url.clone()),
+        download_url: Some(artifact.download_url.clone()),
         bundle_name: Some(
-            manifest
+            artifact
                 .bundle_name
                 .clone()
-                .unwrap_or_else(|| "StreamNook.7z".to_string()),
+                .unwrap_or_else(|| default_bundle_name().to_string()),
         ),
         download_size,
         component_changes: if update_available {
@@ -387,8 +629,8 @@ async fn check_for_bundle_update_streamnook() -> Result<BundleUpdateStatus, Stri
             None
         },
         release_notes: manifest.notes.clone(),
-        sha256: manifest.sha256.clone(),
-        signature: manifest.signature.clone(),
+        sha256: artifact.sha256.clone(),
+        signature: artifact.signature.clone(),
     })
 }
 

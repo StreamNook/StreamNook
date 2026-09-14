@@ -257,7 +257,6 @@ pub async fn recover_stale_session() -> bool {
 /// "let the user sign in normally, then read the jar", and the jar is read from
 /// RUST because the cookies that matter are HttpOnly and page script cannot see
 /// them (the same reason Kick reads its site session this way).
-#[cfg(windows)]
 pub async fn connect() -> Result<()> {
     use tauri::Manager;
 
@@ -624,13 +623,6 @@ fn find_account_name(v: &serde_json::Value) -> Option<String> {
     }
 }
 
-#[cfg(not(windows))]
-pub async fn connect() -> Result<()> {
-    Err(anyhow!(
-        "YouTube login (webview cookie harvest) is only implemented on Windows so far"
-    ))
-}
-
 /// Re-read the auth cookies from the (still-logged-in) YouTube profile via a hidden
 /// webview — used to recover when a cached session goes stale without making the
 /// user sign in again. Returns true if a SAPISID was found.
@@ -651,7 +643,6 @@ pub async fn connect() -> Result<()> {
 /// youtube.com page lets the server issue new `Set-Cookie` values into the profile
 /// first, which is what actually renews the session and is what a browser sitting
 /// open does for free.
-#[cfg(windows)]
 pub async fn reharvest() -> bool {
     use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -711,14 +702,45 @@ pub async fn reharvest() -> bool {
     found
 }
 
+/// Cross-platform cookie read, used everywhere except Windows.
+///
+/// `cookies_for_url` returns HTTP-only and secure cookies, which is exactly the
+/// capability the WebView2 COM path was hand-rolled for. Note it only answers
+/// for `http`/`https` origins — cookies set by script under `tauri://` are not
+/// visible to it, which is fine because every caller passes a real site origin.
 #[cfg(not(windows))]
-pub async fn reharvest() -> bool {
-    false
+pub(crate) async fn fetch_cookies_for_origin(
+    app: &tauri::AppHandle,
+    window_label: &str,
+    names: &[&str],
+    origin: &str,
+) -> Result<HashMap<String, String>> {
+    use tauri::Manager;
+
+    let webview = app
+        .get_webview_window(window_label)
+        .ok_or_else(|| anyhow!("webview window '{}' unavailable", window_label))?;
+
+    let url = tauri::Url::parse(origin)
+        .map_err(|e| anyhow!("cookie origin '{}' is not a valid URL: {}", origin, e))?;
+
+    let jar = webview
+        .cookies_for_url(url)
+        .map_err(|e| anyhow!("cookies_for_url({}) failed: {}", origin, e))?;
+
+    let mut found: HashMap<String, String> = HashMap::new();
+    for cookie in jar {
+        let name = cookie.name().to_string();
+        // Empty `names` means "take everything", matching the harvest callers.
+        if names.is_empty() || names.iter().any(|wanted| *wanted == name) {
+            found.insert(name, cookie.value().to_string());
+        }
+    }
+    Ok(found)
 }
 
 // --- WebView2 cookie read (Windows) — mirrors twitch_auth_service ------------
 
-#[cfg(windows)]
 async fn fetch_cookies_from_window(
     app: &tauri::AppHandle,
     window_label: &str,
@@ -731,7 +753,23 @@ async fn fetch_cookies_from_window(
 ///
 /// This sees **HttpOnly** cookies, which page script never can — which is the
 /// whole reason it exists. `origin` selects whose jar to read, so other
-/// platforms' sign-in windows can reuse the same proven path.
+/// platforms' sign-in windows can reuse the same path.
+///
+/// An empty `names` means "every cookie for that origin", which is what the
+/// harvest paths pass.
+///
+/// # Two implementations, on purpose
+///
+/// Windows keeps the hand-rolled WebView2 `GetCookies` COM path below. It is
+/// proven in production and Tauri's own `cookies_for_url` carries a documented
+/// **deadlock** on Windows when called from a synchronous command or event
+/// handler (wry#583), so there is no upside to swapping it there.
+///
+/// Everywhere else uses `WebviewWindow::cookies_for_url`, which has been
+/// cross-platform since Tauri 2.4.0 and abstracts `WKHTTPCookieStore` on macOS
+/// and `WebKitCookieManager` on Linux. Read-only is all this needs, so the
+/// cookie-SETTER gap (tauri#11691) does not matter here.
+#[cfg(windows)]
 pub(crate) async fn fetch_cookies_for_origin(
     app: &tauri::AppHandle,
     window_label: &str,

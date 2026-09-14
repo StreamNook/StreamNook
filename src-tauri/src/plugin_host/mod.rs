@@ -379,7 +379,15 @@ impl PluginHost {
                 .ok_or_else(|| anyhow!("source not found; add it first"))?
         };
         let (doc, _) = install::fetch_index(url, Some(&pinned)).await?;
-        Ok(doc.plugins)
+        // Filter the LISTING, not just the install step. A plugin with no build
+        // for this platform is not "available but broken" - it is not
+        // available, and showing it only to fail at the final click is worse
+        // than never showing it. Also keeps other platforms' artifacts out of
+        // the payload entirely, alongside `skip_serializing` on the map itself.
+        Ok(install::installable_on(
+            doc.plugins,
+            &install::current_platform_key(),
+        ))
     }
 
     /// Install step 1: download, verify, and unpack from a source (SIGNING.md

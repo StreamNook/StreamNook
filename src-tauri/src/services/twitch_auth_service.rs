@@ -61,13 +61,15 @@ const EMPTY_CACHE_TTL: Duration = Duration::from_secs(5);
 
 /// Label of the hidden, short-lived webview used to read the active account's
 /// profile cookies. Built bound to that profile and destroyed right after.
-#[cfg(windows)]
 const SESSION_WINDOW_LABEL: &str = "twitch-session";
 
 /// Cookies a single harvest collects, so one window read serves both the token
 /// and the device-id callers.
-#[cfg(windows)]
 const COOKIE_NAMES: &[&str] = &["auth-token", "unique_id"];
+/// Origin whose cookie jar carries playback entitlement. Kept beside
+/// COOKIE_NAMES so the two never drift apart.
+#[cfg(not(windows))]
+const TWITCH_COOKIE_ORIGIN: &str = "https://twitch.tv";
 
 #[derive(Debug, Clone)]
 pub enum AuthError {
@@ -245,7 +247,6 @@ impl TwitchAuthService {
 /// a short-lived hidden webview; on a profile with no session, falls back to the
 /// main window's default store (a pre-multi-account login lives there). Returns
 /// whatever was found (possibly empty); callers treat empty as not-logged-in.
-#[cfg(windows)]
 async fn harvest(app: &AppHandle) -> HashMap<String, String> {
     use crate::services::account_store::AccountStore;
 
@@ -311,7 +312,6 @@ async fn harvest(app: &AppHandle) -> HashMap<String, String> {
 /// Build a hidden webview bound to the active account's profile, read its
 /// cookies, and destroy it. Retries the read while the freshly-built webview's
 /// controller initializes. `None` if the window couldn't be built at all.
-#[cfg(windows)]
 async fn harvest_from_active_profile(app: &AppHandle) -> Option<HashMap<String, String>> {
     use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -361,6 +361,51 @@ async fn harvest_from_active_profile(app: &AppHandle) -> Option<HashMap<String, 
         let _ = window.destroy();
     }
     Some(result)
+}
+
+/// Cross-platform cookie read for the Twitch jar, used everywhere except Windows.
+///
+/// Mirrors the WebView2 path below, but built on `WebviewWindow::cookies_for_url`
+/// (cross-platform since Tauri 2.4.0). Windows deliberately keeps its hand-rolled
+/// COM implementation: it is proven, and Tauri's own API documents a **deadlock**
+/// on Windows when called from a synchronous command or event handler (wry#583).
+///
+/// This is what makes the entitlement half of Twitch auth work off Windows. The
+/// loopback + file-token half was already portable, which is why login worked on
+/// macOS while `cookies.json` stayed empty.
+#[cfg(not(windows))]
+async fn fetch_cookies_from_window(
+    app: &AppHandle,
+    window_label: &str,
+    names: &[&str],
+) -> Result<HashMap<String, String>, AuthError> {
+    use tauri::Manager;
+
+    let webview = app
+        .get_webview_window(window_label)
+        .ok_or(AuthError::WebViewUnavailable)?;
+
+    let url = tauri::Url::parse(TWITCH_COOKIE_ORIGIN)
+        .map_err(|e| AuthError::Internal(format!("bad cookie origin: {e}")))?;
+
+    let jar = webview
+        .cookies_for_url(url)
+        .map_err(|e| AuthError::Internal(format!("cookies_for_url failed: {e}")))?;
+
+    let mut found: HashMap<String, String> = HashMap::new();
+    for cookie in jar {
+        let name = cookie.name().to_string();
+        // Empty `names` means "take everything"; the Twitch callers always pass
+        // COOKIE_NAMES, but keep the contract identical to the Windows path.
+        if names.is_empty() || names.iter().any(|wanted| *wanted == name) {
+            found.insert(name, cookie.value().to_string());
+        }
+    }
+
+    if found.get("auth-token").map(String::is_empty).unwrap_or(true) {
+        return Err(AuthError::NotLoggedIn);
+    }
+    Ok(found)
 }
 
 #[cfg(windows)]
@@ -478,7 +523,3 @@ fn extract_cookies(
     Ok(found)
 }
 
-#[cfg(not(windows))]
-async fn harvest(_app: &AppHandle) -> HashMap<String, String> {
-    HashMap::new()
-}

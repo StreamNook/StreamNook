@@ -391,12 +391,157 @@ mod imp {
 mod imp {
     use super::*;
 
-    pub fn webview_kinds(_app: &AppHandle) -> HashMap<u32, Kind> {
-        HashMap::new()
+    /// Classify a webview helper process by NAME.
+    ///
+    /// Windows has to ask WebView2 which process is which, because
+    /// `msedgewebview2.exe` is the name of all of them. WebKit does not have
+    /// that problem: macOS runs each role as a separately-named helper, so the
+    /// classification is available without querying anything.
+    ///
+    /// Returns `None` for a process this does not recognise, leaving
+    /// `build_tree` to fall back to its own Plugin/Other reasoning.
+    fn kind_from_name(name: &str) -> Option<Kind> {
+        // `ps` reports these as bare bundle executables, lowercased by
+        // `platform::process`.
+        match name {
+            "com.apple.webkit.webcontent" => Some(Kind::Renderer),
+            "com.apple.webkit.gpu" => Some(Kind::Gpu),
+            "com.apple.webkit.networking" => Some(Kind::Utility),
+            // The Linux/WebKitGTK equivalents.
+            "webkitwebprocess" | "webkitgtkwebprocess" => Some(Kind::Renderer),
+            "webkitnetworkprocess" => Some(Kind::Utility),
+            _ => {
+                // Bundle IDs sometimes arrive with a trailing role suffix
+                // (".Sandboxed", a numbered variant). Prefix-match rather than
+                // silently dropping the process into WebViewOther.
+                if name.starts_with("com.apple.webkit.webcontent") {
+                    Some(Kind::Renderer)
+                } else if name.starts_with("com.apple.webkit.gpu") {
+                    Some(Kind::Gpu)
+                } else if name.starts_with("com.apple.webkit") {
+                    Some(Kind::WebViewOther)
+                } else {
+                    None
+                }
+            }
+        }
     }
 
-    pub fn sample_tree(_kinds: &HashMap<u32, Kind>) -> Option<Vec<ProcRow>> {
-        None
+    pub fn webview_kinds(_app: &AppHandle) -> HashMap<u32, Kind> {
+        crate::platform::process::tree()
+            .into_iter()
+            .filter_map(|p| kind_from_name(&p.name).map(|k| (p.pid, k)))
+            .collect()
+    }
+
+    pub fn sample_tree(kinds: &HashMap<u32, Kind>) -> Option<Vec<ProcRow>> {
+        let self_pid = std::process::id();
+        let all = crate::platform::process::tree();
+        if all.is_empty() {
+            // Enumeration failed. `None` means "no sample", which is honest;
+            // an empty Vec would read as "the app has no processes".
+            return None;
+        }
+        let entries: Vec<Entry> = all
+            .iter()
+            .map(|p| Entry {
+                pid: p.pid,
+                parent: p.parent,
+                threads: p.threads,
+                name: p.name.clone(),
+            })
+            .collect();
+
+        let rss = rss_by_pid();
+        let rows = build_tree(self_pid, &entries, kinds)
+            .into_iter()
+            .map(|(e, kind)| {
+                let ws_mb = rss.get(&e.pid).copied().unwrap_or(0) / 1024;
+                ProcRow {
+                    pid: e.pid,
+                    name: e.name,
+                    kind,
+                    ws_mb,
+                    // Unix `ps` has no cheap private-bytes or handle-count
+                    // equivalent. 0 means "not measured here", which the log
+                    // renders as such rather than claiming zero usage.
+                    private_mb: 0,
+                    handles: 0,
+                    threads: e.threads,
+                }
+            })
+            .collect();
+        Some(rows)
+    }
+
+    /// Resident set size per pid, in KiB, from one `ps` call.
+    fn rss_by_pid() -> HashMap<u32, u64> {
+        let mut out = HashMap::new();
+        let Ok(output) = std::process::Command::new("ps").args(["-Ao", "pid=,rss="]).output()
+        else {
+            return out;
+        };
+        if !output.status.success() {
+            return out;
+        }
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let mut it = line.split_whitespace();
+            if let (Some(pid), Some(rss)) = (it.next(), it.next()) {
+                if let (Ok(pid), Ok(rss)) = (pid.parse::<u32>(), rss.parse::<u64>()) {
+                    out.insert(pid, rss);
+                }
+            }
+        }
+        out
+    }
+
+    #[cfg(test)]
+    mod unix_tests {
+        use super::*;
+
+        #[test]
+        fn webkit_helpers_are_classified_by_name() {
+            assert_eq!(kind_from_name("com.apple.webkit.webcontent"), Some(Kind::Renderer));
+            assert_eq!(kind_from_name("com.apple.webkit.gpu"), Some(Kind::Gpu));
+            assert_eq!(kind_from_name("com.apple.webkit.networking"), Some(Kind::Utility));
+        }
+
+        #[test]
+        fn unknown_webkit_roles_fall_back_to_webviewother_not_none() {
+            // A future helper we have not enumerated is still a webview process,
+            // and reporting it as unknown-webview is more useful than dropping
+            // it into the generic "Other" bucket.
+            assert_eq!(
+                kind_from_name("com.apple.webkit.somethingnew"),
+                Some(Kind::WebViewOther)
+            );
+        }
+
+        #[test]
+        fn suffixed_content_processes_still_count_as_renderers() {
+            assert_eq!(
+                kind_from_name("com.apple.webkit.webcontent.sandboxed"),
+                Some(Kind::Renderer)
+            );
+        }
+
+        #[test]
+        fn non_webkit_processes_are_left_for_build_tree_to_judge() {
+            assert_eq!(kind_from_name("streamnook"), None);
+            assert_eq!(kind_from_name("obs"), None);
+        }
+
+        #[test]
+        fn sampling_returns_rows_for_the_running_process() {
+            // Not a stub any more: this must actually produce the current
+            // process, which is what `None` used to hide.
+            let kinds = HashMap::new();
+            let rows = sample_tree(&kinds).expect("sample_tree should produce a sample");
+            assert!(
+                rows.iter().any(|r| r.pid == std::process::id()),
+                "the sample must contain the process doing the sampling"
+            );
+        }
     }
 }
 

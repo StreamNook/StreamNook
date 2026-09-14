@@ -16,8 +16,16 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::Notify;
 
 const AUTO_POLL_SECS: u64 = 30;
+
 /// Process names (lowercase, without path) that mean a broadcast is likely
 /// running. Same list Chatterino uses plus Twitch Studio.
+///
+/// **The list is per-platform because the NAMES are.** macOS processes carry no
+/// `.exe`, and `ps -o comm` reports a bundle's inner executable, so OBS appears
+/// as `obs`, not `obs64.exe`. Matching the Windows list on macOS is why
+/// auto-detect could never fire there: it was not that detection failed, it was
+/// that it was looking for filenames that do not exist on the platform.
+#[cfg(windows)]
 const BROADCAST_PROCESSES: &[&str] = &[
     "obs64.exe",
     "obs32.exe",
@@ -31,6 +39,23 @@ const BROADCAST_PROCESSES: &[&str] = &[
     "vmix.exe",
     "prismlivestudio.exe",
 ];
+
+/// XSplit and vMix are Windows-only products, so they are absent here rather
+/// than merely unlisted.
+#[cfg(target_os = "macos")]
+const BROADCAST_PROCESSES: &[&str] = &[
+    "obs",
+    "streamlabs desktop",
+    "streamlabs obs",
+    "streamlabs",
+    "twitch studio",
+    "prism live studio",
+    "prismlivestudio",
+    "ecamm live",
+];
+
+#[cfg(all(unix, not(target_os = "macos")))]
+const BROADCAST_PROCESSES: &[&str] = &["obs", "obs-studio", "streamlabs-desktop"];
 
 const MODE_OFF: u8 = 0;
 const MODE_ON: u8 = 1;
@@ -137,35 +162,17 @@ impl StreamerMode {
     }
 }
 
-#[cfg(windows)]
+/// True when any known broadcasting app is running.
+///
+/// The process walk itself moved to `platform::process::running_names`, which
+/// has a real implementation on every platform (ToolHelp on Windows, `ps`
+/// elsewhere). This function is now pure policy: compare what is running
+/// against the per-platform name list above.
 fn broadcast_running() -> bool {
-    use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
-        TH32CS_SNAPPROCESS,
-    };
-    unsafe {
-        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
-            return false;
-        };
-        let mut pe = PROCESSENTRY32W {
-            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
-            ..Default::default()
-        };
-        let mut found = false;
-        let mut ok = Process32FirstW(snap, &mut pe).is_ok();
-        while ok && !found {
-            let len = pe.szExeFile.iter().position(|&c| c == 0).unwrap_or(pe.szExeFile.len());
-            let name = String::from_utf16_lossy(&pe.szExeFile[..len]).to_lowercase();
-            found = BROADCAST_PROCESSES.contains(&name.as_str());
-            ok = Process32NextW(snap, &mut pe).is_ok();
-        }
-        let _ = CloseHandle(snap);
-        found
-    }
+    let running = crate::platform::process::running_names();
+    BROADCAST_PROCESSES
+        .iter()
+        .any(|wanted| running.contains(*wanted))
 }
 
-#[cfg(not(windows))]
-fn broadcast_running() -> bool {
-    false
-}
+

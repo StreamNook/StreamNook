@@ -78,20 +78,71 @@ pub struct IndexEntry {
     /// macos-aarch64, macos-x86_64, linux-x86_64, ...). The bare `artifact`
     /// above is the windows-x86_64 build; other platforms go here. The app
     /// installs whichever matches the user's platform.
-    #[serde(default)]
+    ///
+    /// **Deserialised but never serialised.** This is index plumbing, not
+    /// marketplace content: the UI has no use for other platforms' download
+    /// URLs, hashes and signature URLs, and shipping them would mean a Windows
+    /// marketplace payload describing macOS builds it can never install.
+    #[serde(default, skip_serializing)]
     pub platforms: HashMap<String, IndexArtifact>,
+}
+
+/// The `<os>-<arch>` key for the running platform.
+pub fn current_platform_key() -> String {
+    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
 }
 
 impl IndexEntry {
     /// The artifact to install on the running platform, or None when the plugin
-    /// ships no build for it. Prefers a matching `platforms` entry; the bare
-    /// `artifact` counts only as the windows-x86_64 build.
+    /// ships no build for it.
     pub fn artifact_for_platform(&self) -> Option<&IndexArtifact> {
-        let target = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
-        self.platforms
-            .get(&target)
-            .or_else(|| (target == "windows-x86_64").then_some(&self.artifact))
+        self.artifact_for_target(&current_platform_key())
     }
+
+    /// Resolution against an explicit target.
+    ///
+    /// Split out so the rules can be tested for EVERY platform from any one of
+    /// them. Reading `std::env::consts` inline would mean the Windows-only
+    /// fallback below could only ever be exercised on Windows.
+    ///
+    /// Prefers a matching `platforms` entry. The bare `artifact` counts only as
+    /// the windows-x86_64 build, because an index predating the map describes a
+    /// Windows zip and nothing else; falling back to it elsewhere would install
+    /// a Windows binary on a Mac.
+    ///
+    /// **The fallback applies only to entries that declare NO platforms at
+    /// all.** Once an entry has a `platforms` map, that map is the complete
+    /// statement of what it supports. Without this rule a publisher shipping a
+    /// mac-only plugin would still leak into the Windows marketplace purely
+    /// because the schema requires a bare `artifact` field to exist — the
+    /// plugin would list, download a macOS zip, and fail at spawn.
+    pub fn artifact_for_target(&self, target: &str) -> Option<&IndexArtifact> {
+        if let Some(found) = self.platforms.get(target) {
+            return Some(found);
+        }
+        if self.platforms.is_empty() && target == "windows-x86_64" {
+            return Some(&self.artifact);
+        }
+        None
+    }
+
+    /// Whether this plugin can be installed on `target` at all.
+    pub fn is_installable_on(&self, target: &str) -> bool {
+        self.artifact_for_target(target).is_some()
+    }
+}
+
+/// Keep only the entries the given platform can actually install.
+///
+/// The marketplace listing is filtered, not just the install step. A plugin
+/// with no build for this platform is not "available but broken" — it is not
+/// available, and listing it only to fail at the last click is a worse
+/// experience than never showing it.
+pub fn installable_on(entries: Vec<IndexEntry>, target: &str) -> Vec<IndexEntry> {
+    entries
+        .into_iter()
+        .filter(|e| e.is_installable_on(target))
+        .collect()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -308,6 +359,16 @@ pub async fn prepare_install(
         std::fs::remove_dir_all(&staging).ok();
         bail!("the artifact does not contain its declared entry '{}'", manifest.runtime.entry);
     }
+    // A zip records Unix mode bits only if it was CREATED on a Unix host. An
+    // artifact zipped on Windows carries none, so `extract` lands the binary at
+    // 0644 and the plugin host later fails to spawn it with "Permission denied"
+    // — long after this install reported success, and with nothing linking the
+    // two. Set it explicitly rather than trusting whoever packaged the plugin
+    // to have used the right machine. No-op on Windows.
+    if let Err(e) = crate::platform::fs::make_executable(&staging.join(&manifest.runtime.entry)) {
+        std::fs::remove_dir_all(&staging).ok();
+        bail!("could not make the plugin entry executable: {e}");
+    }
     if let Some(ui_entry) = &manifest.runtime.ui_entry {
         if !staging.join(ui_entry).exists() {
             std::fs::remove_dir_all(&staging).ok();
@@ -404,4 +465,164 @@ pub fn promote_staging(staging: &PathBuf, plugin_id: &str) -> Result<()> {
     std::fs::rename(staging, &live)
         .map_err(|e| anyhow!("failed to move the verified artifact into place: {e}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod platform_filter_tests {
+    use super::*;
+
+    fn artifact_json(url: &str) -> serde_json::Value {
+        serde_json::json!({
+            "url": url,
+            "sha256": "aa",
+            "size": 1,
+            "signature_url": format!("{url}.minisig"),
+        })
+    }
+
+    fn artifact(url: &str) -> IndexArtifact {
+        serde_json::from_value(artifact_json(url)).expect("IndexArtifact fixture")
+    }
+
+    fn entry(id: &str, platforms: &[(&str, &str)]) -> IndexEntry {
+        let mut e: IndexEntry = serde_json::from_value(serde_json::json!({
+            "id": id,
+            "name": id,
+            "version": "1.0.0",
+            "tier": "C",
+            "description": "",
+            "host_min": "0.0.0",
+            "author": { "name": "t", "pubkey": "RW" },
+            "artifact": artifact_json("https://x/win.zip"),
+        }))
+        .expect("IndexEntry fixture");
+        for (k, url) in platforms {
+            e.platforms.insert((*k).to_string(), artifact(url));
+        }
+        e
+    }
+
+    #[test]
+    fn a_legacy_windows_only_entry_is_hidden_from_macos() {
+        // THE point of this filter. A pre-platforms index entry describes a
+        // Windows zip; a Mac must not be offered it.
+        let e = entry("legacy", &[]);
+        assert!(e.is_installable_on("windows-x86_64"));
+        assert!(!e.is_installable_on("macos-aarch64"));
+        assert!(!e.is_installable_on("linux-x86_64"));
+    }
+
+    #[test]
+    fn a_mac_only_plugin_is_hidden_from_windows() {
+        // The direction that matters here: the normal desktop marketplace must
+        // not show builds it cannot install.
+        //
+        // The schema REQUIRES a bare `artifact` field, so a mac-only entry
+        // still has one. If the legacy fallback fired whenever the map lacked
+        // a Windows key, that plugin would list on Windows, download a macOS
+        // zip, and fail at spawn. Declaring `platforms` is therefore a complete
+        // statement of support, and the fallback is reserved for entries with
+        // no map at all.
+        let e = entry("mac-only", &[("macos-aarch64", "https://x/mac.zip")]);
+        assert!(e.is_installable_on("macos-aarch64"));
+        assert!(
+            !e.is_installable_on("windows-x86_64"),
+            "an entry that declares platforms without windows-x86_64 must not \
+             fall back to its bare artifact"
+        );
+    }
+
+    #[test]
+    fn declaring_platforms_does_not_break_windows_when_windows_is_declared() {
+        // The live index restates windows-x86_64 explicitly, so this is the
+        // path every current Windows user takes. It must keep working.
+        let e = entry(
+            "both",
+            &[
+                ("windows-x86_64", "https://x/win2.zip"),
+                ("macos-aarch64", "https://x/mac.zip"),
+            ],
+        );
+        let win = e.artifact_for_target("windows-x86_64").expect("resolves");
+        assert_eq!(
+            win.url, "https://x/win2.zip",
+            "the declared entry wins over the bare artifact"
+        );
+    }
+
+    #[test]
+    fn filtering_removes_entries_with_no_build_for_the_target() {
+        let list = vec![
+            // Declares both, which is what the live index does.
+            entry(
+                "cross-platform",
+                &[
+                    ("windows-x86_64", "https://x/win2.zip"),
+                    ("macos-aarch64", "https://x/mac.zip"),
+                ],
+            ),
+            // Declares macOS only: must NOT surface on Windows.
+            entry("mac-only", &[("macos-aarch64", "https://x/mac.zip")]),
+            // Declares nothing: legacy, Windows-only by definition.
+            entry("legacy-windows-only", &[]),
+        ];
+
+        let mac: Vec<String> = installable_on(list.clone(), "macos-aarch64")
+            .into_iter()
+            .map(|e| e.id)
+            .collect();
+        assert_eq!(mac, vec!["cross-platform", "mac-only"]);
+
+        let win: Vec<String> = installable_on(list, "windows-x86_64")
+            .into_iter()
+            .map(|e| e.id)
+            .collect();
+        assert_eq!(
+            win,
+            vec!["cross-platform", "legacy-windows-only"],
+            "Windows must see the cross-platform and legacy entries, and NOT \
+             the mac-only one"
+        );
+    }
+
+    #[test]
+    fn linux_sees_nothing_it_cannot_run() {
+        let list = vec![
+            entry("mac", &[("macos-aarch64", "https://x/mac.zip")]),
+            entry("legacy", &[]),
+        ];
+        assert!(installable_on(list, "linux-x86_64").is_empty());
+    }
+
+    #[test]
+    fn the_platforms_map_is_never_serialised_to_the_ui() {
+        // The UI has no use for other platforms' URLs, hashes and signature
+        // URLs, and a Windows payload should not describe macOS builds.
+        let e = entry("x", &[("macos-aarch64", "https://x/mac.zip")]);
+        let json = serde_json::to_string(&e).expect("serialises");
+        assert!(
+            !json.contains("platforms"),
+            "platforms must be skip_serializing; payload was {json}"
+        );
+        assert!(
+            !json.contains("mac.zip"),
+            "no other-platform artifact URL may reach the frontend"
+        );
+    }
+
+    #[test]
+    fn the_platforms_map_still_DESERIALISES_from_the_index() {
+        // skip_serializing must not become skip: the app reads this field from
+        // the published index to decide what it can install.
+        let e = entry("x", &[("macos-aarch64", "https://x/mac.zip")]);
+        assert!(e.artifact_for_target("macos-aarch64").is_some());
+    }
+
+    #[test]
+    fn current_platform_key_matches_env_consts() {
+        let k = current_platform_key();
+        let (os, arch) = k.split_once('-').expect("<os>-<arch>");
+        assert_eq!(os, std::env::consts::OS);
+        assert_eq!(arch, std::env::consts::ARCH);
+    }
 }

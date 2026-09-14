@@ -286,6 +286,7 @@ fn close_main_window(app: tauri::AppHandle) {
 
 mod commands;
 mod models;
+mod platform;
 mod plugin_host;
 mod services;
 mod utils;
@@ -597,6 +598,14 @@ fn main() {
                     }
                 }
             }
+            // Off Windows there is no message pump to probe, so the watchdog
+            // uses a main-thread round-trip instead and needs the AppHandle
+            // rather than an HWND. Without this the app had no hang detection
+            // at all on macOS or Linux.
+            #[cfg(not(windows))]
+            {
+                services::ui_hang_watchdog::start(app.handle().clone());
+            }
             // A build before the logical-units fix could resize the window past the
             // screen, and the window-state plugin persists that rect because it only
             // skips saving while maximized. Correcting rcNormalPosition rather than the
@@ -635,6 +644,18 @@ fn main() {
             // Register deep link scheme on Windows
             #[cfg(windows)]
             {
+                // Windows-only ON PURPOSE, not an unfinished port. Windows
+                // registers a URL scheme at RUNTIME by writing registry keys,
+                // which is what register_all() does. macOS and Linux register
+                // DECLARATIVELY - the bundler copies
+                // `plugins.deep-link.desktop.schemes` into the .app's
+                // Info.plist (CFBundleURLSchemes) and the .desktop file. Calling
+                // this there would be a no-op at best.
+                //
+                // Verified on the built bundle: Info.plist carries
+                // CFBundleURLSchemes = [streamnook]. Because that path depends
+                // entirely on config rather than on code, it is pinned by
+                // `tests/macos_window_parity.rs`.
                 use tauri_plugin_deep_link::DeepLinkExt;
                 let _ = app.deep_link().register_all();
             }
@@ -891,11 +912,30 @@ fn main() {
                 &[&show_item, &open_multichat_item, &overlay_clickable_item, &sep, &quit_item],
             )?;
 
-            let _tray = TrayIconBuilder::new()
+            let tray_builder = TrayIconBuilder::new()
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false)
                 .tooltip("StreamNook")
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(app.default_window_icon().unwrap().clone());
+
+            // macOS menu-bar icons are TEMPLATE images: the system uses only the
+            // alpha channel and paints the result itself, so the icon tracks the
+            // menu bar's light/dark appearance and matches every native item
+            // beside it.
+            //
+            // Without this the full-colour app icon is drawn literally, rounded
+            // app-tile background and all, which is why it looked like an app
+            // icon sitting in the menu bar rather than a menu-bar icon.
+            //
+            // Expect a MONOCHROME silhouette afterwards. That is correct and
+            // native (Dropbox, Slack and friends all look like this); it is not
+            // the colour being lost by accident. If the silhouette reads as a
+            // solid blob, the source art is too filled-in for template use and
+            // needs a dedicated alpha-only asset rather than a code change.
+            #[cfg(target_os = "macos")]
+            let tray_builder = tray_builder.icon_as_template(true);
+
+            let _tray = tray_builder
                 .on_menu_event(|app_handle, event| match event.id.as_ref() {
                     "show" => show_main_window(app_handle),
                     "overlay_clickable" => {
