@@ -257,6 +257,7 @@ pub async fn recover_stale_session() -> bool {
 /// "let the user sign in normally, then read the jar", and the jar is read from
 /// RUST because the cookies that matter are HttpOnly and page script cannot see
 /// them (the same reason Kick reads its site session this way).
+#[cfg(desktop)]
 pub async fn connect() -> Result<()> {
     use tauri::Manager;
 
@@ -337,6 +338,13 @@ pub async fn connect() -> Result<()> {
     }
     crate::services::providers::emit_platform_account_changed(&["youtube"]);
     Ok(())
+}
+
+#[cfg(mobile)]
+pub async fn connect() -> Result<()> {
+    Err(anyhow!(
+        "YouTube login (webview cookie harvest) is only implemented on the desktop app so far"
+    ))
 }
 
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -643,6 +651,7 @@ fn find_account_name(v: &serde_json::Value) -> Option<String> {
 /// youtube.com page lets the server issue new `Set-Cookie` values into the profile
 /// first, which is what actually renews the session and is what a browser sitting
 /// open does for free.
+#[cfg(desktop)]
 pub async fn reharvest() -> bool {
     use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -702,6 +711,11 @@ pub async fn reharvest() -> bool {
     found
 }
 
+#[cfg(mobile)]
+pub async fn reharvest() -> bool {
+    false
+}
+
 /// Cross-platform cookie read, used everywhere except Windows.
 ///
 /// `cookies_for_url` returns HTTP-only and secure cookies, which is exactly the
@@ -741,6 +755,7 @@ pub(crate) async fn fetch_cookies_for_origin(
 
 // --- WebView2 cookie read (Windows) — mirrors twitch_auth_service ------------
 
+#[cfg(desktop)]
 async fn fetch_cookies_from_window(
     app: &tauri::AppHandle,
     window_label: &str,

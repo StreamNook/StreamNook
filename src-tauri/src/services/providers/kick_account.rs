@@ -85,6 +85,12 @@ pub async fn is_connected() -> bool {
 /// window closes itself. Non-interactive runs hidden and fails fast when there
 /// is no session yet.
 pub async fn import(interactive: bool) -> Result<KickImportReport> {
+    #[cfg(mobile)]
+    {
+        let _ = interactive;
+        return Err(anyhow!("Kick account sync is only wired for the desktop app so far"));
+    }
+    #[cfg(desktop)]
     {
         use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -404,6 +410,7 @@ fn import_script(label: &str, interactive: bool) -> String {
 /// cookies — leading with consent left the flow waiting on a session that could
 /// never appear. Once the site session exists, the follow list is readable and
 /// the consent leg below is usually a single click.
+#[cfg(desktop)]
 pub async fn sign_in() -> Result<KickImportReport> {
     use tauri::Manager;
 
@@ -498,6 +505,11 @@ pub async fn sign_in() -> Result<KickImportReport> {
     }
 }
 
+#[cfg(mobile)]
+pub async fn sign_in() -> Result<KickImportReport> {
+    Err(anyhow!("Kick sign-in is only wired for the desktop app so far"))
+}
+
 /// Read the kick.com session from the sign-in window and pull the follow list
 /// from Rust.
 ///
@@ -507,6 +519,7 @@ pub async fn sign_in() -> Result<KickImportReport> {
 /// came back 401, and the window sat there waiting for a session the user had
 /// already established. The webview's cookie manager has no such blind spot, and
 /// our rustls client already talks to kick.com successfully.
+#[cfg(desktop)]
 async fn follows_via_cookies(app: &tauri::AppHandle, label: &str) -> Option<Vec<KickFollowedChannel>> {
     let jar = crate::services::youtube_auth_service::fetch_cookies_for_origin(
         app,

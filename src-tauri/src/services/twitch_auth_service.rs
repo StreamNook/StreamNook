@@ -63,6 +63,7 @@ const EMPTY_CACHE_TTL: Duration = Duration::from_secs(5);
 
 /// Label of the hidden, short-lived webview used to read the active account's
 /// profile cookies. Built bound to that profile and destroyed right after.
+#[cfg(desktop)]
 const SESSION_WINDOW_LABEL: &str = "twitch-session";
 
 /// Cookies a single harvest collects, so one window read serves both the token
@@ -315,6 +316,7 @@ async fn harvest(app: &AppHandle) -> HashMap<String, String> {
 /// Build a hidden webview bound to the active account's profile, read its
 /// cookies, and destroy it. Retries the read while the freshly-built webview's
 /// controller initializes. `None` if the window couldn't be built at all.
+#[cfg(desktop)]
 async fn harvest_from_active_profile(app: &AppHandle) -> Option<HashMap<String, String>> {
     use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -364,6 +366,15 @@ async fn harvest_from_active_profile(app: &AppHandle) -> Option<HashMap<String, 
         let _ = window.destroy();
     }
     Some(result)
+}
+
+/// Mobile has no hidden-webview profile to read. Android harvests through the
+/// Kotlin login plugin (`harvest` below) and never calls this, so the twin only
+/// exists for other mobile targets, where the desktop `harvest` above compiles.
+#[cfg(all(mobile, not(target_os = "android")))]
+async fn harvest_from_active_profile(_app: &AppHandle) -> Option<HashMap<String, String>> {
+    log::warn!("[Auth] active-profile harvest is desktop-only; no session window on this platform");
+    None
 }
 
 /// Cross-platform cookie read for the Twitch jar, used everywhere except Windows.
