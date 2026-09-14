@@ -1,6 +1,9 @@
-# Automatically derived from the `tauri::generate_handler!` list in src/main.rs.
-# Regenerate if commands are added or removed; a command missing here is DENIED
-# at runtime for every window, including the main UI.
+# Automatically derived from the `tauri::generate_handler!` list in src/lib.rs
+# (the one registry desktop and Android share; main.rs is a thin binary that
+# calls the library). Regenerate if commands are added or removed; a command
+# missing here is DENIED at runtime for every window, including the main UI.
+# Commands registered only for the mobile shell live in mobile-commands.toml
+# instead, never in both; tests/acl_parity.rs enforces both rules.
 #
 # This file exists to close a real hole: with no app-level ACL manifest at all,
 # Tauri skips the authorization check for app commands entirely
