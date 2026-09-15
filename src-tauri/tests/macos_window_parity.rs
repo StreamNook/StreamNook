@@ -207,3 +207,53 @@ fn deep_link_scheme_is_declared_for_the_bundler() {
         "the `streamnook` scheme must stay declared; found {schemes:?}"
     );
 }
+
+/// The main window is recreated at runtime in two places (Rust
+/// `show_main_window` after Go Live or a tray click, JS `ensureMainWindow.ts`
+/// from a popout), and neither goes through the config, so neither inherits
+/// the macOS chrome above. The first macOS build shipped both with the
+/// Windows values: the recreated window came back with no traffic lights,
+/// and since the React title bar draws no minimize/close cluster on macOS,
+/// no way to close or minimize it at all. Pin both call sites to the config.
+#[test]
+fn recreated_main_window_restates_the_macos_chrome() {
+    const LIB_RS: &str = include_str!("../src/lib.rs");
+    const ENSURE_MAIN_TS: &str = include_str!("../../src/utils/ensureMainWindow.ts");
+
+    let macos = window_object(MACOS_JSON, "tauri.macos.conf.json");
+    assert_eq!(macos.get("decorations").and_then(Value::as_bool), Some(true));
+    assert_eq!(macos.get("titleBarStyle").and_then(Value::as_str), Some("Overlay"));
+    assert_eq!(macos.get("hiddenTitle").and_then(Value::as_bool), Some(true));
+    let pos = macos
+        .get("trafficLightPosition")
+        .and_then(Value::as_object)
+        .expect("trafficLightPosition object");
+    let x = pos.get("x").and_then(Value::as_f64).expect("trafficLightPosition.x");
+    let y = pos.get("y").and_then(Value::as_f64).expect("trafficLightPosition.y");
+
+    let rust_needles = [
+        ".decorations(true)".to_string(),
+        ".title_bar_style(tauri::TitleBarStyle::Overlay)".to_string(),
+        ".hidden_title(true)".to_string(),
+        format!(".traffic_light_position(tauri::LogicalPosition::new({x:.1}, {y:.1}))"),
+    ];
+    for needle in &rust_needles {
+        assert!(
+            LIB_RS.contains(needle.as_str()),
+            "src/lib.rs main_window_chrome must restate `{needle}` from tauri.macos.conf.json"
+        );
+    }
+
+    let js_needles = [
+        "decorations: IS_MAC".to_string(),
+        "titleBarStyle: 'overlay'".to_string(),
+        "hiddenTitle: true".to_string(),
+        format!("trafficLightPosition: new LogicalPosition({x}, {y})"),
+    ];
+    for needle in &js_needles {
+        assert!(
+            ENSURE_MAIN_TS.contains(needle.as_str()),
+            "src/utils/ensureMainWindow.ts must restate `{needle}` from tauri.macos.conf.json"
+        );
+    }
+}

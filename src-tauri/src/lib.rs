@@ -168,6 +168,35 @@ fn arm_reveal_failsafe(handle: tauri::AppHandle) {
     });
 }
 
+/// The window chrome the config files give the main window, re-applied when
+/// Rust recreates it (tray click, or Go Live after the window was destroyed).
+///
+/// `tauri.macos.conf.json` decorates the window and floats real traffic
+/// lights over the page; `tauri.conf.json` (Windows/Linux) is borderless
+/// because the React title bar draws its own controls. A recreated window
+/// built with the Windows values on macOS came back with NO traffic lights,
+/// and since the React title bar renders no minimize/close cluster on macOS,
+/// no way to close or minimize it at all. `tests/macos_window_parity.rs`
+/// pins these literals to the config; `src/utils/ensureMainWindow.ts` is the
+/// JS twin.
+#[cfg(desktop)]
+fn main_window_chrome(
+    builder: tauri::WebviewWindowBuilder<'_, tauri::Wry, tauri::AppHandle>,
+) -> tauri::WebviewWindowBuilder<'_, tauri::Wry, tauri::AppHandle> {
+    // cfg on `let` rebindings, the same idiom the tray builder uses below
+    // (`icon_as_template`): three of the four macOS calls only exist on
+    // macOS, so a plain chain would not compile on Windows.
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .decorations(true)
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true)
+        .traffic_light_position(tauri::LogicalPosition::new(20.0, 22.0));
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.decorations(false);
+    builder
+}
+
 /// Bring the main StreamNook window forward — used by the tray icon left-click
 /// and the "Show StreamNook" menu item. Restores from minimized if needed and
 /// re-shows if the window was hidden to the tray on close.
@@ -199,21 +228,19 @@ fn show_main_window(app: &tauri::AppHandle) {
     } else {
         tauri::WebviewUrl::App("index.html".into())
     };
-    match tauri::WebviewWindowBuilder::new(app, "main", app_url)
+    let builder = tauri::WebviewWindowBuilder::new(app, "main", app_url)
         .title("StreamNook")
-    .inner_size(1600.0, 1000.0)
-    .min_inner_size(800.0, 600.0)
-    .center()
-    .resizable(true)
-    .decorations(false)
-    // Matches the config window's backgroundColor so the shell paints dark
-    // while the webview boots. Recreation is user-initiated (tray click), so
-    // the window shows immediately instead of gating on the reveal signal;
-    // saved geometry is restored below since skip_initial_state("main")
-    // covers every creation of this label, not just the first.
-    .background_color(tauri::window::Color(0x0c, 0x0c, 0x0d, 0xff))
-    .build()
-    {
+        .inner_size(1600.0, 1000.0)
+        .min_inner_size(800.0, 600.0)
+        .center()
+        .resizable(true)
+        // Matches the config window's backgroundColor so the shell paints dark
+        // while the webview boots. Recreation is user-initiated (tray click), so
+        // the window shows immediately instead of gating on the reveal signal;
+        // saved geometry is restored below since skip_initial_state("main")
+        // covers every creation of this label, not just the first.
+        .background_color(tauri::window::Color(0x0c, 0x0c, 0x0d, 0xff));
+    match main_window_chrome(builder).build() {
         Ok(win) => {
             debug!("[Main] Recreated main window on demand");
             {

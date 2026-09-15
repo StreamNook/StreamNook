@@ -10,7 +10,9 @@
 // this is a fast show+focus with no wait.
 
 import { invoke } from '@tauri-apps/api/core';
+import { LogicalPosition } from '@tauri-apps/api/dpi';
 import { Logger } from './logger';
+import { IS_MAC } from './platform';
 
 // Generous cold-start ceiling: recreating main boots the whole app shell. The
 // fallback only exists so a missed/late `main-ready` can't deadlock the action.
@@ -68,7 +70,19 @@ export async function ensureMainAlive(): Promise<void> {
           minHeight: 600,
           center: true,
           resizable: true,
-          decorations: false,
+          // Same per-platform chrome as the config-defined window: macOS keeps
+          // its decorated overlay title bar and real traffic lights (the React
+          // title bar draws no window controls there), everything else is
+          // borderless. Pinned to tauri.macos.conf.json by
+          // src-tauri/tests/macos_window_parity.rs.
+          decorations: IS_MAC,
+          ...(IS_MAC
+            ? {
+                titleBarStyle: 'overlay' as const,
+                hiddenTitle: true,
+                trafficLightPosition: new LogicalPosition(20, 22),
+              }
+            : {}),
           // Same hidden-until-first-paint gate as the config-defined window:
           // App's mount effect restores saved geometry and reveals, so the
           // recreated main appears painted instead of as a blank shell.
