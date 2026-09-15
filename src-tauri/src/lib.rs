@@ -401,8 +401,12 @@ fn cleanup_legacy_streamlink_bundle() {
     });
 }
 
+/// `async` on purpose: a non-async command runs on the UI thread, and a
+/// pasteboard read blocks until the app that owns the clipboard delivers its
+/// promised data. A hung source app then hung our window (macOS). The
+/// clipboard plugin's own `read_text` command is async for the same reason.
 #[tauri::command]
-fn read_clipboard_text_native(app: tauri::AppHandle) -> Result<String, String> {
+async fn read_clipboard_text_native(app: tauri::AppHandle) -> Result<String, String> {
     app.clipboard().read_text().map_err(|e| e.to_string())
 }
 

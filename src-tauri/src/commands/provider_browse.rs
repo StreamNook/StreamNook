@@ -185,8 +185,9 @@ pub async fn youtube_user_profile(
 // typed field, because the who's-live poller reads it) and is written through
 // the same save path as every other setting.
 
+// `async` so the settings lock is taken on a worker, never on the UI thread.
 #[tauri::command]
-pub fn get_provider_follows(state: State<'_, AppState>) -> Result<Vec<ProviderFollow>, String> {
+pub async fn get_provider_follows(state: State<'_, AppState>) -> Result<Vec<ProviderFollow>, String> {
     let settings = state.settings.lock().map_err(|e| e.to_string())?;
     Ok(settings.provider_follows.clone())
 }

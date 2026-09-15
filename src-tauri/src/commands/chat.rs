@@ -210,16 +210,24 @@ pub async fn youtube_connect() -> Result<(), String> {
 /// Sign out of YouTube. Same policy as Kick: credentials and imported channels
 /// go, an open player and read-only chat stay. The auth service already wipes the
 /// webview profile and the moderation cache.
+// `async` on purpose, here and on the Kick twins below: a non-async command
+// runs on the UI thread, and these touch the OS keychain (which can block on
+// a SecurityAgent prompt), delete a whole webview profile and write settings.
+// On macOS that froze the window for as long as the keychain took to answer.
+// Async commands that borrow `State` must return a `Result`.
 #[tauri::command]
-pub fn youtube_disconnect(state: State<'_, AppState>) {
+pub async fn youtube_disconnect(state: State<'_, AppState>) -> Result<(), String> {
     crate::services::youtube_auth_service::disconnect();
     if let Err(e) = crate::commands::provider_browse::clear_imported_follows("youtube", &state) {
         log::warn!("[youtube] could not clear imported follows: {}", e);
     }
+    Ok(())
 }
 
+// The first call lazily loads the session from the keychain; keep that off the
+// UI thread too.
 #[tauri::command]
-pub fn youtube_is_connected() -> bool {
+pub async fn youtube_is_connected() -> bool {
     crate::services::youtube_auth_service::is_connected()
 }
 
@@ -285,7 +293,7 @@ pub async fn kick_connect() -> Result<(), String> {
 /// account state. Sending goes read-only, Following becomes the login wall, and
 /// Twitch (and YouTube) are untouched.
 #[tauri::command]
-pub fn kick_disconnect(app: tauri::AppHandle, state: State<'_, AppState>) {
+pub async fn kick_disconnect(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     crate::services::kick_auth_service::disconnect();
     // The OAuth token and the site session are two different credentials in two
     // different places. Clearing only the first left kick.com still logged in, so
@@ -299,10 +307,11 @@ pub fn kick_disconnect(app: tauri::AppHandle, state: State<'_, AppState>) {
     if let Err(e) = crate::commands::provider_browse::clear_imported_follows("kick", &state) {
         log::warn!("[Kick] could not clear imported follows: {}", e);
     }
+    Ok(())
 }
 
 #[tauri::command]
-pub fn kick_is_connected() -> bool {
+pub async fn kick_is_connected() -> bool {
     crate::services::kick_auth_service::is_connected()
 }
 
