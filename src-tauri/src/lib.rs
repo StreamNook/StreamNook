@@ -455,6 +455,32 @@ pub fn run() {
 
     // Initialize the logging system FIRST so all debug!/error! macros work
     services::diagnostic_logger::init_logging();
+
+    // Every panic goes to streamnook.log. Without this, a panic on a
+    // background thread prints to stderr, which nobody sees in a release
+    // build, and the thread simply disappears: if it was the log writer or
+    // the UI-hang watchdog, the session loses logging or hang detection with
+    // nothing on disk to say so. The default hook still runs afterwards
+    // (stderr + RUST_BACKTRACE handling in a dev shell).
+    {
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let thread = std::thread::current();
+            let name = thread.name().unwrap_or("unnamed");
+            let location = info
+                .location()
+                .map(|l| format!("{}:{}", l.file(), l.line()))
+                .unwrap_or_else(|| "unknown location".to_string());
+            let message = info
+                .payload()
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| info.payload().downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "non-string panic payload".to_string());
+            error!("[Panic] thread '{name}' panicked at {location}: {message}");
+            default_hook(info);
+        }));
+    }
     if let Some(port) = cdp_port {
         warn!("[Main] SN_CDP_PORT set: WebView2 remote debugging is listening on 127.0.0.1:{port} for this launch");
     }

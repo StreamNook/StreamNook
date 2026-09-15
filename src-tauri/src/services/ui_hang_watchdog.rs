@@ -617,6 +617,77 @@ mod portable {
         CTX.get_or_init(|| Mutex::new(None))
     }
 
+    /// `<app_data>/logs`, where streamnook.log, errors.log and the samples
+    /// live. `None` only if the data dir cannot be resolved at all.
+    fn logs_dir() -> Option<std::path::PathBuf> {
+        crate::services::file_log::log_file_path()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    }
+
+    /// How many `sample` captures one session may write. A wedge that never
+    /// recovers produces exactly one; the cap only stops a flapping UI thread
+    /// from filling the logs folder.
+    #[cfg(target_os = "macos")]
+    const MAX_SAMPLES_PER_SESSION: u32 = 3;
+
+    /// Capture the wedged process's call stacks with macOS's own `sample`
+    /// tool, into the logs folder next to streamnook.log.
+    ///
+    /// The Windows watchdog can name the window and the foreground app at
+    /// hang time. On macOS the only thing that answers "what is the main
+    /// thread stuck in" is a stack sample, and the first macOS freeze report
+    /// (8.6.2) came with no way to take one after the fact. So the app
+    /// samples itself: `/usr/bin/sample` ships with the OS, works on any
+    /// process the user owns (this bundle is not hardened), and the release
+    /// binary keeps its symbol table (`strip = "debuginfo"` in Cargo.toml) so
+    /// the frames read as Rust function names rather than addresses.
+    ///
+    /// Runs on its own thread so probing continues and recovery is still
+    /// timed. Never touches the wedged thread. `-mayDie` keeps a Force Quit
+    /// mid-sample from turning into an error. `sample` ends on its own after
+    /// the requested seconds, so the wait is bounded.
+    #[cfg(target_os = "macos")]
+    fn sample_main_thread(missed: u32) {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static CAPTURED: AtomicU32 = AtomicU32::new(0);
+        let n = CAPTURED.fetch_add(1, Ordering::Relaxed) + 1;
+        if n > MAX_SAMPLES_PER_SESSION {
+            return;
+        }
+        let Some(dir) = logs_dir() else {
+            log::warn!("[UiHang] no logs dir; cannot write a main-thread sample");
+            return;
+        };
+        let out = dir.join(format!(
+            "ui-hang-{}.txt",
+            chrono::Local::now().format("%Y%m%d-%H%M%S")
+        ));
+        let _ = std::thread::Builder::new()
+            .name("ui-hang-sampler".into())
+            .spawn(move || {
+                let pid = std::process::id().to_string();
+                let result = std::process::Command::new("/usr/bin/sample")
+                    .args([pid.as_str(), "3", "-mayDie", "-file"])
+                    .arg(&out)
+                    .stdin(std::process::Stdio::null())
+                    .output();
+                match result {
+                    Ok(o) if o.status.success() && out.exists() => log::error!(
+                        "[UiHang] main-thread sample #{n} written to {} after {missed} \
+                         missed probes; attach it to the bug report",
+                        out.display()
+                    ),
+                    Ok(o) => log::warn!(
+                        "[UiHang] sample exited with {}: {}",
+                        o.status,
+                        String::from_utf8_lossy(&o.stderr).trim()
+                    ),
+                    Err(e) => log::warn!("[UiHang] could not run /usr/bin/sample: {e}"),
+                }
+            });
+    }
+
     /// Record which overlay is mounted, so a hang report can name it. This is
     /// the same context the Windows reporter captures; without it a freeze
     /// report cannot distinguish "wedged during the Twitch login overlay" from
@@ -628,6 +699,11 @@ mod portable {
     }
 
     pub fn start(app: tauri::AppHandle) {
+        // Same marker the Windows watchdog writes: an absent hang report can
+        // then be read as "armed, never hung" rather than "never started".
+        if let Some(dir) = logs_dir() {
+            let _ = std::fs::write(dir.join("ui_hang_watchdog.armed"), b"");
+        }
         std::thread::Builder::new()
             .name("ui-hang-watchdog".into())
             .spawn(move || {
@@ -649,6 +725,8 @@ mod portable {
                                  missed probes ({}ms deadline each), overlay = {ctx}",
                                 PROBE_DEADLINE.as_millis()
                             );
+                            #[cfg(target_os = "macos")]
+                            sample_main_thread(missed);
                         }
                         Transition::Recovered { missed } => {
                             log::warn!(
