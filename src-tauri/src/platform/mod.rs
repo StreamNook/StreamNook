@@ -33,6 +33,7 @@
 pub mod app_update;
 pub mod browser;
 pub mod capture;
+pub mod cookies;
 pub mod fs;
 pub mod process;
 pub mod responsiveness;

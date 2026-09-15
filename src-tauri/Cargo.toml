@@ -169,6 +169,30 @@ windows = { version = "0.61", features = [
     "Win32_UI_Input_KeyboardAndMouse",
 ] }
 
+# macOS-only. WebKit's cookie store is read through these (see
+# src/platform/cookies.rs) instead of Tauri's `cookies_for_url`, which on
+# macOS pumps a nested run loop on the main thread inside tao's event
+# dispatch; a redraw or a Dock click during that pump relocks tao's callback
+# mutex on the same thread and the app hangs for good. Versions are the ones
+# wry 0.55 already resolves to, so the lockfile keeps one copy of each crate.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSObject",
+    "NSString",
+    "NSArray",
+    "NSHTTPCookie",
+] }
+objc2-web-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "objc2-app-kit",
+    "block2",
+    "WKWebView",
+    "WKWebViewConfiguration",
+    "WKWebsiteDataStore",
+    "WKHTTPCookieStore",
+] }
 
 [features]
 default = ["custom-protocol"]
@@ -195,9 +219,14 @@ devtools = ["tauri/devtools"]
 # opt-level 3: chat parsing and song-id FFT are CPU-hot, size-opt would cost them.
 # panic stays "unwind": tokio tasks and warp handlers contain isolated panics
 # today; abort would turn any one of them into a full-process death.
-# strip is ~free on windows-msvc (debug info lives in the PDB) but helps any
-# future cross-compile.
+# strip = "debuginfo" keeps the symbol table so a macOS `sample` of a hung
+# process names our Rust frames (the UI-hang watchdog takes that sample
+# itself, see services/ui_hang_watchdog.rs). Windows is unaffected: debug
+# info lives in the PDB and the PE carries no symtab to keep. Android already
+# passes `-C strip=debuginfo` through RUSTFLAGS in scripts/android-build.sh.
+# "symbols" saved a few MB of Mach-O symtab and made every macOS freeze
+# report unreadable.
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-strip = "symbols"
+strip = "debuginfo"

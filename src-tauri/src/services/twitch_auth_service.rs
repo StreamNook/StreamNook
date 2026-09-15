@@ -377,42 +377,36 @@ async fn harvest_from_active_profile(_app: &AppHandle) -> Option<HashMap<String,
     None
 }
 
-/// Cross-platform cookie read for the Twitch jar, used everywhere except Windows.
+/// Cookie read for the Twitch jar, used everywhere except Windows.
 ///
-/// Mirrors the WebView2 path below, but built on `WebviewWindow::cookies_for_url`
-/// (cross-platform since Tauri 2.4.0). Windows deliberately keeps its hand-rolled
-/// COM implementation: it is proven, and Tauri's own API documents a **deadlock**
-/// on Windows when called from a synchronous command or event handler (wry#583).
+/// Built on `platform::cookies`, which on macOS asks WebKit through a
+/// completion block instead of `WebviewWindow::cookies_for_url`. The Tauri
+/// call pumps a nested run loop on the main thread while tao's event
+/// callback is held, and a redraw or Dock click during that pump deadlocked
+/// the whole app (the 8.6.2 macOS freeze). Windows deliberately keeps its
+/// hand-rolled COM implementation below: it is proven, and Tauri's own API
+/// documents a deadlock on Windows when called from a synchronous command or
+/// event handler (wry#583).
 ///
-/// This is what makes the entitlement half of Twitch auth work off Windows. The
-/// loopback + file-token half was already portable, which is why login worked on
-/// macOS while `cookies.json` stayed empty.
+/// This is what makes the entitlement half of Twitch auth work off Windows.
+/// The loopback + file-token half was already portable, which is why login
+/// worked on macOS while `cookies.json` stayed empty.
 #[cfg(not(windows))]
 async fn fetch_cookies_from_window(
     app: &AppHandle,
     window_label: &str,
     names: &[&str],
 ) -> Result<HashMap<String, String>, AuthError> {
-    use tauri::Manager;
-
-    let webview = app
-        .get_webview_window(window_label)
-        .ok_or(AuthError::WebViewUnavailable)?;
-
-    let url = tauri::Url::parse(TWITCH_COOKIE_ORIGIN)
-        .map_err(|e| AuthError::Internal(format!("bad cookie origin: {e}")))?;
-
-    let jar = webview
-        .cookies_for_url(url)
-        .map_err(|e| AuthError::Internal(format!("cookies_for_url failed: {e}")))?;
+    let jar = crate::platform::cookies::cookies_for_origin(app, window_label, TWITCH_COOKIE_ORIGIN)
+        .await
+        .map_err(|e| AuthError::Internal(format!("cookie read failed: {e}")))?;
 
     let mut found: HashMap<String, String> = HashMap::new();
     for cookie in jar {
-        let name = cookie.name().to_string();
         // Empty `names` means "take everything"; the Twitch callers always pass
         // COOKIE_NAMES, but keep the contract identical to the Windows path.
-        if names.is_empty() || names.iter().any(|wanted| *wanted == name) {
-            found.insert(name, cookie.value().to_string());
+        if names.is_empty() || names.iter().any(|wanted| *wanted == cookie.name) {
+            found.insert(cookie.name, cookie.value);
         }
     }
 

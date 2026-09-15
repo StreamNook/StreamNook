@@ -716,12 +716,14 @@ pub async fn reharvest() -> bool {
     false
 }
 
-/// Cross-platform cookie read, used everywhere except Windows.
+/// Cookie read for a site's jar, used everywhere except Windows.
 ///
-/// `cookies_for_url` returns HTTP-only and secure cookies, which is exactly the
-/// capability the WebView2 COM path was hand-rolled for. Note it only answers
-/// for `http`/`https` origins — cookies set by script under `tauri://` are not
-/// visible to it, which is fine because every caller passes a real site origin.
+/// Built on `platform::cookies` (a completion-block read on macOS; see that
+/// module for the deadlock `cookies_for_url` caused there). It returns
+/// HTTP-only and secure cookies, which is exactly the capability the WebView2
+/// COM path was hand-rolled for. Only `http`/`https` origins answer; cookies
+/// set by script under `tauri://` are not visible, which is fine because
+/// every caller passes a real site origin.
 #[cfg(not(windows))]
 pub(crate) async fn fetch_cookies_for_origin(
     app: &tauri::AppHandle,
@@ -729,25 +731,13 @@ pub(crate) async fn fetch_cookies_for_origin(
     names: &[&str],
     origin: &str,
 ) -> Result<HashMap<String, String>> {
-    use tauri::Manager;
-
-    let webview = app
-        .get_webview_window(window_label)
-        .ok_or_else(|| anyhow!("webview window '{}' unavailable", window_label))?;
-
-    let url = tauri::Url::parse(origin)
-        .map_err(|e| anyhow!("cookie origin '{}' is not a valid URL: {}", origin, e))?;
-
-    let jar = webview
-        .cookies_for_url(url)
-        .map_err(|e| anyhow!("cookies_for_url({}) failed: {}", origin, e))?;
+    let jar = crate::platform::cookies::cookies_for_origin(app, window_label, origin).await?;
 
     let mut found: HashMap<String, String> = HashMap::new();
     for cookie in jar {
-        let name = cookie.name().to_string();
         // Empty `names` means "take everything", matching the harvest callers.
-        if names.is_empty() || names.iter().any(|wanted| *wanted == name) {
-            found.insert(name, cookie.value().to_string());
+        if names.is_empty() || names.iter().any(|wanted| *wanted == cookie.name) {
+            found.insert(cookie.name, cookie.value);
         }
     }
     Ok(found)
@@ -780,10 +770,11 @@ async fn fetch_cookies_from_window(
 /// **deadlock** on Windows when called from a synchronous command or event
 /// handler (wry#583), so there is no upside to swapping it there.
 ///
-/// Everywhere else uses `WebviewWindow::cookies_for_url`, which has been
-/// cross-platform since Tauri 2.4.0 and abstracts `WKHTTPCookieStore` on macOS
-/// and `WebKitCookieManager` on Linux. Read-only is all this needs, so the
-/// cookie-SETTER gap (tauri#11691) does not matter here.
+/// Everywhere else goes through `platform::cookies`: a completion-block read
+/// of `WKHTTPCookieStore` on macOS (Tauri's `cookies_for_url` pumps a nested
+/// run loop there and deadlocked the app, see that module) and
+/// `Webview::cookies()` over `WebKitCookieManager` on Linux. Read-only is all
+/// this needs, so the cookie-SETTER gap (tauri#11691) does not matter here.
 #[cfg(windows)]
 pub(crate) async fn fetch_cookies_for_origin(
     app: &tauri::AppHandle,
