@@ -1907,7 +1907,13 @@ pub fn run() {
                 // gracefully (stragglers are killed with the supervisor).
                 let state = app_handle.state::<AppState>();
                 let host = state.plugin_host.clone();
-                tauri::async_runtime::block_on(async move {
+                // Bounded on purpose: this runs on the UI thread after the last
+                // window is gone, so an open-ended wait is a beachballing Dock
+                // icon and, on macOS, a Force Quit. A std channel rather than a
+                // tokio timeout because block_on from this thread does not drive
+                // tokio's timer.
+                let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+                tauri::async_runtime::spawn(async move {
                     host.shutdown_all().await;
                     for _ in 0..20 {
                         if !host.has_running().await {
@@ -1915,7 +1921,14 @@ pub fn run() {
                         }
                         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     }
+                    let _ = done_tx.send(());
                 });
+                if done_rx
+                    .recv_timeout(std::time::Duration::from_secs(3))
+                    .is_err()
+                {
+                    warn!("[Main] plugin shutdown did not finish within 3 s; exiting anyway");
+                }
             }
         });
 }
