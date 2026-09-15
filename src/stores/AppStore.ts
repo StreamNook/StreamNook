@@ -11,7 +11,7 @@ import { reportCodecPreference } from '../utils/codecPreference';
 import { setInlineEmoteScale } from '../services/emoteService';
 import { upsertUser, claimLoginAccolades, grantAtmosphereOwnership } from '../services/supabaseService';
 import { emitSettingsUpdated } from '../utils/settingsBroadcast';
-import { IS_MOBILE } from '../utils/platform';
+import { IS_MAC, IS_MOBILE } from '../utils/platform';
 import { makeKey, parseKey } from '../utils/providerKey';
 import { isStrayYouTubeFavoriteId } from '../utils/favorites';
 import { buildProviderUrl, streamProvider } from '../utils/streamProvider';
@@ -3333,7 +3333,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       // A borderless (decorations: false) window that is WS_MAXIMIZE keeps its
       // maximized chrome and leaves the taskbar showing even after
       // setFullscreen(true). Drop the maximize first so we cover the whole screen.
-      if (next && (await win.isMaximized())) {
+      // Windows only: on macOS the window is decorated, and zooming right
+      // before the animated full-screen transition makes AppKit refuse it.
+      if (next && !IS_MAC && (await win.isMaximized())) {
         await win.unmaximize();
       }
       await win.setFullscreen(next);

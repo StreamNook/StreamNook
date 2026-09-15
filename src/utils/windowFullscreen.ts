@@ -1,8 +1,16 @@
 import { Logger } from './logger';
+import { IS_MAC } from './platform';
 
 // Win32 quirk: a borderless window (decorations: false) that is WS_MAXIMIZE
 // keeps its maximized chrome/taskbar visible even after setFullscreen(true).
 // Track whether the window was maximized going in so we can restore it on exit.
+//
+// macOS never takes this path. There the window is decorated and
+// `toggleFullScreen:` is an animated transition AppKit owns: zooming the
+// window right before or right after it fights that transition, and when
+// AppKit refuses the entry the window keeps reporting itself full screen
+// while it is not, so every later toggle does nothing until the green
+// button is used.
 let restoreMaximizedAfterFullscreen = false;
 
 /**
@@ -28,7 +36,7 @@ export const syncTauriWindowFullscreen = async (entering: boolean): Promise<void
     const { getCurrentWindow, currentMonitor, PhysicalPosition } = await import('@tauri-apps/api/window');
     const win = getCurrentWindow();
     if (entering) {
-      restoreMaximizedAfterFullscreen = await win.isMaximized();
+      restoreMaximizedAfterFullscreen = !IS_MAC && (await win.isMaximized());
       if (restoreMaximizedAfterFullscreen) {
         await win.unmaximize();
       }
