@@ -2,7 +2,7 @@ use crate::models::components::{
     BundleUpdateStatus, ComponentChanges, ComponentManifest, VersionChange,
 };
 use sevenz_rust::decompress_file;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Get the directory where the executable is located (portable mode)
 fn get_exe_directory() -> Result<PathBuf, String> {
@@ -790,8 +790,11 @@ pub async fn download_and_install_bundle(app_handle: tauri::AppHandle) -> Result
     install_bundle_from_status(app_handle, status).await
 }
 
-/// Shared install body. Downloads the exe-only 7z, extracts it, and writes the
-/// hardened batch script that swaps StreamNook.exe and restarts.
+/// Shared install body. Downloads and verifies the platform's bundle, then
+/// stages it for `restart_to_apply_update`: on Windows the exe-only 7z is
+/// extracted and a hardened batch script that swaps StreamNook.exe is written;
+/// on macOS the `.app` tarball is unpacked and left in temp for a whole-bundle
+/// swap.
 async fn install_bundle_from_status(
     app_handle: tauri::AppHandle,
     status: BundleUpdateStatus,
@@ -852,6 +855,16 @@ async fn install_bundle_from_status(
     verify_update_bundle(&bytes, status.sha256.as_deref(), status.signature.as_deref())?;
 
     std::fs::write(&bundle_path, &bytes).map_err(|e| format!("Failed to save bundle: {}", e))?;
+
+    // macOS ships the update as a .app tarball, not a 7z, and installs it by
+    // swapping the whole bundle. Until 8.6.3 this fell through to the 7z
+    // extractor below and every macOS update died with "Failed to extract 7z
+    // bundle" after a successful download, so no Mac could ever update
+    // in-app. A runtime check rather than cfg so the branch compiles (and the
+    // helpers stay testable) on every platform.
+    if cfg!(target_os = "macos") {
+        return stage_macos_bundle(&app_handle, &temp_dir, &bundle_path).await;
+    }
 
     let _ = app_handle.emit("bundle-update-progress", "Extracting bundle...");
 
@@ -1037,11 +1050,112 @@ WshShell.Run """{batch}""", 0, False
     Ok(())
 }
 
+/// macOS install: unpack the `.app` tarball into temp and leave it staged for
+/// `restart_to_apply_update`.
+///
+/// `/usr/bin/tar` is part of the OS, so no archive crate is needed for the one
+/// format the platform uses. The bundle is checked for its executable before
+/// anything is staged: a stray archive would otherwise turn into an `rm -rf`
+/// of the installed app followed by a `mv` of nothing.
+async fn stage_macos_bundle(
+    app_handle: &tauri::AppHandle,
+    temp_dir: &Path,
+    bundle_path: &Path,
+) -> Result<(), String> {
+    use tauri::Emitter;
+
+    let _ = app_handle.emit("bundle-update-progress", "Extracting bundle...");
+    let extract_dir = temp_dir.join("extracted");
+    let _ = std::fs::remove_dir_all(&extract_dir);
+    std::fs::create_dir_all(&extract_dir)
+        .map_err(|e| format!("Failed to create extract directory: {}", e))?;
+
+    let output = tokio::process::Command::new("/usr/bin/tar")
+        .arg("-xzf")
+        .arg(bundle_path)
+        .arg("-C")
+        .arg(&extract_dir)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run tar: {}", e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Failed to extract the app bundle: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    let staged = extract_dir.join("StreamNook.app");
+    let binary = staged.join("Contents").join("MacOS").join("StreamNook");
+    if !binary.is_file() {
+        return Err("The downloaded bundle does not contain StreamNook.app".to_string());
+    }
+    // tar restores the mode bits, and a bundle the app unpacked itself carries
+    // no quarantine flag, so the relaunch does not hit Gatekeeper. Belt and
+    // braces on the one bit that matters.
+    crate::platform::fs::make_executable(&binary).map_err(|e| e.to_string())?;
+
+    let _ = app_handle.emit("bundle-update-progress", "Update installed");
+    Ok(())
+}
+
+/// The `.app` that owns `exe`, if `exe` sits where a bundle keeps its main
+/// executable (`Something.app/Contents/MacOS/<exe>`). Pure, so the shape can
+/// be tested anywhere; `running_app_bundle` adds the filesystem check.
+fn bundle_of(exe: &Path) -> Option<PathBuf> {
+    let macos_dir = exe.parent()?;
+    let contents = macos_dir.parent()?;
+    let bundle = contents.parent()?;
+    let is_bundle = macos_dir.file_name().and_then(|n| n.to_str()) == Some("MacOS")
+        && contents.file_name().and_then(|n| n.to_str()) == Some("Contents")
+        && bundle.extension().and_then(|e| e.to_str()) == Some("app");
+    is_bundle.then(|| bundle.to_path_buf())
+}
+
+/// The `.app` this process runs from. Refuses anything else (a bare binary
+/// under target/, a copied-out executable): swapping "the folder three levels
+/// up" of an arbitrary path would delete an arbitrary folder.
+fn running_app_bundle() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("Failed to get current exe path: {}", e))?;
+    let bundle = bundle_of(&exe)
+        .ok_or_else(|| format!("{} is not inside an .app bundle; refusing to swap", exe.display()))?;
+    if !bundle.join("Contents").join("MacOS").is_dir() {
+        return Err(format!("{} is not an .app bundle; refusing to swap", bundle.display()));
+    }
+    Ok(bundle)
+}
+
+/// `std::process::exit` skips Tauri's `RunEvent::Exit`, so the window-state
+/// plugin would never auto-save (the relaunch forgets which monitor/size the
+/// window had) and nothing debounced would reach disk. Flush it all by hand
+/// before a hard exit, matching the flags the plugin is built with
+/// (position/size/maximized only). The window-state plugin is desktop-only,
+/// and no swap path runs on mobile (Android updates via the package installer).
+fn flush_stores_before_hard_exit(app_handle: &tauri::AppHandle) {
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+        let _ = app_handle.save_window_state(
+            StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED,
+        );
+    }
+    #[cfg(not(desktop))]
+    let _ = app_handle;
+    let _ = crate::commands::settings::flush_settings_now();
+    let _ = crate::services::universal_cache_service::flush_manifest_now();
+    let _ = crate::services::mod_log_storage_service::ModLogStorageService::flush_now();
+    let _ = crate::services::whisper_storage_service::WhisperStorageService::flush_now();
+    let _ = crate::services::vod_progress_service::flush_now();
+    let _ = crate::services::chat_logger_service::ChatLoggerService::flush_all();
+}
+
 /// Apply a staged bundle update by restarting StreamNook. download_and_install_bundle
-/// leaves a hidden batch launcher in temp; this spawns it (the batch waits for
-/// this process to exit, swaps StreamNook.exe + components.json, then relaunches)
-/// and exits. Called from the "Restart StreamNook" button on the update-installed
-/// card, so the user controls when the swap happens instead of it firing mid-install.
+/// leaves a hidden batch launcher in temp (Windows) or an unpacked `.app`
+/// (macOS); this spawns the swap helper (which waits for this process to exit,
+/// swaps the exe or the whole bundle, then relaunches) and exits. Called from
+/// the "Restart StreamNook" button on the update-installed card, so the user
+/// controls when the swap happens instead of it firing mid-install.
 #[tauri::command]
 pub async fn restart_to_apply_update(app_handle: tauri::AppHandle) -> Result<(), String> {
     let temp_dir = std::env::temp_dir().join("StreamNook-update");
@@ -1057,6 +1171,27 @@ pub async fn restart_to_apply_update(app_handle: tauri::AppHandle) -> Result<(),
         return Ok(());
     }
 
+    // macOS: the .app that stage_macos_bundle unpacked. The helper script
+    // waits for this pid to exit, removes the installed bundle, moves the new
+    // one into its place and `open`s it (platform::app_update), so the exit
+    // below is what lets it proceed, exactly like the Windows launcher.
+    if cfg!(target_os = "macos") {
+        let staged = temp_dir.join("extracted").join("StreamNook.app");
+        if staged.is_dir() {
+            let current = running_app_bundle()?;
+            flush_stores_before_hard_exit(&app_handle);
+            let request = crate::platform::app_update::SwapRequest {
+                current: current.clone(),
+                replacement: staged,
+                pid: std::process::id(),
+                relaunch: current,
+            };
+            crate::platform::app_update::swap_and_relaunch(&request)
+                .map_err(|e| format!("Failed to start the bundle swap: {}", e))?;
+            std::process::exit(0);
+        }
+    }
+
     let vbs_path = temp_dir.join("update_launcher.vbs");
 
     if vbs_path.exists() {
@@ -1064,31 +1199,46 @@ pub async fn restart_to_apply_update(app_handle: tauri::AppHandle) -> Result<(),
             .arg(&vbs_path)
             .spawn()
             .map_err(|e| format!("Failed to run update script: {}", e))?;
-        // std::process::exit skips Tauri's RunEvent::Exit, so the window-state
-        // plugin never auto-saves and the relaunch forgets which monitor/size
-        // the window had. Flush geometry ourselves first, matching the flags the
-        // plugin is built with (position/size/maximized only).
-        // The window-state plugin is desktop-only, and this exe-swap path never
-        // runs on mobile (Android updates via the package installer intent).
-        #[cfg(desktop)]
-        {
-            use tauri_plugin_window_state::{AppHandleExt, StateFlags};
-            let _ = app_handle.save_window_state(
-                StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED,
-            );
-        }
-        // Same skipped-RunEvent::Exit reason: flush every debounced store
-        // manually before the hard exit.
-        let _ = crate::commands::settings::flush_settings_now();
-        let _ = crate::services::universal_cache_service::flush_manifest_now();
-        let _ = crate::services::mod_log_storage_service::ModLogStorageService::flush_now();
-        let _ = crate::services::whisper_storage_service::WhisperStorageService::flush_now();
-        let _ = crate::services::vod_progress_service::flush_now();
-        let _ = crate::services::chat_logger_service::ChatLoggerService::flush_all();
+        flush_stores_before_hard_exit(&app_handle);
         std::process::exit(0);
     }
 
     // No exe-swap launcher staged (a component-only update already wrote its
     // files in place); a plain relaunch is enough to pick them up.
     app_handle.restart();
+}
+
+#[cfg(test)]
+mod bundle_path_tests {
+    use super::bundle_of;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn the_main_executable_maps_to_its_bundle() {
+        let exe = Path::new("/Applications/StreamNook.app/Contents/MacOS/StreamNook");
+        assert_eq!(
+            bundle_of(exe),
+            Some(PathBuf::from("/Applications/StreamNook.app"))
+        );
+    }
+
+    #[test]
+    fn anything_that_is_not_a_bundle_executable_is_refused() {
+        // A bare binary under target/: swapping three levels up would delete
+        // the build tree.
+        assert_eq!(
+            bundle_of(Path::new("/Users/x/StreamNook/src-tauri/target/debug/StreamNook")),
+            None
+        );
+        // Inside a bundle but not the MacOS executable.
+        assert_eq!(
+            bundle_of(Path::new("/Users/x/StreamNook.app/Contents/Resources/StreamNook")),
+            None
+        );
+        // Right shape, wrong extension.
+        assert_eq!(
+            bundle_of(Path::new("/Users/x/StreamNook/Contents/MacOS/StreamNook")),
+            None
+        );
+    }
 }
