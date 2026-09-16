@@ -1,3 +1,16 @@
+## [8.6.3] - 2026-09-15
+
+### 🐛 Bug Fixes
+- **macOS: fixed the freeze that needed a Force Quit.** The whole app could stop responding, window buttons included, when a background check of your Twitch sign-in coincided with the window repainting. The check no longer blocks the window.
+- **macOS: updates now install from inside the app.** Until now a Mac would download an update, verify it, then fail to unpack it. This one release still has to be downloaded from the website; after that, updates install themselves.
+- **macOS: a window brought back from the menu bar icon has its buttons again.** Reopening StreamNook after it was closed to the menu bar gave you a window with no close or minimize controls.
+- **macOS: full screen from a zoomed window works.** Entering full screen while the window was zoomed could leave StreamNook convinced it was still full screen, so the shortcut stopped doing anything.
+- Signing out of YouTube or Kick, pasting from the clipboard and loading your followed channels no longer run on the window's own thread, so a slow keychain or clipboard cannot freeze the app.
+- Quitting no longer waits without limit for a plugin that will not stop.
+
+### 🔧 Maintenance
+- **macOS: if the window ever stops responding, StreamNook now writes a stack sample next to its log** (`ui-hang-<time>.txt` in the logs folder), so a freeze can be fixed from the report alone. Crashes on background threads are written to the log now too.
+
 ## [8.6.2] - 2026-09-14
 
 ### ✨ Features
