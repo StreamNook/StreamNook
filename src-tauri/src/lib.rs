@@ -353,6 +353,17 @@ fn load_settings_from_file() -> Result<Settings, Box<dyn std::error::Error>> {
 
 /// Clean up leftover files from previous update attempts
 fn cleanup_update_artifacts() {
+    // macOS: the bundle swap moves the staged .app out of the staging folder
+    // but nothing removes the 33 MB tarball it came from (the Windows batch
+    // deletes its own temp folder; the macOS helper only swaps and relaunches).
+    // By the time this runs the swap is over, so the folder is dead weight.
+    if cfg!(target_os = "macos") {
+        let staging = std::env::temp_dir().join("StreamNook-update");
+        if staging.is_dir() {
+            debug!("[Main] Removing the update staging folder {:?}", staging);
+            let _ = std::fs::remove_dir_all(&staging);
+        }
+    }
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(exe_dir) = current_exe.parent() {
             // Remove leftover StreamNook_new.exe if it exists
