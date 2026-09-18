@@ -4,7 +4,7 @@ use crate::models::user::{ChannelInfo, UserInfo};
 use crate::services::drops_auth_service::DropsAuthService;
 use crate::services::twitch_service::{DeviceCodeInfo, TokenHealthStatus, TwitchService};
 use crate::services::whisper_history_service::{
-    WhisperHistoryService, WhisperMessage, WhisperThread,
+    WhisperHistoryService, WhisperMessage,
 };
 use crate::services::whisper_service::WhisperService;
 use anyhow::Result;
