@@ -63,16 +63,6 @@ pub async fn get_cache_statistics() -> Result<CacheStats, String> {
 }
 
 #[command]
-pub async fn save_cosmetics_cache(user_id: String, data: String) -> Result<(), String> {
-    save_emote_to_cache(&format!("cosmetics_{}", user_id), &data, 1).map_err(|e| e.to_string())
-}
-
-#[command]
-pub async fn load_cosmetics_cache(user_id: String) -> Result<Option<String>, String> {
-    load_emote_from_cache(&format!("cosmetics_{}", user_id)).map_err(|e| e.to_string())
-}
-
-#[command]
 pub async fn save_favorite_emotes_cache(data: String) -> Result<(), String> {
     save_favorite_emotes(&data).map_err(|e| e.to_string())
 }
