@@ -901,13 +901,6 @@ export async function fetchUserInventory(
   }
 }
 
-// Legacy function for backwards compatibility — unwraps to the historical
-// `UserCosmeticsResponse | null` shape (null = hard failure).
-export async function fetch7TVUserData(twitchUserId: string): Promise<UserCosmeticsResponse | null> {
-  const { data, hardFail } = await getUserCosmetics(twitchUserId);
-  return hardFail ? null : data;
-}
-
 // Compute paint style layers
 // (paint → CSS engine moved to ./paintStyle — see the re-exports near the top)
 
@@ -962,17 +955,6 @@ export const getBadgeFallbackUrls = (badgeId: string): string[] => {
     `${baseUrl}/2x.webp`,
     `${baseUrl}/1x.webp`,
   ];
-};
-
-// Get badge image URL for any provider
-export const getBadgeImageUrlForProvider = (badge: any, provider: '7tv' | 'ffz'): string => {
-  if (provider === '7tv') {
-    if (badge.localUrl) return badge.localUrl;
-    return pickBadgeImage(badge.images, 3) ?? `https://cdn.7tv.app/badge/${badge.id}/3x.webp`;
-  } else if (provider === 'ffz') {
-    return badge.urls?.['4'] || badge.urls?.['2'] || badge.urls?.['1'] || badge.image;
-  }
-  return '';
 };
 
 export function clearUserCache() {

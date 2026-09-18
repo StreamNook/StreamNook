@@ -408,14 +408,3 @@ export function isUserModeratorOf(channel: string): boolean {
 // Test-only export for the parser. Lets a unit test cover parseNukeArgs
 // without dragging in the rest of the engine.
 export const __testing = { parseNukeArgs, parseDurationToken, parseWindow, parseActionToken, parsePattern };
-
-// Re-export an alias for AppStore-aware callers
-export function getCurrentChannelLogin(): string | null {
-  const stream = useAppStore.getState().currentStream;
-  return stream?.user_login ?? null;
-}
-
-export function getCurrentBroadcasterId(): string | null {
-  const stream = useAppStore.getState().currentStream;
-  return stream?.user_id ?? null;
-}

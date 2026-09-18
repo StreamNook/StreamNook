@@ -10,8 +10,3 @@ export type HelixResource = 'users' | 'streams' | 'channels' | 'clips';
 export function helixGet<T = unknown>(resource: HelixResource, query: string): Promise<T> {
   return invoke<T>('helix_get', { resource, query });
 }
-
-/** `key=value&key=value` from a list, encoded, for the batch endpoints. */
-export function helixQuery(key: string, values: readonly string[]): string {
-  return values.map((v) => `${key}=${encodeURIComponent(v)}`).join('&');
-}

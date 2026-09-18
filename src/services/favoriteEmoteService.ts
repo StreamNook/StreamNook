@@ -33,20 +33,6 @@ export async function loadFavoriteEmotes(): Promise<FavoriteEmote[]> {
 }
 
 /**
- * Save favorite emotes to cache
- */
-export async function saveFavoriteEmotes(favorites: FavoriteEmote[]): Promise<void> {
-  try {
-    const data = JSON.stringify(favorites);
-    await invoke('save_favorite_emotes_cache', { data });
-    favoriteEmotesCache = favorites;
-  } catch (error) {
-    Logger.error('[FavoriteEmoteService] Failed to save favorite emotes:', error);
-    throw error;
-  }
-}
-
-/**
  * Add an emote to favorites
  */
 export async function addFavoriteEmote(emote: Emote): Promise<void> {
@@ -125,11 +111,4 @@ export function getAvailableFavorites(allEmotes: Emote[]): FavoriteEmote[] {
   
   // Filter favorites to only those available in current chat
   return favoriteEmotesCache.filter(fav => availableEmoteIds.has(fav.id));
-}
-
-/**
- * Clear the in-memory cache (useful when switching channels)
- */
-export function clearFavoriteEmotesCache(): void {
-  favoriteEmotesCache = null;
 }

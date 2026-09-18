@@ -37,11 +37,3 @@ export function parseKey(key: string): ParsedKey {
   // Bare login, or text that merely contains a colon: read as Twitch.
   return { provider: DEFAULT_PROVIDER, channel: key.toLowerCase() };
 }
-
-export function keyProvider(key: string): ProviderId {
-  return parseKey(key).provider;
-}
-
-export function keyChannel(key: string): string {
-  return parseKey(key).channel;
-}

@@ -131,13 +131,6 @@ export function getAppleEmojiUrl(emoji: string): string {
 }
 
 /**
- * Checks if a string contains any emoji characters
- */
-export function containsEmoji(text: string): boolean {
-    return EMOJI_REGEX.test(text);
-}
-
-/**
  * Synchronously parses text for Unicode emojis
  * Returns an array of segments with emojis and text separated
  * Note: Does NOT convert shortcodes (that's async). For optimistic messages only.
@@ -210,83 +203,6 @@ export interface EmojiSegment {
     type: 'text' | 'emoji';
     content: string;
     emojiUrl?: string;
-}
-
-export async function parseEmojis(text: string): Promise<EmojiSegment[]> {
-    if (!text) {
-        return [];
-    }
-
-    // First replace any shortcodes with actual unicode emojis
-    const processedText = await replaceShortcodes(text);
-
-    // Reset regex lastIndex
-    EMOJI_REGEX.lastIndex = 0;
-
-    const segments: EmojiSegment[] = [];
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = EMOJI_REGEX.exec(processedText)) !== null) {
-        // Add text before the emoji
-        if (match.index > lastIndex) {
-            segments.push({
-                type: 'text',
-                content: processedText.substring(lastIndex, match.index),
-            });
-        }
-
-        // Add the emoji
-        const emoji = match[0];
-        segments.push({
-            type: 'emoji',
-            content: emoji,
-            emojiUrl: getAppleEmojiUrl(emoji),
-        });
-
-        lastIndex = match.index + emoji.length;
-    }
-
-    // Add remaining text after the last emoji
-    if (lastIndex < processedText.length) {
-        segments.push({
-            type: 'text',
-            content: processedText.substring(lastIndex),
-        });
-    }
-
-    return segments.length > 0 ? segments : [{ type: 'text', content: processedText }];
-}
-
-/**
- * Cache for emoji URL validity to avoid repeated 404s
- * Maps codepoint to boolean indicating if the URL is valid
- */
-const emojiUrlCache = new Map<string, boolean>();
-
-/**
- * Preloads and validates an emoji URL
- * Returns true if the image loads successfully
- */
-export async function validateEmojiUrl(emoji: string): Promise<boolean> {
-    const codepoint = emojiToCodepoint(emoji);
-
-    if (emojiUrlCache.has(codepoint)) {
-        return emojiUrlCache.get(codepoint)!;
-    }
-
-    return new Promise((resolve) => {
-        const img = new Image();
-        img.onload = () => {
-            emojiUrlCache.set(codepoint, true);
-            resolve(true);
-        };
-        img.onerror = () => {
-            emojiUrlCache.set(codepoint, false);
-            resolve(false);
-        };
-        img.src = getAppleEmojiUrl(emoji);
-    });
 }
 
 /**

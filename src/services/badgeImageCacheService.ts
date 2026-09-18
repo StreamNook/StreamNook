@@ -154,13 +154,6 @@ export function getCachedBadgeUrl(id: string): string | undefined {
 }
 
 /**
- * Check if a badge is cached locally.
- */
-export function isBadgeCached(id: string): boolean {
-  return cachedBadgeFiles.has(id);
-}
-
-/**
  * Initialize the badge file cache from disk.
  * This should be called once at app startup.
  */
@@ -193,15 +186,4 @@ export async function initializeBadgeImageCache(): Promise<void> {
 export async function clearBadgeImageCache(): Promise<void> {
   cachedBadgeFiles.clear();
   Logger.debug('[BadgeImageCache] Cleared in-memory badge cache');
-}
-
-/**
- * Get cache statistics.
- */
-export function getBadgeCacheStats(): { cached: number; pending: number; queued: number } {
-  return {
-    cached: cachedBadgeFiles.size,
-    pending: pendingDownloads.size,
-    queued: downloadQueue.length
-  };
 }

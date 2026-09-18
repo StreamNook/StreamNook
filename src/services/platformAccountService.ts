@@ -48,11 +48,3 @@ export function disconnect(provider: PlatformId): Promise<void> {
 export function beginYoutubeSession(): Promise<void> {
   return invoke<void>('youtube_connect');
 }
-
-/**
- * Ask each connected platform whether its session still works, signing out any
- * that have been revoked. Resolves to the provider ids that were signed out.
- */
-export function validateSessions(): Promise<PlatformId[]> {
-  return invoke<PlatformId[]>('validate_platform_sessions');
-}

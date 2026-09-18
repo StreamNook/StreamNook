@@ -699,8 +699,3 @@ export async function clearEmoteCache() {
     Logger.warn('[EmoteService] Failed to clear emote cache:', e);
   }
 }
-
-// Legacy compatibility exports (kept for backward compatibility, but simplified)
-export const fetchBTTVEmotes = async () => [];
-export const fetch7TVEmotes = async () => [];
-export const fetchFFZEmotes = async () => [];

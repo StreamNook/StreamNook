@@ -151,21 +151,6 @@ export async function getIdentityWithCache(userId: string): Promise<IdentityLoad
   return p;
 }
 
-/** Batch prefetch (chat backfill). Populates the cache; ignores failures. */
-export async function prefetchIdentities(userIds: string[]): Promise<void> {
-  const need = userIds.filter((id) => {
-    const hit = cache.get(id);
-    return id && (!hit || Date.now() - hit.ts >= TTL);
-  });
-  if (need.length === 0) return;
-  try {
-    const map = (await invoke('get_streamnook_identities', { userIds: need })) as Record<string, IdentityLoadout>;
-    for (const [id, data] of Object.entries(map)) publish(id, data);
-  } catch (e) {
-    Logger.warn('[identityService] batch prefetch failed:', e);
-  }
-}
-
 // ── Resolved (all-in-one) bundle ────────────────────────────────────────────
 // One call returns the member's selected badges already resolved to images
 // (server-side, ownership-checked) + their live 7TV badge/paint. Chat uses this

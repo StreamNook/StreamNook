@@ -52,22 +52,6 @@ interface IVRSubageData {
     } | null;
 }
 
-export interface IVRProfileData {
-    createdAt: string | null;
-    followingSince: string | null;
-    statusHidden: boolean;
-    isSubscribed: boolean;
-    subStreak: number | null;
-    subCumulative: number | null;
-    isFounder: boolean;
-    isMod: boolean;
-    modSince: string | null;
-    isVip: boolean;
-    vipSince: string | null;
-    isLoading: boolean;
-    error: string | null;
-}
-
 // Cache for IVR API results
 interface CacheEntry<T> {
     data: T;
@@ -217,23 +201,4 @@ export function formatSubTenure(streak: number | null, cumulative: number | null
     }
 
     return `${streak} ${streak === 1 ? 'month' : 'months'} (${cumulative} cumulative)`;
-}
-
-/**
- * Clears the IVR cache
- */
-export function clearIVRCache(): void {
-    userDataCache.clear();
-    subageCache.clear();
-    Logger.debug('[IVR] Cache cleared');
-}
-
-/**
- * Gets the current cache size
- */
-export function getIVRCacheSize(): { users: number; subages: number } {
-    return {
-        users: userDataCache.size,
-        subages: subageCache.size,
-    };
 }

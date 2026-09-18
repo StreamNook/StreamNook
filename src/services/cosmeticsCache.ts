@@ -298,14 +298,6 @@ export function getCosmeticsFromMemoryCache(userId: string): CachedCosmetics | n
 }
 
 /**
- * Get third-party badges from synchronous in-memory cache (instant, no async)
- * Returns null if not in memory cache - use this for initial state
- */
-export function getThirdPartyBadgesFromMemoryCache(userId: string): any[] | null {
-  return inMemoryThirdPartyBadgesCache.get(userId) || null;
-}
-
-/**
  * Get cosmetics for a user - memory cache -> API fetch with deduplication
  * Image caching is handled by the seventvService internally
  */
@@ -343,32 +335,6 @@ export async function getCosmeticsWithFallback(userId: string): Promise<CachedCo
 
   pendingCosmeticsRequests.set(userId, request);
   return request;
-}
-
-/**
- * Get third-party badges for a user - memory cache -> API fetch
- * Third-party badges (FFZ, Chatterino, Homies) come from the unified Rust badge service
- * Note: This requires channelId/channelName context, so we use a simpler approach
- */
-export async function getThirdPartyBadgesWithFallback(userId: string): Promise<any[]> {
-  // 1. Try in-memory cache first (instant, synchronous)
-  const memoryCached = inMemoryThirdPartyBadgesCache.get(userId);
-  if (memoryCached) {
-    return memoryCached;
-  }
-
-  // Third-party badges are now fetched as part of the unified badge service
-  // They'll be populated when getTwitchBadgesWithFallback is called
-  // Return empty for now - the full profile fetch will populate this
-  return [];
-}
-
-/**
- * Get Twitch badges from synchronous in-memory cache (instant, no async)
- * Returns null if not in memory cache - use this for initial state
- */
-export function getTwitchBadgesFromMemoryCache(cacheKey: string): any[] | null {
-  return inMemoryTwitchBadgesCache.get(cacheKey) || null;
 }
 
 /**
