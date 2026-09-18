@@ -27,6 +27,16 @@ export const IS_ANDROID = /android/i.test(ua);
 export const IS_MAC = !IS_MOBILE && /Macintosh|Mac OS X/.test(ua);
 
 /**
+ * Publish the platform to CSS, for the handful of rules that genuinely differ
+ * rather than merely looking different. Set at module load, which runs during
+ * the initial import graph and therefore before the first paint, for the same
+ * reason IS_MAC is a synchronous UA test rather than an async plugin call.
+ */
+if (typeof document !== 'undefined') {
+  document.documentElement.dataset.platform = IS_MAC ? 'mac' : IS_MOBILE ? 'mobile' : 'desktop';
+}
+
+/**
  * Width reserved at the leading edge of the title bar for macOS traffic
  * lights. They are drawn by AppKit (the window is decorated with an overlay
  * title bar), so the app must simply not put anything under them.

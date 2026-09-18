@@ -21,8 +21,33 @@
 // playback completely untouched.
 
 import { Logger } from './logger';
+import { IS_MAC } from './platform';
 import type { AudioBoostSettings } from '../types';
 import { DEFAULT_AUDIO_BOOST } from '../types';
+
+/**
+ * Whether this shell can route stream audio through Web Audio at all.
+ *
+ * WebKit cannot hand an MSE-backed media element to an AudioContext: the
+ * MediaElementAudioSourceNode outputs zeros AND the element stops feeding the
+ * speakers, so one call permanently silences the stream for that element's
+ * lifetime. That is WebKit bug 180696, open since 2017 and still unfixed; the
+ * bug thread has the explicit MSE confirmation ("Safari fails using MSE/MMS
+ * with hls.js. MediaElementAudioSourceNode outputs zeros"), which is exactly
+ * how StreamNook plays. macOS is the only desktop shell on WebKit.
+ *
+ * This has to be a hard refusal rather than a graceful fallback because of rule
+ * 1 above: once an element is tapped there is no untapping it, so the passthrough
+ * that "off" relies on is already silent by then.
+ *
+ * iOS, when it ships, needs the same guard for the same reason - it is WebKit
+ * too, and Song Identification reaches this file from the mobile player.
+ */
+export const AUDIO_GRAPH_SUPPORTED = !IS_MAC;
+
+/** Plain-language reason, for the controls that have to explain themselves. */
+export const AUDIO_GRAPH_REFUSAL =
+  "Not available on macOS: the system's video engine won't share stream audio with the app.";
 
 interface MediaGraph {
   source: MediaElementAudioSourceNode;
@@ -57,6 +82,11 @@ function getCtx(): AudioContext | null {
 }
 
 function getOrCreateGraph(video: HTMLMediaElement): MediaGraph | null {
+  // Fail safe, not fail silent. Every public entry point below already checks,
+  // but this is the one place that actually taps the element, so a future
+  // caller that forgets the platform cannot mute the stream.
+  if (!AUDIO_GRAPH_SUPPORTED) return null;
+
   const existing = graphs.get(video);
   if (existing) return existing;
 
@@ -100,6 +130,7 @@ export function applyAudioBoost(
   cfg: AudioBoostSettings,
 ): void {
   if (!video) return;
+  if (!AUDIO_GRAPH_SUPPORTED) return;
   // Do no harm until the feature has actually been turned on at least once.
   if (!cfg.enabled && !graphs.has(video)) return;
 
@@ -224,6 +255,7 @@ export async function captureStreamSamples(
   seconds: number,
 ): Promise<Int16Array | null> {
   if (!video) return null;
+  if (!AUDIO_GRAPH_SUPPORTED) return null;
   const ctx = getCtx();
   if (!ctx) return null;
 

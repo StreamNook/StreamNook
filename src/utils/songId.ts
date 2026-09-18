@@ -1,5 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
-import { captureStreamSamples } from './audioBoost';
+import {
+  captureStreamSamples,
+  AUDIO_GRAPH_SUPPORTED,
+  AUDIO_GRAPH_REFUSAL,
+} from './audioBoost';
 import { getActiveVideo } from './activeVideo';
 import { Logger } from './logger';
 import { useAppStore } from '../stores/AppStore';
@@ -45,6 +49,13 @@ export async function recognizeNowPlaying(
   const target = video ?? getActiveVideo();
   if (!target) {
     return { status: 'error', message: 'No stream is playing.' };
+  }
+  // Recognition listens through the same Web Audio tap Audio Boost uses, so it
+  // is closed wherever that tap is. Answering with the real reason beats
+  // "could not capture the stream audio", which reads like a transient failure
+  // worth retrying.
+  if (!AUDIO_GRAPH_SUPPORTED) {
+    return { status: 'error', message: AUDIO_GRAPH_REFUSAL };
   }
   if (target.paused || target.muted || target.readyState < 2) {
     // Muted captures silence; paused has nothing to capture.
