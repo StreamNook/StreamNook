@@ -1,11 +1,11 @@
-import React, { useEffect, useLayoutEffect, useRef, useState, useMemo, useCallback, memo } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import ChatMessageList from './ChatMessageList';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { openProfilePopup } from '../utils/openProfilePopup';
-import { Pickaxe, Gift, Settings, Zap, BarChart3, Filter, SquareSlash } from 'lucide-react';
+import { Pickaxe, Zap, BarChart3, Filter, SquareSlash } from 'lucide-react';
 import ChatSearchBar from './chat/ChatSearchBar';
 import AutomodQueueStrip from './chat/AutomodQueueStrip';
 import { useStreamerMode } from '../utils/streamerMode';
@@ -20,7 +20,6 @@ const ChannelPointsIcon = ({ className = "", size = 14 }: { className?: string; 
     <path fillRule="evenodd" d="M1 12C1 5.925 5.925 1 12 1s11 4.925 11 11-4.925 11-11 11S1 18.075 1 12Zm11 9a9 9 0 1 1 0-18 9 9 0 0 1 0 18Z" clipRule="evenodd"></path>
   </svg>
 );
-import { DropProgressStatus } from '../types';
 import { useTwitchChat, type ModerationContext } from '../hooks/useTwitchChat';
 import { useChannelEmotes, ensureChannelEmotes, getChannelEmotes, emoteCacheKey, refreshChannelEmotes, useChannelChat, useChannelChatMeta, useChatConnectionStore, setChannelPaused, injectRedemptionMessage, injectSystemMessage, systemSourceFor } from '../stores/chatConnectionStore';
 import { useSpellcheck } from '../hooks/useSpellcheck';
@@ -38,7 +37,6 @@ import { usePlatformAccountStore } from '../stores/platformAccountStore';
 import { useFollowsStore } from '../stores/followsStore';
 import { incrementStat } from '../services/supabaseService';
 import { trackEmoteUsage } from '../utils/trackEmoteUsage';
-import ChatMessage from './ChatMessage';
 import { LinkPreviewCard } from './chat/LinkPreviewCard';
 import { extractPreviewUrls } from '../services/linkPreviewService';
 import UserProfileCard from './UserProfileCard';
@@ -59,18 +57,14 @@ import ChannelPointsMenu from './ChannelPointsMenu';
 import ModeratorMenu from './chat/ModeratorMenu';
 import ResubNotificationBanner, { ResubNotification } from './ResubNotificationBanner';
 import WatchStreakBanner, { WatchStreakMilestone } from './WatchStreakBanner';
-import { Emote, EmoteSet, preloadChannelEmotes, queueEmoteForCaching, queueEmoteForDisplayCaching, queueChannelEmotesForCaching, getCachedEmoteUrl, setEmoteCacheBurst, inlineEmoteTier, sevenTvTierUrl } from '../services/emoteService';
+import { Emote, EmoteSet, queueChannelEmotesForCaching, setEmoteCacheBurst } from '../services/emoteService';
 import { prefetchChannelBadges } from '../services/badgeService';
 import { parseBadges } from '../services/twitchBadges';
 import { initializeBadgeImageCache } from '../services/badgeImageCacheService';
 import { parseMessage } from '../services/twitchChat';
 import {
   loadFavoriteEmotes,
-  addFavoriteEmote,
-  removeFavoriteEmote,
-  isFavoriteEmote,
-  getAvailableFavorites,
-  getFavoriteEmotes
+  getAvailableFavorites
 } from '../services/favoriteEmoteService';
 import { getAppleEmojiUrl } from '../services/emojiService';
 import { useChatUserStore } from '../stores/chatUserStore';
@@ -757,7 +751,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     (currentMediaType === 'video' || currentMediaType === 'clip' || currentMediaType === 'offline_chat');
   const [chatMode, setChatMode] = useState<'replay' | 'live'>('replay');
   const chat = isVodReplay && chatMode === 'replay' ? replayChat : isTwitch ? twitchChat : providerChat;
-  const { connectChat, sendMessage, isConnected, error, setPaused: setBufferPaused, roomState, userBadges } = chat;
+  const { connectChat, sendMessage, isConnected, setPaused: setBufferPaused, roomState, userBadges } = chat;
 
   // A new VOD always starts in replay (beginVodReplay bumps sessionId).
   useEffect(() => {
@@ -1068,21 +1062,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // exclusive with the emote picker: they share the space above the box.
   const [showCommandMenu, setShowCommandMenu] = useState(false);
   const commandMenuButtonRef = useRef<HTMLButtonElement>(null);
-  // Keep-mounted picker: once opened, the picker stays in the tree and is hidden
-  // with display:none instead of being unmounted, so reopening is a style flip
-  // (no grid rebuild, no re-running the section/block layout). `pickerFullyClosed`
-  // latches true only after the close animation finishes, when display:none is
-  // applied — that frees the lazy blocks' images (they then observe as
-  // not-intersecting) so a hidden picker holds ~no image RAM while its cheap
-  // placeholder structure stays built for an instant reopen.
-  const [pickerMounted, setPickerMounted] = useState(false);
-  const [pickerFullyClosed, setPickerFullyClosed] = useState(true);
-  useEffect(() => {
-    if (showEmotePicker) {
-      setPickerMounted(true);
-      setPickerFullyClosed(false);
-    }
-  }, [showEmotePicker]);
   // While the picker is open, fill the emote disk cache aggressively (the user is
   // actively waiting on these); the matching cleanup drops back to the polite
   // background trickle on close. Ref-counted in the service so split panes /
@@ -1207,10 +1186,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
   // Shared swapping-smiley state for the emote-picker trigger.
   const smiley = useSwappingSmiley();
-  const [searchQuery, setSearchQuery] = useState('');
   const [isLoadingEmotes, setIsLoadingEmotes] = useState(false);
   const [favoriteEmotes, setFavoriteEmotes] = useState<Emote[]>([]);
-  const emoteScrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const channelPointsRef = useRef<HTMLDivElement>(null);
   // Always-latest reference to handleUsernameClick so window-event listeners
@@ -1417,7 +1394,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
   // / command autocomplete state
   const [showCommandAutocomplete, setShowCommandAutocomplete] = useState(false);
-  const [commandQuery, setCommandQuery] = useState('');
   const [commandSelectedIndex, setCommandSelectedIndex] = useState(0);
   const [matchingCommands, setMatchingCommands] = useState<CommandDefinition[]>([]);
   // When the command popup is walking the user through the multi-step /remind
@@ -1582,7 +1558,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     () => !(useAppStore.getState().settings.chat_design?.pinned_start_collapsed ?? true),
   );
   const seenPinIdRef = useRef<string | null>(null);
-  const pinnedContentRef = useRef<HTMLDivElement>(null);
 
   // Name -> emote lookup for pinned-message bodies. GQL pins arrive as plain
   // text with no emote ranges, so emotes are matched per whitespace word.
@@ -3535,7 +3510,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       if (firstSpaceIndex === -1 && value.length > 0) {
         // Still typing the command itself
         const query = value.slice(1).toLowerCase(); // remove '/'
-        setCommandQuery(query);
         
         // Filter commands based on roles, then append the user's own custom
         // commands. User commands are always available regardless of role.
@@ -3645,7 +3619,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     
     // Hide autocomplete just in case
     setShowCommandAutocomplete(false);
-    setCommandQuery('');
     
     // Focus and set cursor position at end
     inputRef.current?.focus({ preventScroll: true });
@@ -3681,7 +3654,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
   const insertCommand = useCallback((cmd: CommandDefinition) => {
     const replaceFrom = flowReplaceFromRef.current;
-    setCommandQuery('');
 
     // Guided /remind flow: replace the current token and advance to the next
     // step. A hint row has nothing to insert — keep focus and let the user type.

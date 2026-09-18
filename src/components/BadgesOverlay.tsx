@@ -1,7 +1,7 @@
-import { useEffect, useState, useMemo, useRef, useSyncExternalStore } from 'react';
+import { useEffect, useState, useMemo, useSyncExternalStore } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { createPortal } from 'react-dom';
-import { X, ArrowUpDown, RefreshCw, Check, Trophy, Award, Search, ExternalLink, Lock } from 'lucide-react';
+import { X, ArrowUpDown, RefreshCw, Check, Search, ExternalLink, Lock } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../stores/AppStore';
@@ -152,7 +152,6 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
   const [snTab, setSnTab] = useState<StreamNookTab>('badges');
   
   // Twitch badges state
-  const [badges, setBadges] = useState<BadgeSet[]>([]);
   const [badgesWithMetadata, setBadgesWithMetadata] = useState<BadgeWithMetadata[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMetadata, setLoadingMetadata] = useState(false);
@@ -161,9 +160,6 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
   const [sortBy, setSortBy] = useState<SortOption>('date-newest');
   const [cacheAge, setCacheAge] = useState<number | null>(null);
   const [newBadgesCount, setNewBadgesCount] = useState(0);
-  const [showRankList, setShowRankList] = useState(false);
-  const [dropdownPosition, setDropdownPosition] = useState<{ top: number; left: number } | null>(null);
-  const rankButtonRef = useRef<HTMLButtonElement>(null);
   
   // 7TV state
   const [seventvBadges, setSeventvBadges] = useState<SevenTVGlobalBadge[]>([]);
@@ -837,254 +833,6 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
   // Total global collectible badges
   const totalGlobalBadges = globalCollectibleBadges.length;
 
-  // Collection rank system based on percentage collected - Epic tier system
-  const getCollectionRank = (collected: number, total: number) => {
-    if (total === 0) return null;
-    const percentage = (collected / total) * 100;
-    
-    // 10 Epic rank tiers with unique themes
-    if (percentage >= 95) {
-      return {
-        title: 'APEX',
-        tier: 'apex',
-        description: 'The final form',
-        animationClass: 'rank-apex',
-        colors: {
-          from: '#ff0080',
-          via: '#7928ca',
-          to: '#00d4ff',
-          glow: 'rgba(121, 40, 202, 0.5)',
-          bg: 'from-[#ff0080]/20 via-[#7928ca]/20 to-[#00d4ff]/20',
-          border: '[#7928ca]/50',
-          sparkle: ['#ff0080', '#7928ca', '#00d4ff', '#ff6b6b', '#feca57']
-        }
-      };
-    } else if (percentage >= 85) {
-      return {
-        title: 'TITAN',
-        tier: 'titan',
-        description: 'Diamond incarnate',
-        animationClass: 'rank-titan',
-        colors: {
-          from: '#e8e8e8',
-          via: '#c0c0c0',
-          to: '#a8d8ea',
-          glow: 'rgba(200, 200, 220, 0.5)',
-          bg: 'from-[#e8e8e8]/15 via-[#c0c0c0]/15 to-[#a8d8ea]/15',
-          border: '[#c0c0c0]/40',
-          sparkle: ['#ffffff', '#e8e8e8', '#a8d8ea', '#ffd700']
-        }
-      };
-    } else if (percentage >= 73) {
-      return {
-        title: 'AEON',
-        tier: 'aeon',
-        description: 'Cosmic wanderer',
-        animationClass: 'rank-aeon',
-        colors: {
-          from: '#1a1a2e',
-          via: '#4a0080',
-          to: '#ffd700',
-          glow: 'rgba(74, 0, 128, 0.4)',
-          bg: 'from-[#1a1a2e]/20 via-[#4a0080]/20 to-[#ffd700]/10',
-          border: '[#ffd700]/30',
-          sparkle: ['#ffd700', '#4a0080', '#ffffff', '#ff6b6b']
-        }
-      };
-    } else if (percentage >= 59) {
-      return {
-        title: 'NEXUS',
-        tier: 'nexus',
-        description: 'Grid architect',
-        animationClass: 'rank-nexus',
-        colors: {
-          from: '#7c3aed',
-          via: '#a855f7',
-          to: '#c084fc',
-          glow: 'rgba(124, 58, 237, 0.4)',
-          bg: 'from-[#7c3aed]/15 via-[#a855f7]/15 to-[#c084fc]/15',
-          border: '[#7c3aed]/40',
-          sparkle: ['#7c3aed', '#a855f7', '#c084fc', '#e879f9']
-        }
-      };
-    } else if (percentage >= 47) {
-      return {
-        title: 'AURORA',
-        tier: 'aurora',
-        description: 'Northern light bearer',
-        animationClass: 'rank-aurora',
-        colors: {
-          from: '#14b8a6',
-          via: '#a855f7',
-          to: '#ec4899',
-          glow: 'rgba(20, 184, 166, 0.35)',
-          bg: 'from-[#14b8a6]/12 via-[#a855f7]/12 to-[#ec4899]/12',
-          border: '[#14b8a6]/35',
-          sparkle: ['#14b8a6', '#a855f7', '#ec4899', '#06b6d4']
-        }
-      };
-    } else if (percentage >= 35) {
-      return {
-        title: 'VANGUARD',
-        tier: 'vanguard',
-        description: 'Chrome sentinel',
-        animationClass: 'rank-vanguard',
-        colors: {
-          from: '#94a3b8',
-          via: '#64748b',
-          to: '#cbd5e1',
-          glow: 'rgba(148, 163, 184, 0.35)',
-          bg: 'from-[#94a3b8]/12 via-[#64748b]/12 to-[#cbd5e1]/12',
-          border: '[#94a3b8]/35',
-          sparkle: ['#94a3b8', '#cbd5e1', '#e2e8f0', '#f1f5f9']
-        }
-      };
-    } else if (percentage >= 23) {
-      return {
-        title: 'PHANTOM',
-        tier: 'phantom',
-        description: 'Ethereal presence',
-        animationClass: 'rank-phantom',
-        colors: {
-          from: '#06b6d4',
-          via: '#22d3d1',
-          to: '#67e8f9',
-          glow: 'rgba(6, 182, 212, 0.35)',
-          bg: 'from-[#06b6d4]/12 via-[#22d3d1]/12 to-[#67e8f9]/12',
-          border: '[#06b6d4]/35',
-          sparkle: ['#06b6d4', '#22d3d1', '#67e8f9', '#a5f3fc']
-        }
-      };
-    } else if (percentage >= 13) {
-      return {
-        title: 'RONIN',
-        tier: 'ronin',
-        description: 'Blade of the void',
-        animationClass: 'rank-ronin',
-        colors: {
-          from: '#3b82f6',
-          via: '#60a5fa',
-          to: '#0ea5e9',
-          glow: 'rgba(59, 130, 246, 0.4)',
-          bg: 'from-[#3b82f6]/15 via-[#60a5fa]/15 to-[#0ea5e9]/15',
-          border: '[#3b82f6]/40',
-          sparkle: ['#3b82f6', '#60a5fa', '#0ea5e9', '#38bdf8']
-        }
-      };
-    } else if (percentage >= 6) {
-      return {
-        title: 'NOMAD',
-        tier: 'nomad',
-        description: 'Desert wanderer',
-        animationClass: 'rank-nomad',
-        colors: {
-          from: '#78716c',
-          via: '#a8a29e',
-          to: '#d4a84b',
-          glow: 'rgba(212, 168, 75, 0.25)',
-          bg: 'from-[#78716c]/10 via-[#a8a29e]/10 to-[#d4a84b]/10',
-          border: '[#d4a84b]/25',
-          sparkle: ['#78716c', '#a8a29e', '#d4a84b', '#f5d0a9']
-        }
-      };
-    } else if (percentage >= 0.1) {
-      return {
-        title: 'DRIFTER',
-        tier: 'drifter',
-        description: 'Signal in the static',
-        animationClass: 'rank-drifter',
-        colors: {
-          from: '#6b7280',
-          via: '#9ca3af',
-          to: '#e5e7eb',
-          glow: 'rgba(156, 163, 175, 0.2)',
-          bg: 'from-[#6b7280]/8 via-[#9ca3af]/8 to-[#e5e7eb]/8',
-          border: '[#9ca3af]/20',
-          sparkle: ['#6b7280', '#9ca3af', '#e5e7eb', '#f3f4f6']
-        }
-      };
-    }
-    return null;
-  };
-
-  // Get current rank
-  const currentRank = useMemo(() => {
-    return getCollectionRank(collectedCount, totalGlobalBadges);
-  }, [collectedCount, totalGlobalBadges]);
-
-  // All ranks for display in ranks list - Epic 10-tier system
-  const allRanks = [
-    {
-      title: 'APEX',
-      requirement: '95%+',
-      description: 'The final form',
-      tier: 'apex',
-      colors: { from: '#ff0080', via: '#7928ca', to: '#00d4ff' }
-    },
-    {
-      title: 'TITAN',
-      requirement: '85%+',
-      description: 'Diamond incarnate',
-      tier: 'titan',
-      colors: { from: '#e8e8e8', via: '#c0c0c0', to: '#a8d8ea' }
-    },
-    {
-      title: 'AEON',
-      requirement: '73%+',
-      description: 'Cosmic wanderer',
-      tier: 'aeon',
-      colors: { from: '#1a1a2e', via: '#4a0080', to: '#ffd700' }
-    },
-    {
-      title: 'NEXUS',
-      requirement: '59%+',
-      description: 'Grid architect',
-      tier: 'nexus',
-      colors: { from: '#7c3aed', via: '#a855f7', to: '#c084fc' }
-    },
-    {
-      title: 'AURORA',
-      requirement: '47%+',
-      description: 'Northern light bearer',
-      tier: 'aurora',
-      colors: { from: '#14b8a6', via: '#a855f7', to: '#ec4899' }
-    },
-    {
-      title: 'VANGUARD',
-      requirement: '35%+',
-      description: 'Chrome sentinel',
-      tier: 'vanguard',
-      colors: { from: '#94a3b8', via: '#64748b', to: '#cbd5e1' }
-    },
-    {
-      title: 'PHANTOM',
-      requirement: '23%+',
-      description: 'Ethereal presence',
-      tier: 'phantom',
-      colors: { from: '#06b6d4', via: '#22d3d1', to: '#67e8f9' }
-    },
-    {
-      title: 'RONIN',
-      requirement: '13%+',
-      description: 'Blade of the void',
-      tier: 'ronin',
-      colors: { from: '#3b82f6', via: '#60a5fa', to: '#0ea5e9' }
-    },
-    {
-      title: 'NOMAD',
-      requirement: '6%+',
-      description: 'Desert wanderer',
-      tier: 'nomad',
-      colors: { from: '#78716c', via: '#a8a29e', to: '#d4a84b' }
-    },
-    {
-      title: 'DRIFTER',
-      requirement: '0.1%+',
-      description: 'Signal in the static',
-      tier: 'drifter',
-      colors: { from: '#6b7280', via: '#9ca3af', to: '#e5e7eb' }
-    }
-  ];
 
   const loadBadges = async () => {
     try {
@@ -1101,7 +849,6 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
 
       if (cachedBadges && cachedBadges.data && cachedBadges.data.length > 0) {
         Logger.debug('[BadgesOverlay] Found cached badges, loading immediately');
-        setBadges(cachedBadges.data);
 
         // Flatten all badge versions
         const flattened = cachedBadges.data.flatMap(set =>
@@ -1154,7 +901,6 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
       // Fetch global badges (Rust attaches its own credentials and caches them)
       const response = await invoke<{ data: BadgeSet[] }>('fetch_global_badges');
 
-      setBadges(response.data);
 
       // Flatten all badge versions
       const flattened = response.data.flatMap(set =>
@@ -1237,7 +983,6 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
         Logger.debug(`[BadgesOverlay] Set "${set.set_id}": ${set.versions.length} versions - ${set.versions.map(v => v.title).join(', ')}`);
       });
 
-      setBadges(response.data);
       setCacheAge(0);
 
       // Flatten all badge versions
@@ -2065,7 +1810,6 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
                   {/* Badge Grid */}
                   <div className="grid grid-cols-8 gap-2">
                     {sortedSeventvBadges.map((badge) => {
-                    const animated = isAnimatedBadge(badge);
                     const isOwned = userOwned7TVBadgeIds.has(badge.id);
                     return (
                       <Tooltip key={badge.id} content={badge.description || badge.name}>

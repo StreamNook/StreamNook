@@ -19,7 +19,7 @@ import HighlightAppearanceSettings from './HighlightAppearanceSettings';
 import UserOverridesSettings from './UserOverridesSettings';
 import UserCommandsSettings from './UserCommandsSettings';
 import RemindersSettings from './RemindersSettings';
-import { SettingsSection, SettingsRow, SegmentedSelect, SettingsSubGroup } from './_primitives';
+import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
 import { Toggle } from '../ui/Toggle';
 import SpellcheckDictionary from './SpellcheckDictionary';
 import IgnoredPhrasesSettings from './IgnoredPhrasesSettings';

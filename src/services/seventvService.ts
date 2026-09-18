@@ -1,7 +1,6 @@
 // Service for fetching 7TV badges and paints using the v4 GraphQL API
 import { invoke } from '@tauri-apps/api/core';
 import { convertFileSrc } from '@tauri-apps/api/core';
-import { SevenTVBadge, SevenTVPaint } from '../types';
 
 import { Logger } from '../utils/logger';
 import { features } from '../features';

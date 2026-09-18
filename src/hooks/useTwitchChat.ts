@@ -23,7 +23,6 @@ import {
   sendChannelMessage,
   setChannelPaused,
   useChannelChatMeta,
-  type ClearedUserEntry,
   type RoomState,
   type SendUserInfo,
   type SendAsAccount,

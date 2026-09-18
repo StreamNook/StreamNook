@@ -606,8 +606,6 @@ const ProfileOverview = ({
   const earnedMedallions = sortedAccolades.filter((a) => a.earned);
   const lockedCount = accolades.length - earnedCount;
 
-  const num = (n: number | null | undefined) => (n ?? 0).toLocaleString();
-
   const accentRgb = useContext(ProfileAccentContext);
   const compact = useContext(ProfileCompactContext);
   // A member can hide sections from their PUBLIC profile; honored only when

@@ -227,7 +227,7 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
         (s) => (s.kick.connected ? 1 : 0) + (s.youtube.connected ? 1 : 0),
     );
 
-    const { addToast, settings, updateSettings, isAuthenticated, checkAuthStatus, loginToTwitch, whisperImportState, setWhisperImportState, resetWhisperImportState } = useAppStore();
+    const { addToast, settings, updateSettings, isAuthenticated, checkAuthStatus, loginToTwitch, whisperImportState, setWhisperImportState } = useAppStore();
     const unlistenRefs = useRef<Array<() => void>>([]);
     // Mobile only: drives the one-time "these pages swipe" hint, which retires
     // itself the moment it has been proven unnecessary.
@@ -568,7 +568,7 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                 const granted = await invoke<boolean>('plugin:notification|is_permission_granted');
                 if (!cancelled && granted) setNotifPermission('granted');
             } catch (e) {
-                console.error('[SetupWizard] notification permission probe failed:', e);
+                Logger.error('[SetupWizard] notification permission probe failed:', e);
             }
         })();
         return () => { cancelled = true; };
@@ -584,7 +584,7 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
         } catch (e) {
             // Surface it: silently mapping every failure to "denied" makes a broken
             // plugin registration indistinguishable from the user saying no.
-            console.error('[SetupWizard] notification permission request failed:', e);
+            Logger.error('[SetupWizard] notification permission request failed:', e);
             setNotifPermission('denied');
         }
     }, []);

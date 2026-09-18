@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { ProviderId } from '../types/providers';
 import UserProfileCard from '../components/UserProfileCard';

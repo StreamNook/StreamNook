@@ -2,16 +2,15 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import { createPortal } from 'react-dom';
 import { motion, useMotionValue } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
-import { Trash2, Clock, Ban, RotateCcw, Pin, PinOff, type LucideIcon } from 'lucide-react';
+import { Trash2, Clock, Ban, RotateCcw, Pin, PinOff } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { useChatUserStore } from '../../stores/chatUserStore';
 import { computePaintStyle } from '../../services/seventvService';
 import { useDragModerationStore } from '../../stores/dragModerationStore';
 import { usePinStore } from '../../stores/pinStore';
 import { Logger } from '../../utils/logger';
-import { BucketTile, SOLID_TINT, type Bucket } from './ModBucketTile';
+import { BucketTile, type Bucket } from './ModBucketTile';
 import {
-  MAX_TIMEOUT_SECS,
   formatDuration,
   timeoutSecsFromDistance,
 } from '../../utils/timeoutRamp';

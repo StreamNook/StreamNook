@@ -7,7 +7,6 @@
 // SAME twin renderer the OBS overlay uses.
 
 import { useEffect, useMemo, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { helixGet } from '../../services/helix';
 import {
   acquireChannel,

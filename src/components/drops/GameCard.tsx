@@ -1,30 +1,9 @@
 import { useRef, useEffect, useState } from 'react';
 import { Check, Clock, Package, Square, Heart, DollarSign } from 'lucide-react';
-import type { UnifiedGame, DropProgress, DropProgressStatus, DropCampaign } from '../../types';
+import type { UnifiedGame, DropProgress, DropProgressStatus } from '../../types';
 import { Tooltip } from '../ui/Tooltip';
 import { deriveDropProgressDisplay } from '../../utils/dropProgressDisplay';
 import { useAppStore } from '../../stores/AppStore';
-
-// Helper to check if a campaign is collectible (has time-based drops that require watching)
-function isCampaignCollectible(campaign: DropCampaign): boolean {
-    // Campaign is collectible if it has any time_based_drops
-    // The API only gives us time_based_drops, so if we have them, they're collectible
-    // Subscription/gift-based campaigns won't have time_based_drops populated
-    if (!campaign.time_based_drops || campaign.time_based_drops.length === 0) {
-        return false;
-    }
-    
-    // Check if at least one drop requires watch time (> 0 minutes)
-    // Use >= 0 check since undefined/null would fail > 0 check incorrectly
-    // Also fallback to true if we have drops but required_minutes_watched isn't set
-    const hasWatchTimeDrops = campaign.time_based_drops.some(drop => {
-        const minutes = drop.required_minutes_watched;
-        // If required_minutes_watched is not set or is positive, it's collectible
-        return minutes === undefined || minutes === null || minutes > 0;
-    });
-    
-    return hasWatchTimeDrops;
-}
 
 interface GameCardProps {
     game: UnifiedGame;
