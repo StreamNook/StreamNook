@@ -1,6 +1,6 @@
 use crate::models::settings::AppState;
 use anyhow::Result;
-use discord_rich_presence::{activity::*, DiscordIpc, DiscordIpcClient};
+use discord_rich_presence::{activity::*, DiscordIpc};
 use lazy_static::lazy_static;
 use rand::prelude::IndexedRandom;
 // rand 0.10 moved random_bool / random_range onto RngExt.
@@ -10,6 +10,15 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
+
+// Which IPC transport carries the presence. Windows and Linux use the crate's
+// own client; macOS needs a wider socket search than the crate performs (see
+// services/discord_ipc_macos.rs). Both implement `DiscordIpc`, so every call
+// below is platform-agnostic.
+#[cfg(target_os = "macos")]
+use crate::services::discord_ipc_macos::MacDiscordIpcClient as IpcClient;
+#[cfg(not(target_os = "macos"))]
+use discord_rich_presence::DiscordIpcClient as IpcClient;
 
 // --- New Imports for matching logic ---
 use regex::Regex;
@@ -28,7 +37,7 @@ const DOWNLOAD_URL: &str = "https://streamnook.app";
 pub struct DiscordService;
 
 struct DiscordState {
-    client: Option<DiscordIpcClient>,
+    client: Option<IpcClient>,
     start_time: i64,
     // Identity of the currently-displayed activity (the "Watching X" line). When
     // this changes (a raid or auto-switch to a different streamer), the elapsed
@@ -195,7 +204,16 @@ impl DiscordService {
         }
 
         // Create new connection
-        let (client, username) = Self::connect_client()?;
+        let (client, username) = match Self::connect_client() {
+            Ok(pair) => pair,
+            Err(e) => {
+                // The frontend logs this too, but only to the JS console. This
+                // is the copy that reaches streamnook.log, which is the file a
+                // user can actually send back.
+                log::warn!("[Discord] initial connect failed: {e}");
+                return Err(e);
+            }
+        };
         guard.client = Some(client);
         guard.discord_username = username;
         guard.start_time = SystemTime::now()
@@ -214,8 +232,8 @@ impl DiscordService {
     /// user. We run the handshake by hand so we can keep the name for the
     /// personalized idle phrases. No OAuth or extra scopes are involved. The
     /// basic RPC handshake returns the current user on its own.
-    fn connect_client() -> Result<(DiscordIpcClient, Option<String>)> {
-        let mut client = DiscordIpcClient::new(DISCORD_CLIENT_ID);
+    fn connect_client() -> Result<(IpcClient, Option<String>)> {
+        let mut client = IpcClient::new(DISCORD_CLIENT_ID);
         client.connect_ipc()?;
         client.send(json!({ "v": 1, "client_id": DISCORD_CLIENT_ID }), 0)?;
 
@@ -282,6 +300,21 @@ impl DiscordService {
             .unwrap()
             .as_secs() as i64;
         let timestamp = guard.start_time;
+
+        // Discord may have started AFTER StreamNook, in which case the
+        // boot-time connect() found no socket and gave up for good.
+        // `update_presence` already retries lazily; without the same retry here
+        // the idle line - the first presence a browsing user would ever see -
+        // never appears until a stream is opened and closed again.
+        if guard.client.is_none() {
+            if let Ok((client, name)) = Self::connect_client() {
+                guard.client = Some(client);
+                if name.is_some() {
+                    guard.discord_username = name;
+                }
+            }
+        }
+
         let username = guard.discord_username.clone();
 
         if let Some(client) = &mut guard.client {
@@ -360,8 +393,11 @@ impl DiscordService {
                         guard.discord_username = username;
                     }
                 }
-                Err(_) => {
-                    // Discord not running - silently fail
+                Err(e) => {
+                    // Discord not running. Never block the stream on it, but do
+                    // not swallow the reason either: this path failing without a
+                    // trace is what made the macOS gap undiagnosable.
+                    log::warn!("[Discord] presence update skipped, no IPC connection: {e}");
                     return Ok(());
                 }
             }
@@ -420,8 +456,9 @@ impl DiscordService {
         if let Some(client) = &mut guard.client {
             match client.set_activity(activity.clone()) {
                 Ok(_) => return Ok(()),
-                Err(_) => {
+                Err(e) => {
                     // Connection lost - clear the broken client
+                    log::debug!("[Discord] set_activity failed, reconnecting: {e}");
                     guard.client = None;
                 }
             }
@@ -439,14 +476,16 @@ impl DiscordService {
                         }
                         Ok(())
                     }
-                    Err(_) => {
-                        // Still failing - Discord probably not running
-                        Ok(()) // Silently fail - don't block stream
+                    Err(e) => {
+                        // Reconnected and STILL refused. Distinct from "Discord
+                        // isn't running", and the only place it can be seen.
+                        log::warn!("[Discord] reconnected but set_activity failed: {e}");
+                        Ok(()) // Don't block the stream on a cosmetic feature
                     }
                 }
             }
-            Err(_) => {
-                // Discord not running - silently fail
+            Err(e) => {
+                log::warn!("[Discord] reconnect failed: {e}");
                 Ok(()) // Don't propagate error - this is non-critical
             }
         }
