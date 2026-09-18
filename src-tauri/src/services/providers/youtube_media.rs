@@ -1790,8 +1790,8 @@ fn row_from_lockup(lk: &Value) -> Option<ProviderStream> {
         .and_then(|arr| arr.last())
         .and_then(|t| t.get("url"))
         .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
+        .map(super::youtube::absolutize_url)
+        .unwrap_or_default();
     // The channel avatar, so a card isn't bare. Lockups nest it under the newer
     // view-model chain rather than the classic `channelThumbnail...` renderer.
     let avatar = meta.and_then(|m| {
@@ -1829,7 +1829,7 @@ fn largest_url(arr: Option<&Value>) -> Option<String> {
         .last()?
         .get("url")?
         .as_str()?;
-    (!url.is_empty()).then(|| url.to_string())
+    (!url.is_empty()).then(|| super::youtube::absolutize_url(url))
 }
 
 /// Whether any thumbnail badge in this subtree marks the video as live now.

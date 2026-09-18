@@ -301,7 +301,7 @@ pub async fn kick_account_sync(
     }
     .map_err(|e| e.to_string())?;
     if report.status != "ok" {
-        return Err("Not signed in to kick.com".to_string());
+        return Err("Sign-in did not finish on kick.com.".to_string());
     }
 
     let now = chrono::Utc::now().to_rfc3339();

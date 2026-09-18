@@ -2060,7 +2060,8 @@ fn build_pinned_banner(banner: &Value, channel_key: &str) -> Option<String> {
         .and_then(|a| a.last())
         .and_then(|t| t.get("url"))
         .and_then(|u| u.as_str())
-        .unwrap_or("");
+        .map(absolutize_url)
+        .unwrap_or_default();
     // The banner header reads like "Pinned by <name>". It is localized, so the
     // prefix is stripped only when it is actually there and the whole string is
     // kept otherwise rather than mangled.
@@ -2416,7 +2417,7 @@ fn base_message(
         .and_then(|t| t.get("url"))
         .and_then(|u| u.as_str())
     {
-        tags.insert("avatar".to_string(), url.to_string());
+        tags.insert("avatar".to_string(), absolutize_url(url));
     }
 
     let metadata = match &event {
@@ -2632,6 +2633,68 @@ fn member_months(tooltip: &str) -> String {
 /// Read a JSON string value that immediately follows a `"key":"` marker, up to the
 /// next quote. Used for flat ytcfg values (API key, client version, visitorData)
 /// whose values contain no embedded quotes.
+#[cfg(test)]
+mod absolutize_tests {
+    use super::absolutize_url;
+
+    /// The exact shape the subscriptions feed returns, and the exact shape that
+    /// rendered as a broken avatar for 253 of one account's 258 follows.
+    #[test]
+    fn a_protocol_relative_feed_avatar_gets_a_scheme() {
+        assert_eq!(
+            absolutize_url("//yt3.googleusercontent.com/abc=s176-c-k-c0x00ffffff-no-rj-mo"),
+            "https://yt3.googleusercontent.com/abc=s176-c-k-c0x00ffffff-no-rj-mo"
+        );
+    }
+
+    /// The watch and live-chat endpoints already return absolute urls, and those
+    /// must pass through byte for byte.
+    #[test]
+    fn an_absolute_url_is_untouched() {
+        let u = "https://yt3.ggpht.com/ytc/AIdro_mN49Wf2Zqi=s176-c-k-c";
+        assert_eq!(absolutize_url(u), u);
+        let h = "http://example.test/a.png";
+        assert_eq!(absolutize_url(h), h);
+    }
+
+    /// A single leading slash is a PATH, not a protocol-relative url, and
+    /// rewriting it would invent a host out of the first path segment.
+    #[test]
+    fn a_rooted_path_is_not_protocol_relative() {
+        assert_eq!(absolutize_url("/channel/UC123"), "/channel/UC123");
+    }
+
+    /// Idempotent, because the repair pass re-runs on every settings load.
+    #[test]
+    fn running_it_twice_changes_nothing() {
+        let once = absolutize_url("//yt3.googleusercontent.com/x");
+        assert_eq!(absolutize_url(&once), once);
+    }
+}
+
+/// Make an InnerTube image URL absolute.
+///
+/// InnerTube is INCONSISTENT about this and the difference is invisible until it is
+/// rendered. The watch and live-chat endpoints return `https://yt3.ggpht.com/...`,
+/// while the BROWSE feeds return the same image protocol-relative, as
+/// `//yt3.googleusercontent.com/...`.
+///
+/// A protocol-relative URL resolves against the page it is rendered in, and the app's
+/// frontend is not served over https, so every one of those became a dead request and
+/// drew a broken avatar. Measured on a real 258-channel subscription import: 253 came
+/// back protocol-relative and 5 absolute, which is exactly how it presented — a
+/// Following list of broken pictures with a handful that worked.
+///
+/// Worse than cosmetic: the broken value is still a value, so the stored avatar looked
+/// present, the per-card resolver fell back for all 253 channels on every single load,
+/// and the disk cache that exists to prevent precisely that did nothing.
+pub(crate) fn absolutize_url(url: &str) -> String {
+    match url.strip_prefix("//") {
+        Some(rest) => format!("https://{}", rest),
+        None => url.to_string(),
+    }
+}
+
 pub(crate) fn json_str_after(html: &str, marker: &str) -> Option<String> {
     let idx = html.find(marker)?;
     let after = &html[idx + marker.len()..];

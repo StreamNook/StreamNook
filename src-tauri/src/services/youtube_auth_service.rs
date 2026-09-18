@@ -53,6 +53,19 @@ struct YouTubeSession {
     // re-harvests the complete set from the still-signed-in profile.
     #[serde(default)]
     complete: bool,
+    /// ytcfg `SESSION_INDEX`: WHICH of the signed-in Google accounts this session
+    /// acts as, echoed back on every call as `X-Goog-AuthUser`. None = the first
+    /// one (index 0), which is what this used to be hardcoded to.
+    #[serde(default)]
+    session_index: Option<String>,
+    /// ytcfg `DELEGATED_SESSION_ID`: WHICH channel under that account, echoed back
+    /// as `X-Goog-PageId`. Set only while a BRAND account is active; None means the
+    /// Google account's own primary channel.
+    ///
+    /// NOT derivable from the cookie jar, which is why it has to be stored: see
+    /// `probe_identity`.
+    #[serde(default)]
+    delegated_session_id: Option<String>,
 }
 
 static SESSION: OnceLock<Mutex<Option<YouTubeSession>>> = OnceLock::new();
@@ -181,19 +194,41 @@ pub fn auth_headers() -> Option<Vec<(String, String)>> {
     let sapisid = sapisid(&sess.cookies)?;
     let ts = now();
     let digest = sha1_hex(&format!("{} {} {}", ts, sapisid, ORIGIN));
-    let cookie = sess
-        .cookies
-        .iter()
-        .map(|(k, v)| format!("{}={};", k, v))
-        .collect::<Vec<_>>()
-        .join(" ");
-    Some(vec![
-        ("Cookie".to_string(), cookie),
+    let mut headers = vec![
+        ("Cookie".to_string(), cookie_header(&sess.cookies)),
         ("Authorization".to_string(), format!("SAPISIDHASH {}_{}", ts, digest)),
         ("Origin".to_string(), ORIGIN.to_string()),
         ("X-Origin".to_string(), ORIGIN.to_string()),
-        ("X-Goog-AuthUser".to_string(), "0".to_string()),
-    ])
+        // WHICH signed-in Google account. This was hardcoded "0", which silently
+        // pinned every request to the FIRST account in a multi-login profile no
+        // matter which one the user had actually chosen.
+        (
+            "X-Goog-AuthUser".to_string(),
+            sess.session_index
+                .clone()
+                .unwrap_or_else(|| "0".to_string()),
+        ),
+    ];
+    // WHICH channel under that account. Omitted rather than blanked when there is
+    // no brand account active: absent means "the account's own primary channel",
+    // which is the correct default, while an empty value is a different statement.
+    if let Some(page_id) = sess
+        .delegated_session_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        headers.push(("X-Goog-PageId".to_string(), page_id.to_string()));
+    }
+    Some(headers)
+}
+
+/// The jar as one `Cookie` header, in the form YouTube's own client sends.
+fn cookie_header(cookies: &HashMap<String, String>) -> String {
+    cookies
+        .iter()
+        .map(|(k, v)| format!("{}={};", k, v))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn sapisid(cookies: &HashMap<String, String>) -> Option<&String> {
@@ -201,6 +236,197 @@ fn sapisid(cookies: &HashMap<String, String>) -> Option<&String> {
         .get("SAPISID")
         .or_else(|| cookies.get("__Secure-3PAPISID"))
         .or_else(|| cookies.get("__Secure-1PAPISID"))
+}
+
+// --- Which identity this session acts as ------------------------------------
+//
+// A YouTube session is not one identity, it is three values, and only the first
+// is a cookie:
+//
+//   1. which Google login          -> the SAPISID jar (hashed into Authorization)
+//   2. which signed-in account     -> ytcfg SESSION_INDEX        -> X-Goog-AuthUser
+//   3. which channel under it      -> ytcfg DELEGATED_SESSION_ID -> X-Goog-PageId
+//
+// Brand ("delegated") channels are separate identities with their OWN subscription
+// list, so getting 3 wrong does not fail, it quietly answers for a different
+// channel. That is what shipped: with no X-Goog-PageId, every `youtubei/v1` call
+// resolved to the Google account's primary channel, so a user whose channel is a
+// brand account saw their email account's name and their email account's (nearly
+// empty) subscription list.
+
+/// The active identity as YouTube itself reports it.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct Identity {
+    session_index: Option<String>,
+    delegated_session_id: Option<String>,
+}
+
+impl Identity {
+    /// The identity with its defaults spelled out, which is what the comparison has
+    /// to be made on.
+    ///
+    /// A session stored before any of this existed carries `None`/`None`, and a
+    /// user sitting on their account's primary channel probes as `Some("0")`/`None`.
+    /// Those are the SAME identity: the header already defaulted to account 0, and
+    /// no delegated id already meant the primary channel. Comparing the raw Options
+    /// would call that a channel switch and make every existing install re-import
+    /// its follow list once for nothing.
+    fn effective(&self) -> (&str, &str) {
+        (
+            self.session_index.as_deref().unwrap_or("0"),
+            self.delegated_session_id.as_deref().unwrap_or(""),
+        )
+    }
+}
+
+/// The identity currently stored on the session.
+fn stored_identity() -> Identity {
+    session_cell()
+        .lock()
+        .ok()
+        .and_then(|s| s.clone())
+        .map(|s| Identity {
+            session_index: s.session_index,
+            delegated_session_id: s.delegated_session_id,
+        })
+        .unwrap_or_default()
+}
+
+/// Read the active identity out of a freshly-served youtube.com page.
+///
+/// WHY A PAGE FETCH RATHER THAN THE COOKIE JAR: the selected channel is not in the
+/// jar at all. YouTube renders it into the page's `ytcfg` as `DELEGATED_SESSION_ID`,
+/// and its own web client then echoes that back on every `youtubei/v1` call as
+/// `X-Goog-PageId`. The HTML is the only place the choice is legible, and it is
+/// where yt-dlp and youtube.js read it from too.
+///
+/// This is also why switching channels inside an in-app YouTube window (the `/join`
+/// membership panel has a full account switcher) changed nothing here: the switch is
+/// real and it does land in this profile, but it leaves no trace in the cookies.
+///
+/// Sent with COOKIES ONLY, deliberately. `auth_headers()` would attach the
+/// previously-stored `X-Goog-PageId`, YouTube would render the page for THAT
+/// channel, and the probe could then only ever confirm what it already believed.
+async fn probe_identity() -> Option<Identity> {
+    use crate::services::providers::youtube::json_str_after;
+
+    let cookies = {
+        let guard = session_cell().lock().ok()?;
+        let sess = guard.as_ref()?;
+        cookie_header(&sess.cookies)
+    };
+    let html = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .ok()?
+        .get(ORIGIN)
+        .header("User-Agent", UA)
+        .header("Cookie", cookies)
+        .send()
+        .await
+        .ok()?
+        .text()
+        .await
+        .ok()?;
+
+    let ident = identity_from_html(&html)?;
+    log::info!(
+        "[YouTube] identity: authuser={} channel={} (datasync={})",
+        ident.session_index.as_deref().unwrap_or("0"),
+        ident.delegated_session_id.as_deref().unwrap_or("primary"),
+        // `<delegated>||<primary>`, the cross-check on the two values above.
+        json_str_after(&html, "\"DATASYNC_ID\":\"").unwrap_or_default()
+    );
+    Some(ident)
+}
+
+/// The identity a served youtube.com page reports, or None if the page is not a
+/// signed-in one.
+///
+/// A rotted cookie set answers HTTP 200 with a signed-OUT page rather than a 401
+/// (the trap `recover_stale_session` exists for). Both ytcfg keys are simply absent
+/// there, so parsing it anyway would read as "primary channel, no brand account" and
+/// quietly wipe a correct stored identity. So a signed-out page is refused outright
+/// rather than believed.
+fn identity_from_html(html: &str) -> Option<Identity> {
+    use crate::services::providers::youtube::json_str_after;
+
+    if !html.contains("\"LOGGED_IN\":true") {
+        log::warn!("[YouTube] identity probe got a signed-out page; keeping the stored identity");
+        return None;
+    }
+    Some(Identity {
+        session_index: json_str_after(html, "\"SESSION_INDEX\":\"").filter(|s| !s.is_empty()),
+        delegated_session_id: json_str_after(html, "\"DELEGATED_SESSION_ID\":\"")
+            .filter(|s| !s.is_empty()),
+    })
+}
+
+/// Re-read the active identity and store it. True when it CHANGED.
+///
+/// The cached name and picture belong to whichever channel was active when they
+/// were fetched, so a change drops both: `account_identity()` short-circuits on a
+/// cached pair and would otherwise keep showing the old channel forever.
+pub async fn refresh_identity() -> bool {
+    let Some(next) = probe_identity().await else {
+        return false;
+    };
+    let before = stored_identity();
+    let changed = before.effective() != next.effective();
+    let mut updated = None;
+    if let Ok(mut guard) = session_cell().lock() {
+        if let Some(sess) = guard.as_mut() {
+            sess.session_index = next.session_index.clone();
+            sess.delegated_session_id = next.delegated_session_id.clone();
+            if changed {
+                sess.account_name = None;
+                sess.account_avatar = None;
+            }
+            updated = Some(sess.clone());
+        }
+    }
+    if let Some(sess) = updated {
+        persist(&sess);
+    }
+    if changed {
+        // Every moderation answer was computed AS THE OLD CHANNEL. Left in place they
+        // outlive the identity that earned them, and the app shows mod powers on a
+        // channel the newly-active channel has none on. `disconnect` has always
+        // cleared this for exactly this reason; a channel switch is the same event.
+        crate::services::providers::youtube::clear_moderation_cache();
+        log::info!(
+            "[YouTube] active channel changed: {} -> {}",
+            before.delegated_session_id.as_deref().unwrap_or("primary"),
+            next.delegated_session_id.as_deref().unwrap_or("primary")
+        );
+        // Two signals on purpose. The first repaints the connected-account chip
+        // (the name and face were just dropped as stale). The second is the one
+        // that matters: a brand channel has its OWN subscriptions, so the imported
+        // follow list now belongs to the wrong channel and has to be re-read.
+        crate::services::providers::emit_platform_account_changed(&["youtube"]);
+        if let Some(app) = crate::services::providers::app_handle() {
+            use tauri::Emitter;
+            let _ = app.emit("youtube-identity-changed", ());
+        }
+    }
+    changed
+}
+
+/// Re-read the signed-in profile AND the identity it now acts as, for after the
+/// user has had the chance to switch channels inside an in-app YouTube window.
+///
+/// Re-harvests first on purpose: an account switch can rewrite cookies in the
+/// profile, and probing with the old jar would then answer for the old account.
+/// True when the active identity actually changed.
+pub async fn resync_identity() -> bool {
+    if !is_connected() {
+        return false;
+    }
+    let before = stored_identity();
+    // `reharvest` ends with its own `refresh_identity`, so this covers both the
+    // "switch rewrote the cookies" and "switch is server-side only" cases.
+    reharvest().await;
+    stored_identity().effective() != before.effective()
 }
 
 /// Sign out: drop the cached/persisted session and wipe the YouTube webview profile
@@ -321,20 +547,34 @@ pub async fn connect() -> Result<()> {
         return Err(anyhow!("Sign-in was cancelled"));
     }
     let cookies = harvested.ok_or_else(|| anyhow!("YouTube sign-in wasn't completed"))?;
-    let mut sess = YouTubeSession {
+    let sess = YouTubeSession {
         cookies,
         account_name: None,
         account_avatar: None,
         complete: true,
+        session_index: None,
+        delegated_session_id: None,
     };
     // Store first so auth_headers() (used by the account-name fetch) sees the session.
     if let Ok(mut s) = session_cell().lock() {
-        *s = Some(sess.clone());
-    }
-    sess.account_name = fetch_account_name().await;
-    persist(&sess);
-    if let Ok(mut s) = session_cell().lock() {
         *s = Some(sess);
+    }
+    // WHICH channel this session acts as, before anything asks the account menu who
+    // it is. A brand account answers that question differently, and the name we show
+    // has to be the one whose subscriptions we are about to import.
+    refresh_identity().await;
+    // Both of the calls above write to the STORED session, so build the persisted
+    // copy from that rather than from a local one that never saw either write.
+    let name = fetch_account_name().await;
+    let mut updated = None;
+    if let Ok(mut s) = session_cell().lock() {
+        if let Some(sess) = s.as_mut() {
+            sess.account_name = name;
+            updated = Some(sess.clone());
+        }
+    }
+    if let Some(sess) = updated {
+        persist(&sess);
     }
     crate::services::providers::emit_platform_account_changed(&["youtube"]);
     Ok(())
@@ -418,6 +658,15 @@ pub fn start_reharvest_daemon() {
         // The first interval tick fires immediately; skip it so app start doesn't
         // spawn a harvest webview alongside everything else that is launching.
         tick.tick().await;
+        // The identity probe is ONE page fetch, not a webview, so unlike the
+        // re-harvest it is cheap enough to run at launch — and it has to run there.
+        // A session that signed in before the app read `DELEGATED_SESSION_ID` at all
+        // is still acting as the wrong channel, and waiting a full day to notice is
+        // the difference between "fixed on update" and "fixed tomorrow".
+        tokio::time::sleep(Duration::from_secs(20)).await;
+        if is_connected() {
+            refresh_identity().await;
+        }
         loop {
             tick.tick().await;
             if !is_connected() {
@@ -602,7 +851,7 @@ fn largest_thumbnail_url(v: &serde_json::Value) -> Option<String> {
     }
     let mut best = None;
     walk(v, &mut best, 0);
-    best.map(|(_, url)| url)
+    best.map(|(_, url)| crate::services::providers::youtube::absolutize_url(&url))
 }
 
 /// Recursively pull `activeAccountHeaderRenderer.accountName` out of the account-menu
@@ -688,12 +937,20 @@ pub async fn reharvest() -> bool {
     for _ in 0..30 {
         if let Ok(map) = fetch_cookies_from_window(&app, HARVEST_WINDOW_LABEL, &[]).await {
             if sapisid(&map).is_some() && map.contains_key("APISID") {
+                let prev = stored_identity();
                 let sess = YouTubeSession {
                     cookies: map,
-                    // A re-harvest replaces the cookies, not the identity.
+                    // Carried forward only provisionally. The identity probe below
+                    // drops both the moment it sees the active channel has changed,
+                    // which is exactly what a re-harvest after an in-app account
+                    // switch has to notice. This used to be the end of the story,
+                    // commented "a re-harvest replaces the cookies, not the
+                    // identity", and that is why a switch never showed up.
                     account_name: account_name(),
                     account_avatar: account_avatar(),
                     complete: true,
+                    session_index: prev.session_index,
+                    delegated_session_id: prev.delegated_session_id,
                 };
                 persist(&sess);
                 if let Ok(mut s) = session_cell().lock() {
@@ -707,6 +964,11 @@ pub async fn reharvest() -> bool {
     }
     if let Some(window) = app.get_webview_window(HARVEST_WINDOW_LABEL) {
         let _ = window.destroy();
+    }
+    if found {
+        // Fresh cookies in hand, ask YouTube who this session now acts as. Nothing
+        // else notices a channel switch: it leaves the jar untouched.
+        refresh_identity().await;
     }
     found
 }
@@ -949,5 +1211,86 @@ mod account_photo_tests {
     #[test]
     fn no_photo_anywhere_is_none() {
         assert_eq!(find_account_photo(&json!({ "unrelated": { "x": 1 } })), None);
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    /// Shapes taken from real ytcfg blobs. The signed-out one was probed live on
+    /// 2026-09-18: note that `DATASYNC_ID` is present even there, with the right
+    /// half of its `<delegated>||<primary>` split empty.
+    const SIGNED_OUT: &str = r#"{"DATASYNC_ID":"V5c2f44d1||","LOGGED_IN":false,"INNERTUBE_CONTEXT_CLIENT_VERSION":"2.20260918.00.00"}"#;
+    const PRIMARY: &str = r#"{"LOGGED_IN":true,"SESSION_INDEX":"0","DATASYNC_ID":"||117440512345"}"#;
+    const BRAND: &str = r#"{"LOGGED_IN":true,"SESSION_INDEX":"0","DELEGATED_SESSION_ID":"117440512999","DATASYNC_ID":"117440512999||117440512345"}"#;
+    const SECOND_ACCOUNT: &str = r#"{"LOGGED_IN":true,"SESSION_INDEX":"2","DATASYNC_ID":"||117440599999"}"#;
+
+    /// The failure that shipped: nothing read the delegated id, so every call went
+    /// out as the Google account's own primary channel.
+    #[test]
+    fn a_brand_channel_is_read_off_the_page() {
+        let id = identity_from_html(BRAND).expect("a signed-in page has an identity");
+        assert_eq!(id.delegated_session_id.as_deref(), Some("117440512999"));
+        assert_eq!(id.session_index.as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn the_primary_channel_has_no_delegated_id() {
+        let id = identity_from_html(PRIMARY).expect("a signed-in page has an identity");
+        assert_eq!(id.delegated_session_id, None, "primary is the ABSENCE of one");
+        assert_eq!(id.effective(), ("0", ""));
+    }
+
+    /// A multi-login profile: the header used to be hardcoded "0", which pinned
+    /// every request to the first account no matter which one was chosen.
+    #[test]
+    fn a_second_google_account_keeps_its_index() {
+        let id = identity_from_html(SECOND_ACCOUNT).expect("signed in");
+        assert_eq!(id.effective(), ("2", ""));
+    }
+
+    /// A stale cookie set answers 200 with a signed-out page. Believing it would
+    /// wipe a correct stored identity and silently demote the user to their
+    /// primary channel, which is the exact bug this all exists to fix.
+    #[test]
+    fn a_signed_out_page_is_refused_rather_than_parsed() {
+        assert!(identity_from_html(SIGNED_OUT).is_none());
+    }
+
+    /// An install that predates any of this stores None/None. A user sitting on
+    /// their primary channel probes as Some("0")/None. Those are the same
+    /// identity, and calling it a switch would make every existing install
+    /// re-import its follow list once for nothing.
+    #[test]
+    fn an_unprobed_session_does_not_look_like_a_switch() {
+        let never_probed = Identity::default();
+        let probed_primary = identity_from_html(PRIMARY).unwrap();
+        assert_ne!(
+            never_probed, probed_primary,
+            "the raw Options genuinely differ"
+        );
+        assert_eq!(
+            never_probed.effective(),
+            probed_primary.effective(),
+            "but the identity they describe is the same one"
+        );
+    }
+
+    /// The case that has to survive normalisation: a real switch.
+    #[test]
+    fn switching_to_a_brand_channel_is_a_change() {
+        let from = identity_from_html(PRIMARY).unwrap();
+        let to = identity_from_html(BRAND).unwrap();
+        assert_ne!(from.effective(), to.effective());
+    }
+
+    /// Absent and empty-string mean the same thing, and neither may become an
+    /// `X-Goog-PageId: ` header: the value is omitted, not blanked.
+    #[test]
+    fn an_empty_delegated_id_reads_as_absent() {
+        let empty = r#"{"LOGGED_IN":true,"SESSION_INDEX":"0","DELEGATED_SESSION_ID":""}"#;
+        let id = identity_from_html(empty).expect("signed in");
+        assert_eq!(id.delegated_session_id, None);
     }
 }

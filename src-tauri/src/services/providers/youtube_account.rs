@@ -134,7 +134,9 @@ fn largest_thumbnail(node: &Value) -> Option<String> {
     }
     let mut best = None;
     walk(node, &mut best, 0);
-    best.map(|(_, url)| url)
+    // The subscriptions feed hands these over protocol-relative; stored raw they are
+    // unloadable. See `youtube::absolutize_url`.
+    best.map(|(_, url)| super::youtube::absolutize_url(&url))
 }
 
 /// Read one node as a channel entry, or None if it isn't one.
@@ -234,6 +236,45 @@ mod tests {
         assert_eq!(subs.len(), 1);
         assert_eq!(subs[0].display_name, "TechLinked");
         assert_eq!(subs[0].handle.as_deref(), Some("@techlinked"));
+    }
+
+    /// The bug that emptied the Following list of pictures: `FEchannels` returns
+    /// avatars PROTOCOL-RELATIVE, and stored raw they resolve against the app's own
+    /// origin instead of https, so the webview drew a broken image for all but the
+    /// handful that came from the absolute fallback path.
+    #[test]
+    fn a_protocol_relative_avatar_is_stored_absolute() {
+        let v = json!({ "contents": [ { "channelRenderer": {
+            "title": { "simpleText": "Some Channel" },
+            "navigationEndpoint": { "browseEndpoint": {
+                "browseId": "UCXuqSBlHAE6Xw-yeJA0Tunw"
+            } },
+            "thumbnail": { "thumbnails": [
+                { "url": "//yt3.googleusercontent.com/small=s88", "width": 88 },
+                { "url": "//yt3.googleusercontent.com/big=s176", "width": 176 }
+            ] }
+        } } ] });
+        let subs = channels_in(&v);
+        assert_eq!(subs.len(), 1);
+        assert_eq!(
+            subs[0].avatar.as_deref(),
+            Some("https://yt3.googleusercontent.com/big=s176"),
+            "the largest thumbnail, with a scheme on it"
+        );
+    }
+
+    /// The watch-side shape is already absolute and must not be rewritten.
+    #[test]
+    fn an_absolute_avatar_survives_the_import_unchanged() {
+        let v = json!({ "contents": [ { "channelRenderer": {
+            "title": { "simpleText": "Absolute" },
+            "navigationEndpoint": { "browseEndpoint": { "browseId": "UCdBK94H6oZT2Q7l0-b0xmMg" } },
+            "thumbnail": { "thumbnails": [ { "url": "https://yt3.ggpht.com/ytc/x=s176", "width": 176 } ] }
+        } } ] });
+        assert_eq!(
+            channels_in(&v)[0].avatar.as_deref(),
+            Some("https://yt3.ggpht.com/ytc/x=s176")
+        );
     }
 
     #[test]

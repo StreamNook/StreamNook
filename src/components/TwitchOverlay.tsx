@@ -5,6 +5,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Lock, X } from 'lucide-react';
 import { Logger } from '../utils/logger';
 import { useAppStore } from '../stores/AppStore';
+import { useFollowsStore } from '../stores/followsStore';
 
 // In-app Twitch overlay (login, drops sign-in, subscribe). React owns the chrome
 // (the read-only address bar, and for subscribe the centered panel); the Twitch
@@ -99,6 +100,12 @@ export default function TwitchOverlay() {
   const [tick, setTick] = useState(0);
   const mountedLabelRef = useRef<string | null>(null);
   const lastKeyRef = useRef('');
+  // The live overlay, for the close handler: it needs the PROFILE of the overlay
+  // that is going away, and a `setOverlay` updater must stay a pure function.
+  const overlayRef = useRef<OverlayState | null>(null);
+  useEffect(() => {
+    overlayRef.current = overlay;
+  }, [overlay]);
 
   // Backend events: open a new overlay, live URL updates, and dismissal.
   useEffect(() => {
@@ -121,7 +128,23 @@ export default function TwitchOverlay() {
     }).then((u) => uns.push(u));
 
     listen<{ label: string }>('twitch-overlay-close', (e) => {
+      const closing = overlayRef.current;
       setOverlay((cur) => (cur && cur.label === e.payload.label ? null : cur));
+      // YouTube puts a full account switcher in every page it serves, including the
+      // sign-in overlay and the /join membership panel, and both run in the app's
+      // own YouTube profile. Switching channel there is real but leaves nothing in
+      // the cookie jar, so Rust has to go and re-read it. A brand account has its
+      // OWN subscriptions, so a change means re-importing the follow list.
+      if (closing?.label === e.payload.label && closing.profile === 'youtube-account') {
+        void invoke<boolean>('youtube_refresh_identity')
+          .then(async (changed) => {
+            if (!changed) return;
+            Logger.info('[overlay] YouTube channel switched; re-importing subscriptions');
+            const { imported } = await useFollowsStore.getState().syncYouTube();
+            Logger.info(`[overlay] re-imported ${imported} YouTube subscription(s)`);
+          })
+          .catch((err) => Logger.warn('[overlay] YouTube identity refresh failed:', err));
+      }
     }).then((u) => uns.push(u));
 
     return () => uns.forEach((u) => u());

@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Loader2, Unlink } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
+import { Loader2, Unlink, Users } from 'lucide-react';
 import { ProviderLogo } from '../ProviderLogo';
 import { PROVIDERS } from '../../types/providers';
 import { usePlatformAccountStore } from '../../stores/platformAccountStore';
@@ -127,15 +128,34 @@ function PlatformRow({ provider }: { provider: PlatformId }) {
             </button>
           </div>
         ) : (
-          <Tooltip content={`Disconnect ${meta.label}`}>
-            <button
-              onClick={() => setConfirmDisconnect(true)}
-              aria-label={`Disconnect ${meta.label}`}
-              className="p-1.5 text-textMuted hover:text-red-400 hover:bg-red-500/10 rounded-md transition-colors flex-shrink-0"
-            >
-              <Unlink size={15} />
-            </button>
-          </Tooltip>
+          <div className="flex items-center gap-0.5 flex-shrink-0">
+            {/* A YouTube account can own several channels, and each one has its own
+                subscriptions. Sign-in can only ever land on the default one, so
+                without this the other channels are unreachable. Quiet and secondary:
+                most people have exactly one and will never press it. */}
+            {provider === 'youtube' && (
+              <Tooltip content="Switch channel (each one has its own subscriptions)">
+                <button
+                  onClick={() => {
+                    void invoke('open_youtube_channel_switcher').catch(() => {});
+                  }}
+                  aria-label="Switch YouTube channel"
+                  className="p-1.5 text-textMuted hover:text-textPrimary hover:bg-white/[0.05] rounded-md transition-colors"
+                >
+                  <Users size={15} />
+                </button>
+              </Tooltip>
+            )}
+            <Tooltip content={`Disconnect ${meta.label}`}>
+              <button
+                onClick={() => setConfirmDisconnect(true)}
+                aria-label={`Disconnect ${meta.label}`}
+                className="p-1.5 text-textMuted hover:text-red-400 hover:bg-red-500/10 rounded-md transition-colors"
+              >
+                <Unlink size={15} />
+              </button>
+            </Tooltip>
+          </div>
         )
       ) : (
         <button

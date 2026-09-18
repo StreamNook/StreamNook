@@ -238,6 +238,19 @@ pub async fn youtube_account_name() -> Option<String> {
     crate::services::youtube_auth_service::account_name_lazy().await
 }
 
+/// Re-read WHICH YouTube channel the signed-in session acts as. True when it
+/// changed, so the caller can re-import that channel's subscriptions.
+///
+/// Every in-app YouTube window (the sign-in overlay, and the `/join` membership
+/// panel) opens youtube.com in the app's own YouTube profile, and YouTube puts a
+/// full account switcher in both. A user with a brand account can therefore change
+/// channel in there, and that switch leaves NO trace in the cookie jar, so nothing
+/// in the app noticed it. Called when such a window closes.
+#[tauri::command]
+pub async fn youtube_refresh_identity() -> bool {
+    crate::services::youtube_auth_service::resync_identity().await
+}
+
 /// Delete a single YouTube chat message (`message_id` is the live-chat item id).
 /// `channel` is the source identifier (the same key the chat slice uses).
 #[tauri::command]
