@@ -5,9 +5,6 @@ node_modules/
 dist/
 src-tauri/target/
 
-# Dev-only schema scraper + its scraped reference dumps (regenerable, not shipped)
-/tools/
-
 # Tauri auto-generated schemas (regenerated on every build)
 src-tauri/gen/schemas/
 scripts/*
@@ -24,13 +21,6 @@ docs/*
 # plugins index - not bundled with or pushed to the app repo). Root-level only,
 # so src/components/drops and docs/plugins are unaffected.
 /plugins/
-
-# Streamlink portable (for development - bundled in production releases)
-/streamlink/
-
-# Update artifacts
-update_streamnook.bat
-StreamNook_new.exe
 
 # Release artifacts (only uploaded to GitHub releases, not committed)
 *.7z
