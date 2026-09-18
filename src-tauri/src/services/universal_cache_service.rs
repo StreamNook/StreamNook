@@ -669,7 +669,7 @@ pub async fn cache_item(
 
 /// Parse date string in format "DD Month YYYY" to timestamp for sorting
 fn parse_date_to_timestamp(date_str: &str) -> i64 {
-    use chrono::{Datelike, NaiveDate, Timelike};
+    use chrono::{NaiveDate};
 
     // Try to parse "DD Month YYYY" format
     let months = [

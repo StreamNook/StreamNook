@@ -2,7 +2,6 @@
 // Fetches all available badges and paints from 7TV v4 GraphQL API
 
 use log::debug;
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 const SEVENTV_GQL_URL: &str = "https://7tv.io/v4/gql";

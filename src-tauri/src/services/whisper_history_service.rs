@@ -1,5 +1,4 @@
-use log::{debug, error};
-use reqwest::Client;
+use log::{error};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 

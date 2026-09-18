@@ -3,7 +3,6 @@ use cosmic_text::{
     Align, Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, Style, SwashCache, Weight,
 };
 use std::sync::Mutex;
-use tauri::State;
 
 pub struct LayoutService {
     font_system: Mutex<FontSystem>,

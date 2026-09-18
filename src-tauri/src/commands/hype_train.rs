@@ -1,6 +1,5 @@
 use log::debug;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT};
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

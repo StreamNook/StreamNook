@@ -6,7 +6,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use base64::prelude::{Engine as _, BASE64_STANDARD};
-use log::{debug, warn};
+use log::{warn};
 use once_cell::sync::OnceCell;
 use std::collections::HashMap;
 use std::sync::Mutex;

@@ -1,4 +1,3 @@
-use log::debug;
 use lru::LruCache;
 use once_cell::sync::Lazy;
 use std::env;
@@ -6,7 +5,6 @@ use std::num::NonZeroUsize;
 use std::sync::Mutex;
 use tauri::command;
 use tauri::window::Window;
-use tauri::Manager;
 
 // In-memory cache for emoji images (codepoint -> base64 data URL).
 // LRU-bounded at 256 entries (~5 KB per entry → ~1.3 MB cap). Twitch chat uses

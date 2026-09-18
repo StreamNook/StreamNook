@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use log::debug;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;

@@ -7,7 +7,6 @@ use crate::services::cookie_jar_service::CookieJarService;
 use anyhow::Result;
 use chrono::{Duration as ChronoDuration, Utc};
 use log::{debug, error};
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;

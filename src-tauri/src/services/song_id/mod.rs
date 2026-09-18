@@ -13,7 +13,7 @@ mod odesli;
 mod shazam;
 mod signature_format;
 
-pub use shazam::{Provider, SongMatch};
+pub use shazam::{SongMatch};
 
 use algorithm::SignatureGenerator;
 

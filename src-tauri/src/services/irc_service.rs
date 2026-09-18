@@ -17,15 +17,11 @@ use crate::services::irc_transport::{self, IrcTransport, IrcWriter};
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, warn};
-use rand::Rng;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use tauri::Emitter;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
 use tokio::sync::{broadcast, Mutex};
 use warp::Filter;
 

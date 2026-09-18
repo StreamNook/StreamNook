@@ -31,7 +31,7 @@
 
 use crate::services::providers::youtube_media::HighRendition;
 use crate::services::webm_fmp4::{self, Parsed, Vp9Config};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use once_cell::sync::Lazy;
 use rand::RngExt;

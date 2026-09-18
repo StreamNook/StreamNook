@@ -573,7 +573,6 @@ pub async fn place_prediction(
     channel_id: String,
 ) -> Result<serde_json::Value, String> {
     use crate::services::drops_auth_service::DropsAuthService;
-    use reqwest::Client;
     use serde_json::json;
 
     // Use the mobile/Android client ID for GQL queries
@@ -766,7 +765,6 @@ pub async fn get_active_prediction(
     channel_login: String,
 ) -> Result<Option<serde_json::Value>, String> {
     use crate::services::drops_auth_service::DropsAuthService;
-    use reqwest::Client;
     use serde_json::json;
 
     const CLIENT_ID: &str = env!("TWITCH_ANDROID_CLIENT_ID");
@@ -908,7 +906,6 @@ pub async fn get_channel_points_for_channel(
     channel_login: String,
 ) -> Result<serde_json::Value, String> {
     use crate::services::drops_auth_service::DropsAuthService;
-    use reqwest::Client;
     use serde_json::json;
 
     // Use the web client ID for this read query.
@@ -1162,7 +1159,6 @@ pub async fn get_channel_rewards(
     channel_id: String, // Actually channel login (username)
 ) -> Result<Vec<crate::models::drops::ChannelReward>, String> {
     use crate::services::drops_auth_service::DropsAuthService;
-    use reqwest::Client;
     use serde_json::json;
 
     // Use mobile client ID for persisted queries (same as predictions)
@@ -1249,7 +1245,6 @@ pub async fn redeem_channel_reward(
     prompt: Option<String>,
 ) -> Result<crate::models::drops::RedemptionResult, String> {
     use crate::services::drops_auth_service::DropsAuthService;
-    use reqwest::Client;
     use serde_json::json;
 
     // Mirrors send_highlighted_message: Android client ID + Android-flow token + dashless IDs.
@@ -1419,7 +1414,6 @@ pub async fn send_highlighted_message(
     cost: i32,
 ) -> Result<crate::models::drops::RedemptionResult, String> {
     use crate::services::drops_auth_service::DropsAuthService;
-    use reqwest::Client;
     use serde_json::json;
 
     // Use mobile client ID - less strict integrity requirements than web
@@ -1545,7 +1539,6 @@ pub async fn unlock_random_emote(
     cost: i32,
 ) -> Result<crate::models::drops::RedemptionResult, String> {
     use crate::services::drops_auth_service::DropsAuthService;
-    use reqwest::Client;
     use serde_json::json;
 
     // Use mobile client ID - less strict integrity requirements
@@ -1711,7 +1704,6 @@ pub struct ModifiableEmote {
 #[tauri::command]
 pub async fn get_modifiable_emotes(channel_id: String) -> Result<Vec<ModifiableEmote>, String> {
     use crate::services::drops_auth_service::DropsAuthService;
-    use reqwest::Client;
     use serde_json::json;
 
     // Use mobile Android client ID
@@ -1851,7 +1843,6 @@ pub async fn unlock_modified_emote(
     cost: i32,
 ) -> Result<crate::models::drops::RedemptionResult, String> {
     use crate::services::drops_auth_service::DropsAuthService;
-    use reqwest::Client;
     use serde_json::json;
 
     // Use mobile Android client ID
@@ -2004,7 +1995,6 @@ pub async fn unlock_chosen_emote(
     cost: i32,
 ) -> Result<crate::models::drops::RedemptionResult, String> {
     use crate::services::drops_auth_service::DropsAuthService;
-    use reqwest::Client;
     use serde_json::json;
 
     // Use mobile Android client ID

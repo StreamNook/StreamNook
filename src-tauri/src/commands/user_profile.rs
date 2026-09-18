@@ -1,4 +1,3 @@
-use crate::services::badge_service::BadgeService;
 use crate::services::twitch_service::TwitchService;
 use log::debug;
 use serde::{Deserialize, Serialize};

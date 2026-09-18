@@ -2,7 +2,6 @@ use anyhow::Result;
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error};
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};

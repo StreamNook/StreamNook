@@ -10,7 +10,7 @@ use rand::RngExt;
 use reqwest::Client;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tauri::{Emitter, Manager};
+use tauri::{Emitter};
 use tokio::sync::Mutex;
 use warp::Filter;
 

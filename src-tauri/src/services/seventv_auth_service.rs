@@ -1,7 +1,6 @@
 use anyhow::Result;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use log::debug;
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;

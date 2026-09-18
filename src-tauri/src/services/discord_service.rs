@@ -14,7 +14,6 @@ use tokio::sync::Mutex;
 // --- New Imports for matching logic ---
 use regex::Regex;
 use std::collections::HashSet;
-use strsim::normalized_levenshtein;
 // --- End New Imports ---
 
 // Discord asset keys - these must match the asset names uploaded to Discord Developer Portal

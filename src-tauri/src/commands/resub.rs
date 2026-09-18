@@ -6,7 +6,6 @@
 use crate::services::drops_auth_service::DropsAuthService;
 use log::debug;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

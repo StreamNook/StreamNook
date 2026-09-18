@@ -23,7 +23,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex, RwLock as TokioRwLock};
 
 use process::SupCmd;
-use registry::{InstalledPlugin, Registry, SourceEntry};
+use registry::{Registry, SourceEntry};
 
 /// What the user answered on a consent prompt.
 #[derive(Debug, Clone, Copy)]

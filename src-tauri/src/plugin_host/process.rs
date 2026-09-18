@@ -12,8 +12,8 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::Emitter;
-use tokio::io::{AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin};
+use tokio::io::{BufReader};
+use tokio::process::{ChildStdin};
 use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
 use tokio::time::timeout;
 
