@@ -70,6 +70,23 @@ const STEP_CLEAR_MS = 6000;
  *  lifetime and must not be wiped the instant it appears. */
 const PROGRESS_STEPS = ['Waiting for you to sign in…', 'Getting your channels…'];
 
+/**
+ * What to tell the user when a connect did not finish.
+ *
+ * Prefers the backend's OWN sentence. It is the only thing that knows which step
+ * failed, and the flat "Sign-in was not completed" this replaced described every
+ * outcome identically, including the one where the sign-in window never opened,
+ * which is indistinguishable from a dead button. Anything that does not read as
+ * a sentence for a person falls back to the generic line rather than putting an
+ * error code on screen.
+ */
+const signInReason = (e: unknown): string => {
+  const raw = String((e as { message?: string } | null)?.message ?? e).trim();
+  if (!raw || raw === 'undefined' || raw.length > 160) return 'Sign-in was not completed';
+  if (/cancel/i.test(raw)) return 'Sign-in was cancelled';
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+};
+
 export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) => {
   const patch = (provider: PlatformId, next: Partial<PlatformAccountState>) =>
     set((s) => ({ [provider]: { ...s[provider], ...next } }) as Partial<PlatformAccountStore>);
@@ -177,10 +194,12 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
         if (step && PROGRESS_STEPS.includes(step)) patch(provider, { step: null });
       } catch (e) {
         Logger.warn(`[platform] ${provider} sign-in failed:`, e);
-        transientStep(
-          provider,
-          String(e).includes('cancelled') ? 'Sign-in was cancelled' : 'Sign-in was not completed',
-        );
+        const reason = signInReason(e);
+        transientStep(provider, reason);
+        // Not every surface shows `step`. The in-composer pill is a bare button
+        // and the Home empty state shows nothing at all, so a failure there read
+        // as a click that did nothing. The toast reaches all of them.
+        useAppStore.getState().addToast(reason, 'error');
       }
       await refreshOne(provider);
       // The follow list is only visible once connected, so paint it now rather

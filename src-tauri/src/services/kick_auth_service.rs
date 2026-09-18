@@ -4,9 +4,15 @@
 //! vars baked from `.env` (via build.rs), read here with `option_env!` so a build
 //! without them still compiles — `connect()` just reports "not configured".
 //!
-//! Flow: open the system browser to id.kick.com consent, catch the redirect on a
-//! localhost:3000 loopback (the app's registered redirect URI), exchange the code
-//! at id.kick.com/oauth/token (id + secret + PKCE verifier), cache the token.
+//! Flow: open id.kick.com consent, catch the redirect to the app's one registered
+//! redirect URI (`http://localhost:3000/callback`), exchange the code at
+//! id.kick.com/oauth/token (id + secret + PKCE verifier), cache the token.
+//!
+//! The redirect arrives by one of two routes. In-app (Settings, and every other
+//! Connect button) consent runs in our own overlay window, so `capture_redirect`
+//! reads the code straight off the navigation and needs no socket at all. Only
+//! `connect()`, which opens the system browser, still depends on binding
+//! localhost:3000. See `PendingAuth` for why that distinction is load-bearing.
 //!
 //! First slice keeps the token IN MEMORY (per session); keyring persistence like
 //! the Twitch tokens is an easy follow-up.
@@ -20,6 +26,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 
 const CLIENT_ID: Option<&str> = option_env!("KICK_APP_CLIENT_ID");
@@ -286,18 +293,94 @@ struct TokenResponse {
 }
 
 /// Run the full Authorization-Code + PKCE flow and cache the resulting token.
-/// An authorization in flight: the bound loopback plus the PKCE material the
-/// token exchange will need. Split out from `connect` so the consent page can be
-/// opened somewhere other than the system browser — an in-app webview, say —
-/// without duplicating any of the protocol.
+/// An authorization in flight: the PKCE material the token exchange will need,
+/// plus the two routes the authorization code can take to reach us. Split out
+/// from `connect` so the consent page can be opened somewhere other than the
+/// system browser (an in-app webview, say) without duplicating any of the
+/// protocol.
+///
+/// The loopback is NOT a precondition for the in-app flow, and used to be. Kick
+/// registers one fixed redirect, `http://localhost:3000/callback`, and port 3000
+/// is among the most commonly occupied ports on a Windows desktop: any Node dev
+/// server owns it, and the reserved ranges Hyper-V, WSL and Docker carve out
+/// swallow it even with nothing listening. Binding it FIRST meant those machines
+/// failed before the sign-in window was ever asked for, so the button looked
+/// dead and the log said nothing. The overlay's own navigation handler now
+/// delivers the code through `redirect`, which needs no socket; the loopback
+/// stays for `connect`, where consent opens in the system browser and there is
+/// no window of ours for the redirect to land in.
 pub struct PendingAuth {
-    listener: TcpListener,
+    listener: Option<TcpListener>,
+    redirect: oneshot::Receiver<(String, String)>,
     verifier: String,
     state: String,
 }
 
-/// Bind the loopback and build the consent URL. The caller decides where to open
-/// it, then hands the `PendingAuth` back to `finish_auth`.
+/// Where the in-app sign-in overlay hands its redirect over. Parked by
+/// `begin_auth`, taken by `capture_redirect`.
+static REDIRECT: OnceLock<Mutex<Option<oneshot::Sender<(String, String)>>>> = OnceLock::new();
+
+fn redirect_cell() -> &'static Mutex<Option<oneshot::Sender<(String, String)>>> {
+    REDIRECT.get_or_init(|| Mutex::new(None))
+}
+
+/// Take the authorization code off a navigation to our registered redirect URI.
+///
+/// Called from the Kick sign-in overlay's navigation handler, on the UI thread,
+/// so it only locks and sends and never waits. `true` means it consumed the
+/// redirect, which is the caller's signal to CANCEL that navigation: nothing is
+/// necessarily listening on localhost:3000, and letting it through would replace
+/// the sign-in page with a connection error at the very last step.
+pub fn capture_redirect(url: &str) -> bool {
+    let Some(rest) = url
+        .strip_prefix("http://localhost:3000/callback")
+        .or_else(|| url.strip_prefix("http://127.0.0.1:3000/callback"))
+    else {
+        return false;
+    };
+    let Some(query) = rest.strip_prefix('?') else {
+        return false;
+    };
+    let (code, state) = code_and_state(query);
+    if code.is_empty() {
+        return false;
+    }
+    let Ok(mut slot) = redirect_cell().lock() else {
+        return false;
+    };
+    match slot.take() {
+        Some(tx) => {
+            let _ = tx.send((code, state));
+            true
+        }
+        // Nothing is waiting on this. Let the navigation run rather than
+        // cancelling something this flow does not own.
+        None => false,
+    }
+}
+
+/// Pull `code` and `state` out of a urlencoded query string.
+fn code_and_state(query: &str) -> (String, String) {
+    let decode = |v: &str| {
+        urlencoding::decode(v)
+            .map(|c| c.into_owned())
+            .unwrap_or_else(|_| v.to_string())
+    };
+    let mut code = String::new();
+    let mut state = String::new();
+    for pair in query.split('&') {
+        let mut kv = pair.splitn(2, '=');
+        match (kv.next(), kv.next()) {
+            (Some("code"), Some(v)) => code = decode(v),
+            (Some("state"), Some(v)) => state = decode(v),
+            _ => {}
+        }
+    }
+    (code, state)
+}
+
+/// Arm both redirect routes and build the consent URL. The caller decides where
+/// to open it, then hands the `PendingAuth` back to `finish_auth`.
 pub async fn begin_auth() -> Result<(String, PendingAuth)> {
     let cid = client_id().ok_or_else(|| {
         anyhow!("Kick app not configured — KICK_APP_CLIENT_ID missing from .env at build time")
@@ -308,10 +391,25 @@ pub async fn begin_auth() -> Result<(String, PendingAuth)> {
     let challenge = b64url(&Sha256::digest(verifier.as_bytes()));
     let state = rand_b64(16);
 
-    // Bind BEFORE the consent page opens so the redirect can't race us.
-    let listener = TcpListener::bind("127.0.0.1:3000")
-        .await
-        .map_err(|e| anyhow!("couldn't bind localhost:3000 for the Kick login redirect: {}", e))?;
+    // Arm BEFORE the consent page opens so the redirect can't race us. Replacing
+    // the slot drops any previous attempt's sender, which is what cancels it.
+    let (tx, redirect) = oneshot::channel();
+    if let Ok(mut slot) = redirect_cell().lock() {
+        *slot = Some(tx);
+    }
+
+    // A bonus, not a requirement: see `PendingAuth`. Losing it costs the system
+    // browser flow, never the in-app one, so it must not cost the user a return.
+    let listener = match TcpListener::bind("127.0.0.1:3000").await {
+        Ok(l) => Some(l),
+        Err(e) => {
+            log::warn!(
+                "[Kick] localhost:3000 is unavailable ({}); taking the redirect from the sign-in window instead",
+                e
+            );
+            None
+        }
+    };
 
     let auth_url = format!(
         "{}?response_type=code&client_id={}&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
@@ -326,31 +424,55 @@ pub async fn begin_auth() -> Result<(String, PendingAuth)> {
         auth_url,
         PendingAuth {
             listener,
+            redirect,
             verifier,
             state,
         },
     ))
 }
 
-/// Wait for the redirect, exchange the code, and store the token.
+/// Wait for the redirect on whichever route delivers it, exchange the code, and
+/// store the token.
 pub async fn finish_auth(pending: PendingAuth) -> Result<()> {
     let cid = client_id().ok_or_else(|| anyhow!("Kick app not configured"))?;
     let secret = client_secret().ok_or_else(|| anyhow!("Kick app not configured"))?;
 
-    let (code, got_state) = timeout(
-        Duration::from_secs(180),
-        accept_redirect(pending.listener),
-    )
-    .await
-    .map_err(|_| anyhow!("Kick login timed out (no redirect received)"))??;
-    if got_state != pending.state {
-        return Err(anyhow!("Kick login state mismatch — aborting"));
+    let PendingAuth {
+        listener,
+        mut redirect,
+        verifier,
+        state,
+    } = pending;
+    let closed = || anyhow!("The Kick sign-in window closed before it finished.");
+    let wait = async move {
+        match listener {
+            Some(listener) => tokio::select! {
+                got = accept_redirect(listener) => got,
+                got = &mut redirect => got.map_err(|_| closed()),
+            },
+            None => redirect.await.map_err(|_| closed()),
+        }
+    };
+
+    let (code, got_state) = timeout(Duration::from_secs(180), wait)
+        .await
+        .map_err(|_| anyhow!("Kick login timed out (no redirect received)"))??;
+    if got_state != state {
+        return Err(anyhow!("Kick login state mismatch, aborting"));
     }
-    exchange_code(cid, secret, &pending.verifier, &code).await
+    exchange_code(cid, secret, &verifier, &code).await
 }
 
 pub async fn connect() -> Result<()> {
     let (auth_url, pending) = begin_auth().await?;
+    // The system browser has no navigation handler of ours, so here the loopback
+    // is the only route and its absence is fatal. Say which, and say where the
+    // flow that does not need it lives.
+    if pending.listener.is_none() {
+        return Err(anyhow!(
+            "Kick sign-in in your browser needs port 3000, which something else on this computer is using. Connect Kick from Settings instead, which does not need it."
+        ));
+    }
     open_in_browser(&auth_url)?;
     finish_auth(pending).await
 }
@@ -422,21 +544,8 @@ async fn accept_redirect(listener: TcpListener) -> Result<(String, String)> {
             .nth(1)
             .and_then(|rest| rest.split_whitespace().next())
             .unwrap_or("");
-        let mut code = String::new();
-        let mut state = String::new();
-        for pair in query.split('&') {
-            let mut kv = pair.splitn(2, '=');
-            match (kv.next(), kv.next()) {
-                (Some("code"), Some(v)) => {
-                    code = urlencoding::decode(v).map(|c| c.into_owned()).unwrap_or_else(|_| v.to_string())
-                }
-                (Some("state"), Some(v)) => {
-                    state = urlencoding::decode(v).map(|c| c.into_owned()).unwrap_or_else(|_| v.to_string())
-                }
-                _ => {}
-            }
-        }
-        let html = "<!doctype html><html><body style=\"font-family:system-ui,sans-serif;background:#0e0e10;color:#efeff1;text-align:center;padding-top:80px\"><h2>Kick connected to StreamNook ✓</h2><p>You can close this tab and return to the app.</p></body></html>";
+        let (code, state) = code_and_state(query);
+        let html ="<!doctype html><html><body style=\"font-family:system-ui,sans-serif;background:#0e0e10;color:#efeff1;text-align:center;padding-top:80px\"><h2>Kick connected to StreamNook ✓</h2><p>You can close this tab and return to the app.</p></body></html>";
         let resp = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             html.len(),
@@ -678,4 +787,66 @@ pub fn start_refresh_daemon() {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn code_and_state_reads_both_and_urldecodes() {
+        let (code, state) = code_and_state("code=abc%2F123&state=xy%3Dz");
+        assert_eq!(code, "abc/123");
+        assert_eq!(state, "xy=z");
+    }
+
+    #[test]
+    fn code_and_state_tolerates_extra_and_missing_params() {
+        let (code, state) = code_and_state("scope=user%3Aread&code=abc&session_state=9");
+        assert_eq!(code, "abc");
+        assert_eq!(state, "");
+    }
+
+    /// Only our registered redirect is ours to take. Cancelling anything else
+    /// would break the consent page itself, which navigates plenty on its way.
+    #[test]
+    fn capture_redirect_ignores_everything_that_is_not_the_callback() {
+        for url in [
+            "https://id.kick.com/oauth/authorize?code=abc",
+            "https://kick.com/login",
+            "http://localhost:3000/",
+            "http://localhost:3001/callback?code=abc",
+            "http://localhost:3000/callbackish?code=abc",
+            // The right URL with nothing on it is not a delivery.
+            "http://localhost:3000/callback",
+            "http://localhost:3000/callback?error=access_denied",
+        ] {
+            assert!(!capture_redirect(url), "should have ignored {url}");
+        }
+    }
+
+    /// One test, not three, because the arming slot is process-wide: split up,
+    /// cargo's parallel threads arm and disarm each other's expectations.
+    #[test]
+    fn capture_redirect_only_fires_for_an_armed_waiter() {
+        // Nothing armed means no authorization in flight, so the navigation
+        // belongs to whoever else wants it and has to run.
+        if let Ok(mut slot) = redirect_cell().lock() {
+            *slot = None;
+        }
+        assert!(!capture_redirect("http://localhost:3000/callback?code=abc&state=s"));
+
+        let (tx, rx) = oneshot::channel();
+        if let Ok(mut slot) = redirect_cell().lock() {
+            *slot = Some(tx);
+        }
+        assert!(capture_redirect("http://127.0.0.1:3000/callback?code=a%2Bb&state=st8"));
+        assert_eq!(
+            rx.blocking_recv().unwrap(),
+            ("a+b".to_string(), "st8".to_string())
+        );
+
+        // Consumed: a replayed redirect must not cancel a later navigation.
+        assert!(!capture_redirect("http://127.0.0.1:3000/callback?code=a%2Bb&state=st8"));
+    }
 }

@@ -417,10 +417,6 @@ pub async fn sign_in() -> Result<KickImportReport> {
     const LABEL: &str = "kick-login";
     let app = app_handle().ok_or_else(|| anyhow!("app handle not available for Kick sign-in"))?;
 
-    // Bind the loopback and build the consent URL up front, so the redirect can
-    // never arrive before something is listening for it.
-    let (auth_url, auth_pending) = crate::services::kick_auth_service::begin_auth().await?;
-
     // Hand the overlay the login page. React measures the app body and mounts the
     // webview at that rect; `kick-account` selects Kick's own cookie jar.
     crate::commands::twitch::emit_overlay_open_with(
@@ -430,7 +426,10 @@ pub async fn sign_in() -> Result<KickImportReport> {
         "fullbody",
         Some("kick-account"),
     )
-    .map_err(|e| anyhow!("couldn't open the Kick sign-in overlay: {}", e))?;
+    .map_err(|e| {
+        log::warn!("[Kick] could not ask for the sign-in window: {}", e);
+        anyhow!("The Kick sign-in window could not open.")
+    })?;
 
     // The overlay mounts asynchronously (Rust asks, React measures, Rust builds),
     // so wait for the window to exist before addressing it.
@@ -444,7 +443,8 @@ pub async fn sign_in() -> Result<KickImportReport> {
     }
     let win = win.ok_or_else(|| {
         crate::commands::twitch::dismiss_login_overlay(&app, LABEL);
-        anyhow!("Kick sign-in overlay never mounted")
+        log::warn!("[Kick] the sign-in overlay never mounted");
+        anyhow!("The Kick sign-in window could not open.")
     })?;
 
     // Leg 1: wait for the site session by polling the webview's cookie jar. That
@@ -477,13 +477,24 @@ pub async fn sign_in() -> Result<KickImportReport> {
     }
 
     // Leg 2: consent, in the SAME overlay. Already signed in, so this is usually
-    // one click, and the redirect lands on the loopback exactly as before.
-    if let Ok(url) = auth_url.parse() {
-        let _ = win.navigate(url);
-    }
-    match crate::services::kick_auth_service::finish_auth(auth_pending).await {
-        Ok(()) => log::info!("[Kick] OAuth complete (in-app)"),
-        Err(e) => log::warn!("[Kick] OAuth leg failed: {}", e),
+    // one click, and the window's navigation handler takes the redirect.
+    //
+    // Prepared HERE rather than before the window, which is the ordering that
+    // shipped the bug: `begin_auth` could fail, and failing before the emit meant
+    // the sign-in ended with no window ever appearing and nothing on screen to
+    // say why. Nothing above this line can fail for a reason the user could act
+    // on, so the window is now unconditional and only the consent leg is at risk.
+    match crate::services::kick_auth_service::begin_auth().await {
+        Ok((auth_url, auth_pending)) => {
+            if let Ok(url) = auth_url.parse() {
+                let _ = win.navigate(url);
+            }
+            match crate::services::kick_auth_service::finish_auth(auth_pending).await {
+                Ok(()) => log::info!("[Kick] OAuth complete (in-app)"),
+                Err(e) => log::warn!("[Kick] OAuth leg failed: {}", e),
+            }
+        }
+        Err(e) => log::warn!("[Kick] could not start the authorization leg: {}", e),
     }
 
     // Closing goes through the overlay's own dismissal so React tears down its
