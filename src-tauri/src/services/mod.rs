@@ -33,6 +33,10 @@ pub mod hls_projection;
 // Desktop-only: Discord Rich Presence (IPC to a running Discord client).
 #[cfg(desktop)]
 pub mod discord_service;
+// macOS supplies its own socket discovery; see the file header for why the
+// crate's Unix finder cannot locate Discord there.
+#[cfg(target_os = "macos")]
+pub mod discord_ipc_macos;
 pub mod drops_auth_service;
 pub mod drops_service;
 pub mod emoji_service;
@@ -60,6 +64,8 @@ pub mod resource_log;
 pub mod runtime_watchdog;
 pub mod secure_store;
 pub mod ui_hang_watchdog;
+pub mod window_aspect;
+pub mod media_glow;
 pub mod mod_log_storage_service;
 // Desktop-only: MultiNook multi-stream tiling is not part of the phone app.
 #[cfg(desktop)]

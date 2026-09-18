@@ -837,6 +837,29 @@ fn spa_url_report_script(window_label: &str, is_overlay: bool) -> String {
 #[tauri::command]
 pub fn report_login_popup_url(app: AppHandle, window_label: String, url: String) {
     use tauri::Emitter;
+
+    // The drops grant lands with its credential on the fragment. Take it here and
+    // return WITHOUT emitting: the overlay renders this url in a bar, and a token
+    // must never be painted on screen.
+    if window_label == "drops-login" {
+        if let Some(token) =
+            crate::services::drops_auth_service::DropsAuthService::access_token_from_redirect(&url)
+        {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let outcome =
+                    crate::services::drops_auth_service::DropsAuthService::store_access_token(token)
+                        .await;
+                dismiss_login_overlay(&app, "drops-login");
+                let _ = match outcome {
+                    Ok(()) => app.emit("drops-login-complete", ()),
+                    Err(e) => app.emit("drops-login-error", e.to_string()),
+                };
+            });
+            return;
+        }
+    }
+
     let _ = app.emit(
         "twitch-overlay-url",
         serde_json::json!({ "label": window_label, "url": url }),
@@ -894,7 +917,7 @@ pub async fn mount_twitch_overlay(
     };
     let parsed = url.parse().map_err(|e| format!("Invalid URL: {}", e))?;
 
-    let win = WebviewWindowBuilder::new(&app, label.clone(), WebviewUrl::External(parsed))
+    let mut builder = WebviewWindowBuilder::new(&app, label.clone(), WebviewUrl::External(parsed))
         .data_directory(profile)
         .initialization_script(spa_url_report_script(&label, true))
         .decorations(false)
@@ -902,7 +925,20 @@ pub async fn mount_twitch_overlay(
         .skip_taskbar(true)
         .position(x, y)
         .inner_size(width.max(1.0), height.max(1.0))
-        .focused(true)
+        .focused(true);
+
+    // Kick's consent redirect targets a fixed http://localhost:3000/callback.
+    // Read the code off the navigation here rather than out of a socket: the
+    // port belongs to whatever claimed it first on the user's machine, and the
+    // sign-in must not depend on winning that race. Cancelling the navigation
+    // also keeps a connection error off the screen at the last step.
+    if label == "kick-login" {
+        builder = builder.on_navigation(|url| {
+            !crate::services::kick_auth_service::capture_redirect(url.as_str())
+        });
+    }
+
+    let win = builder
         .parent(&main)
         .map_err(|e| format!("Failed to own overlay to main window: {}", e))?
         .build()
@@ -1106,6 +1142,41 @@ pub fn open_subscribe_window(
         ),
     };
     emit_overlay_open_with(&app, &label, &url, "panel", profile)?;
+    Ok(label)
+}
+
+/// Open YouTube's own channel switcher as an in-app panel, in the app's YouTube
+/// web profile.
+///
+/// A Google account can own several YouTube channels (Google calls the extra ones
+/// brand accounts), and each is a SEPARATE identity with its own subscriptions,
+/// memberships and moderator powers. Google's sign-in picks an ACCOUNT and never a
+/// CHANNEL, so signing in always lands on the default one. Before this, the only
+/// route to the others was the account switcher buried inside a channel's membership
+/// sheet, which meant opening Join on some unrelated streamer, closing it, switching,
+/// and opening it again. A user reported exactly that, having found it themselves.
+///
+/// Deliberately YouTube's own page rather than a picker of our own. Switching here
+/// changes the real session, so the served page and `youtube_auth_service`'s identity
+/// probe agree. A local picker would store a choice that the next re-harvest would
+/// read off the page and silently overwrite, because the probe treats the page as the
+/// source of truth. This also gets multiple Google logins and "add account" right for
+/// free, and stays right when YouTube changes the flow.
+///
+/// CLOSING the panel is what applies it: `TwitchOverlay` re-reads the identity when
+/// any `youtube-account` overlay closes, and re-imports the follow list if the active
+/// channel changed.
+#[cfg(desktop)]
+#[tauri::command]
+pub fn open_youtube_channel_switcher(app: AppHandle) -> Result<String, String> {
+    let label = format!("youtube-switch-{}", chrono::Utc::now().timestamp_millis());
+    emit_overlay_open_with(
+        &app,
+        &label,
+        "https://www.youtube.com/channel_switcher",
+        "panel",
+        Some("youtube-account"),
+    )?;
     Ok(label)
 }
 

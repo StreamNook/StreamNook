@@ -134,6 +134,57 @@ async function restoreFromCompact(
   await win.setSize(new LogicalSize(restored.width, restored.height));
 }
 
+/** Height of the React title bar, in CSS pixels. */
+const TITLE_BAR_HEIGHT = 40;
+
+/**
+ * The aspect ratio the video box should hold, and the chrome that sits OUTSIDE
+ * it, in CSS pixels. Chat is not included: each caller adds it on the axis it
+ * occupies, because they want it in different shapes.
+ *
+ * Shared by the aspect-ratio settle effect, the resize listener, and the
+ * constraint handed to the native sizing hook, which have to agree to the pixel
+ * or the window converges on a size none of them asked for. (The chat-placement
+ * effect keeps its own copy: it counts the separator for 'left' too, which is a
+ * real difference rather than drift.)
+ */
+const measureAspectChrome = (
+  chatPlacement: string,
+  isMultiNookActive: boolean,
+  multiNookCount: number,
+): { targetAspectRatio: number; uiWidthOffset: number; uiHeightOffset: number } => {
+  let targetAspectRatio = 16.0 / 9.0;
+
+  // Dynamically measure sidebar
+  let uiWidthOffset = 64;
+  const sidebarEl = document.querySelector('.border-r.border-borderSubtle.flex-shrink-0');
+  if (sidebarEl) {
+    uiWidthOffset = sidebarEl.getBoundingClientRect().width;
+  }
+  let uiHeightOffset = 0;
+
+  // Account for the chat resize separator
+  if (chatPlacement === 'right') uiWidthOffset += 4;
+  if (chatPlacement === 'bottom') uiHeightOffset += 4;
+
+  if (isMultiNookActive) {
+    const len = multiNookCount;
+    uiWidthOffset += 16; // 8px padding on L/R
+    uiHeightOffset += 16; // 8px padding on T/B
+
+    if (len === 2) { targetAspectRatio = 16.0 / 18.0; uiHeightOffset += 8; }
+    else if (len >= 3 && len <= 4) { targetAspectRatio = 16.0 / 9.0; uiWidthOffset += 8; uiHeightOffset += 8; }
+    else if (len >= 5 && len <= 6) { targetAspectRatio = 48.0 / 18.0; uiWidthOffset += 16; uiHeightOffset += 8; }
+    else if (len >= 7 && len <= 9) { targetAspectRatio = 16.0 / 9.0; uiWidthOffset += 16; uiHeightOffset += 16; }
+    else if (len >= 10 && len <= 12) { targetAspectRatio = 64.0 / 27.0; uiWidthOffset += 24; uiHeightOffset += 16; }
+    else if (len >= 13 && len <= 16) { targetAspectRatio = 16.0 / 9.0; uiWidthOffset += 24; uiHeightOffset += 24; }
+    else if (len >= 17 && len <= 20) { targetAspectRatio = 80.0 / 36.0; uiWidthOffset += 32; uiHeightOffset += 24; }
+    else if (len > 20) { targetAspectRatio = 80.0 / 36.0; uiWidthOffset += 32; uiHeightOffset += 32; }
+  }
+
+  return { targetAspectRatio, uiWidthOffset, uiHeightOffset };
+};
+
 function App() {
   useCommandPaletteHotkey();
   useKeybindings();
@@ -145,6 +196,31 @@ function App() {
   // rather than each running a check of their own.
   usePlatformSessionCheck();
   usePlatformAccountSync();
+  // A YouTube account can own several channels, and a brand channel has its OWN
+  // subscriptions. When Rust notices the active one changed (at launch, or after
+  // the user switched channel inside an in-app YouTube window), the imported follow
+  // list belongs to the channel that is no longer active. Main window only: this
+  // writes settings, so exactly one window must do it.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen('youtube-identity-changed', () => {
+      void useFollowsStore
+        .getState()
+        .syncYouTube()
+        .then(({ imported }) =>
+          Logger.info(`[youtube] channel changed; re-imported ${imported} subscription(s)`),
+        )
+        .catch((e) => Logger.warn('[youtube] re-import after a channel change failed:', e));
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
   // First-paint signal for the hidden-until-ready main window. The Rust
   // command lands with the visibility-gate change; until then the invoke
   // rejects and the catch keeps this a no-op. Runs on every App mount so the
@@ -427,6 +503,14 @@ function App() {
   // gap in placementResizeInProgressRef, which is cleared in a finally block before
   // the resize event it caused has been delivered.
   const selfResizeUntilRef = useRef(0);
+  // True when the OS itself is constraining the drag (Windows: the WM_SIZING
+  // hook in services/window_aspect.rs). The debounced correction below then
+  // stands down: two authorities resizing the same window is what made a
+  // locked drag jerk and snap back, because the correction lands a setSize
+  // inside the OS sizing loop and corrupts its cached rect. Set from what the
+  // invoke actually reports, so a platform without the hook - or a hook that
+  // failed to attach - keeps the correction rather than losing the lock.
+  const nativeAspectLockRef = useRef(false);
   // When the current channel's chat is owned by a MultiChat popout, main's
   // chat panel JSX is gone — the video player container expands to fill the
   // freed width, but stays 16:9 so the user sees side black bars. The
@@ -1476,6 +1560,54 @@ function App() {
   }, [watchRewardChannel, watchRewardGame]);
 
 
+  // Publish the current constraint to the native sizing hook, which applies it
+  // INSIDE the OS resize loop: the dragged edge tracks the pointer and the
+  // other axis follows, with nothing to undo once the drag commits.
+  useEffect(() => {
+    const chatHiddenByPopout = Boolean(activeChatChannelInPopout);
+    const placement = chatHiddenByPopout ? 'hidden' : chatPlacement;
+    const size = chatHiddenByPopout ? 0 : chatSize;
+    const enabled =
+      (settings.video_player?.lock_aspect_ratio ?? true) &&
+      !isTheaterMode &&
+      Boolean(streamUrl || isMultiNookActive);
+
+    const { targetAspectRatio, uiWidthOffset, uiHeightOffset } = measureAspectChrome(
+      placement,
+      isMultiNookActive,
+      visibleSlotsLength,
+    );
+
+    // Chat counts against whichever axis it occupies; the rest is chrome the
+    // video box never gets. Same decomposition calculate_aspect_ratio_size
+    // makes, expressed once instead of per placement.
+    const extraWidth = uiWidthOffset + (placement === 'right' || placement === 'left' ? size : 0);
+    const extraHeight = TITLE_BAR_HEIGHT + uiHeightOffset + (placement === 'bottom' ? size : 0);
+
+    invoke<boolean>('set_window_aspect_constraint', {
+      enabled,
+      ratio: targetAspectRatio,
+      extraWidth: Math.max(0, Math.round(extraWidth)),
+      extraHeight: Math.max(0, Math.round(extraHeight)),
+    })
+      .then((live) => {
+        nativeAspectLockRef.current = live;
+      })
+      .catch((error) => {
+        nativeAspectLockRef.current = false;
+        Logger.error('[AspectRatio] Failed to publish the native size constraint:', error);
+      });
+  }, [
+    settings.video_player?.lock_aspect_ratio,
+    chatSize,
+    chatPlacement,
+    streamUrl,
+    isTheaterMode,
+    isMultiNookActive,
+    visibleSlotsLength,
+    activeChatChannelInPopout,
+  ]);
+
   // Handle aspect ratio locking when setting changes or chat is resized
   useEffect(() => {
     const adjustWindowForAspectRatio = async () => {
@@ -1533,36 +1665,12 @@ function App() {
         Logger.debug('[AspectRatio] Chat placement:', currentChatPlacement);
 
         // Title bar height is 40px
-        const titleBarHeight = 40;
-
-        let targetAspectRatio = 16.0 / 9.0;
-        
-        // Dynamically measure sidebar
-        let uiWidthOffset = 64;
-        const sidebarEl = document.querySelector('.border-r.border-borderSubtle.flex-shrink-0');
-        if (sidebarEl) {
-          uiWidthOffset = sidebarEl.getBoundingClientRect().width;
-        }
-        let uiHeightOffset = 0;
-
-        // Account for the chat resize separator
-        if (currentChatPlacement === 'right') uiWidthOffset += 4;
-        if (currentChatPlacement === 'bottom') uiHeightOffset += 4;
-
-        if (currentIsMultiNookActive) {
-          const len = multiNookCount;
-          uiWidthOffset += 16; // 8px padding on L/R
-          uiHeightOffset += 16; // 8px padding on T/B
-
-          if (len === 2) { targetAspectRatio = 16.0 / 18.0; uiHeightOffset += 8; }
-          else if (len >= 3 && len <= 4) { targetAspectRatio = 16.0 / 9.0; uiWidthOffset += 8; uiHeightOffset += 8; }
-          else if (len >= 5 && len <= 6) { targetAspectRatio = 48.0 / 18.0; uiWidthOffset += 16; uiHeightOffset += 8; }
-          else if (len >= 7 && len <= 9) { targetAspectRatio = 16.0 / 9.0; uiWidthOffset += 16; uiHeightOffset += 16; }
-          else if (len >= 10 && len <= 12) { targetAspectRatio = 64.0 / 27.0; uiWidthOffset += 24; uiHeightOffset += 16; }
-          else if (len >= 13 && len <= 16) { targetAspectRatio = 16.0 / 9.0; uiWidthOffset += 24; uiHeightOffset += 24; }
-          else if (len >= 17 && len <= 20) { targetAspectRatio = 80.0 / 36.0; uiWidthOffset += 32; uiHeightOffset += 24; }
-          else if (len > 20) { targetAspectRatio = 80.0 / 36.0; uiWidthOffset += 32; uiHeightOffset += 32; }
-        }
+        const titleBarHeight = TITLE_BAR_HEIGHT;
+        const { targetAspectRatio, uiWidthOffset, uiHeightOffset } = measureAspectChrome(
+          currentChatPlacement,
+          currentIsMultiNookActive,
+          multiNookCount,
+        );
 
         const [newWidth, newHeight] = await invoke<[number, number]>('calculate_aspect_ratio_size', {
           currentWidth: width,
@@ -1642,35 +1750,12 @@ function App() {
         // what stops the window from growing on every resize event.
         const { width, height, scale } = await getLogicalInnerSize(window);
 
-        const titleBarHeight = 40;
-
-        let targetAspectRatio = 16.0 / 9.0;
-        // Dynamically measure sidebar
-        let uiWidthOffset = 64;
-        const sidebarEl = document.querySelector('.border-r.border-borderSubtle.flex-shrink-0');
-        if (sidebarEl) {
-          uiWidthOffset = sidebarEl.getBoundingClientRect().width;
-        }
-        let uiHeightOffset = 0;
-
-        // Account for the chat resize separator
-        if (currentChatPlacement === 'right') uiWidthOffset += 4;
-        if (currentChatPlacement === 'bottom') uiHeightOffset += 4;
-
-        if (currentIsMultiNookActive) {
-          const len = multiNookCount;
-          uiWidthOffset += 16; // 8px padding on L/R
-          uiHeightOffset += 16; // 8px padding on T/B
-
-          if (len === 2) { targetAspectRatio = 16.0 / 18.0; uiHeightOffset += 8; }
-          else if (len >= 3 && len <= 4) { targetAspectRatio = 16.0 / 9.0; uiWidthOffset += 8; uiHeightOffset += 8; }
-          else if (len >= 5 && len <= 6) { targetAspectRatio = 48.0 / 18.0; uiWidthOffset += 16; uiHeightOffset += 8; }
-          else if (len >= 7 && len <= 9) { targetAspectRatio = 16.0 / 9.0; uiWidthOffset += 16; uiHeightOffset += 16; }
-          else if (len >= 10 && len <= 12) { targetAspectRatio = 64.0 / 27.0; uiWidthOffset += 24; uiHeightOffset += 16; }
-          else if (len >= 13 && len <= 16) { targetAspectRatio = 16.0 / 9.0; uiWidthOffset += 24; uiHeightOffset += 24; }
-          else if (len >= 17 && len <= 20) { targetAspectRatio = 80.0 / 36.0; uiWidthOffset += 32; uiHeightOffset += 24; }
-          else if (len > 20) { targetAspectRatio = 80.0 / 36.0; uiWidthOffset += 32; uiHeightOffset += 32; }
-        }
+        const titleBarHeight = TITLE_BAR_HEIGHT;
+        const { targetAspectRatio, uiWidthOffset, uiHeightOffset } = measureAspectChrome(
+          currentChatPlacement,
+          currentIsMultiNookActive,
+          multiNookCount,
+        );
 
         const [newWidth, newHeight] = await invoke<[number, number]>('calculate_aspect_ratio_size', {
           currentWidth: width,
@@ -1705,6 +1790,11 @@ function App() {
           clearTimeout(debounceTimeout);
         }
         debounceTimeout = setTimeout(async () => {
+          // The native hook already constrained this drag as the user made it,
+          // so there is nothing left to correct - and correcting anyway lands a
+          // setSize inside the OS sizing loop, which is what used to snap the
+          // window back to a size the pointer was nowhere near.
+          if (nativeAspectLockRef.current) return;
           // Never react to a resize we performed ourselves, nor to the
           // restore/move traffic of a titlebar drag still in the OS move loop.
           if (Date.now() < selfResizeUntilRef.current || isTitlebarDragActive()) return;
@@ -1880,7 +1970,7 @@ function App() {
   // sn-app-shell: the hook a theme's light treatment paints onto (see
   // styles/theme-prism.css); the room every glass surface sits in.
   return (
-    <div className="sn-app-shell flex flex-col h-screen bg-background">
+    <div className="sn-app-shell relative flex flex-col h-screen bg-background">
       <ErrorBoundary
         componentName="TitleBar"
         fallback={
@@ -1940,8 +2030,12 @@ function App() {
           </ErrorBoundary>
         )}
 
-        {/* Main content area with Home/PIP support */}
-        <div className="flex-1 relative overflow-hidden">
+        {/* Main content area with Home/PIP support.
+            `sn-content-layer` is the hook the sidebar's layering hangs off: with
+            the sidebar pinned this becomes a card lifted above it, and with the
+            sidebar overlaid it stays flat and the drawer does the lifting
+            instead. See `html[data-sn-sidebar]` in globals.css. */}
+        <div className="sn-content-layer flex-1 relative overflow-hidden">
           {/* Home View - shown when isHomeActive or no stream */}
           <AnimatePresence>
             {(isHomeActive || (!streamUrl && !isLoading && !isMultiNookActive)) && (
@@ -1982,7 +2076,23 @@ function App() {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.2, ease: "easeInOut" }}
-                className={`flex flex-1 h-full overflow-hidden ${
+                // pt-10 reserves the title bar's 40px for everything in the
+                // stream area: player, MultiNook grid, chat, mod logs.
+                //
+                // The bar floats over content rather than sitting in flow (see
+                // TitleBar.tsx), which is right for Home, where the grid passing
+                // behind the chrome is the effect. It is wrong for a player: a
+                // stream is not a backdrop for our own toolbar, and the top of
+                // the picture is where the streamer's own overlays live.
+                //
+                // So the decision is made per SURFACE rather than globally, and
+                // this is the surface that wants the space back. Home is a
+                // sibling of this element, not a child, so it is unaffected.
+                //
+                // It also keeps the aspect-ratio lock honest: measureAspectChrome
+                // counts TITLE_BAR_HEIGHT as chrome outside the video box, which
+                // is only true while something actually reserves it.
+                className={`flex flex-1 h-full overflow-hidden ${IS_MOBILE ? '' : 'pt-10'} ${
                   settings.show_mod_logs && chatPlacement !== 'hidden'
                     ? (isSideChat ? 'flex-col' : 'flex-row')
                     : (chatPlacement === 'bottom' ? 'flex-col' : 'flex-row')

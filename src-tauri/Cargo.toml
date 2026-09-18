@@ -159,6 +159,11 @@ windows = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
+    # services/window_aspect.rs: SetWindowSubclass/DefSubclassProc live in Shell,
+    # GetDpiForWindow in HiDpi. The aspect lock constrains WM_SIZING live instead
+    # of correcting the window after the drag has already committed a size.
+    "Win32_UI_Shell",
+    "Win32_UI_HiDpi",
 ] }
 
 # macOS-only. WebKit's cookie store is read through these (see

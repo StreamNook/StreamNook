@@ -35,7 +35,7 @@ use commands::{
     badges::*, cache::*, channel_panels::*, channel_state::*, chat::*, chat_identity::*, components::*,
     cosmetics_cache::*, diagnostic_logging::*, drops::*, emoji::*, emote_prefetch::*,
     emotes::*, eventsub::*, ffz::*, gifs::*, helix::*, home_snapshot::*, hype_train::*, identity::*, justlog::*, layout::*,
-    link_preview::*, logs::*, mod_log_storage::*, modroom::*, plugins::*,
+    link_preview::*, logs::*, media_glow::*, mod_log_storage::*, modroom::*, plugins::*,
     profile_cache::*, provider_browse::*,
     resub::*, session::*, settings::*, seventv::*, seventv_cosmetics::*,
     seventv_cosmetics_fetch::*, song_id::*, streamnook_api::*, streaming::*, subscriptions::*,
@@ -254,6 +254,7 @@ fn show_main_window(app: &tauri::AppHandle) {
             #[cfg(windows)]
             if let Ok(hwnd) = win.hwnd() {
                 services::ui_hang_watchdog::start_for_hwnd(hwnd.0 as isize);
+                services::window_aspect::install_for_hwnd(hwnd.0 as isize);
             }
         }
         Err(e) => error!("[Main] Failed to recreate main window: {e}"),
@@ -347,8 +348,38 @@ fn load_settings_from_file() -> Result<Settings, Box<dyn std::error::Error>> {
     }
 
     let json = std::fs::read_to_string(&settings_path)?;
-    let settings: Settings = serde_json::from_str(&json)?;
+    let mut settings: Settings = serde_json::from_str(&json)?;
+    repair_protocol_relative_avatars(&mut settings);
     Ok(settings)
+}
+
+/// Rewrite follow avatars that were stored protocol-relative (`//host/path`).
+///
+/// Fixing the parse only helps rows imported AFTER the fix. Every existing install
+/// already has a settings file full of unloadable URLs (measured: 253 of 258 on one
+/// real account), and nothing would repair them short of the user signing out and
+/// re-importing, because the backfill only fills avatars that are `None` and these
+/// are not None, they are wrong.
+///
+/// Done on LOAD rather than as a one-shot migration: it is a string check over a few
+/// hundred rows with no network and no write of its own, so it costs nothing to
+/// re-run, and it needs no migration flag to get right. The next ordinary settings
+/// save persists the repaired values.
+fn repair_protocol_relative_avatars(settings: &mut Settings) {
+    let mut fixed = 0usize;
+    for follow in &mut settings.provider_follows {
+        let Some(url) = follow.avatar.as_deref() else {
+            continue;
+        };
+        let fixed_url = services::providers::youtube::absolutize_url(url);
+        if fixed_url != url {
+            follow.avatar = Some(fixed_url);
+            fixed += 1;
+        }
+    }
+    if fixed > 0 {
+        log::info!("[Follows] repaired {} protocol-relative avatar url(s)", fixed);
+    }
 }
 
 /// Clean up leftover files from previous update attempts
@@ -739,6 +770,11 @@ pub fn run() {
                 if let Some(main) = app.get_webview_window("main") {
                     if let Ok(hwnd) = main.hwnd() {
                         services::ui_hang_watchdog::start_for_hwnd(hwnd.0 as isize);
+                        // Aspect-ratio lock. Attached at window creation, inert
+                        // until the frontend pushes a constraint, and the reason
+                        // a locked resize tracks the pointer instead of being
+                        // corrected (and undone) after the drag commits.
+                        services::window_aspect::install_for_hwnd(hwnd.0 as isize);
                     }
                 }
             }
@@ -1167,6 +1203,7 @@ pub fn run() {
             close_main_window,
             calculate_aspect_ratio_size,
             calculate_aspect_ratio_size_preserve_video,
+            set_window_aspect_constraint,
             start_titlebar_drag,
             get_system_info,
             get_emoji_image,
@@ -1192,6 +1229,8 @@ pub fn run() {
             open_drops_login_window,
             #[cfg(desktop)]
             open_subscribe_window,
+            #[cfg(desktop)]
+            open_youtube_channel_switcher,
             #[cfg(desktop)]
             report_login_popup_url,
             #[cfg(desktop)]
@@ -1362,6 +1401,7 @@ pub fn run() {
             youtube_disconnect,
             youtube_is_connected,
             youtube_account_name,
+            youtube_refresh_identity,
             youtube_delete_message,
             youtube_ban_user,
             youtube_unban_user,
@@ -1545,6 +1585,7 @@ pub fn run() {
             report_player_playing,
             // Automation commands
             // Drops Authentication commands
+            start_drops_login,
             start_drops_device_flow,
             poll_drops_token,
             drops_logout,
@@ -1698,6 +1739,7 @@ pub fn run() {
             watch_channel_state,
             unwatch_channel_state,
             get_channel_state,
+            submit_media_frame,
             refresh_channel_state,
             watch_user_history,
             unwatch_user_history,
