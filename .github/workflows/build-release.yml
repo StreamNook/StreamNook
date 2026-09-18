@@ -38,10 +38,10 @@ jobs:
           # Force-push dev to main (dev is source of truth)
           git push origin origin/dev:main --force
 
-  # macOS build. Runs in parallel with the Windows job; `build` consumes this
-  # job's outputs to write the per-platform update manifest, so a macOS failure
-  # holds the release rather than shipping a manifest that promises a macOS
-  # build nobody produced.
+  # macOS build. Runs in PARALLEL with the Windows job and nothing waits on it:
+  # finalize-macos joins the two afterwards and patches this job's outputs into
+  # the manifest. A macOS failure therefore skips finalize-macos and leaves a
+  # Windows-only release standing, rather than holding up every Windows user.
   build-macos:
     needs: merge-to-main
     runs-on: macos-latest
@@ -215,14 +215,21 @@ jobs:
       # correct for first-time installs.
 
   build:
-    needs: [merge-to-main, build-macos]
-    # Run even when the macOS job failed: a Mac build problem degrades to a
-    # Windows-only release (the manifest step already handles empty macOS
-    # outputs) instead of blocking every Windows user's update.
+    # Deliberately does NOT need build-macos. It used to, and the cost was
+    # measured: build-macos runs 32-51 min, and `needs` makes Windows WAIT for it
+    # even though the old comment here already said a Mac failure should not
+    # block "every Windows user's update". It solved the failure case and not the
+    # latency one. 8.6.1, before macOS existed, shipped in 35 min; 8.6.2 took 96
+    # and 8.6.3 took 80. The two jobs are independent, so they run in parallel and
+    # finalize-macos below joins them afterwards.
+    needs: merge-to-main
     if: ${{ !cancelled() && needs.merge-to-main.result == 'success' }}
     runs-on: windows-latest
     permissions:
       contents: write
+    outputs:
+      VERSION: ${{ steps.version.outputs.VERSION }}
+      RELEASE_EXISTS: ${{ steps.check_release.outputs.RELEASE_EXISTS }}
 
     steps:
       - name: Checkout main branch
@@ -275,7 +282,7 @@ jobs:
 
       - name: Rust cache
         if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
-        uses: swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2
         with:
           workspaces: "./src-tauri -> target"
           cache-on-failure: true
@@ -284,19 +291,6 @@ jobs:
       - name: Install dependencies
         if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
         run: npm ci
-
-      - name: Install Tauri CLI (cached)
-        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
-        shell: pwsh
-        run: |
-          # Check if tauri-cli is already installed
-          $tauriVersion = npm list @tauri-apps/cli 2>$null
-          if ($tauriVersion) {
-            echo "Tauri CLI already installed"
-          } else {
-            echo "Installing Tauri CLI..."
-            npm install @tauri-apps/cli
-          }
 
       - name: Pre-install WiX Toolset
         if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
@@ -546,26 +540,6 @@ jobs:
       # The macOS job cannot attach to a release that does not exist yet (it
       # runs before this job), so it parks the bundle as a workflow artifact
       # and we attach it here. Skipped when the macOS job produced nothing.
-      - name: Fetch the macOS bundle
-        if: steps.check_release.outputs.RELEASE_EXISTS == 'false' && needs.build-macos.outputs.BUNDLE_NAME != ''
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-bundle
-          path: macos-bundle
-
-      - name: Attach the macOS bundle to the release
-        if: steps.check_release.outputs.RELEASE_EXISTS == 'false' && needs.build-macos.outputs.BUNDLE_NAME != ''
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="${{ steps.version.outputs.VERSION }}"
-          bundle="macos-bundle/${{ needs.build-macos.outputs.BUNDLE_NAME }}"
-          gh release upload "v$version" "$bundle" --clobber
-          [ -f "$bundle.minisig" ] && gh release upload "v$version" "$bundle.minisig" --clobber || true
-          echo "Attached $(basename "$bundle") to v$version"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Push installer to Cloudflare R2
         # Mirrors StreamNook.7z to the R2 bucket that streamnook.app serves at
         # /download, so the website's download button always hands out this
@@ -654,28 +628,13 @@ jobs:
             }
           }
 
-          # macOS comes from the build-macos job. Only published if that job
-          # actually produced a bundle: an entry pointing at a build that does
-          # not exist is worse than no entry, because the client would offer an
-          # update and then fail to download it.
-          $macBundle = "${{ needs.build-macos.outputs.BUNDLE_NAME }}"
-          $macSha    = "${{ needs.build-macos.outputs.SHA256 }}"
-          if ($macBundle -and $macSha) {
-            $macEntry = [ordered]@{
-              download_url = "${{ needs.build-macos.outputs.DOWNLOAD_URL }}"
-              bundle_name  = $macBundle
-              sha256       = $macSha
-              signature    = "${{ needs.build-macos.outputs.SIGNATURE }}"
-              size         = [int64]"${{ needs.build-macos.outputs.SIZE }}"
-            }
-            # Universal binary: one artifact serves both Mac architectures, so
-            # both keys point at it rather than shipping two identical files.
-            $platforms["macos-aarch64"] = $macEntry
-            $platforms["macos-x86_64"]  = $macEntry
-            Write-Host "Manifest includes macOS: $macBundle"
-          } else {
-            Write-Host "WARN: no macOS bundle from build-macos - manifest is Windows-only"
-          }
+          # NOTE: this manifest is WINDOWS-ONLY by design. The macOS entries are
+          # patched in afterwards by the finalize-macos job, so that Windows users
+          # are not made to wait 32-51 min for a Mac build to publish their
+          # update. Until that job lands, macos-* keys are simply absent, which is
+          # the correct safe state: an entry pointing at a build that does not
+          # exist is worse than no entry, because the client would offer an update
+          # and then fail to download it.
 
           # The flat fields stay, and stay describing the WINDOWS bundle. Every
           # client already installed reads them and knows nothing about
@@ -865,3 +824,91 @@ jobs:
             # Don't fail the workflow if Discord is down — release is already on GitHub.
             echo "::warning::Discord webhook post failed: $_"
           }
+
+  # Joins the two parallel builds. Runs only after BOTH finish, and only does
+  # anything if build-macos actually produced a bundle. Everything here used to
+  # live at the end of the Windows job, which is what forced Windows to wait for
+  # macOS; moving it out is the whole point of the split.
+  finalize-macos:
+    needs: [build, build-macos]
+    if: >-
+      ${{ !cancelled()
+          && needs.build.result == 'success'
+          && needs.build.outputs.RELEASE_EXISTS == 'false'
+          && needs.build-macos.outputs.BUNDLE_NAME != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Fetch the macOS bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-bundle
+          path: macos-bundle
+
+      - name: Attach the macOS bundle to the release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.build.outputs.VERSION }}"
+          bundle="macos-bundle/${{ needs.build-macos.outputs.BUNDLE_NAME }}"
+          gh release upload "v$version" "$bundle" --clobber
+          [ -f "$bundle.minisig" ] && gh release upload "v$version" "$bundle.minisig" --clobber || true
+          echo "Attached $(basename "$bundle") to v$version"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+
+      # Patch rather than rewrite. The Windows job already published a complete,
+      # correct Windows manifest; re-deriving its fields here would duplicate that
+      # logic and let the two drift. This only adds the two macOS keys.
+      - name: Patch macOS into latest.json
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          MAC_BUNDLE: ${{ needs.build-macos.outputs.BUNDLE_NAME }}
+          MAC_SHA: ${{ needs.build-macos.outputs.SHA256 }}
+          MAC_SIG: ${{ needs.build-macos.outputs.SIGNATURE }}
+          MAC_SIZE: ${{ needs.build-macos.outputs.SIZE }}
+          MAC_URL: ${{ needs.build-macos.outputs.DOWNLOAD_URL }}
+          VERSION: ${{ needs.build.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+
+          npx --yes wrangler@4 r2 object get "streamnook-downloads/latest.json" \
+            --file=latest.json --remote
+          test -s latest.json
+
+          # Refuse to patch a manifest for a different release. Without this, a
+          # slow macOS job could staple its bundle onto whatever version shipped
+          # next, which is exactly the "offers an update it cannot download" case
+          # the Windows manifest step guards against.
+          have=$(jq -r '.version' latest.json)
+          if [ "$have" != "$VERSION" ]; then
+            echo "latest.json is v$have but this run is v$VERSION - refusing to patch"
+            exit 1
+          fi
+
+          # --argjson below parses MAC_SIZE as JSON, so a blank or non-numeric
+          # value would abort jq with a parse error rather than anything legible.
+          case "$MAC_SIZE" in
+            ''|*[!0-9]*) echo "build-macos gave a non-numeric SIZE: '$MAC_SIZE'"; exit 1 ;;
+          esac
+          test -n "$MAC_SHA" || { echo "build-macos gave an empty SHA256"; exit 1; }
+
+          # Universal binary: one artifact serves both Mac architectures, so both
+          # keys point at it rather than shipping two identical files.
+          jq --arg url "$MAC_URL" --arg name "$MAC_BUNDLE" --arg sha "$MAC_SHA" \
+             --arg sig "$MAC_SIG" --argjson size "$MAC_SIZE" \
+             '.platforms["macos-aarch64"] = {download_url:$url, bundle_name:$name, sha256:$sha, signature:$sig, size:$size}
+              | .platforms["macos-x86_64"] = .platforms["macos-aarch64"]' \
+             latest.json > latest.patched.json
+          test -s latest.patched.json
+
+          npx --yes wrangler@4 r2 object put "streamnook-downloads/latest.json" \
+            --file=latest.patched.json \
+            --content-type="application/json" \
+            --remote
+          echo "Patched macOS ($MAC_BUNDLE) into latest.json for v$VERSION"

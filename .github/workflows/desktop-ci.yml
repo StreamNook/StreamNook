@@ -64,7 +64,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "./src-tauri -> target"
           key: windows-ci
@@ -115,7 +115,7 @@ jobs:
           # otherwise surface only when the release job runs lipo.
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-      - uses: swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "./src-tauri -> target"
           key: macos-ci

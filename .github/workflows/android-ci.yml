@@ -11,10 +11,11 @@ name: CI
 # So this gate answers exactly one question: does the tree still compile after a
 # dependency changed? It is not a release pipeline and does not produce an APK.
 #
-# Deliberately NOT running `npm run lint` here. eslint currently reports 29
-# errors and 362 warnings of pre-existing debt, so a lint gate would be red on
-# every run from day one, and a check that is always red is a check nobody
-# reads. Add it once that backlog is cleared, not before.
+# Deliberately NOT running `npm run lint` here -- but the reason has changed and
+# this is now worth revisiting. The old blocker was 29 eslint ERRORS, which would
+# have made a lint gate red from day one. As of the 2026-09-18 cleanup pass that
+# count is 0 (601 warnings remain, and eslint exits 0 on warnings alone), so
+# `npm run lint` passes today. Adding the gate is a decision, not a blocked one.
 
 on:
   pull_request:
@@ -72,7 +73,7 @@ jobs:
         with:
           targets: aarch64-linux-android,x86_64-linux-android
 
-      - uses: swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "./src-tauri -> target"
 
