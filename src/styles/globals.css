@@ -223,8 +223,8 @@ html[data-motion="off"] .update-pill { animation: none; }
   pointer-events: none;
   /* Every glaze layer is drawn at the same strength, so surfaces differ by
      what they are rather than by which copy of the recipe they got.
-     Chrome overrides this to 1 below — Cider makes exactly the same
-     distinction, chrome at full and nested components at three quarters. */
+     Chrome overrides this to 1 below — the split is deliberate:
+       chrome at full strength, nested components at three quarters. */
   opacity: var(--glaze-opacity, 0.75);
   transition: box-shadow 0.2s ease, background-color 0.18s ease;
 }
@@ -242,7 +242,7 @@ html[data-motion="off"] .update-pill { animation: none; }
 }
 
 /* No `content-visibility: auto` here, deliberately.
-   It was copied across from Cider as a free perf hint and is not free: it lets
+   It was taken on as a free perf hint and is not free: it lets
    the browser SKIP rendering the layer until it decides the element is
    relevant, and that check frequently does not run until some input forces it.
    The symptom is the glaze missing after a view change and appearing the
@@ -339,10 +339,9 @@ body[data-window-blurred="true"] .chrome-glaze::before {
    back; the shape was worth having.
 
    The title-bar pills were never here either: they are full capsules (radius
-   9999px) where no straight side remains for a corner shape to affect, and
-   Cider makes the same exception. */
+   9999px) where no straight side remains for a corner shape to affect. */
 
-/* The chip shape Cider uses for this kind of object: a 14px superellipse
+/* The chip shape for this kind of object: a 14px superellipse
    rather than a small rounded rectangle. At 14px a circular arc is already
    curving a third of the way down a 44px-tall chip; a superellipse holds the
    side flat and turns at the corner, which is why theirs reads crisp at a
@@ -382,7 +381,7 @@ body[data-window-blurred="true"] .chrome-glaze::before {
 
 /* Same masked specular as the container, so the two are plainly one material:
    bright across the middle, gone at both ends. */
-/* Measured off Cider's own chip rather than guessed: its outline is white at
+/* Measured off a reference chip rather than guessed: its outline is white at
    20%, the specular takes 70% of that (14%), and the soft pass behind it takes
    80% of the specular (11%). This was 20%/7% at full strength — nearly twice
    as bright on the line that reads first, which is what made ours look
@@ -410,7 +409,7 @@ body[data-window-blurred="true"] .glaze-inset::after {
 .nav-flipper {
   display: grid;
   /* Columns are not declared, so whatever sits between the two arrows decides
-     its own width. Cider's flipper reserves that middle slot too, which is the
+     its own width. Reserving that middle slot is the
      hint that the control was always meant to carry something: a divider when
      there is nothing to say, a page count when there is. */
   grid-auto-flow: column;
@@ -566,8 +565,8 @@ body[data-window-blurred="true"] .glaze-inset::after {
    cannot: the theme tint is light enough that bright artwork passing beneath it
    washes the panel out and the labels on it lose contrast.
 
-   Cider solves this the same way — its floating chrome is a dark translucent
-   film (`--chromeColor: rgb(40 40 40 / 50%)`) rather than a theme colour, with
+   The fix is a dark film, not a brighter tint — floating chrome wants a translucent
+     film around `rgb(40 40 40 / 50%)` rather than a theme colour, with
    the blur still doing the glass. So this lays a dark film OVER the theme tint
    rather than replacing it: the theme still shows through, just underneath
    something that guarantees contrast.
@@ -587,6 +586,226 @@ body[data-window-blurred="true"] .glaze-inset::after {
       rgb(8 8 11 / var(--panel-darken))
     ),
     linear-gradient(var(--color-background-secondary), var(--color-background-secondary));
+}
+
+/* The notification trigger: the Dynamic Island's door, parked in the title bar.
+   Small and fixed-size on purpose — the SURFACE is what grows, out of this and
+   back into it, so this must never move or resize as notifications arrive. */
+.sn-notif-trigger {
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 9px;
+  position: relative;
+}
+/* Joined into the nav strip. A 34px control inside a `py-1` pill would make the
+   whole strip taller than its own tabs, so inline it sizes to the tabs instead:
+   this is a member of the strip, not a pill parked next to one. */
+.sn-notif-trigger--inline {
+  height: 26px;
+  padding: 0 7px;
+}
+.sn-notif-trigger--inline .sn-notif-face {
+  width: 16px;
+  height: 16px;
+}
+/* Overlapped faces. A stack reads as "several things" at a glance and stays
+   narrow; three discrete slots got wide fast and needed dividers that fought
+   the glaze's own rim. */
+.sn-notif-trigger .sn-notif-face {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  overflow: hidden;
+  flex: none;
+  background: var(--color-surface);
+  /* A ring in the app's own background colour is what separates one face from
+     the next when they overlap; without it the stack reads as a smear. */
+  box-shadow: 0 0 0 2px var(--color-background);
+}
+.sn-notif-trigger .sn-notif-face img,
+.sn-notif-trigger .sn-notif-face svg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+/* ===== Notification Center =====
+   The panel the trigger opens into. It wears `.chrome-glaze --frosted` in the
+   markup, so everything here is what sits INSIDE that: a header that does not
+   scroll, and rows that are glass within glass.
+
+   The old version was flat `bg-white/10` tiles under a centred title with an
+   invisible close strip across the middle third, and two text buttons below the
+   list. Three things were wrong with that and only one was cosmetic: the actions
+   scrolled away exactly when there was enough to need them, the close target was
+   undiscoverable, and the tiles were the one surface in the app not speaking the
+   material language around them. */
+
+.sn-notif-head {
+  height: 42px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  cursor: pointer;
+}
+
+/* The unread count. Accent on black text rather than a tinted pill: it is the
+   one number in the panel and it should read at a glance from the trigger's
+   width away. */
+.sn-notif-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  color: #000;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* Header actions. Quiet until pointed at, because these are destructive-ish and
+   a panel that shouts CLEAR ALL at rest is a panel you read past. */
+.sn-notif-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 27px;
+  height: 27px;
+  border-radius: 8px;
+  /* Quiet, but not invisible. At `--color-text-secondary` over a frosted panel
+     these disappeared: quiet is a lower contrast than the title, not a lower
+     contrast than the background. */
+  color: rgba(255, 255, 255, 0.55);
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+.sn-notif-action:hover {
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.08);
+}
+/* Clear all earns a colour only on hover: it is the one thing here you cannot
+   undo, and that is worth saying at the moment of the reach rather than always. */
+.sn-notif-action--danger:hover {
+  color: #fb7185;
+  background: color-mix(in srgb, #fb7185 12%, transparent);
+}
+
+/* A row, sitting directly on the panel.
+   It was a `.glaze-inset` card, and forty cards inside a glass panel is a box in
+   a box in a box: the panel is already the object, and giving every line its own
+   edge and fill made the list read as luggage rather than as contents. Rows are
+   now separated by a hairline and lit only on hover, which is what the panel
+   itself is for. */
+.sn-notif-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 14px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+.sn-notif-row + .sn-notif-row {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.sn-notif-row:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+/* Unread vs read, carried by the row itself rather than by a marker.
+   A rail down the leading edge was tried and cut: it is the generic answer and
+   it turns every row into a bordered list item.
+
+   The first cut leaned on a trace of accent in the fill, on the theory that a
+   hue change reads where two greys do not. Rendered, it did not: the default
+   theme's accent is `#97b1b9`, near enough to grey that 10% of it over a dark
+   fill is invisible, and a signal that only works on the purple themes is not a
+   signal. So the difference is carried the other way, by DIMMING what is
+   already dealt with, which is the older and more legible convention and needs
+   no accent to work. Unread simply looks normal. */
+.sn-notif-row--unread {
+  background-color: rgba(255, 255, 255, 0.035);
+}
+/* Children only: the glaze edge is a pseudo-element and stays at full strength,
+   so a read row still reads as an object rather than a faded picture of one. */
+.sn-notif-row > * {
+  transition: opacity 0.15s ease;
+}
+.sn-notif-row:not(.sn-notif-row--unread) > * {
+  opacity: 0.55;
+}
+.sn-notif-row:not(.sn-notif-row--unread):hover > * {
+  opacity: 0.85;
+}
+/* A mark where a face would be. No circle behind it: the row already has the
+   panel behind it and the glyph reads perfectly well on its own, so a filled
+   disc was one more container earning nothing. The box stays the same size as an
+   avatar so names line up whether or not a row has a picture. */
+.sn-notif-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+}
+
+/* The level, attached to a face rather than boxed beside it. It sits ON the
+   avatar's edge and separates with a dark outline instead of a filled chip. */
+.sn-notif-seal {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(0 0 1.5px rgb(0 0 0 / 0.9)) drop-shadow(0 1px 2px rgb(0 0 0 / 0.6));
+}
+
+/* Platform marks on a live row. Sits beside the name and never shrinks it:
+   the name truncates, the marks do not, because which platforms went live is
+   the thing a merged row exists to say. */
+.sn-notif-marks {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  opacity: 0.85;
+}
+
+/* Day bucket headers. Quiet and small: they are a place-keeper you read past,
+   not a heading you read. */
+.sn-notif-group {
+  padding: 11px 14px 4px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.3);
+}
+
+/* Empty state. A ring rather than a bare glyph, so the panel still has an object
+   in it instead of reading as a rendering failure. */
+.sn-notif-empty-ring {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-background-tertiary) 70%, transparent);
+  box-shadow: var(--bevel-tile);
+}
+
+.sn-notif-trigger .sn-notif-more {
+  margin-left: 7px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--color-text-secondary);
 }
 
 /* The glaze's pseudo-element layers position against this element, so it has to
@@ -805,6 +1024,36 @@ html[data-motion="off"] .sn-bulb-rainbow stop {
   background: #e11d48;
 }
 
+/* Caption buttons, at the platform's geometry rather than the app's.
+
+   These are the WINDOW's controls, not StreamNook's, so they follow the OS
+   convention instead of the floating-pill language the rest of the bar speaks.
+   The point is not decoration, it is aim: Windows and every browser that draws
+   its own chrome put close in the literal corner, which is the one target on
+   screen you can hit by slamming the pointer at it without looking. A 34x28
+   rounded chip inset 12px from the edge throws that away, and its highlight
+   reads as a small square floating near the corner rather than as the corner
+   lighting up.
+
+   So: the platform's 46px width, the full height of the bar, no radius, no gap
+   between them, and a negative margin that cancels the bar's own px-3 so the
+   close button owns the actual corner pixel. Scoped to the container, which
+   macOS does not render (AppKit draws the real traffic lights there). */
+.titlebar-window-controls .titlebar-window-btn {
+  width: 46px;
+  height: 40px;
+  border-radius: 0;
+}
+/* Pressed. Native dims on the way down; without it a full-height button feels
+   inert next to the tiny one it replaced, which had motion from its radius. */
+.titlebar-window-controls .titlebar-window-btn:active {
+  background: rgba(255, 255, 255, 0.14);
+}
+.titlebar-window-controls .titlebar-window-btn-close:active {
+  color: #ffffff;
+  background: #be123c;
+}
+
 /* Floating glass modal — frosted translucent surface whose blur is local to the
    modal (it frosts only what's directly behind it, not the whole screen), with
    an accent-tinted border and a deep drop shadow so it lifts off an unblurred
@@ -909,10 +1158,10 @@ html[data-motion="off"] .sn-bulb-rainbow stop {
      RIGHT. That is an embossed plate, not glass: light falling from above does
      not land on a vertical edge, so lighting the left side describes a light
      source that is not in the room. On a wide panel it is the loudest thing
-     about the border, and it is why ours read heavy beside Cider's at the same
-     nominal 1px.
+     about the border, and it is why ours read heavy against a
+       reference at the same nominal 1px.
 
-     What replaces it is the grammar counted out of Cider's own stylesheets:
+     What replaces it is the grammar counted out of the reference stylesheets:
      light on the TOP edge only, and separation handled by a dark half-pixel
      contour OUTSIDE the shape rather than a line drawn on it. */
   --bevel-tile: inset 0 1px 0 0 rgba(255, 255, 255, 0.10), var(--hairline-contour);
@@ -949,7 +1198,7 @@ html[data-motion="off"] .sn-bulb-rainbow stop {
   --glass-active-opacity: 0.35;
 
   /* ===== Media card geometry =====
-     The one place Cider's grammar DOES use a squircle. Its chrome overrides
+     The one place the grammar DOES use a squircle. Chrome overrides
      back to round capsules, but a media card is `corner-shape: squircle` at
      24px — three times the rounded fallback.
 
@@ -963,7 +1212,7 @@ html[data-motion="off"] .sn-bulb-rainbow stop {
   --media-card-corner: round;
 
   /* ===== Elevation =====
-     Cider's drops are LADDERS, not single shadows. Its bottom toolbar reads:
+     Drops are LADDERS, not single shadows. A reference bottom toolbar reads:
 
          0 2px 4px  rgb(0 0 0 / 25%)
          0 8px 16px rgb(0 0 0 / 20%)
@@ -990,7 +1239,7 @@ html[data-motion="off"] .sn-bulb-rainbow stop {
      outlined in light; it is CONTOURED in dark, just outside its own edge,
      with at most a faint light rim inset within it.
 
-     Counted across Cider's shipped stylesheets: 368 uses of a dark 1px outer
+     Counted across the reference stylesheets: 368 uses of a dark 1px outer
      contour and 86 of a half-pixel one, against a handful of real `border`
      properties, none above 10% white. The reason it looks better is what each
      one says. A light line drawn ON a shape reads as an outline somebody
@@ -1000,8 +1249,8 @@ html[data-motion="off"] .sn-bulb-rainbow stop {
 
      The half-pixel is not a rounding error. On a 2x display it resolves to
      exactly one device pixel, the finest line that can be drawn; a 1px CSS
-     border is two, which is why ours read heavy beside Cider's at the same
-     nominal width. */
+     border is two, which is why ours read heavy against a reference at
+       the same nominal width. */
   --hairline-contour: 0 0 0 0.5px rgba(0, 0, 0, 0.4);
   /* Top edge only, never a ring. A continuous light line all the way round is
      a bezel: it claims light is arriving from every direction at once, which
@@ -1051,34 +1300,224 @@ html[data-motion="off"] .sn-bulb-rainbow stop {
   overflow-anchor: auto;
 }
 
-/* Custom scrollbar styles - Theme aware */
-.scrollbar-thin::-webkit-scrollbar,
-.custom-scrollbar::-webkit-scrollbar {
-  width: 8px;
+/* ===== Sidebar layering =====
+   Which of the two is on top depends on which one the sidebar currently IS, and
+   the states want opposite answers.
+
+   PINNED, the sidebar is furniture: it is always there, you are not looking at
+   it, and the app should read as sitting ON it. So the content column becomes a
+   card, rounded on the edge where the two meet and carrying a real drop, and the
+   drawer recedes behind it. Rounding only the leading corners is deliberate:
+   the card is flush to the window on its other three sides, and rounding those
+   would cut notches out of the window itself.
+
+   The shadow is a LADDER, not one blur: a tight drop for the near edge and a
+   wider diffuse one for the lift. One big blur reads as fog; two stacked read as
+   an object at a height.
+
+   There is deliberately NO hard contour in it. A 1px black line at the seam was
+   tried and cut: it draws a border rather than casting a shadow, which is the
+   opposite of the effect, and it is the first thing the eye finds. The drop has
+   to do the separating on its own.
+
+   The ladder is deliberately SHORT, 14px at its widest. It has to work against
+   the compact rail as well as the expanded panel, and the rail is about 56px:
+   the first attempt used a 26px blur, which on a rail that narrow is not a
+   shadow falling ON the drawer, it is a shadow covering it. A drop has to be
+   smaller than the thing it lands on or it stops reading as depth.
+
+   OVERLAID, the sidebar is the thing that just arrived, so it does the lifting
+   instead and the content stays flat underneath. Same ladder, mirrored. */
+html[data-sn-sidebar="pinned"][data-sn-sidebar-side="left"] .sn-content-layer {
+  border-top-left-radius: 14px;
+  border-bottom-left-radius: 14px;
+  box-shadow:
+    -2px 0 6px 0 rgb(0 0 0 / 0.38),
+    -5px 0 16px 0 rgb(0 0 0 / 0.26);
+}
+html[data-sn-sidebar="pinned"][data-sn-sidebar-side="right"] .sn-content-layer {
+  border-top-right-radius: 14px;
+  border-bottom-right-radius: 14px;
+  box-shadow:
+    2px 0 6px 0 rgb(0 0 0 / 0.38),
+    5px 0 16px 0 rgb(0 0 0 / 0.26);
+}
+/* Whenever the layering is on, the drop IS the edge and the panel's own border
+   has to go. `border-width: 0`, not `border-color: transparent`.
+
+   That distinction was the bug, twice. A transparent border still occupies its
+   1px of box and shows whatever is BEHIND the element through it, so the panel
+   ended up with a 1px see-through strip along its edge and the shadow beyond
+   that. Brandon, twice: "the sidebar, then some invisible space and then a black
+   border look." Colouring a border away does not remove it; only its width
+   does. */
+html[data-sn-sidebar="pinned"] .sn-sidebar-panel,
+html[data-sn-sidebar="overlay"] .sn-sidebar-panel {
+  border-width: 0;
 }
 
-.scrollbar-thin::-webkit-scrollbar-track,
-.custom-scrollbar::-webkit-scrollbar-track {
+/* Overlaid: the drawer is what lifts, and it lifts toward the content. */
+html[data-sn-sidebar="overlay"][data-sn-sidebar-side="left"] .sn-sidebar-panel {
+  border-top-right-radius: 14px;
+  border-bottom-right-radius: 14px;
+  box-shadow:
+    2px 0 8px 0 rgb(0 0 0 / 0.42),
+    5px 0 20px 0 rgb(0 0 0 / 0.30);
+}
+html[data-sn-sidebar="overlay"][data-sn-sidebar-side="right"] .sn-sidebar-panel {
+  border-top-left-radius: 14px;
+  border-bottom-left-radius: 14px;
+  box-shadow:
+    -2px 0 8px 0 rgb(0 0 0 / 0.42),
+    -5px 0 20px 0 rgb(0 0 0 / 0.30);
+}
+
+/* macOS keeps the platform's own scrollbars.
+   --------------------------------------------
+   Everything below builds a CUSTOM scrollbar, which is the right answer on
+   Windows: WebView2 draws classic, always-visible bars there and hands back a
+   stepper arrow at each end unless we take the whole thing over.
+   macOS has neither problem. It has overlay scrollbars that fade out when they
+   are not in use and take no layout width at all, and no steppers to remove. A
+   custom bar there is a straight downgrade: always visible, and 8px narrower
+   content forever.
+   The lever is the one this session went four rounds to find: `scrollbar-width`
+   and `scrollbar-color` are mutually exclusive with `::-webkit-scrollbar` in
+   Chromium and the STANDARD properties win, so setting them here switches macOS
+   back to the platform bar and leaves it themed. See
+   [[CSS_Scrollbar_Standard_Vs_Webkit]]. The same trap that broke Windows is
+   exactly the tool macOS wants. */
+html[data-platform="mac"] * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-scrollbar-thumb) transparent;
+}
+
+/* Scrollbars, app-wide.
+
+   This used to be scoped to `.scrollbar-thin` / `.custom-scrollbar`, which
+   meant every scroller that forgot the class kept the platform's default bar:
+   wider, differently coloured, and on Windows carrying a stepper arrow at each
+   end. Hunting the class down one element at a time is a losing game, and there
+   is no scroller in this app that wants to look different from the others, so
+   the base styling belongs on the bare pseudo-element. The two classes stay for
+   the places that override the size or colour.
+
+   `::-webkit-scrollbar-button` is the important line. Styling a scrollbar at all
+   opts the element into a CUSTOM scrollbar, and on Windows the parts left
+   unstyled fall back to the platform theme rather than to nothing, which is
+   exactly where the arrows come from. Nothing in the app steps a list one line
+   at a time, so they are cost with no use.
+
+   html/body/#root are `overflow: hidden` (see the layout reset below), so this
+   never paints a document scrollbar. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+/* Every other spelling Chromium has for the same two buttons. `display: none`
+   on the bare pseudo-element is the documented fix and was not enough here:
+   WebView2 on Windows kept drawing the platform theme's steppers, and which
+   selector actually reaches them depends on how the scrollbar was composed
+   (one button per end, a double button, or addressed by direction).
+
+   One rule each, deliberately, rather than a shared selector list: an
+   unrecognised selector invalidates the WHOLE list it appears in, so grouping
+   them would mean one unsupported spelling silently taking the supported ones
+   down with it. */
+::-webkit-scrollbar-button:single-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+::-webkit-scrollbar-button:double-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+::-webkit-scrollbar-button:start:decrement {
+  display: none;
+  width: 0;
+  height: 0;
+}
+::-webkit-scrollbar-button:end:increment {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-track {
   background: var(--color-scrollbar-track);
 }
 
-.scrollbar-thin::-webkit-scrollbar-thumb,
-.custom-scrollbar::-webkit-scrollbar-thumb {
+::-webkit-scrollbar-thumb {
   background: var(--color-scrollbar-thumb);
   border-radius: 4px;
 }
 
-.scrollbar-thin::-webkit-scrollbar-thumb:hover,
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+::-webkit-scrollbar-thumb:hover {
   background: var(--color-accent-muted);
 }
 
-/* Firefox scrollbar */
-.scrollbar-thin,
-.custom-scrollbar {
-  scrollbar-width: thin;
-  scrollbar-color: var(--color-scrollbar-thumb) var(--color-scrollbar-track);
+/* A scroller the floating chrome sits on top of.
+
+   The title bar reserves no space (see TitleBar.tsx), so this element reaches
+   the top of the window and its scrollbar would too: the thumb travels up
+   behind the bar and disappears under the window controls.
+
+   The content and the scrollbar need DIFFERENT geometry, and normally one
+   element cannot give you that: `overflow` clips to the padding box, so
+   anything that shortens the scrollbar also clips the content, which kills the
+   scroll-under this layout exists for. Margin on the TRACK is the one thing
+   that separates them: it shortens the thumb's range and leaves the content's
+   alone.
+
+   Written once before and pulled as an unverifiable quirk. It was not a quirk.
+   It was being disabled along with every other `::-webkit-scrollbar` rule in
+   this file by a `scrollbar-width: thin` sitting a few rules away; see the note
+   at the top of this section. */
+.sn-scroll-under-chrome::-webkit-scrollbar-track {
+  margin-top: 40px;
 }
+
+/* No `scrollbar-width` / `scrollbar-color` anywhere below, deliberately.
+
+   They are the standard properties and they look like the harmless
+   cross-browser companion to the pseudo-elements above. They are not: in
+   Chromium they are mutually exclusive with `::-webkit-scrollbar`, and the
+   STANDARD properties win. An element carrying `scrollbar-width: thin` gets the
+   platform's own scrollbar, and every `::-webkit-scrollbar-*` rule targeting it
+   is ignored outright.
+
+   Measured, four boxes, same page: pseudo-elements alone reserved 8px of layout
+   for the bar; pseudo-elements plus `scrollbar-width: thin` reserved 0px, the
+   same as no styling at all. The 0 is the tell that the custom bar was never
+   built.
+
+   That is what kept the stepper arrows on Windows: they belong to the platform
+   bar, so no amount of `::-webkit-scrollbar-button { display: none }` could
+   reach them. The rules were live and had nothing to act on.
+
+   The app runs on WebView2 and Android WebView, both Chromium, so there is no
+   Firefox to serve here. If a future build ever needs one, these properties go
+   behind `@supports not selector(::-webkit-scrollbar)`, never beside the
+   pseudo-elements. */
+
+/* `.scrollbar-thin` and `.custom-scrollbar` no longer carry a copy of the
+   recipe: the bare pseudo-elements above already style every scroller in the
+   app with exactly these values, so the class versions were four rules that
+   could only ever restate what was already true. The classes stay on the
+   elements, because the per-surface overrides further down this file (the
+   Dynamic Island, the chat overlay, mobile) still hang off them. */
 
 /* Animated gradient border for gift-bomb activity cards. A bright shine travels
    continuously around a colored ring so a bomb reads as a big deal, while the
@@ -1291,7 +1730,7 @@ body {
      put the stream's colour: it washed the surface the thumbnail sits on, so
      every card read as a coloured rectangle rather than a picture in a frame.
      The colour belongs in the GLAZE — the lit edge and the drop below — which
-     is exactly where Cider puts it, and it lets the colour be much stronger
+     is where it belongs, and it lets the colour be much stronger
      while taking up far less of the card. */
   background-image:
     linear-gradient(
@@ -1302,6 +1741,26 @@ body {
   border-radius: var(--media-card-radius);
   corner-shape: var(--media-card-corner);
   transition: box-shadow 0.35s ease;
+  /* No live blur, and it costs nothing to look at.
+
+     The card wears `.glass-panel`, which carries `backdrop-filter: blur(10px)`.
+     That blur has never had anything to do: a card's backdrop is the page, a
+     flat fill, and blurring a uniform colour returns the same uniform colour.
+     Checked rather than assumed, both contexts, rendered side by side against
+     the real rules: over the page, and over Home's veil with a stream playing
+     behind it, which is the only backdrop that is not flat. Indistinguishable
+     in both, because the veil has already flattened the video before the card
+     ever sees it.
+
+     What it costs is the part that matters. Every card in the grid is its own
+     backdrop-filtered layer, forty of them at a full window, and each one
+     re-rasterizes whenever the pixels behind it move. The grid scrolls UNDER
+     the floating chrome now, so that is every scroll frame.
+
+     This wins on source order, not specificity: `.media-card` and
+     `.glass-panel` are both one class, and this rule is ~100 lines below it. */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   /* A resting card is a fill and a shape and nothing else — no rim, no
      specular, no drop. A grid of forty outlined, lit rectangles reads as forty
      competing objects; the thumbnails are the content and the cards should get
@@ -1322,7 +1781,16 @@ body {
    as the same card lit rather than a different card. */
 .media-card:hover,
 .media-card:focus-visible {
-  box-shadow: 0 8px 30px -10px color-mix(in srgb, var(--stream-glow, var(--color-accent)) 62%, transparent);
+  /* Tight, not broad. This was `0 8px 30px -10px` at 62%, which carried 13px
+     past the bottom edge and 5px out either side on a 30px blur, so the colour
+     washed into the gutters and met the glow of whatever card was next to it.
+     A glow that reaches its neighbours stops reading as THIS card being lit.
+
+     `0 6px 18px -8px` keeps the shape and roughly halves the reach: 7px below
+     and 1px to the sides, on an 18px blur. The falloff is what changed most.
+     Intensity only comes down a little, from 62% to 58%, because the complaint
+     was how far it went rather than how bright it is at the source. */
+  box-shadow: 0 6px 18px -8px color-mix(in srgb, var(--stream-glow, var(--color-accent)) 58%, transparent);
 }
 
 /* Settings card — a flat grouped slab, not a raised panel. Dropping the bevel,
@@ -1534,7 +2002,7 @@ body {
   /* Hairlines, and nothing softer. An earlier pass put the compact player's
      lighting on this shell — an 18% border, a 5px blurred shine and a 14px
      interior glow. It was wrong twice over. That glow appears in exactly two
-     selectors in the whole of Cider, both of them the compact player, and
+     selectors in the reference, both of them the compact player, and
      there it sits directly on top of a live refracted copy of the content
      behind it, so it reads as light scattering through the material. With no
      refraction under it, it is just a white vignette. It was also tuned for a
@@ -3683,12 +4151,22 @@ html[data-watching] .drops-progress-inline {
 }
 
 /* ============================================
-   Dynamic Island Styles - OLED Pure Black
+   Dynamic Island
    ============================================ */
 .dynamic-island {
-  /* Pure OLED black - no gradients, no shadows, crisp edges */
-  background: #000000;
-  will-change: width, height, border-radius;
+  /* No fill of its own. The surface wears `.chrome-glaze --frosted` in the
+     markup, which is the same recipe as the trigger it grows out of, so the
+     swap between them is invisible and the morph carries one material the whole
+     way. It used to be `background: #000000` from an OLED pass, and once the
+     bar around it became floating glass a pitch-black slab was the only thing
+     in that row not made of the same stuff.
+
+     `--frosted` rather than bare glaze because this one holds paragraphs of
+     text over a playing stream, where a 34% film is not enough to read against.
+     Same knob Brandon reached for on the MultiNook arrow.
+
+     `will-change: width, height, border-radius` was here too and is gone: none
+     of those are compositable, so it was a hint the engine cannot act on. */
 }
 
 /* Notification entry animation */
@@ -5141,10 +5619,6 @@ html[data-motion="reduced"] .sn-ffz-anim-leave {
 }
 .sn-overlay-feed .chat-striped > .chat-message-row:nth-child(even) {
   background-color: color-mix(in srgb, var(--color-surface) calc(var(--sn-overlay-alpha) * 100%), transparent);
-}
-.sn-overlay-feed .overflow-y-auto {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, calc(0.28 * var(--sn-overlay-alpha))) transparent;
 }
 .sn-overlay-feed .overflow-y-auto::-webkit-scrollbar {
   width: 6px;

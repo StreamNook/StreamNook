@@ -1,7 +1,8 @@
-import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import { Fragment, useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Bell, Radio, MessageCircle, ChevronRight, User, Download, Gift, Award, Check, CheckCheck, Info, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
-import { X, SpeakerHigh, SpeakerSlash } from 'phosphor-react';
+import { Bell, Radio, MessageCircle, User, Download, Award, Check, CheckCheck, Info, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
+import { X, SpeakerSlash, Trash, PuzzlePiece, Package } from 'phosphor-react';
 import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../stores/AppStore';
@@ -10,6 +11,9 @@ import { deriveBadgeStatus, formatBadgeDateInfo } from '../utils/badgeWindow';
 import { playSound, type SoundId } from '../utils/notificationSound';
 import { liveActivityText } from '../utils/liveActivity';
 import { Tooltip } from './ui/Tooltip';
+import { parseKey } from '../utils/providerKey';
+import { ProviderIcon } from './overlay/ProviderIcon';
+import type { ProviderId } from '../types/providers';
 import type {
     DynamicIslandNotification,
     LiveNotificationData,
@@ -34,6 +38,13 @@ const TEST_NOTIFICATION_TTL_MS = 8000;
  *  render, and there is only ever one Dynamic Island. */
 const GO_LIVE_DEDUPE_MS = 5 * 60_000;
 const recentGoLive = new Map<string, number>();
+
+/** How long a live entry stays open to absorb the same channel on another
+ *  platform. Generous on purpose: a multicast rarely starts everywhere at once,
+ *  and two rows an hour apart are two events, not one. */
+const CROSS_PLATFORM_MERGE_MS = 10 * 60_000;
+/** channel (platform-free) -> the live entry currently standing for it. */
+const openLiveEntries = new Map<string, { id: string; providers: ProviderId[]; at: number }>();
 
 interface LiveNotificationFromBackend {
     streamer_name: string;
@@ -161,8 +172,11 @@ const getPreviewText = (n: DynamicIslandNotification): string => {
     }
 };
 
-// The leading glyph for the collapsed preview: profile picture for live/whisper
-// (with an icon fallback), a themed icon for everything else.
+// The leading mark for the collapsed preview AND for the stacked faces on the
+// trigger, which is why it has to agree with the rows in the list below: a
+// profile picture wherever there is one (a streamer, a whisper sender, you), the
+// source glyph for anything a plugin raised, and the type or level glyph
+// otherwise.
 const renderPreviewIcon = (n: DynamicIslandNotification): React.ReactNode => {
     switch (n.type) {
         case 'live': {
@@ -180,7 +194,7 @@ const renderPreviewIcon = (n: DynamicIslandNotification): React.ReactNode => {
         case 'update':
             return <Download size={11} className="text-yellow-400 flex-shrink-0" />;
         case 'drops':
-            return <Gift size={11} className="text-green-400 flex-shrink-0" />;
+            return <Package size={11} className="text-green-400 flex-shrink-0" />;
         case 'channel_points':
             return (
                 <svg width="11" height="11" viewBox="0 0 24 24" className="text-orange-400 flex-shrink-0" fill="currentColor">
@@ -191,10 +205,18 @@ const renderPreviewIcon = (n: DynamicIslandNotification): React.ReactNode => {
         case 'badge':
             return <Award size={11} className="text-cyan-400 flex-shrink-0" />;
         case 'system': {
-            const lvl = (n.data as SystemNotificationData).level;
-            if (lvl === 'success') return <CheckCircle2 size={11} className="text-green-400 flex-shrink-0" />;
-            if (lvl === 'error') return <XCircle size={11} className="text-red-400 flex-shrink-0" />;
-            if (lvl === 'warning') return <AlertTriangle size={11} className="text-yellow-400 flex-shrink-0" />;
+            const d = n.data as SystemNotificationData;
+            // Same order the row uses, for the same reason: a face beats a
+            // glyph, and a source beats a status. This drives BOTH the stacked
+            // faces on the trigger and the pop-up preview, so the two can never
+            // disagree with the list they came from.
+            if (d.avatar_url) {
+                return <img src={d.avatar_url} alt="" className="w-4 h-4 rounded-full object-cover flex-shrink-0" />;
+            }
+            if (d.source === 'plugin') return <PuzzlePiece size={11} className="text-accent flex-shrink-0" />;
+            if (d.level === 'success') return <CheckCircle2 size={11} className="text-green-400 flex-shrink-0" />;
+            if (d.level === 'error') return <XCircle size={11} className="text-red-400 flex-shrink-0" />;
+            if (d.level === 'warning') return <AlertTriangle size={11} className="text-yellow-400 flex-shrink-0" />;
             return <Info size={11} className="text-accent flex-shrink-0" />;
         }
         default:
@@ -205,7 +227,6 @@ const renderPreviewIcon = (n: DynamicIslandNotification): React.ReactNode => {
 const DynamicIsland = () => {
     const [isExpanded, setIsExpanded] = useState(false);
     const [notifications, setNotifications] = useState<DynamicIslandNotification[]>(() => loadCachedNotifications());
-    const [hasUnread, setHasUnread] = useState(false);
     const [latestNotification, setLatestNotification] = useState<DynamicIslandNotification | null>(null);
     const [showPreview, setShowPreview] = useState(false);
     const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight });
@@ -214,6 +235,17 @@ const DynamicIsland = () => {
     const [previewWidth, setPreviewWidth] = useState(200);
     const previewTextRef = useRef<HTMLSpanElement>(null);
     const islandRef = useRef<HTMLDivElement>(null);
+    // The title bar's slot for the resting trigger, and the trigger itself.
+    // Portaling into the title bar rather than rendering the trigger there
+    // keeps every notification in this component: nothing has to be lifted into
+    // a store just so two places can draw the same list.
+    const [slot, setSlot] = useState<HTMLElement | null>(null);
+    const triggerRef = useRef<HTMLButtonElement>(null);
+    // Where the surface grows FROM. Null until measured, and on mobile (no
+    // title bar, so no slot) it stays null and the old centred behaviour holds.
+    const [anchor, setAnchor] = useState<
+        { left: number; top: number; width: number; height: number; cover: number; radius: number } | null
+    >(null);
     const previewTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const updateCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
     
@@ -230,6 +262,91 @@ const DynamicIsland = () => {
     const { startStream, openWhisperWithUser, openSettings, addToast, setShowDropsOverlay, setShowBadgesOverlay, setUpdateInfo } = useAppStore.getState();
     const settings = useAppStore((s) => s.settings);
     const isSettingsOpen = useAppStore((s) => s.isSettingsOpen);
+
+    // Two homes, and which one is right changes as you navigate.
+    //
+    // With the Home strip on screen the trigger belongs INSIDE it, at the left
+    // end behind a hairline, and the notification expands to fill the strip.
+    // With no strip (watching a stream, a category drill-down, a phone) it is
+    // its own glazed pill floating in the bar, and expands from its own centre.
+    //
+    // The inline slot is Home's, so it appears and disappears as Home mounts and
+    // unmounts. A one-shot lookup would bind to whichever happened to exist at
+    // start-up and then be wrong for the rest of the session, so watch the nav
+    // slot (which is the title bar's own and always there) for the strip
+    // arriving or leaving.
+    useEffect(() => {
+        const outer = document.getElementById('sn-island-slot');
+        const resolve = () =>
+            setSlot(document.getElementById('sn-island-slot-inline') ?? outer);
+        resolve();
+        const host = document.getElementById('sn-nav-slot');
+        if (!host) return;
+        const mo = new MutationObserver(resolve);
+        mo.observe(host, { childList: true, subtree: true });
+        return () => mo.disconnect();
+    }, []);
+
+    // The slot moves whenever the centred group around it changes width -- the
+    // nav pill gaining a Results tab, say -- and that is a POSITION change with
+    // no size change, which a ResizeObserver on the slot alone would miss. So
+    // watch the parent too.
+    useLayoutEffect(() => {
+        if (!slot) return;
+        const measure = () => {
+            const r = slot.getBoundingClientRect();
+            // Joined into the strip, the thing being filled is the STRIP, so the
+            // geometry is the strip's pill and not the trigger's own box: same
+            // top, same height, and `cover` is its full width. Anchoring to the
+            // trigger instead filled the pill horizontally while sitting 4px
+            // inside it top and bottom, which reads as a chip laid over the bar
+            // rather than the bar being taken over.
+            //
+            // `width` is the box the surface STARTS from, so it still ends at
+            // the trigger's right edge: the notification blooms out of the
+            // trigger and runs to the end of the strip.
+            //
+            // Standalone (no strip on screen) there is nothing to fill: it keeps
+            // its own box, `cover` is 0, and the surface grows from its centre.
+            const pill = slot.closest('.glass-panel') as HTMLElement | null;
+            const pillR = pill?.getBoundingClientRect();
+            if (pillR && pillR.width > 0) {
+                setAnchor({
+                    left: pillR.left, top: pillR.top,
+                    width: Math.max(0, r.right - pillR.left),
+                    height: pillR.height,
+                    cover: pillR.width,
+                    // Read off the strip rather than hard-coded, so a surface that
+                    // covers it can never be a different shape from it. Two radii
+                    // on the same box is what left the strip's corners visible
+                    // around the notification filling it.
+                    radius: parseFloat(getComputedStyle(pill!).borderTopLeftRadius) || 0,
+                });
+                return;
+            }
+            setAnchor({
+                left: r.left, top: r.top,
+                width: r.width || 72, height: r.height || 34,
+                cover: 0,
+                radius: 0,
+            });
+        };
+        measure();
+        const ro = new ResizeObserver(measure);
+        ro.observe(slot);
+        if (slot.parentElement) ro.observe(slot.parentElement);
+        // The strip changes width on its own: a Results tab appearing, the
+        // search field focusing open. Both move the edge the surface fills to.
+        const navEl = document.getElementById('sn-nav-slot');
+        if (navEl) ro.observe(navEl);
+        const pillEl = slot.closest('.glass-panel');
+        if (pillEl) ro.observe(pillEl);
+        window.addEventListener('resize', measure);
+        return () => {
+            ro.disconnect();
+            window.removeEventListener('resize', measure);
+        };
+    }, [slot]);
 
     const soundEnabled = settings.live_notifications?.play_sound ?? true;
     const notificationsEnabled = settings.live_notifications?.enabled ?? true;
@@ -331,7 +448,6 @@ const DynamicIsland = () => {
             const newNotifications = [notification, ...prev].slice(0, MAX_NOTIFICATIONS);
             return newNotifications;
         });
-        setHasUnread(true);
         setLatestNotification(notification);
         setShowPreview(true);
 
@@ -355,16 +471,21 @@ const DynamicIsland = () => {
     // marks them read) and play no sound, since the action itself was the user's
     // own context.
     useEffect(() => {
-        const unlisten = listen<{ text: string; level?: SystemNotificationData['level'] }>('action-notification', (event) => {
+        const unlisten = listen<{
+            text: string;
+            level?: SystemNotificationData['level'];
+            avatarUrl?: string;
+            source?: SystemNotificationData['source'];
+        }>('action-notification', (event) => {
             if (!notificationsEnabled || !useDynamicIsland) return;
-            const { text, level } = event.payload;
+            const { text, level, avatarUrl, source } = event.payload;
             if (!text) return;
             addNotification({
                 id: `system-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                 type: 'system',
                 timestamp: Date.now(),
                 read: false,
-                data: { title: '', message: text, level } as SystemNotificationData,
+                data: { title: '', message: text, level, avatar_url: avatarUrl, source } as SystemNotificationData,
             });
         });
         return () => { unlisten.then((fn) => fn()); };
@@ -523,23 +644,57 @@ const DynamicIsland = () => {
 
             // Add to Dynamic Island if enabled (real notifications only)
             if (useDynamicIsland) {
-                const notification: DynamicIslandNotification = {
-                    id: `live-${Date.now()}-${data.streamer_login}`,
-                    type: 'live',
-                    timestamp: Date.now(),
-                    read: false,
-                    data: {
-                        streamer_name: data.streamer_name,
-                        streamer_login: data.streamer_login,
-                        streamer_avatar: data.streamer_avatar,
-                        game_name: data.game_name,
-                        game_image: data.game_image,
-                        stream_title: data.stream_title,
-                        is_live: true,
-                    } as LiveNotificationData,
-                };
+                // `streamer_login` is a bare login for Twitch and a composite
+                // `provider:channel` key for everyone else (see the emitter in
+                // favorite_live_service.rs), so the two key spaces this app
+                // keeps apart meet right here. `parseKey` is the seam between
+                // them: it hands back the platform and the platform-FREE
+                // channel, and the channel is what a person means when they say
+                // "xQc went live". That is the only thing worth merging on.
+                const { provider, channel } = parseKey(data.streamer_login);
+                const now = Date.now();
 
-                addNotification(notification);
+                // Sweep first: unbounded otherwise, and a stale entry would let
+                // a go-live an hour later silently graft onto the old row.
+                for (const [k, v] of openLiveEntries) {
+                    if (now - v.at >= CROSS_PLATFORM_MERGE_MS) openLiveEntries.delete(k);
+                }
+
+                const open = openLiveEntries.get(channel);
+                if (open && !open.providers.includes(provider)) {
+                    // Same person, another platform. One row, two marks.
+                    open.providers = [...open.providers, provider];
+                    open.at = now;
+                    setNotifications(prev => prev.map(n =>
+                        n.id === open.id
+                            ? {
+                                ...n,
+                                // Unread again: something new happened on it.
+                                read: false,
+                                data: { ...(n.data as LiveNotificationData), providers: open.providers },
+                            }
+                            : n,
+                    ));
+                } else if (!open) {
+                    const notification: DynamicIslandNotification = {
+                        id: `live-${now}-${data.streamer_login}`,
+                        type: 'live',
+                        timestamp: now,
+                        read: false,
+                        data: {
+                            streamer_name: data.streamer_name,
+                            streamer_login: data.streamer_login,
+                            streamer_avatar: data.streamer_avatar,
+                            game_name: data.game_name,
+                            game_image: data.game_image,
+                            stream_title: data.stream_title,
+                            is_live: true,
+                            providers: [provider],
+                        } as LiveNotificationData,
+                    };
+                    openLiveEntries.set(channel, { id: notification.id, providers: [provider], at: now });
+                    addNotification(notification);
+                }
             }
 
             // Show decorated toast if enabled - emit event for ToastManager to handle
@@ -805,13 +960,15 @@ const DynamicIsland = () => {
         if (useToast) {
             const toastContent = (
                 <div className="flex items-center gap-3 w-full">
-                    {/* Channel Points Icon */}
-                    <div className="w-10 h-10 rounded-full bg-orange-500/20 flex items-center justify-center flex-shrink-0">
-                        <svg width="20" height="20" viewBox="0 0 24 24" className="text-orange-400" fill="currentColor">
+                    {/* Free-standing, same as the notification centre. The toast is
+                        already a surface; a filled disc inside it was a box in a box,
+                        and ToastManager's own icons never had one. */}
+                    <span className="sn-notif-glyph">
+                        <svg width="22" height="22" viewBox="0 0 24 24" className="text-orange-400" fill="currentColor">
                             <path d="M12 5v2a5 5 0 0 1 5 5h2a7 7 0 0 0-7-7Z"></path>
                             <path fillRule="evenodd" d="M1 12C1 5.925 5.925 1 12 1s11 4.925 11 11-4.925 11-11 11S1 18.075 1 12Zm11 9a9 9 0 1 1 0-18 9 9 0 0 1 0 18Z" clipRule="evenodd"></path>
                         </svg>
-                    </div>
+                    </span>
 
                     {/* Text Content */}
                     <div className="flex-1 min-w-0">
@@ -1071,6 +1228,10 @@ const DynamicIsland = () => {
     // Click outside to close
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
+            // The trigger lives in the title bar now, outside islandRef, so
+            // without this a click on it would collapse the surface in the same
+            // gesture that opened it.
+            if (triggerRef.current?.contains(event.target as Node)) return;
             if (islandRef.current && !islandRef.current.contains(event.target as Node)) {
                 setIsExpanded(false);
             }
@@ -1158,7 +1319,6 @@ const DynamicIsland = () => {
     // Clear all notifications
     const clearAllNotifications = () => {
         setNotifications([]);
-        setHasUnread(false);
     };
 
     // Mark single notification as read
@@ -1174,18 +1334,27 @@ const DynamicIsland = () => {
         setNotifications(prev =>
             prev.map(n => ({ ...n, read: true }))
         );
-        setHasUnread(false);
     };
 
     // Get unread count
     const unreadCount = notifications.filter(n => !n.read).length;
 
-    // Update hasUnread when notifications change
-    useEffect(() => {
-        setHasUnread(unreadCount > 0);
-    }, [unreadCount]);
 
     // Format time ago - uses 'now' state (updated every 30s) to avoid impure function calls during render
+    // Day buckets for the list headers. Calendar days rather than rolling
+    // windows: "Today" has to mean today, or a header is worse than none.
+    const groupLabel = (timestamp: number) => {
+        const d = new Date(timestamp);
+        const now = new Date();
+        const sameDay = (a: Date, b: Date) =>
+            a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+        if (sameDay(d, now)) return 'Today';
+        const yesterday = new Date(now);
+        yesterday.setDate(now.getDate() - 1);
+        if (sameDay(d, yesterday)) return 'Yesterday';
+        return 'Earlier';
+    };
+
     const formatTimeAgo = (timestamp: number) => {
         const seconds = Math.floor((now - timestamp) / 1000);
         if (seconds < 60) return 'Just now';
@@ -1199,6 +1368,11 @@ const DynamicIsland = () => {
 
     // Calculate collapsed width based on notifications
     const getCollapsedWidth = () => {
+        // Joined into the strip, a preview CONSUMES it: the notification takes
+        // the whole nav pill and hands it back, which is the same move the
+        // search makes from the other end. Fitting the pill to the message
+        // instead leaves it stopping at some arbitrary point mid-strip.
+        if (anchor?.cover) return anchor.cover;
         if (showPreview && latestNotification) {
             // Fit the pill to the current preview's content (measured in the
             // useLayoutEffect above) so the whole message shows instead of
@@ -1207,11 +1381,96 @@ const DynamicIsland = () => {
             // sides, then contracts back once the preview auto-hides.
             return previewWidth;
         }
-        // Idle: a fixed compact pill. The quiet unread dot fits without widening.
+        // Idle never renders any more -- the trigger in the title bar IS the
+        // resting state -- so this only backstops a preview with no measurement
+        // yet. Matching the trigger's own width keeps the growth starting from
+        // exactly its edge rather than jumping.
         return 72;
     };
 
+    // Does the black surface have anything to say? Idle it is invisible and the
+    // trigger in the title bar stands in its place.
+    // Inside the strip it is a strip member: flat, like the tab pills beside it,
+    // because a second blur of an already-blurred panel is visually identical
+    // and costs a nested compositing layer. Standalone it is chrome in its own
+    // right and keeps the full glaze.
+    const inline = slot?.id === 'sn-island-slot-inline';
+
+    const wantsSurface = isExpanded || (showPreview && !!latestNotification);
+    // ...but it has to stay on screen for the whole collapse, or the shrink
+    // never plays: hiding on the same tick the state flips means the bar simply
+    // vanishes at full width. `surfaceShown` therefore turns on with the
+    // request and off only when the spring has finished putting it back.
+    const [surfaceShown, setSurfaceShown] = useState(false);
+    useEffect(() => {
+        if (wantsSurface) {
+            setSurfaceShown(true);
+            return;
+        }
+        // 340ms: just past the end of the container's fade below.
+        //
+        // This used to hang off the spring's `onAnimationComplete`, and THAT is
+        // what produced the pause. A spring is not finished when it looks
+        // finished: it arrives, then runs a long invisible tail until framer's
+        // rest thresholds are met. So the surface sat there, fully opaque and
+        // covering the notification area, waiting for an event nobody could
+        // see, and then blinked out. A fixed clock cannot do that.
+        const t = setTimeout(() => setSurfaceShown(false), 340);
+        return () => clearTimeout(t);
+    }, [wantsSurface]);
+    const shown = notifications.slice(0, 3);
+    const hasSeveralDays = new Set(notifications.map((n) => groupLabel(n.timestamp))).size > 1;
+    const overflow = notifications.length - shown.length;
+
     return (
+        <>
+            {slot && createPortal(
+                /* The door, not the surface. It stays put and stays small; the
+                   surface above grows out of it and collapses back into it. */
+                <Tooltip content="Notifications" side="bottom">
+                    <button
+                        ref={triggerRef}
+                        type="button"
+                        aria-label="Notifications"
+                        data-tauri-drag-region="false"
+                        onClick={() => setIsExpanded((v) => !v)}
+                        className={
+                            inline
+                                // Bare inside the strip. The strip already carries a
+                                // pill, the one that slides between the tabs, and a
+                                // second one sitting next to it reads as two
+                                // competing selections rather than one control and
+                                // one indicator. The hairline is what separates it.
+                                ? 'sn-notif-trigger sn-notif-trigger--inline'
+                                // Standalone it IS the chrome, so it takes the full
+                                // material like the clusters either side of it.
+                                : 'sn-notif-trigger chrome-glaze chrome-glaze--control'
+                        }
+                    >
+                        {shown.length === 0 ? (
+                            <Bell size={15} className="text-textSecondary" />
+                        ) : (
+                            <>
+                                {shown.map((n, i) => (
+                                    <span
+                                        key={n.id}
+                                        className="sn-notif-face"
+                                        /* Overlapped rather than spaced: a stack reads as
+                                           "several things" at a glance and stays narrow,
+                                           where discrete slots got wide fast and needed
+                                           dividers that fought the glaze's own rim. */
+                                        style={i ? { marginLeft: -7 } : undefined}
+                                    >
+                                        {renderPreviewIcon(n)}
+                                    </span>
+                                ))}
+                                {overflow > 0 && <span className="sn-notif-more">+{overflow}</span>}
+                            </>
+                        )}
+                    </button>
+                </Tooltip>,
+                slot,
+            )}
             <div
                 ref={islandRef}
                 // Rendered at the app root (see App.tsx) and pinned to the top
@@ -1222,8 +1481,53 @@ const DynamicIsland = () => {
                 // at the normal title-bar layer (z-50). The element stays mounted
                 // across this toggle (only the class changes), so there is no
                 // re-mount flash of the unread-count badge.
-                className={`fixed left-1/2 -translate-x-1/2 top-1.5 ${isSettingsOpen ? 'z-[55]' : 'z-50'}`}
-                style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+                // Pinned to the trigger's LEFT edge rather than recentred, so the
+                // surface grows rightward over the nav and gives it back on
+                // collapse. That also retires the recentring this file blames for
+                // the settle jitter: only `width` animates now, nothing is
+                // fighting a translateX(-50%).
+                //
+                // Still rendered at the app root (see App.tsx) so it is not
+                // trapped in the title bar's stacking context, and still lifted
+                // to z-[55] over the settings blur overlay.
+                className={`fixed ${isSettingsOpen ? 'z-[55]' : 'z-50'}`}
+                style={{
+                    // Anchored to the trigger's LEFT edge only when there is a
+                    // nav to the right of it to take over: that is the whole
+                    // point of growing that way. In a stream view Home is
+                    // unmounted, so nothing is portaled into the nav slot, and
+                    // opening rightward threw a panel out across empty bar for
+                    // no reason. With nothing to cover it reverts to what a
+                    // dynamic island normally does and grows from its own centre.
+                    left: anchor
+                        ? (anchor.cover ? anchor.left : anchor.left + anchor.width / 2)
+                        : '50%',
+                    top: anchor ? anchor.top : 6,
+                    // No anchor means no title bar (mobile): keep the old centring.
+                    transform: anchor && anchor.cover ? undefined : 'translateX(-50%)',
+                    // Idle is invisible, and an invisible pill must not eat the
+                    // clicks meant for the nav underneath it.
+                    //
+                    // No fade. The surface appears at exactly the trigger's box,
+                    // pitch black and opaque, so the swap is invisible and the
+                    // only thing the eye can follow is the size springing out:
+                    // the button becomes the bar. Cross-fading instead was the
+                    // whole problem, because for 180ms you saw the trigger
+                    // THROUGH a half-transparent black pill, which reads as a
+                    // panel appearing rather than a control opening.
+                    opacity: surfaceShown && wantsSurface ? 1 : 0,
+                    pointerEvents: wantsSurface ? 'auto' : 'none',
+                    // Opening: instant, so the swap at the trigger's box stays
+                    // invisible and the spring is the only thing you follow.
+                    //
+                    // Closing: hold at full opacity for 180ms while the spring
+                    // does the collapse you already liked, THEN fade over 120ms.
+                    // 180ms is about where this spring is visually home (natural
+                    // frequency 20 rad/s, damping ratio 0.89), so the fade lands
+                    // on the tail rather than replacing the travel.
+                    transition: wantsSurface ? 'none' : 'opacity 120ms linear 180ms',
+                    WebkitAppRegion: 'no-drag',
+                } as React.CSSProperties}
             >
                 <motion.div
                     // No `layout` here on purpose: width/height are animated
@@ -1232,16 +1536,24 @@ const DynamicIsland = () => {
                     // caused the left/right jitter as the pill settled back.
                     initial={false}
                     animate={{
-                        width: isExpanded ? expandedWidth : getCollapsedWidth(),
+                        // Idle is the trigger's own box, so the surface visibly
+                        // shrinks back INTO it rather than blinking out.
+                        width: isExpanded
+                            ? (anchor?.cover || expandedWidth)
+                            : wantsSurface
+                                ? getCollapsedWidth()
+                                : (anchor?.width ?? 72),
                         // Collapsed pill sits centered in the title bar. The bar is
                         // h-[40px] (less a 1px bottom border); container at top-1.5 (6px)
                         // + a 28px pill leaves an even gap above and below.
-                        height: isExpanded ? Math.min(maxHeight, 64 + notifications.length * itemHeight) : 28,
+                        height: isExpanded
+                            ? Math.min(maxHeight, 64 + notifications.length * itemHeight)
+                            : (anchor?.height ?? 28),
                     }}
+                    // One spring, both directions. The collapse was never the
+                    // problem and every attempt to "improve" it (a tween, a
+                    // retimed tween) only replaced something that already worked.
                     transition={{
-                        // Softer than a snappy popup so the pill flows open and
-                        // contracts cleanly. This spring drives the dynamic-island
-                        // grow/shrink as notifications come and go.
                         type: 'spring',
                         stiffness: 360,
                         damping: 32,
@@ -1256,10 +1568,17 @@ const DynamicIsland = () => {
                             }
                         }
                     }}
-                    className="dynamic-island overflow-hidden cursor-pointer"
+                    className="dynamic-island chrome-glaze chrome-glaze--frosted overflow-hidden cursor-pointer"
                     style={{
                         backgroundColor: '#000000',
-                        borderRadius: isExpanded ? 20 : 14,
+                        // Capsule when small, so it matches the trigger it grows
+                        // out of; softer rectangle once it is a panel.
+                        // Open as a list it is a panel and takes a panel's corner.
+                        // Sitting in the strip it takes the STRIP's corner, measured,
+                        // so it lands exactly on top of it.
+                        borderRadius: isExpanded
+                            ? 20
+                            : (anchor?.radius || (anchor ? anchor.height / 2 : 14)),
                         // No outer rim. The expanded panel keeps a soft black drop
                         // shadow for depth; the collapsed pill is pure black. Unread
                         // still surfaces via the accent dot, not a border ring.
@@ -1292,16 +1611,7 @@ const DynamicIsland = () => {
                                             {getPreviewText(latestNotification)}
                                         </span>
                                     </motion.div>
-                                ) : (
-                                    // Default state: just a quiet accent dot when there are
-                                    // unread notifications, otherwise an empty black pill.
-                                    // The count itself lives in the expanded header.
-                                    <div className="flex items-center justify-center w-full">
-                                        {hasUnread ? (
-                                            <span className="block w-1.5 h-1.5 rounded-full bg-accent" />
-                                        ) : null}
-                                    </div>
-                                )}
+                                ) : null}
                             </motion.div>
                         )}
                     </AnimatePresence>
@@ -1316,71 +1626,110 @@ const DynamicIsland = () => {
                                 transition={{ duration: 0.15 }}
                                 className="flex flex-col h-full"
                             >
-                                {/* Header */}
+                                {/* Header.
+                                    Actions live up here now, not under the list.
+                                    Below the list they scrolled away the moment
+                                    there was anything to clear, so the one control
+                                    you wanted was the one you had to scroll to
+                                    reach. This row does not scroll.
+
+                                    The sound indicator only appears when sound is
+                                    OFF. A speaker icon shown while sound is on
+                                    reports the absence of a problem, which is the
+                                    default state and therefore nothing to say. */}
                                 <div
-                                    className="relative flex items-center px-5 py-4"
-                                    style={{
-                                        borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+                                    className="sn-notif-head relative flex flex-shrink-0 items-center gap-2 px-4"
+                                    onClick={(e) => {
+                                        // The header background closes the panel.
+                                        // This replaces an invisible strip across
+                                        // the middle third, which nothing could
+                                        // have told you was there. Buttons stop
+                                        // propagation, so only the empty run
+                                        // between them acts.
+                                        e.stopPropagation();
+                                        setIsExpanded(false);
                                     }}
                                 >
-                                    {/* Invisible close button in the middle third */}
-                                    <Tooltip content="Click to close" side="bottom">
-                                        <div
-                                            className="absolute left-1/3 right-1/3 top-0 bottom-0 cursor-pointer z-10"
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                setIsExpanded(false);
-                                            }}
-                                        />
-                                    </Tooltip>
-                                    {/* Sound icon on the left */}
-                                    <div className="flex-shrink-0">
-                                        {soundEnabled ? (
-                                            <SpeakerHigh size={16} className="text-white/40" />
-                                        ) : (
-                                            <SpeakerSlash size={16} className="text-white/30" />
-                                        )}
-                                    </div>
-                                    {/* Centered notifications text and count */}
-                                    <div className="flex-1 flex items-center justify-center gap-2">
-                                        <span className="text-white font-semibold text-base">Notifications</span>
-                                        {unreadCount > 0 && (
-                                            <span
-                                                className="text-[10px] font-bold px-1.5 py-0.5 rounded-full text-black"
-                                                style={{
-                                                    backgroundColor: 'var(--color-accent)',
+                                    <span className="text-[13px] font-semibold tracking-tight text-white">
+                                        Notifications
+                                    </span>
+                                    {unreadCount > 0 && (
+                                        <span className="sn-notif-count">{unreadCount}</span>
+                                    )}
+                                    {!soundEnabled && (
+                                        <Tooltip content="Notification sounds are off" side="bottom">
+                                            <SpeakerSlash size={14} className="text-white/35" />
+                                        </Tooltip>
+                                    )}
+
+                                    <span className="flex-1" />
+
+                                    {unreadCount > 0 && (
+                                        <Tooltip content="Mark all read" side="bottom">
+                                            <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    markAllAsRead();
                                                 }}
+                                                className="sn-notif-action"
+                                                aria-label="Mark all read"
                                             >
-                                                {unreadCount}
-                                            </span>
-                                        )}
-                                    </div>
-                                    {/* Empty spacer on the right to balance the sound icon */}
-                                    <div className="flex-shrink-0 w-4" />
+                                                <CheckCheck size={15} />
+                                            </button>
+                                        </Tooltip>
+                                    )}
+                                    {notifications.length > 0 && (
+                                        <Tooltip content="Clear all" side="bottom">
+                                            <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    clearAllNotifications();
+                                                }}
+                                                className="sn-notif-action sn-notif-action--danger"
+                                                aria-label="Clear all"
+                                            >
+                                                <Trash size={15} />
+                                            </button>
+                                        </Tooltip>
+                                    )}
                                 </div>
 
                                 {/* Notifications List */}
                                 <div className="flex-1 overflow-y-auto scrollbar-thin">
                                     {notifications.length === 0 ? (
-                                        <div className="flex flex-col items-center justify-center py-12 text-white/40">
-                                            <Bell size={28} className="mb-3" />
-                                            <span className="text-sm">No notifications</span>
+                                        <div className="flex flex-col items-center justify-center gap-3 py-14">
+                                            <span className="sn-notif-empty-ring">
+                                                <Bell size={20} className="text-textSecondary" />
+                                            </span>
+                                            <span className="text-[13px] font-medium text-textSecondary">
+                                                Nothing to catch up on
+                                            </span>
                                         </div>
                                     ) : (
-                                        <div className="p-3 space-y-2">
-                                            {notifications.map((notification) => (
+                                        <div className="pb-1">
+                                            {notifications.map((notification, i) => {
+                                            // A single "Today" over a list that is
+                                            // entirely today is a label telling you
+                                            // nothing, so headers only appear once
+                                            // there is more than one bucket to tell
+                                            // apart.
+                                            const label = groupLabel(notification.timestamp);
+                                            const showHeader = hasSeveralDays
+                                                && (i === 0 || groupLabel(notifications[i - 1].timestamp) !== label);
+                                            return (
+                                            <Fragment key={notification.id}>
+                                            {showHeader && <div className="sn-notif-group">{label}</div>}
                                                 <motion.div
-                                                    key={notification.id}
                                                     layout
                                                     initial={{ opacity: 0, y: -10 }}
                                                     animate={{ opacity: 1, y: 0 }}
                                                     exit={{ opacity: 0, x: -100 }}
                                                     onClick={() => handleNotificationClick(notification)}
-                                                    className={`
-                                                        flex items-center gap-4 p-3 rounded-xl cursor-pointer
-                                                        ${notification.read ? 'bg-white/5' : 'bg-white/10'}
-                                                        hover:bg-white/15 transition-colors group
-                                                    `}
+                                                    className={`sn-notif-row group ${
+                                                        notification.read ? '' : 'sn-notif-row--unread'
+                                                    }`}
                                                 >
                                                     {notification.type === 'live' ? (
                                                         <>
@@ -1390,11 +1739,11 @@ const DynamicIsland = () => {
                                                                     <img
                                                                         src={(notification.data as LiveNotificationData).streamer_avatar}
                                                                         alt=""
-                                                                        className="w-12 h-12 rounded-full object-cover"
+                                                                        className="w-[34px] h-[34px] rounded-full object-cover"
                                                                     />
                                                                 ) : (
-                                                                    <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center">
-                                                                        <User size={18} className="text-white/50" />
+                                                                    <div className="sn-notif-glyph">
+                                                                        <User size={21} className="text-white/45" />
                                                                     </div>
                                                                 )}
                                                                 {(notification.data as LiveNotificationData).is_live && (
@@ -1407,6 +1756,16 @@ const DynamicIsland = () => {
                                                                     <span className="text-white text-sm font-semibold truncate">
                                                                         {(notification.data as LiveNotificationData).streamer_name}
                                                                     </span>
+                                                                    {/* The marks carry the platform. With one they
+                                                                        say where the click goes; with two they are
+                                                                        the whole reason the row is one row. */}
+                                                                    {!!(notification.data as LiveNotificationData).providers?.length && (
+                                                                        <span className="sn-notif-marks">
+                                                                            {(notification.data as LiveNotificationData).providers!.map((pid) => (
+                                                                                <ProviderIcon key={pid} provider={pid} size="12px" />
+                                                                            ))}
+                                                                        </span>
+                                                                    )}
                                                                 </div>
                                                                 <p className="text-white/50 text-sm truncate mt-0.5">
                                                                     {(notification.data as LiveNotificationData).is_live
@@ -1424,11 +1783,11 @@ const DynamicIsland = () => {
                                                                     <img
                                                                         src={(notification.data as WhisperNotificationData).profile_image_url}
                                                                         alt=""
-                                                                        className="w-12 h-12 rounded-full object-cover"
+                                                                        className="w-[34px] h-[34px] rounded-full object-cover"
                                                                     />
                                                                 ) : (
-                                                                    <div className="w-12 h-12 rounded-full bg-purple-500/20 flex items-center justify-center">
-                                                                        <MessageCircle size={18} className="text-purple-400" />
+                                                                    <div className="sn-notif-glyph">
+                                                                        <MessageCircle size={21} className="text-purple-400" />
                                                                     </div>
                                                                 )}
                                                             </div>
@@ -1448,8 +1807,8 @@ const DynamicIsland = () => {
                                                         <>
                                                             {/* Update notification */}
                                                             <div className="relative flex-shrink-0">
-                                                                <div className="w-12 h-12 rounded-full bg-yellow-500/20 flex items-center justify-center">
-                                                                    <Download size={18} className="text-yellow-400" />
+                                                                <div className="sn-notif-glyph">
+                                                                    <Download size={21} className="text-yellow-400" />
                                                                 </div>
                                                             </div>
                                                             <div className="flex-1 min-w-0">
@@ -1472,17 +1831,23 @@ const DynamicIsland = () => {
                                                                     <img
                                                                         src={(notification.data as DropsNotificationData).benefit_image_url}
                                                                         alt=""
-                                                                        className="w-12 h-12 rounded-lg object-cover"
+                                                                        className="w-[34px] h-[34px] rounded-lg object-cover"
                                                                     />
                                                                 ) : (
-                                                                    <div className="w-12 h-12 rounded-full bg-green-500/20 flex items-center justify-center">
-                                                                        <Gift size={18} className="text-green-400" />
+                                                                    <div className="sn-notif-glyph">
+                                                                        <Package size={21} className="text-green-400" />
                                                                     </div>
                                                                 )}
                                                             </div>
                                                             <div className="flex-1 min-w-0">
                                                                 <div className="flex items-center gap-2">
-                                                                    <Gift size={14} className="text-green-400 flex-shrink-0" />
+                                                                    {/* Only alongside the drop's own artwork. Without
+                                                                        it the leading slot already carries this exact
+                                                                        mark, and two of them on one row is what the
+                                                                        channel-points row was doing. */}
+                                                                    {!!(notification.data as DropsNotificationData).benefit_image_url && (
+                                                                        <Package size={14} className="text-green-400 flex-shrink-0" />
+                                                                    )}
                                                                     <span className="text-white text-sm font-semibold truncate">
                                                                         Drop Claimed
                                                                     </span>
@@ -1496,7 +1861,7 @@ const DynamicIsland = () => {
                                                         <>
                                                             {/* Channel Points notification */}
                                                             <div className="relative flex-shrink-0">
-                                                                <div className="w-12 h-12 rounded-full bg-orange-500/20 flex items-center justify-center">
+                                                                <div className="sn-notif-glyph">
                                                                     <svg width="18" height="18" viewBox="0 0 24 24" className="text-orange-400" fill="currentColor">
                                                                         <path d="M12 5v2a5 5 0 0 1 5 5h2a7 7 0 0 0-7-7Z"></path>
                                                                         <path fillRule="evenodd" d="M1 12C1 5.925 5.925 1 12 1s11 4.925 11 11-4.925 11-11 11S1 18.075 1 12Zm11 9a9 9 0 1 1 0-18 9 9 0 0 1 0 18Z" clipRule="evenodd"></path>
@@ -1504,11 +1869,10 @@ const DynamicIsland = () => {
                                                                 </div>
                                                             </div>
                                                             <div className="flex-1 min-w-0">
+                                                                {/* One points mark per row. The leading glyph already
+                                                                    says what this is; a second copy beside the title was
+                                                                    the same icon twice on one line. */}
                                                                 <div className="flex items-center gap-2">
-                                                                    <svg width="14" height="14" viewBox="0 0 24 24" className="text-orange-400 flex-shrink-0" fill="currentColor">
-                                                                        <path d="M12 5v2a5 5 0 0 1 5 5h2a7 7 0 0 0-7-7Z"></path>
-                                                                        <path fillRule="evenodd" d="M1 12C1 5.925 5.925 1 12 1s11 4.925 11 11-4.925 11-11 11S1 18.075 1 12Zm11 9a9 9 0 1 1 0-18 9 9 0 0 1 0 18Z" clipRule="evenodd"></path>
-                                                                    </svg>
                                                                     <span className="text-white text-sm font-semibold truncate">
                                                                         Channel Points +{(notification.data as ChannelPointsNotificationData).points_earned.toLocaleString()}
                                                                     </span>
@@ -1545,11 +1909,11 @@ const DynamicIsland = () => {
                                                                     <img
                                                                         src={(notification.data as BadgeNotificationData).badge_image_url}
                                                                         alt=""
-                                                                        className="w-12 h-12 rounded-lg object-cover"
+                                                                        className="w-[34px] h-[34px] rounded-lg object-cover"
                                                                     />
                                                                 ) : (
-                                                                    <div className="w-12 h-12 rounded-full bg-cyan-500/20 flex items-center justify-center">
-                                                                        <Award size={18} className="text-cyan-400" />
+                                                                    <div className="sn-notif-glyph">
+                                                                        <Award size={21} className="text-cyan-400" />
                                                                     </div>
                                                                 )}
                                                                 {/* Status indicator */}
@@ -1591,20 +1955,41 @@ const DynamicIsland = () => {
                                                             {/* Action feedback mirrored from a toast */}
                                                             {(() => {
                                                                 const d = notification.data as SystemNotificationData;
-                                                                const Icon = d.level === 'success' ? CheckCircle2
+                                                                // Source beats level: what a plugin has to say is more
+                                                                // useful than the fact that it went fine.
+                                                                const Icon = d.source === 'plugin' ? PuzzlePiece
+                                                                    : d.level === 'success' ? CheckCircle2
                                                                     : d.level === 'error' ? XCircle
                                                                     : d.level === 'warning' ? AlertTriangle
                                                                     : Info;
-                                                                const color = d.level === 'success' ? 'text-green-400'
+                                                                const color = d.source === 'plugin' ? 'text-accent'
+                                                                    : d.level === 'success' ? 'text-green-400'
                                                                     : d.level === 'error' ? 'text-red-400'
                                                                     : d.level === 'warning' ? 'text-yellow-400'
                                                                     : 'text-accent';
                                                                 return (
                                                                     <>
                                                                         <div className="relative flex-shrink-0">
-                                                                            <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center">
-                                                                                <Icon size={18} className={color} />
-                                                                            </div>
+                                                                            {d.avatar_url ? (
+                                                                                <>
+                                                                                    <img
+                                                                                        src={d.avatar_url}
+                                                                                        alt=""
+                                                                                        className="w-[34px] h-[34px] rounded-full object-cover"
+                                                                                    />
+                                                                                    {/* The glyph survives as a small seal on the
+                                                                                        face, so the row still says at a glance
+                                                                                        whether it went well without giving the
+                                                                                        whole circle over to a tick. */}
+                                                                                    <span className="sn-notif-seal">
+                                                                                        <Icon size={13} className={color} />
+                                                                                    </span>
+                                                                                </>
+                                                                            ) : (
+                                                                                <div className="sn-notif-glyph">
+                                                                                    <Icon size={21} className={color} />
+                                                                                </div>
+                                                                            )}
                                                                         </div>
                                                                         <div className="flex-1 min-w-0">
                                                                             <p className="text-white/90 text-sm line-clamp-2">
@@ -1617,8 +2002,8 @@ const DynamicIsland = () => {
                                                         </>
                                                     ) : null}
 
-                                                    <div className="flex items-center gap-1.5 flex-shrink-0">
-                                                        <span className="text-white/30 text-xs">
+                                                    <div className="flex flex-shrink-0 items-center gap-1.5 self-start pt-[3px]">
+                                                        <span className="text-[10.5px] text-white/30">
                                                             {formatTimeAgo(notification.timestamp)}
                                                         </span>
                                                         {/* Mark as read button - only show for unread notifications */}
@@ -1640,36 +2025,11 @@ const DynamicIsland = () => {
                                                                 <X size={14} />
                                                             </button>
                                                         </Tooltip>
-                                                        <ChevronRight size={14} className="text-white/30" />
                                                     </div>
                                                 </motion.div>
-                                            ))}
-                                            {/* Footer Actions */}
-                                            <div className="flex gap-2 mt-2">
-                                                {/* Mark All as Read Button - only show if there are unread */}
-                                                {unreadCount > 0 && (
-                                                    <button
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            markAllAsRead();
-                                                        }}
-                                                        className="flex-1 py-2 text-white/40 hover:text-green-400 text-xs transition-colors text-center rounded-lg hover:bg-white/5 flex items-center justify-center gap-1.5"
-                                                    >
-                                                        <CheckCheck size={12} />
-                                                        Mark all read
-                                                    </button>
-                                                )}
-                                                {/* Clear All Button */}
-                                                <button
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        clearAllNotifications();
-                                                    }}
-                                                    className={`${unreadCount > 0 ? 'flex-1' : 'w-full'} py-2 text-white/40 hover:text-white/70 text-xs transition-colors text-center rounded-lg hover:bg-white/5`}
-                                                >
-                                                    Clear all
-                                                </button>
-                                            </div>
+                                            </Fragment>
+                                            );
+                                            })}
                                         </div>
                                     )}
                                 </div>
@@ -1678,6 +2038,7 @@ const DynamicIsland = () => {
                     </AnimatePresence>
                 </motion.div>
             </div>
+        </>
     );
 };
 

@@ -35,7 +35,11 @@ const PluginRuntimeBridge = () => {
         (event) => {
           const { plugin_name, level, message } = event.payload;
           const toastLevel = level === 'warning' ? 'info' : level === 'error' ? 'error' : 'info';
-          addToast(`${plugin_name}: ${message}`, toastLevel as 'info' | 'error');
+          addToast(`${plugin_name}: ${message}`, toastLevel as 'info' | 'error', undefined, {
+            // So the notification centre marks it as a plugin rather than as
+            // one more status line.
+            source: 'plugin',
+          });
         }
       );
       const un3 = await listen<{ name: string; reason: string }>(

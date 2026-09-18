@@ -1624,6 +1624,14 @@ export interface DynamicIslandNotification {
 export interface LiveNotificationData {
   streamer_name: string;
   streamer_login: string;
+  /** Every platform this one entry stands for.
+   *
+   *  A channel that goes live on Twitch and then on Kick is one event to the
+   *  person reading it, so the two collapse into a single entry carrying both
+   *  marks rather than two rows with the same face and name. `streamer_login`
+   *  stays whatever the FIRST one carried, so the click still opens something
+   *  real. Optional because entries cached before this existed have no idea. */
+  providers?: ProviderId[];
   streamer_avatar?: string;
   game_name?: string;
   game_image?: string;
@@ -1642,6 +1650,17 @@ export interface WhisperNotificationData {
 }
 
 export interface SystemNotificationData {
+  /** Where the entry came from, when that is more useful than its level.
+   *  A plugin saying "farming is now active" is a plugin talking, and the
+   *  generic info glyph buries that under the same mark every other status
+   *  message gets. */
+  source?: 'plugin';
+  /** A face for entries that are ABOUT somebody, in practice the signed-in user.
+   *  "Welcome back, br_winters" with a generic success tick says the operation
+   *  succeeded, which is not the point of it; the point is who you are. When
+   *  absent the row falls back to the level glyph, which is right for the ones
+   *  that really are just status. */
+  avatar_url?: string;
   title: string;
   message: string;
   icon?: string;

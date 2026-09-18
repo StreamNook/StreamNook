@@ -462,7 +462,7 @@ interface AppState {
   /** Merge fresh fields into the watched stream (viewers/title from a provider
    *  metadata poll). No-op when nothing is playing. */
   patchCurrentStream: (partial: Partial<TwitchStream>) => void;
-  addToast: (message: string | React.ReactNode, type: 'info' | 'success' | 'warning' | 'error' | 'live' | 'channel_points', action?: { label: string; onClick: () => void }, options?: { skipIsland?: boolean; alwaysShow?: boolean }) => void;
+  addToast: (message: string | React.ReactNode, type: 'info' | 'success' | 'warning' | 'error' | 'live' | 'channel_points', action?: { label: string; onClick: () => void }, options?: { skipIsland?: boolean; alwaysShow?: boolean; avatarUrl?: string; source?: 'plugin' }) => void;
   removeToast: (id: number) => void;
   loadSettings: () => Promise<void>;
   updateSettings: (newSettings: Settings) => Promise<void>;
@@ -1507,7 +1507,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!options?.skipIsland && typeof message === 'string') {
       const islandOn = !ln || (ln.enabled !== false && ln.use_dynamic_island !== false);
       if (islandOn) {
-        emit('action-notification', { text: message, level: type }).catch(() => {});
+        emit('action-notification', {
+          text: message,
+          level: type,
+          // Only the callers that are about a PERSON pass this; everything else
+          // keeps the level glyph.
+          avatarUrl: options?.avatarUrl,
+          source: options?.source,
+        }).catch(() => {});
       }
     }
 
@@ -3681,7 +3688,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       // phone skips it: a toast over the UI on every launch was too much there.
       if (!IS_MOBILE && hasCredentials && !wasAuthenticated && !hasShownWelcomeBackToast) {
         hasShownWelcomeBackToast = true;
-        get().addToast(`Welcome back, ${userInfo.display_name}!`, 'success');
+        get().addToast(`Welcome back, ${userInfo.display_name}!`, 'success', undefined, {
+          avatarUrl: userInfo.profile_image_url,
+        });
       }
 
       // Start whisper listener after successful authentication
