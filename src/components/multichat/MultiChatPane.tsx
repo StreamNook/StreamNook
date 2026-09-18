@@ -28,7 +28,8 @@ export interface MultiChatPaneProps {
   channelId?: string | null;
   channelName?: string;
   /** Source platform. Absent/twitch uses the full ChatWidget; other providers
-   *  use the lightweight read-only ProviderChatPane. */
+   *  go through ProviderViaChatWidget below, which wraps the same widget in
+   *  read-only mode. */
   provider?: ProviderId;
   /** Whether this pane is the active/focused tab — it owns the keyboard-mod keys. */
   isActive?: boolean;
