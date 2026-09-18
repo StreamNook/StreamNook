@@ -20,7 +20,7 @@ import {
 import { FallbackImage } from '../FallbackImage';
 import { Tooltip } from '../ui/Tooltip';
 import { TwitchBadge } from '../../services/badgeService';
-import { ThirdPartyBadge } from '../../services/thirdPartyBadges';
+import type { ThirdPartyBadge } from '../../services/badgeService';
 import { SevenTVBadge, SevenTVPaint } from '../../types';
 import {
   getProfileFromMemoryCache,

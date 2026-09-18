@@ -24,7 +24,7 @@ import {
   type BadgeWindowStatus,
 } from '../../utils/badgeWindow';
 import { gameBoxArt } from '../../utils/boxArt';
-import { openExternal } from '../openExternal';
+import { openExternal } from '../../utils/openExternal';
 import { Logger } from '../../utils/logger';
 import type {
   DropCampaign,

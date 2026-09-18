@@ -1,50 +1,11 @@
 import { Logger } from '../utils/logger';
-/**
- * DEPRECATED: This service has been replaced by the unified Rust badge service
- * 
- * All badge functionality is now handled in Rust for maximum performance.
- * Please use `badgeService.ts` instead:
- * 
- * ```typescript
- * import { getAllUserBadges, prefetchChannelBadges } from './badgeService';
- * ```
- * 
- * The Rust backend handles:
- * - Twitch Helix API (global + channel badges)
- * - Twitch GQL (user display/earned badges)
- * - Third-party providers (FFZ, Chatterino, Homies)
- * - LRU caching with automatic eviction
- * - Background pre-fetching
- */
-
-// Re-export from unified service for backwards compatibility
-export {
-  getAllUserBadges,
-  parseBadgeString,
-  prefetchGlobalBadges,
-  prefetchChannelBadges,
-  clearBadgeCache,
-  clearChannelBadgeCache,
-  type BadgeInfo,
-  type UserBadge,
-  type UserBadgesResponse,
-  type TwitchBadge,
-} from './badgeService';
-
-// Legacy function names for backwards compatibility
-export { prefetchGlobalBadges as fetchGlobalBadges } from './badgeService';
-
-// Older callsites expect a 3-arg `fetchChannelBadges(channelId, clientId, token)`.
-// Keep that signature but ignore extra args.
-export async function fetchChannelBadges(channelId: string, _clientId?: string, _token?: string): Promise<void> {
-  const { prefetchChannelBadges } = await import('./badgeService');
-  await prefetchChannelBadges(channelId);
-}
-
-/**
- * @deprecated Badge info is now included in the UserBadgesResponse from getAllUserBadges()
- * This stub returns null to maintain backwards compatibility
- */
+// Twitch badge parsing for the chat pipeline.
+//
+// Most of what this file used to hold moved into the unified Rust badge
+// service (badgeService.ts); what survives here is the two things that live
+// ONLY here: parseBadges, which turns an IRC badge string into renderable
+// entries, and initializeBadgeCache, which builds the lookup indexes it reads.
+// Import those from here; everything else badge-related from badgeService.
 
 // Prebuilt lookup indexes. Global badges come from `commands/badges.rs`
 // (universal cache); channel badges are per-room-id and must be fetched

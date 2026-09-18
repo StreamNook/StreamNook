@@ -12,7 +12,7 @@
 // permissions, integrity checking and the installer intent, to arrive at the
 // same place the browser reaches on its own.
 import { Logger } from '../utils/logger';
-import { openExternal } from './openExternal';
+import { openExternal } from '../utils/openExternal';
 
 const MANIFEST_URL = 'https://streamnook.app/api/v1/update-android';
 const DOWNLOAD_URL = 'https://streamnook.app/download/android';

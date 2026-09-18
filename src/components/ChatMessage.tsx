@@ -11,7 +11,7 @@ import { useDragModerationStore } from '../stores/dragModerationStore';
 import { usePinStore } from '../stores/pinStore';
 import { FallbackImage } from './FallbackImage';
 import { getCosmeticsWithFallback } from '../services/cosmeticsCache';
-import type { ThirdPartyBadge as ThirdPartyBadgeType } from '../services/thirdPartyBadges';
+import type { ThirdPartyBadge as ThirdPartyBadgeType } from '../services/badgeService';
 import { useAppStore } from '../stores/AppStore';
 import { openBadgesWithBadgeInMain } from '../utils/openBadgesInMain';
 import { openExternal } from '../utils/openExternal';
