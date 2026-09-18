@@ -328,6 +328,32 @@ pub async fn calculate_aspect_ratio_size(
     Ok((new_width, new_height))
 }
 
+/// Push the aspect constraint the frontend just computed to the native sizing
+/// hook, and report which of the two lock implementations is in force.
+///
+/// `ratio` is the target `video width / video height`. `extra_width` and
+/// `extra_height` are the chrome that sits OUTSIDE the video box, in LOGICAL
+/// pixels: title bar, sidebar, the chat panel and its separator, MultiNook
+/// gaps. The hook scales them with the window's live DPI, so the caller must
+/// not pre-multiply by its scale factor.
+///
+/// Returns true when the window is constrained live, during the drag itself
+/// (`services::window_aspect`). That is the caller's signal to stand its own
+/// debounced `setSize` correction down: running both fights over the same
+/// window, which is what made a locked resize jerk and snap back. False means
+/// this platform has no live hook, or the hook failed to attach, and the
+/// after-the-fact correction is still the only thing enforcing the lock.
+#[command]
+pub fn set_window_aspect_constraint(
+    enabled: bool,
+    ratio: f64,
+    extra_width: u32,
+    extra_height: u32,
+) -> bool {
+    crate::services::window_aspect::set_constraint(enabled, ratio, extra_width, extra_height);
+    crate::services::window_aspect::constrains_live()
+}
+
 /// Calculate window size to preserve video dimensions when chat placement changes
 /// This version preserves the actual video pixel dimensions
 #[command]
