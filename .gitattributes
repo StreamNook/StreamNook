@@ -1,0 +1,15 @@
+# core.autocrlf is true on the Windows checkout, so without a rule here every
+# LF-ending file git touches is flagged as modified with an empty diff. That is
+# not cosmetic: three workflow files sat in `git status` looking like in-flight
+# work for long enough to nearly be excluded from a cleanup pass.
+#
+# Deliberately narrow. A blanket `* text=auto` would ask git to guess
+# text-vs-binary across 1000+ tracked files including ~53 MB of images and eight
+# .woff2 fonts, and renormalise the whole repo in one commit. These four rules
+# cover the files that actually flap.
+#
+# eol=lf is load-bearing for shell scripts: scripts/android-build.sh runs under
+# WSL, where CRLF breaks the shebang.
+*.sh    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
