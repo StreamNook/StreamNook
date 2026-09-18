@@ -10,6 +10,7 @@ import { useAppStore } from '../stores/AppStore';
 import PenroseLogo from './PenroseLogo';
 import PlatformSwitcher from './PlatformSwitcher';
 import NavFlipper from './NavFlipper';
+import { MultiNookToggle, MultiChatButton } from './titlebar/WindowActions';
 import AboutWidget from './AboutWidget';
 import UpdateOverlay, { type UpdatePhase } from './UpdateOverlay';
 import CompactStreamStats from './CompactStreamStats';
@@ -528,12 +529,57 @@ const TitleBar = () => {
       <div
         onMouseDown={IS_MAC ? undefined : onTitleBarMouseDown}
         data-tauri-drag-region={IS_MAC ? true : undefined}
-        className="relative flex items-center justify-between h-[40px] px-3 select-none bg-secondary backdrop-blur-md border-b border-borderSubtle z-50"
+        // Paints nothing: no fill, no blur, no rule under it. Everything in
+        // here is already a floating glazed pill, so with the plate gone the
+        // chrome reads as objects over the page instead of a bar across it —
+        // the same move the Home nav made.
+        //
+        // Losing the full-width `backdrop-blur-md` is a real saving as well: a
+        // window-wide compositing layer sampling a backdrop that hardly varied.
+        //
+        // Out of flow, deliberately. In flow the bar OWNS the top 40px, and
+        // since nothing paints there you get a solid strip of the app background
+        // whether or not the bar draws a fill of its own, which is why removing
+        // the fill did nothing. Overlaying it lets the grid, the
+        // player and the glow run to the top edge of the window and the chrome
+        // float on top of them, which is also what the glaze was built for: it
+        // blurs and tints whatever is actually behind it.
+        //
+        // The row keeps its height and its drag region; only its place in the
+        // layout changes. Surfaces that must not slide under it (the sidebar,
+        // the chat column) clear it themselves. The main content column
+        // deliberately does not.
+        className="absolute inset-x-0 top-0 flex items-center justify-between h-[40px] px-3 select-none z-50"
         style={IS_MAC ? { paddingLeft: MAC_TRAFFIC_LIGHT_INSET_PX } : undefined}
       >
-        {/* Dynamic Island is rendered at the app root (App.tsx), not here, so it
-            can lift above the Settings blur overlay. It still pins to the top
-            center via fixed positioning, so it visually sits in this title bar. */}
+        {/* The centre of the bar, as two slots other components portal into.
+            Slots rather than real children, because the things that belong here
+            own state that has no business being lifted: the Island owns every
+            notification, and Home owns the tab strip's selection, search and
+            counts. Portaling lets them stay where they are and still render
+            here.
+
+            Absolutely centred so neither slot can push the left or right
+            clusters around as its contents change width. `pointer-events-none`
+            on the wrapper with `auto` on the slots, so the empty space between
+            and around them stays draggable window chrome.
+
+            The Island's SURFACE is still rendered at the app root (App.tsx) so
+            it can lift above the Settings blur overlay; only its door sits
+            here, and the surface grows out of that door rightward over the nav
+            and collapses back into it. */}
+        <div className="pointer-events-none absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center">
+          {/* The NAV is what gets centred, not the pair. Sitting them side by
+              side in one centred row pushes the tabs right of true centre by
+              half the trigger plus the gap, which is visible against the window
+              — so the trigger is taken out of flow and hung off the nav's left
+              edge instead. The wrapper then measures the nav alone. */}
+          <div
+            id="sn-island-slot"
+            className="pointer-events-auto absolute right-full mr-2 flex items-center"
+          />
+          <div id="sn-nav-slot" className="pointer-events-auto flex items-center" />
+        </div>
 
         <div className="flex items-center gap-2.5" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           {/* Penrose Logo. On macOS the leading edge belongs to the traffic
@@ -548,12 +594,19 @@ const TitleBar = () => {
 
           {/* Back / forward between the stream and everything else. Its own
               pill rather than a slot in the cluster beside it: navigating is
-              not the same kind of thing as opening drops or settings, and
-              Cider draws that line the same way. */}
+              not the same kind of thing as opening drops or settings. */}
           <NavFlipper />
 
-          {/* Grouped action icons */}
+          {/* Grouped action icons.
+              MultiNook and MultiChat lead, behind a hairline: they act on the
+              WINDOW (tile some players, spawn a popout) where the rest of the
+              group opens something inside it. They used to live in Home's tab
+              strip, which meant they vanished on a category drill-down and
+              while watching — this bar is mounted in every view. */}
           <div className="chrome-glaze titlebar-icon-group">
+          <MultiNookToggle />
+          <MultiChatButton />
+          <span className="mx-0.5 h-4 w-px bg-borderSubtle" aria-hidden />
           {/* Drops Button with Inline Progress Badge */}
           <div
             className="relative"
@@ -965,8 +1018,11 @@ const TitleBar = () => {
           )}
           </div>
 
-          {/* Window controls — kept adjacent but not grouped into a pill */}
-          <div className="flex items-center gap-1">
+          {/* Window controls — kept adjacent but not grouped into a pill.
+              On Windows and Linux they also take the platform's caption
+              geometry (see .titlebar-window-controls); on macOS this slot holds
+              only the About logo, so it keeps the app's own spacing. */}
+          <div className={IS_MAC ? 'flex items-center gap-1' : 'flex items-center titlebar-window-controls -mr-3'}>
           {/* macOS already has full screen on the green traffic light, so a
               second control for it is redundant chrome. The slot goes to About,
               which lost its home on the leading edge to the traffic lights. */}

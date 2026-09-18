@@ -235,44 +235,6 @@ const VideoPlayer = () => {
   const glowOn = settings?.media_glow !== false;
   const immersive = glowOn && settings?.immersive_glow === true && !!streamUrl;
 
-  // One-shot report of what immersive mode ACTUALLY resolved to in the live
-  // app. Reasoning about this from outside has been wrong repeatedly: labs use
-  // a bare <video>, the real player is Plyr, and the difference is exactly
-  // where the bug lives. This logs the state that decides whether anything can
-  // be seen, so the answer comes from the app rather than from a guess.
-  useEffect(() => {
-    if (!immersive) return;
-    const t = setTimeout(() => {
-      const host = containerRef.current;
-      if (!host) return;
-      const cs = getComputedStyle(host);
-      const band = host.querySelector('.sn-immersive--top') as HTMLElement | null;
-      const wrap = host.querySelector('.plyr__video-wrapper') as HTMLElement | null;
-      const plyr = host.querySelector('.plyr--video') as HTMLElement | null;
-      if (!band) {
-        Logger.warn('[Immersive] band is NOT in the DOM — the mode rendered false');
-        return;
-      }
-      const r = band.getBoundingClientRect();
-      const paneR = host.getBoundingClientRect();
-      const frame = host.querySelector('.sn-immersive-frame') as HTMLElement | null;
-      // The band's height is supposed to BE the letterbox, worked out in CSS
-      // from the aspect the sampler publishes. When those two disagree the
-      // container query did not apply and the light is back to a painted bar,
-      // which is invisible from a screenshot but obvious from two numbers.
-      const letterbox = frame ? frame.getBoundingClientRect().top - paneR.top : -1;
-      Logger.warn(
-        `[Immersive] data-immersive=${host.dataset.immersive} ` +
-          `bandH=${Math.round(r.height)} letterbox=${Math.round(letterbox)} ` +
-          `${Math.abs(r.height - letterbox) < 2 ? 'MATCH' : 'MISMATCH (container query did not apply)'} ` +
-          `arn=${cs.getPropertyValue('--sn-video-arn').trim() || '(unset)'} ` +
-          `segs=[${Array.from({ length: 8 }, (_, i) => cs.getPropertyValue(`--glow-t${i}`).trim() || '-').join(',')}] ` +
-          `plyrBg=${plyr ? getComputedStyle(plyr).backgroundColor : '(no .plyr--video)'} ` +
-          `wrapBg=${wrap ? getComputedStyle(wrap).backgroundColor : '(no wrapper)'}`,
-      );
-    }, 5000);
-    return () => clearTimeout(t);
-  }, [immersive]);
   // Only immersive mode needs the decoder-driven rate. With the strip off
   // nothing on screen changes faster than the card rim, so the sampler stays
   // on its once-a-second path and costs what it always did.

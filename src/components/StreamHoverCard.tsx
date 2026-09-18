@@ -1,5 +1,5 @@
-import { Gift } from 'lucide-react';
 import StreamTitleWithEmojis from './StreamTitleWithEmojis';
+import { Package } from 'phosphor-react';
 import { formatStreamUptime } from '../utils/chatCommands';
 import type { TwitchStream } from '../types';
 
@@ -57,7 +57,7 @@ const StreamHoverCard = ({ stream, hasDrops }: StreamHoverCardProps) => {
                     <div className="live-dot text-xs px-1.5 py-0.5">LIVE</div>
                     {hasDrops && (
                         <div className="drops-badge-glass">
-                            <Gift size={10} />
+                            <Package size={10} />
                             <span>DROPS</span>
                         </div>
                     )}

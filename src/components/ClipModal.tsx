@@ -181,18 +181,37 @@ function PurpleDrop({
 }) {
   const [flying, setFlying] = useState(false);
   useEffect(() => {
-    const t = setTimeout(() => setFlying(true), 10);
-    return () => clearTimeout(t);
+    // Two frames, not a timer: a transition only runs if the start state has
+    // been painted, and a 10ms timeout can lose that race on the frame a modal
+    // is doing other work. Losing it means no travel at all.
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => setFlying(true));
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
   }, []);
   return createPortal(
     <div
       className="pointer-events-none fixed z-[9999] flex h-5 w-5 items-center justify-center rounded-full"
+      // Same fix as the MultiNook flyer in titlebar/WindowActions.tsx: the
+      // travel is a `transform`, which the compositor owns, rather than
+      // `left`/`top`, which are layout and run on the main thread for every
+      // frame of the flight. `transition: all` also had the 14px box-shadow on
+      // the clock; naming the two properties that change lets it rasterize once.
       style={{
-        left: flying ? targetX : startX,
-        top: flying ? targetY : startY,
+        left: startX,
+        top: startY,
         opacity: flying ? 0.15 : 1,
-        transform: `translate(-50%, -50%) scale(${flying ? 0.3 : 1})`,
-        transition: 'all 600ms cubic-bezier(0.22, 1, 0.36, 1)',
+        transform: flying
+          ? `translate3d(${targetX - startX}px, ${targetY - startY}px, 0) translate(-50%, -50%) scale(0.3)`
+          : 'translate3d(0, 0, 0) translate(-50%, -50%) scale(1)',
+        transition:
+          'transform 600ms cubic-bezier(0.22, 1, 0.36, 1),' +
+          ' opacity 600ms cubic-bezier(0.22, 1, 0.36, 1)',
+        willChange: 'transform, opacity',
         backgroundColor: '#9146FF',
         boxShadow: '0 0 14px rgba(145,70,255,0.35)',
       }}

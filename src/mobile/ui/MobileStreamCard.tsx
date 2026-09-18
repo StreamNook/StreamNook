@@ -4,7 +4,8 @@
 // .glass-badge viewer chip, partner verified mark, and Apple-style emoji
 // titles. Only the sizing is phone-tuned.
 import React from 'react';
-import { Flame, Gift } from 'lucide-react';
+import { Flame } from 'lucide-react';
+import { Package } from 'phosphor-react';
 import StreamTitleWithEmojis from '../../components/StreamTitleWithEmojis';
 import { campaignEarnableOn } from '../dropsEligibility';
 import type { DropsByGame } from '../dropsCampaigns';
@@ -100,7 +101,7 @@ export const MobileStreamCard: React.FC<{
               }}
               aria-label="Drops enabled"
             >
-              <Gift size={10} />
+              <Package size={10} />
             </div>
           )}
           {hypeTrain && (
@@ -146,7 +147,7 @@ export const MobileStreamCard: React.FC<{
           {stream.game_name && (
             <div className="flex items-center gap-1 text-textMuted text-[12px]">
               <span className="truncate">{stream.game_name}</span>
-              {hasDrops && <Gift size={10} className="text-accent flex-shrink-0" />}
+              {/* The DROPS badge over the thumbnail already says this. */}
             </div>
           )}
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -177,7 +178,7 @@ export const MobileStreamCard: React.FC<{
           <div className="live-dot text-xs px-1.5 py-0.5">LIVE</div>
           {hasDrops && (
             <div className="drops-badge-glass">
-              <Gift size={10} />
+              <Package size={10} />
               <span>DROPS</span>
             </div>
           )}
@@ -211,7 +212,7 @@ export const MobileStreamCard: React.FC<{
         {stream.game_name && (
           <div className="flex items-center gap-1 text-textMuted text-[13px]">
             <span className="line-clamp-1">{stream.game_name}</span>
-            {hasDrops && <Gift size={10} className="text-accent flex-shrink-0" />}
+            {/* The DROPS badge over the thumbnail already says this. */}
           </div>
         )}
       </div>

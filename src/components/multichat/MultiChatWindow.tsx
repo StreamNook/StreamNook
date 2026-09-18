@@ -2964,8 +2964,10 @@ function TitleBar({
         </div>
 
         {/* Window controls — kept adjacent but not grouped into a pill, matching
-            the core app so they read as window chrome rather than app actions. */}
-        <div className="flex items-center gap-1">
+            the core app so they read as window chrome rather than app actions.
+            Same caption geometry as the main window: this is a real window with
+            a real corner, and the two bars are the same 40px over the same px-3. */}
+        <div className="flex items-center titlebar-window-controls -mr-3">
           <Tooltip content="Minimize" delay={200}>
             <button
               type="button"

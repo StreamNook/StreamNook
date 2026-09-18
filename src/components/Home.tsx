@@ -4,7 +4,8 @@ import { useAppStore, ensureHomeSnapshotSync, clipSourceOf, HomeTab } from '../s
 import { IS_MOBILE } from '../utils/platform';
 import { createPortal } from 'react-dom';
 import { glowThumbProps } from '../utils/mediaGlow';
-import { Search, Heart, X, Gift, Pickaxe, LayoutGrid, Flame, ArrowUpRight, Undo2, Users, User, Loader2, Clock, Play, Check, Plus } from 'lucide-react';
+import { Search, Heart, X, Pickaxe, LayoutGrid, Flame, ArrowUpRight, Undo2, Users, User, Loader2, Clock, Play, Check, Plus } from 'lucide-react';
+import { Package } from 'phosphor-react';
 import { MediaCard } from './MediaCard';
 import ContinueWatchingRow from './ContinueWatchingRow';
 import { formatCardDate, mediaKindOfVideo, videoDurationLabel, vodThumbUrl, VOD_FALLBACK_THUMB } from '../utils/vodProgress';
@@ -75,197 +76,6 @@ interface DropCampaign {
  */
 const FAVORITES_GRAIN_MASK =
   'linear-gradient(to bottom, transparent 0%, white 38%, white 62%, transparent 100%)';
-
-const FlyingDot = ({ startX, startY, targetX, targetY }: { startX: number, startY: number, targetX: number, targetY: number }) => {
-    const [isFlying, setIsFlying] = useState(false);
-
-    useEffect(() => {
-        const timer = setTimeout(() => setIsFlying(true), 10);
-        return () => clearTimeout(timer);
-    }, []);
-
-    return (
-        <div 
-            className="fixed z-[9999] pointer-events-none flex h-5 w-5 items-center justify-center rounded-full bg-red-500 shadow-[0_0_15px_color-mix(in_srgb,var(--color-live)_80%,transparent)]"
-            style={{
-                left: isFlying ? targetX : startX,
-                top: isFlying ? targetY : startY,
-                opacity: isFlying ? 0.3 : 1,
-                transform: isFlying ? 'scale(0.3)' : 'scale(1)',
-                transition: 'all 500ms cubic-bezier(0.25, 1, 0.5, 1)'
-            }}
-        >
-           <LayoutGrid size={12} className="text-white" />
-        </div>
-    );
-};
-
-const ReverseFlyingDot = ({ startX, startY, targetX, targetY }: { startX: number, startY: number, targetX: number, targetY: number }) => {
-    const [isFlying, setIsFlying] = useState(false);
-
-    useEffect(() => {
-        const timer = setTimeout(() => setIsFlying(true), 10);
-        return () => clearTimeout(timer);
-    }, []);
-
-    return (
-        <div 
-            className="fixed z-[9999] pointer-events-none flex h-5 w-5 items-center justify-center rounded-full bg-accent shadow-[0_0_15px_rgba(var(--color-accent-rgb),0.8)]"
-            style={{
-                left: isFlying ? targetX : startX,
-                top: isFlying ? targetY : startY,
-                opacity: isFlying ? 1 : 0.3,
-                transform: isFlying ? 'scale(1)' : 'scale(0.3)',
-                transition: 'all 500ms cubic-bezier(0.25, 1, 0.5, 1)'
-            }}
-        >
-           <Undo2 size={10} className="text-white" />
-        </div>
-    );
-};
-
-const MultiNookToggle = () => {
-    const { isMultiNookActive, toggleMultiNook, slots, flyingAnimation, recallAnimation } = usemultiNookStore();
-    // Action only, stable for the store's lifetime: no subscription needed.
-    const { toggleHome } = useAppStore.getState();
-    const [animateBadge, setAnimateBadge] = useState(false);
-    const buttonRef = useRef<HTMLButtonElement>(null);
-    const [flyingDots, setFlyingDots] = useState<Array<{ id: number, startX: number, startY: number, targetX: number, targetY: number }>>([]);
-    const [reverseDots, setReverseDots] = useState<Array<{ id: number, startX: number, startY: number, targetX: number, targetY: number }>>([]);
-
-    useEffect(() => {
-        if (flyingAnimation && buttonRef.current) {
-            const rect = buttonRef.current.getBoundingClientRect();
-            // Target is the top right of the button where the badge will sit
-            const targetX = rect.right - 10;
-            const targetY = rect.top - 5;
-            
-            const newDot = {
-                id: flyingAnimation.id,
-                startX: flyingAnimation.x,
-                startY: flyingAnimation.y,
-                targetX,
-                targetY
-            };
-            
-            setFlyingDots(prev => [...prev, newDot]);
-            
-            setTimeout(() => {
-                setFlyingDots(prev => prev.filter(d => d.id !== newDot.id));
-                setAnimateBadge(true);
-                setTimeout(() => setAnimateBadge(false), 200);
-            }, 500); 
-        }
-    }, [flyingAnimation]);
-
-    // Handle reverse recall animation — dot flies from badge to card
-    useEffect(() => {
-        if (recallAnimation) {
-            const newDot = {
-                id: recallAnimation.id,
-                startX: recallAnimation.sourceX,
-                startY: recallAnimation.sourceY,
-                targetX: recallAnimation.targetX,
-                targetY: recallAnimation.targetY,
-            };
-            
-            queueMicrotask(() => setReverseDots(prev => [...prev, newDot]));
-            
-            setTimeout(() => {
-                setReverseDots(prev => prev.filter(d => d.id !== newDot.id));
-            }, 600);
-        }
-    }, [recallAnimation]);
-
-    return (
-        <>
-            <Tooltip content={isMultiNookActive ? 'Return to MultiNook' : 'Enter MultiNook'} side="bottom">
-                <button
-                    id="multinook-return-button"
-                    ref={buttonRef}
-                    onClick={() => {
-                        if (isMultiNookActive) {
-                            toggleHome();
-                        } else {
-                            toggleMultiNook();
-                        }
-                    }}
-                    className={`relative px-3 py-1.5 text-sm font-medium rounded-lg transition-all whitespace-nowrap mr-0.5 ${
-                        isMultiNookActive
-                            ? 'glass-button text-accent shadow-[0_0_15px_rgba(var(--color-accent-rgb),0.3)]'
-                            : 'text-textSecondary hover:text-textPrimary'
-                    }`}
-                >
-                    {isMultiNookActive ? 'Return' : 'MultiNook'}
-                    {!isMultiNookActive && slots.length > 0 && (
-                        <span 
-                            className={`absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full glass-button !bg-error/30 text-[9px] font-extrabold text-white !shadow-[0_2px_10px_color-mix(in_srgb,var(--color-error)_40%,transparent),inset_0_1px_rgba(255,255,255,0.2)] z-50 ${
-                                animateBadge ? 'scale-150 ring-2 ring-error transition-transform duration-200' : 'scale-100 transition-transform duration-500'
-                            }`}
-                        >
-                            {slots.length}
-                        </span>
-                    )}
-                </button>
-            </Tooltip>
-            {flyingDots.length > 0 && typeof document !== 'undefined' && createPortal(
-                flyingDots.map(dot => (
-                    <FlyingDot key={dot.id} {...dot} />
-                )),
-                document.body
-            )}
-            {reverseDots.length > 0 && typeof document !== 'undefined' && createPortal(
-                reverseDots.map(dot => (
-                    <ReverseFlyingDot key={dot.id} {...dot} />
-                )),
-                document.body
-            )}
-        </>
-    );
-};
-
-// Top-nav entry point for the MultiChat popout, sitting beside MultiNook so the
-// two "multi" workspaces live together. Clicking opens the popout window — or
-// focuses it if one's already open — via openMultiChatWindow with no channel
-// (which seeds an empty window, or restores its previous tabs). The count badge
-// mirrors MultiNook's: it shows how many channels are currently popped out,
-// which main tracks through the `channelsInPopouts` aggregate the popout
-// broadcasts. No outer glow on the active state (no-glow aesthetic); the badge
-// uses the approved soft-shadow notification recipe.
-const MultiChatButton = () => {
-    const channelsInPopouts = useAppStore((s) => s.channelsInPopouts);
-    const count = channelsInPopouts.size;
-    const active = count > 0;
-
-    const handleOpen = async () => {
-        try {
-            const { openMultiChatWindow } = await import('../utils/multichatWindow');
-            await openMultiChatWindow({});
-        } catch (err) {
-            Logger.error('[Home] openMultiChatWindow failed:', err);
-        }
-    };
-
-    return (
-        <Tooltip content="Open MultiChat" side="bottom">
-            <button
-                onClick={handleOpen}
-                className={`relative px-3 py-1.5 text-sm font-medium rounded-lg transition-all whitespace-nowrap mr-0.5 ${
-                    active
-                        ? 'glass-button text-accent'
-                        : 'text-textSecondary hover:text-textPrimary'
-                }`}
-            >
-                MultiChat
-                {count > 0 && (
-                    <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full glass-button !bg-accent/30 text-[9px] font-extrabold text-white !shadow-[0_2px_10px_rgba(var(--color-accent-rgb),0.35),inset_0_1px_rgba(255,255,255,0.2)] z-50">
-                        {count}
-                    </span>
-                )}
-            </button>
-        </Tooltip>
-    );
-};
 
 const QuickAddButton = ({ stream }: { stream: TwitchStream }) => {
     const { addSlot, slots, triggerAddAnimation } = usemultiNookStore();
@@ -2136,7 +1946,7 @@ const Home = () => {
                                                                     <div className="live-dot text-xs px-1.5 py-0.5">LIVE</div>
                                                                     {hasDrops && (
                                                                         <div className="drops-badge-glass">
-                                                                            <Gift size={10} />
+                                                                            <Package size={10} />
                                                                             <span>DROPS</span>
                                                                         </div>
                                                                     )}
@@ -2220,9 +2030,10 @@ const Home = () => {
                                                                                 className="flex items-center gap-1 text-textMuted text-xs hover:text-textPrimary hover:bg-glass-hover px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded transition-all text-left cursor-pointer focus:outline-none overflow-hidden"
                                                                             >
                                                                                 <span className="line-clamp-1">{stream.game_name}</span>
-                                                                                {hasDrops && (
-                                                                                    <Gift size={10} className="text-accent flex-shrink-0" />
-                                                                                )}
+{/* No mark beside the category here. The card already carries the
+                                                                                    animated DROPS badge over its thumbnail, which is the
+                                                                                    same package glyph saying the same thing about the same
+                                                                                    card. One signal per card. */}
                                                                             </button>
                                                                         </Tooltip>
                                                                         )}
@@ -2639,7 +2450,7 @@ const Home = () => {
                     {hasDrops && (
                         <div className="absolute top-2 left-2 z-10">
                             <div className="drops-badge-glass-lg">
-                                <Gift size={14} className="drop-shadow-lg" />
+                                <Package size={14} className="drop-shadow-lg" />
                                 <span>DROPS</span>
                             </div>
                         </div>
@@ -2729,6 +2540,16 @@ const Home = () => {
         />
     );
 
+    // The title bar's slot for the tab strip. Looked up in an effect, not during
+    // render: App renders TitleBar before Home, but nothing is in the DOM until
+    // the whole tree commits, so a render-time getElementById would always miss
+    // on the first pass. Null on mobile, where there is no title bar and the
+    // strip keeps floating over the grid as before.
+    const [navSlot, setNavSlot] = useState<HTMLElement | null>(null);
+    useEffect(() => {
+        setNavSlot(IS_MOBILE ? null : document.getElementById('sn-nav-slot'));
+    }, []);
+
     // The floating nav and the padding that clears it must agree: the category
     // drill-down hides the nav, and a fixed inset there would leave a gap with
     // nothing in it.
@@ -2754,16 +2575,24 @@ const Home = () => {
             </svg>
 
             {/* Top Navigation Frame - Always Center Navigation */}
-            {showTopNav && (
+            {showTopNav && ((node: React.ReactNode) => (
+                // Portaled into the title bar when there is one. The strip owns
+                // Home's selection, search, counts and history, so moving the JSX
+                // would mean lifting all of that into a store; this leaves every
+                // line where it is and only changes where the DOM lands. Its two
+                // wrappers go `display: contents` so the pill drops straight into
+                // the bar's flex row with no layout of its own.
+                navSlot ? createPortal(node, navSlot) : node
+            ))(
                 /* Out of flow entirely. In flow it reserved a page-wide band of
                    empty height above the grid, and removing that band's paint
                    changed almost nothing because it was already the page colour
                    — the band WAS the height.
                    `pointer-events-none` with the panel re-enabling them is
-                   Cider's own trick (`.ns-bottom-inline-bounds`): the bounds are
+                   the standard trick for this: the bounds are
                    full width and invisible, so without it they would swallow
                    every click in the top of the grid. */
-                <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex flex-col box-border overflow-hidden">
+                <div className={navSlot ? 'contents' : 'pointer-events-none absolute inset-x-0 top-0 z-30 flex flex-col box-border overflow-hidden'}>
                     {/* Mobile: pad past the status bar (targetSdk 36 forces edge-to-edge,
                         so without this the clock sits on top of the tabs), and let the
                         row scroll horizontally instead of clipping — at 360px the
@@ -2774,8 +2603,8 @@ const Home = () => {
                         rule, no plate, no full-width backdrop filter. Only the
                         `glass-panel` inside it is visible, so the navigation reads
                         as an object floating on the page rather than a toolbar
-                        bolted across it — the same move Cider makes with its
-                        bottom toolbar, which is a centred floating bar rather
+                        bolted across it — the same move a centred floating
+                        toolbar makes rather
                         than a bar the width of the window.
                         Still a row in normal flow, so it reserves its own height
                         and nothing scrolls underneath it; only the paint is gone.
@@ -2783,7 +2612,7 @@ const Home = () => {
                         too — that was a window-wide compositing layer sampling a
                         backdrop that barely varied. */}
                     <div
-                        className={`flex gap-3 relative z-30 px-4 py-3.5 min-h-[48px] items-center ${
+                        className={navSlot ? 'contents' : `flex gap-3 relative z-30 px-4 py-3.5 min-h-[48px] items-center ${
                             IS_MOBILE ? 'justify-start overflow-x-auto' : 'justify-center'
                         }`}
                         style={IS_MOBILE ? { paddingTop: 'calc(0.625rem + var(--sn-safe-top))' } : undefined}
@@ -2791,9 +2620,38 @@ const Home = () => {
                     <div ref={searchBarRef} // `--dark`: this floats over the grid now, and the theme tint
                         // alone lets bright artwork wash straight through it. The
                         // dark film keeps the labels legible while the blur still
-                        // does the glass, which is how Cider's floating chrome
-                        // works (`--chromeColor: rgb(40 40 40 / 50%)`).
-                        className="pointer-events-auto relative flex items-center glass-panel glass-panel--dark px-1.5 py-1 !rounded-xl">
+                        // does the glass, which is how floating chrome
+                        // works: a dark film around `rgb(40 40 40 / 50%)`.
+                        // A capsule, not a 12px rounded rect. Everything else in
+                        // this row is already a capsule (both title-bar icon
+                        // clusters, the platform pill, the selected-tab highlight),
+                        // so the strip was the one shape disagreeing with its own
+                        // contents. It shows most when a notification fills the
+                        // strip: two different corner radii on the same box means
+                        // the strip's corners peek out from behind whatever is
+                        // covering it.
+                        className="pointer-events-auto relative flex items-center glass-panel glass-panel--dark px-1.5 py-1 !rounded-full">
+                        {/* Where the notification trigger lands when this strip is on
+                            screen. A slot rather than the control itself, because the
+                            notifications live in DynamicIsland and putting them here
+                            would mean lifting all of that state somewhere both places
+                            could reach.
+
+                            Joined INTO the strip rather than floating beside it: with
+                            a nav present, a lone pill 8px to its left reads as a stray
+                            object, and this is the element the notification expands to
+                            fill. The same reason it sits at the left end, mirroring the
+                            search at the right, which expands the same way.
+
+                            Only when the strip is in the title bar. On a phone, and in
+                            any view where this strip is not rendered at all, the
+                            trigger goes back to being its own glazed pill. */}
+                        {navSlot && (
+                            <>
+                                <div id="sn-island-slot-inline" className="flex items-center" />
+                                <span className="mx-1.5 h-4 w-px bg-borderSubtle" aria-hidden />
+                            </>
+                        )}
                         {/* Navigation buttons - fade out when search is expanded */}
                         <LayoutGroup>
                         <div className={`flex items-center gap-1 transition-opacity duration-300 ${isSearchExpanded ? 'opacity-0' : 'opacity-100'}`}>
@@ -2801,22 +2659,15 @@ const Home = () => {
                                 players at once and MultiChat spawns a popout, and
                                 WebviewWindow.create() throws on mobile, so on a phone
                                 these are dead buttons taking scarce header width. */}
-                            {!IS_MOBILE && (
-                                <>
-                                    {/* The platform switcher used to sit here. It moved to
-                                        the title bar (PlatformSwitcher): this toolbar unmounts
-                                        on a category drill-down and is gone entirely while
-                                        watching, so it could never answer "which platform
-                                        am I in" for more than one screen. */}
-                                    <MultiNookToggle />
-                                    <MultiChatButton />
-                                    <div className="border-l border-borderSubtle h-5 mx-0.5" />
-                                </>
-                            )}
+                            {/* MultiNook and MultiChat used to sit here. They are window
+                                actions, not pages, and this strip unmounts on a category
+                                drill-down and is gone entirely while watching — so from
+                                here they were unreachable most of the time. They live in
+                                the title bar now, which is mounted in every view. */}
                             {isAuthenticated && (
                                 <button
                                     onClick={() => { setActiveTab('following'); setIsSearchExpanded(false); }}
-                                    className={`group relative px-3 py-1.5 text-sm font-medium rounded-lg transition-all duration-300 whitespace-nowrap ${activeTab === 'following'
+                                    className={`group relative px-3 py-1 text-sm font-medium rounded-lg transition-all duration-300 whitespace-nowrap ${activeTab === 'following'
                                         ? 'text-textPrimary'
                                         : 'text-textSecondary hover:text-textPrimary'
                                         }`}
@@ -2857,7 +2708,7 @@ const Home = () => {
                             )}
                             <button
                                 onClick={() => { setActiveTab('recommended'); setIsSearchExpanded(false); }}
-                                className={`group relative px-3 py-1.5 text-sm font-medium rounded-lg transition-all duration-300 whitespace-nowrap ${activeTab === 'recommended'
+                                className={`group relative px-3 py-1 text-sm font-medium rounded-lg transition-all duration-300 whitespace-nowrap ${activeTab === 'recommended'
                                     ? 'text-textPrimary'
                                     : 'text-textSecondary hover:text-textPrimary'
                                     }`}
@@ -2875,7 +2726,7 @@ const Home = () => {
                             </button>
                             <button
                                 onClick={handleBrowseClick}
-                                className={`group relative px-3 py-1.5 text-sm font-medium rounded-lg transition-all duration-300 whitespace-nowrap ${activeTab === 'browse'
+                                className={`group relative px-3 py-1 text-sm font-medium rounded-lg transition-all duration-300 whitespace-nowrap ${activeTab === 'browse'
                                     ? 'text-textPrimary'
                                     : 'text-textSecondary hover:text-textPrimary'
                                     }`}
@@ -2894,7 +2745,7 @@ const Home = () => {
                             {(searchResults.length > 0 || categorySearchResults.length > 0) && (
                                 <button
                                     onClick={() => setActiveTab('search')}
-                                    className={`group relative px-3 py-1.5 text-sm font-medium rounded-lg transition-all duration-300 whitespace-nowrap ${activeTab === 'search'
+                                    className={`group relative px-3 py-1 text-sm font-medium rounded-lg transition-all duration-300 whitespace-nowrap ${activeTab === 'search'
                                         ? 'text-textPrimary'
                                         : 'text-textSecondary hover:text-textPrimary'
                                         }`}
@@ -3061,21 +2912,36 @@ const Home = () => {
             {/* Content */}
             <div
                 ref={scrollContainerRef}
-                className="flex-1 overflow-y-auto p-4 scrollbar-thin relative"
-                // Deliberately NOT padded to clear the nav. Padding it by the
-                // nav's height reproduces exactly the band this change exists to
-                // remove: same empty strip, just built from padding instead of a
-                // flow row. The grid starts at the top and the nav floats over
-                // it, which is the whole point of taking it out of flow.
-                // Mobile still owes the status bar its inset.
+                // pt-14 is the 16px the grid already had plus the title bar's
+                // 40px, which it stopped reserving for anyone when it came out of
+                // flow.
+                //
+                // Padding, deliberately, and on the SCROLLER rather than on the
+                // column above it. Padding a scroller moves its content but not
+                // its box, which is exactly what is wanted here: the box still
+                // starts at the top of the window, so the grid travels UNDER the
+                // floating chrome as you scroll, while the first section header
+                // starts clear of it instead of being cut in half. Moving this to
+                // the column was tried and reverted: it fixes the scrollbar but
+                // clips the grid at the bar, and the scroll-under is the effect.
+                //
+                // The scrollbar is handled separately, by `sn-scroll-under-chrome`
+                // in globals.css, because the bar and the content need different
+                // geometry and only one thing gives you that.
+                //
+                // Mobile has no title bar, only the status bar's own inset.
+                className={`flex-1 overflow-y-auto p-4 scrollbar-thin relative ${IS_MOBILE ? '' : 'pt-14 sn-scroll-under-chrome'}`}
                 style={showTopNav && IS_MOBILE
                     ? { paddingTop: 'calc(1rem + var(--sn-safe-top, 0px))' }
                     : undefined}
             >
                 
                 {/* FLOATING GLASS PILL HEADER (Only in Category View) */}
+                {/* top-14, not top-4: sticky resolves against the scrollport, which
+                    starts at the window edge, so a 16px offset would park this row
+                    underneath the title bar's clusters. */}
                 {activeTab === 'category' && selectedCategory && (
-                    <div className="sticky top-4 mt-2 z-30 h-0 overflow-visible flex items-center justify-between w-full pointer-events-none">
+                    <div className="sticky top-14 mt-2 z-30 h-0 overflow-visible flex items-center justify-between w-full pointer-events-none">
                         <div className="flex items-center gap-3 text-textPrimary">
                             {/* No back arrow here any more. Navigation is the
                                 title bar's flipper, in one fixed place, rather
@@ -3152,7 +3018,7 @@ const Home = () => {
                                         }}
                                         className="drops-badge-glass hover:brightness-125 hover:scale-105 active:scale-95 transition-all cursor-pointer !text-[10px] !px-2 !py-0.5 mr-1"
                                     >
-                                        <Gift size={11} />
+                                        <Package size={11} />
                                         <span>DROPS ENABLED</span>
                                     </button>
                                 )}
@@ -3598,7 +3464,7 @@ const Home = () => {
                                                                         <div className="live-dot text-xs px-1.5 py-0.5">LIVE</div>
                                                                         {hasDrops && (
                                                                             <div className="drops-badge-glass">
-                                                                                <Gift size={10} />
+                                                                                <Package size={10} />
                                                                                 <span>DROPS</span>
                                                                             </div>
                                                                         )}
@@ -4156,7 +4022,7 @@ const Home = () => {
                         }}
                     >
                         <div className="animate-fly-up-fade">
-                            <Gift
+                            <Package
                                 size={24}
                                 className="automation-shimmer-gold"
                             />

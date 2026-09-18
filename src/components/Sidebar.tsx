@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef, useCallback, useMemo, memo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore, ensureHomeSnapshotSync } from '../stores/AppStore';
-import { ChevronLeft, ChevronRight, Users, Sparkles, Radio, Heart, Gift, Flame, Star } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Users, Sparkles, Radio, Heart, Flame, Star } from 'lucide-react';
+import { Package } from 'phosphor-react';
 import type { TwitchStream } from '../types';
 import { invoke } from '@tauri-apps/api/core';
 import { getSidebarSettings, type SidebarMode } from './settings/InterfaceSettings';
@@ -191,7 +192,7 @@ const StreamItem = memo(({
                 {/* Drops indicator on avatar - only show in compact mode */}
                 {hasDrops && !showExpanded && (
                     <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-accent flex items-center justify-center border border-background">
-                        <Gift size={10} className="text-white" />
+                        <Package size={10} className="text-white" />
                     </div>
                 )}
                 {/* Hype Train indicator on avatar - only show in compact mode when no drops */}
@@ -233,7 +234,7 @@ const StreamItem = memo(({
                         {hasDrops && (
                             <Tooltip content="Drops enabled" delay={100} side="top">
                                 <span>
-                                    <Gift size={10} className="text-accent flex-shrink-0" />
+                                    <Package size={10} className="text-accent flex-shrink-0" />
                                 </span>
                             </Tooltip>
                         )}
@@ -716,6 +717,27 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
 
     const { visible, width, showExpanded, isOverlay } = calculateSidebarState();
 
+    // Publish how the sidebar is laid out, so the layering can be pure CSS.
+    //
+    // The two states want opposite things. PINNED, the drawer is furniture the
+    // app sits on top of, so the content becomes a card above it. As an OVERLAY
+    // it is the thing that arrived, so it floats above the content instead. The
+    // main content column cannot ask the sidebar which it is (they are
+    // siblings), and threading it through the store to answer a question about
+    // paint order would be the wrong kind of coupling.
+    useEffect(() => {
+        const el = document.documentElement;
+        el.dataset.snSidebar = !visible ? 'none' : isOverlay ? 'overlay' : 'pinned';
+        // The panel flips to the right edge when chat is docked left, and the
+        // card has to round and drop toward whichever side it actually meets.
+        el.dataset.snSidebarSide = onRight ? 'right' : 'left';
+        return () => {
+            delete el.dataset.snSidebar;
+            delete el.dataset.snSidebarSide;
+        };
+    }, [visible, isOverlay, onRight]);
+
+
     // Expand the panel unblurred (cheap) and only fade the frosted glass in once
     // it has finished widening. Blurring an element while its width animates forces
     // a per-frame backdrop re-raster, which is what made the expand choppy. Gating
@@ -939,6 +961,7 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
             <div
                 ref={sidebarRef}
                 className={`
+                    sn-sidebar-panel
                     ${onRight ? 'border-l' : 'border-r'} border-borderSubtle flex flex-col flex-shrink-0
                     transition-[width,min-width,opacity,transform] duration-200 ease-[cubic-bezier(0.4,0,0.2,1)]
                     ${isOverlay
@@ -952,7 +975,12 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
                         // when it lagged at top-8 the panel rode up under the bar and
                         // its frosted backing clipped the title-bar action icons.
                         ? `fixed ${onRight ? 'right-0' : 'left-0'} top-10 bottom-0 z-50`
-                        : 'relative h-full'
+                        // pt-10 clears the floating title bar, which no longer
+                        // reserves those 40px for anyone. Padding rather than a
+                        // margin so the panel's own backing still reaches the top
+                        // of the window and the left icon cluster has something to
+                        // sit on; only the content starts below the bar.
+                        : 'relative h-full pt-10'
                     }
                 `}
                 style={{
