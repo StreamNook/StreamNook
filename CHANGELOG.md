@@ -1,3 +1,33 @@
+## [8.6.4] - 2026-09-18
+
+## 🎉 New: a fresh look
+> StreamNook's chrome has been rebuilt around the player: a floating navigation
+> strip, softer surfaces, and a glow that follows the colours on screen. The
+> notification center moved into the title bar, and the MultiNook and MultiChat
+> controls moved there with it, so they work from any view instead of only from
+> Home.
+
+---
+
+### ✨ Features
+- **A new look.** Softer surfaces, a floating navigation strip, and a glow behind the player driven by the colours actually on screen.
+- **Notifications now live in the title bar.** The notification center moved out of the centre of the window and into the title bar, where the trigger shows stacked faces for what is waiting. A channel that goes live on two platforms now collapses into a single entry carrying both marks instead of two identical rows, and plugin messages carry their own mark rather than the generic status glyph.
+- **MultiNook and MultiChat from anywhere.** Both moved out of Home's tab strip into the title bar, so they are reachable from any view rather than only one page.
+- **Switch YouTube channel.** If your YouTube account owns more than one channel, Accounts now lets you switch between them. Each channel has its own subscriptions, and StreamNook follows the one you pick.
+
+### 🐛 Bug Fixes
+- **YouTube: StreamNook now acts as the channel you chose.** If your account owns more than one channel it always signed in as the default one, showing the wrong name and reading a different channel's subscriptions. Reading, chatting and moderating now all follow the channel you are actually on.
+- **YouTube: your followed channels have their pictures back.** Most pictures in the following list were saved in a form the app could not load, so they showed as broken and were fetched again on every launch. Existing lists repair themselves on the next start.
+- **Drops sign-in works again.** It failed outright. Signing in now goes through the browser redirect instead of the code flow Twitch stopped accepting.
+- **Kick sign-in opens its window again.** For some people the button did nothing, because sign-in needed one specific port on your machine to be free. It no longer does.
+- **Resizing is smooth with the aspect-ratio lock on.** Dragging an edge or corner could stutter and snap back to a size you never asked for. The lock now applies while you drag instead of correcting afterwards, and every edge works.
+- **macOS: Discord Rich Presence connects.** StreamNook could not find Discord on many Macs and gave up without saying so.
+- **macOS: audio boost and song identification no longer silence the stream.** The system's video engine will not share stream audio with the app, so those controls now explain that instead of muting playback.
+
+### 🔧 Maintenance
+- Windows and macOS builds now run in parallel, so releases arrive sooner.
+- A large sweep of dead code: unused modules and packages removed, along with an expired seasonal effect.
+
 ## [8.6.3] - 2026-09-15
 
 ### 🐛 Bug Fixes
