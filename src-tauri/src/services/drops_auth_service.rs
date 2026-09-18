@@ -169,6 +169,64 @@ impl DropsAuthService {
         Ok(())
     }
 
+    /// The page the browser lands on once the grant completes. Registered for this
+    /// client, so it must match byte for byte.
+    const REDIRECT_URI_ENCODED: &'static str = "https%3A%2F%2Fwww.twitch.tv%2F";
+
+    /// Where the sign-in overlay is pointed. The token comes back on the fragment
+    /// of the redirect, which the overlay's URL reporter already surfaces.
+    pub fn authorize_url() -> String {
+        format!(
+            "https://id.twitch.tv/oauth2/authorize?client_id={}&response_type=token&redirect_uri={}&scope=",
+            DROPS_CLIENT_ID,
+            Self::REDIRECT_URI_ENCODED
+        )
+    }
+
+    /// Pull the access token out of a landed redirect. Returns None for any URL
+    /// that is not one, so callers can hand it every navigation they observe.
+    pub fn access_token_from_redirect(url: &str) -> Option<String> {
+        let fragment = url.split_once('#')?.1;
+        fragment.split('&').find_map(|pair| {
+            let (key, value) = pair.split_once('=')?;
+            if key == "access_token" && !value.is_empty() {
+                Some(value.to_string())
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Persist a token obtained without a refresh companion. Mirrors the device
+    /// flow's storage so every reader downstream is unchanged.
+    pub async fn store_access_token(access_token: String) -> Result<()> {
+        let token = StorableDropsToken {
+            access_token,
+            refresh_token: String::new(),
+            expires_at: 0,
+        };
+
+        let file_result = Self::store_token_to_file(&token);
+        let cookie_result = Self::store_token_to_cookies(&token).await;
+
+        match (file_result, cookie_result) {
+            (Ok(_), Ok(_)) => Ok(()),
+            (Ok(_), Err(e)) => {
+                error!("[DROPS_AUTH] Token saved to file but cookies failed: {:?}", e);
+                Ok(())
+            }
+            (Err(e), Ok(_)) => {
+                error!("[DROPS_AUTH] Token saved to cookies but file failed: {:?}", e);
+                Ok(())
+            }
+            (Err(file_err), Err(cookie_err)) => Err(anyhow::anyhow!(
+                "could not store the drops token (file: {:?}, cookies: {:?})",
+                file_err,
+                cookie_err
+            )),
+        }
+    }
+
     /// Start the device code flow for drops authentication
     pub async fn start_device_flow() -> Result<DropsDeviceCodeInfo> {
         let client = HTTP_CLIENT.clone();
@@ -205,9 +263,23 @@ impl DropsAuthService {
             device_response.verification_uri
         );
 
+        let verification_uri = if device_response.verification_uri.contains("device-code=") {
+            device_response.verification_uri
+        } else {
+            let sep = if device_response.verification_uri.contains('?') {
+                '&'
+            } else {
+                '?'
+            };
+            format!(
+                "{}{}device-code={}",
+                device_response.verification_uri, sep, device_response.user_code
+            )
+        };
+
         Ok(DropsDeviceCodeInfo {
             user_code: device_response.user_code,
-            verification_uri: device_response.verification_uri,
+            verification_uri,
             device_code: device_response.device_code,
             interval: device_response.interval,
             expires_in: device_response.expires_in,

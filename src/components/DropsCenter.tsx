@@ -10,7 +10,7 @@ import { Dropdown } from './ui/Dropdown';
 import { SegmentedSelect } from './settings/_primitives';
 import {
     UnifiedGame, DropCampaign, DropProgress, DropsStatistics,
-    DropProgressStatus, DropsDeviceCodeInfo, InventoryResponse, InventoryItem, CompletedDrop, TwitchStream
+    DropProgressStatus, InventoryResponse, InventoryItem, CompletedDrop, TwitchStream
 } from '../types';
 
 import LoadingWidget from './LoadingWidget';
@@ -81,7 +81,6 @@ export default function DropsCenter() {
     // Auth State
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [isAuthenticating, setIsAuthenticating] = useState(false);
-    const [deviceCodeInfo, setDeviceCodeInfo] = useState<DropsDeviceCodeInfo | null>(null);
 
     // Automation State
     const [dropProgress, setDropProgress] = useState<DropProgressStatus | null>(null);
@@ -292,50 +291,16 @@ export default function DropsCenter() {
         try {
             setIsAuthenticating(true);
             setError(null);
-            const deviceInfo = await invoke<DropsDeviceCodeInfo>('start_drops_device_flow');
-            setDeviceCodeInfo(deviceInfo);
+
+            const url = await invoke<string>('start_drops_login');
 
             // Bound to the active account's web profile (Rust), so it reuses the
-            // main login's twitch.tv session — authorize only, no re-login.
-            await invoke('open_drops_login_window', { url: deviceInfo.verification_uri });
-
-            pollForToken(deviceInfo);
+            // main login's twitch.tv session - authorize only, no re-login.
+            await invoke('open_drops_login_window', { url });
         } catch (err) {
             Logger.error('Failed to start drops login:', err);
             setError(err instanceof Error ? err.message : String(err));
             setIsAuthenticating(false);
-        }
-    };
-
-    const pollForToken = async (deviceInfo: DropsDeviceCodeInfo) => {
-        try {
-            await invoke('poll_drops_token', {
-                deviceCode: deviceInfo.device_code,
-                interval: deviceInfo.interval,
-                expiresIn: deviceInfo.expires_in,
-            });
-
-            // Dismiss the in-app drops login overlay
-            try {
-                await invoke('close_login_overlay', { label: 'drops-login' });
-            } catch (closeErr) {
-                Logger.warn('[DropsCenter] Failed to close drops login overlay:', closeErr);
-            }
-
-            setIsAuthenticated(true);
-            setIsAuthenticating(false);
-            setDeviceCodeInfo(null);
-            addToast('Drops login successful!', 'success');
-            await loadDropsData();
-        } catch (err) {
-            Logger.error('Failed to complete drops login:', err);
-            setError(err instanceof Error ? err.message : String(err));
-            setIsAuthenticating(false);
-            
-            // Also dismiss the drops login overlay on error
-            try {
-                await invoke('close_login_overlay', { label: 'drops-login' });
-            } catch { /* overlay may not exist */ }
         }
     };
 
@@ -1019,6 +984,26 @@ export default function DropsCenter() {
         }
     };
 
+    // The overlay reports completion, so the outcome arrives as an event rather
+    // than as the resolution of the call that started it.
+    useEffect(() => {
+        const uns: Array<() => void> = [];
+        listen('drops-login-complete', () => {
+            setIsAuthenticating(false);
+            setIsAuthenticated(true);
+            setError(null);
+            addToast('Drops login successful!', 'success');
+            void loadDropsData();
+        }).then((u) => uns.push(u));
+        listen<string>('drops-login-error', (e) => {
+            setIsAuthenticating(false);
+            Logger.error('Failed to complete drops login:', e.payload);
+            setError(e.payload);
+        }).then((u) => uns.push(u));
+        return () => uns.forEach((u) => u());
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     // ---- Favorite Drops Notification Logic ----
     // Check if any favorited categories have new drops since last session
     const FAVORITE_CAMPAIGNS_CACHE_KEY = 'streamnook_favorite_campaigns_cache';
@@ -1374,13 +1359,12 @@ export default function DropsCenter() {
                             </div>
                         </div>
 
-                        {/* Device Code Display (when authenticating) */}
-                        {isAuthenticating && deviceCodeInfo && (
+                        {/* Authorization in progress */}
+                        {isAuthenticating && (
                             <div className="mb-6 p-6 bg-accent/5 rounded-xl border border-accent/30 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                                <p className="text-xs text-textSecondary uppercase tracking-wider mb-3">Enter this code on Twitch</p>
-                                <div className="text-4xl font-mono font-bold text-accent tracking-[0.3em] py-2 select-all">
-                                    {deviceCodeInfo.user_code}
-                                </div>
+                                <p className="text-sm text-textSecondary">
+                                    Approve the request on Twitch to turn on drops and channel points.
+                                </p>
                                 <div className="flex items-center justify-center gap-2 mt-4 text-textSecondary text-sm">
                                     <div className="w-2 h-2 bg-accent rounded-full animate-pulse" />
                                     <span>Waiting for authorization...</span>

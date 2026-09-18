@@ -512,6 +512,15 @@ pub async fn report_player_playing(
 }
 
 // Drops Authentication commands
+
+/// The url the drops sign-in overlay should load. Completion is reported on the
+/// `drops-login-complete` / `drops-login-error` events rather than returned here,
+/// because the credential arrives on a redirect the overlay observes.
+#[tauri::command]
+pub fn start_drops_login() -> String {
+    DropsAuthService::authorize_url()
+}
+
 #[tauri::command]
 pub async fn start_drops_device_flow() -> Result<DropsDeviceCodeInfo, String> {
     DropsAuthService::start_device_flow()
