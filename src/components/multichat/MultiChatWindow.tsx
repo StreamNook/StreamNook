@@ -2828,7 +2828,7 @@ function TitleBar({
 
       {canSplit && (
         <div
-          className="titlebar-icon-group mr-2 gap-0.5"
+          className="chrome-glaze chrome-glaze--flat titlebar-icon-group mr-2"
           data-tauri-drag-region="false"
         >
           <LayoutToggleButton
@@ -2836,14 +2836,14 @@ function TitleBar({
             active={isMentionsMode}
             onClick={onToggleMentions}
           >
-            <span className="text-[12px] font-bold leading-none">@</span>
+            <span className="text-[15px] font-bold leading-none">@</span>
           </LayoutToggleButton>
           <LayoutToggleButton
             label="Blend all sources into one feed"
             active={isBlendedMode}
             onClick={onToggleBlended}
           >
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <svg className="h-[17px] w-[17px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <circle cx="9" cy="12" r="6" />
               <circle cx="15" cy="12" r="6" />
             </svg>
@@ -2882,7 +2882,7 @@ function TitleBar({
             active={isSplitMode}
             onClick={onToggleSplits}
           >
-            <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+            <svg className="h-[17px] w-[17px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
               <rect x="3" y="3" width="18" height="18" rx="2" />
               <path d="M11 3v18M11 13h10" />
             </svg>
@@ -2891,12 +2891,21 @@ function TitleBar({
       )}
 
       <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-        {/* Grouped action icons — restore, mod logs, activity, settings — in the
-            same glass pill the core app's title bar uses (`titlebar-icon-group`
-            + `titlebar-icon-btn`), so the popout reads as first-class chrome
-            instead of a looser one-off. Toggles flag their on-state with the
-            shared accent treatment (`!text-accent !bg-accent/15`). */}
-        <div className="titlebar-icon-group">
+        {/* Grouped action icons, wearing the same chrome glaze as the core app's
+            title bar so the popout reads as first-class chrome rather than a
+            looser one-off.
+
+            `--flat` because this bar has a solid background and WebView2 smears
+            the chat scrolling below it into a live backdrop filter; see the
+            variant's own note. The glaze's material is the tint and the rim, so
+            nothing of the look is lost.
+
+            One hairline inside rather than separate pills: the group splits into
+            "leave this window" and "panels + settings", and `Restore` is
+            conditional — separate pills would collapse to a lone button beside a
+            pair whenever it is hidden, which is most of the time. The divider is
+            the same one the layout cluster above already uses. */}
+        <div className="chrome-glaze chrome-glaze--flat titlebar-icon-group">
           <Tooltip content="Open main app" delay={200}>
             <button
               type="button"
@@ -2904,7 +2913,7 @@ function TitleBar({
               data-tauri-drag-region="false"
               className="titlebar-icon-btn hover:!text-accent"
             >
-              <House size={15} />
+              <House size={17} />
             </button>
           </Tooltip>
           {canRestore && (
@@ -2915,10 +2924,11 @@ function TitleBar({
                 data-tauri-drag-region="false"
                 className="titlebar-icon-btn hover:!text-accent"
               >
-                <ArrowLineLeft size={15} />
+                <ArrowLineLeft size={17} />
               </button>
             </Tooltip>
           )}
+          <span className="mx-0.5 h-4 w-px bg-borderSubtle" aria-hidden />
           <Tooltip content={showModLogs ? 'Hide mod logs' : 'Show mod logs'} delay={200}>
             <button
               type="button"
@@ -2927,7 +2937,7 @@ function TitleBar({
               aria-pressed={showModLogs}
               className={`titlebar-icon-btn ${showModLogs ? 'is-active' : ''}`}
             >
-              <ShieldCheck size={15} />
+              <ShieldCheck size={17} />
             </button>
           </Tooltip>
           <Tooltip content={showActivityFeed ? 'Hide activity' : 'Show activity'} delay={200}>
@@ -2938,7 +2948,7 @@ function TitleBar({
               aria-pressed={showActivityFeed}
               className={`titlebar-icon-btn ${showActivityFeed ? 'is-active' : ''}`}
             >
-              <Activity size={15} />
+              <Activity size={17} />
             </button>
           </Tooltip>
           <Tooltip content="Chat settings" delay={200}>
@@ -2948,7 +2958,7 @@ function TitleBar({
               data-tauri-drag-region="false"
               className="titlebar-icon-btn settings-gear-btn"
             >
-              <Settings size={15} />
+              <Settings size={17} />
             </button>
           </Tooltip>
         </div>
@@ -3010,14 +3020,13 @@ function LayoutToggleButton({ label, active, onClick, children }: LayoutToggleBu
       aria-label={label}
       aria-pressed={active}
       data-tauri-drag-region="false"
-      // Brighter resting color (textSecondary, not textMuted) + a real hover fill
-      // so the layout/blend controls are clearly visible at rest; the engaged
-      // state uses the same pressed-in accent trench as the icon-group toggles.
-      className={`grid h-6 w-7 place-items-center rounded-md transition-all ${
-        active
-          ? 'bg-surface text-accent shadow-[inset_2px_2px_5px_-2px_rgba(0,0,0,0.55),inset_-2px_-2px_5px_-2px_rgba(255,255,255,0.09)]'
-          : 'text-textSecondary hover:bg-white/[0.06] hover:text-textPrimary'
-      }`}
+      // The same primitive the action cluster uses, rather than a hand-rolled
+      // box. These sat at 24px in a soft rectangle next to 30px capsules, which
+      // is why the two pills were visibly different heights.
+      //
+      // `is-active` also replaces an inline copy of that rule: the trench this
+      // used to spell out was character-for-character `.titlebar-icon-btn.is-active`.
+      className={`titlebar-icon-btn ${active ? 'is-active' : ''}`}
     >
       {children}
     </button>
@@ -3029,12 +3038,16 @@ function LayoutToggleButton({ label, active, onClick, children }: LayoutToggleBu
 // a 12x10 rectangle subdivided into N equal columns.
 function LayoutIcon({ mode }: { mode: LayoutMode }) {
   const cols = mode;
-  const width = 12;
-  const height = 10;
+  // Sized to sit beside 17px lucide glyphs. At 12x10 this read as a different,
+  // smaller family of icon. The stroke is a shade under lucide's effective
+  // 1.42px at this size, because a pure rectangle reads heavier than an
+  // open-path glyph at the same weight.
+  const width = 17;
+  const height = 13;
   const colWidth = width / cols;
   return (
     <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} fill="none">
-      <rect x="0.5" y="0.5" width={width - 1} height={height - 1} stroke="currentColor" strokeWidth="1" />
+      <rect x="0.5" y="0.5" width={width - 1} height={height - 1} stroke="currentColor" strokeWidth="1.25" />
       {Array.from({ length: cols - 1 }, (_, i) => (
         <line
           key={i}
@@ -3043,7 +3056,7 @@ function LayoutIcon({ mode }: { mode: LayoutMode }) {
           x2={(i + 1) * colWidth}
           y2={height - 0.5}
           stroke="currentColor"
-          strokeWidth="1"
+          strokeWidth="1.25"
         />
       ))}
     </svg>

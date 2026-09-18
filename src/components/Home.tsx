@@ -3,7 +3,8 @@ import { useShallow } from 'zustand/react/shallow';
 import { useAppStore, ensureHomeSnapshotSync, clipSourceOf, HomeTab } from '../stores/AppStore';
 import { IS_MOBILE } from '../utils/platform';
 import { createPortal } from 'react-dom';
-import { Search, ArrowLeft, Heart, X, Gift, Pickaxe, LayoutGrid, Flame, ArrowUpRight, Undo2, Users, User, Loader2, Clock, Play, Check, Plus } from 'lucide-react';
+import { glowThumbProps } from '../utils/mediaGlow';
+import { Search, Heart, X, Gift, Pickaxe, LayoutGrid, Flame, ArrowUpRight, Undo2, Users, User, Loader2, Clock, Play, Check, Plus } from 'lucide-react';
 import { MediaCard } from './MediaCard';
 import ContinueWatchingRow from './ContinueWatchingRow';
 import { formatCardDate, mediaKindOfVideo, videoDurationLabel, vodThumbUrl, VOD_FALLBACK_THUMB } from '../utils/vodProgress';
@@ -326,7 +327,17 @@ const QuickAddButton = ({ stream }: { stream: TwitchStream }) => {
                         triggerAddAnimation(e.clientX, e.clientY, stream.user_login, streamProvider(stream));
                         addSlot(stream.user_login, streamProvider(stream));
                     }}
-                    className="flex items-center justify-center glass-button !rounded-full aspect-square !p-1.5 text-white shadow-[0_4px_10px_rgba(0,0,0,0.5)]"
+                    // The chrome glaze rather than a plain glass button: this
+                    // floats over a thumbnail, which is exactly the varied
+                    // backdrop the material is built to sit on. `--control`
+                    // because it is a lone button, so the whole surface answers
+                    // the pointer instead of staying inert like a cluster.
+                    //
+                    // No `!rounded-full` needed: the glaze is already a 9999px
+                    // capsule, and `aspect-square` makes that a circle. The drop
+                    // shadow stays, since it is what lifts the button off the
+                    // picture; the glaze only lights its own edge.
+                    className="flex items-center justify-center chrome-glaze chrome-glaze--control chrome-glaze--frosted aspect-square !p-1.5 text-white shadow-[0_4px_10px_rgba(0,0,0,0.5)]"
                 >
                     <ArrowUpRight 
                         size={14} 
@@ -1147,26 +1158,16 @@ const Home = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeTab]);
 
-    const handleBackToBrowse = () => {
-        setActiveTab('browse');
-        setSelectedCategory(null);
+    // Leaving category view drops what that category had loaded. It is an
+    // effect rather than part of a click handler because the click now happens
+    // in the title bar, which knows nothing about these lists. Browse's own
+    // refetch is already handled by the effect above.
+    useEffect(() => {
+        if (activeTab === 'category') return;
         setCategoryStreams([]);
         setCategoryStreamsCursor(null);
         setHasMoreCategoryStreams(true);
-        
-        const isCacheStale = Date.now() - cachedTopGamesTimestamp > CATEGORY_CACHE_TTL;
-        
-        // Re-fetch categories if lost on remount
-        if (topGames.length === 0) {
-            loadTopGames(false);
-        } else if (isCacheStale) {
-            loadTopGames(true);
-        }
-        
-        if (dropsGameIds.size === 0) {
-            refreshDrops();
-        }
-    };
+    }, [activeTab]);
 
     const loadMoreCategoryStreams = useCallback(async () => {
         if (!selectedCategory || !hasMoreCategoryStreams || isLoadingMoreCategoryStreams) return;
@@ -2128,6 +2129,7 @@ const Home = () => {
                                                                     loading="lazy"
                                                                     src={getThumbnailUrl(stream.thumbnail_url)}
                                                                     alt={stream.title}
+                                                                    {...glowThumbProps(getThumbnailUrl(stream.thumbnail_url))}
                                                                     className="w-full aspect-video object-cover group-hover:scale-105 transition-transform duration-200"
                                                                 />
                                                                 <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
@@ -2727,8 +2729,15 @@ const Home = () => {
         />
     );
 
+    // The floating nav and the padding that clears it must agree: the category
+    // drill-down hides the nav, and a fixed inset there would leave a gap with
+    // nothing in it.
+    const showTopNav = !(activeTab === 'category' && selectedCategory);
+
     return (
-        <div className="flex flex-col h-full">
+        // `relative` so the nav below can position against Home rather than
+        // against whatever ancestor happens to be positioned.
+        <div className="relative flex flex-col h-full">
             {/* Global SVG Definitions for Liquid Glass Heart */}
             <svg width="0" height="0" className="absolute pointer-events-none">
                 <defs>
@@ -2745,21 +2754,46 @@ const Home = () => {
             </svg>
 
             {/* Top Navigation Frame - Always Center Navigation */}
-            {!(activeTab === 'category' && selectedCategory) && (
-                <div className="flex flex-col relative box-border overflow-hidden z-20">
+            {showTopNav && (
+                /* Out of flow entirely. In flow it reserved a page-wide band of
+                   empty height above the grid, and removing that band's paint
+                   changed almost nothing because it was already the page colour
+                   — the band WAS the height.
+                   `pointer-events-none` with the panel re-enabling them is
+                   Cider's own trick (`.ns-bottom-inline-bounds`): the bounds are
+                   full width and invisible, so without it they would swallow
+                   every click in the top of the grid. */
+                <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex flex-col box-border overflow-hidden">
                     {/* Mobile: pad past the status bar (targetSdk 36 forces edge-to-edge,
                         so without this the clock sits on top of the tabs), and let the
                         row scroll horizontally instead of clipping — at 360px the
                         desktop row runs off the right edge and the last tab is
                         unreachable. justify-start on mobile so scrolling starts at the
                         first tab rather than mid-row. */}
+                    {/* The row paints nothing of its own any more: no edge-to-edge
+                        rule, no plate, no full-width backdrop filter. Only the
+                        `glass-panel` inside it is visible, so the navigation reads
+                        as an object floating on the page rather than a toolbar
+                        bolted across it — the same move Cider makes with its
+                        bottom toolbar, which is a centred floating bar rather
+                        than a bar the width of the window.
+                        Still a row in normal flow, so it reserves its own height
+                        and nothing scrolls underneath it; only the paint is gone.
+                        Losing the full-width `backdrop-blur-md` is a real saving
+                        too — that was a window-wide compositing layer sampling a
+                        backdrop that barely varied. */}
                     <div
-                        className={`flex gap-3 relative z-30 px-4 py-2.5 min-h-[48px] items-center border-b border-borderSubtle bg-background/95 backdrop-blur-md ${
+                        className={`flex gap-3 relative z-30 px-4 py-3.5 min-h-[48px] items-center ${
                             IS_MOBILE ? 'justify-start overflow-x-auto' : 'justify-center'
                         }`}
                         style={IS_MOBILE ? { paddingTop: 'calc(0.625rem + var(--sn-safe-top))' } : undefined}
                     >
-                    <div ref={searchBarRef} className="relative flex items-center glass-panel px-1.5 py-1 !rounded-xl">
+                    <div ref={searchBarRef} // `--dark`: this floats over the grid now, and the theme tint
+                        // alone lets bright artwork wash straight through it. The
+                        // dark film keeps the labels legible while the blur still
+                        // does the glass, which is how Cider's floating chrome
+                        // works (`--chromeColor: rgb(40 40 40 / 50%)`).
+                        className="pointer-events-auto relative flex items-center glass-panel glass-panel--dark px-1.5 py-1 !rounded-xl">
                         {/* Navigation buttons - fade out when search is expanded */}
                         <LayoutGroup>
                         <div className={`flex items-center gap-1 transition-opacity duration-300 ${isSearchExpanded ? 'opacity-0' : 'opacity-100'}`}>
@@ -2790,7 +2824,21 @@ const Home = () => {
                                     {activeTab === 'following' && (
                                         <motion.div
                                             layoutId="homeTabHighlight"
-                                            className="absolute inset-0 glass-button-static rounded-lg"
+                                            // The selected tab is lit now rather than plated.
+                                            //
+                                            // `--flat`: this pill sits inside the strip's own
+                                            // `glass-panel`, so its backdrop is that panel's
+                                            // near-uniform fill. A second blur of an
+                                            // already-blurred surface is indistinguishable
+                                            // (compared side by side) and costs a nested
+                                            // compositing layer in a header that sits over
+                                            // scrolling content.
+                                            //
+                                            // No `rounded-lg`: the glaze is a capsule, and a
+                                            // capsule gliding between tabs reads far better than
+                                            // a rounded rectangle sliding. All four tabs share
+                                            // one `layoutId`, so they must stay identical.
+                                            className="absolute inset-0 chrome-glaze chrome-glaze--flat chrome-glaze--control"
                                             transition={{ type: "spring", stiffness: 350, damping: 30 }}
                                         />
                                     )}
@@ -2817,7 +2865,9 @@ const Home = () => {
                                 {activeTab === 'recommended' && (
                                     <motion.div
                                         layoutId="homeTabHighlight"
-                                        className="absolute inset-0 glass-button-static rounded-lg"
+                                        // Same lit pill as the Following tab; all four share one
+                                        // `layoutId`, so they cannot diverge.
+                                        className="absolute inset-0 chrome-glaze chrome-glaze--flat chrome-glaze--control"
                                         transition={{ type: "spring", stiffness: 350, damping: 30 }}
                                     />
                                 )}
@@ -2833,7 +2883,9 @@ const Home = () => {
                                 {activeTab === 'browse' && (
                                     <motion.div
                                         layoutId="homeTabHighlight"
-                                        className="absolute inset-0 glass-button-static rounded-lg"
+                                        // Same lit pill as the Following tab; all four share one
+                                        // `layoutId`, so they cannot diverge.
+                                        className="absolute inset-0 chrome-glaze chrome-glaze--flat chrome-glaze--control"
                                         transition={{ type: "spring", stiffness: 350, damping: 30 }}
                                     />
                                 )}
@@ -2850,7 +2902,9 @@ const Home = () => {
                                     {activeTab === 'search' && (
                                         <motion.div
                                             layoutId="homeTabHighlight"
-                                            className="absolute inset-0 glass-button-static rounded-lg"
+                                            // Same lit pill as the Following tab; all four share one
+                                        // `layoutId`, so they cannot diverge.
+                                        className="absolute inset-0 chrome-glaze chrome-glaze--flat chrome-glaze--control"
                                             transition={{ type: "spring", stiffness: 350, damping: 30 }}
                                         />
                                     )}
@@ -3005,22 +3059,28 @@ const Home = () => {
         )}
 
             {/* Content */}
-            <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4 scrollbar-thin relative">
+            <div
+                ref={scrollContainerRef}
+                className="flex-1 overflow-y-auto p-4 scrollbar-thin relative"
+                // Deliberately NOT padded to clear the nav. Padding it by the
+                // nav's height reproduces exactly the band this change exists to
+                // remove: same empty strip, just built from padding instead of a
+                // flow row. The grid starts at the top and the nav floats over
+                // it, which is the whole point of taking it out of flow.
+                // Mobile still owes the status bar its inset.
+                style={showTopNav && IS_MOBILE
+                    ? { paddingTop: 'calc(1rem + var(--sn-safe-top, 0px))' }
+                    : undefined}
+            >
                 
                 {/* FLOATING GLASS PILL HEADER (Only in Category View) */}
                 {activeTab === 'category' && selectedCategory && (
                     <div className="sticky top-4 mt-2 z-30 h-0 overflow-visible flex items-center justify-between w-full pointer-events-none">
                         <div className="flex items-center gap-3 text-textPrimary">
-                            {/* Back Button */}
-                            <Tooltip content="Back to Browse" side="right">
-                                <button
-                                    onClick={handleBackToBrowse}
-                                    className="h-[44px] w-[44px] glass-panel hover:bg-glass-hover rounded-xl flex items-center justify-center shadow-lg pointer-events-auto bg-background/80 backdrop-blur-md transition-colors"
-                                >
-                                    <ArrowLeft size={20} className="text-textSecondary hover:text-textPrimary transition-colors" />
-                                </button>
-                            </Tooltip>
-
+                            {/* No back arrow here any more. Navigation is the
+                                title bar's flipper, in one fixed place, rather
+                                than a control that moved around the window
+                                depending on which view you were in. */}
                             {/* Tiny Category Pill - Dropping in playfully */}
                             <div
                                 style={{
@@ -3531,6 +3591,7 @@ const Home = () => {
                                                                         loading="lazy"
                                                                         src={getThumbnailUrl(stream.thumbnail_url)}
                                                                         alt={stream.title}
+                                                                        {...glowThumbProps(getThumbnailUrl(stream.thumbnail_url))}
                                                                         className="w-full aspect-video object-cover group-hover:scale-105 transition-transform duration-200"
                                                                     />
                                                                     <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
@@ -4097,7 +4158,7 @@ const Home = () => {
                         <div className="animate-fly-up-fade">
                             <Gift
                                 size={24}
-                                className="gift-shimmer-gold"
+                                className="automation-shimmer-gold"
                             />
                         </div>
                     </div>

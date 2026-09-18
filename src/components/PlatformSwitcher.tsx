@@ -271,9 +271,11 @@ export default function PlatformSwitcher() {
         }
       }}
     >
-      {/* The anchor wears `titlebar-select`: a hairline under the content and
-          nothing else. See that class for the treatments this replaced and why
-          each one failed. */}
+      {/* The anchor wears `.chrome-glaze`, the title-bar material, so it reads
+          as the same pane of glass as the icon clusters beside it. See that
+          class for what each layer does and `.titlebar-pill` for the one thing
+          the anchor does differently: it lights on hover, because it is itself
+          the button. */}
       <button
         ref={anchorRef}
         type="button"
@@ -283,17 +285,18 @@ export default function PlatformSwitcher() {
         aria-expanded={open}
         aria-haspopup="menu"
         onClick={() => setOpen((v) => !v)}
-        // A pill again, so the padding comes back: the fill needs room around
-        // the content or it reads as a plate clamped to the text. Taller too —
-        // 22px was sized for a hairline with nothing above or below it.
-        className={`titlebar-pill flex h-[26px] items-center gap-[7px] pl-[9px] pr-[7px] outline-none ${
+        // Height matches the icon clusters rather than the text it contains:
+        // they are the same material now, and a lit capsule that is 8px shorter
+        // than the lit capsule beside it reads as a mistake. The extra padding
+        // comes with it, or the content sits clamped inside a taller shell.
+        className={`chrome-glaze titlebar-pill flex h-[34px] items-center gap-[7px] pl-[11px] pr-[9px] outline-none ${
           open ? 'is-open' : ''
         }`}
       >
         {/* A size larger than the flyout's marks: with the name gone this is
             the only thing identifying the platform, so it carries the weight
             the words used to. */}
-        <Mark platform={focused} size={13} />
+        <Mark platform={focused} size={16} />
         {/* Baseline-aligned, not centre-aligned. Two different type sizes on
             one line centre by their em boxes, which puts their baselines a
             fraction apart and reads as the smaller one sitting low. */}
@@ -320,7 +323,7 @@ export default function PlatformSwitcher() {
             the anchor. It also means nothing has to rotate on open — the shape
             is already symmetric, so the state is carried by brightness alone. */}
         <ChevronsUpDown
-          size={11}
+          size={12}
           strokeWidth={2.5}
           className="flex-shrink-0 text-textMuted"
           style={{
@@ -357,7 +360,7 @@ export default function PlatformSwitcher() {
               opacity: { duration: 0.15, ease: 'easeOut' },
             }}
           >
-            <div className="p-1">
+            <div>
               {options.map((p, i) => {
                 const connected = isConnected(p);
                 const on = p === activePlatform;
@@ -387,7 +390,7 @@ export default function PlatformSwitcher() {
                       // Room for the Connect button sitting over the right of
                       // this row, so a long platform name cannot run under it.
                       connected ? 'pr-2.5' : 'pr-[62px]'
-                    } ${on ? 'is-selected' : ''}`}
+                    } ${on ? 'is-selected glaze-inset' : ''}`}
                   >
 
                     {/* Every mark at full strength. Fading the unselected ones
@@ -413,8 +416,12 @@ export default function PlatformSwitcher() {
                         is nothing signed in to ask. */}
                     {connected && (
                       <span
+                        // On a chosen row the plate is already the accent, so
+                        // the accent-coloured secondary text goes muddy against
+                        // it. White at 70% keeps the same "quieter than the
+                        // label" relationship without fighting the fill.
                         className={`ml-auto text-[10.5px] leading-none tabular-nums ${
-                          on ? 'text-textSecondary' : 'text-textMuted'
+                          on ? 'text-white/70' : 'text-textMuted'
                         }`}
                       >
                         {countOf(p)} live

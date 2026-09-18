@@ -269,7 +269,11 @@ const SettingsDialog = () => {
               style={IS_MOBILE ? { paddingTop: 'var(--sn-safe-top)' } : undefined}
             >
               <div className="px-2">
-                <div className="flex items-center gap-1">
+                {/* Who you are, as one object rather than a nav row that happens
+                    to have a face on it. It holds both the identity and the
+                    sign-out, so the glaze goes on the ROW: a chip with a button
+                    inside it, not two controls sitting next to each other. */}
+                <div className="glaze-inset glaze-chip flex items-center gap-1 bg-white/[0.10] p-1.5">
                   <button
                     type="button"
                     onClick={() => selectTab('Profile')}

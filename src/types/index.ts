@@ -999,6 +999,16 @@ export interface Settings {
   // purpose: a full-size window glued in front of everything is overbearing.
   // Only the frontend reads it, so it rides Rust's `extra` catch-all.
   keep_on_top_in_compact?: boolean;
+  // Tint a stream's container from the colour of what is playing in it. Only
+  // the frontend reads it (Rust is handed frames, it does not decide whether to
+  // ask for them), so it rides Rust's `extra` catch-all exactly like
+  // keep_on_top_in_compact above. Default ON, hence every read is `!== false`.
+  media_glow?: boolean;
+  // Immersive mode: the picture's own colour spills onto the letterbox bars
+  // above and below it. Rides `extra` like its neighbours — Rust is handed
+  // frames, it never decides what the page does with the answer. Off by
+  // default: it is a mode you choose, not the normal look.
+  immersive_glow?: boolean;
   // Which rows the chat user card shows.
   user_card?: UserCardSettings;
   // Folding runs of the same message into one row with a count.

@@ -8,7 +8,7 @@ import {
   Trash2,
   Copy,
   Play,
-  ArrowLeft,
+  ChevronLeft,
   Check,
   X,
   Plus,
@@ -637,9 +637,11 @@ const PresetEditorView: React.FC<{
       <div className="flex items-center gap-2 px-2.5 pt-2.5 pb-2 shrink-0">
         <button
           onClick={onDone}
-          className="w-6 h-6 flex items-center justify-center rounded-md glass-button text-textSecondary hover:text-white shrink-0"
+          className="chrome-glaze nav-flipper-btn shrink-0"
+          style={{ '--nav-btn-size': '24px' } as React.CSSProperties}
+          aria-label="Back"
         >
-          <ArrowLeft size={13} />
+          <ChevronLeft size={15} />
         </button>
         <span className="text-[10px] font-bold uppercase tracking-wider text-textMuted">
           {editingId ? 'Edit preset' : 'New preset'}
@@ -926,9 +928,11 @@ const PresetIconPicker: React.FC<{
       <div className="flex items-center gap-2 px-2.5 pt-2.5 pb-2 shrink-0">
         <button
           onClick={onBack}
-          className="w-6 h-6 flex items-center justify-center rounded-md glass-button text-textSecondary hover:text-white shrink-0"
+          className="chrome-glaze nav-flipper-btn shrink-0"
+          style={{ '--nav-btn-size': '24px' } as React.CSSProperties}
+          aria-label="Back"
         >
-          <ArrowLeft size={13} />
+          <ChevronLeft size={15} />
         </button>
         <span className="flex-1 text-[10px] font-bold uppercase tracking-wider text-textMuted">Choose icon</span>
         {current && (

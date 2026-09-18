@@ -142,7 +142,7 @@ export default function LinkedAccountsSection() {
           <p className="text-[11px] font-medium uppercase tracking-wide text-textMuted">
             Watching &amp; streaming as
           </p>
-          <div className="flex items-center gap-3 rounded-lg px-3 py-2.5 bg-white/[0.03]">
+          <div className="glaze-inset flex items-center gap-3 rounded-lg px-3 py-2.5 bg-white/[0.03]">
             {avatar(primary)}
             <div className="min-w-0 flex-1">
               <div className="text-sm text-textPrimary truncate">
@@ -202,7 +202,7 @@ export default function LinkedAccountsSection() {
             return (
               <div
                 key={account.user_id}
-                className="flex items-center gap-3 rounded-lg px-3 py-2.5 bg-white/[0.03]"
+                className="glaze-inset flex items-center gap-3 rounded-lg px-3 py-2.5 bg-white/[0.03]"
               >
                 {avatar(account)}
 

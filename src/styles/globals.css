@@ -141,21 +141,366 @@
 /* Honor the global motion-off / glass-off switches. */
 html[data-motion="off"] .update-pill { animation: none; }
 
-/* Title-bar icon clusters — related actions sit in a subtle segmented group,
-   each icon getting a hover highlight and a gentle lift. No glow, no chip
-   borders; just a soft grouping background and a tactile hover. */
+/* ===== Chrome glaze =====
+   The title-bar material. One recipe, so a bar that grows another cluster
+   later keeps reading as a single pane of glass with openings cut into it
+   rather than a row of unrelated chips.
+
+   Four layers, in paint order:
+     1. a theme-tinted translucent fill over a live backdrop blur, so the pill
+        takes its colour from whatever is playing behind the bar;
+     2. ::before, an accent hairline plus a soft inner glow and a half-pixel
+        dark contour, which is what gives the edge its thickness;
+     3. ::after, the specular streak: the same rim light, masked to fade out at
+        both ends so it only lands across the middle. This layer does most of
+        the work. A rim that stays bright all the way around reads as a drawn
+        border; one that is bright only where light would actually catch reads
+        as a curved surface.
+     4. the icons, which sit above all of it and keep their own hover.
+
+   Both pseudo layers are z-index -1, so they paint over the fill but under the
+   content and no glow washes across an icon. The isolation is load-bearing for
+   that: at Glassiness 0% the global override strips backdrop-filter, and
+   without a stacking context of its own the negative-index layers would fall
+   behind the title bar instead.
+
+   The light goes out when the window loses focus, the way native vibrancy
+   does. Lit chrome on a background window is the tell that a surface is
+   painted on rather than real. */
+.chrome-glaze {
+  /* The knobs. A variant retunes these rather than restating the recipe, so
+     every surface wearing the glaze stays the same material and differs only
+     in how brightly it is lit. --glaze-lift is the pointer response: zero for
+     a cluster, whose buttons answer the pointer themselves, and non-zero for a
+     control that IS the button. */
+  --glaze-ring: 10%;
+  --glaze-inner: 7%;
+  --glaze-spec: 34%;
+  --glaze-spec-soft: 14%;
+  --glaze-lift: 0%;
+  /* How much milky floor sits under the blur. Zero for chrome, which sits on
+     app surfaces and only needs the blur; a lone control floating over a
+     THUMBNAIL needs a real film behind it or the icon competes with whatever is
+     playing underneath. Added to the glassiness-derived floor rather than
+     replacing it, so the Glassiness slider still wins at the opaque end. */
+  --glaze-frost: 0%;
+  isolation: isolate;
+  border-radius: 9999px;
+  /* Opaque floor fades IN as glassiness drops and the tint always sits on top:
+     the house two-layer composite, same as .glass-panel and .glass-modal. */
+  background-color: color-mix(in srgb, var(--color-background-tertiary) calc((1 - var(--glass-strength)) * 100% + var(--glaze-frost)), transparent);
+  /* The tint carries a little of the theme accent rather than being neutral
+     grey, so the cluster belongs to the current theme instead of sitting on
+     top of it. Flat rather than a gradient: the light comes from the rim
+     layers below, and a second source in the fill only muddies them. */
+  background-image: linear-gradient(
+    color-mix(in srgb, color-mix(in srgb, var(--color-accent) 8%, var(--color-background-tertiary)) 34%, transparent),
+    color-mix(in srgb, color-mix(in srgb, var(--color-accent) 8%, var(--color-background-tertiary)) 34%, transparent)
+  );
+  -webkit-backdrop-filter: blur(calc(20px * var(--glass-strength))) saturate(140%);
+  backdrop-filter: blur(calc(20px * var(--glass-strength))) saturate(140%);
+}
+
+.chrome-glaze::before,
+.chrome-glaze::after,
+.glaze-inset::before,
+.glaze-inset::after,
+.sn-popover::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  /* Behind the content. Every glazed surface leaves its own edges clear — a
+     pill with icons in the middle, a chip with text inset from the rim — so
+     the layer has room to show without anything covering it, and keeping it
+     under the content means no glow can ever wash across a label or an icon.
+     The one surface where that failed was the stream card, whose thumbnail
+     reaches its edges; that card no longer carries a glaze at all. */
+  z-index: -1;
+  border-radius: inherit;
+  /* Load-bearing on a squircle: without it the layer is drawn with circular
+     corners inside a superellipse and the rim visibly parts from the edge. */
+  corner-shape: inherit;
+  pointer-events: none;
+  /* Every glaze layer is drawn at the same strength, so surfaces differ by
+     what they are rather than by which copy of the recipe they got.
+     Chrome overrides this to 1 below — Cider makes exactly the same
+     distinction, chrome at full and nested components at three quarters. */
+  opacity: var(--glaze-opacity, 0.75);
+  transition: box-shadow 0.2s ease, background-color 0.18s ease;
+}
+
+/* The specular is always the same layer doing the same job, so its mask and
+   its compositing hint belong here rather than being restated per variant. */
+.chrome-glaze::after,
+.glaze-inset::after,
+.sn-popover::after {
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 50%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 50%, transparent);
+  /* Its own compositor layer: the rim repaints on hover and focus, and this
+     keeps that off the element's own paint. */
+  transform: translateZ(0);
+}
+
+/* No `content-visibility: auto` here, deliberately.
+   It was copied across from Cider as a free perf hint and is not free: it lets
+   the browser SKIP rendering the layer until it decides the element is
+   relevant, and that check frequently does not run until some input forces it.
+   The symptom is the glaze missing after a view change and appearing the
+   moment the pointer moves.
+
+   The reasoning behind adding it was also wrong on its own terms — the comment
+   said "frequently offscreen in a long grid", but `.chrome-glaze` is the title
+   bar, which is never offscreen and never in a grid. There is no population of
+   these big enough for skipped painting to buy anything. */
+
+/* Chrome is lit at full strength; it sits over content and has to hold its
+   own against it. */
+.chrome-glaze {
+  --glaze-opacity: 1;
+}
+
+/* Edge: accent hairline, soft inner glow, half-pixel dark contour so the pill
+   still separates when something bright is playing behind the bar. */
+.chrome-glaze::before {
+  /* The lift rides here, not on the element fill: a linear-gradient does not
+     interpolate, so a hover written into the base fill would snap. */
+  background-color: color-mix(in srgb, var(--color-accent) var(--glaze-lift), transparent);
+  box-shadow:
+    inset 0 1px 0 0 color-mix(in srgb, var(--color-accent) var(--glaze-ring), transparent),
+    inset 0 0 6px 1px color-mix(in srgb, var(--color-accent) var(--glaze-inner), transparent),
+    /* Bounce: a half-pixel of light along the INSIDE of the bottom edge, which
+       is the bar underneath throwing light back up into the glass. Cheap, and
+       it is most of what stops a translucent shape reading as a hole. */
+    inset 0 -0.5px 0 0 rgba(255, 255, 255, 0.10),
+    0 0 0 0.5px rgba(0, 0, 0, 0.38),
+    /* Contact line plus a small drop. The cluster is an object resting on the
+       title bar, not an opening cut through it, and nothing says that faster
+       than a shadow falling from it onto what is behind. */
+    0 1px 0 0 rgba(0, 0, 0, 0.05),
+    0 1px 3px 0 rgba(0, 0, 0, 0.10);
+}
+
+/* Specular: a brighter rim masked to the middle. Without the mask this is just
+   a second border drawn on top of the first. */
+.chrome-glaze::after {
+  box-shadow:
+    inset 0 0 1.5px 1px color-mix(in srgb, var(--color-accent) var(--glaze-spec), transparent),
+    inset 0 0 3px 1px color-mix(in srgb, var(--color-accent) var(--glaze-spec-soft), transparent);
+}
+
+/* Unfocused window. The specular streak goes entirely and the edge keeps only
+   its dark contour, so a background window reads as unlit glass instead of a
+   lit control nobody is using. Driven by TitleBar via Tauri onFocusChanged. */
+body[data-window-blurred="true"] .chrome-glaze::after {
+  display: none;
+}
+body[data-window-blurred="true"] .chrome-glaze::before {
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.38);
+}
+
+/* ===== Glaze inset — glass INSIDE glass =====
+   The other half of the material. A glazed container holds glazed components,
+   and the component is not simply a smaller copy of the container: three
+   things change, and all three are load-bearing.
+
+     1. No backdrop-filter. The container already frosted what is behind it,
+        and frosting an already-frosted surface costs a compositor layer to
+        change nothing.
+     2. It casts a shadow ONTO its container — a contact line plus a 3px drop.
+        Without this a translucent shape inside a translucent shape reads as a
+        hole cut through the parent. With it, it is an object resting inside
+        one. This is the single difference that makes the pattern work.
+     3. Light arrives from two directions. The rim is lit from above like
+        everything else, but the bottom inside edge carries a half-pixel of
+        light bounced back up off the container it is sitting on.
+
+   Radius and fill are deliberately not set here: a nested component takes its
+   shape from whatever it is (a menu row, a lockup, a card), and only the
+   lighting is shared. */
+/* Squircle corners are kept OFF every surface that carries a backdrop filter.
+   This block used to list `.glass-panel`, `.glass-modal`, `.glass-flyout`,
+   `.glass-button`, `.glass-button-static`, `.sn-popover`, `.stats-hud` and
+   `.liquid-glass-panel` — every one of which has a `backdrop-filter`, and
+   `.liquid-glass-panel` a 96px one.
+
+   It is the only change the badges overlay and the drops overlay had in common
+   when both started dropping content, and both are built on
+   `.liquid-glass-panel`. `corner-shape` is a very new property, and clipping a
+   heavy backdrop filter to a non-rectangular path is a new code path in the
+   compositor; a shape refinement is not worth an app that does not paint.
+
+   Being straight about the evidence: this was NOT reproduced. Five labs failed
+   to trigger it outside Tauri, including one running this exact combination at
+   96px, because the Browser pane is not WebView2 with the same GPU. What the
+   evidence does support is narrower and enough to act on — it is the single
+   change shared by both broken surfaces, and the places squircle SURVIVES
+   (`.glaze-chip`, `.media-card`) are exactly the ones with no backdrop filter,
+   which are not reported broken. If squircle is later exonerated, this comes
+   back; the shape was worth having.
+
+   The title-bar pills were never here either: they are full capsules (radius
+   9999px) where no straight side remains for a corner shape to affect, and
+   Cider makes the same exception. */
+
+/* The chip shape Cider uses for this kind of object: a 14px superellipse
+   rather than a small rounded rectangle. At 14px a circular arc is already
+   curving a third of the way down a 44px-tall chip; a superellipse holds the
+   side flat and turns at the corner, which is why theirs reads crisp at a
+   radius that would look soft on ours. */
+.glaze-chip {
+  border-radius: 10px;
+}
+@supports (corner-shape: squircle) {
+  .glaze-chip {
+    border-radius: 14px;
+    corner-shape: squircle;
+  }
+}
+
+.glaze-inset {
+  position: relative;
+  isolation: isolate;
+  /* No ring. This was `inset 0 0 0 1px` — a uniform light line on all four
+     sides, which is a bezel, not glass, and it was the last surface still
+     doing that after the panels moved to top-lit-only. Being on the ELEMENT
+     rather than a pseudo, it also sat outside `--glaze-opacity` and so drew at
+     full strength while every other layer had come down to 0.75.
+
+     What is left lights the object rather than outlining it: the top edge,
+     because that is where light falls; a half-pixel of bounce along the bottom
+     inside edge off whatever it rests on; a dark half-pixel outside to
+     separate it; and the contact line and drop that say it is sitting IN
+     something. The only light that crosses the middle now comes from the
+     masked specular below, which fades out at both ends by construction. */
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.10),
+    inset 0 -0.5px 0 0 rgba(255, 255, 255, 0.08),
+    var(--hairline-contour),
+    0 1px 0 0 rgba(0, 0, 0, 0.05),
+    var(--elev-1);
+}
+
+/* Same masked specular as the container, so the two are plainly one material:
+   bright across the middle, gone at both ends. */
+/* Measured off Cider's own chip rather than guessed: its outline is white at
+   20%, the specular takes 70% of that (14%), and the soft pass behind it takes
+   80% of the specular (11%). This was 20%/7% at full strength — nearly twice
+   as bright on the line that reads first, which is what made ours look
+   heavy-handed beside theirs. */
+.glaze-inset::after {
+  box-shadow:
+    inset 0 0 1.5px 1px rgba(255, 255, 255, 0.14),
+    inset 0 0 3px 1px rgba(255, 255, 255, 0.11);
+}
+
+/* Unlit with everything else when the window goes to the background. */
+body[data-window-blurred="true"] .glaze-inset::after {
+  display: none;
+}
+
+/* ===== Nav flipper =====
+   Back and forward as one control, in its own glazed pill beside the cluster
+   rather than inside it. It is navigation, not an action, and the separation
+   is what says so.
+
+   Two round buttons either side of a hairline. Round, because the pill around
+   them is already a capsule and a rounded rectangle inside a capsule fights
+   it; a circle is the only shape that sits inside a capsule without arguing
+   about which curve is in charge. */
+.nav-flipper {
+  display: grid;
+  /* Columns are not declared, so whatever sits between the two arrows decides
+     its own width. Cider's flipper reserves that middle slot too, which is the
+     hint that the control was always meant to carry something: a divider when
+     there is nothing to say, a page count when there is. */
+  grid-auto-flow: column;
+  align-items: center;
+  /* Same gutter and the same button height as .titlebar-icon-group, so the
+     two pills come out at an identical 34px without either one stating a
+     height. Pills on one bar that differ by a few pixels do not read as a
+     deliberate size step, they read as a mistake. */
+  gap: 4px;
+  padding: 2px 6px;
+}
+
+.nav-flipper-divider {
+  width: 1px;
+  height: 16px;
+  background: rgba(255, 255, 255, 0.10);
+}
+
+/* The middle slot carrying words instead of a divider — a page count, say.
+   Tabular figures so the pill does not twitch as the number changes. */
+.nav-flipper-label {
+  padding: 0 2px;
+  font-size: 11.5px;
+  line-height: 1;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.nav-flipper-btn {
+  display: grid;
+  place-items: center;
+  /* Sized by a knob rather than a constant: the same arrow has to serve a
+     34px title-bar pill, a 24px header and anything else, and a second class
+     per size would drift out of step with this one. */
+  width: var(--nav-btn-size, 30px);
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  position: relative;
+  color: var(--color-text-secondary);
+  transition: transform 0.14s cubic-bezier(0.2, 0.8, 0.2, 1), color 0.15s ease, opacity 0.15s ease;
+}
+
+/* The hover fill is a pseudo-element cross-fading its OPACITY rather than a
+   background-color transition. Over a live backdrop a colour transition
+   animates through the wrong intermediate values — it briefly mixes the fill
+   with whatever the video is doing behind it — where fading a fixed colour in
+   and out is the same at every frame. */
+.nav-flipper-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-color: var(--color-surface);
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+.nav-flipper-btn svg {
+  position: relative;
+  transition: transform 0.16s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.nav-flipper-btn:hover:not(:disabled) {
+  color: var(--color-text-primary);
+}
+.nav-flipper-btn:hover:not(:disabled)::before {
+  opacity: 1;
+}
+.nav-flipper-btn:hover:not(:disabled) svg {
+  transform: scale(1.1);
+}
+.nav-flipper-btn:active:not(:disabled) {
+  transform: scale(0.96);
+  transition-duration: 0.08s;
+}
+
+/* Unavailable, not absent. The dead half keeps its place so the control never
+   changes width and the live half never slides out from under the pointer. */
+.nav-flipper-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Title-bar icon clusters — related actions share one glazed pill, each icon
+   keeping its own hover highlight. The buttons inside deliberately get no
+   glaze of their own; one material per cluster, or the bar becomes a row of
+   beads. */
 .titlebar-icon-group {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 3px 6px;
-  border-radius: 9999px;
-  /* No fill tint — the interior matches the title bar. Just the inset glass
-     bevel (light top-left edge, dark bottom-right) plus a faint outer drop. */
-  box-shadow:
-    inset 1px 1px 0 0 rgba(255, 255, 255, 0.08),
-    inset -1px -1px 0 0 rgba(0, 0, 0, 0.2),
-    0 1px 2px rgba(0, 0, 0, 0.15);
+  padding: 2px 6px;
 }
 
 /* The platform anchor. Three treatments were tried and rejected before this
@@ -182,35 +527,103 @@ html[data-motion="off"] .update-pill { animation: none; }
   border-bottom-color: rgba(255, 255, 255, 0.34);
 }
 
-/* The platform anchor as a glass pill.
-   Deliberately lighter than .glass-flyout. That recipe keeps a near-opaque base
-   because it hangs OVER LIVE VIDEO and has to stay readable there. This sits on
-   the title bar, where the surface behind it is already the app's own chrome, so
-   a near-opaque plate reads as a button stuck onto the bar rather than part of
-   it. A low tint that picks up what is behind it, one specular hairline for the
-   light, and no ring: a lit outline here would be the bordered-chip look, which
-   is the opposite of glass.
-   Tinted from theme vars rather than flat white, so it does not invert into a
-   glowing lozenge on a light theme. */
-.titlebar-pill {
-  border-radius: 9999px;
-  background-color: color-mix(in srgb, var(--color-background-tertiary) 46%, transparent);
-  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.055), transparent 62%);
-  -webkit-backdrop-filter: blur(calc(6px + 12px * var(--glass-strength))) saturate(135%);
-  backdrop-filter: blur(calc(6px + 12px * var(--glass-strength))) saturate(135%);
-  /* Light from above, weight below. Both insets, so the silhouette stays a clean
-     pill instead of gaining a drawn edge. */
-  box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.10),
-    inset 0 -1px 0 0 rgba(0, 0, 0, 0.20);
-  transition: background-color 0.16s ease, box-shadow 0.16s ease;
-}
+/* The platform anchor, wearing the same glaze as the icon clusters beside it.
+   It used to carry its own lighter glass recipe, on the reasoning that the bar
+   should not look like a row of plates. The clusters becoming lit capsules
+   settled that the other way: with a shape either side of it, the anchor
+   keeping a different material read as the odd one out rather than the quiet
+   one. Same height as the clusters too, because once both are lit an 8px
+   difference stops looking deliberate.
+
+   What it does NOT share is the pointer response. A cluster stays inert and
+   lets its buttons light up individually; the anchor IS the button, and a mark,
+   a count and a chevron have nothing of their own to light, so the whole
+   surface lifts. `.is-open` holds that lift while the flyout is up, so the
+   anchor does not go dark the moment the pointer moves down into the menu. */
 .titlebar-pill:hover,
 .titlebar-pill.is-open {
-  background-color: color-mix(in srgb, var(--color-background-tertiary) 66%, transparent);
-  box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.16),
-    inset 0 -1px 0 0 rgba(0, 0, 0, 0.24);
+  --glaze-lift: 7%;
+  --glaze-ring: 17%;
+  --glaze-inner: 10%;
+  --glaze-spec: 46%;
+  --glaze-spec-soft: 19%;
+}
+
+/* The same pointer response, for any glazed surface that IS a single control
+   rather than a cluster.
+
+   `.chrome-glaze` ships `--glaze-lift: 0` because a cluster should stay inert
+   and let the buttons inside it light up one at a time. A lone control has
+   nothing inside it to light, so the whole surface has to answer the pointer or
+   it reads as dead. The values are the title-bar anchor's, because it is the
+   same object: a glazed thing you press.
+
+   Specificity carries this over `.chrome-glaze` wherever it sits in the file,
+   so it does not depend on source order the way a bare-class override would. */
+/* A darker glass panel, for chrome that floats over CONTENT.
+   A panel sitting in a layout can take its tone from the theme, because
+   everything around it is chrome too. One floating over a grid of thumbnails
+   cannot: the theme tint is light enough that bright artwork passing beneath it
+   washes the panel out and the labels on it lose contrast.
+
+   Cider solves this the same way — its floating chrome is a dark translucent
+   film (`--chromeColor: rgb(40 40 40 / 50%)`) rather than a theme colour, with
+   the blur still doing the glass. So this lays a dark film OVER the theme tint
+   rather than replacing it: the theme still shows through, just underneath
+   something that guarantees contrast.
+
+   Knob, not a fixed value, because how dark it needs to be depends on what is
+   passing behind it. */
+.glass-panel--dark {
+  /* Landed by sweeping against bright thumbnails scrolling underneath, three
+     passes: 46% read light over a real grid, 56% was better, and this is where
+     it sits. Content behind is faint but still legibly there, which is the line
+     between dark glass and a plate — by 72% the backdrop has gone entirely and
+     the material stops being glass at all. */
+  --panel-darken: 64%;
+  background-image:
+    linear-gradient(
+      rgb(8 8 11 / var(--panel-darken)),
+      rgb(8 8 11 / var(--panel-darken))
+    ),
+    linear-gradient(var(--color-background-secondary), var(--color-background-secondary));
+}
+
+/* The glaze's pseudo-element layers position against this element, so it has to
+   be a containing block — but only when nothing else has already made it one.
+
+   A bare `position: relative` here TIES on specificity with Tailwind's
+   `absolute` / `fixed` utilities and wins on source order, tearing anything so
+   positioned out of place. The Home tab strip's selected pill is exactly that:
+   a `motion.div` with `absolute inset-0` that slides between tabs, which
+   collapsed to zero width the moment it wore the glaze. `:where()` contributes
+   no specificity and matches only the elements that position themselves
+   nowhere, where relative is a no-op anyway. Same guard `.sn-popover` carries. */
+.chrome-glaze:where(:not(.absolute):not(.fixed)) {
+  position: relative;
+}
+
+/* A glazed control that floats over media rather than over app chrome.
+   Clear glass reads as a smudge on a busy thumbnail: there is nothing behind it
+   with a consistent tone, so the icon has to fight the picture. A frosted floor
+   gives the arrow something to sit on while the blur still carries the colour
+   underneath, which is what keeps it feeling like glass rather than a chip. */
+.chrome-glaze--frosted {
+  --glaze-frost: 55%;
+}
+
+.chrome-glaze--control:hover,
+.chrome-glaze--control:focus-visible,
+/* ...and when the glazed surface is a CHILD of the control rather than the
+   control itself: the Home tab strip's selected pill sits under its label, so
+   the pointer lands on the label and the pill's own `:hover` never matches.
+   The lift has to come from the button around it. */
+.group:hover > .chrome-glaze--control {
+  --glaze-lift: 7%;
+  --glaze-ring: 17%;
+  --glaze-inner: 10%;
+  --glaze-spec: 46%;
+  --glaze-spec-soft: 19%;
 }
 
 /* A row in the platform flyout.
@@ -224,41 +637,56 @@ html[data-motion="off"] .update-pill { animation: none; }
    grammar as the rest of the app's glass: a top-lit gradient, a specular hairline
    along the top edge, and a soft floor under it. */
 .platform-row {
-  border-radius: 8px;
+  border-radius: 6px;
   transition: background-color 0.15s ease, box-shadow 0.15s ease;
 }
+
+/* Hover is a tint of the accent, not white. White-alpha over a dark panel is
+   the same material as a disabled control, which is the whole reason the
+   selected row used to read as "greyed" rather than "chosen". Keeping hover in
+   the accent family means the two states differ in amount rather than in
+   kind, and the row never looks switched off on the way to being chosen. */
 .platform-row:hover,
 .platform-row:focus-visible {
-  background-color: rgba(255, 255, 255, 0.045);
+  background-color: color-mix(in srgb, var(--color-accent) 14%, transparent);
 }
+
+/* Chosen: the accent mixed down INTO black rather than laid over the panel.
+   That is the difference between a colour wash and a coloured surface — the
+   mix keeps the row dark enough to sit inside the menu while still being
+   unmistakably the theme colour, so white text stays legible on it in every
+   theme without a per-theme exception.
+
+   The bevel is two steps, not one: a bright 1px line along the top edge and a
+   softer 2px behind it, so the light falls off instead of stopping dead, with
+   a dark floor under the row. Deliberately still no brand wash per row — the
+   marks are already three saturated colours, and tinting beneath them is what
+   made this read as a toy. One theme colour on one row is not that. */
+/* The chosen row is the menu's nested component: the one entry that is an
+   object rather than a line of text. Its fill is the accent mixed down INTO
+   black rather than laid over the panel, which keeps it dark enough to belong
+   inside the menu while still being unmistakably the theme colour — and dark
+   enough that white text works in every theme without a per-theme exception.
+
+   Lighting comes from `.glaze-inset` (see above), so the row is lit by the
+   same rules as the panel around it; only the fill is its own. Still no brand
+   wash per row: the marks are already three saturated colours, and tinting
+   beneath them is what made this read as a toy. One theme colour on one row is
+   a different thing. */
 .platform-row.is-selected {
-  /* Gradient rather than a flat fill: the row is brightest where the light hits
-     it and settles toward the bottom, so it sits IN the panel instead of on it. */
-  background-image: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.13),
-    rgba(255, 255, 255, 0.06) 55%,
-    rgba(255, 255, 255, 0.045)
-  );
-  box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.16),
-    inset 0 -1px 0 0 rgba(0, 0, 0, 0.22);
+  background-color: color-mix(in srgb, var(--color-accent) 40%, #000000);
 }
-.platform-row.is-selected:hover {
-  background-image: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.16),
-    rgba(255, 255, 255, 0.075) 55%,
-    rgba(255, 255, 255, 0.055)
-  );
+.platform-row.is-selected:hover,
+.platform-row.is-selected:focus-visible {
+  background-color: color-mix(in srgb, var(--color-accent) 50%, #000000);
 }
 
 .titlebar-icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 30px;
-  height: 28px;
+  min-width: 32px;
+  height: 30px;
   padding: 0 7px;
   border-radius: 9999px;
   color: var(--color-text-secondary);
@@ -279,11 +707,74 @@ html[data-motion="off"] .update-pill { animation: none; }
 .titlebar-icon-btn:hover img {
   transform: scale(1.12);
 }
+/* The glaze without its live blur, for chrome that sits on an OPAQUE surface.
+   The MultiChat popout's title bar is the case this exists for, and its own
+   comment explains why: the bar has a solid background, so a backdrop filter
+   has nothing useful to sample, and WebView2 smears the chat scrolling just
+   below it into that live layer (content visibly bleeding onto the title bar).
+   The whole bar was deliberately kept free of compositing layers because of it.
+
+   Nothing of the glaze's LOOK depends on the blur here. The material is the
+   tinted floor plus the masked specular rim, and both survive; only the sampling
+   of a backdrop that is already flat goes away. So the popout gets the same
+   chrome language as the main window with none of the smearing.
+
+   `.no-live-blur` is the same switch for anything that is not a glaze — a
+   `.glass-button` sitting on a flat panel, say. Reach for either whenever a
+   surface's backdrop does not actually vary: the filter is then a live
+   compositing layer bought for nothing, and in WebView2 it can smear whatever
+   is repainting next to it. */
+/* `.chrome-glaze--flat` / `.no-live-blur` live at the END of this file; see
+   the note there for why position matters. */
+
 /* Engaged title-bar toggle — an open pane (mod logs / activity). A pressed-in
    neumorphic trench (a scaled-down version of the .glass-input "pressed" feel)
    plus the accent color, so it reads as physically held down and clearly ON,
    not just faintly tinted. The :hover twin keeps the trench from flattening when
    the pointer is over an already-engaged button. */
+/* Immersive engaged: a lit rainbow bulb.
+   Every other toggle in the bar goes accent-tinted to say "on". This one says
+   what it turned ON, which is colour poured out of the picture — an accent tint
+   would be the one statement it should not make. The trench is kept so it still
+   reads as physically held down; only the colour changes.
+
+   The stroke is a real SVG paint server (`url(#sn-bulb-rainbow)`), because a
+   CSS gradient cannot paint an SVG stroke. The stops carry their own colours,
+   so the bulb is a rainbow even standing still, and the animation only rotates
+   which stop is where. */
+.titlebar-icon-btn.is-immersive,
+.titlebar-icon-btn.is-immersive:hover {
+  background: var(--color-surface);
+  box-shadow:
+    inset 2px 2px 5px -2px rgba(0, 0, 0, 0.55),
+    inset -2px -2px 5px -2px rgba(255, 255, 255, 0.09);
+}
+/* A bulb that is on should look like it is emitting, not just coloured. */
+.titlebar-icon-btn.is-immersive svg {
+  filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.32));
+}
+@keyframes sn-bulb-hue {
+  0% { stop-color: #ff5470; }
+  20% { stop-color: #ffb43d; }
+  40% { stop-color: #46e08a; }
+  60% { stop-color: #3fc9f5; }
+  80% { stop-color: #a97bff; }
+  100% { stop-color: #ff5470; }
+}
+.sn-bulb-rainbow stop {
+  animation: sn-bulb-hue 6s linear infinite;
+}
+.sn-bulb-rainbow stop:nth-child(1) { stop-color: #ff5470; animation-delay: 0s; }
+.sn-bulb-rainbow stop:nth-child(2) { stop-color: #ffb43d; animation-delay: -1.2s; }
+.sn-bulb-rainbow stop:nth-child(3) { stop-color: #46e08a; animation-delay: -2.4s; }
+.sn-bulb-rainbow stop:nth-child(4) { stop-color: #3fc9f5; animation-delay: -3.6s; }
+.sn-bulb-rainbow stop:nth-child(5) { stop-color: #a97bff; animation-delay: -4.8s; }
+/* Motion off keeps the rainbow and drops the cycling: the stop colours above
+   are the whole icon, so it stays a rainbow bulb rather than losing its point. */
+html[data-motion="off"] .sn-bulb-rainbow stop {
+  animation: none;
+}
+
 .titlebar-icon-btn.is-active,
 .titlebar-icon-btn.is-active:hover {
   color: var(--color-accent);
@@ -328,15 +819,19 @@ html[data-motion="off"] .update-pill { animation: none; }
     color-mix(in srgb, var(--color-background-tertiary) 78%, transparent),
     color-mix(in srgb, var(--color-background-tertiary) 78%, transparent)
   );
-  border: 1px solid var(--color-border-light);
+  /* Transparent, not removed: the inset rim below is the only edge line
+     now, and keeping the 1px box means the geometry does not shift. */
+  border: 1px solid transparent;
   border-radius: 18px;
   -webkit-backdrop-filter: blur(calc(28px * var(--glass-strength)));
   backdrop-filter: blur(calc(28px * var(--glass-strength)));
   box-shadow:
-    inset 1px 1px 0 0 rgba(255, 255, 255, 0.07),
-    inset -1px -1px 0 0 rgba(0, 0, 0, 0.25),
-    0 32px 80px -24px rgba(0, 0, 0, 0.75),
-    0 12px 28px -10px rgba(0, 0, 0, 0.55);
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.09),
+    var(--hairline-contour),
+    var(--elev-3),
+    /* A modal sits higher than anything else, so it keeps one rung beyond the
+       shared ladder rather than stopping where a popover does. */
+    0 32px 64px rgba(0, 0, 0, 0.45);
 }
 
 /* StreamNook Atmosphere: Aurora. Two curtain layers flow horizontally as a
@@ -406,10 +901,26 @@ html[data-motion="off"] .update-pill { animation: none; }
      Kept in sync per theme by applyTheme(). */
   --color-accent-rgb: 151, 177, 185;
 
-  /* Canonical Winters' Glass inset bevels, shared with component style objects
-     via var() so the recipe lives in exactly one place. */
-  --bevel-tile: inset 1px 1px 0 0 rgba(255, 255, 255, 0.10), inset -1px -1px 0 0 rgba(0, 0, 0, 0.18);
-  --bevel-hero: inset 1px 1px 0 0 rgba(255, 255, 255, 0.14), inset -1px -1px 0 0 rgba(0, 0, 0, 0.22), 0 4px 10px rgba(0, 0, 0, 0.18);
+  /* Canonical surface edges, shared with component style objects via var() so
+     the recipe lives in exactly one place.
+
+     These used to be DIAGONAL bevels — `inset 1px 1px` light, `inset -1px -1px`
+     dark — which lights the top AND LEFT edges and darkens the bottom AND
+     RIGHT. That is an embossed plate, not glass: light falling from above does
+     not land on a vertical edge, so lighting the left side describes a light
+     source that is not in the room. On a wide panel it is the loudest thing
+     about the border, and it is why ours read heavy beside Cider's at the same
+     nominal 1px.
+
+     What replaces it is the grammar counted out of Cider's own stylesheets:
+     light on the TOP edge only, and separation handled by a dark half-pixel
+     contour OUTSIDE the shape rather than a line drawn on it. */
+  --bevel-tile: inset 0 1px 0 0 rgba(255, 255, 255, 0.10), var(--hairline-contour);
+  --bevel-hero:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.10),
+    inset 0 -0.5px 0 0 rgba(255, 255, 255, 0.06),
+    var(--hairline-contour),
+    0 4px 10px rgba(0, 0, 0, 0.18);
 
   /* Border colors */
   --color-border: rgba(151, 177, 185, 0.3);
@@ -436,6 +947,88 @@ html[data-motion="off"] .update-pill { animation: none; }
   --glass-opacity: 0.15;
   --glass-hover-opacity: 0.25;
   --glass-active-opacity: 0.35;
+
+  /* ===== Media card geometry =====
+     The one place Cider's grammar DOES use a squircle. Its chrome overrides
+     back to round capsules, but a media card is `corner-shape: squircle` at
+     24px — three times the rounded fallback.
+
+     The reason the big radius works there and would not as a circular arc: a
+     superellipse keeps a long flat run along each side and turns hard only at
+     the very corner, where a 24px circular arc is already curving a third of
+     the way down the edge. So the card reads generous without reading like a
+     pill. Where corner-shape is unsupported the plain 8px rounding stands and
+     nothing looks broken. */
+  --media-card-radius: 8px;
+  --media-card-corner: round;
+
+  /* ===== Elevation =====
+     Cider's drops are LADDERS, not single shadows. Its bottom toolbar reads:
+
+         0 2px 4px  rgb(0 0 0 / 25%)
+         0 8px 16px rgb(0 0 0 / 20%)
+         0 16px 32px rgb(0 0 0 / 15%)
+
+     Each rung doubles both the offset and the blur while the alpha steps down.
+     That is roughly what a real object does: a tight, dark contact shadow
+     immediately under it, then progressively softer and fainter ones spreading
+     out. A single `0 4px 10px` is the middle rung on its own, which is why our
+     panels read as stickers at a fixed height instead of objects sitting at a
+     distance.
+
+     Costs nothing extra to composite — it is one box-shadow property either
+     way. */
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.20), 0 2px 6px rgba(0, 0, 0, 0.12);
+  --elev-2: 0 2px 4px rgba(0, 0, 0, 0.25), 0 8px 16px rgba(0, 0, 0, 0.20);
+  --elev-3:
+    0 2px 4px rgba(0, 0, 0, 0.25),
+    0 8px 16px rgba(0, 0, 0, 0.20),
+    0 16px 32px rgba(0, 0, 0, 0.15);
+
+  /* ===== Hairlines =====
+     Separation, and it is close to the opposite of a border. A surface is not
+     outlined in light; it is CONTOURED in dark, just outside its own edge,
+     with at most a faint light rim inset within it.
+
+     Counted across Cider's shipped stylesheets: 368 uses of a dark 1px outer
+     contour and 86 of a half-pixel one, against a handful of real `border`
+     properties, none above 10% white. The reason it looks better is what each
+     one says. A light line drawn ON a shape reads as an outline somebody
+     added; a dark line just OUTSIDE it reads as the surface standing off what
+     is behind it, which is the job a border on a dark interface is actually
+     doing.
+
+     The half-pixel is not a rounding error. On a 2x display it resolves to
+     exactly one device pixel, the finest line that can be drawn; a 1px CSS
+     border is two, which is why ours read heavy beside Cider's at the same
+     nominal width. */
+  --hairline-contour: 0 0 0 0.5px rgba(0, 0, 0, 0.4);
+  /* Top edge only, never a ring. A continuous light line all the way round is
+     a bezel: it claims light is arriving from every direction at once, which
+     is why it reads as a drawn outline rather than a lit surface. */
+  --hairline-rim: inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
+
+  /* ===== Scrubber =====
+     The seek bar is drawn by two different things — Plyr's native range for
+     VODs, a portalled custom timeline for live broadcasts — so its dimensions
+     and its easing live here rather than in either one. They have to move
+     identically, or switching between live and VOD reads as a bug.
+
+     The grow curve overshoots (the 1.56 control point) and runs long at 0.4s.
+     A linear or ease-out grow reads as the bar being resized; an overshoot
+     reads as the bar reacting to you, which is the entire point of a control
+     that only appears when you reach for it.
+
+     The playhead is a vertical capsule rather than a circle. On a 4px track a
+     circle big enough to grab looks like a bead sitting on a wire, where a
+     capsule reads as a cursor IN the track — and it stays legible when the
+     track doubles in height under it. */
+  --scrub-track-h: 4px;
+  --scrub-track-h-hover: 8px;
+  --scrub-thumb-w: 4px;
+  --scrub-thumb-h: 16px;
+  --scrub-grow-duration: 0.4s;
+  --scrub-grow-ease: cubic-bezier(0.34, 1.56, 0.64, 1);
 
   /* Global glassiness multiplier (1 = full frosted glass, 0 = fully solid
      panels). Driven by the Glassiness slider in Theme settings and persisted
@@ -598,12 +1191,14 @@ body {
   /* Frost scales with the Glassiness slider — blur(0) at 0% (the panel is also
      fully opaque there via the background-color fade above). */
   backdrop-filter: blur(calc(10px * var(--glass-strength)));
-  /* A highly subtle version of the liquid glass bevel to frame content cards */
+  /* Top-lit, contoured in dark outside, nothing drawn down the sides. See
+     --bevel-tile for why the diagonal bevel this replaces read as an embossed
+     plate rather than glass. */
   border: 1px solid transparent;
   box-shadow:
-    inset 1px 1px 0 0 rgba(255, 255, 255, 0.08),
-    inset -1px -1px 0 0 rgba(0, 0, 0, 0.15),
-    0 4px 10px rgba(0, 0, 0, 0.15);
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.08),
+    var(--hairline-contour),
+    var(--elev-1);
   /* Scoped, never `all`: animating backdrop-filter on state change is the
      WebView2 flicker bug (see the MultiChat glass-artifact fix). */
   transition: background-color 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.25),
@@ -612,6 +1207,27 @@ body {
     color 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.25),
     transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.25),
     opacity 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.25);
+}
+
+/* A glass panel that is also a glazed COMPONENT — a card sitting inside
+   another glass surface rather than a card on a page. `.glaze-inset` is
+   defined above `.glass-panel`, so at equal specificity the panel's own bevel
+   would win and only the specular would survive; naming both classes here
+   settles the composition explicitly instead of relying on file order.
+
+   The panel's fill, frost and Glassiness ramp are untouched. What changes is
+   the lighting: light from above, a half-pixel of bounce along the bottom
+   INSIDE edge thrown back up off the surface underneath, a contact line, then
+   the panel's own drop. The bevel this replaces put dark on the bottom-right,
+   which reads as a raised chip; a lit bottom edge reads as glass with
+   something behind it. */
+.glass-panel.glaze-inset {
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.10),
+    inset 0 -0.5px 0 0 rgba(255, 255, 255, 0.10),
+    var(--hairline-contour),
+    0 1px 0 0 rgba(0, 0, 0, 0.05),
+    var(--elev-1);
 }
 
 /* Telemetry HUD over live video. Readability here must NOT ride the global
@@ -626,9 +1242,9 @@ body {
   border: 1px solid transparent;
   border-radius: 10px;
   box-shadow:
-    inset 1px 1px 0 0 rgba(255, 255, 255, 0.08),
-    inset -1px -1px 0 0 rgba(0, 0, 0, 0.25),
-    0 8px 24px -8px rgba(0, 0, 0, 0.6);
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.08),
+    var(--hairline-contour),
+    var(--elev-2);
 }
 
 /* Display tile — for content that is FOR SHOW, not pressable (profile stat
@@ -663,13 +1279,50 @@ body {
    black themes, where the glass tint alone is almost the same color as the page.
    Layered ON TOP of the glass-panel tint (so the Glassiness fade still works);
    kept to a low-alpha accent so it stays on-theme — a tint, never a glow. */
+@supports (corner-shape: squircle) {
+  :root {
+    --media-card-radius: 24px;
+    --media-card-corner: squircle;
+  }
+}
+
 .media-card {
+  /* The fill is neutral again. Tinting the whole card was the wrong place to
+     put the stream's colour: it washed the surface the thumbnail sits on, so
+     every card read as a coloured rectangle rather than a picture in a frame.
+     The colour belongs in the GLAZE — the lit edge and the drop below — which
+     is exactly where Cider puts it, and it lets the colour be much stronger
+     while taking up far less of the card. */
   background-image:
     linear-gradient(
-      color-mix(in srgb, var(--color-accent) 5%, transparent),
-      color-mix(in srgb, var(--color-accent) 5%, transparent)
+      color-mix(in srgb, var(--color-accent) 4%, transparent),
+      color-mix(in srgb, var(--color-accent) 4%, transparent)
     ),
     linear-gradient(var(--color-background-secondary), var(--color-background-secondary));
+  border-radius: var(--media-card-radius);
+  corner-shape: var(--media-card-corner);
+  transition: box-shadow 0.35s ease;
+  /* A resting card is a fill and a shape and nothing else — no rim, no
+     specular, no drop. A grid of forty outlined, lit rectangles reads as forty
+     competing objects; the thumbnails are the content and the cards should get
+     out of their way. The stream's colour is held back for hover, where it
+     applies to one card at a time and means something. */
+  box-shadow: none;
+  /* Hover grows the card off a shared baseline instead of swelling about its
+     own middle, so a row of them stays visually seated on one line. */
+  transform-origin: bottom center;
+}
+
+/* Hover is the only time a card shows its stream's colour, and then it is the
+   glow rather than an outline: the card lights the page under itself. One card
+   at a time, so the colour is an answer to where you are pointing instead of
+   decoration spread across the whole grid.
+
+   The fill does not change either, which is what keeps a hovered card reading
+   as the same card lit rather than a different card. */
+.media-card:hover,
+.media-card:focus-visible {
+  box-shadow: 0 8px 30px -10px color-mix(in srgb, var(--stream-glow, var(--color-accent)) 62%, transparent);
 }
 
 /* Settings card — a flat grouped slab, not a raised panel. Dropping the bevel,
@@ -786,10 +1439,9 @@ body {
   background-color: var(--color-surface);
   /* Unified, crisp inner bevel matching panel thickness */
   box-shadow: 
-    inset 1px 1px 0 0 rgba(255, 255, 255, 0.1),
-    inset -1px -1px 0 0 rgba(0, 0, 0, 0.15),
-    0 4px 6px rgba(0, 0, 0, 0.2), 
-    0 0 15px rgba(0, 0, 0, 0.1);
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.10),
+    var(--hairline-contour),
+    var(--elev-1);
   border: 1px solid transparent;
   border-radius: 8px;
   backdrop-filter: blur(calc(8px * var(--glass-strength)));
@@ -808,10 +1460,9 @@ body {
 .glass-button-static {
   background-color: var(--color-surface);
   box-shadow: 
-    inset 1px 1px 0 0 rgba(255, 255, 255, 0.1),
-    inset -1px -1px 0 0 rgba(0, 0, 0, 0.15),
-    0 4px 6px rgba(0, 0, 0, 0.2), 
-    0 0 15px rgba(0, 0, 0, 0.1);
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.10),
+    var(--hairline-contour),
+    var(--elev-1);
   border: 1px solid transparent;
   border-radius: 8px;
   backdrop-filter: blur(calc(8px * var(--glass-strength)));
@@ -825,13 +1476,17 @@ body {
      is a fully solid panel rather than a see-through sheet. */
   background-color: color-mix(in srgb, var(--color-background-tertiary) calc((1 - var(--glass-strength)) * 100%), transparent);
   background-image: linear-gradient(rgba(16, 16, 20, 0.35), rgba(16, 16, 20, 0.35));
-  /* Liquid Specular Highlights via dual internal bevels */
+  /* Top-lit with a bounce along the bottom inside edge, the way a lens sits
+     on what is under it. The dual diagonal bevel this replaces put its
+     brightest line down the LEFT side, which on the widest panel in the
+     app was the most visible wrong thing in the border language. */
   box-shadow: 
-    inset 1px 1px 0 0 rgba(255, 255, 255, 0.18),
-    inset -1px -1px 0 0 rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.10),
+    inset 0 -0.5px 0 0 rgba(255, 255, 255, 0.06),
+    var(--hairline-contour),
     0 10px 30px -5px rgba(0, 0, 0, 0.7), 
     0 0 20px rgba(0, 0, 0, 0.4);
-  border: 1px solid rgba(255,255,255,0.06); 
+  border: 1px solid transparent;
   border-radius: 12px; 
   /* Absolute maximum blur radius (96px) to completely melt any structures/text
      behind it into soft gradients — scaled by the Glassiness slider down to none. */
@@ -867,16 +1522,35 @@ body {
   background-image:
     linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012) 45%, transparent),
     linear-gradient(var(--color-background-secondary), var(--color-background-secondary));
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-bottom-color: rgba(255, 255, 255, 0.03);
+  /* 12px shell, 6px gutter, 6px rows. Concentric by construction: an inner
+     radius equal to the outer minus the gutter keeps every row's curve
+     parallel to the shell instead of drifting against it. Every hairline below
+     is an inset shadow rather than a real border, so it lands inside the
+     radius and the shell measures exactly what it says it does. */
   border-radius: 12px;
+  padding: 6px;
   -webkit-backdrop-filter: blur(calc(16px + 26px * var(--glass-strength))) saturate(140%);
   backdrop-filter: blur(calc(16px + 26px * var(--glass-strength))) saturate(140%);
+  /* Hairlines, and nothing softer. An earlier pass put the compact player's
+     lighting on this shell — an 18% border, a 5px blurred shine and a 14px
+     interior glow. It was wrong twice over. That glow appears in exactly two
+     selectors in the whole of Cider, both of them the compact player, and
+     there it sits directly on top of a live refracted copy of the content
+     behind it, so it reads as light scattering through the material. With no
+     refraction under it, it is just a white vignette. It was also tuned for a
+     surface several times this size, so at menu scale it bloomed around the
+     entire edge instead of staying a hint.
+
+     The deeper reason it had to go: a container has to be QUIETER than what it
+     contains. The chosen row is a nested glass component, and it can only read
+     as nested if the shell around it is not competing. So the shell gets one
+     light hairline inside, one dark contour outside, a slightly brighter top
+     edge, and a symmetric halo with no offset — a menu hangs in front of the
+     window rather than resting on it. */
   box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.12),
-    inset 0 -1px 0 0 rgba(0, 0, 0, 0.28),
-    0 1px 2px rgba(0, 0, 0, 0.3),
-    0 16px 40px -12px rgba(0, 0, 0, 0.65);
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.10),
+    var(--hairline-contour),
+    0 0 20px rgba(0, 0, 0, 0.5);
 }
 
 /* Glassiness floor. At 0% the slider sets html[data-glass="off"]; strip every
@@ -945,19 +1619,18 @@ html[data-motion="reduced"] .animate-shimmer {
   background-color: var(--color-surface-hover);
   /* Enhanced depth and brightness on hover */
   box-shadow: 
-    inset 1px 1px 0 0 rgba(255, 255, 255, 0.15),
-    inset -1px -1px 0 0 rgba(0, 0, 0, 0.15),
-    0 4px 8px rgba(0, 0, 0, 0.25), 
-    0 0 18px rgba(0, 0, 0, 0.15);
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.15),
+    var(--hairline-contour),
+    var(--elev-2);
 }
 
 .glass-button:active {
   background-color: var(--color-surface-active);
   /* Compression effect when clicked */
   box-shadow:
-    inset 1px 1px 0 0 rgba(255, 255, 255, 0.05),
-    inset -1px -1px 0 0 rgba(0, 0, 0, 0.1),
-    0 2px 4px rgba(0, 0, 0, 0.2);
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.05),
+    var(--hairline-contour),
+    0 1px 2px rgba(0, 0, 0, 0.25);
 }
 
 /* Discord-branded call to action — blurple fill carrying the same crisp inset
@@ -965,9 +1638,9 @@ html[data-motion="reduced"] .animate-shimmer {
 .discord-join-button {
   background: linear-gradient(180deg, #5865f2 0%, #4f5bd6 100%);
   box-shadow:
-    inset 1px 1px 0 0 rgba(255, 255, 255, 0.18),
-    inset -1px -1px 0 0 rgba(0, 0, 0, 0.2),
-    0 4px 10px rgba(0, 0, 0, 0.25);
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.18),
+    var(--hairline-contour),
+    var(--elev-2);
   transition: all 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
@@ -978,9 +1651,9 @@ html[data-motion="reduced"] .animate-shimmer {
 .discord-join-button:active {
   background: linear-gradient(180deg, #4f5bd6 0%, #4853c4 100%);
   box-shadow:
-    inset 1px 1px 0 0 rgba(255, 255, 255, 0.08),
-    inset -1px -1px 0 0 rgba(0, 0, 0, 0.18),
-    0 2px 4px rgba(0, 0, 0, 0.22);
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.08),
+    var(--hairline-contour),
+    0 1px 2px rgba(0, 0, 0, 0.25);
 }
 
 .glass-input {
@@ -2003,7 +2676,7 @@ html[data-motion="reduced"] .animate-shimmer {
   --plyr-range-thumb-background: var(--color-info);
   --plyr-range-thumb-shadow: 0 0 10px
     color-mix(in srgb, var(--color-info) 50%, transparent);
-  --plyr-range-track-height: 4px;
+  --plyr-range-track-height: var(--scrub-track-h);
   --plyr-range-fill-background: linear-gradient(
     90deg,
     var(--color-accent) 0%,
@@ -2024,28 +2697,97 @@ html[data-motion="reduced"] .animate-shimmer {
   background: #000;
 }
 
+/* In immersive mode the letterbox has to be see-through, because the light is
+   painted BEHIND the player and Plyr paints an opaque black over the whole
+   pane: its own `.plyr__video-wrapper` is `background:#000; position:relative`,
+   and the rule above adds a second one. Both sit after the glow layer in the
+   DOM and are positioned, so they paint over it — the "pitch black bars" were
+   Plyr's background, not an absence of glow.
+
+   FOUR elements paint that black, each covering the whole pane, and finding
+   them one at a time cost four rounds: `.plyr--video`, Plyr's own
+   `.plyr__video-wrapper`, the poster, and `video` itself — the last one being
+   a plain `background: #000` on the element, which survived removing the same
+   thing from its inline style. They were enumerated by searching the whole
+   stylesheet for opaque dark backgrounds inside this container rather than
+   guessing at another one.
+
+   Only the BACKGROUNDS go. The picture, the controls and everything else Plyr
+   draws are untouched; what used to be black behind the picture is now the
+   container, where the bands live. Fullscreen keeps its black on purpose —
+   there is no glow there and a transparent letterbox would show the desktop. */
+.video-player-container[data-immersive="true"] .plyr--video,
+.video-player-container[data-immersive="true"] .plyr__video-wrapper,
+.video-player-container[data-immersive="true"] .plyr__poster,
+.video-player-container[data-immersive="true"] video {
+  background: transparent;
+}
+
+/* ...except while a full-screen overlay is covering the player, when the black
+   comes back.
+
+   Hiding the bands was only two thirds of turning immersive off. This is the
+   third: making four stacked layers see-through changes how the player
+   COMPOSITES, and a `backdrop-filter` spanning the window has to resolve the
+   backdrop through every transparent layer it finds, every time the video
+   behind them advances a frame. The bands stopping does not help with that,
+   which is why hiding them alone did not fix the flicker.
+
+   With this, a covered player is byte-for-byte the immersive-off player: opaque
+   layers, no bands, no sampling. Immersive contributes nothing at all, so if
+   something still stutters with an overlay up, immersive is not what is doing
+   it. That is the point of making it total rather than partial.
+
+   Same attribute as the band rule below; see it for how it is set and for why
+   it is an attribute rather than a `:has()`. */
+body[data-player-covered="true"] .video-player-container[data-immersive="true"] .plyr--video,
+body[data-player-covered="true"] .video-player-container[data-immersive="true"] .plyr__video-wrapper,
+body[data-player-covered="true"] .video-player-container[data-immersive="true"] .plyr__poster,
+body[data-player-covered="true"] .video-player-container[data-immersive="true"] video {
+  background: #000;
+}
+
 /* Control bar styling */
 .video-player-container .plyr__controls {
   background: rgba(0, 0, 0, 0.7);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
-  border-top: 1px solid var(--color-border-subtle);
+  /* The bar separates itself from the video with a dark half-pixel above it
+     and catches a little light on its own top edge, instead of drawing an
+     accent-tinted line across the picture. */
+  border-top: 0;
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.06),
+    0 -0.5px 0 0 rgba(0, 0, 0, 0.4);
   padding: 10px;
 }
 
 /* Big play button */
 .video-player-container .plyr__control--overlaid {
   background: var(--color-surface) !important;
-  border: 2px solid var(--color-border);
+  /* Was `2px solid var(--color-border)`: four device pixels of a 15-40% accent
+     line (the alpha is per-theme) ringing a round button over live video —
+     the heaviest outline in the app, and the one that made every other border
+     look like it was allowed to be thick. Now a faint rim inside, a dark
+     half-pixel outside, and a real shadow doing the lifting. */
+  border: 0;
+  box-shadow:
+    var(--hairline-rim),
+    var(--hairline-contour),
+    0 4px 14px rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(5px);
   -webkit-backdrop-filter: blur(5px);
-  transition: all 0.3s ease;
+  transition: background-color 0.3s ease, box-shadow 0.3s ease;
 }
 
 .video-player-container .plyr__control--overlaid:hover {
   background: var(--color-surface-hover) !important;
-  border-color: var(--color-accent-muted);
-  box-shadow: 0 4px 20px var(--color-accent-muted);
+  /* Hover brightens the RIM rather than swapping the contour: the button is
+     the same object, lit harder. */
+  box-shadow:
+    inset 0 1px 0 0 color-mix(in srgb, var(--color-accent) 24%, transparent),
+    var(--hairline-contour),
+    0 4px 20px var(--color-accent-muted);
 }
 
 .video-player-container .plyr__control--overlaid svg {
@@ -2076,6 +2818,11 @@ html[data-motion="reduced"] .animate-shimmer {
 .video-player-container .plyr__progress {
   flex: 1;
   margin: 0 10px;
+  /* Scoped here rather than :root on purpose. The volume slider is the same
+     element type and would otherwise inherit a playhead sized for the seek
+     bar. Plyr centres its thumb with a margin computed from this token, so it
+     has to be the CAPSULE's height; the width is set separately below. */
+  --plyr-range-thumb-height: var(--scrub-thumb-h);
 }
 
 .video-player-container .plyr__progress__container {
@@ -2083,12 +2830,18 @@ html[data-motion="reduced"] .animate-shimmer {
 }
 
 .video-player-container .plyr__progress input[type="range"] {
-  height: 4px;
-  transition: height 0.2s ease;
+  height: var(--scrub-track-h);
+  transition: height var(--scrub-grow-duration) var(--scrub-grow-ease);
 }
 
-.video-player-container .plyr__progress:hover input[type="range"] {
-  height: 6px;
+/* `focus-within` as well as hover, so keyboard seeking gets the same bar the
+   pointer does. Re-declaring the track-height token here rather than only the
+   height is what keeps Plyr's own thumb-centring arithmetic correct while the
+   track is grown — it reads the variable live. */
+.video-player-container .plyr__progress:hover input[type="range"],
+.video-player-container .plyr__progress:focus-within input[type="range"] {
+  --plyr-range-track-height: var(--scrub-track-h-hover);
+  height: var(--scrub-track-h-hover);
 }
 
 .video-player-container .plyr__progress__buffer {
@@ -2114,6 +2867,36 @@ html[data-motion="reduced"] .animate-shimmer {
   .plyr--full-ui
   input[type="range"]::-webkit-slider-thumb:hover {
   transform: scale(1.2);
+}
+
+/* The seek bar's playhead, which is not the volume slider's. A vertical
+   capsule that is absent until you reach for the bar, then springs in on the
+   same curve the track grows on — one gesture, two parts of it moving
+   together, rather than a bead that was always sitting there.
+   `transition: all` above would sweep width and height into the spring too, so
+   this names its properties. */
+.video-player-container
+  .plyr__progress
+  input[type="range"]::-webkit-slider-thumb {
+  width: var(--scrub-thumb-w);
+  height: var(--scrub-thumb-h);
+  border-radius: 999px;
+  opacity: 0;
+  transform: scaleY(0.5);
+  transition: opacity 0.2s ease, transform var(--scrub-grow-duration) var(--scrub-grow-ease);
+}
+.video-player-container .plyr__progress:hover input[type="range"]::-webkit-slider-thumb,
+.video-player-container .plyr__progress:focus-within input[type="range"]::-webkit-slider-thumb {
+  opacity: 1;
+  transform: scaleY(1);
+}
+/* Held: bigger, and with a shadow that says it has been picked up off the
+   track rather than merely brightened. */
+.video-player-container .plyr__progress input[type="range"]:active::-webkit-slider-thumb {
+  opacity: 1;
+  transform: scale(1.6);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3),
+    0 0 10px color-mix(in srgb, var(--color-info) 50%, transparent);
 }
 
 .video-player-container .plyr--full-ui input[type="range"]::-moz-range-thumb {
@@ -2237,19 +3020,19 @@ html[data-watching] .plyr__time--live {
   animation: none;
 }
 
-html[data-watching] .gift-shimmer-silver {
+html[data-watching] .automation-shimmer-silver {
   animation: none;
   color: #d4d4d4;
   filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.45));
 }
 
-html[data-watching] .gift-shimmer-gold {
+html[data-watching] .automation-shimmer-gold {
   animation: none;
   color: #e6bf3f;
   filter: drop-shadow(0 0 5px rgba(255, 215, 0, 0.5));
 }
 
-html[data-watching] .gift-shimmer-iridescent {
+html[data-watching] .automation-shimmer-iridescent {
   animation: none;
   color: #7bd9de;
   filter: drop-shadow(0 0 5px rgba(121, 157, 241, 0.55));
@@ -2758,11 +3541,11 @@ html[data-watching] .drops-progress-inline {
 }
 
 /* ============================================
-   Gift Box Shimmer Animations for Title Bar
+   Drops-automation shimmer (title bar drops button, Home claim flight)
    ============================================ */
 
 /* Silver pulse - Channel Points only */
-@keyframes gift-pulse-silver {
+@keyframes automation-pulse-silver {
   0%,
   100% {
     color: #a8a8a8;
@@ -2774,12 +3557,12 @@ html[data-watching] .drops-progress-inline {
   }
 }
 
-.gift-shimmer-silver {
-  animation: gift-pulse-silver 2s ease-in-out infinite;
+.automation-shimmer-silver {
+  animation: automation-pulse-silver 2s ease-in-out infinite;
 }
 
 /* Gold pulse - Drops Mining only */
-@keyframes gift-pulse-gold {
+@keyframes automation-pulse-gold {
   0%,
   100% {
     color: #c9a227;
@@ -2791,12 +3574,12 @@ html[data-watching] .drops-progress-inline {
   }
 }
 
-.gift-shimmer-gold {
-  animation: gift-pulse-gold 2s ease-in-out infinite;
+.automation-shimmer-gold {
+  animation: automation-pulse-gold 2s ease-in-out infinite;
 }
 
 /* Iridescent pulse - Both active (rainbow color cycling) */
-@keyframes gift-pulse-iridescent {
+@keyframes automation-pulse-iridescent {
   0%,
   100% {
     color: #799df1;
@@ -2816,8 +3599,8 @@ html[data-watching] .drops-progress-inline {
   }
 }
 
-.gift-shimmer-iridescent {
-  animation: gift-pulse-iridescent 4s ease-in-out infinite;
+.automation-shimmer-iridescent {
+  animation: automation-pulse-iridescent 4s ease-in-out infinite;
 }
 
 /* Settings gear icon — smooth roll on hover, reverse on unhover */
@@ -3589,8 +4372,8 @@ html[data-watching] .drops-progress-inline {
   border: 1px solid transparent;
   border-radius: 6px;
   box-shadow:
-    inset 1px 1px 0 0 rgba(255, 255, 255, 0.08),
-    inset -1px -1px 0 0 rgba(0, 0, 0, 0.14);
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.08),
+    var(--hairline-contour);
   transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 .glass-button-secondary:hover {
@@ -3634,16 +4417,50 @@ html[data-watching] .drops-progress-inline {
      its transparency, and chat scrolled straight through the popover. */
   --sn-popover-tint: calc(50% + (1 - var(--glass-strength)) * 50%);
   background-color: color-mix(in srgb, var(--color-background) var(--sn-popover-tint), transparent);
-  border: 1px solid var(--color-border-subtle);
+  border: 1px solid transparent;
   border-radius: 8px;
   -webkit-backdrop-filter: blur(calc(64px * var(--glass-strength))) saturate(300%);
   backdrop-filter: blur(calc(64px * var(--glass-strength))) saturate(300%);
+  /* Glaze lighting, over the frost above rather than instead of it. The tint
+     ramp is load-bearing and is not touched here — only how the panel is lit.
+     Light from above, a half-pixel of bounce along the bottom INSIDE edge
+     thrown back up off whatever the panel is sitting on, a contact line, then
+     the drop. The old bevel put dark on the bottom-right, which reads as a
+     raised chip; a lit bottom edge reads as glass with something under it. */
   box-shadow:
-    inset 1px 1px 0 0 rgba(255, 255, 255, 0.08),
-    inset -1px -1px 0 0 rgba(0, 0, 0, 0.15),
-    0 8px 24px -8px rgba(0, 0, 0, 0.55);
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.10),
+    inset 0 -0.5px 0 0 rgba(255, 255, 255, 0.10),
+    var(--elev-2);
+  /* The specular below sits at z-index -1 so it never washes across the text.
+     That needs a stacking context, and at Glassiness 0 the global override
+     strips the backdrop-filter that was otherwise providing one. */
+  isolation: isolate;
   transition: background-color 0.2s ease, box-shadow 0.2s ease,
     border-color 0.2s ease, opacity 0.2s ease, transform 0.2s ease;
+}
+
+/* The pseudo needs this element to be its containing block. Most popovers are
+   already positioned by a Tailwind `absolute`/`fixed` utility, and a bare
+   `position` here would TIE with those on specificity and win on source order,
+   tearing them out of place. `:where()` contributes no specificity and matches
+   only the ones that position themselves nowhere, where relative is a no-op. */
+.sn-popover:where(:not(.absolute):not(.fixed)) {
+  position: relative;
+}
+
+/* The same masked specular as every other glazed surface: bright across the
+   middle, gone at both ends. A rim that stays bright all the way round reads
+   as a drawn border; one bright only where the light would actually catch
+   reads as a curved surface. */
+.sn-popover::after {
+  box-shadow:
+    inset 0 0 1.5px 1px color-mix(in srgb, var(--color-accent) 20%, transparent),
+    inset 0 0 3px 1px color-mix(in srgb, var(--color-accent) 16%, transparent);
+}
+
+/* Unlit with the rest of the chrome when the window goes to the background. */
+body[data-window-blurred="true"] .sn-popover::after {
+  display: none;
 }
 
 /* Hover lift for an .sn-popover that is itself a button (the collapsed pinned
@@ -3651,6 +4468,299 @@ html[data-watching] .drops-progress-inline {
    see-through state at Glassiness 0; it just deepens the tint at full glass. */
 .sn-popover-hover:hover {
   --sn-popover-tint: calc(60% + (1 - var(--glass-strength)) * 40%);
+}
+
+/* The stream tints its own frame.
+   `--stream-glow` is set per container by useMediaGlow, from the colour Rust
+   picks out of that container's own video (see services::media_glow). The
+   fallback is the whole safety net: it keeps exactly today's look when the
+   setting is off, before the first frame is read, and on a DRM-protected
+   stream whose pixels can never be read at all.
+
+   The colour is already eased in Rust between samples; this eases the paint
+   BETWEEN those eased values, so a scene change arrives as a slow wash rather
+   than a step every two seconds. Long, because nothing here is a response to
+   anything the user did — a glow that moved quickly would read as a flicker. */
+.media-glow-focus {
+  box-shadow: 0 0 25px var(--stream-glow, var(--color-accent-muted));
+  transition: box-shadow 1.4s ease;
+}
+
+/* Honour the motion switch: at `off` the colour still tracks the stream, it
+   just arrives without the crossfade. */
+html[data-motion="off"] .media-glow-focus {
+  transition: none;
+}
+
+/* ===== Immersive glow =====
+   The letterbox bars stop being dead space and become where the picture's own
+   light lands. The two bands are sampled independently from the top and bottom
+   thirds of the frame (see services::media_glow), so the light above matches
+   the sky and the light below matches the ground — which is the difference
+   between light pouring out of the picture and a single colour washed around
+   it.
+
+   Each band is brightest against the video's edge and falls to nothing toward
+   the outside, so the colour appears to come FROM the picture rather than
+   being painted onto the bars. Where the video fills the pane there are no
+   bars, the layers are covered, and nothing shows — correct, not a failure.
+
+   No blur filter: the gradient is already smooth, and blurring a 40%-tall
+   layer over live video is real GPU work for something that would look the
+   same. The transition is long because nothing here responds to the user;
+   a fast one would read as flicker at the edge of vision. */
+/* Immersive mode does not touch the player's layout at all.
+   An earlier version resized the video element so the frame below could match
+   it; that moved the picture, which is a real cost for no gain. The frame is
+   `aspect-ratio` + `inset: 0` + `margin: auto`, which is precisely the
+   geometry `object-fit: contain` produces — the same box, computed
+   independently. The video keeps its original 100% x 100% box and the picture
+   stays exactly where it has always been. */
+
+/* An invisible stand-in for the picture: identical constraints, so its top and
+   bottom edges land exactly where the picture's do. The bands hang off THOSE
+   edges.
+
+   This is what the first attempt got wrong a second way. Positioning the bands
+   against the container put the bright end of each gradient in the middle of
+   the pane — underneath the picture — so all that reached the bar was the
+   faded tail. Light has to be strongest where it leaves the picture. */
+.sn-immersive-frame {
+  aspect-ratio: var(--sn-video-ar, 16 / 9);
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: var(--sn-immersive-fit, 100%);
+  margin: auto;
+  z-index: 0;
+  pointer-events: none;
+}
+/* Nothing may spill out of the player onto chat or the title bar, so the
+   bands live inside a box clipped to the pane. */
+.sn-immersive-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  z-index: 0;
+  pointer-events: none;
+}
+/* The band measures the letterbox against this. Safe to contain: the clip's
+   size comes from `inset: 0`, never from its contents. The height that uses it
+   is further down, after `.sn-immersive` — same specificity, so it has to come
+   later in the file or the fallback wins. */
+@supports (container-type: size) {
+  .sn-immersive-clip {
+    container-type: size;
+  }
+}
+
+.sn-immersive {
+  position: absolute;
+  /* Wider than the picture: light spreads sideways as it leaves an edge, so a
+     band exactly the picture's width reads as a painted rectangle. */
+  left: -6%;
+  right: -6%;
+  /* Exactly the letterbox, computed rather than guessed.
+     Every earlier version picked a share of the picture's height, and every one
+     of them read as a painted bar for the same reason: the band was taller than
+     the gap, so the only part ever on screen was the bloom's bright core and
+     the falloff was clipped away off-screen. Light that never visibly fades is
+     a bar, however carefully it is drawn.
+
+     The gap is derivable with no measuring at all, because the sampler
+     publishes the aspect as a bare number as well as a ratio:
+
+       picture height = min(100cqh, 100cqw / ar)
+       letterbox      = (100cqh - picture height) / 2
+
+     so the light is brightest at the picture and gone by the edge of the pane,
+     at every pane size and every stream shape, with no ResizeObserver and no
+     forced layout read on the sampling path. The percentage below is the
+     fallback for an engine without size containers; it is deliberately small,
+     since too short merely looks modest while too tall looks like a bar. */
+  height: 14%;
+  pointer-events: none;
+  /* Light has no edges. Most of the softness is now in the shape — the blooms
+     are radial, so this is not holding the whole effect together the way it was
+     when the band was a gradient of flat columns. It still earns its place:
+     eight overlapping pools leave faint seams and the mask bands without it.
+     Tuned by eye against a real frame rather than reasoned about.
+     `filter`, not `backdrop-filter` — this blurs the band's own pixels, and it
+     re-runs on every sampled frame now rather than once per crossfade. */
+  filter: blur(20px);
+  /* No colour transition, and this is the one line that decides whether the
+     mode feels attached to the picture. The sampler IS the animation: it
+     recomputes on every presented frame, so a crossfade on top only adds lag
+     to the thing the mode exists to keep in step with. At 1.8s the colour was
+     arriving a beat and a half after the scene that caused it. */
+  transition: opacity 0.35s ease;
+}
+/* The letterbox, derived. Must follow the rule above: same specificity. */
+@supports (container-type: size) {
+  .sn-immersive {
+    height: calc((100cqh - min(100cqh, 100cqw / var(--sn-video-arn, 1.7778))) / 2);
+  }
+}
+/* Eight blooms per edge, not eight stripes.
+   A real edge light is a row of point sources: each throws a soft radial pool
+   onto the wall, and the pools overlap into one continuous arc. A band of flat
+   columns cannot do that — it reads as a painted strip however smoothly the
+   colours blend, because light does not have a straight edge. So each segment
+   is its own ellipse centred ON the picture's edge, wide enough to overlap its
+   neighbours, blooming outward into the letterbox.
+
+   The ellipses are far wider than they are tall, and that is physical rather
+   than stylistic: the gap a stream leaves is shallow next to how wide it is, so
+   light entering it spreads sideways much further than it travels outward.
+   Sizing the pools by their true radius would leave eight separated dots.
+
+   `background-blend-mode: screen` is what makes the overlaps behave like light.
+   Background layers otherwise paint over one another, so the topmost bloom
+   would simply hide the one beside it; screen adds them, which is what two
+   overlapping pools of light actually do.
+
+   The mask is an ellipse so tall it is effectively horizontal-only: it tapers
+   the ends without touching the falloff, and that taper is the arc — light
+   reaching from one side of the picture to the other rather than a rectangle
+   with corners.
+
+   Each segment falls back to the frame's overall colour rather than leaving a
+   hole in the arc. */
+.sn-immersive--top {
+  bottom: 100%;
+  background-image:
+    radial-gradient(
+      13% 130% at 10.94% 100%,
+      var(--glow-t0, var(--stream-glow, transparent)) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      13% 130% at 22.10% 100%,
+      var(--glow-t1, var(--stream-glow, transparent)) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      13% 130% at 33.26% 100%,
+      var(--glow-t2, var(--stream-glow, transparent)) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      13% 130% at 44.42% 100%,
+      var(--glow-t3, var(--stream-glow, transparent)) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      13% 130% at 55.58% 100%,
+      var(--glow-t4, var(--stream-glow, transparent)) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      13% 130% at 66.74% 100%,
+      var(--glow-t5, var(--stream-glow, transparent)) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      13% 130% at 77.90% 100%,
+      var(--glow-t6, var(--stream-glow, transparent)) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      13% 130% at 89.06% 100%,
+      var(--glow-t7, var(--stream-glow, transparent)) 0%,
+      transparent 100%
+    );
+  background-blend-mode: screen;
+  -webkit-mask-image: radial-gradient(ellipse 70% 300% at 50% 100%, #000 8%, transparent 100%);
+  mask-image: radial-gradient(ellipse 70% 300% at 50% 100%, #000 8%, transparent 100%);
+}
+.sn-immersive--bottom {
+  top: 100%;
+  background-image:
+    radial-gradient(
+      13% 130% at 10.94% 0%,
+      var(--glow-b0, var(--stream-glow, transparent)) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      13% 130% at 22.10% 0%,
+      var(--glow-b1, var(--stream-glow, transparent)) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      13% 130% at 33.26% 0%,
+      var(--glow-b2, var(--stream-glow, transparent)) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      13% 130% at 44.42% 0%,
+      var(--glow-b3, var(--stream-glow, transparent)) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      13% 130% at 55.58% 0%,
+      var(--glow-b4, var(--stream-glow, transparent)) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      13% 130% at 66.74% 0%,
+      var(--glow-b5, var(--stream-glow, transparent)) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      13% 130% at 77.90% 0%,
+      var(--glow-b6, var(--stream-glow, transparent)) 0%,
+      transparent 100%
+    ),
+    radial-gradient(
+      13% 130% at 89.06% 0%,
+      var(--glow-b7, var(--stream-glow, transparent)) 0%,
+      transparent 100%
+    );
+  background-blend-mode: screen;
+  -webkit-mask-image: radial-gradient(ellipse 70% 300% at 50% 0%, #000 8%, transparent 100%);
+  mask-image: radial-gradient(ellipse 70% 300% at 50% 0%, #000 8%, transparent 100%);
+}
+/* A full-screen overlay turns the light OFF, not down.
+   This is not a preference, it is a correctness fix. Nineteen-odd overlays in
+   this app are `fixed inset-0` with a `backdrop-filter`, and a backdrop filter
+   has to re-sample everything behind it every time that content changes. The
+   bands change eighteen times a second, so opening one of those over a playing
+   stream asks the compositor to re-blur the whole window at 18 Hz — and in the
+   badges overlay, which nests a `backdrop-blur-md` on every collected tile, to
+   do it hundreds of times over. That drops tiles and flickers.
+
+   The attribute is set by the sampler, which finds the overlay structurally
+   (`fixed inset-0` carrying a backdrop blur IS the thing that costs) rather
+   than from a list of overlay flags — those overlays are rendered from a dozen
+   components, several nowhere near App, so any enumeration would be wrong
+   within a month.
+
+   This WAS a `body:has(...)` rule, and that was a mistake worth remembering.
+   `:has()` is live: it keyed on `.backdrop-blur-md`, which the badges overlay
+   puts on every collected tile and every checkmark, so the engine had to
+   consider those selectors every time that menu opened — **with immersive off
+   and no stream playing**. A feature that is switched off should have no
+   footprint at all, and that one did. An attribute is evaluated only when it
+   exists, and the sampler only sets it while immersive is actually running.
+
+   `display`, not `opacity`: an opacity of 0 still composites, and compositing
+   is the entire cost being avoided here. */
+body[data-player-covered="true"] .sn-immersive {
+  display: none;
+}
+
+/* The light goes out with the window, like every other glaze surface. */
+body[data-window-blurred="true"] .sn-immersive {
+  opacity: 0.35;
+}
+/* The inverse of the usual motion rule, on purpose. At `off` the sampler drops
+   to once a second and drifts instead of following, so here a crossfade is what
+   KEEPS it calm — without one, a slow sampler shows visible steps, which is
+   exactly the motion the setting exists to remove. */
+html[data-motion="off"] .sn-immersive {
+  transition: background-image 1.2s linear, opacity 0.35s ease;
 }
 
 /* Bonus-chest "claim me" attention. The chest button rests most of the cycle,
@@ -3809,9 +4919,10 @@ html[data-motion="reduced"] .sn-ffz-anim-leave {
   display: none;
 }
 
-/* The timeline itself, on Plyr's own variables so it matches the range it
-   replaces: 4px track that grows to 6px on hover, the theme's fill gradient,
-   the info-colored thumb with its glow, and the player's tooltip look. */
+/* The timeline itself, on the shared scrubber tokens so it matches the range
+   it replaces exactly — same track heights, same grow curve, same capsule
+   playhead. Live and VOD are the same control to the person using them, and
+   the two must not be distinguishable by how they move. */
 .sn-timeline {
   position: relative;
   width: 100%;
@@ -3825,16 +4936,17 @@ html[data-motion="reduced"] .sn-ffz-anim-leave {
   left: 0;
   right: 0;
   top: 50%;
-  height: var(--plyr-range-track-height, 4px);
+  height: var(--scrub-track-h);
   transform: translateY(-50%);
   border-radius: 999px;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.16);
-  transition: height 0.2s ease;
+  transition: height var(--scrub-grow-duration) var(--scrub-grow-ease);
 }
 .sn-timeline:hover .sn-timeline__track,
+.sn-timeline:focus-within .sn-timeline__track,
 .sn-timeline--dragging .sn-timeline__track {
-  height: 6px;
+  height: var(--scrub-track-h-hover);
 }
 .sn-timeline__available {
   position: absolute;
@@ -3853,18 +4965,30 @@ html[data-motion="reduced"] .sn-ffz-anim-leave {
 .sn-timeline__thumb {
   position: absolute;
   top: 50%;
-  width: var(--plyr-range-thumb-height, 13px);
-  height: var(--plyr-range-thumb-height, 13px);
-  transform: translate(-50%, -50%) scale(0);
-  border-radius: 50%;
+  width: var(--scrub-thumb-w);
+  height: var(--scrub-thumb-h);
+  /* Squashed rather than scaled to nothing: it grows out of the track's own
+     line instead of appearing from a point, which is what makes the playhead
+     and the track read as one thing widening. */
+  transform: translate(-50%, -50%) scaleY(0.5);
+  opacity: 0;
+  border-radius: 999px;
   background: var(--plyr-range-thumb-background, var(--plyr-color-main));
   box-shadow: var(--plyr-range-thumb-shadow, none);
-  transition: transform 0.15s ease;
+  transition: opacity 0.2s ease, transform var(--scrub-grow-duration) var(--scrub-grow-ease),
+    box-shadow 0.2s ease;
   pointer-events: none;
 }
 .sn-timeline:hover .sn-timeline__thumb,
+.sn-timeline:focus-within .sn-timeline__thumb {
+  opacity: 1;
+  transform: translate(-50%, -50%) scaleY(1);
+}
 .sn-timeline--dragging .sn-timeline__thumb {
-  transform: translate(-50%, -50%) scale(1);
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1.6);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3),
+    var(--plyr-range-thumb-shadow, none);
 }
 /* Section boundaries of the compressed scale: a hairline always, its
    "-1h 02m" label only while the bar is hovered or dragged. */
@@ -4133,4 +5257,31 @@ html[data-motion="reduced"] .sn-ffz-anim-leave {
 
 .sn-rail::-webkit-scrollbar {
   display: none;
+}
+
+/* ===== Utilities =====
+   Last in the file on purpose. These are single-class selectors that have to
+   beat single-class COMPONENT selectors (`.glass-button` at 1359, for one), so
+   they carry identical specificity and nothing but source order decides the
+   winner. Declared beside the glaze at 645 they silently lost, and the button
+   kept the backdrop filter this is meant to remove. Anything added here must
+   stay after every component rule. */
+
+/* Turn off a live backdrop filter while keeping everything else about a
+   surface.
+
+   Reach for it whenever the backdrop does not actually vary: the filter is then
+   a compositing layer bought for nothing, and in WebView2 it can smear whatever
+   is repainting next to it. Two cases in the app today:
+
+   - The MultiChat popout's title bar (`--flat`), whose own note explains that
+     the chat scrolling below it bleeds into a live blur layer there.
+   - The setup wizard's primary button, which sits on a flat panel roughly 16px
+     under a looping swipe hint. That hint animates `width`, which is a LAYOUT
+     property, so every frame of an infinite loop forced layout and paint right
+     inside the region an 8px backdrop blur samples from. */
+.chrome-glaze--flat,
+.no-live-blur {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }

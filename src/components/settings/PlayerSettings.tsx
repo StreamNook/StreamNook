@@ -7,7 +7,12 @@ import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
 import { DEFAULT_AUDIO_BOOST, DEFAULT_SONG_ID } from '../../types';
 import { aboutRevealNeedsShift } from '../../utils/playerMouseControls';
 import { Fader } from '../AudioBoostFaders';
-import { audioBoostFaderDefs, audioBoostResetPatch } from '../../utils/audioBoost';
+import {
+  audioBoostFaderDefs,
+  audioBoostResetPatch,
+  AUDIO_GRAPH_SUPPORTED,
+  AUDIO_GRAPH_REFUSAL,
+} from '../../utils/audioBoost';
 import { reportCodecPreference } from '../../utils/codecPreference';
 import { invoke } from '@tauri-apps/api/core';
 import { LL_TARGET_DEFAULT } from '../../utils/latency';
@@ -190,6 +195,17 @@ const PlayerSettings = () => {
             <Toggle
               enabled={autoSwitchNotification}
               onChange={() => setAutoSwitch({ show_notification: !autoSwitchNotification })}
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Glow with the stream"
+          description="The player picks up the colour of whatever is on screen, so a neon game and a talk show don't look the same."
+          control={
+            <Toggle
+              enabled={settings.media_glow !== false}
+              onChange={() => updateSettings({ ...settings, media_glow: settings.media_glow === false })}
             />
           }
         />
@@ -601,8 +617,16 @@ const PlayerSettings = () => {
       <SettingsSection
         id="settings-section-audio-boost"
         label="Audio Boost"
-        description="Even out loud and quiet moments and push the stream a little louder than the source, without the harsh clipping you get from raising volume past 100%."
+        description={`Even out loud and quiet moments and push the stream a little louder than the source, without the harsh clipping you get from raising volume past 100%.${
+          AUDIO_GRAPH_SUPPORTED ? '' : ` ${AUDIO_GRAPH_REFUSAL}`
+        }`}
       >
+        {/* Dimmed rather than hidden on the shells that cannot run the audio
+            graph, for the same reason the MultiNook overlay button is: a
+            feature that silently vanishes reads as a bug, while a dimmed
+            control with the reason above it reads as a limitation. The wrapper
+            is a plain box so the rows keep the card's own padding maths. */}
+        <div className={AUDIO_GRAPH_SUPPORTED ? '' : 'opacity-50 pointer-events-none'}>
         <SettingsRow
           title="Turn on Audio Boost"
           description="Evens out the stream's loudness and lifts it, on top of the normal volume slider."
@@ -670,14 +694,20 @@ const PlayerSettings = () => {
             </div>
           </details>
         </SettingsRow>
+        </div>
       </SettingsSection>
       )}
 
       <SettingsSection
         id="settings-section-song-id"
         label="Song Identification"
-        description="The /song command and the player's music button listen to a few seconds of the stream and name the track."
+        description={`The /song command and the player's music button listen to a few seconds of the stream and name the track.${
+          AUDIO_GRAPH_SUPPORTED ? '' : ` ${AUDIO_GRAPH_REFUSAL}`
+        }`}
       >
+        {/* Recognition listens through the same tap Audio Boost uses, so it is
+            closed on exactly the same shells. */}
+        <div className={AUDIO_GRAPH_SUPPORTED ? '' : 'opacity-50 pointer-events-none'}>
         <SettingsRow
           title={`Listen for ${songId.capture_seconds}s`}
           description="How many seconds of audio to fingerprint; longer matches more reliably over talking or noise, but the result takes a little longer to appear."
@@ -708,6 +738,7 @@ const PlayerSettings = () => {
             className="w-full accent-accent cursor-pointer"
           />
         </SettingsRow>
+        </div>
       </SettingsSection>
     </div>
   );

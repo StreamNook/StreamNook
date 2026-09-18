@@ -420,6 +420,11 @@ interface AppState {
    *  Persisted, so the app reopens where you left it. */
   activePlatform: ProviderId | 'all';
   homeSelectedCategory: TwitchCategory | null;
+  /** The category you most recently backed out of, so navigation has somewhere
+   *  forward to go. Cleared the moment you open a different one — going
+   *  somewhere new ends the retrace, the way a browser drops its forward stack
+   *  when you follow a fresh link. */
+  homeLastExitedCategory: TwitchCategory | null;
   streamOriginCategory: TwitchCategory | null;
   /**
    * Tab the most recent search was launched from. Used to send the user back to
@@ -552,6 +557,13 @@ interface AppState {
   setHomeActiveTab: (tab: HomeTab) => void;
   setActivePlatform: (platform: ProviderId | 'all') => void;
   setHomeSelectedCategory: (category: TwitchCategory | null) => void;
+  /** One step out: the stream drops you back onto Home, a category drops you
+   *  back to browse. Owned here rather than in a view because the control that
+   *  drives it lives in the title bar and can see none of them. */
+  navigateBack: () => void;
+  /** One step back in, reversing navigateBack: browse re-enters the category
+   *  you just left, Home returns to the stream. */
+  navigateForward: () => void;
   setStreamOriginCategory: (category: TwitchCategory | null) => void;
   setSearchReturnTab: (tab: HomeTab) => void;
   setHomeCategoryTab: (tab: 'live' | 'clips' | 'videos') => void;
@@ -1014,6 +1026,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   homeActiveTab: 'following' as HomeTab,
   activePlatform: 'all' as ProviderId | 'all',
   homeSelectedCategory: null,
+  homeLastExitedCategory: null,
   streamOriginCategory: null,
   searchReturnTab: 'following' as HomeTab,
   homeCategoryTab: 'live' as 'live' | 'clips' | 'videos',
@@ -3856,6 +3869,49 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // Navigation actions for deep linking
+  navigateBack: () => {
+    const s = get();
+    // Outermost step first. Leaving the stream lands you on Home exactly where
+    // you left it, so a second press can keep going out from there.
+    if (!s.isHomeActive && s.streamUrl) {
+      trackActivity('Opened Home');
+      // Land back on the tab you left rather than a fixed one — this is a back
+      // button, and restoring where you were is its whole job. The one
+      // exception is Following with nothing signed in, which is an empty page
+      // by construction; the control that preceded this redirected around it
+      // and losing that would be a regression.
+      const strandedOnFollowing = s.homeActiveTab === 'following' && !s.isAuthenticated;
+      set(strandedOnFollowing ? { isHomeActive: true, homeActiveTab: 'recommended' as HomeTab } : { isHomeActive: true });
+      return;
+    }
+    if (s.homeActiveTab === 'category' && s.homeSelectedCategory) {
+      set({
+        homeLastExitedCategory: s.homeSelectedCategory,
+        homeActiveTab: 'browse',
+        homeSelectedCategory: null,
+      });
+    }
+  },
+
+  navigateForward: () => {
+    const s = get();
+    if (!s.isHomeActive) return;
+    // Innermost step first, mirroring back: re-enter the category before
+    // returning to the stream, so the two directions retrace the same path.
+    if (s.homeActiveTab === 'browse' && s.homeLastExitedCategory) {
+      set({
+        homeActiveTab: 'category',
+        homeSelectedCategory: s.homeLastExitedCategory,
+        homeLastExitedCategory: null,
+      });
+      return;
+    }
+    if (s.streamUrl) {
+      trackActivity('Closed Home');
+      set({ isHomeActive: false });
+    }
+  },
+
   setHomeActiveTab: (tab: HomeTab) => {
     set({ homeActiveTab: tab });
   },
@@ -3871,7 +3927,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setHomeSelectedCategory: (category: TwitchCategory | null) => {
-    set({ homeSelectedCategory: category });
+    // Opening a category is a new destination, not a retrace, so the forward
+    // target goes with it. Clearing it to null is the back path's own doing
+    // and must not wipe what that path just recorded.
+    set(category ? { homeSelectedCategory: category, homeLastExitedCategory: null } : { homeSelectedCategory: category });
   },
 
   setStreamOriginCategory: (category: TwitchCategory | null) => {

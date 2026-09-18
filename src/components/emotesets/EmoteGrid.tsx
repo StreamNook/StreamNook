@@ -181,24 +181,33 @@ export default function EmoteGrid({ setId, canManage, reloadKey, onCountChange, 
 
       {/* Pagination */}
       {pageCount > 1 && (
-        <div className="flex items-center justify-center gap-3 py-2 border-t border-borderSubtle shrink-0 text-sm text-textSecondary">
-          <button
-            disabled={page <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            className="p-1 rounded hover:bg-glass disabled:opacity-40"
-          >
-            <ChevronLeft size={16} />
-          </button>
-          <span>
-            {page} / {pageCount}
-          </span>
-          <button
-            disabled={page >= pageCount}
-            onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
-            className="p-1 rounded hover:bg-glass disabled:opacity-40"
-          >
-            <ChevronRight size={16} />
-          </button>
+        // The same flipper as the title bar, with the page count in the slot
+        // the divider usually occupies. Paging is navigation, so it gets the
+        // navigation control rather than a private pair of buttons.
+        <div className="flex items-center justify-center py-2 border-t border-borderSubtle shrink-0">
+          <div className="chrome-glaze nav-flipper">
+            <button
+              type="button"
+              disabled={page <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className="nav-flipper-btn"
+              aria-label="Previous page"
+            >
+              <ChevronLeft size={20} />
+            </button>
+            <span className="nav-flipper-label">
+              {page} / {pageCount}
+            </span>
+            <button
+              type="button"
+              disabled={page >= pageCount}
+              onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+              className="nav-flipper-btn"
+              aria-label="Next page"
+            >
+              <ChevronRight size={20} />
+            </button>
+          </div>
         </div>
       )}
     </div>

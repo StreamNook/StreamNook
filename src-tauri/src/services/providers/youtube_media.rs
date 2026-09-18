@@ -1582,7 +1582,20 @@ fn row_from_meta(channel: &str, meta: &youtube::YouTubeChannelMeta) -> ProviderS
         // empty rather than guessing; the UI already handles a blank category.
         game_name: meta.game_name.clone().unwrap_or_default(),
         category_thumbnail: None,
-        thumbnail_url: String::new(),
+        // The channel-meta path carries no thumbnail of its own, but it does
+        // carry the live broadcast's video id, and a YouTube thumbnail is
+        // addressable from that. Without this the row reaches the UI with an
+        // empty URL, the card renders `src=""`, and every YouTube entry in the
+        // who's-live list is a blank rectangle.
+        //
+        // `hqdefault` rather than `maxresdefault`: maxres is generated only for
+        // some uploads and 404s on a great many live broadcasts, where
+        // hqdefault always exists.
+        thumbnail_url: meta
+            .video_id
+            .as_ref()
+            .map(|v| format!("https://i.ytimg.com/vi/{v}/hqdefault.jpg"))
+            .unwrap_or_default(),
         started_at: meta.start_time.clone().unwrap_or_default(),
         profile_image_url: meta.profile_pic.clone(),
         is_live: meta.is_live,
@@ -2229,6 +2242,35 @@ mod tests {
         assert_eq!(r.user_id, "UCrPseYLGpNygVi34QpGNqpA");
         assert_eq!(r.thumbnail_url, "https://i.ytimg.com/vi/xtlt8BVmawk/large.jpg");
         assert!(r.is_live);
+    }
+
+    /// The who's-live list is built from channel meta, not from a feed, and
+    /// that path used to hand the UI an EMPTY thumbnail URL. The card then
+    /// rendered `src=""` and every YouTube entry was a blank rectangle. The
+    /// broadcast's video id is present, and a thumbnail is addressable from it.
+    #[test]
+    fn a_live_youtube_channel_row_carries_a_thumbnail() {
+        let meta = youtube::YouTubeChannelMeta {
+            username: Some("Ludwig".into()),
+            is_live: true,
+            video_id: Some("xtlt8BVmawk".into()),
+            ..Default::default()
+        };
+        let r = row_from_meta("ludwig", &meta);
+        assert_eq!(r.thumbnail_url, "https://i.ytimg.com/vi/xtlt8BVmawk/hqdefault.jpg");
+    }
+
+    /// No live broadcast means no video id, and an invented URL would 404 into
+    /// a broken image. Empty is the honest answer; the UI already handles it.
+    #[test]
+    fn an_offline_youtube_channel_row_has_no_thumbnail() {
+        let meta = youtube::YouTubeChannelMeta {
+            username: Some("Ludwig".into()),
+            is_live: false,
+            video_id: None,
+            ..Default::default()
+        };
+        assert!(row_from_meta("ludwig", &meta).thumbnail_url.is_empty());
     }
 
     /// An ENDED broadcast keeps "LIVE" in its title and differs only by badge

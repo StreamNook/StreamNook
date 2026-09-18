@@ -66,21 +66,27 @@ export default function ContinueWatchingRow() {
 
         {overflowing && (
           <>
+            {/* The flipper's button, but not its pill: these two live at
+                opposite ends of the row rather than side by side, so there is
+                no single control for them to be halves of. `!absolute` beats
+                the primitive's own `position: relative`, which only exists so
+                the hover fill has something to sit in — an absolute box gives
+                it that just as well. */}
             <button
               type="button"
               aria-label="Scroll left"
               onClick={() => scrollBy(-1)}
-              className="glass-button absolute left-0 top-1/2 -translate-y-1/2 z-10 rounded-full p-1.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+              className="chrome-glaze nav-flipper-btn !absolute left-0 top-1/2 -translate-y-1/2 z-10 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
             >
-              <ChevronLeft size={16} />
+              <ChevronLeft size={20} />
             </button>
             <button
               type="button"
               aria-label="Scroll right"
               onClick={() => scrollBy(1)}
-              className="glass-button absolute right-0 top-1/2 -translate-y-1/2 z-10 rounded-full p-1.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+              className="chrome-glaze nav-flipper-btn !absolute right-0 top-1/2 -translate-y-1/2 z-10 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
             >
-              <ChevronRight size={16} />
+              <ChevronRight size={20} />
             </button>
           </>
         )}

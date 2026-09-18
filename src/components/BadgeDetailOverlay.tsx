@@ -1,4 +1,4 @@
-import { X, Gift, ArrowLeft, AlertTriangle, Calendar, ChevronRight, Users, Clock, ArrowUpRight } from 'lucide-react';
+import { X, Gift, ChevronLeft, AlertTriangle, Calendar, ChevronRight, Users, Clock, ArrowUpRight } from 'lucide-react';
 import { useEffect, useState, useMemo, useCallback, type JSX } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -838,9 +838,10 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
             <Tooltip content="Back to badges" side="bottom">
               <button
                 onClick={onBack}
-                className="p-2 hover:bg-glass rounded-lg transition-all group"
+                className="chrome-glaze nav-flipper-btn"
+                aria-label="Back to badges"
               >
-                <ArrowLeft size={20} className="text-textSecondary group-hover:text-textPrimary transition-colors" />
+                <ChevronLeft size={20} />
               </button>
             </Tooltip>
             <div>

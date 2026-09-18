@@ -1147,7 +1147,7 @@ const ProfileSettings = () => {
         ))}
       </div>
 
-      <div ref={profileCardRef} className="relative overflow-hidden flex items-center gap-8 p-6 glass-panel rounded-xl">
+      <div ref={profileCardRef} className="relative overflow-hidden flex items-center gap-8 p-6 glass-panel glaze-inset rounded-xl">
         {/* Tier aura backdrop — Ethereal gets violet, Mythic gets amber.
             Other tiers don't define one; the card stays neutral glass. */}
         {tier?.auraClassName && <div className={tier.auraClassName} />}

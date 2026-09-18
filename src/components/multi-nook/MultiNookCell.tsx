@@ -7,6 +7,7 @@ import { useMultiNookPlayer } from './useMultiNookPlayer';
 import { usemultiNookStore } from '../../stores/multiNookStore';
 import { useAppStore } from '../../stores/AppStore';
 import { buildProviderUrl } from '../../utils/streamProvider';
+import { useMediaGlow } from '../../utils/mediaGlow';
 import { useChannelSocial } from '../../hooks/useChannelSocial';
 import {
   ignoresPlayerMouse,
@@ -85,6 +86,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
   // correct for this channel regardless of what the solo player last had.
   const socialEnabled = isFocused && !isMinimized;
   const playerOverlayButtons = useAppStore((s) => s.settings.player_overlay_buttons);
+  const mediaGlowEnabled = useAppStore((s) => s.settings.media_glow !== false);
   const {
     isFollowing,
     followLoading,
@@ -262,6 +264,10 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
 
   // Merge dnd-kit's node ref with our own so we can attach a native listener.
   const cellRef = useRef<HTMLDivElement | null>(null);
+  // Slot id rather than a channel key: two tiles can show the same channel,
+  // and each one needs its own colour.
+  useMediaGlow(videoRef, cellRef, streamUrl ? id : null, mediaGlowEnabled);
+
   const setRefs = useCallback((node: HTMLDivElement | null) => {
     setNodeRef(node);
     cellRef.current = node;
@@ -397,7 +403,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
       className={`${gridSpanClass} relative w-full h-full overflow-hidden ${
         isMaximized ? '' : 'rounded-lg border border-white/5'
       } ${
-        isFocused && !isMaximized ? 'shadow-[0_0_25px_var(--color-accent-muted)]' : ''
+        isFocused && !isMaximized ? 'media-glow-focus' : ''
       } ${
         isDragging ? 'opacity-50 blur-sm' : 'opacity-100'
       } bg-black/40 transition-opacity duration-300 group flex items-center justify-center video-player-container [&_.plyr]:w-full [&_.plyr]:h-full [&_.plyr]:absolute [&_.plyr]:inset-0 ${

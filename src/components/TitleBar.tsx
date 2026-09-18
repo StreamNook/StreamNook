@@ -1,6 +1,6 @@
 import { Window } from '@tauri-apps/api/window';
-import { Gift, User, Settings, Store, Proportions, MessageCircle, Pickaxe, Clock, Tv, Download, LogIn, Sparkles, Check, Pin, PinOff, Home } from 'lucide-react';
-import { Minus, X, CornersOut, CornersIn, ArrowsOut, ArrowsIn, Medal } from 'phosphor-react';
+import { User, Settings, Proportions, MessageCircle, Pickaxe, Clock, Tv, Download, LogIn, Sparkles, Check, Pin, PinOff, Lightbulb } from 'lucide-react';
+import { Minus, X, CornersOut, CornersIn, ArrowsOut, ArrowsIn, Medal, Package, PuzzlePiece } from 'phosphor-react';
 import { IS_MAC, MAC_TRAFFIC_LIGHT_INSET_PX } from '../utils/platform';
 import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
@@ -9,6 +9,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../stores/AppStore';
 import PenroseLogo from './PenroseLogo';
 import PlatformSwitcher from './PlatformSwitcher';
+import NavFlipper from './NavFlipper';
 import AboutWidget from './AboutWidget';
 import UpdateOverlay, { type UpdatePhase } from './UpdateOverlay';
 import CompactStreamStats from './CompactStreamStats';
@@ -50,8 +51,8 @@ const TitleBar = () => {
   // subscribing; state goes through a shallow-compared selector. This was a
   // whole-store subscription, so the title bar re-rendered on every unrelated
   // store tick.
-  const { openSettings, setShowDropsOverlay, setShowMarketplaceOverlay, setShowBadgesOverlay, setShowWhispersOverlay, toggleTheaterMode, toggleWindowFullscreen, toggleKeepOnTop, toggleHome, setHomeActiveTab, addToast } = useAppStore.getState();
-  const { isAuthenticated, currentUser, dropProgressActive, dropProgressComplete, isTheaterMode, isWindowFullscreen, isHomeActive, streamUrl, currentMediaType, settings, whisperImportState, updateInfo } = useAppStore(
+  const { openSettings, setShowDropsOverlay, setShowMarketplaceOverlay, setShowBadgesOverlay, setShowWhispersOverlay, toggleTheaterMode, toggleWindowFullscreen, toggleKeepOnTop, addToast } = useAppStore.getState();
+  const { isAuthenticated, currentUser, dropProgressActive, dropProgressComplete, isTheaterMode, isWindowFullscreen, streamUrl, currentMediaType, settings, whisperImportState, updateInfo } = useAppStore(
     useShallow((s) => ({
       isAuthenticated: s.isAuthenticated,
       currentUser: s.currentUser,
@@ -59,7 +60,6 @@ const TitleBar = () => {
       dropProgressComplete: s.dropProgressComplete,
       isTheaterMode: s.isTheaterMode,
       isWindowFullscreen: s.isWindowFullscreen,
-      isHomeActive: s.isHomeActive,
       streamUrl: s.streamUrl,
       currentMediaType: s.currentMediaType,
       settings: s.settings,
@@ -125,7 +125,37 @@ const TitleBar = () => {
     };
   }, []);
 
+  // Window focus, published to the DOM for the chrome glaze (see .chrome-glaze
+  // in globals.css). CSS cannot ask whether the OS window is focused, so the
+  // answer is parked on <body> and the title-bar material reads it from there:
+  // the specular streak goes out on a background window, the way native
+  // vibrancy does. Purely cosmetic, so a failed subscription is not worth an
+  // error path.
+  useEffect(() => {
+    const mark = (focused: boolean) => {
+      document.body.dataset.windowBlurred = focused ? 'false' : 'true';
+    };
+    mark(document.hasFocus());
 
+    // The subscription resolves asynchronously; a handle arriving after
+    // cleanup must be released rather than stored, or the listener outlives
+    // the effect (StrictMode double-invokes this).
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    Window.getCurrent()
+      .onFocusChanged(({ payload: focused }) => mark(focused))
+      .then((u) => {
+        if (cancelled) u();
+        else unlisten = u;
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+      delete document.body.dataset.windowBlurred;
+    };
+  }, []);
 
   // Load drops settings. These are user preferences that only change when the
   // user toggles them in the settings dialog — polling at 5s was wildly
@@ -172,28 +202,34 @@ const TitleBar = () => {
     if (isDropsLoggingIn) return;
     setIsDropsLoggingIn(true);
     try {
-      const info = await invoke<{ user_code: string; verification_uri: string; device_code: string; interval: number; expires_in: number }>('start_drops_device_flow');
-      addToast(`Enter code ${info.user_code} to enable drops & channel points`, 'info');
+      const url = await invoke<string>('start_drops_login');
       // Opened from Rust bound to the active account's web profile, so it reuses
       // the main login's twitch.tv session — just authorize, no re-login.
-      await invoke('open_drops_login_window', { url: info.verification_uri });
-      await invoke('poll_drops_token', {
-        deviceCode: info.device_code,
-        interval: info.interval,
-        expiresIn: info.expires_in,
-      });
-      try {
-        await invoke('close_login_overlay', { label: 'drops-login' });
-      } catch { /* already dismissed by the backend */ }
-      addToast('Signed in — drops & channel points enabled', 'success');
-      await checkDropsAuth();
+      await invoke('open_drops_login_window', { url });
     } catch (e) {
       Logger.error('[TitleBar] Drops login failed:', e);
-      addToast('Drops sign-in failed. Please try again.', 'error');
-    } finally {
+      // Say what actually went wrong: the generic line sent people reinstalling.
+      addToast(`Drops sign-in failed: ${e instanceof Error ? e.message : String(e)}`, 'error');
       setIsDropsLoggingIn(false);
     }
-  }, [isDropsLoggingIn, addToast, checkDropsAuth]);
+  }, [isDropsLoggingIn, addToast]);
+
+  // The overlay reports completion, so the outcome arrives as an event rather
+  // than as the resolution of the call that started it.
+  useEffect(() => {
+    const uns: Array<() => void> = [];
+    listen('drops-login-complete', () => {
+      setIsDropsLoggingIn(false);
+      addToast('Signed in — drops & channel points enabled', 'success');
+      void checkDropsAuth();
+    }).then((u) => uns.push(u));
+    listen<string>('drops-login-error', (e) => {
+      setIsDropsLoggingIn(false);
+      Logger.error('[TitleBar] Drops login failed:', e.payload);
+      addToast(`Drops sign-in failed: ${e.payload}`, 'error');
+    }).then((u) => uns.push(u));
+    return () => uns.forEach((u) => u());
+  }, [addToast, checkDropsAuth]);
 
   // Seed the progress badge from the bridge-cached automation status (a plugin
   // powering automation reports through it). Live updates arrive on the
@@ -511,28 +547,14 @@ const TitleBar = () => {
               readout beside the logo that opens the switcher on hover. */}
           <PlatformSwitcher />
 
-          {/* Grouped action icons */}
-          <div className="titlebar-icon-group">
-          {/* Home / Return — one dynamic toggle instead of a "Keep Browsing"
-              button in the player overlay and a "Return" button on the far side
-              of the Home header. Only show when a stream is playing, same rule
-              as the Compact View button: with nothing playing there is nothing
-              to browse away from or come back to. */}
-          {streamUrl && (
-            <Tooltip content={isHomeActive ? 'Return to Stream' : 'Keep Browsing'} delay={200}>
-              <button
-                onClick={() => {
-                  if (!isHomeActive) setHomeActiveTab(isAuthenticated ? 'following' : 'recommended');
-                  toggleHome();
-                }}
-                className="titlebar-icon-btn"
-                aria-label={isHomeActive ? 'Return to Stream' : 'Keep Browsing'}
-              >
-                {isHomeActive ? <Tv size={14} /> : <Home size={14} />}
-              </button>
-            </Tooltip>
-          )}
+          {/* Back / forward between the stream and everything else. Its own
+              pill rather than a slot in the cluster beside it: navigating is
+              not the same kind of thing as opening drops or settings, and
+              Cider draws that line the same way. */}
+          <NavFlipper />
 
+          {/* Grouped action icons */}
+          <div className="chrome-glaze titlebar-icon-group">
           {/* Drops Button with Inline Progress Badge */}
           <div
             className="relative"
@@ -558,23 +580,23 @@ const TitleBar = () => {
               // after a full sign-out, not only while the main account is in.
               const needsDropsAuth = dropsAuthed === false;
 
-              // Determine gift box color/shimmer class
+              // Determine the drops-button shimmer class
               // Silver = channel points only, Gold = drops only, Iridescent = both
-              let giftClass = '';
+              let automationShimmerClass = '';
               let title = 'Drops & Points';
 
               if (needsDropsAuth) {
                 title = 'Sign in to enable drops & channel points';
               } else if (isBothActive) {
-                giftClass = 'gift-shimmer-iridescent';
+                automationShimmerClass = 'automation-shimmer-iridescent';
                 title = 'Drops & Points (Both Active)';
               } else if (dropProgressActive) {
-                giftClass = 'gift-shimmer-gold';
+                automationShimmerClass = 'automation-shimmer-gold';
                 title = `Drops progress: ${progressPercent}%`;
               } else if (showCompleteBadge) {
                 title = 'Drops complete — all rewards earned for this game';
               } else if (channelPointsActive) {
-                giftClass = 'gift-shimmer-silver';
+                automationShimmerClass = 'automation-shimmer-silver';
                 title = 'Drops & Points (Channel Points Active)';
               }
 
@@ -610,10 +632,15 @@ const TitleBar = () => {
                       </span>
                     ) : showCompleteBadge ? (
                       // Done: every watch-time reward for the watched game is earned
-                      <Check size={14} className="text-green-400" />
+                      <Check size={17} className="text-green-400" />
                     ) : (
-                      // Normal Gift icon when not automation drops
-                      <Gift size={14} className={isAnyAutomationActive ? giftClass : ''} />
+                      // A package, not a gift box. What arrives is a reward you
+                      // earned by watching rather than one somebody handed you,
+                      // and the box reads as the thing itself rather than the
+                      // wrapping. Phosphor to match the badge and puzzle glyphs
+                      // beside it — a heavier stroke in one slot of a cluster
+                      // reads as a mistake once the others agree.
+                      <Package size={17} className={isAnyAutomationActive ? automationShimmerClass : ''} />
                     )}
                   </button>
                 </Tooltip>
@@ -706,7 +733,13 @@ const TitleBar = () => {
               onClick={() => setShowMarketplaceOverlay(true)}
               className="titlebar-icon-btn relative"
             >
-              <Store size={14} />
+              {/* A puzzle piece, not a shopfront. The button opens the plugin
+                  Marketplace and its badge counts plugin UPDATES, so "shop" was
+                  only half of what it does; a puzzle piece is the universal
+                  glyph for an extension and says the other half. Phosphor
+                  rather than Lucide for the thinner stroke, matching the window
+                  controls and the badge glyph already in this bar. */}
+              <PuzzlePiece size={17} />
               {pluginUpdateCount > 0 && (
                 <span className="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-amber-500 px-1 text-[9px] font-bold leading-none text-zinc-950">
                   {pluginUpdateCount}
@@ -732,7 +765,7 @@ const TitleBar = () => {
                     transition={{ duration: 0.15 }}
                     src={currentBadgeUrl}
                     alt="Badge"
-                    className="w-3.5 h-3.5 object-contain"
+                    className="w-[17px] h-[17px] object-contain"
                     draggable={false}
                   />
                 ) : (
@@ -742,7 +775,7 @@ const TitleBar = () => {
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                   >
-                    <Medal size={14} />
+                    <Medal size={17} />
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -758,7 +791,7 @@ const TitleBar = () => {
                 onClick={() => openSemiquincentennialShow()}
                 className="titlebar-icon-btn"
               >
-                <Sparkles size={14} />
+                <Sparkles size={17} />
               </button>
             </Tooltip>
           )}
@@ -769,7 +802,7 @@ const TitleBar = () => {
               onClick={() => openSettings()}
               className="titlebar-icon-btn settings-gear-btn"
             >
-              <Settings size={14} />
+              <Settings size={17} />
             </button>
           </Tooltip>
           </div>
@@ -821,14 +854,14 @@ const TitleBar = () => {
           <PluginTitleBarButtons />
 
           {/* Grouped action icons */}
-          <div className="titlebar-icon-group">
+          <div className="chrome-glaze titlebar-icon-group">
           {/* Whispers Button */}
           <Tooltip content="Whispers" delay={200}>
             <button
               onClick={() => setShowWhispersOverlay(true)}
               className="titlebar-icon-btn relative"
             >
-              <MessageCircle size={14} />
+              <MessageCircle size={17} />
               {/* Import indicator */}
               {whisperImportState.isImporting && (
                 <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-purple-500 rounded-full animate-pulse" />
@@ -846,10 +879,10 @@ const TitleBar = () => {
                 <img
                   src={currentUser.profile_image_url}
                   alt="Profile"
-                  className="w-[18px] h-[18px] rounded-full object-cover"
+                  className="w-[20px] h-[20px] rounded-full object-cover"
                 />
               ) : (
-                <User size={18} />
+                <User size={20} />
               )}
             </button>
           </Tooltip>
@@ -861,7 +894,72 @@ const TitleBar = () => {
                 onClick={toggleTheaterMode}
                 className={`titlebar-icon-btn ${isTheaterMode ? '!text-accent !bg-accent/15' : ''}`}
               >
-                <Proportions size={14} />
+                <Proportions size={17} />
+              </button>
+            </Tooltip>
+          )}
+
+          {/* Immersive: the picture's colour spills onto the letterbox. Sits
+              beside Compact View because both are choices about how the player
+              occupies the window rather than actions. Only offered while
+              something is playing, and only while sampling is on — otherwise
+              there is no colour for it to pour. */}
+          {streamUrl && settings?.media_glow !== false && (
+            <Tooltip content={settings?.immersive_glow ? 'Turn off immersive' : 'Immersive'} delay={200}>
+              <button
+                onClick={() => {
+                  const s = useAppStore.getState().settings;
+                  void useAppStore.getState().updateSettings({ ...s, immersive_glow: !s.immersive_glow });
+                }}
+                aria-pressed={settings?.immersive_glow === true}
+                className={`titlebar-icon-btn ${settings?.immersive_glow ? 'is-immersive' : ''}`}
+                aria-label="Immersive"
+              >
+                {/* On, the bulb lights up instead of taking the accent tint
+                    every other toggle uses. The tint says "this control is on";
+                    a lit bulb says what it turned on, and this is the one
+                    control in the bar whose entire subject is colour.
+
+                    The gradient has to live in the document for `url(#...)` to
+                    resolve, so it rides along in a zero-sized SVG rather than
+                    being a background the stroke cannot use. Rendered only
+                    while the mode is on, so it costs nothing otherwise. */}
+                {settings?.immersive_glow && (
+                  <svg
+                    width="0"
+                    height="0"
+                    aria-hidden="true"
+                    focusable="false"
+                    style={{ position: 'absolute' }}
+                  >
+                    <defs>
+                      {/* User space, not the default object bounding box: the
+                          icon is three separate paths, and per-object units
+                          would give the bulb, the collar and the base a full
+                          rainbow each instead of one running across the whole
+                          thing. Coordinates are the icon's own 24-unit box. */}
+                      <linearGradient
+                        id="sn-bulb-rainbow"
+                        className="sn-bulb-rainbow"
+                        gradientUnits="userSpaceOnUse"
+                        x1="4"
+                        y1="22"
+                        x2="20"
+                        y2="2"
+                      >
+                        <stop offset="0%" />
+                        <stop offset="25%" />
+                        <stop offset="50%" />
+                        <stop offset="75%" />
+                        <stop offset="100%" />
+                      </linearGradient>
+                    </defs>
+                  </svg>
+                )}
+                <Lightbulb
+                  size={17}
+                  color={settings?.immersive_glow ? 'url(#sn-bulb-rainbow)' : undefined}
+                />
               </button>
             </Tooltip>
           )}
@@ -874,7 +972,7 @@ const TitleBar = () => {
                 aria-pressed={keepOnTop}
                 className={`titlebar-icon-btn ${keepOnTop ? '!text-accent !bg-accent/15' : ''}`}
               >
-                {keepOnTop ? <PinOff size={14} /> : <Pin size={14} />}
+                {keepOnTop ? <PinOff size={17} /> : <Pin size={17} />}
               </button>
             </Tooltip>
           )}

@@ -194,19 +194,26 @@ interface StepStatus {
     mainAuthenticated: boolean;
 }
 
-interface DropsDeviceCodeInfo {
-    user_code: string;
-    verification_uri: string;
-    device_code: string;
-    interval: number;
-    expires_in: number;
-}
+// The overlay reports the outcome on events, so a caller that needs to await it
+// builds its promise from them.
+const waitForDropsLogin = (): Promise<void> =>
+    new Promise((resolve, reject) => {
+        const uns: Array<() => void> = [];
+        const settle = (fn: () => void) => {
+            uns.forEach((u) => u());
+            fn();
+        };
+        void listen('drops-login-complete', () => settle(resolve)).then((u) => uns.push(u));
+        void listen<string>('drops-login-error', (e) =>
+            settle(() => reject(new Error(String(e.payload)))),
+        ).then((u) => uns.push(u));
+    });
 
 const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
     const [currentStep, setCurrentStep] = useState(0);
     const [isExtracting, setIsExtracting] = useState(false);
     const [isAuthenticating, setIsAuthenticating] = useState(false);
-    const [dropsDeviceCode, setDropsDeviceCode] = useState<DropsDeviceCodeInfo | null>(null);
+    const [dropsAuthUrl, setDropsAuthUrl] = useState<string | null>(null);
     const [status, setStatus] = useState<StepStatus>({
         componentsInstalled: null,
         extractionError: null,
@@ -328,28 +335,17 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
         setIsAuthenticating(true);
         setError(null);
         try {
-            const deviceInfo = await invoke('start_drops_device_flow') as DropsDeviceCodeInfo;
-            setDropsDeviceCode(deviceInfo);
+            const url = await invoke<string>('start_drops_login');
+            setDropsAuthUrl(url);
 
-            // The mobile login WebView COVERS the app, so the code has to be on
-            // the clipboard before it opens or there is no way to read it off
-            // the card underneath.
-            if (IS_MOBILE) {
-                try {
-                    await navigator.clipboard.writeText(deviceInfo.user_code);
-                } catch {
-                    // The code card is still on screen behind the overlay.
-                }
-            }
+            // Subscribed BEFORE the window opens. An account that has already
+            // authorized is redirected the moment the page loads, and a listener
+            // attached afterwards would miss it.
+            const poll = waitForDropsLogin().then(() => 'done' as const);
 
-            await openDropsVerificationWindow(deviceInfo.verification_uri);
+            await openDropsVerificationWindow(url);
 
             try {
-                const poll = invoke('poll_drops_token', {
-                    deviceCode: deviceInfo.device_code,
-                    interval: deviceInfo.interval,
-                    expiresIn: deviceInfo.expires_in,
-                }).then(() => 'done' as const);
 
                 // Android only: the login overlay is a native view the user can
                 // close with its X, and the poll above then runs on for the
@@ -376,7 +372,7 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                         );
                     });
                     if (outcome === 'cancelled') {
-                        setDropsDeviceCode(null);
+                        setDropsAuthUrl(null);
                         return;
                     }
                 } else {
@@ -384,7 +380,7 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                 }
 
                 setStatus(prev => ({ ...prev, dropsAuthenticated: true }));
-                setDropsDeviceCode(null);
+                setDropsAuthUrl(null);
                 addToast('Drops login successful!', 'success');
 
                 // Desktop-only: there is no separate window to raise on a phone,
@@ -406,7 +402,7 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
             } catch (pollError) {
                 Logger.error('Failed to complete drops login:', pollError);
                 setError(`Login failed: ${pollError}`);
-                setDropsDeviceCode(null);
+                setDropsAuthUrl(null);
             }
         } catch (e) {
             Logger.error('Failed to start drops login:', e);
@@ -799,23 +795,24 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                                 : 'Sign in to track Twitch Drops, watch your inventory, and auto-claim rewards.'}
                         </p>
 
-                        {isAuthenticating && dropsDeviceCode && (
+                        {isAuthenticating && (
                             <div className="glass-panel rounded-xl p-6 mb-6 w-full max-w-sm">
-                                <p className="text-sm text-textSecondary mb-3">Enter this code on Twitch</p>
-                                <div className="text-4xl font-mono font-bold text-accent tracking-[0.3em] py-2 tabular-nums">
-                                    {dropsDeviceCode.user_code}
-                                </div>
+                                <p className="text-sm text-textSecondary">
+                                    Approve the request on Twitch to turn on drops and channel points.
+                                </p>
                                 <div className="pt-3 border-t border-borderSubtle mt-3 flex items-center justify-center gap-2 text-xs text-textMuted">
                                     <Loader2 size={13} className="animate-spin" />
                                     <span>Waiting for authorization</span>
                                 </div>
-                                <button
-                                    onClick={() => openDropsVerificationWindow(dropsDeviceCode.verification_uri)}
-                                    className="mt-3 inline-flex items-center justify-center gap-1.5 w-full text-xs text-textSecondary hover:text-textPrimary transition-colors"
-                                >
-                                    <ExternalLink size={12} />
-                                    Reopen sign-in window
-                                </button>
+                                {dropsAuthUrl && (
+                                    <button
+                                        onClick={() => openDropsVerificationWindow(dropsAuthUrl)}
+                                        className="mt-3 inline-flex items-center justify-center gap-1.5 w-full text-xs text-textSecondary hover:text-textPrimary transition-colors"
+                                    >
+                                        <ExternalLink size={12} />
+                                        Reopen sign-in window
+                                    </button>
+                                )}
                             </div>
                         )}
 
@@ -1406,7 +1403,17 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                                 className={`flex items-center justify-center gap-2 rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed ${
                                     primaryAction.variant === 'twitch'
                                         ? 'bg-[#9146FF] text-white active:opacity-90'
-                                        : 'glass-button text-textPrimary'
+                                        // `no-live-blur`: this sits on the
+                                        // wizard's flat panel, so the button's
+                                        // backdrop filter has nothing varied to
+                                        // sample -- it is a live compositing
+                                        // layer bought for nothing. It also sits
+                                        // ~16px under the looping swipe hint,
+                                        // well inside the region an 8px backdrop
+                                        // blur pulls from, so every frame of that
+                                        // loop was dirtying this button's
+                                        // backdrop.
+                                        : 'glass-button no-live-blur text-textPrimary'
                                 } ${IS_MOBILE ? 'w-full py-4 text-base' : 'px-5 py-2.5 text-sm'}`}
                             >
                                 {primaryAction.variant === 'twitch' &&

@@ -3,6 +3,7 @@ import { Film, Play, Scissors, Sparkles, Upload, Users } from 'lucide-react';
 import { TwitchVerifiedMark } from './ui/TwitchGlyph';
 import { VodProgressBar, VodRecordingBadge } from './VodCardMarks';
 import { VOD_FALLBACK_THUMB, type MediaKind } from '../utils/vodProgress';
+import { glowThumbProps } from '../utils/mediaGlow';
 import type { VodProgressSummary } from '../types';
 
 /**
@@ -110,6 +111,10 @@ export function MediaCard({
           loading="lazy"
           src={thumbnailUrl}
           alt=""
+          // The card takes its colour from its own thumbnail. Same helper the
+          // hand-rolled live cards in Home use, so there is one path rather
+          // than two that can drift.
+          {...glowThumbProps(thumbnailUrl)}
           onError={(e) => {
             e.currentTarget.src = VOD_FALLBACK_THUMB;
           }}

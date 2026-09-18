@@ -11,6 +11,7 @@ import { Heart, HeartBreak, ArrowLeft, X as XIcon } from 'phosphor-react';
 import { useAppStore } from '../stores/AppStore';
 import { streamProvider } from '../utils/streamProvider';
 import { makeKey } from '../utils/providerKey';
+import { useMediaGlow } from '../utils/mediaGlow';
 import { canGridProvider, gridRefusal } from '../types/providers';
 import { platformTerms } from '../utils/platformTerms';
 import { useContextMenuStore } from '../stores/contextMenuStore';
@@ -41,6 +42,8 @@ import {
   resolveAudioBoost,
   audioBoostFaderDefs,
   audioBoostResetPatch,
+  AUDIO_GRAPH_SUPPORTED,
+  AUDIO_GRAPH_REFUSAL,
 } from '../utils/audioBoost';
 import type { AudioBoostSettings, MutedRange } from '../types';
 import { Fader, Toggle } from './AudioBoostFaders';
@@ -78,9 +81,23 @@ import { useVolumeOsd } from '../hooks/useVolumeOsd';
 // control. Module-level so the inject and sync effects share one copy.
 function paintAudioBoostButton(btn: Element | null, on: boolean): void {
   if (!btn) return;
+  const tip = btn.querySelector('.plyr__tooltip');
+
+  // Shown but inert where the audio graph cannot run, the same way the overlay
+  // buttons refuse a platform they cannot serve. A control that simply vanishes
+  // reads as a missing feature; a dimmed one with the reason reads as a limit.
+  if (!AUDIO_GRAPH_SUPPORTED) {
+    btn.classList.remove('is-active');
+    btn.setAttribute('aria-pressed', 'false');
+    btn.setAttribute('aria-disabled', 'true');
+    (btn as HTMLElement).style.opacity = '0.4';
+    (btn as HTMLElement).style.cursor = 'default';
+    if (tip) tip.textContent = 'Audio Boost: unavailable on macOS';
+    return;
+  }
+
   btn.classList.toggle('is-active', on);
   btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-  const tip = btn.querySelector('.plyr__tooltip');
   if (tip) tip.textContent = on ? 'Audio Boost: On' : 'Audio Boost: Off';
 }
 
@@ -200,6 +217,66 @@ const VideoPlayer = () => {
   // badge, clipping, drops, entitlement and the low-latency origin are all
   // Twitch-contractual and stay gated on this.
   const isTwitchStream = streamProvider(currentStream) === 'twitch';
+
+  // Tint this container from whatever is playing in it. Composite key, never a
+  // bare login: the same channel on two providers is two different streams.
+  // Keyed whenever something is playing. This used to require `currentStream`,
+  // which is not guaranteed for every playback path — and with no key the
+  // sampler disables itself, so the main player was never sampled at all while
+  // MultiNook (keyed on its slot id, always present) worked fine.
+  const glowKey = streamUrl
+    ? currentStream
+      ? makeKey(streamProvider(currentStream), currentStream.user_login ?? currentStream.user_name ?? '')
+      : 'player:main'
+    : null;
+
+  // Immersive mode needs the bands, so it needs sampling on at all. Turning
+  // the glow off turns this off with it rather than leaving a dead toggle.
+  const glowOn = settings?.media_glow !== false;
+  const immersive = glowOn && settings?.immersive_glow === true && !!streamUrl;
+
+  // One-shot report of what immersive mode ACTUALLY resolved to in the live
+  // app. Reasoning about this from outside has been wrong repeatedly: labs use
+  // a bare <video>, the real player is Plyr, and the difference is exactly
+  // where the bug lives. This logs the state that decides whether anything can
+  // be seen, so the answer comes from the app rather than from a guess.
+  useEffect(() => {
+    if (!immersive) return;
+    const t = setTimeout(() => {
+      const host = containerRef.current;
+      if (!host) return;
+      const cs = getComputedStyle(host);
+      const band = host.querySelector('.sn-immersive--top') as HTMLElement | null;
+      const wrap = host.querySelector('.plyr__video-wrapper') as HTMLElement | null;
+      const plyr = host.querySelector('.plyr--video') as HTMLElement | null;
+      if (!band) {
+        Logger.warn('[Immersive] band is NOT in the DOM — the mode rendered false');
+        return;
+      }
+      const r = band.getBoundingClientRect();
+      const paneR = host.getBoundingClientRect();
+      const frame = host.querySelector('.sn-immersive-frame') as HTMLElement | null;
+      // The band's height is supposed to BE the letterbox, worked out in CSS
+      // from the aspect the sampler publishes. When those two disagree the
+      // container query did not apply and the light is back to a painted bar,
+      // which is invisible from a screenshot but obvious from two numbers.
+      const letterbox = frame ? frame.getBoundingClientRect().top - paneR.top : -1;
+      Logger.warn(
+        `[Immersive] data-immersive=${host.dataset.immersive} ` +
+          `bandH=${Math.round(r.height)} letterbox=${Math.round(letterbox)} ` +
+          `${Math.abs(r.height - letterbox) < 2 ? 'MATCH' : 'MISMATCH (container query did not apply)'} ` +
+          `arn=${cs.getPropertyValue('--sn-video-arn').trim() || '(unset)'} ` +
+          `segs=[${Array.from({ length: 8 }, (_, i) => cs.getPropertyValue(`--glow-t${i}`).trim() || '-').join(',')}] ` +
+          `plyrBg=${plyr ? getComputedStyle(plyr).backgroundColor : '(no .plyr--video)'} ` +
+          `wrapBg=${wrap ? getComputedStyle(wrap).backgroundColor : '(no wrapper)'}`,
+      );
+    }, 5000);
+    return () => clearTimeout(t);
+  }, [immersive]);
+  // Only immersive mode needs the decoder-driven rate. With the strip off
+  // nothing on screen changes faster than the card rim, so the sampler stays
+  // on its once-a-second path and costs what it always did.
+  useMediaGlow(videoRef, containerRef, glowKey, glowOn, immersive);
   // Platform vocabulary. On YouTube the free relationship is "Subscribe" and the
   // paid one is "Join", the inverse of Twitch's words, so a button labelled
   // "Subscribe" there would point a viewer at the paid page.
@@ -348,6 +425,8 @@ const VideoPlayer = () => {
       // Click opens the in-player popover (which holds the on/off toggle plus
       // all the faders), so everything is adjustable on the fly.
       btn.addEventListener('click', () => {
+        // The popover only holds controls for a graph this shell cannot build.
+        if (!AUDIO_GRAPH_SUPPORTED) return;
         setAudioPanelOpen((o) => !o);
       });
 
@@ -2652,6 +2731,7 @@ const VideoPlayer = () => {
     <div
       ref={containerRef}
       className="w-full h-full flex items-center justify-center video-player-container group"
+      data-immersive={immersive ? 'true' : undefined}
       style={{
         minHeight: '300px',
         position: 'relative',
@@ -2667,6 +2747,18 @@ const VideoPlayer = () => {
         }
       }}
     >
+      {/* The picture's own light, landing on the letterbox. Rendered before
+          the video and left at z-index 0 so it paints over the container's
+          background but under the picture. */}
+      {immersive && (
+        <div className="sn-immersive-clip" aria-hidden="true">
+          <div className="sn-immersive-frame">
+            <div className="sn-immersive sn-immersive--top" />
+            <div className="sn-immersive sn-immersive--bottom" />
+          </div>
+        </div>
+      )}
+
       <video
         ref={videoRef}
         className="w-full h-full"
@@ -2674,7 +2766,10 @@ const VideoPlayer = () => {
           width: '100%',
           height: '100%',
           objectFit: 'contain',
-          ...letterboxStyle,
+          // Deliberately NOT letterboxStyle. `object-fit: contain` only leaves
+          // the bars transparent if the element itself paints nothing there,
+          // and the container already paints the identical background — so
+          // this looks the same and lets the immersive layers show through.
         }}
         playsInline
         onLoadedMetadata={(e) => {
@@ -3131,13 +3226,16 @@ const VideoPlayer = () => {
           {/* Identify Song Button — fingerprints a few seconds of player audio
               and names the track (the /song chat command does the same). */}
           {overlayButtonOn('song') && (
-            <Tooltip content="Identify song" side="bottom">
+            <Tooltip
+              content={AUDIO_GRAPH_SUPPORTED ? 'Identify song' : AUDIO_GRAPH_REFUSAL}
+              side="bottom"
+            >
             <button
               onClick={() => handleIdentifySong()}
-              disabled={isIdentifyingSong}
+              disabled={isIdentifyingSong || !AUDIO_GRAPH_SUPPORTED}
               className={`flex items-center justify-center p-2 glass-button rounded-lg ${
                 isIdentifyingSong ? 'cursor-wait opacity-70' : ''
-              }`}
+              } ${!AUDIO_GRAPH_SUPPORTED ? 'opacity-40 cursor-default' : ''}`}
               style={{ backdropFilter: 'blur(16px)' }}
             >
               {isIdentifyingSong ? (
