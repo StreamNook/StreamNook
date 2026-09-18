@@ -107,12 +107,9 @@ export default defineConfig({
           'vendor-hls': ['hls.js', 'plyr'],
           'vendor-motion': ['framer-motion'],
           'vendor-tauri': [
-            '@tauri-apps/api', 
-            '@tauri-apps/plugin-shell', 
-            '@tauri-apps/plugin-deep-link', 
-            '@tauri-apps/plugin-clipboard-manager', 
-            '@tauri-apps/plugin-dialog', 
-            '@tauri-apps/plugin-notification'
+            '@tauri-apps/api',
+            '@tauri-apps/plugin-shell',
+            '@tauri-apps/plugin-dialog',
           ],
         }
       }

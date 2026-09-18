@@ -637,7 +637,7 @@ function UsernameWithCosmetics({
 
 /** Timeout durations for the hover dock: settings.moderation.timeout_presets
  *  (seconds) or the classic 1s / 10m / 1h / 24h. */
-export function formatTimeoutLabel(seconds: number): string {
+function formatTimeoutLabel(seconds: number): string {
   if (seconds % 604800 === 0 && seconds >= 604800) return `${seconds / 604800}w`;
   if (seconds % 86400 === 0 && seconds >= 86400) return `${seconds / 86400}d`;
   if (seconds % 3600 === 0 && seconds >= 3600) return `${seconds / 3600}h`;
