@@ -34,7 +34,6 @@ import { usemultiNookStore } from './stores/multiNookStore';
 import LoadingWidget from './components/LoadingWidget';
 import ToastManager from './components/ToastManager';
 import DeviceLoginOverlay from './components/DeviceLoginOverlay';
-import SemiquincentennialShow from './components/SemiquincentennialShow';
 import EntitlementUnlockNote from './components/EntitlementUnlockNote';
 import AnnouncementsBanner from './components/AnnouncementsBanner';
 import { TooltipManager } from './components/ui/TooltipManager';
@@ -2339,7 +2338,6 @@ function App() {
         </Suspense>
       )}
       {settings.setup_complete && !showSetupWizard && <AnnouncementsBanner />}
-      <SemiquincentennialShow />
       <ToastManager />
       <DeviceLoginOverlay />
       <EntitlementUnlockNote />

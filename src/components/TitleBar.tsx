@@ -1,5 +1,5 @@
 import { Window } from '@tauri-apps/api/window';
-import { User, Settings, Proportions, MessageCircle, Pickaxe, Clock, Tv, Download, LogIn, Sparkles, Check, Pin, PinOff, Lightbulb } from 'lucide-react';
+import { User, Settings, Proportions, MessageCircle, Pickaxe, Clock, Tv, Download, LogIn, Check, Pin, PinOff, Lightbulb } from 'lucide-react';
 import { Minus, X, CornersOut, CornersIn, ArrowsOut, ArrowsIn, Medal, Package, PuzzlePiece } from 'phosphor-react';
 import { IS_MAC, MAC_TRAFFIC_LIGHT_INSET_PX } from '../utils/platform';
 import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
@@ -25,7 +25,6 @@ import { Logger } from '../utils/logger';
 import { useVisibleInterval } from '../utils/useVisibleInterval';
 import { handleTitleBarMouseDown } from '../utils/titleBarDrag';
 import { Tooltip } from './ui/Tooltip';
-import { isSemiquincentennialShowDay, openSemiquincentennialShow } from '../services/semiquincentennialEvent';
 import PluginTitleBarButtons from '../plugins-ui/PluginTitleBarButtons';
 import { usePluginUpdates } from '../stores/pluginUpdatesStore';
 
@@ -783,18 +782,6 @@ const TitleBar = () => {
           </Tooltip>
 
 
-
-          {/* Fireworks show reopen, only on the Fourth itself */}
-          {isSemiquincentennialShowDay() && (
-            <Tooltip content="Fireworks show" delay={200}>
-              <button
-                onClick={() => openSemiquincentennialShow()}
-                className="titlebar-icon-btn"
-              >
-                <Sparkles size={17} />
-              </button>
-            </Tooltip>
-          )}
 
           {/* Settings */}
           <Tooltip content="Settings" delay={200}>
