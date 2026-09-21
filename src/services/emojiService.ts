@@ -122,6 +122,31 @@ export function emojiToCodepoint(emoji: string): string {
     return codepoints.join('-');
 }
 
+export type EmojiStyle = 'system' | 'apple' | 'google' | 'twitter' | 'facebook';
+
+const VENDOR_EMOJI_CDN: Record<string, string> = {
+    apple: 'https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/img/apple/64',
+    google: 'https://cdn.jsdelivr.net/npm/emoji-datasource-google@15.1.2/img/google/64',
+    facebook: 'https://cdn.jsdelivr.net/npm/emoji-datasource-facebook@15.1.2/img/facebook/64',
+};
+
+/**
+ * The image for an emoji in a chosen vendor set, or null for the system style
+ * (draw the glyph) or an unknown style. Twitter renders from Twemoji's SVG,
+ * whose filenames drop FE0F; the raster sets keep it.
+ */
+export function vendorEmojiUrl(emoji: string, style: string): string | null {
+    if (style === 'system') return null;
+    const cps = [...emoji].map((c) => c.codePointAt(0)!);
+    if (style === 'twitter') {
+        const cp = cps.filter((c) => c !== 0xfe0f).map((c) => c.toString(16)).join('-');
+        return `https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/svg/${cp}.svg`;
+    }
+    const base = VENDOR_EMOJI_CDN[style];
+    if (!base) return null;
+    return `${base}/${cps.map((c) => c.toString(16)).join('-')}.png`;
+}
+
 /**
  * Gets the Apple emoji image URL for a given emoji
  */

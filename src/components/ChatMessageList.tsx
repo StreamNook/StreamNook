@@ -593,10 +593,17 @@ const ChatMessageList = memo(function ChatMessageList({
         '--sn-emote-scale': emoteScale,
         '--sn-emote-margin': `${emoteMargin}rem`,
         '--sn-backfill-opacity': Math.max(0.3, Math.min(1, (chatDesign?.backfill_opacity ?? 100) / 100)),
+        '--sn-badge-scale': Math.max(0.5, Math.min(2.5, chatDesign?.badge_scale ?? 1)),
       } as React.CSSProperties}
     >
-      {/* Messages container with native virtualization - pt-10 for header */}
-      <div ref={contentRef} className={`flex flex-col min-h-full justify-end pt-10${chatDesign?.alternating_backgrounds ? ' chat-striped' : ''}`}>
+      {/* Messages container with native virtualization - pt-10 for header.
+          data-entrance drives a CSS-only arrival animation on live rows
+          (history rows carry .is-backfill and are excluded by the selector). */}
+      <div
+        ref={contentRef}
+        className={`flex flex-col min-h-full justify-end pt-10${chatDesign?.alternating_backgrounds ? ' chat-striped' : ''}`}
+        data-entrance={chatDesign?.message_entrance && chatDesign.message_entrance !== 'none' ? chatDesign.message_entrance : undefined}
+      >
         {messages.map((message, index) => {
           const messageId = getMessageId(message);
 

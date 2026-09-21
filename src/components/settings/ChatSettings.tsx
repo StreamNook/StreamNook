@@ -335,6 +335,20 @@ const HiddenNameEditor = ({
   );
 };
 
+/** Add-on badge services, by the lowercase id each resolved badge carries. */
+const BADGE_PROVIDERS: { id: string; label: string }[] = [
+  { id: 'streamnook', label: 'StreamNook' },
+  { id: '7tv', label: '7TV' },
+  { id: 'ffz', label: 'FFZ' },
+  { id: 'bttv', label: 'BTTV' },
+  { id: 'chatterino', label: 'Chatterino' },
+  { id: 'homies', label: 'Homies' },
+  { id: 'moltorino', label: 'Moltorino' },
+  { id: 'chatsen', label: 'Chatsen' },
+  { id: 'chatty', label: 'Chatty' },
+  { id: 'dankchat', label: 'DankChat' },
+];
+
 const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {}) => {
   const { settings, updateSettings } = useAppStore();
   // Phone-shell preferences (see mobile/phonePrefs.ts); only read on the phone.
@@ -384,7 +398,27 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     pinned_start_collapsed: stored?.pinned_start_collapsed ?? true,
     polls_start_collapsed: stored?.polls_start_collapsed ?? false,
     name_color_adjustment: (stored?.name_color_adjustment ?? 'hsl_loop') as 'off' | 'hsl_loop',
+    show_badges: stored?.show_badges ?? true,
+    badge_scale: stored?.badge_scale ?? 1,
+    show_third_party_badges: stored?.show_third_party_badges ?? true,
+    hidden_badge_providers: stored?.hidden_badge_providers ?? [],
+    message_entrance: (stored?.message_entrance ?? 'none') as 'none' | 'fade' | 'slide' | 'rise',
+    emoji_style: (stored?.emoji_style ?? 'apple') as 'system' | 'apple' | 'google' | 'twitter' | 'facebook',
+    show_personal_emotes: stored?.show_personal_emotes ?? true,
+    giant_emote_align: (stored?.giant_emote_align ?? 'center') as 'left' | 'center' | 'right' | 'inline',
+    show_avatars: stored?.show_avatars ?? true,
+    show_at_sign: stored?.show_at_sign ?? false,
+    reply_style: (stored?.reply_style ?? 'full') as 'full' | 'mention' | 'off',
+    link_color: stored?.link_color ?? '',
+    link_underline: stored?.link_underline ?? true,
   };
+  const badgeProviderHidden = (id: string) => cd.hidden_badge_providers.includes(id);
+  const toggleBadgeProvider = (id: string) =>
+    setDesign({
+      hidden_badge_providers: badgeProviderHidden(id)
+        ? cd.hidden_badge_providers.filter((k) => k !== id)
+        : [...cd.hidden_badge_providers, id],
+    });
 
   const setDesign = (patch: Partial<typeof cd>) => {
     updateSettings({
@@ -1068,6 +1102,97 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
 
         <SettingsRow
+          title="How a new message arrives"
+          description="A short fade or slide as each message lands. History loaded on join never animates, and it is skipped when motion is reduced."
+        >
+          <SegmentedSelect<'none' | 'fade' | 'slide' | 'rise'>
+            value={cd.message_entrance}
+            onChange={(message_entrance) => setDesign({ message_entrance })}
+            options={[
+              { value: 'none', label: 'Instant' },
+              { value: 'fade', label: 'Fade' },
+              { value: 'slide', label: 'Slide' },
+              { value: 'rise', label: 'Rise' },
+            ]}
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          title="Show badges"
+          description="The platform's own badges next to names: moderator, subscriber, VIP and the rest."
+          control={<Toggle enabled={cd.show_badges} onChange={() => setDesign({ show_badges: !cd.show_badges })} />}
+        />
+
+        <SettingsRow
+          title="Badge size"
+          description="How big badges draw, relative to the text."
+          control={
+            <div className="flex items-center gap-2">
+              <input
+                type="range"
+                min={0.5}
+                max={2.5}
+                step={0.05}
+                value={cd.badge_scale}
+                disabled={!cd.show_badges && !cd.show_third_party_badges}
+                onChange={(e) => setDesign({ badge_scale: Number(e.target.value) })}
+                className="w-32 accent-accent disabled:opacity-40"
+              />
+              <span className="text-[12px] text-textMuted tabular-nums w-10 text-right">{cd.badge_scale.toFixed(2)}x</span>
+            </div>
+          }
+        />
+
+        <SettingsRow
+          title="Add-on badges"
+          description="Badges from 7TV, FFZ, Chatterino, Homies and the other badge services, plus StreamNook membership badges."
+          control={
+            <Toggle
+              enabled={cd.show_third_party_badges}
+              onChange={() => setDesign({ show_third_party_badges: !cd.show_third_party_badges })}
+            />
+          }
+        />
+
+        {cd.show_third_party_badges && (
+          <SettingsRow
+            title="Badge services"
+            description="Turn individual badge services off. Lit means shown."
+          >
+            <div className="flex flex-wrap gap-1.5">
+              {BADGE_PROVIDERS.map((p) => {
+                const on = !badgeProviderHidden(p.id);
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => toggleBadgeProvider(p.id)}
+                    className={`px-2.5 py-1 rounded-full text-[12px] font-medium transition-colors ${
+                      on ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textPrimary' : 'glass-button-static text-textMuted'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
+          </SettingsRow>
+        )}
+
+        <SettingsRow
+          title="Profile pictures beside names"
+          description="On platforms that send one (YouTube, TikTok), the chatter's picture leads their message."
+          control={<Toggle enabled={cd.show_avatars} onChange={() => setDesign({ show_avatars: !cd.show_avatars })} />}
+        />
+
+        <SettingsRow
+          title="@ before names"
+          description="Writes every name as @name."
+          control={<Toggle enabled={cd.show_at_sign} onChange={() => setDesign({ show_at_sign: !cd.show_at_sign })} />}
+        />
+
+        <SettingsRow
           title="Show timestamps"
           description="Shows the time each message was sent, next to the name."
           control={
@@ -1235,6 +1360,21 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             tooltip="Reply thread color"
           />
         </SettingsRow>
+
+        <SettingsRow
+          title="How replies show their parent"
+          description="A context line above the message, an @name at the start of it, or nothing."
+        >
+          <SegmentedSelect<'full' | 'mention' | 'off'>
+            value={cd.reply_style}
+            onChange={(reply_style) => setDesign({ reply_style })}
+            options={[
+              { value: 'full', label: 'Context line' },
+              { value: 'mention', label: '@name' },
+              { value: 'off', label: 'Off' },
+            ]}
+          />
+        </SettingsRow>
       </SettingsSection>
 
       <SettingsSection
@@ -1278,6 +1418,24 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
 
         <SettingsRow
+          title="Link color"
+          description="Leave it on the default to follow the theme."
+        >
+          <ColorSwatch
+            value={cd.link_color || '#8ab4ff'}
+            defaultValue=""
+            onChange={(color) => setDesign({ link_color: color })}
+            tooltip="Link color"
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          title="Underline links"
+          description="Off leaves links colored but not underlined."
+          control={<Toggle enabled={cd.link_underline} onChange={() => setDesign({ link_underline: !cd.link_underline })} />}
+        />
+
+        <SettingsRow
           title="Trusted sites"
           description="Links from trusted sites expand into a preview on their own; every other link shows a Load preview button instead."
           help="The shield on a Load preview button trusts that site from chat. Popular sites are trusted out of the box; add or remove your own here."
@@ -1294,6 +1452,36 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         label="Emotes"
         description="How big emotes are, how they animate, and how much they grow when you hover one."
       >
+        <SettingsRow
+          title="Emoji style"
+          description="Which set draws the emoji in messages. System uses your device's own."
+        >
+          <Dropdown<'system' | 'apple' | 'google' | 'twitter' | 'facebook'>
+            value={cd.emoji_style}
+            onChange={(emoji_style) => setDesign({ emoji_style })}
+            className="w-full"
+            ariaLabel="Emoji style"
+            options={[
+              { value: 'apple', label: 'Apple' },
+              { value: 'google', label: 'Google' },
+              { value: 'twitter', label: 'Twitter' },
+              { value: 'facebook', label: 'Facebook' },
+              { value: 'system', label: 'System' },
+            ]}
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          title="7TV personal emotes"
+          description="Emotes from a chatter's own personal set. Off shows the text they typed instead."
+          control={
+            <Toggle
+              enabled={cd.show_personal_emotes}
+              onChange={() => setDesign({ show_personal_emotes: !cd.show_personal_emotes })}
+            />
+          }
+        />
+
         <SettingsRow
           title="Animate emotes"
           description="Play animated emotes always, only while you hover a message, or never (first frame). Never is the lightest on the GPU in a fast chat."
@@ -1637,6 +1825,24 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
           }
         />
+
+        {cd.giant_emotes && (
+          <SettingsRow
+            title="Where the giant emote sits"
+            description="Under the message on the left, centered or on the right, or kept in the text at its normal size."
+          >
+            <SegmentedSelect<'left' | 'center' | 'right' | 'inline'>
+              value={cd.giant_emote_align}
+              onChange={(giant_emote_align) => setDesign({ giant_emote_align })}
+              options={[
+                { value: 'left', label: 'Left' },
+                { value: 'center', label: 'Center' },
+                { value: 'right', label: 'Right' },
+                { value: 'inline', label: 'In the text' },
+              ]}
+            />
+          </SettingsRow>
+        )}
 
         <SettingsRow
           title="7TV emote update notices"

@@ -283,6 +283,40 @@ export interface ChatDesignSettings {
   // lighter on a dark theme (darker on a light one) until it stands out,
   // keeping the hue; 'off' shows colors exactly as set.
   name_color_adjustment?: 'off' | 'hsl_loop';
+  // --- Badges ---
+  // Native platform badges (Twitch, Kick, YouTube). Default true.
+  show_badges?: boolean;
+  // Badge size multiplier, 0.5-2.5. Default 1.
+  badge_scale?: number;
+  // 7TV, FFZ, Chatterino and the other add-on badges. Default true.
+  show_third_party_badges?: boolean;
+  // Add-on badge providers to leave out (lowercase ids: 'streamnook', '7tv',
+  // 'ffz', 'bttv', 'chatterino', 'homies', 'moltorino', 'chatsen', 'chatty',
+  // 'dankchat'). Default none.
+  hidden_badge_providers?: string[];
+  // How a new message arrives: none (default), fade, slide, rise. History
+  // rows loaded on join never animate.
+  message_entrance?: 'none' | 'fade' | 'slide' | 'rise';
+  // Which emoji set draws emoji in messages. Default 'apple'; 'system' uses
+  // the device font.
+  emoji_style?: 'system' | 'apple' | 'google' | 'twitter' | 'facebook';
+  // Show 7TV personal emotes (off renders their text). Default true.
+  show_personal_emotes?: boolean;
+  // Where a gigantified emote sits under the message; 'inline' keeps it in
+  // the text at normal size. Default 'center'.
+  giant_emote_align?: 'left' | 'center' | 'right' | 'inline';
+  // Profile pictures beside names on platforms that send them (YouTube,
+  // TikTok). Default true.
+  show_avatars?: boolean;
+  // Put an @ before every name. Default false.
+  show_at_sign?: boolean;
+  // How a reply shows its parent: a context line (default), an @name in the
+  // body, or nothing.
+  reply_style?: 'full' | 'mention' | 'off';
+  // Link color (hex); empty uses the theme's link color. Default empty.
+  link_color?: string;
+  // Underline links. Default true.
+  link_underline?: boolean;
   // How per-message mod actions are offered in the chat hover dock:
   // 'buttons' = the classic click buttons (delete/timeout/ban), 'drag' = the
   // grab handle that lifts a chatter into action buckets, 'both' = offer both.

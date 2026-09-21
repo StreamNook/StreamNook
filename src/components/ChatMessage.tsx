@@ -39,6 +39,7 @@ import { chatterId, chatterProvider } from '../utils/chatterIdentity';
 import type { ProviderId } from '../types/providers';
 import { getDisplayedName, getColorOverride } from '../utils/userChatOverrides';
 import { useNameColorAdjust } from '../hooks/useNameColor';
+import { vendorEmojiUrl } from '../services/emojiService';
 import { CHANNEL_SPECIFIC_TWITCH_BADGES, orderTwitchBadges } from '../utils/badgeOrder';
 import { LinkPreviewCard } from './chat/LinkPreviewCard';
 import { SongCard } from './chat/SongCard';
@@ -98,6 +99,8 @@ interface EmoteSegment {
   isZeroWidth?: boolean;
   /** Modifier bitmask; present only on modifier emotes (FFZ or BetterTTV) */
   modifierFlags?: number;
+  /** A 7TV personal emote (the sender's own set, not the channel's). */
+  isPersonal?: boolean;
   // Twitch chat GIF: the asset URL (used exactly as sent) and GIPHY id.
   gifId?: string;
   gifUrl?: string;
@@ -537,6 +540,8 @@ const chatMessageAreEqual = (prevProps: ChatMessageProps, nextProps: ChatMessage
 // selector returns the same array identity for every non-member chatter (a
 // fresh [] each render would re-render every row on any store change).
 const EMPTY_THIRD_PARTY: ThirdPartyBadgeType[] = [];
+const EMPTY_HIDDEN_PROVIDERS: string[] = [];
+const EMPTY_TWITCH_BADGES: never[] = [];
 
 // Memoized ChatMessage component to prevent unnecessary re-renders
 // This is critical for preventing animation restarts when new messages arrive
@@ -793,6 +798,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             emoteUrl: seg.emote_url,
             isZeroWidth: seg.is_zero_width,
             modifierFlags: seg.modifier_flags,
+            isPersonal: seg.is_personal,
           }];
         } else if (seg.type === 'emoji') {
           return [{
@@ -1006,16 +1012,35 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // value (its `username` already holds the cased display name), so Twitch
   // rendering is unchanged. Non-Twitch providers (Kick) put the lowercase slug
   // in `username`, so render their cased display name instead.
+  const showAtSign = chatDesign?.show_at_sign === true;
   const renderedName = useMemo(
-    () =>
-      parsed.provider && parsed.provider !== 'twitch'
-        ? parsed.tags.get('display-name') || parsed.displayName || parsed.username
-        : parsed.username,
-    [parsed.provider, parsed.tags, parsed.displayName, parsed.username],
+    () => {
+      const base =
+        parsed.provider && parsed.provider !== 'twitch'
+          ? parsed.tags.get('display-name') || parsed.displayName || parsed.username
+          : parsed.username;
+      return showAtSign && base && !base.startsWith('@') ? `@${base}` : base;
+    },
+    [parsed.provider, parsed.tags, parsed.displayName, parsed.username, showAtSign],
   );
   // Color override layers under the user's 7TV paint when one is selected
   // (the paint computes against this base color), or replaces parsed.color
   // outright when no paint is in play.
+  // How a reply names its parent: the context line above the body (default),
+  // an @name at the start of the body, or nothing at all.
+  const replyStyle = chatDesign?.reply_style ?? 'full';
+  const replyMentionNode =
+    replyStyle === 'mention' && parsed.replyInfo ? (
+      <span className="font-semibold opacity-85">
+        @{getDisplayedName(parsed.replyInfo.parentUserId, parsed.replyInfo.parentDisplayName, userOverrides)}{' '}
+      </span>
+    ) : null;
+  const giantJustify =
+    chatDesign?.giant_emote_align === 'left'
+      ? 'justify-start'
+      : chatDesign?.giant_emote_align === 'right'
+        ? 'justify-end'
+        : 'justify-center';
   // Readability last: an override is still a color someone chose, and a
   // navy override is as hard to read as a navy Twitch color.
   const adjustNameColor = useNameColorAdjust();
@@ -1038,7 +1063,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   const {
     paint: seventvPaintRaw,
     seventvBadge: seventvBadgeRaw,
-    thirdPartyBadges,
+    thirdPartyBadges: thirdPartyBadgesAll,
     atmosphereId,
     cologne,
   } = useChatUserStore(
@@ -1063,7 +1088,21 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     }),
   );
   const seventvPaint = seventvPaintRaw as SevenTVPaintWithSelection | null | undefined;
-  const seventvBadge = seventvBadgeRaw as SevenTVBadgeWithSelection | null | undefined;
+  // Badge controls. Filtered HERE, at the source, so the five badge render
+  // sites below all follow without each knowing why.
+  const badgesOn = chatDesign?.show_badges !== false;
+  const thirdPartyBadgesOn = chatDesign?.show_third_party_badges !== false;
+  const hiddenBadgeProviders = chatDesign?.hidden_badge_providers ?? EMPTY_HIDDEN_PROVIDERS;
+  const badgeSourceHidden = (src?: string) => hiddenBadgeProviders.includes((src || '').toLowerCase());
+  const visibleBadges = badgesOn ? parsed.badges : EMPTY_TWITCH_BADGES;
+  const seventvBadgeAll = seventvBadgeRaw as SevenTVBadgeWithSelection | null | undefined;
+  const seventvBadge = thirdPartyBadgesOn && !badgeSourceHidden('7tv') ? seventvBadgeAll : null;
+  const thirdPartyBadges = useMemo(
+    () => (thirdPartyBadgesOn ? thirdPartyBadgesAll.filter((b) => !badgeSourceHidden(b.provider)) : EMPTY_THIRD_PARTY),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [thirdPartyBadgesAll, thirdPartyBadgesOn, hiddenBadgeProviders],
+  );
+  const snBadgeOn = thirdPartyBadgesOn && !badgeSourceHidden('streamnook');
   const atmosphere = atmosphereId ? getAtmosphere(atmosphereId) : null;
   // Frost behind the text only when the atmosphere declares it needs it (busy
   // washes); subtle ones render the text bare. A backdrop-filter per message row
@@ -1321,6 +1360,10 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     const gridStyle = inGrid ? { gridArea: '1/1' } : {};
     const marginClass = inGrid ? '' : 'mx-0.5';
     
+    if (segment.type === 'emote' && segment.isPersonal && chatDesign?.show_personal_emotes === false) {
+      // A personal emote with the set turned off reads as the text it stands for.
+      return <span key={key}>{segment.content}</span>;
+    }
     if (segment.type === 'emote') {
       const emoteUrl = segment.emoteUrl ||
         (segment.emoteId ? `https://static-cdn.jtvnw.net/emoticons/v2/${segment.emoteId}/default/dark/2.0` : '');
@@ -1567,8 +1610,17 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       );
     }
 
-    if (segment.type === 'emoji' && segment.emojiUrl) {
-      const emojiSrc = getCachedEmojiUrl(segment.content, segment.emojiUrl);
+    if (segment.type === 'emoji' && (segment.emojiUrl || segment.content)) {
+      const emojiStyle = chatDesign?.emoji_style ?? 'apple';
+      if (emojiStyle === 'system') {
+        return <span key={key} className={marginClass}>{segment.content}</span>;
+      }
+      // Apple keeps the Rust-baked url and the on-disk cache; the other sets
+      // are drawn straight from their CDN by codepoint.
+      const emojiSrc =
+        emojiStyle === 'apple' && segment.emojiUrl
+          ? getCachedEmojiUrl(segment.content, segment.emojiUrl)
+          : (vendorEmojiUrl(segment.content, emojiStyle) ?? segment.emojiUrl ?? '');
       return (
         <Tooltip key={key} content={segment.content} side="top">
           <img
@@ -1862,6 +1914,10 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     segments: EmoteSegment[],
   ): { inline: React.ReactNode; giant: React.ReactNode | null } => {
     const groups = groupSegments(segments);
+    // 'inline' keeps the emote in the text at its usual size.
+    if (chatDesign?.giant_emote_align === 'inline') {
+      return { inline: groups.map((g, i) => renderGroup(g, i)), giant: null };
+    }
     let giantIdx = -1;
     for (let i = groups.length - 1; i >= 0; i--) {
       const g = groups[i];
@@ -1904,6 +1960,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
 
         const shorten = chatDesign?.shorten_links ?? true;
         const label = shorten ? prettyUrlLabel(part) : part;
+        const linkColor = (chatDesign?.link_color || '').trim();
+        const linkUnderline = chatDesign?.link_underline !== false;
 
         const anchor = (
           <a
@@ -1911,7 +1969,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             href={url}
             // No target="_blank": the webview opens _blank links externally on
             // its own, which would stack a second tab on top of the open() below.
-            className="text-info hover:text-info/80 underline cursor-pointer"
+            className={`text-info hover:text-info/80 cursor-pointer${linkUnderline ? ' underline' : ''}`}
+            style={linkColor ? { color: linkColor } : undefined}
             onClick={(e) => {
               // preventDefault runs BEFORE the open attempt, so if the open
               // fails there is no fallback navigation left - which is why this
@@ -2231,11 +2290,11 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       const senderUserId = parsed.tags.get('user-id');
       const isSN = isStreamNookUser(senderUserId);
 
-      if (parsed.badges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
+      if (visibleBadges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
 
       return (
         <span className="inline-flex items-center gap-1 mr-1">
-          {parsed.badges.map((badge, idx) => {
+          {visibleBadges.map((badge, idx) => {
             // Handle both old format (key/info) and new format (name/version)
             if (!badge.info) return null;
             return (
@@ -2281,7 +2340,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               />
             </Tooltip>
           ))}
-          {isSN && <StreamNookBadge userId={senderUserId} userNumber={getStreamNookUserNumber(senderUserId)} />}
+          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} userNumber={getStreamNookUserNumber(senderUserId)} />}
         </span>
       );
     };
@@ -2318,7 +2377,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               </p>
             )}
             {giantPluckCheer?.giant && (
-              <div className="mt-1 flex justify-center">{giantPluckCheer.giant}</div>
+              <div className={`mt-1 flex ${giantJustify}`}>{giantPluckCheer.giant}</div>
             )}
           </div>
         </div>
@@ -2400,11 +2459,11 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       const senderUserId = parsed.tags.get('user-id');
       const isSN = isStreamNookUser(senderUserId);
 
-      if (parsed.badges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
+      if (visibleBadges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
 
       return (
         <span className="inline-flex items-center gap-1 mr-1">
-          {parsed.badges.map((badge, idx) => {
+          {visibleBadges.map((badge, idx) => {
             if (!badge.info) return null;
             return (
               <Tooltip key={`donation-badge-${badge.key}-${idx}`} content={badge.info.title} side="top">
@@ -2449,7 +2508,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               />
             </Tooltip>
           ))}
-          {isSN && <StreamNookBadge userId={senderUserId} userNumber={getStreamNookUserNumber(senderUserId)} />}
+          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} userNumber={getStreamNookUserNumber(senderUserId)} />}
         </span>
       );
     };
@@ -2583,11 +2642,11 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       const senderUserId = parsed.tags.get('user-id');
       const isSN = isStreamNookUser(senderUserId);
 
-      if (parsed.badges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
+      if (visibleBadges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
 
       return (
         <span className="inline-flex items-center gap-1 mr-1">
-          {parsed.badges.map((badge, idx) => {
+          {visibleBadges.map((badge, idx) => {
             if (!badge.info) return null;
             return (
               <Tooltip key={`watchstreak-badge-${badge.key}-${idx}`} content={badge.info.title} side="top">
@@ -2632,7 +2691,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               />
             </Tooltip>
           ))}
-          {isSN && <StreamNookBadge userId={senderUserId} userNumber={getStreamNookUserNumber(senderUserId)} />}
+          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} userNumber={getStreamNookUserNumber(senderUserId)} />}
         </span>
       );
     };
@@ -2701,11 +2760,11 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       const senderUserId = parsed.tags.get('user-id');
       const isSN = isStreamNookUser(senderUserId);
 
-      if (parsed.badges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
+      if (visibleBadges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
 
       return (
         <span className="inline-flex items-center align-middle gap-1 mr-1">
-          {parsed.badges.map((badge, idx) => {
+          {visibleBadges.map((badge, idx) => {
             if (!badge.info) return null;
             return (
               <Tooltip key={`sub-badge-${badge.key}-${idx}`} content={badge.info.title} side="top">
@@ -2750,7 +2809,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               />
             </Tooltip>
           ))}
-          {isSN && <StreamNookBadge userId={senderUserId} userNumber={getStreamNookUserNumber(senderUserId)} />}
+          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} userNumber={getStreamNookUserNumber(senderUserId)} />}
         </span>
       );
     };
@@ -3179,7 +3238,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         </div>
       )}
       {/* Reply indicator */}
-      {parsed.replyInfo && (
+      {parsed.replyInfo && replyStyle === 'full' && (
         <Tooltip content="Click to view parent message" side="top">
           <div
             className="mb-1.5 pl-2 border-l-2 border-textSecondary/40 cursor-pointer hover:border-textSecondary/60 transition-colors"
@@ -3246,7 +3305,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           {/* YouTube / TikTok native inline avatar — leads the row (before badges)
               so it shows even for chatters with no badges. The picture rides every
               message (those adapters stamp it onto the `avatar` tag). */}
-          {(parsed.provider === 'youtube' || parsed.provider === 'tiktok') && parsed.tags.get('avatar') && (
+          {chatDesign?.show_avatars !== false && (parsed.provider === 'youtube' || parsed.provider === 'tiktok') && parsed.tags.get('avatar') && (
             <img
               src={parsed.tags.get('avatar')}
               alt=""
@@ -3262,7 +3321,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             />
           )}
           {/* Badges */}
-          {isSN || (isFromSharedChat && channelProfileImage) || parsed.badges.length > 0 || seventvBadge || thirdPartyBadges.length > 0 ? (
+          {isSN || (isFromSharedChat && channelProfileImage) || visibleBadges.length > 0 || seventvBadge || thirdPartyBadges.length > 0 ? (
             <span className="inline-flex items-center gap-1 mr-1.5 align-middle">
               {/* Shared chat channel profile image badge */}
               {isFromSharedChat && channelProfileImage && (
@@ -3288,14 +3347,14 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                 </Tooltip>
               )}
               {/* Twitch badges, channel-contextual (subscriber, poll, …) before global. */}
-              {orderTwitchBadges(parsed.badges).map((badge, idx) => {
+              {orderTwitchBadges(visibleBadges).map((badge, idx) => {
                 if (!badge.info) return null;
                 return (
                   <Tooltip key={`${badge.key}-${idx}`} content={badge.info.title} side="top">
                     <img
                       src={getTwitchBadgeUrl(badge.key, badge.info)}
                       alt={badge.info.title}
-                      className="w-5 h-5 cursor-pointer hover:scale-110 transition-transform"
+                      className="sn-chat-badge cursor-pointer hover:scale-110 transition-transform"
                       onClick={() => onBadgeClick?.(badge.key, badge.info)}
                       onError={(e) => {
                         // Hide broken badge images
@@ -3316,7 +3375,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                       src={getBadgeImageUrl(seventvBadge)}
                       fallbackUrls={getBadgeFallbackUrls(seventvBadge.id).slice(1)}
                       alt={seventvBadge.description || seventvBadge.name}
-                      className="w-5 h-5"
+                      className="sn-chat-badge"
                     />
                   </button>
                 </Tooltip>
@@ -3331,7 +3390,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                   <img
                     src={badge.image2x || badge.imageUrl}
                     alt={badge.title}
-                    className="w-5 h-5"
+                    className="sn-chat-badge"
                     onError={(e) => {
                       e.currentTarget.style.display = 'none';
                     }}
@@ -3339,7 +3398,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                 </Tooltip>
               ))}
               {/* StreamNook identity badge sits rightmost, next to the name (see utils/badgeOrder). */}
-              {isSN && <StreamNookBadge userId={senderUserId} userNumber={getStreamNookUserNumber(senderUserId)} />}
+              {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} userNumber={getStreamNookUserNumber(senderUserId)} />}
             </span>
           ) : null}
 
@@ -3394,7 +3453,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                     )}
                   </span>
                 </Tooltip>
-                {' '}{giantPluck ? giantPluck.inline : renderContent(contentWithEmotes)}
+                {' '}{replyMentionNode}{giantPluck ? giantPluck.inline : renderContent(contentWithEmotes)}
               </span>
             ) : (
               // Regular messages: username in color, content in default color
@@ -3447,7 +3506,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                         : undefined
                     }
                   >
-                    {' '}{giantPluck ? giantPluck.inline : renderContent(contentWithEmotes)}
+                    {' '}{replyMentionNode}{giantPluck ? giantPluck.inline : renderContent(contentWithEmotes)}
                   </span>
                   {redemptionCost && (
                     <span className="inline-flex items-center gap-0.5 ml-1 align-middle text-highlight-cyan/90 font-medium">
@@ -3493,7 +3552,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           the body (same tier as link previews / SongCard). fontSize matches
           the body so the em-based giant height tracks the chat font setting. */}
       {giantPluck?.giant && (
-        <div className="mt-1 flex justify-center" style={{ fontSize: `${chatDesign?.font_size ?? 14}px` }}>
+        <div className={`mt-1 flex ${giantJustify}`} style={{ fontSize: `${chatDesign?.font_size ?? 14}px` }}>
           {giantPluck.giant}
         </div>
       )}

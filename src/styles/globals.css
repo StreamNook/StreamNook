@@ -2294,8 +2294,41 @@ html[data-motion="reduced"] .animate-shimmer {
 /* Chat badge size, in `em` so it scales with the chat font (the badge container
    carries the message font-size). 1.4em = ~20px at the default 14px font. */
 .sn-chat-badge {
-  width: 1.4em;
-  height: 1.4em;
+  width: calc(1.4em * var(--sn-badge-scale, 1));
+  height: calc(1.4em * var(--sn-badge-scale, 1));
+}
+
+/* Message arrival. CSS only, on the row itself, chosen by data-entrance on
+   the list: the animation runs once when the element is inserted and never
+   again. History rows (.is-backfill) sit out, so a join's backfill does not
+   ripple. Opacity for fade; a short transform for slide and rise, kept brief
+   so a fast chat never has more than a couple of rows mid-flight. The
+   data-motion kill switch and the OS reduced-motion preference both apply. */
+@keyframes sn-enter-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes sn-enter-slide {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes sn-enter-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+[data-entrance='fade'] > .chat-message-row:not(.is-backfill) {
+  animation: sn-enter-fade 220ms ease-out both;
+}
+[data-entrance='slide'] > .chat-message-row:not(.is-backfill) {
+  animation: sn-enter-slide 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+[data-entrance='rise'] > .chat-message-row:not(.is-backfill) {
+  animation: sn-enter-rise 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-entrance] > .chat-message-row {
+    animation: none;
+  }
 }
 
 .subscription-gradient {

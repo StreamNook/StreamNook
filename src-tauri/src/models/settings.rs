@@ -299,6 +299,34 @@ pub struct ChatDesignSettings {
     /// of the theme; "off" renders it as Twitch sent it.
     #[serde(default = "default_name_color_adjustment")]
     pub name_color_adjustment: String,
+    // Badges, entrance, emoji, emote extras, replies and links: the render
+    // options the OBS overlay had that chat did not.
+    #[serde(default = "default_true")]
+    pub show_badges: bool,
+    #[serde(default = "default_badge_scale")]
+    pub badge_scale: f64,
+    #[serde(default = "default_true")]
+    pub show_third_party_badges: bool,
+    #[serde(default)]
+    pub hidden_badge_providers: Vec<String>,
+    #[serde(default = "default_message_entrance")]
+    pub message_entrance: String, // none | fade | slide | rise
+    #[serde(default = "default_emoji_style")]
+    pub emoji_style: String, // system | apple | google | twitter | facebook
+    #[serde(default = "default_true")]
+    pub show_personal_emotes: bool,
+    #[serde(default = "default_giant_emote_align")]
+    pub giant_emote_align: String, // left | center | right | inline
+    #[serde(default = "default_true")]
+    pub show_avatars: bool,
+    #[serde(default)]
+    pub show_at_sign: bool,
+    #[serde(default = "default_reply_style")]
+    pub reply_style: String, // full | mention | off
+    #[serde(default)]
+    pub link_color: String,
+    #[serde(default = "default_true")]
+    pub link_underline: bool,
     // Optional on the TS side and left optional here on purpose: the frontend
     // applies its own default when the key is absent, and turning an absent
     // key into a concrete value on save would change what a fresh install
@@ -315,6 +343,26 @@ pub struct ChatDesignSettings {
 
 fn default_name_color_adjustment() -> String {
     "hsl_loop".to_string()
+}
+
+fn default_badge_scale() -> f64 {
+    1.0
+}
+
+fn default_message_entrance() -> String {
+    "none".to_string()
+}
+
+fn default_emoji_style() -> String {
+    "apple".to_string()
+}
+
+fn default_giant_emote_align() -> String {
+    "center".to_string()
+}
+
+fn default_reply_style() -> String {
+    "full".to_string()
 }
 
 fn default_emote_scale() -> f64 {
@@ -387,6 +435,19 @@ impl Default for ChatDesignSettings {
             username_separator: "none".to_string(),
             username_style: "plain".to_string(),
             name_color_adjustment: default_name_color_adjustment(),
+            show_badges: true,
+            badge_scale: 1.0,
+            show_third_party_badges: true,
+            hidden_badge_providers: Vec::new(),
+            message_entrance: default_message_entrance(),
+            emoji_style: default_emoji_style(),
+            show_personal_emotes: true,
+            giant_emote_align: default_giant_emote_align(),
+            show_avatars: true,
+            show_at_sign: false,
+            reply_style: default_reply_style(),
+            link_color: String::new(),
+            link_underline: true,
             activity_font_size: None,
             username_colon: None,
             pinned_start_collapsed: None,
