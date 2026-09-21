@@ -20,6 +20,7 @@
 
 import { sameSentContent } from '../utils/sentContent';
 import { isWindowHidden, onWindowVisibility } from '../utils/windowVisibility';
+import { IS_MOBILE } from '../utils/platform';
 import { useEffect, useState } from 'react';
 import {
   CHAT_BUFFER_SIZE,
@@ -923,12 +924,16 @@ function removeSlice(channel: string) {
 }
 
 // Resolve the active per-channel buffer cap. Settings can override the
-// hardcoded 100 default within [50, 1000]. Out-of-range values fall back
-// to the default rather than crashing.
+// hardcoded 100 default within [50, 1000] on desktop and [50, 300] on the
+// phone: a device soak measured a 1,000-row buffer at 8x the DOM, heap and
+// decoded images of a 130-row run, on hardware whose whole cost is
+// compositing. Out-of-range values fall back to the default rather than
+// crashing.
+const BUFFER_CEILING = IS_MOBILE ? 300 : 1000;
 function getActiveHistoryMax(): number {
   const setting = useAppStore.getState().settings.chat_render?.message_buffer_cap;
   if (typeof setting !== 'number' || !Number.isFinite(setting)) return CHAT_HISTORY_MAX;
-  return Math.max(50, Math.min(1000, Math.round(setting)));
+  return Math.max(50, Math.min(BUFFER_CEILING, Math.round(setting)));
 }
 
 // Timestamp of a buffered message in unix ms: structured rows carry

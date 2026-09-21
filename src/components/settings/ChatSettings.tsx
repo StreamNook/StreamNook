@@ -1541,15 +1541,19 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
 
         <SettingsRow
-          title={`Message buffer: ${settings.chat_render?.message_buffer_cap ?? 100} messages`}
-          description="How many messages each chat keeps on screen to scroll back through; more history uses more memory."
+          title={`Message buffer: ${Math.min(IS_MOBILE ? 300 : 1000, settings.chat_render?.message_buffer_cap ?? 100)} messages`}
+          description={
+            IS_MOBILE
+              ? 'How many messages each chat keeps to scroll back through. Phones stop at 300: more than that costs memory and smoothness with nothing extra to see.'
+              : 'How many messages each chat keeps on screen to scroll back through; more history uses more memory.'
+          }
         >
           <input
             type="range"
             min="50"
-            max="1000"
+            max={IS_MOBILE ? 300 : 1000}
             step="10"
-            value={settings.chat_render?.message_buffer_cap ?? 100}
+            value={Math.min(IS_MOBILE ? 300 : 1000, settings.chat_render?.message_buffer_cap ?? 100)}
             onChange={(e) => setRender({ message_buffer_cap: parseInt(e.target.value, 10) })}
             className="w-full accent-accent cursor-pointer"
           />

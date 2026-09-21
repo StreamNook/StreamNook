@@ -246,7 +246,7 @@ export const DropProgressBar: React.FC<Props> = ({ onActiveChange, visible = tru
       // used to supply a shared background is pure layout now, so anything
       // sitting in it has to be a self-contained floating card or it reads as
       // loose text over chat.
-      className="sn-popover pointer-events-auto flex items-center gap-2.5 px-2.5 py-1.5 active:opacity-70"
+      className="sn-popover sn-popover--static pointer-events-auto flex items-center gap-2.5 px-2.5 py-1.5 active:opacity-70"
     >
       {live.image ? (
         <img

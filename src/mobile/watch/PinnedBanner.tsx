@@ -33,7 +33,7 @@ export const PinnedBanner: React.FC<Props> = ({ pins, expanded, onToggle }) => {
 
   return (
     // The single container. Everything below lives inside this one box.
-    <div className="sn-popover pointer-events-auto w-full overflow-hidden">
+    <div className="sn-popover sn-popover--static pointer-events-auto w-full overflow-hidden">
       <button
         type="button"
         onClick={onToggle}
