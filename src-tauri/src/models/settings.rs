@@ -505,6 +505,11 @@ pub struct AutoSwitchSettings {
     pub show_notification: bool, // Show toast when auto-switching
     #[serde(default = "default_true")]
     pub auto_redirect_on_raid: bool, // Automatically follow raids to the target channel
+    // Stay in the channel's chat when it goes offline instead of auto-switching.
+    // The frontend has read this field for some time; without it here the
+    // setting was dropped on every save.
+    #[serde(default)]
+    pub stay_in_offline_chat: bool,
 }
 
 impl Default for AutoSwitchSettings {
@@ -514,6 +519,7 @@ impl Default for AutoSwitchSettings {
             mode: AutoSwitchMode::SameCategory,
             show_notification: true,
             auto_redirect_on_raid: true, // Enabled by default
+            stay_in_offline_chat: false,
         }
     }
 }

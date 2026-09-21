@@ -1296,6 +1296,7 @@ pub fn run() {
             force_refresh_token,
             get_twitch_token,
             check_stream_online,
+            resolve_stream_for_login,
             check_streams_online,
             get_streams_by_game_name,
             get_streams_by_game_id,

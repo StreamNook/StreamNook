@@ -1313,11 +1313,18 @@ impl TwitchService {
         // the badge metadata cache is never populated for the room, so every
         // badge resolves to no image. Resolve the login to an id first.
         let broadcaster_id = Self::get_user_by_login(channel_name).await?.id;
+        Self::channel_row_by_id(&broadcaster_id, &token).await
+    }
+
+    /// The Helix `channels` row for a broadcaster id: title and category, live
+    /// or not. Split out so a caller that already holds the id does not pay a
+    /// second users lookup for it.
+    async fn channel_row_by_id(broadcaster_id: &str, token: &str) -> Result<ChannelInfo> {
         let client = crate::services::http::client().clone();
         let response = client
             .get(format!(
                 "https://api.twitch.tv/helix/channels?broadcaster_id={}",
-                broadcaster_id
+                urlencoding::encode(broadcaster_id)
             ))
             .header(AUTHORIZATION, format!("Bearer {}", token))
             .header("Client-Id", CLIENT_ID)
@@ -1331,7 +1338,7 @@ impl TwitchService {
             .get("data")
             .and_then(|d| d.as_array())
             .and_then(|arr| arr.first())
-            .ok_or_else(|| anyhow::anyhow!("Channel '{}' not found", channel_name))?;
+            .ok_or_else(|| anyhow::anyhow!("Channel '{}' not found", broadcaster_id))?;
 
         let info: ChannelInfo = serde_json::from_value(data.clone())?;
         Ok(info)
@@ -1566,7 +1573,10 @@ impl TwitchService {
         let client = crate::services::http::client().clone();
 
         let response = client
-            .get(format!("https://api.twitch.tv/helix/users?login={}", login))
+            .get(format!(
+                "https://api.twitch.tv/helix/users?login={}",
+                urlencoding::encode(login)
+            ))
             .header(AUTHORIZATION, format!("Bearer {}", token))
             .header("Client-Id", CLIENT_ID)
             .send()
@@ -3041,6 +3051,82 @@ impl TwitchService {
                 Ok(Some(stream))
             }
             _ => Ok(None), // Stream is offline
+        }
+    }
+
+    /// A Twitch login: 1..25 of lowercase ASCII letters, digits and underscore.
+    /// Checked before a login from a deep link or a search box reaches a query
+    /// string.
+    fn valid_login(login: &str) -> bool {
+        (1..=25).contains(&login.len())
+            && login
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    }
+
+    /// One login → one enriched stream row (avatar, partner mark, liveness;
+    /// the channel's title and category when offline). The single lookup
+    /// every non-list open path uses, so a stream reached by a raid, a
+    /// notification tap, a deep link or a search has the same shape as one
+    /// opened from Following.
+    pub async fn resolve_stream_for_login(login: &str) -> Result<TwitchStream> {
+        let login = login.trim().to_lowercase();
+        if !Self::valid_login(&login) {
+            return Err(anyhow::anyhow!("'{}' is not a Twitch login", login));
+        }
+        let user = Self::get_user_by_login(&login).await?;
+        let live = Self::check_stream_online(&login).await;
+        let channel = match &live {
+            Ok(Some(_)) => None,
+            _ => match Self::get_token().await {
+                Ok(token) => Self::channel_row_by_id(&user.id, &token).await.ok(),
+                Err(_) => None,
+            },
+        };
+        Ok(Self::fuse_stream_row(user, &login, live, channel))
+    }
+
+    /// Pure merge of the three Helix answers into the row shape Following
+    /// hands over. A FAILED liveness probe is `is_live: None`, never `false`:
+    /// the chat header treats `false` as offline, and a transient 5xx on a
+    /// raid must not paint a live channel dark.
+    fn fuse_stream_row(
+        user: UserInfo,
+        login: &str,
+        live: Result<Option<TwitchStream>>,
+        channel: Option<ChannelInfo>,
+    ) -> TwitchStream {
+        let avatar = user.profile_image_url.clone().filter(|u| !u.is_empty());
+        let kind = user.broadcaster_type.clone().filter(|t| !t.is_empty());
+        let probe_failed = live.is_err();
+        match live {
+            Ok(Some(mut row)) => {
+                row.is_live = Some(true);
+                row.profile_image_url = avatar;
+                row.broadcaster_type = kind;
+                row
+            }
+            _ => TwitchStream {
+                id: String::new(),
+                user_id: user.id,
+                user_name: user.display_name,
+                user_login: login.to_string(),
+                title: channel.as_ref().map(|c| c.title.clone()).unwrap_or_default(),
+                viewer_count: 0,
+                game_id: String::new(),
+                game_name: channel
+                    .as_ref()
+                    .map(|c| c.game_name.clone())
+                    .unwrap_or_default(),
+                thumbnail_url: String::new(),
+                started_at: String::new(),
+                broadcaster_type: kind,
+                has_shared_chat: None,
+                profile_image_url: avatar,
+                is_live: if probe_failed { None } else { Some(false) },
+                tags: None,
+                language: None,
+            },
         }
     }
 
@@ -6037,5 +6123,73 @@ mod discovery_tests {
         assert_eq!(second.language.as_deref(), Some("zh-hk"));
         assert_eq!(second.broadcaster_type.as_deref(), Some("affiliate"));
         assert_eq!(second.game_name, "");
+    }
+}
+
+#[cfg(test)]
+mod resolve_stream_tests {
+    use super::*;
+    use crate::models::user::{ChannelInfo, UserInfo};
+
+    fn user() -> UserInfo {
+        UserInfo {
+            id: "1".into(),
+            login: "a".into(),
+            display_name: "A".into(),
+            email: None,
+            profile_image_url: Some("https://x/a.png".into()),
+            broadcaster_type: Some("partner".into()),
+        }
+    }
+
+    fn row() -> TwitchStream {
+        serde_json::from_value(serde_json::json!({
+            "id": "9", "user_id": "1", "user_name": "A", "user_login": "a", "title": "t",
+            "viewer_count": 5, "game_id": "2", "game_name": "g", "thumbnail_url": "",
+            "started_at": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn live_row_gets_avatar_mark_and_liveness() {
+        let s = TwitchService::fuse_stream_row(user(), "a", Ok(Some(row())), None);
+        assert_eq!(s.is_live, Some(true));
+        assert_eq!(s.profile_image_url.as_deref(), Some("https://x/a.png"));
+        assert_eq!(s.broadcaster_type.as_deref(), Some("partner"));
+        assert_eq!(s.viewer_count, 5);
+    }
+
+    #[test]
+    fn offline_row_carries_channel_title_and_is_not_live() {
+        let ch = ChannelInfo {
+            broadcaster_id: "1".into(),
+            broadcaster_name: "A".into(),
+            game_name: "g".into(),
+            title: "t".into(),
+        };
+        let s = TwitchService::fuse_stream_row(user(), "a", Ok(None), Some(ch));
+        assert_eq!(s.is_live, Some(false));
+        assert_eq!(s.title, "t");
+        assert_eq!(s.game_name, "g");
+        assert_eq!(s.started_at, "");
+        assert_eq!(s.user_id, "1");
+    }
+
+    #[test]
+    fn failed_probe_is_unknown_not_offline() {
+        let s = TwitchService::fuse_stream_row(user(), "a", Err(anyhow::anyhow!("5xx")), None);
+        assert_eq!(s.is_live, None);
+        assert_eq!(s.profile_image_url.as_deref(), Some("https://x/a.png"));
+    }
+
+    #[test]
+    fn login_validation() {
+        assert!(TwitchService::valid_login("xqc_2"));
+        assert!(TwitchService::valid_login("a"));
+        assert!(!TwitchService::valid_login("foo&id=1"));
+        assert!(!TwitchService::valid_login("Mixed"));
+        assert!(!TwitchService::valid_login(""));
+        assert!(!TwitchService::valid_login("abcdefghijklmnopqrstuvwxyz"));
     }
 }

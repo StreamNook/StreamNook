@@ -2630,111 +2630,56 @@ export const useAppStore = create<AppState>((set, get) => ({
       
       if (followedStreamInfo) {
         info = followedStreamInfo;
-      } else if (providedStreamInfo && providedStreamInfo.user_id) {
-        // Provided info has a user_id, so it's complete enough to drive the
-        // stream. But a SEEDED object carries only what its source knew: a raid
-        // redirect, for instance, gets ids and a viewer count from the raid event
-        // and nothing else, so title, category, thumbnail and avatar arrive empty
-        // and `started_at` is a placeholder of "now".
-        //
-        // Left that way the overlay drops its title and Home button (both gated on
-        // a non-empty title), the profile shows no avatar, uptime counts from zero,
-        // and Discord RPC falls back to the app logo instead of the category art.
-        //
-        // The live row is the better source than `get_channel_info`, which knows
-        // only title and category: one lookup by user id brings the real title,
-        // game, thumbnail, viewer count and start time together. The avatar is not
-        // on a stream row at all and needs the user lookup. Each is applied only
-        // over a field the caller left blank, so a complete row is never
-        // overwritten, and either failing leaves what was provided.
-        info = providedStreamInfo;
-        const seededGaps =
-          !info.title?.trim() ||
-          !info.game_name?.trim() ||
-          !info.thumbnail_url?.trim() ||
-          !info.profile_image_url?.trim();
-
-        if (seededGaps && info.user_id) {
-          const [liveRow, user] = await Promise.all([
-            invoke<TwitchStream[]>('get_streams_by_user_ids', { userIds: [info.user_id] })
-              .then(rows => rows?.[0])
-              .catch((e) => {
-                Logger.warn('Could not backfill live row for seeded stream:', e);
-                return undefined;
-              }),
-            info.profile_image_url?.trim()
-              ? Promise.resolve(undefined)
-              : invoke<{ profile_image_url?: string }>('get_user_by_id', { userId: info.user_id })
-                  .catch((e) => {
-                    Logger.warn('Could not backfill avatar for seeded stream:', e);
-                    return undefined;
-                  }),
-          ]);
-
-          const keep = (mine?: string, theirs?: string) =>
-            mine?.trim() ? mine : (theirs || '');
-
-          info = {
-            ...info,
-            id: info.id || liveRow?.id || '',
-            title: keep(info.title, liveRow?.title),
-            game_name: keep(info.game_name, liveRow?.game_name),
-            game_id: info.game_id || liveRow?.game_id,
-            thumbnail_url: keep(info.thumbnail_url, liveRow?.thumbnail_url),
-            profile_image_url: keep(info.profile_image_url, user?.profile_image_url),
-            // The raid event's count is the raiding party, not the target's own
-            // audience, and the seeded start time is just "now". Prefer the live
-            // row for both so uptime and viewers read true.
-            viewer_count: liveRow?.viewer_count ?? info.viewer_count,
-            started_at: liveRow?.started_at || info.started_at,
-          };
-        }
-
-        // Still nothing for title or category (the live row 404s for a channel
-        // that went offline between the raid and this lookup): fall back to the
-        // channel-info call, which answers for offline channels too.
-        if (!info.title?.trim() || !info.game_name?.trim()) {
-          try {
-            const rawInfo = await invoke<{ title?: string; game_name?: string }>('get_channel_info', { channelName: channel });
-            info = {
-              ...info,
-              title: info.title?.trim() ? info.title : (rawInfo.title || ''),
-              game_name: info.game_name?.trim() ? info.game_name : (rawInfo.game_name || ''),
-            };
-          } catch (e) {
-            Logger.warn('Could not backfill channel info for seeded stream:', e);
-          }
-        }
       } else {
-        // Fallback: get channel info to get the user_id and other details
-        try {
-          const rawInfo = await invoke<{ title?: string; game_name?: string; broadcaster_id?: string; broadcaster_name?: string }>('get_channel_info', { channelName: channel });
-          info = {
-            id: providedStreamInfo?.id || '',
-            user_id: rawInfo.broadcaster_id || '',
-            user_name: rawInfo.broadcaster_name || providedStreamInfo?.user_name || channel,
-            user_login: channel.toLowerCase(),
-            title: rawInfo.title || providedStreamInfo?.title || `Watching ${channel}`,
-            viewer_count: providedStreamInfo?.viewer_count || 0,
-            game_name: rawInfo.game_name || providedStreamInfo?.game_name || '',
-            thumbnail_url: providedStreamInfo?.thumbnail_url || '',
-            profile_image_url: providedStreamInfo?.profile_image_url || '',
-            started_at: providedStreamInfo?.started_at || new Date().toISOString(),
-          };
-        } catch (e) {
-          Logger.warn('Could not get channel info:', e);
-          info = providedStreamInfo || {
-            id: '',
-            user_id: '',
-            user_name: channel,
-            user_login: channel.toLowerCase(),
-            title: `Watching ${channel}`,
-            viewer_count: 0,
-            game_name: '',
-            thumbnail_url: '',
-            started_at: new Date().toISOString(),
-          };
-        }
+        // Anything that is not a full row from a list: a raid seed (ids and
+        // the raiding party's size), a notification tap or a deep link (a bare
+        // login), a search hit (no viewer count), a favourite. One Rust lookup
+        // returns the row the way Following would have handed it over, so the
+        // overlay, the lock-screen card and the chat tab show the same avatar,
+        // partner mark, title, category, viewers and start time however the
+        // stream was opened. Each field is taken from the seed first and the
+        // lookup second, so a complete seed is never overwritten and a failed
+        // lookup leaves exactly what the caller knew.
+        const seed = providedStreamInfo;
+        const seededGaps =
+          !seed ||
+          !seed.user_id ||
+          !seed.title?.trim() ||
+          !seed.game_name?.trim() ||
+          !seed.profile_image_url?.trim() ||
+          !seed.started_at?.trim();
+        const resolved = seededGaps
+          ? await invoke<TwitchStream>('resolve_stream_for_login', { login: channel }).catch((e) => {
+              Logger.warn(`Could not resolve stream row for ${channel}:`, e);
+              return undefined;
+            })
+          : undefined;
+        const keep = (mine?: string, theirs?: string) => (mine?.trim() ? mine : (theirs || ''));
+        info = {
+          id: seed?.id || resolved?.id || '',
+          user_id: seed?.user_id || resolved?.user_id || '',
+          user_name: seed?.user_name || resolved?.user_name || channel,
+          user_login: channel.toLowerCase(),
+          title: keep(seed?.title, resolved?.title) || `Watching ${channel}`,
+          // A seed's count is the raiding party or a search placeholder; the
+          // live row's is the channel's own audience.
+          viewer_count: resolved?.viewer_count ?? seed?.viewer_count ?? 0,
+          game_id: seed?.game_id || resolved?.game_id,
+          game_name: keep(seed?.game_name, resolved?.game_name),
+          thumbnail_url: keep(seed?.thumbnail_url, resolved?.thumbnail_url),
+          // Never fabricated as "now": a made-up start makes uptime count from
+          // zero on a stream that has been live for hours. Empty renders as
+          // no uptime, which is the honest reading.
+          started_at: resolved?.started_at || seed?.started_at || '',
+          profile_image_url: keep(seed?.profile_image_url, resolved?.profile_image_url),
+          broadcaster_type: seed?.broadcaster_type ?? resolved?.broadcaster_type,
+          is_live: resolved?.is_live ?? seed?.is_live,
+          tags: seed?.tags ?? resolved?.tags,
+          language: seed?.language ?? resolved?.language,
+          has_shared_chat: seed?.has_shared_chat ?? resolved?.has_shared_chat,
+          provider: seed?.provider,
+          watch_url: seed?.watch_url,
+        };
       }
 
       // Same guard on the success path: a slow start that finally resolves

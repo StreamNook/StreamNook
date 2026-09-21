@@ -1440,6 +1440,16 @@ pub async fn check_stream_online(user_login: String) -> Result<Option<TwitchStre
         .map_err(|e| e.to_string())
 }
 
+/// One login → one enriched stream row (avatar, partner mark, liveness; the
+/// channel's title and category when offline). The single lookup every
+/// non-list open path uses. See `TwitchService::resolve_stream_for_login`.
+#[tauri::command]
+pub async fn resolve_stream_for_login(login: String) -> Result<TwitchStream, String> {
+    TwitchService::resolve_stream_for_login(&login)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Batched liveness check for many logins (chunked 100/call). Returns only the
 /// logins that are currently live. Use this over N× check_stream_online for
 /// large allow-lists (e.g. special-event ACL drops).
