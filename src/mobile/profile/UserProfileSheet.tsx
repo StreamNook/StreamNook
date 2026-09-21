@@ -23,6 +23,7 @@ import { normalizeProfileBadges, type NormalizedBadge } from '../../utils/profil
 import { FallbackImage } from '../../components/FallbackImage';
 import { StreamNookBadge } from '../../components/StreamNookBadge';
 import { MobileSheet } from '../ui/MobileSheet';
+import { useNameColorAdjust } from '../../hooks/useNameColor';
 import { Logger } from '../../utils/logger';
 
 export interface SheetUser {
@@ -210,9 +211,9 @@ const ProfileBody: React.FC<{
   }, [userId, username, channelId, channelName]);
 
   const paint = storeUser?.paint ?? profile?.seventvCosmetics?.paints?.find((p) => p.selected);
-  const nameStyle = paint
-    ? computePaintStyle(paint, user.color || '#9147FF', 'all')
-    : { color: user.color || '#9147FF' };
+  const adjustNameColor = useNameColorAdjust();
+  const shownColor = adjustNameColor(user.color || '#9147FF') ?? '#9147FF';
+  const nameStyle = paint ? computePaintStyle(paint, shownColor, 'all') : { color: shownColor };
 
   const badges = normalizeProfileBadges({ cachedProfile: profile });
   const userNumber = getStreamNookUserNumber(user.userId);

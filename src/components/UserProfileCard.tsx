@@ -11,6 +11,7 @@ import { useAppStore } from '../stores/AppStore';
 import { streamProvider } from '../utils/streamProvider';
 import { openBadgesWithPaintInMain, openBadgesOnStreamNookInMain, openBadgesWithBadgeInMain, openBadgesWithTargetInMain, openProfileViewerInMain } from '../utils/openBadgesInMain';
 import { computePaintStyle, getBadgeImageUrls, getBadgeFallbackUrls, queueCosmeticForCaching } from '../services/seventvService';
+import { useNameColorAdjust } from '../hooks/useNameColor';
 import { FallbackImage } from './FallbackImage';
 import { formatIVRDate, formatSubTenure } from '../services/ivrService';
 import { Logger } from '../utils/logger';
@@ -1173,9 +1174,11 @@ const UserProfileCard = ({
     return paints.find((p: any) => p.selected) || null;
   }, [cachedProfile?.seventvCosmetics, profileData?.seventv_cosmetics]);
 
-  const usernameStyle = useMemo(() => 
-    selectedPaint ? computePaintStyle(selectedPaint as any, color) : { color }, 
-    [selectedPaint, color]
+  const adjustNameColor = useNameColorAdjust();
+  const shownColor = adjustNameColor(color) ?? color;
+  const usernameStyle = useMemo(() =>
+    selectedPaint ? computePaintStyle(selectedPaint as any, shownColor) : { color: shownColor },
+    [selectedPaint, shownColor]
   );
 
   // Reactive caching for 7TV cosmetics displayed in profile

@@ -27,6 +27,7 @@ import { useChatUserStore } from '../../stores/chatUserStore';
 import { computePaintStyle } from '../../services/seventvService';
 import { durationTier, timeoutSecsFromDistance } from '../../utils/timeoutRamp';
 import { hapticCommit, hapticDestructive, hapticStep, hapticTick } from '../ui/haptics';
+import { useNameColorAdjust } from '../../hooks/useNameColor';
 import { useWindowShape } from '../ui/useWindowShape';
 
 export type FanAction = 'reply' | 'copy' | 'profile' | 'delete' | 'timeout' | 'ban' | 'pin';
@@ -104,9 +105,11 @@ export const ChatFanOut: React.FC<Props> = ({
   const paint = useChatUserStore((s) =>
     target ? s.users.get(target.userId)?.paint : undefined,
   );
-  const userColor = useChatUserStore((s) =>
+  const rawUserColor = useChatUserStore((s) =>
     target ? s.users.get(target.userId)?.color : undefined,
   );
+  const adjustNameColor = useNameColorAdjust();
+  const userColor = adjustNameColor(rawUserColor);
 
   const buckets = useMemo(() => {
     const list = [...EVERYONE, ...(isModerator ? MOD_ONLY : [])].filter((b) => !hide?.includes(b.id));

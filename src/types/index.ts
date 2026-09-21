@@ -279,6 +279,10 @@ export interface ChatDesignSettings {
   // Deprecated: superseded by username_separator. Kept so an existing "colon on"
   // setting migrates to username_separator: 'colon'.
   username_colon?: boolean;
+  // Readable name colors: 'hsl_loop' (default) nudges a chatter's color
+  // lighter on a dark theme (darker on a light one) until it stands out,
+  // keeping the hue; 'off' shows colors exactly as set.
+  name_color_adjustment?: 'off' | 'hsl_loop';
   // How per-message mod actions are offered in the chat hover dock:
   // 'buttons' = the classic click buttons (delete/timeout/ban), 'drag' = the
   // grab handle that lifts a chatter into action buckets, 'both' = offer both.

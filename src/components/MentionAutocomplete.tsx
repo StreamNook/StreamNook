@@ -4,6 +4,7 @@ import { ChatUser } from '../stores/chatUserStore';
 import { computePaintStyle } from '../services/seventvService';
 import { useAppStore } from '../stores/AppStore';
 import { getDisplayedName, getColorOverride } from '../utils/userChatOverrides';
+import { useNameColorAdjust } from '../hooks/useNameColor';
 import type { UserChatOverride } from '../types';
 
 interface MentionAutocompleteProps {
@@ -30,7 +31,8 @@ const MentionUserItem: React.FC<{
 }> = ({ user, isSelected, onSelect, onHover, itemRef, overrides }) => {
   // Override-aware base color: the user's set color wins over their Twitch
   // color. 7TV paint (if any) still renders on top.
-  const effectiveColor = getColorOverride(user.userId, overrides) ?? user.color;
+  const adjustNameColor = useNameColorAdjust();
+  const effectiveColor = adjustNameColor(getColorOverride(user.userId, overrides) ?? user.color);
 
   // Compute paint style for the user's display name
   const nameStyle = useMemo(() => {

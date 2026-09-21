@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState, useMemo, useCallba
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import ChatMessageList from './ChatMessageList';
+import { readableNameColor } from '../hooks/useNameColor';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { openProfilePopup } from '../utils/openProfilePopup';
@@ -4547,7 +4548,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                           })()}
                           <span
                             className="text-sm font-bold tracking-tight"
-                            style={{ color: pin.sender_color, textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}
+                            style={{ color: readableNameColor(pin.sender_color), textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}
                           >
                             {pin.sender_name}
                           </span>
@@ -4646,7 +4647,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     </svg>
                     <span
                       className="text-[13px] font-bold flex-shrink-0 max-w-[35%] truncate"
-                      style={{ color: pin.sender_color, textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}
+                      style={{ color: readableNameColor(pin.sender_color), textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}
                     >
                       {pin.sender_name}
                     </span>

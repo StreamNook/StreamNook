@@ -1502,6 +1502,11 @@ const hexToRgb = (hex: string): { r: number; g: number; b: number } => {
 // Relative luminance with the sRGB coefficients, split at the midpoint. Used for
 // the Android system bars, which sit over the app's own background: only the
 // palette knows what is behind the clock and the battery icon.
+/** Whether the applied theme's background is dark, i.e. text on it needs to
+ *  be light. Set by applyTheme; read by the readable-name-color adjustment. */
+let themeDark = true;
+export const isThemeDark = (): boolean => themeDark;
+
 export const needsLightContentOn = (color: string): boolean => {
     const { r, g, b } = hexToRgb(parseColorToHex(color));
     return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.5;
@@ -1672,6 +1677,7 @@ export const applyTheme = (theme: Theme): void => {
     // (src/mobile/systemBars.ts). Deliberately an event rather than a direct
     // call: this file is shared, and shared code must not reach for a native
     // bridge that only exists on the phone.
+    themeDark = needsLightContentOn(palette.background);
     window.dispatchEvent(
         new CustomEvent('sn:theme-applied', {
             detail: {

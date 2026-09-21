@@ -295,6 +295,26 @@ pub struct ChatDesignSettings {
     pub pinned_collapsed_style: String, // bar | hidden
     #[serde(default = "default_mod_pin_style")]
     pub mod_pin_style: String, // inline | drag | both
+    /// "hsl_loop" (default) walks a chatter's color toward the readable side
+    /// of the theme; "off" renders it as Twitch sent it.
+    #[serde(default = "default_name_color_adjustment")]
+    pub name_color_adjustment: String,
+    // Optional on the TS side and left optional here on purpose: the frontend
+    // applies its own default when the key is absent, and turning an absent
+    // key into a concrete value on save would change what a fresh install
+    // sees. Absent stays absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_font_size: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username_colon: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_start_collapsed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub polls_start_collapsed: Option<bool>,
+}
+
+fn default_name_color_adjustment() -> String {
+    "hsl_loop".to_string()
 }
 
 fn default_emote_scale() -> f64 {
@@ -366,6 +386,11 @@ impl Default for ChatDesignSettings {
             link_preview_trusted_domains: Vec::new(),
             username_separator: "none".to_string(),
             username_style: "plain".to_string(),
+            name_color_adjustment: default_name_color_adjustment(),
+            activity_font_size: None,
+            username_colon: None,
+            pinned_start_collapsed: None,
+            polls_start_collapsed: None,
             username_accent_source: "user".to_string(),
             drag_moderation_enabled: true,
             mod_action_style: "both".to_string(),
@@ -945,6 +970,34 @@ mod backup_persistence_tests {
 
     /// A full settings dump with no unrecognized keys round-trips with an empty
     /// catch-all and emits no stray "extra" wrapper key (backward compatible).
+    /// The readable-name-color mode and the four chat_design keys the struct
+    /// never named (they were being dropped on every save) must survive a
+    /// round trip. The optional ones stay ABSENT when unset, so a fresh
+    /// install keeps the frontend default rather than a value written by save.
+    #[test]
+    fn chat_design_name_color_and_optional_keys_round_trip() {
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize defaults");
+        let design = value["chat_design"].as_object_mut().expect("chat_design object");
+        assert_eq!(design.get("name_color_adjustment").and_then(|v| v.as_str()), Some("hsl_loop"));
+        assert!(design.get("activity_font_size").is_none(), "absent stays absent");
+        design.insert("name_color_adjustment".into(), serde_json::json!("off"));
+        design.insert("activity_font_size".into(), serde_json::json!(16));
+        design.insert("username_colon".into(), serde_json::json!(true));
+        design.insert("pinned_start_collapsed".into(), serde_json::json!(true));
+        design.insert("polls_start_collapsed".into(), serde_json::json!(false));
+
+        let parsed: Settings = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(parsed.chat_design.name_color_adjustment, "off");
+        assert_eq!(parsed.chat_design.activity_font_size, Some(16));
+        assert_eq!(parsed.chat_design.username_colon, Some(true));
+        assert_eq!(parsed.chat_design.pinned_start_collapsed, Some(true));
+        assert_eq!(parsed.chat_design.polls_start_collapsed, Some(false));
+
+        let again = serde_json::to_value(&parsed).expect("re-serialize");
+        assert_eq!(again["chat_design"]["activity_font_size"], serde_json::json!(16));
+        assert_eq!(again["chat_design"]["name_color_adjustment"], serde_json::json!("off"));
+    }
+
     #[test]
     fn default_settings_round_trip_with_empty_extra() {
         let original = Settings::default();

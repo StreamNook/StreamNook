@@ -11,6 +11,7 @@ import type { MouseEvent } from 'react';
 import { FixedSizeList as List, type ListChildComponentProps } from 'react-window';
 import { invoke } from '@tauri-apps/api/core';
 import { useChatUserStore } from '../stores/chatUserStore';
+import { readableNameColor } from '../hooks/useNameColor';
 import { useAppStore } from '../stores/AppStore';
 import { Tooltip } from './ui/Tooltip';
 import { Logger } from '../utils/logger';
@@ -132,7 +133,7 @@ function PanelRow({ index, style, data }: ListChildComponentProps<RowData>) {
   // A chatter row. Color comes from the chat-user store when the person has been
   // seen talking this session; silent lurkers render in the default text color.
   const stored = useChatUserStore.getState().getUserByUsername(row.chatter.user_login);
-  const color = stored?.color || undefined;
+  const color = stored?.color ? readableNameColor(stored.color) : undefined;
 
   return (
     <div style={style} className="px-1">
@@ -224,7 +225,7 @@ export default function ViewersPanel({ broadcasterId, channelLogin, onUsernameCl
   const onRow = useCallback(
     (chatter: Chatter, event: MouseEvent) => {
       const stored = useChatUserStore.getState().getUserByUsername(chatter.user_login);
-      const color = stored?.color || '#9147FF';
+      const color = readableNameColor(stored?.color || '#9147FF');
       onUsernameClick(chatter.user_id, chatter.user_login, chatter.user_name, color, [], event);
     },
     [onUsernameClick],

@@ -38,6 +38,7 @@ import { playSoundThrottled } from '../utils/notificationSound';
 import { chatterId, chatterProvider } from '../utils/chatterIdentity';
 import type { ProviderId } from '../types/providers';
 import { getDisplayedName, getColorOverride } from '../utils/userChatOverrides';
+import { useNameColorAdjust } from '../hooks/useNameColor';
 import { CHANNEL_SPECIFIC_TWITCH_BADGES, orderTwitchBadges } from '../utils/badgeOrder';
 import { LinkPreviewCard } from './chat/LinkPreviewCard';
 import { SongCard } from './chat/SongCard';
@@ -400,7 +401,8 @@ const MentionSpan: React.FC<{
   const [apiUserPaint, setApiUserPaint] = useState<SevenTVPaintWithSelection | null>(null);
   
   // If user is in chat store, use their data directly
-  const userColor = cachedUser?.color || '#9147FF';
+  const adjustMentionColor = useNameColorAdjust();
+  const userColor = adjustMentionColor(cachedUser?.color || '#9147FF') ?? '#9147FF';
   const userPaint = cachedUser?.paint || apiUserPaint;
   const paintShadowMode = useAppStore((s) => s.settings.cosmetics?.paint_shadows) ?? 'all';
   
@@ -586,7 +588,9 @@ function UsernameWithCosmetics({
   // real Twitch name color (batched Helix lookup), else Twitch purple. This
   // is why a gift recipient no longer inherits the gifter's color.
   const fetchedColor = useUserColor(userIdProp);
-  const recipientBaseColor = getColorOverride(userIdProp, userOverrides) ?? fetchedColor ?? '#9147FF';
+  const adjustRecipientColor = useNameColorAdjust();
+  const recipientBaseColor =
+    adjustRecipientColor(getColorOverride(userIdProp, userOverrides) ?? fetchedColor ?? '#9147FF') ?? '#9147FF';
 
   const userStyle = useMemo(() => {
     if (!userPaint) {
@@ -1012,9 +1016,12 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // Color override layers under the user's 7TV paint when one is selected
   // (the paint computes against this base color), or replaces parsed.color
   // outright when no paint is in play.
+  // Readability last: an override is still a color someone chose, and a
+  // navy override is as hard to read as a navy Twitch color.
+  const adjustNameColor = useNameColorAdjust();
   const effectiveColor = useMemo(
-    () => getColorOverride(cosmeticsKey ?? userId, userOverrides) ?? parsed.color,
-    [cosmeticsKey, userId, userOverrides, parsed.color],
+    () => adjustNameColor(getColorOverride(cosmeticsKey ?? userId, userOverrides) ?? parsed.color),
+    [cosmeticsKey, userId, userOverrides, parsed.color, adjustNameColor],
   );
 
   // Paint + 7TV badge are now derived from chatUserStore: ChatWidget's addUser

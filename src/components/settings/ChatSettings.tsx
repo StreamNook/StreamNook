@@ -22,6 +22,7 @@ import RemindersSettings from './RemindersSettings';
 import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
 import { Toggle } from '../ui/Toggle';
 import { usePhonePrefs } from '../../mobile/phonePrefs';
+import { useNameColorAdjust } from '../../hooks/useNameColor';
 import SpellcheckDictionary from './SpellcheckDictionary';
 import IgnoredPhrasesSettings from './IgnoredPhrasesSettings';
 import CustomSoundsSettings from './CustomSoundsSettings';
@@ -111,6 +112,7 @@ const NamePrefixPreview = ({
 }) => {
   const currentUser = useAppStore((s) => s.currentUser);
   const paintShadowMode = useAppStore((s) => s.settings.cosmetics?.paint_shadows) ?? 'all';
+  const adjustPreviewColor = useNameColorAdjust();
   const fontSize = useAppStore((s) => s.settings.chat_design?.font_size) ?? 14;
   const userId = currentUser?.user_id;
   const storeEntry = useChatUserStore((s) => (userId ? s.users.get(userId) : undefined));
@@ -134,7 +136,7 @@ const NamePrefixPreview = ({
   }, [userId, storeEntry?.paint]);
 
   const name = currentUser?.display_name || currentUser?.username || 'YourName';
-  const baseColor = storeEntry?.color || '#9147ff';
+  const baseColor = adjustPreviewColor(storeEntry?.color || '#9147ff') ?? '#9147ff';
   const paint = storeEntry?.paint ?? fetchedPaint;
   const nameTextStyle = paint ? computePaintStyle(paint, baseColor, paintShadowMode) : { color: baseColor };
   const accentColor = accentSource === 'theme' ? 'var(--color-accent)' : baseColor;
@@ -381,6 +383,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     pinned_collapsed_style: stored?.pinned_collapsed_style ?? 'bar',
     pinned_start_collapsed: stored?.pinned_start_collapsed ?? true,
     polls_start_collapsed: stored?.polls_start_collapsed ?? false,
+    name_color_adjustment: (stored?.name_color_adjustment ?? 'hsl_loop') as 'off' | 'hsl_loop',
   };
 
   const setDesign = (patch: Partial<typeof cd>) => {
@@ -1045,6 +1048,21 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             <Toggle
               enabled={cd.mention_animation ?? true}
               onChange={() => setDesign({ mention_animation: !(cd.mention_animation ?? true) })}
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Keep name colors readable"
+          description="Nudges a chatter's color lighter on a dark theme, or darker on a light one, until it stands out from the background. The hue stays theirs. Off shows colors exactly as they set them."
+          control={
+            <Toggle
+              enabled={(cd.name_color_adjustment ?? 'hsl_loop') !== 'off'}
+              onChange={() =>
+                setDesign({
+                  name_color_adjustment: (cd.name_color_adjustment ?? 'hsl_loop') === 'off' ? 'hsl_loop' : 'off',
+                })
+              }
             />
           }
         />
