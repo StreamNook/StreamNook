@@ -23,6 +23,9 @@ import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
 import { Toggle } from '../ui/Toggle';
 import { usePhonePrefs } from '../../mobile/phonePrefs';
 import { useNameColorAdjust } from '../../hooks/useNameColor';
+import { CURRENCY_OPTIONS } from '../../services/currencyService';
+import { EVENT_CATEGORIES, EVENT_TEMPLATE_EXAMPLES, PROVIDER_CATEGORY_LABELS, PROVIDER_EVENT_CATEGORIES } from '../overlay/overlayConfig';
+import type { ChatEventCategory, ChatEventSettings, CommandFilter } from '../../types';
 import SpellcheckDictionary from './SpellcheckDictionary';
 import IgnoredPhrasesSettings from './IgnoredPhrasesSettings';
 import CustomSoundsSettings from './CustomSoundsSettings';
@@ -335,6 +338,8 @@ const HiddenNameEditor = ({
   );
 };
 
+const PROVIDER_LABELS: Record<string, string> = { twitch: 'Twitch', kick: 'Kick', youtube: 'YouTube', tiktok: 'TikTok' };
+
 /** Add-on badge services, by the lowercase id each resolved badge carries. */
 const BADGE_PROVIDERS: { id: string; label: string }[] = [
   { id: 'streamnook', label: 'StreamNook' },
@@ -354,6 +359,27 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
   // Phone-shell preferences (see mobile/phonePrefs.ts); only read on the phone.
   const mentionHaptic = usePhonePrefs((s) => s.mentionHaptic);
   const setMentionHaptic = usePhonePrefs((s) => s.setMentionHaptic);
+  // Chat events (how event rows look and read) and command hiding.
+  const chatEvents = settings.chat_events ?? {};
+  const setEvents = (patch: Partial<ChatEventSettings>) =>
+    updateSettings({ ...settings, chat_events: { ...settings.chat_events, ...patch } });
+  const hiddenEvents = chatEvents.hidden_provider_events ?? [];
+  const toggleHiddenEvent = (key: string) =>
+    setEvents({
+      hidden_provider_events: hiddenEvents.includes(key) ? hiddenEvents.filter((k) => k !== key) : [...hiddenEvents, key],
+    });
+  const [commandDraft, setCommandDraft] = useState('');
+  const [commandMode, setCommandMode] = useState<'prefix' | 'exact'>('prefix');
+  const commandFilters: CommandFilter[] = settings.chat_filters?.command_filters ?? [];
+  const setCommandFilters = (next: CommandFilter[], hide?: boolean) =>
+    updateSettings({
+      ...settings,
+      chat_filters: {
+        ...settings.chat_filters,
+        command_filters: next,
+        ...(hide === undefined ? {} : { hide_commands: hide }),
+      },
+    });
 
   const stored = settings.chat_design;
   const cd = {
@@ -891,6 +917,147 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
           }
         />
+
+        <SettingsRow
+          title="How event rows look"
+          description="Subs, gifts, bits and milestones as tinted cards, as a plain row with a ring, or as a plain row."
+        >
+          <SegmentedSelect<'cards' | 'outline' | 'plain'>
+            value={chatEvents.event_style ?? 'cards'}
+            onChange={(event_style) => setEvents({ event_style })}
+            options={[
+              { value: 'cards', label: 'Cards' },
+              { value: 'outline', label: 'Outline' },
+              { value: 'plain', label: 'Plain' },
+            ]}
+          />
+        </SettingsRow>
+
+        {(chatEvents.event_style ?? 'cards') === 'outline' && (
+          <SettingsRow title="Outline color" description="Leave it on the default to follow the theme accent.">
+            <ColorSwatch
+              value={chatEvents.event_outline_color || '#9147ff'}
+              defaultValue=""
+              onChange={(color) => setEvents({ event_outline_color: color })}
+              tooltip="Outline color"
+            />
+          </SettingsRow>
+        )}
+
+        <SettingsRow
+          title="Event glint"
+          description="A short highlight when an event row lands: a sheen across it, a pulse, or a spark that runs around the edge."
+        >
+          <Dropdown<'none' | 'sheen' | 'pulse' | 'chase'>
+            value={chatEvents.event_animation ?? 'none'}
+            onChange={(event_animation) => setEvents({ event_animation })}
+            className="w-full"
+            ariaLabel="Event glint"
+            options={[
+              { value: 'none', label: 'None' },
+              { value: 'sheen', label: 'Sheen' },
+              { value: 'pulse', label: 'Pulse' },
+              { value: 'chase', label: 'Chase' },
+            ]}
+          />
+        </SettingsRow>
+
+        {(chatEvents.event_animation ?? 'none') !== 'none' && (
+          <SettingsRow
+            title="Keep the glint going"
+            description="Off plays it once as the row arrives."
+            control={
+              <Toggle
+                enabled={chatEvents.event_animate_repeat ?? false}
+                onChange={() => setEvents({ event_animate_repeat: !(chatEvents.event_animate_repeat ?? false) })}
+              />
+            }
+          />
+        )}
+
+        <SettingsRow
+          title="Bits cheers"
+          description="As their own card with the cheer gem, or as an ordinary message with the cheermotes inline."
+        >
+          <SegmentedSelect<'card' | 'message'>
+            value={chatEvents.cheer_display ?? 'card'}
+            onChange={(cheer_display) => setEvents({ cheer_display })}
+            options={[
+              { value: 'card', label: 'Card' },
+              { value: 'message', label: 'Message' },
+            ]}
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          title="Super Chat currency"
+          description="Show amounts converted to one currency. Rates refresh daily; until they load the amount shows as sent."
+        >
+          <Dropdown<string>
+            value={chatEvents.superchat_currency ?? ''}
+            onChange={(superchat_currency) => setEvents({ superchat_currency })}
+            className="w-full"
+            ariaLabel="Super Chat currency"
+            options={[{ value: '', label: 'As sent' }, ...CURRENCY_OPTIONS.map((c) => ({ value: c, label: c }))]}
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          title="Event wording"
+          description="Your own sentence for each kind of event. Tokens in braces fill in from the event; if one is missing, the platform's wording is used."
+          help="Tokens: {username} {tier} {months} {years} {streak} {recipient} {count} {bits} {viewers} {channel} {platform} {time} {default}. Leave a box empty to keep the platform's wording."
+        >
+          <div className="flex flex-col gap-2 w-full">
+            {(['subscription', 'gift', 'cheer', 'milestone'] as ChatEventCategory[]).map((cat) => (
+              <label key={cat} className="flex flex-col gap-1">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-textMuted">
+                  {EVENT_CATEGORIES.find((c) => c.id === cat)?.label ?? cat}
+                </span>
+                <input
+                  type="text"
+                  value={chatEvents.event_templates?.[cat] ?? ''}
+                  placeholder={EVENT_TEMPLATE_EXAMPLES[cat]}
+                  maxLength={200}
+                  onChange={(e) =>
+                    setEvents({ event_templates: { ...chatEvents.event_templates, [cat]: e.target.value } })
+                  }
+                  className="glass-input w-full px-3 py-2 text-[13px] text-textPrimary placeholder:text-textMuted"
+                />
+              </label>
+            ))}
+          </div>
+        </SettingsRow>
+
+        <SettingsRow
+          title="Events by platform"
+          description="Turn event kinds off per platform. Lit means shown."
+        >
+          <div className="flex flex-col gap-2 w-full">
+            {(Object.keys(PROVIDER_EVENT_CATEGORIES) as Array<keyof typeof PROVIDER_EVENT_CATEGORIES>).map((provider) => (
+              <div key={provider} className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[12px] text-textSecondary w-16 shrink-0">{PROVIDER_LABELS[provider] ?? provider}</span>
+                {(PROVIDER_EVENT_CATEGORIES[provider] ?? []).map((cat) => {
+                  const key = `${provider}:${cat}`;
+                  const on = !hiddenEvents.includes(key);
+                  const label = PROVIDER_CATEGORY_LABELS[provider]?.[cat] ?? EVENT_CATEGORIES.find((c) => c.id === cat)?.label ?? cat;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => toggleHiddenEvent(key)}
+                      className={`px-2.5 py-1 rounded-full text-[12px] font-medium transition-colors ${
+                        on ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textPrimary' : 'glass-button-static text-textMuted'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </SettingsRow>
       </SettingsSection>
 
       {/* Desktop only. Writes .log files into a folder the user picks, and there
@@ -2021,6 +2188,79 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           title="Ignored phrases"
           description="Never see messages that contain these words, in any chat. The sender is not told. Plain words work; turn on regex or whole-word per phrase when you need precision."
         >
+          <SettingsRow
+            title="Hide commands"
+            description="Hides messages that are bot commands, so a chat full of !drops and !uptime reads as a chat."
+            help="With no patterns below, anything starting with ! is hidden. Your own messages are never hidden."
+            control={
+              <Toggle
+                enabled={settings.chat_filters?.hide_commands ?? false}
+                onChange={() => setCommandFilters(commandFilters, !(settings.chat_filters?.hide_commands ?? false))}
+              />
+            }
+          />
+          {(settings.chat_filters?.hide_commands ?? false) && (
+            <SettingsRow
+              title="Command patterns"
+              description="A prefix hides every command starting with it; an exact pattern hides only that word at the start of a message."
+            >
+              <div className="flex flex-col gap-2 w-full">
+                <div className="flex flex-wrap gap-1.5">
+                  {commandFilters.length === 0 && (
+                    <span className="text-[12px] text-textMuted">Using the default: anything starting with !</span>
+                  )}
+                  {commandFilters.map((f, i) => (
+                    <button
+                      key={`${f.mode}:${f.value}:${i}`}
+                      type="button"
+                      onClick={() => setCommandFilters(commandFilters.filter((_, j) => j !== i))}
+                      title="Remove"
+                      className="glass-button-static px-2.5 py-1 rounded-full text-[12px] text-textPrimary flex items-center gap-1.5"
+                    >
+                      <span className="font-mono">{f.value}</span>
+                      <span className="text-textMuted">{f.mode === 'exact' ? 'exact' : 'prefix'}</span>
+                      <X size={12} className="text-textMuted" />
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={commandDraft}
+                    onChange={(e) => setCommandDraft(e.target.value)}
+                    placeholder="!"
+                    maxLength={40}
+                    className="glass-input flex-1 min-w-0 px-3 py-2 text-[13px] font-mono text-textPrimary placeholder:text-textMuted"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && commandDraft.trim()) {
+                        setCommandFilters([...commandFilters, { value: commandDraft.trim(), mode: commandMode }]);
+                        setCommandDraft('');
+                      }
+                    }}
+                  />
+                  <SegmentedSelect<'prefix' | 'exact'>
+                    value={commandMode}
+                    onChange={setCommandMode}
+                    options={[
+                      { value: 'prefix', label: 'Prefix' },
+                      { value: 'exact', label: 'Exact' },
+                    ]}
+                  />
+                  <button
+                    type="button"
+                    disabled={!commandDraft.trim()}
+                    onClick={() => {
+                      setCommandFilters([...commandFilters, { value: commandDraft.trim(), mode: commandMode }]);
+                      setCommandDraft('');
+                    }}
+                    className="glass-button px-3 py-2 text-[13px] font-medium text-textPrimary disabled:opacity-50"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+            </SettingsRow>
+          )}
           <IgnoredPhrasesSettings />
         </SettingsRow>
         {perChannelHidden.length > 0 && (

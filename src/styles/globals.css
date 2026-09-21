@@ -2331,6 +2331,100 @@ html[data-motion="reduced"] .animate-shimmer {
   }
 }
 
+/* Event rows as an outline instead of a card: a ring in the event colour
+   (or the accent), a plain ground. --sn-event-outline is set inline when the
+   viewer picked a colour. */
+.sn-event-outline {
+  border-radius: 8px;
+  margin: 2px 6px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sn-event-outline, var(--color-accent)) 62%, transparent);
+}
+
+/* A first-time chatter's row as a ring rather than the tinted wash. */
+.chat-message-row .sn-ft-ring,
+.sn-ft-ring {
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sn-ft-color, var(--color-accent)) 62%, transparent);
+}
+.sn-ft-ring.sn-ft-fill {
+  background-color: color-mix(in srgb, var(--sn-ft-color, var(--color-accent)) 8%, transparent);
+  background-clip: padding-box;
+}
+
+/* The glint family, shared by first-time rows and event rows. A ::after
+   layer draws either a ring band (masked to the element's edge) or a bar down
+   the left, and one keyframe set sweeps, pulses or orbits a highlight across
+   it. One-shot by default; sn-ft-loop keeps it cycling. */
+@property --sn-ft-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes snFtSweep { from { background-position: 130% 0 } to { background-position: -60% 0 } }
+@keyframes snFtSweepLoop { 0% { background-position: 130% 0 } 22% { background-position: -60% 0 } 100% { background-position: -60% 0 } }
+@keyframes snFtBarSweep { from { background-position: 0 -60% } to { background-position: 0 130% } }
+@keyframes snFtBarSweepLoop { 0% { background-position: 0 -60% } 22% { background-position: 0 130% } 100% { background-position: 0 130% } }
+@keyframes snFtPulse { 0% { opacity: 0 } 45% { opacity: 1 } 100% { opacity: 0 } }
+@keyframes snFtPulseLoop { 0% { opacity: 0 } 12% { opacity: 1 } 24% { opacity: 0 } 100% { opacity: 0 } }
+@keyframes snFtChase { from { --sn-ft-angle: 0deg } to { --sn-ft-angle: 360deg } }
+.sn-ft-anim-ring::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  background-repeat: no-repeat;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+.sn-ft-anim-bar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  pointer-events: none;
+  background-repeat: no-repeat;
+}
+.sn-ft-anim-ring.sn-ft-t-sheen::after {
+  background-image: linear-gradient(105deg, transparent 38%, rgba(255, 255, 255, 0.9) 50%, transparent 62%);
+  background-size: 250% 100%;
+  background-position: 130% 0;
+  animation: snFtSweep 1.1s ease-out 0.15s 1 both;
+}
+.sn-ft-anim-ring.sn-ft-t-sheen.sn-ft-loop::after { animation: snFtSweepLoop 5s ease-out 0.15s infinite; }
+.sn-ft-anim-bar.sn-ft-t-sheen::after,
+.sn-ft-anim-bar.sn-ft-t-chase::after {
+  background-image: linear-gradient(180deg, transparent 38%, rgba(255, 255, 255, 0.7) 50%, transparent 62%);
+  background-size: 100% 300%;
+  background-position: 0 -60%;
+  animation: snFtBarSweep 1s ease-out 0.15s 1 both;
+}
+.sn-ft-anim-bar.sn-ft-t-sheen.sn-ft-loop::after,
+.sn-ft-anim-bar.sn-ft-t-chase.sn-ft-loop::after { animation: snFtBarSweepLoop 5s ease-out 0.15s infinite; }
+.sn-ft-anim-ring.sn-ft-t-pulse::after,
+.sn-ft-anim-bar.sn-ft-t-pulse::after {
+  background-color: rgba(255, 255, 255, 0.55);
+  opacity: 0;
+  animation: snFtPulse 1.2s ease-in-out 0.15s 1 both;
+}
+.sn-ft-anim-ring.sn-ft-t-pulse.sn-ft-loop::after,
+.sn-ft-anim-bar.sn-ft-t-pulse.sn-ft-loop::after { animation: snFtPulseLoop 5s ease-in-out 0.15s infinite; }
+.sn-ft-anim-ring.sn-ft-t-chase::after {
+  background-image: conic-gradient(from var(--sn-ft-angle), transparent 0deg, rgba(255, 255, 255, 0.9) 24deg, transparent 56deg);
+  background-size: 100% 100%;
+  animation: snFtChase 1.4s linear 0.15s 1 both;
+}
+.sn-ft-anim-ring.sn-ft-t-chase.sn-ft-loop::after { animation: snFtChase 1.8s linear 0.15s infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .sn-ft-anim-ring::after,
+  .sn-ft-anim-bar::after { animation: none !important; opacity: 0 !important; }
+}
+
 .subscription-gradient {
   background-color: var(--color-background);
   background-image: linear-gradient(

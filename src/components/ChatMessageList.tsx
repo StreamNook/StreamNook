@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useCallback, useMemo, memo } from 'react';
 import ChatMessage from './ChatMessage';
+import { isHiddenEvent } from '../utils/chatEvents';
 import { EmoteSet } from '../services/emoteService';
 import { BackendChatMessage } from '../services/twitchChat';
 import { ModerationContext } from '../hooks/useTwitchChat';
@@ -261,6 +262,7 @@ const ChatMessageList = memo(function ChatMessageList({
   // The `auto` keyword still lets the browser remember the actual size after
   // first render, so this is just the initial-paint guess.
   const chatDesign = useAppStore((s) => s.settings.chat_design);
+  const hiddenEvents = useAppStore((s) => s.settings.chat_events?.hidden_provider_events);
   const intrinsicSizeCSS = useMemo(() => {
     const fontSize = chatDesign?.font_size ?? 14;
     const messageSpacing = chatDesign?.message_spacing ?? 2;
@@ -606,6 +608,8 @@ const ChatMessageList = memo(function ChatMessageList({
       >
         {messages.map((message, index) => {
           const messageId = getMessageId(message);
+          // Event categories the viewer turned off for this platform.
+          if (typeof message !== 'string' && isHiddenEvent(message, hiddenEvents)) return null;
 
           // Render each id at most once. If the array somehow holds a duplicate
           // (e.g. an own message present both as the stamped optimistic copy and

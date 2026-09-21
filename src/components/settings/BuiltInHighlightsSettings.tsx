@@ -1,5 +1,7 @@
+import React from 'react';
 import { useAppStore } from '../../stores/AppStore';
-import { SettingsSection, SettingsRow } from './_primitives';
+import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
+import { Dropdown } from '../ui/Dropdown';
 import type { BuiltInHighlightSettings, BuiltInHighlightRule } from '../../types';
 
 const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
@@ -89,24 +91,79 @@ const BuiltInHighlightsSettings = () => {
           enabled: row.defaultEnabled,
           color: row.defaultColor,
         };
+        const firstTimeExtras = row.key === 'first_time_chatter' && rule.enabled;
         return (
-          <SettingsRow
-            key={row.key}
-            title={row.label}
-            description={row.hint}
-            control={
-              <div className="flex items-center gap-2">
-                <input
-                  type="color"
-                  value={rule.color}
-                  onChange={(e) => patchRule(row.key, { color: e.target.value })}
-                  className="w-8 h-8 rounded cursor-pointer bg-transparent border border-borderSubtle"
-                  aria-label="Highlight color"
-                />
-                <Toggle enabled={rule.enabled} onChange={() => patchRule(row.key, { enabled: !rule.enabled })} />
-              </div>
-            }
-          />
+          <React.Fragment key={row.key}>
+            <SettingsRow
+              title={row.label}
+              description={row.hint}
+              control={
+                <div className="flex items-center gap-2">
+                  <input
+                    type="color"
+                    value={rule.color}
+                    onChange={(e) => patchRule(row.key, { color: e.target.value })}
+                    className="w-8 h-8 rounded cursor-pointer bg-transparent border border-borderSubtle"
+                    aria-label="Highlight color"
+                  />
+                  <Toggle enabled={rule.enabled} onChange={() => patchRule(row.key, { enabled: !rule.enabled })} />
+                </div>
+              }
+            />
+            {firstTimeExtras && (
+              <>
+                <SettingsRow
+                  title="First-time look"
+                  description="A tinted wash with a bar down the left, or a ring around the message."
+                >
+                  <SegmentedSelect<'wash' | 'ring'>
+                    value={rule.style ?? 'wash'}
+                    onChange={(style) => patchRule(row.key, { style })}
+                    options={[
+                      { value: 'wash', label: 'Wash' },
+                      { value: 'ring', label: 'Ring' },
+                    ]}
+                  />
+                </SettingsRow>
+                {(rule.style ?? 'wash') === 'ring' && (
+                  <SettingsRow
+                    title="Fill inside the ring"
+                    description="A faint color-matched fill, so the row reads as highlighted and not only outlined."
+                    control={<Toggle enabled={rule.fill ?? false} onChange={() => patchRule(row.key, { fill: !(rule.fill ?? false) })} />}
+                  />
+                )}
+                <SettingsRow
+                  title="First-time glint"
+                  description="A short highlight as the row lands: a sheen, a pulse, or a spark around the edge."
+                >
+                  <Dropdown<'none' | 'sheen' | 'pulse' | 'chase'>
+                    value={rule.animation ?? 'none'}
+                    onChange={(animation) => patchRule(row.key, { animation })}
+                    className="w-full"
+                    ariaLabel="First-time glint"
+                    options={[
+                      { value: 'none', label: 'None' },
+                      { value: 'sheen', label: 'Sheen' },
+                      { value: 'pulse', label: 'Pulse' },
+                      { value: 'chase', label: 'Chase' },
+                    ]}
+                  />
+                </SettingsRow>
+                {(rule.animation ?? 'none') !== 'none' && (
+                  <SettingsRow
+                    title="Keep the glint going"
+                    description="Off plays it once."
+                    control={
+                      <Toggle
+                        enabled={rule.animate_repeat ?? false}
+                        onChange={() => patchRule(row.key, { animate_repeat: !(rule.animate_repeat ?? false) })}
+                      />
+                    }
+                  />
+                )}
+              </>
+            )}
+          </React.Fragment>
         );
       })}
     </SettingsSection>

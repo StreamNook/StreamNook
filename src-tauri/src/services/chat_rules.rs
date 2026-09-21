@@ -147,6 +147,22 @@ struct ChatFilterSettings {
     /// New in the rule engine: phrases that hide a message everywhere.
     #[serde(default)]
     ignored_phrases: Vec<IgnoredPhrase>,
+    /// Hide bot commands: messages that START with one of the patterns below.
+    #[serde(default)]
+    hide_commands: bool,
+    #[serde(default)]
+    command_filters: Vec<CommandFilter>,
+}
+
+/// A command pattern: a prefix ("!" hides every !command) or an exact first
+/// word ("!drops" hides only that). Compiled into the same ignore set as the
+/// phrases, so a hidden command costs nothing extra per message.
+#[derive(Deserialize, Default, Clone)]
+struct CommandFilter {
+    #[serde(default)]
+    value: String,
+    #[serde(default)]
+    mode: String,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -497,6 +513,33 @@ impl CompiledRules {
                     id: p.id.clone(),
                     error: e.to_string(),
                 }),
+            }
+        }
+        if cf.hide_commands {
+            let filters: Vec<&CommandFilter> = cf
+                .command_filters
+                .iter()
+                .filter(|f| !f.value.trim().is_empty())
+                .collect();
+            let default_prefix = CommandFilter {
+                value: "!".to_string(),
+                mode: "prefix".to_string(),
+            };
+            let effective: Vec<&CommandFilter> = if filters.is_empty() {
+                vec![&default_prefix]
+            } else {
+                filters
+            };
+            for f in effective {
+                let escaped = escape_regex(f.value.trim());
+                let pat = if f.mode == "exact" {
+                    format!(r"(?i:^\s*{}(?:\s|$))", escaped)
+                } else {
+                    format!(r"(?i:^\s*{})", escaped)
+                };
+                if Regex::new(&pat).is_ok() {
+                    ignore_patterns.push(pat);
+                }
             }
         }
         let ignore_set = if ignore_patterns.is_empty() {
@@ -1874,6 +1917,34 @@ mod tests {
         assert!(!eval_with(&rules, &mut msg("eve", "hello")).drop);
         // Own messages are never dropped.
         let mut own = msg("alice", "buy followers");
+        own.user_id = "999".into();
+        assert!(!eval_with(&rules, &mut own).drop);
+    }
+
+    #[test]
+    fn hide_commands_drops_prefix_and_exact_matches_only() {
+        ChatRules::set_own_identity("brandon", "999");
+        // No patterns: the default is anything starting with !.
+        let rules = rules_from("{}", r##"{"hide_commands":true}"##, "{}");
+        assert!(eval_with(&rules, &mut msg("eve", "!drops")).drop);
+        assert!(eval_with(&rules, &mut msg("eve", "  !uptime please")).drop);
+        assert!(!eval_with(&rules, &mut msg("eve", "hello !drops")).drop);
+        // A prefix hides the family; an exact pattern hides one word only.
+        let rules = rules_from(
+            "{}",
+            r##"{"hide_commands":true,"command_filters":[{"value":"?","mode":"prefix"},{"value":"!drops","mode":"exact"}]}"##,
+            "{}",
+        );
+        assert!(eval_with(&rules, &mut msg("eve", "?help")).drop);
+        assert!(eval_with(&rules, &mut msg("eve", "!DROPS now")).drop);
+        assert!(!eval_with(&rules, &mut msg("eve", "!dropsx")).drop);
+        assert!(!eval_with(&rules, &mut msg("eve", "!uptime")).drop);
+        // Off: nothing is a command.
+        let rules = rules_from("{}", r##"{"hide_commands":false}"##, "{}");
+        assert!(!eval_with(&rules, &mut msg("eve", "!drops")).drop);
+        // Own messages are never hidden.
+        let rules = rules_from("{}", r##"{"hide_commands":true}"##, "{}");
+        let mut own = msg("brandon", "!drops");
         own.user_id = "999".into();
         assert!(!eval_with(&rules, &mut own).drop);
     }

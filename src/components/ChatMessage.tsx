@@ -40,6 +40,9 @@ import type { ProviderId } from '../types/providers';
 import { getDisplayedName, getColorOverride } from '../utils/userChatOverrides';
 import { useNameColorAdjust } from '../hooks/useNameColor';
 import { vendorEmojiUrl } from '../services/emojiService';
+import { categoryOf, chatEventTemplateContext } from '../utils/chatEvents';
+import { renderEventTemplate } from './overlay/overlayConfig';
+import { convert as convertMoney, formatMoney, preloadRates, symbolToCode } from '../services/currencyService';
 import { CHANNEL_SPECIFIC_TWITCH_BADGES, orderTwitchBadges } from '../utils/badgeOrder';
 import { LinkPreviewCard } from './chat/LinkPreviewCard';
 import { SongCard } from './chat/SongCard';
@@ -675,6 +678,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   const chatDesign = useAppStore((s) => s.settings.chat_design);
   const chatCustomization = useAppStore((s) => s.settings.chat_customization);
   const chatHighlights = useAppStore((s) => s.settings.chat_highlights);
+  const chatEvents = useAppStore((s) => s.settings.chat_events);
   const timeoutPresetSetting = useAppStore((s) => s.settings.moderation?.timeout_presets);
   const timeoutPresets = useMemo(
     () => presetsFromSetting(timeoutPresetSetting),
@@ -2090,7 +2094,43 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
 
   // Check if this is a bits cheer message
   const bitsAmount = parsed.tags.get('bits');
-  const isBitsCheer = bitsAmount && parseInt(bitsAmount, 10) > 0;
+  // A cheer is its own card unless the viewer asked for it as a plain message,
+  // in which case the row falls through with its cheermotes inline.
+  const isBitsCheer = bitsAmount && parseInt(bitsAmount, 10) > 0 && (chatEvents?.cheer_display ?? 'card') !== 'message';
+
+  // How event rows dress: the tinted cards, a ring, or nothing. The glint
+  // classes are the same ones first-time rows use (see globals.css sn-ft-*).
+  const eventStyle = chatEvents?.event_style ?? 'cards';
+  const eventAnim =
+    chatEvents?.event_animation && chatEvents.event_animation !== 'none' ? chatEvents.event_animation : null;
+  const eventCardClass = (gradient: string) => {
+    const base = eventStyle === 'plain' ? '' : eventStyle === 'outline' ? 'sn-event-outline' : gradient;
+    const anim = eventAnim
+      ? ` ${eventStyle === 'outline' ? 'sn-ft-anim-ring' : 'sn-ft-anim-bar'} sn-ft-t-${eventAnim}${chatEvents?.event_animate_repeat ? ' sn-ft-loop' : ''}`
+      : '';
+    return `relative ${base}${anim}`;
+  };
+  const eventCardStyle =
+    eventStyle === 'outline' && chatEvents?.event_outline_color
+      ? ({ '--sn-event-outline': chatEvents.event_outline_color } as React.CSSProperties)
+      : undefined;
+  // Custom wording for an event category, or null to keep the platform's.
+  const eventTemplateFor = (category: 'subscription' | 'gift' | 'cheer' | 'milestone' | 'raid'): string | null => {
+    const template = chatEvents?.event_templates?.[category];
+    if (!template) return null;
+    return renderEventTemplate(
+      template,
+      chatEventTemplateContext(parsed.tags, category, {
+        username: parsed.username,
+        displayName: parsed.tags.get('display-name') || parsed.displayName || parsed.username,
+        provider: parsed.provider ?? 'twitch',
+        bits: bitsAmount ? parseInt(bitsAmount, 10) : undefined,
+        channel: (parsed.channel ?? '').split(':').pop() || undefined,
+        time: parsed.metadata?.formatted_timestamp || undefined,
+        defaultText: parsed.tags.get('system-msg')?.replace(/\\s/g, ' ') || undefined,
+      }),
+    );
+  };
 
   // Check if this is a system message
   const isSystemMessage = parsed.username === 'System';
@@ -2119,6 +2159,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   let builtInEventColor: string | null = null;
   let builtInEventLabel: string | null = null;
   const builtInStamp = stamped ? parsed.metadata?.built_in : undefined;
+  let builtInKind: 'raider' | 'returning' | 'first_time' | 'self' | undefined;
   const suspiciousStatus = stamped ? parsed.metadata?.suspicious : undefined;
   const streamerModeActive = useStreamerMode((st) => st.active);
   if (stamped) {
@@ -2126,6 +2167,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     if (builtInStamp) {
       builtInEventColor = builtInStamp.color;
       builtInEventLabel = builtInStamp.label;
+      builtInKind = builtInStamp.kind;
     }
   } else if (isRaidNotice && (builtInHighlights?.raider?.enabled ?? false)) {
     builtInEventColor = builtInHighlights?.raider?.color ?? '#ef4444';
@@ -2139,6 +2181,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     // settings panel, the new color flows through builtInEventColor.
     builtInEventColor = builtInHighlights?.first_time_chatter?.color ?? '#a855f7';
     builtInEventLabel = 'First message in chat';
+    builtInKind = 'first_time';
   } else if (isOwnMessage && (builtInHighlights?.self_message?.enabled ?? false)) {
     builtInEventColor = builtInHighlights?.self_message?.color ?? '#facc15';
     builtInEventLabel = 'You';
@@ -2223,6 +2266,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
 
   // Handle bits cheers
   if (isBitsCheer) {
+    const cheerTemplate = eventTemplateFor('cheer');
     // Generate a unique key based on message ID to prevent animation restarts
     const messageId = parsed.tags.get('id') || `bits-${parsed.username}-${parsed.tags.get('tmi-sent-ts') ?? ''}`;
     const bitsCount = parseInt(bitsAmount!, 10);
@@ -2349,7 +2393,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     const eventPadding = calculateHalfPadding(chatDesign?.message_spacing ?? 8);
 
     return (
-      <div key={messageId} className="px-3 border-t border-borderSubtle bits-gradient" style={{ paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
+      <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('bits-gradient')}`} style={{ ...eventCardStyle, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
         <div className="flex items-center gap-2.5">
           <div className="flex-shrink-0">
             {/* Twitch's animated bits gem for the tier */}
@@ -2368,8 +2412,14 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           >
             <p className="text-white font-semibold leading-relaxed">
               {renderBadges()}
-              {renderClickableUsername(parsed.username, parsed.tags.get('display-name') || parsed.username)}
-              <span style={{ color: bitsTierColor }} className="font-bold"> cheered {formattedBits} bits</span>
+              {cheerTemplate ? (
+                <span style={{ color: bitsTierColor }} className="font-bold">{cheerTemplate}</span>
+              ) : (
+                <>
+                  {renderClickableUsername(parsed.username, parsed.tags.get('display-name') || parsed.username)}
+                  <span style={{ color: bitsTierColor }} className="font-bold"> cheered {formattedBits} bits</span>
+                </>
+              )}
             </p>
             {parsed.content && (
               <p className="text-textSecondary mt-1 leading-relaxed break-words">
@@ -2414,7 +2464,22 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     // drops the currency's conventions ("$2.00" becomes "$2").
     const superChatAmount =
       parsed.tags.get('sc-display') || (scAmount ? `${scCurrency}${scAmount}` : null);
-    const formattedAmount = isSuperChat ? (superChatAmount ?? '') : twitchAmount;
+    let formattedAmount = isSuperChat ? (superChatAmount ?? '') : twitchAmount;
+    // Shown in the viewer's currency when they asked for one and the amount can
+    // be read: the original stays when the rate is not loaded yet or the
+    // currency is unknown.
+    const targetCurrency = (chatEvents?.superchat_currency || '').trim().toUpperCase();
+    if (targetCurrency) {
+      preloadRates();
+      const fromCode = isSuperChat
+        ? symbolToCode(scCurrency) ?? (scCurrency.length === 3 ? scCurrency.toUpperCase() : undefined)
+        : donationCurrency.toUpperCase();
+      const rawAmount = isSuperChat ? Number.parseFloat((scAmount ?? '').replace(/[^0-9.]/g, '')) : actualAmount;
+      if (fromCode && Number.isFinite(rawAmount) && rawAmount > 0 && fromCode !== targetCurrency) {
+        const converted = convertMoney(rawAmount, fromCode, targetCurrency);
+        if (converted !== null) formattedAmount = formatMoney(converted, targetCurrency);
+      }
+    }
     // The adapter prefixes the message body with "Super Chat - $2.00  " so a plain
     // row still reads correctly. This card puts the amount in its header, so render
     // the RAW comment instead or the amount appears twice.
@@ -2517,7 +2582,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     const eventPadding = calculateHalfPadding(chatDesign?.message_spacing ?? 8);
 
     return (
-      <div key={messageId} className="px-3 border-t border-borderSubtle donation-gradient" style={{ paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
+      <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('donation-gradient')}`} style={{ ...eventCardStyle, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
         {/* Shared chat indicator */}
         {isFromDifferentChannel && (
           <div className="flex items-center gap-1.5 mb-2 pb-2 border-b border-borderSubtle">
@@ -2700,7 +2765,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     const eventPadding = calculateHalfPadding(chatDesign?.message_spacing ?? 8);
 
     return (
-      <div key={messageId} className="px-3 border-t border-borderSubtle watchstreak-gradient" style={{ paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
+      <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('watchstreak-gradient')}`} style={{ ...eventCardStyle, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
         <div className="flex items-center gap-2.5">
           <div className="flex-shrink-0">
             {/* Fire/Watch Streak icon from Twitch */}
@@ -2727,7 +2792,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               )}
             </p>
             <p className="text-textSecondary mt-0.5 leading-relaxed break-words">
-              Watched {streakValue} consecutive streams and sparked a watch streak!
+              {eventTemplateFor('milestone') ?? `Watched ${streakValue} consecutive streams and sparked a watch streak!`}
             </p>
             {parsed.content && (
               <p className="text-textPrimary mt-1 leading-relaxed break-words">
@@ -2925,12 +2990,15 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         displayMessage = `${parsed.username} subscribed!`;
       }
     }
+    // The viewer's own wording wins when every token it names is present.
+    const subTemplate = eventTemplateFor(categoryOf(msgId) === 'gift' ? 'gift' : 'subscription');
+    if (subTemplate) displayMessage = subTemplate;
 
     // Use dynamic spacing from user settings
     const eventPadding = calculateHalfPadding(chatDesign?.message_spacing ?? 8);
 
     return (
-      <div key={messageId} className="px-3 border-t border-borderSubtle subscription-gradient" style={{ paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
+      <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('subscription-gradient')}`} style={{ ...eventCardStyle, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
         {/* Shared chat indicator */}
         {isFromDifferentChannel && (
           <div className="flex items-center gap-1.5 mb-2 pb-2 border-b border-borderSubtle">
@@ -3122,8 +3190,15 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // a gradient (alpha controlled by tintOpacityPct). Phrase/mention/reply
   // flash still take precedence on the left border (their borderLeftColor
   // overrides below).
+  // First-time rows can wear a ring instead of the wash, and a one-shot glint.
+  const ftRule = builtInHighlights?.first_time_chatter;
+  const ftRing = builtInKind === 'first_time' && ftRule?.style === 'ring' && !!builtInEventColor;
+  const ftAnim = builtInKind === 'first_time' && ftRule?.animation && ftRule.animation !== 'none' ? ftRule.animation : null;
+  const ftClass = `${ftRing ? ` sn-ft-ring${ftRule?.fill ? ' sn-ft-fill' : ''}` : ''}${
+    ftAnim ? ` ${ftRing ? 'sn-ft-anim-ring' : 'sn-ft-anim-bar'} sn-ft-t-${ftAnim}${ftRule?.animate_repeat ? ' sn-ft-loop' : ''}` : ''
+  }`;
   const builtInEventBg =
-    builtInEventColor && showHighlightBg
+    builtInEventColor && showHighlightBg && !ftRing
       ? `linear-gradient(to right, ${builtInEventColor}${tintAlphaHex}, ${builtInEventColor}${Math.round(
           (tintOpacityPct / 100) * 128,
         )
@@ -3134,25 +3209,26 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   return (
     <div
       className={`group relative isolate px-3 hover:bg-glass transition-colors ${borderClass} ${animationClass
-        } ${isRedemption ? 'highlight-message-gradient' : ''
+        }${ftClass} ${isRedemption ? 'highlight-message-gradient' : ''
         } ${isFromSharedChat ? 'border-l-2 border-l-accent/50 bg-accent/5' : ''
         } ${moderationContext && (chatDesign?.deleted_message_style ?? 'strikethrough') !== 'keep' ? 'opacity-50' : ''} ${bodyDragEnabled ? 'select-none cursor-grab' : ''} ${isBeingDragged ? 'overflow-hidden' : ''}`}
       style={{
         ...messageStyle,
         ...(builtInEventBg ? { backgroundImage: builtInEventBg } : {}),
+        ...(ftRing ? ({ '--sn-ft-color': builtInEventColor } as React.CSSProperties) : {}),
         borderLeftColor: (isMentioned || isReplyToMe)
           ? borderLeftColor
           : phraseMatch && showHighlightBorder
             ? phraseMatch.color
-            : builtInEventColor && showHighlightBorder
+            : builtInEventColor && showHighlightBorder && !ftRing
               ? builtInEventColor
               : undefined,
         borderLeftWidth:
-          isMentioned || isReplyToMe || ((phraseMatch || builtInEventColor) && showHighlightBorder)
+          isMentioned || isReplyToMe || ((phraseMatch || (builtInEventColor && !ftRing)) && showHighlightBorder)
             ? '4px'
             : undefined,
         borderLeftStyle:
-          (builtInEventColor || phraseMatch) && showHighlightBorder && !(isMentioned || isReplyToMe)
+          ((builtInEventColor && !ftRing) || phraseMatch) && showHighlightBorder && !(isMentioned || isReplyToMe)
             ? 'solid'
             : undefined,
         ...(phraseMatch

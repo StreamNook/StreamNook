@@ -411,6 +411,14 @@ export interface HighlightBadge {
 // preserve the prior baseline; turning a row on applies a tinted background +
 // left border in the configured color whenever the IRC tag is present.
 export interface BuiltInHighlightRule {
+  // First-time chatters only. 'wash' (default) is the tinted row with a left
+  // bar; 'ring' outlines the row in the color instead.
+  style?: 'wash' | 'ring';
+  // 'ring' only: a faint color-matched fill inside the ring.
+  fill?: boolean;
+  // A one-shot glint when the row arrives: none (default), sheen, pulse, chase.
+  animation?: 'none' | 'sheen' | 'pulse' | 'chase';
+  animate_repeat?: boolean;
   enabled: boolean;
   color: string;
 }
@@ -857,6 +865,36 @@ export interface MessageRepeatSettings {
 // overlay's blocklist dialect: case-insensitive, leading @ stripped, matched
 // against login OR display name. Per-channel keys are composite provider keys
 // (`makeKey`, e.g. `twitch:xqc`); utils/chatFilters.ts owns the matching.
+/** One command pattern to hide: "!" as a prefix hides every !command; "!drops"
+ *  as exact hides only that word at the start of a message. */
+export interface CommandFilter {
+  value: string;
+  mode: 'prefix' | 'exact';
+}
+
+export type ChatEventCategory = 'subscription' | 'gift' | 'raid' | 'cheer' | 'milestone' | 'follow' | 'announcement';
+
+export interface ChatEventSettings {
+  // 'cards' (default): the tinted event cards. 'outline': a ring in the event
+  // color on a plain row. 'plain': the row with no decoration.
+  event_style?: 'cards' | 'outline' | 'plain';
+  // Ring color for 'outline'; empty follows the theme accent.
+  event_outline_color?: string;
+  // A one-shot glint on each event row: none (default), sheen, pulse, chase.
+  event_animation?: 'none' | 'sheen' | 'pulse' | 'chase';
+  // Keep the glint cycling instead of playing once.
+  event_animate_repeat?: boolean;
+  // A Twitch cheer as its own card (default) or as an ordinary message.
+  cheer_display?: 'card' | 'message';
+  // Show Super Chat amounts converted to this currency code; empty = as sent.
+  superchat_currency?: string;
+  // Event categories to leave out, keyed "provider:category" (e.g. "twitch:gift").
+  hidden_provider_events?: string[];
+  // Custom wording per category with {tokens}; a template that names a token
+  // the event lacks is skipped in favour of the platform's wording.
+  event_templates?: Partial<Record<ChatEventCategory, string>>;
+}
+
 export interface ChatFilterSettings {
   // Hide well-known bots (StreamElements, Nightbot, ...) in every channel.
   hide_bots?: boolean;
@@ -867,6 +905,10 @@ export interface ChatFilterSettings {
   // Phrases that hide a message everywhere. Evaluated in Rust
   // (services/chat_rules.rs) before the message reaches any window.
   ignored_phrases?: IgnoredPhrase[];
+  // Hide messages that are bot commands (start with a pattern below). Default off.
+  hide_commands?: boolean;
+  // The command patterns; defaults to a single "!" prefix when empty.
+  command_filters?: CommandFilter[];
 }
 
 export interface IgnoredPhrase {
@@ -1017,6 +1059,9 @@ export interface Settings {
   chat_overlay_order?: ChatOverlayOrder;
   show_channel_point_redemptions?: boolean; // Show no-input channel-point redemptions as chat rows (default on)
   collapse_gift_subs?: boolean; // Collapse mass gift-sub bombs into one announcement row with recipients (default on)
+  // How event rows (subs, gifts, bits, milestones) look and read. Frontend
+  // managed; rides the Rust settings catch-all.
+  chat_events?: ChatEventSettings;
   clip_chat_replay?: boolean; // Show the chat that was live during a clip, beside it in the clip player (default on)
   chat_logging?: ChatLoggingSettings; // Save chat to plain text files as you watch
   moderation?: ModerationSettings;
