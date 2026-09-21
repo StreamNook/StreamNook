@@ -22,7 +22,12 @@ export interface SevenTvAuthStatus {
   is_authenticated: boolean;
   user_id: string | null;
   twitch_id: string | null;
+  /** JWT exp, unix seconds. Null when no token is stored. */
+  expires_at: number | null;
 }
+
+/** A hidden re-mint either completes on its own quickly or not at all. */
+const SILENT_TIMEOUT_MS = 35 * 1000;
 
 /**
  * The 7TV user id, read out of the token itself.
@@ -44,7 +49,7 @@ function sevenTvUserIdFromToken(token: string): string {
 }
 
 /** Resolves with the token, or null if the sheet was closed or nothing arrived. */
-function awaitToken(): Promise<string | null> {
+function awaitToken(timeoutMs: number = CAPTURE_TIMEOUT_MS): Promise<string | null> {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (token: string | null) => {
@@ -61,7 +66,7 @@ function awaitToken(): Promise<string | null> {
       finish(detail.value);
     };
     const onCancel = () => finish(null);
-    const timer = setTimeout(() => finish(null), CAPTURE_TIMEOUT_MS);
+    const timer = setTimeout(() => finish(null), timeoutMs);
 
     window.addEventListener('sn:login-storage', onStorage as EventListener);
     window.addEventListener('sn:login-cancelled', onCancel);
@@ -105,4 +110,41 @@ export async function connectSevenTv(twitchUserId: string): Promise<boolean> {
 
 export async function getSevenTvStatus(): Promise<SevenTvAuthStatus> {
   return await invoke<SevenTvAuthStatus>('get_seventv_auth_status');
+}
+
+/**
+ * Re-mint the 7TV session with nothing on screen.
+ *
+ * The login overlay runs hidden: while the Twitch session in its cookie jar is
+ * alive, 7TV's sign-in round-trips through Twitch on its own and writes a fresh
+ * token into the page, which the overlay captures exactly as a visible sign-in
+ * would. If Twitch wants a click (session gone, consent screen), nothing
+ * happens, the overlay times out and dismisses itself, and this resolves false.
+ * Resolves true once a new token is stored.
+ */
+export async function refreshSevenTvSilently(twitchUserId: string): Promise<boolean> {
+  const url = await invoke<string>('get_seventv_login_url');
+  const pending = awaitToken(SILENT_TIMEOUT_MS);
+  await invoke('open_mobile_login', {
+    url,
+    watchStorageKey: TOKEN_KEY,
+    hidden: true,
+  });
+  const token = await pending;
+  if (!token) {
+    // The native side dismisses on its own deadline; this covers our shorter one.
+    await invoke('close_mobile_login').catch(() => {});
+    return false;
+  }
+  const userId = sevenTvUserIdFromToken(token);
+  if (!userId) {
+    Logger.warn('[7TV] re-minted token carried no user id');
+    return false;
+  }
+  await invoke('store_seventv_token', {
+    accessToken: token,
+    userId,
+    twitchId: twitchUserId,
+  });
+  return true;
 }

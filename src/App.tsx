@@ -919,6 +919,22 @@ function App() {
       const { currentUser, isAuthenticated } = useAppStore.getState();
       if (isAuthenticated && currentUser?.user_id) {
         Logger.debug('[App] Pre-fetching cosmetics for current user...');
+
+        // Keep the 7TV session alive. Its tokens last 30 days and an expired one
+        // reads as signed out; the hidden-window re-mint has existed for linked
+        // accounts all along and simply never ran for the primary. Deferred past
+        // the boot burst and throttled inside.
+        {
+          const primaryId = currentUser.user_id;
+          setTimeout(() => {
+            void Promise.all([
+              import('./services/sevenTvSession'),
+              import('./services/accountService'),
+            ]).then(([session, accounts]) =>
+              session.maybeRefreshSevenTvSession(() => accounts.refreshSeventvForAccount(primaryId)),
+            );
+          }, 10000);
+        }
         const { registerOwnCosmeticAccounts, revalidateOwnCosmetics, getFullProfileWithFallback } =
           await import('./services/cosmeticsCache');
         const { seedOwnIdentitiesFromCache, getResolvedIdentity, getIdentityWithCache } =

@@ -24,6 +24,10 @@ struct OpenLoginArgs {
     watch_storage_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     title: Option<String>,
+    /// Run the overlay invisibly: no bar, nothing on screen, a short deadline.
+    /// For silent session re-mints (7TV) where the page completes on its own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hidden: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -47,6 +51,7 @@ pub async fn open_mobile_login<R: Runtime>(
     url: String,
     watch_storage_key: Option<String>,
     title: Option<String>,
+    hidden: Option<bool>,
 ) -> Result<(), String> {
     let state = app.state::<TwitchLoginState<R>>();
     state
@@ -57,6 +62,7 @@ pub async fn open_mobile_login<R: Runtime>(
                 url,
                 watch_storage_key,
                 title,
+                hidden,
             },
         )
         .map(|_| ())

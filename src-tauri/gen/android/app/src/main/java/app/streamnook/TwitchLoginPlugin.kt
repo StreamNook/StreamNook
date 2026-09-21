@@ -64,7 +64,23 @@ class OpenLoginArgs {
 
     /** Bar label. Defaults to Twitch, since that is what this is usually for. */
     var title: String? = null
+
+    /**
+     * Run the whole thing invisibly: no bar, nothing drawn, and a short deadline
+     * after which it gives up on its own.
+     *
+     * For a silent session re-mint. 7TV's sign-in round-trips through Twitch
+     * and, while the Twitch session in this WebView's cookie jar is still
+     * alive, completes with no interaction and writes a fresh token into the
+     * page's storage. Desktop does the same in a hidden window; this is the
+     * phone's equivalent, and it is what stops the account reading as signed
+     * out every 30 days.
+     */
+    var hidden: Boolean = false
 }
+
+/** A hidden re-mint either completes on its own quickly or it will not at all. */
+private const val HIDDEN_WATCH_TIMEOUT_MS = 30 * 1000L
 
 // Twitch's login page gates on browser version via User-Agent Client Hints
 // (navigator.userAgentData), which report the real WebView engine version and an
@@ -120,6 +136,17 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
     fun openLogin(invoke: Invoke) {
         val args = invoke.parseArgs(OpenLoginArgs::class.java)
         activity.runOnUiThread {
+            // A silent re-mint never takes over a sign-in the person can see,
+            // and a visible sign-in always wins over a re-mint in progress.
+            if (overlay != null && args.hidden) {
+                invoke.resolve()
+                return@runOnUiThread
+            }
+            if (overlay != null && hiddenMode) {
+                dismiss()
+                (activity as? MainActivity)?.notifyLoginCancelled()
+            }
+            hiddenMode = args.hidden
             if (overlay != null) {
                 // Already open — just navigate to the (possibly new) url. The
                 // watch is restarted rather than left alone, since reusing the
@@ -264,7 +291,16 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
             bar.addView(close)
 
             root.addView(wv)
-            root.addView(bar)
+            if (args.hidden) {
+                // Attached (a WebView needs a window to run its page) but never
+                // drawn and never touchable, and the page fills the frame since
+                // there is no bar to sit under.
+                (wv.layoutParams as FrameLayout.LayoutParams).topMargin = 0
+                root.visibility = View.INVISIBLE
+                root.alpha = 0f
+            } else {
+                root.addView(bar)
+            }
 
             activity.addContentView(
                 root,
@@ -380,17 +416,26 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
     private var storageWatchKey: String? = null
     private val storageWatchHandler = Handler(Looper.getMainLooper())
     private var storageWatchTick: Runnable? = null
+    /** Whether the current overlay is a hidden re-mint (see OpenLoginArgs.hidden). */
+    private var hiddenMode: Boolean = false
 
     private fun startStorageWatch(key: String) {
         val js = "(function(){try{return window.localStorage.getItem(" +
             JSONObject.quote(key) + ")}catch(e){return null}})()"
-        val deadline = SystemClock.elapsedRealtime() + STORAGE_WATCH_TIMEOUT_MS
+        val timeout = if (hiddenMode) HIDDEN_WATCH_TIMEOUT_MS else STORAGE_WATCH_TIMEOUT_MS
+        val deadline = SystemClock.elapsedRealtime() + timeout
         lateinit var tick: Runnable
         tick = Runnable {
             val wv = webView
             if (wv == null || storageWatchKey != key) return@Runnable
             if (SystemClock.elapsedRealtime() > deadline) {
                 android.util.Log.i("SNLogin", "storage watch for $key timed out")
+                if (hiddenMode) {
+                    // Nobody can close an invisible overlay; it closes itself
+                    // and tells the shell the re-mint did not happen.
+                    dismiss()
+                    (activity as? MainActivity)?.notifyLoginCancelled()
+                }
                 return@Runnable
             }
             wv.evaluateJavascript(js) { raw ->
@@ -437,6 +482,7 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
         webView?.destroy()
         overlay = null
         webView = null
+        hiddenMode = false
     }
 
     private fun dp(v: Int): Int =

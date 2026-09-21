@@ -28,6 +28,10 @@ pub struct SevenTVAuthStatus {
     pub is_authenticated: bool,
     pub user_id: Option<String>,
     pub twitch_id: Option<String>,
+    /// JWT `exp`, unix seconds. 7TV mints 30-day sessions, so a shell that
+    /// knows when this lands can re-mint silently before it does instead of
+    /// letting the account read as signed out once a month.
+    pub expires_at: Option<i64>,
 }
 
 pub struct SevenTVAuthService;
@@ -183,6 +187,19 @@ impl SevenTVAuthService {
         Self::get_token().await.is_ok()
     }
 
+    /// The JWT `exp` claim, decoded without signature verification. `None`
+    /// for a malformed token or one that carries no expiry.
+    pub fn token_expires_at(access_token: &str) -> Option<i64> {
+        // JWT format: header.payload.signature
+        let parts: Vec<&str> = access_token.split('.').collect();
+        if parts.len() != 3 {
+            return None;
+        }
+        let payload_bytes = URL_SAFE_NO_PAD.decode(parts[1]).ok()?;
+        let payload: serde_json::Value = serde_json::from_slice(&payload_bytes).ok()?;
+        payload.get("exp").and_then(|v| v.as_i64())
+    }
+
     /// Decode the JWT exp claim without signature verification (fast-path expiry check).
     /// Returns true if the token is expired or malformed.
     fn is_token_expired(access_token: &str) -> bool {
@@ -191,22 +208,37 @@ impl SevenTVAuthService {
         if parts.len() != 3 {
             return true; // Malformed → treat as expired
         }
-
-        let payload_bytes = match URL_SAFE_NO_PAD.decode(parts[1]) {
-            Ok(b) => b,
-            Err(_) => return true,
+        let payload: serde_json::Value = match URL_SAFE_NO_PAD
+            .decode(parts[1])
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+        {
+            Some(v) => v,
+            None => return true,
         };
+        match payload.get("exp").and_then(|v| v.as_i64()) {
+            Some(exp) => exp < chrono::Utc::now().timestamp(),
+            None => false, // No exp claim → don't assume expired
+        }
+    }
 
-        let payload: serde_json::Value = match serde_json::from_slice(&payload_bytes) {
-            Ok(v) => v,
-            Err(_) => return true,
-        };
-
-        if let Some(exp) = payload.get("exp").and_then(|v| v.as_i64()) {
-            let now = chrono::Utc::now().timestamp();
-            exp < now
-        } else {
-            false // No exp claim → don't assume expired
+    /// Status for a stored token: signed in only while the JWT is unexpired,
+    /// with the expiry exposed either way.
+    ///
+    /// An EXPIRED token is reported, not deleted. The shells use the expiry to
+    /// re-mint the session silently (a hidden reload of the 7TV login, which
+    /// completes on its own while the underlying Twitch session is alive), and
+    /// deleting the file here made "expired" indistinguishable from "never
+    /// connected", so nothing could know a refresh was worth attempting.
+    /// Explicit sign-out and a rejected request still clear it.
+    fn status_of(token: &StorableSevenTVToken) -> SevenTVAuthStatus {
+        let expires_at = Self::token_expires_at(&token.access_token);
+        let expired = Self::is_token_expired(&token.access_token);
+        SevenTVAuthStatus {
+            is_authenticated: !expired,
+            user_id: Some(token.user_id.clone()),
+            twitch_id: Some(token.twitch_id.clone()),
+            expires_at,
         }
     }
 
@@ -215,26 +247,17 @@ impl SevenTVAuthService {
     pub async fn get_auth_status() -> SevenTVAuthStatus {
         match Self::get_token_info().await {
             Ok(token) => {
-                if Self::is_token_expired(&token.access_token) {
-                    debug!("[7TV_AUTH] Stored token has expired (JWT exp) - auto-clearing");
-                    let _ = Self::logout().await;
-                    SevenTVAuthStatus {
-                        is_authenticated: false,
-                        user_id: None,
-                        twitch_id: None,
-                    }
-                } else {
-                    SevenTVAuthStatus {
-                        is_authenticated: true,
-                        user_id: Some(token.user_id),
-                        twitch_id: Some(token.twitch_id),
-                    }
+                let status = Self::status_of(&token);
+                if !status.is_authenticated {
+                    debug!("[7TV_AUTH] Stored token has expired (JWT exp); kept for a silent re-mint");
                 }
+                status
             }
             Err(_) => SevenTVAuthStatus {
                 is_authenticated: false,
                 user_id: None,
                 twitch_id: None,
+                expires_at: None,
             },
         }
     }
@@ -379,26 +402,12 @@ impl SevenTVAuthService {
     /// Auth status for a linked account (instant JWT-exp check, no network).
     pub async fn get_auth_status_for(twitch_id: &str) -> SevenTVAuthStatus {
         match Self::load_token_for(twitch_id) {
-            Ok(token) => {
-                if Self::is_token_expired(&token.access_token) {
-                    let _ = Self::logout_for(twitch_id).await;
-                    SevenTVAuthStatus {
-                        is_authenticated: false,
-                        user_id: None,
-                        twitch_id: None,
-                    }
-                } else {
-                    SevenTVAuthStatus {
-                        is_authenticated: true,
-                        user_id: Some(token.user_id),
-                        twitch_id: Some(token.twitch_id),
-                    }
-                }
-            }
+            Ok(token) => Self::status_of(&token),
             Err(_) => SevenTVAuthStatus {
                 is_authenticated: false,
                 user_id: None,
                 twitch_id: None,
+                expires_at: None,
             },
         }
     }

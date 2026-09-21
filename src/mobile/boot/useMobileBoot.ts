@@ -121,6 +121,19 @@ export function useMobileBoot(): void {
         const selfId = currentUser.user_id;
         const selfLogin = currentUser.login || currentUser.username;
 
+        // Keep the 7TV session alive. Its tokens last 30 days and an expired one
+        // reads as signed out; a hidden reload of the sign-in re-mints it while
+        // the Twitch session is still good. Deferred past the boot burst and
+        // throttled inside, so it costs nothing on most launches.
+        setTimeout(() => {
+          void Promise.all([
+            import('../../services/sevenTvSession'),
+            import('../cosmetics/sevenTvConnect'),
+          ]).then(([session, connect]) =>
+            session.maybeRefreshSevenTvSession(() => connect.refreshSevenTvSilently(selfId)),
+          );
+        }, 8000);
+
         let accountIds = [selfId];
         try {
           const ids = (await listAccounts()).map((a) => a.user_id).filter(Boolean);
