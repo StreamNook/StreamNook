@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { CircleHelp, RotateCcw } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
+import { IS_MOBILE } from '../../utils/platform';
 
 interface SettingsSectionProps {
   label: string;
@@ -69,7 +70,12 @@ export const SettingsRow = ({
   children,
   disabled = false,
   onReset,
-}: SettingsRowProps) => (
+}: SettingsRowProps) => {
+  // Touch has no hover, so the shared Tooltip renders nothing on the phone
+  // and the help glyph was decoration. A tap opens the explanation in place,
+  // under the description, and a second tap closes it.
+  const [helpOpen, setHelpOpen] = useState(false);
+  return (
   <div
     className={`settings-row -mx-4 px-4 py-3 ${
       disabled ? 'opacity-50 pointer-events-none' : ''
@@ -80,7 +86,17 @@ export const SettingsRow = ({
         <div className="text-[13px] font-medium text-textPrimary">
           {title}
           {titleBadge && <span className="ml-1.5 align-middle">{titleBadge}</span>}
-          {help && (
+          {help && IS_MOBILE ? (
+            <button
+              type="button"
+              aria-expanded={helpOpen}
+              aria-label="More about this setting"
+              onClick={() => setHelpOpen((v) => !v)}
+              className={`ml-1.5 inline-flex align-middle transition-colors ${helpOpen ? 'text-accent' : 'text-textMuted'}`}
+            >
+              <CircleHelp size={12} />
+            </button>
+          ) : help ? (
             <Tooltip content={<span className="block max-w-[34ch] text-left leading-relaxed">{help}</span>}>
               <span
                 tabIndex={0}
@@ -90,7 +106,7 @@ export const SettingsRow = ({
                 <CircleHelp size={12} />
               </span>
             </Tooltip>
-          )}
+          ) : null}
           {onReset && (
             <Tooltip content="Reset to default">
               <button
@@ -112,9 +128,13 @@ export const SettingsRow = ({
       </div>
       {control && <div className="flex-shrink-0">{control}</div>}
     </div>
+    {help && IS_MOBILE && helpOpen && (
+      <p className="mt-1 text-[12px] leading-relaxed text-textMuted">{help}</p>
+    )}
     {children && <div className="mt-3">{children}</div>}
   </div>
-);
+  );
+};
 
 /** Visually nests the rows that exist only to configure the row above them
  *  (a toggle's color/animation/etc.): a thin left rule + inset, so they read as

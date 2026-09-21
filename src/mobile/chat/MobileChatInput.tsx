@@ -30,6 +30,8 @@ import { matchEmoteTokens } from './emoteTabMatch';
 import { getWordRange } from '../../utils/chatInputWord';
 import { useEmoteOwnerNames } from './useEmoteOwnerNames';
 import { ComposerMenuSheet } from './ComposerMenuSheet';
+import { MobileCommandSheet } from './MobileCommandSheet';
+import { handleSlashCommand } from '../../utils/commandHandler';
 import { StreakBanners } from './StreakBanners';
 import type { ChatGating } from './chatGating';
 
@@ -93,6 +95,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const [emotesOpen, setEmotesOpen] = useState(false);
   const [pointsOpen, setPointsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [commandsOpen, setCommandsOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const { currentSmiley, isSmileyTransitioning, cycleEmoteSmiley } = useSwappingSmiley();
@@ -178,6 +181,31 @@ const MobileChatInputImpl: React.FC<Props> = ({
     if (!message || !currentUser || !channel || sending) return;
     setSending(true);
     try {
+      // Slash commands are Helix/GQL calls on the desktop handler, never chat
+      // text. The phone dropped them as "desktop affordances"; moderating from
+      // a phone is not one. Same handler, same identity, the room's own
+      // broadcaster id (a secondary tab's, not the stream's).
+      if (message.startsWith('/')) {
+        if (!channelId) {
+          useAppStore.getState().addToast("Open this channel's stream to run commands here", 'info');
+          setText('');
+          return;
+        }
+        const identity = {
+          username: currentUser.login || currentUser.username,
+          displayName: currentUser.display_name || currentUser.username,
+          userId: currentUser.user_id,
+          color: undefined,
+          badges: '',
+        };
+        const handled = await handleSlashCommand(message, channelId, channel, (msg) => {
+          void sendChannelMessage(channel, msg, identity);
+        });
+        if (handled) {
+          setText('');
+          return;
+        }
+      }
       await sendChannelMessage(
         channel,
         message,
@@ -472,7 +500,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
           <button
             onClick={() => void send()}
             disabled={sending}
-            className="glass-button shrink-0 flex items-center justify-center self-end w-10 h-10 text-white rounded transition-all duration-300 disabled:opacity-50"
+            className="chrome-glaze chrome-glaze--control shrink-0 flex items-center justify-center self-end w-10 h-10 text-white transition-all duration-300 disabled:opacity-50"
             aria-label="Send"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -491,7 +519,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
               setPointsOpen(false);
               setMenuOpen(true);
             }}
-            className="glass-button shrink-0 flex items-center justify-center self-end w-10 h-10 rounded text-textSecondary active:text-textPrimary transition-all duration-300"
+            className="chrome-glaze chrome-glaze--control shrink-0 flex items-center justify-center self-end w-10 h-10 text-textSecondary active:text-textPrimary transition-all duration-300"
             aria-label="Chat options"
           >
             <DotsThreeVertical size={20} weight="bold" />
@@ -565,7 +593,18 @@ const MobileChatInputImpl: React.FC<Props> = ({
         onToggleModTools={onToggleModTools}
         onAddChat={onAddChat}
         onReload={onReload}
+        onBrowseCommands={channel ? () => setCommandsOpen(true) : undefined}
         onCloseChat={onCloseChat}
+      />
+      <MobileCommandSheet
+        open={commandsOpen}
+        onClose={() => setCommandsOpen(false)}
+        isModerator={isModerator}
+        isBroadcaster={!!channelId && channelId === currentUser?.user_id}
+        onPick={(cmd) => {
+          setText(`/${cmd.name} `);
+          inputRef.current?.focus();
+        }}
       />
     </div>
   );

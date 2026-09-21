@@ -1,7 +1,7 @@
 // The menu behind the composer's trailing button when there is nothing to send.
 // Send and this share one slot, so the composer never carries a dead button.
 import React from 'react';
-import { ArrowsClockwise, ChatsCircle, Heart, HeartBreak, Lock, ShieldCheck, X } from 'phosphor-react';
+import { ArrowsClockwise, ChatsCircle, Heart, HeartBreak, Lock, ShieldCheck, Terminal, X } from 'phosphor-react';
 import { MobileSheet } from '../ui/MobileSheet';
 import { useChannelSocial } from '../../hooks/useChannelSocial';
 
@@ -20,6 +20,8 @@ interface Props {
   onToggleModTools: () => void;
   onAddChat: () => void;
   onReload: () => void;
+  /** Opens the chat command browser. Absent when no chat is open. */
+  onBrowseCommands?: () => void;
   /** Absent for the stream-following tab, which is not closable. */
   onCloseChat?: () => void;
 }
@@ -36,6 +38,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
   onToggleModTools,
   onAddChat,
   onReload,
+  onBrowseCommands,
   onCloseChat,
 }) => {
   const row =
@@ -121,6 +124,19 @@ export const ComposerMenuSheet: React.FC<Props> = ({
           <ArrowsClockwise size={19} className="text-textSecondary shrink-0" />
           <span className="flex-1 text-left">Reload this chat</span>
         </button>
+
+        {onBrowseCommands && (
+          <button
+            onClick={() => {
+              onClose();
+              onBrowseCommands();
+            }}
+            className={row}
+          >
+            <Terminal size={19} className="text-textSecondary shrink-0" />
+            <span className="flex-1 text-left">Chat commands</span>
+          </button>
+        )}
 
         {/* Only offered where the actions would actually succeed: Helix rejects
             them without mod powers in this specific channel. */}

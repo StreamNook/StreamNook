@@ -104,7 +104,7 @@ const Skeleton: React.FC = () => (
     </div>
     <div className="space-y-2">
       {[0, 1, 2].map((i) => (
-        <div key={i} className="glass-tile rounded-xl px-[13px] py-3 flex gap-3">
+        <div key={i} className="glass-panel rounded-xl px-[13px] py-3 flex gap-3">
           <div className="h-8 w-8 rounded-lg bg-surface animate-pulse shrink-0" />
           <div className="flex-1 space-y-2 pt-0.5">
             <div className="h-3.5 w-2/5 rounded bg-surface animate-pulse" />
@@ -229,7 +229,7 @@ export const MobileWhatsNew: React.FC = () => {
           {changes.map((c, i) => {
             const Icon = iconFor(c.title);
             return (
-              <div key={i} className="glass-tile rounded-xl px-[13px] py-3 flex gap-3">
+              <div key={i} className="glass-panel rounded-xl px-[13px] py-3 flex gap-3">
                 <div className="h-8 w-8 rounded-lg bg-surface flex items-center justify-center shrink-0 mt-0.5">
                   <Icon size={17} className="text-accent" />
                 </div>

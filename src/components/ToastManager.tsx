@@ -442,7 +442,7 @@ const ToastItem = ({ toast, removeToast, getToastIcon, getToastColor, enter }: T
       } : undefined}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      className={`glass-panel backdrop-blur-lg p-4 rounded-lg shadow-lg border ${getToastColor(toast.type)} w-[380px] pointer-events-auto ${isClickable ? 'cursor-pointer hover:bg-accent/20 transition-colors' : ''} ${isPaused && isClickable ? 'shimmer-border' : ''}`}
+      className={`glass-panel backdrop-blur-lg p-4 rounded-lg shadow-lg border ${getToastColor(toast.type)} w-[min(380px,calc(100vw-24px))] pointer-events-auto ${isClickable ? 'cursor-pointer hover:bg-accent/20 transition-colors' : ''} ${isPaused && isClickable ? 'shimmer-border' : ''}`}
     >
       <div className="flex items-start gap-3">
         {getToastIcon(toast.type) && (

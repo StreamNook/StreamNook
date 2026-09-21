@@ -77,7 +77,12 @@ const SheetSurface: React.FC<Omit<MobileSheetProps, 'open'>> = ({
     >
       <div
         className="absolute inset-0 bg-black/50"
-        style={{ backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)' }}
+        // Rides the Glassiness slider like every other frosted surface; a
+        // fixed blur kept ghosting content at Glassiness 0.
+        style={{
+          backdropFilter: 'blur(calc(6px * var(--glass-strength)))',
+          WebkitBackdropFilter: 'blur(calc(6px * var(--glass-strength)))',
+        }}
         onClick={onClose}
       />
       <motion.div

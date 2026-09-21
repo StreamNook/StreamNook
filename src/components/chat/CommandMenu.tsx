@@ -45,7 +45,7 @@ type RailKey = 'all' | Category;
 
 const CATEGORY_ORDER: Category[] = ['Everyone', 'Moderator', 'Chat Flow', 'Engagement', 'Broadcaster', 'Custom'];
 
-const RAIL: { key: RailKey; label: string; icon: LucideIcon; blurb: string }[] = [
+export const RAIL: { key: RailKey; label: string; icon: LucideIcon; blurb: string }[] = [
   {
     key: 'all',
     label: 'All commands',
@@ -95,7 +95,7 @@ export interface CommandMenuProps {
 }
 
 // What a locked command needs, in the words of the tag and the detail line.
-function lockFor(cmd: CommandDefinition, isModerator: boolean, isBroadcaster: boolean): { tag: string; line: string } | null {
+export function lockFor(cmd: CommandDefinition, isModerator: boolean, isBroadcaster: boolean): { tag: string; line: string } | null {
   if (cmd.category === 'Everyone' || cmd.category === 'Custom') return null;
   if (cmd.category === 'Broadcaster' && !isBroadcaster && !isModerator) {
     return { tag: 'Broadcaster', line: 'Needs the broadcaster in this channel' };
@@ -104,7 +104,7 @@ function lockFor(cmd: CommandDefinition, isModerator: boolean, isBroadcaster: bo
   return null;
 }
 
-function matches(cmd: CommandDefinition, q: string): boolean {
+export function matches(cmd: CommandDefinition, q: string): boolean {
   if (!q) return true;
   const hay = [cmd.name, cmd.usage, cmd.description, cmd.details ?? '', ...(cmd.examples ?? [])]
     .join(' ')

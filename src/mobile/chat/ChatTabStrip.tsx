@@ -66,7 +66,7 @@ const ChatTabStripImpl: React.FC = () => {
           <div
             key={tab.channel}
             className={`shrink-0 flex items-center rounded-full pl-2.5 pr-1 h-8 ${
-              active ? 'glass-button-active' : 'glass-button-static'
+              active ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control' : 'glass-button-static'
             }`}
           >
             <button

@@ -573,7 +573,11 @@ body[data-window-blurred="true"] .glaze-inset::after {
 
    Knob, not a fixed value, because how dark it needs to be depends on what is
    passing behind it. */
-.glass-panel--dark {
+/* Two classes in the selector on purpose: `.glass-panel` sets its own
+   background-image LATER in this file at equal specificity, so a single-class
+   `--dark` rule was overridden wherever both were applied, and the film never
+   painted. */
+.glass-panel.glass-panel--dark {
   /* Landed by sweeping against bright thumbnails scrolling underneath, three
      passes: 46% read light over a real grid, 56% was better, and this is where
      it sits. Content behind is faint but still legibly there, which is the line
@@ -831,13 +835,24 @@ body[data-window-blurred="true"] .glaze-inset::after {
   --glaze-frost: 55%;
 }
 
-.chrome-glaze--control:hover,
-.chrome-glaze--control:focus-visible,
-/* ...and when the glazed surface is a CHILD of the control rather than the
-   control itself: the Home tab strip's selected pill sits under its label, so
-   the pointer lands on the label and the pill's own `:hover` never matches.
-   The lift has to come from the button around it. */
-.group:hover > .chrome-glaze--control {
+/* Pointer lift only where there is a pointer: on touch, `:hover` sticks to
+   whatever was last tapped, and a capsule that stays lifted after the finger
+   leaves reads as a stuck button. Keyboard focus keeps the lift everywhere. */
+@media (hover: hover) {
+  .chrome-glaze--control:hover,
+  /* ...and when the glazed surface is a CHILD of the control rather than the
+     control itself: the Home tab strip's selected pill sits under its label, so
+     the pointer lands on the label and the pill's own `:hover` never matches.
+     The lift has to come from the button around it. */
+  .group:hover > .chrome-glaze--control {
+    --glaze-lift: 7%;
+    --glaze-ring: 17%;
+    --glaze-inner: 10%;
+    --glaze-spec: 46%;
+    --glaze-spec-soft: 19%;
+  }
+}
+.chrome-glaze--control:focus-visible {
   --glaze-lift: 7%;
   --glaze-ring: 17%;
   --glaze-inner: 10%;

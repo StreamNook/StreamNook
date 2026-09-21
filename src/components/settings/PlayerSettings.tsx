@@ -199,16 +199,21 @@ const PlayerSettings = () => {
           }
         />
 
-        <SettingsRow
-          title="Glow with the stream"
-          description="The player picks up the colour of whatever is on screen, so a neon game and a talk show don't look the same."
-          control={
-            <Toggle
-              enabled={settings.media_glow !== false}
-              onChange={() => updateSettings({ ...settings, media_glow: settings.media_glow === false })}
-            />
-          }
-        />
+        {/* The phone's player does not sample the picture (per-frame readback
+            is the one cost a compositing-bound phone cannot afford), so the
+            switch would change nothing there. */}
+        {!IS_MOBILE && (
+          <SettingsRow
+            title="Glow with the stream"
+            description="The player picks up the colour of whatever is on screen, so a neon game and a talk show don't look the same."
+            control={
+              <Toggle
+                enabled={settings.media_glow !== false}
+                onChange={() => updateSettings({ ...settings, media_glow: settings.media_glow === false })}
+              />
+            }
+          />
+        )}
 
         <SettingsRow
           title="Follow raids automatically"
