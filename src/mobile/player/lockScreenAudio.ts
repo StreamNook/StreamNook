@@ -38,6 +38,23 @@ let detach: (() => void) | null = null;
 let downshifted = false;
 let restoreQuality: string | null = null;
 
+// Whether the player has anything to draw on right now: the screen is on and
+// the app is visible. Tracked here, outside attach, because a stream can START
+// with no surface (a raid or auto-switch while the phone is locked, a restart
+// in the background) and the attach-time listeners never see the screen-off
+// that already happened. Without this the new stream came up at full quality
+// and Chromium tore its pipeline down for want of a surface: silence.
+let screenOff = false;
+if (typeof window !== 'undefined') {
+  window.addEventListener('sn:screen-off', () => {
+    screenOff = true;
+  });
+  window.addEventListener('sn:screen-on', () => {
+    screenOff = false;
+  });
+}
+const surfaceGone = () => screenOff || document.hidden;
+
 function pushState(playing: boolean): void {
   if (!current) return;
   mediaSessionStart(current.title, current.artist, current.artUrl, playing);
@@ -50,9 +67,11 @@ function pushState(playing: boolean): void {
  * binding rather than stacking listeners.
  */
 export function attachLockScreenAudio(video: HTMLVideoElement, info: NowPlaying): () => void {
-  // Rebinding the SAME element with the same metadata is a no-op beyond the
-  // state push. MobilePlayer re-renders often and must not accumulate listeners.
-  if (attached === video && current && current.title === info.title) {
+  // Rebinding the SAME element is a metadata update, never a teardown: the
+  // service stays up and the card just repaints. Tearing down per title change
+  // flickered the card and opened a window where isRunning was false.
+  if (attached === video) {
+    current = info;
     pushState(!video.paused);
     return () => releaseLockScreenAudio();
   }
@@ -60,35 +79,6 @@ export function attachLockScreenAudio(video: HTMLVideoElement, info: NowPlaying)
   detach?.();
   attached = video;
   current = info;
-
-  const onPlay = () => pushState(true);
-  const onPause = () => pushState(false);
-  // `ended` on a live stream means the broadcast stopped. Keeping a media
-  // notification for a stream that is over is just litter.
-  const onEnded = () => releaseLockScreenAudio();
-
-  video.addEventListener('play', onPlay);
-  video.addEventListener('pause', onPause);
-  video.addEventListener('ended', onEnded);
-
-  // Transport commands from the lock screen, the shade, a headset button, or an
-  // audio-focus change. MainActivity raises this from the native session.
-  const onCommand = (e: Event) => {
-    const cmd = (e as CustomEvent<string>).detail;
-    const v = attached;
-    if (!v) return;
-    if (cmd === 'play') {
-      // A rejected play() is normal (autoplay policy, focus not granted yet) and
-      // must not throw into the event handler.
-      void v.play().catch((err) => Logger.warn('[lockScreenAudio] play rejected', err));
-    } else if (cmd === 'pause') {
-      v.pause();
-    } else if (cmd === 'stop') {
-      v.pause();
-      releaseLockScreenAudio();
-    }
-  };
-  window.addEventListener('sn:media-cmd', onCommand);
 
   // Whenever the player loses its surface, drop to an audio-only rendition;
   // restore when it comes back.
@@ -134,6 +124,46 @@ export function attachLockScreenAudio(video: HTMLVideoElement, info: NowPlaying)
     void useAppStore.getState().applyTransientQuality(q);
   };
 
+  const onPlay = () => {
+    pushState(true);
+    // A stream that started with no surface (raid while locked, background
+    // restart) has to downshift on its first play; no screen-off event is
+    // coming to do it.
+    if (surfaceGone() && isInPip() !== true) downshift();
+  };
+  const onPause = () => pushState(false);
+  // `ended` on a live stream means the broadcast stopped. Keeping a media
+  // notification for a stream that is over is just litter.
+  const onEnded = () => releaseLockScreenAudio();
+
+  video.addEventListener('play', onPlay);
+  video.addEventListener('pause', onPause);
+  video.addEventListener('ended', onEnded);
+
+  // Transport commands from the lock screen, the shade, a headset button, or an
+  // audio-focus change. MainActivity raises this from the native session.
+  const onCommand = (e: Event) => {
+    const cmd = (e as CustomEvent<string>).detail;
+    const v = attached;
+    if (!v) return;
+    if (cmd === 'play') {
+      // A rejected play() is normal (autoplay policy, focus not granted yet) and
+      // must not throw into the event handler.
+      void v.play().catch((err) => Logger.warn('[lockScreenAudio] play rejected', err));
+    } else if (cmd === 'pause') {
+      v.pause();
+    } else if (cmd === 'stop') {
+      // "Stop" from the card, a headset or the task being removed means done
+      // listening, not paused: end the stream so nothing stays loaded behind a
+      // closed app. The listeners come off BEFORE the queued pause event fires,
+      // so the pause cannot report itself and re-arm the service.
+      v.pause();
+      releaseLockScreenAudio();
+      void useAppStore.getState().exitStream();
+    }
+  };
+  window.addEventListener('sn:media-cmd', onCommand);
+
   // Two independent triggers, because they are genuinely different events and
   // neither implies the other:
   //   - screen off/on, which can happen while the app is in the foreground.
@@ -155,7 +185,21 @@ export function attachLockScreenAudio(video: HTMLVideoElement, info: NowPlaying)
   };
 
   pushState(!video.paused);
+  // Already playing into no surface (rebound mid-stream while locked).
+  if (!video.paused && surfaceGone() && isInPip() !== true) downshift();
   return () => releaseLockScreenAudio();
+}
+
+/**
+ * Repaint the card for the bound element (title, channel, art) without
+ * touching listeners or the service. No-op when nothing is bound or nothing
+ * changed.
+ */
+export function updateNowPlaying(info: NowPlaying): void {
+  if (!attached || !current) return;
+  if (current.title === info.title && current.artist === info.artist && current.artUrl === info.artUrl) return;
+  current = info;
+  pushState(!attached.paused);
 }
 
 /**

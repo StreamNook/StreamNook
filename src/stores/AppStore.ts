@@ -15,10 +15,11 @@ import { IS_MAC, IS_MOBILE } from '../utils/platform';
 import { makeKey, parseKey } from '../utils/providerKey';
 import { isStrayYouTubeFavoriteId } from '../utils/favorites';
 import { buildProviderUrl, streamProvider } from '../utils/streamProvider';
+import { transientSwapVerdict } from '../utils/transientSwap';
 import { providerLabel, WATCHABLE_PROVIDERS, type ProviderId } from '../types/providers';
 import { takePreloadedSettings } from '../bootPreload';
 
-type StreamStartResult = {
+export type StreamStartResult = {
   url: string;
   quality: string;
   /** How the live stream resolved: 'turbo' | 'subscribed' | 'auth-only' | 'plugin'. */
@@ -651,6 +652,19 @@ let providerStartSeq = 0;
 // take up to a minute to give up) must not clobber whatever the user switched
 // to in the meantime.
 let twitchStartSeq = 0;
+// The audio-only swap that may still be resolving. A start, restart or stop
+// waits for it, so a late swap can never land on top of the relay a newer
+// start owns, and never stops a relay it does not own. See applyTransientQuality.
+let transientSwapInFlight: Promise<void> | null = null;
+// Each requested swap takes a number; only the latest one is worth running.
+// A lock/unlock burst on the phone used to fire three re-resolves that landed
+// in one tick and applied in ARRIVAL order, with the stale audio-only URL
+// winning over the restore issued after it, and every one of them a full relay
+// restart and player rebuild.
+let transientSwapSeq = 0;
+async function settleTransientSwap(): Promise<void> {
+  if (transientSwapInFlight) await transientSwapInFlight.catch(() => {});
+}
 /** The most recent rewind / back-to-live swap, so a superseded swap only
  *  releases the loader freeze it set itself. */
 let lastSwapSeq = 0;
@@ -2102,6 +2116,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       // levelLoadError + CORS noise for every poll that lands in that window.
       set({ streamUrl: null });
 
+      // A swap still resolving sees the cleared URL above and stops the relay
+      // it brought up; waiting here keeps that ordered before our own stop.
+      await settleTransientSwap();
+
       // Release the provider chat slice + offline poll first, so the backend
       // relay teardown below can't race a still-live provider session.
       await teardownProviderSession();
@@ -2262,6 +2280,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     
     try {
+      // A swap still resolving must land before the relay is cycled under it.
+      await settleTransientSwap();
       // Freeze the running player's loader BEFORE the backend goes down: the relay
       // and its LL origin stop here, but the old hls.js instance lives until the
       // new streamUrl lands (~1-2s of resolve), and polling a dead origin in that
@@ -2382,6 +2402,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   applyAdPivot: (url, region) => {
+    // A pivot for a stream that is already closed must not revive it.
+    if (!get().streamUrl) return;
     // A resolution-owning plugin already swapped the relay's upstream
     // (set_upstream); pointing the player at the fresh localhost URL re-inits
     // hls.js on the clean source (same mechanism as a quality change).
@@ -2411,23 +2433,70 @@ export const useAppStore = create<AppState>((set, get) => ({
     // screen lock.
     const currentStream = get().currentStream;
     if (!currentStream) return;
+    // Nothing to swap on a stream that is already closing. exitStream clears
+    // streamUrl synchronously before any of its awaits, so this is reliable.
+    if (!get().streamUrl) return;
+    const seq = twitchStartSeq;
+    const login = currentStream.user_login;
+    const mySwap = ++transientSwapSeq;
+    const previous = transientSwapInFlight;
+    const run = async () => {
+      // Swaps queue behind each other, and a swap that was superseded while it
+      // waited never starts: a burst of screen-off / screen-on / hidden events
+      // collapses to the LAST request, one relay restart instead of three.
+      if (previous) await previous.catch(() => {});
+      if (mySwap !== transientSwapSeq) {
+        Logger.info('[TransientQuality] superseded while queued; skipping');
+        return;
+      }
+      try {
+        const { currentMediaType, originalMediaUrl } = get();
+        const targetUrl =
+          currentMediaType !== 'live' && originalMediaUrl
+            ? originalMediaUrl
+            : `https://twitch.tv/${currentStream.user_login}`;
+        const result = await invoke<StreamStartResult>('change_stream_quality', {
+          url: targetUrl,
+          quality,
+        });
+        // change_stream_quality is start_stream underneath: it brought the relay
+        // up for `login`. Closing PiP with its X fires visibilitychange (this
+        // downshift) and sn:pip-closed (exitStream) in the same instant, and the
+        // late swap used to remount the player on an audio-only URL with
+        // currentStream already null: audio, no overlay, no card, nothing on
+        // screen saying so.
+        const now = get();
+        const verdict = transientSwapVerdict({
+          seqAtStart: seq,
+          seqNow: twitchStartSeq,
+          streamUrlNow: now.streamUrl,
+          loginAtStart: login,
+          loginNow: now.currentStream?.user_login,
+        });
+        if (verdict === 'discard') {
+          Logger.info('[TransientQuality] superseded mid-swap; discarding');
+          return;
+        }
+        if (verdict === 'discard-and-stop') {
+          Logger.info('[TransientQuality] stream closed mid-swap; discarding and stopping the relay');
+          await invoke('stop_stream').catch(() => {});
+          return;
+        }
+        // streamUrl only. activeQuality is left alone on purpose so the UI keeps
+        // showing what the VIEWER chose, not the state we swapped in behind them.
+        set({ streamUrl: result.url });
+        Logger.info(`[TransientQuality] swapped to ${result.quality} (no settings write)`);
+      } catch (e) {
+        // Non-fatal: failing to downshift means the stream keeps playing as it is.
+        Logger.warn('[TransientQuality] swap failed, leaving playback alone:', e);
+      }
+    };
+    const p = run();
+    transientSwapInFlight = p;
     try {
-      const { currentMediaType, originalMediaUrl } = get();
-      const targetUrl =
-        currentMediaType !== 'live' && originalMediaUrl
-          ? originalMediaUrl
-          : `https://twitch.tv/${currentStream.user_login}`;
-      const result = await invoke<StreamStartResult>('change_stream_quality', {
-        url: targetUrl,
-        quality,
-      });
-      // streamUrl only. activeQuality is left alone on purpose so the UI keeps
-      // showing what the VIEWER chose, not the state we swapped in behind them.
-      set({ streamUrl: result.url });
-      Logger.info(`[TransientQuality] swapped to ${result.quality} (no settings write)`);
-    } catch (e) {
-      // Non-fatal: failing to downshift means the stream keeps playing as it is.
-      Logger.warn('[TransientQuality] swap failed, leaving playback alone:', e);
+      await p;
+    } finally {
+      if (transientSwapInFlight === p) transientSwapInFlight = null;
     }
   },
 
@@ -2543,8 +2612,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       // frontend loop on top multiplied a transient failure into minutes of
       // spinner and delayed the chat-only fallback below. A hiccup is retried
       // by the backend; when this rejects, the failure is real.
-      const result = await invoke<StreamStartResult>('start_stream', { url: `https://twitch.tv/${channel}`, quality: requestedQuality });
-      logQualityFallback(requestedQuality, result.quality);
+      // A promoted tile arrives already playing. Its quality was chosen by the
+      // TILE's resolve, so no fallback notice is owed here: the viewer picked
+      // that quality on the tile and is not being moved off it.
+      // An audio-only swap still resolving would otherwise land AFTER this
+      // start and re-point the relay at the channel we just left.
+      await settleTransientSwap();
+      const result = preResolved
+        ?? await invoke<StreamStartResult>('start_stream', { url: `https://twitch.tv/${channel}`, quality: requestedQuality });
+      if (!preResolved) logQualityFallback(requestedQuality, result.quality);
 
       // Use the provided stream info, or find it from followed streams, or fetch it
       let info: TwitchStream;

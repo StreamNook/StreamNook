@@ -14,6 +14,7 @@ import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
+import android.os.Bundle
 import android.os.IBinder
 import java.net.URL
 import kotlin.concurrent.thread
@@ -41,6 +42,16 @@ import kotlin.concurrent.thread
  *
  * Transport commands travel back to the web layer through [commandSink], which
  * MainActivity owns. Same process, so no IPC.
+ *
+ * LIFETIME. The web layer says whether it WANTS a session ([wanted]) before it
+ * sends the start intent and before it sends the stop intent. The start is
+ * asynchronous, so a stop that arrives first used to be dropped and the service
+ * then foregrounded itself with nobody left to stop it; now onStartCommand
+ * checks the flag after paying its startForeground and stands down. A task
+ * swiped out of recents ([onTaskRemoved]) and an activity that is finishing
+ * (MainActivity.onDestroy) both stop the service explicitly: a playback service
+ * outliving the app it belongs to is exactly the "audio with nothing on screen"
+ * report.
  */
 class MediaPlaybackService : Service() {
 
@@ -53,6 +64,9 @@ class MediaPlaybackService : Service() {
     const val ACTION_STOP = "app.streamnook.media.STOP"
     /** A transport command from the notification, forwarded to the web layer. */
     const val ACTION_CMD = "app.streamnook.media.CMD"
+
+    /** The Stop control on the card, as a PlaybackState custom action. */
+    const val CUSTOM_STOP = "app.streamnook.media.STOP_LISTENING"
 
     const val EXTRA_TITLE = "title"
     const val EXTRA_ARTIST = "artist"
@@ -72,6 +86,15 @@ class MediaPlaybackService : Service() {
     /** True while the service is foregrounded, so onPause knows to keep the WebView awake. */
     @Volatile
     var isRunning: Boolean = false
+
+    /**
+     * Whether the web layer currently WANTS a session. Set by the bridge before
+     * the start intent is sent and cleared before the stop intent, so a stop
+     * that arrives before the asynchronous start has landed is not lost:
+     * onStartCommand checks it after startForeground and stands down.
+     */
+    @Volatile
+    var wanted: Boolean = false
   }
 
   private var session: MediaSession? = null
@@ -91,7 +114,10 @@ class MediaPlaybackService : Service() {
       setCallback(object : MediaSession.Callback() {
         override fun onPlay() { commandSink?.invoke("play") }
         override fun onPause() { commandSink?.invoke("pause") }
-        override fun onStop() { commandSink?.invoke("stop") }
+        override fun onStop() { routeStop() }
+        override fun onCustomAction(action: String, extras: Bundle?) {
+          if (action == CUSTOM_STOP) routeStop()
+        }
         // Headset play/pause buttons arrive as MEDIA_BUTTON and are dispatched to
         // onPlay/onPause by the framework, so there is nothing extra to wire.
       })
@@ -102,13 +128,21 @@ class MediaPlaybackService : Service() {
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     when (intent?.action) {
       ACTION_STOP -> {
-        stopSelf()
+        standDown()
         return START_NOT_STICKY
       }
       ACTION_CMD -> {
-        // Forward and return. The web layer will call back with ACTION_UPDATE
-        // once the element has actually changed state.
-        intent.getStringExtra(EXTRA_CMD)?.let { commandSink?.invoke(it) }
+        val cmd = intent.getStringExtra(EXTRA_CMD) ?: return START_NOT_STICKY
+        val sink = commandSink
+        if (sink != null) {
+          // Forward and return. The web layer will call back with ACTION_UPDATE
+          // once the element has actually changed state.
+          sink.invoke(cmd)
+        } else if (cmd == "stop" || cmd == "pause") {
+          // The activity is gone, so there is no player to command. The only
+          // honest answer to a Stop from the shade is to stop being here.
+          standDown()
+        }
         return START_NOT_STICKY
       }
       ACTION_START, ACTION_UPDATE -> {
@@ -121,7 +155,14 @@ class MediaPlaybackService : Service() {
           loadArt(url)
         }
         pushSession()
+        // startForeground is owed for every startForegroundService, even one
+        // whose stop already went past. Pay it, then check whether anyone
+        // still wants us.
         goForeground()
+        if (!wanted) {
+          standDown()
+          return START_NOT_STICKY
+        }
         isRunning = true
       }
     }
@@ -131,8 +172,39 @@ class MediaPlaybackService : Service() {
     return START_NOT_STICKY
   }
 
+  /** Drop the notification and the foreground state together, then stop. */
+  private fun standDown() {
+    isRunning = false
+    stopForeground(STOP_FOREGROUND_REMOVE)
+    stopSelf()
+  }
+
+  /**
+   * Stop from the card, the lock screen or a headset: the page ends the stream
+   * if it is still there to do so; otherwise stand down ourselves.
+   */
+  private fun routeStop() {
+    val sink = commandSink
+    if (sink != null) sink.invoke("stop") else standDown()
+  }
+
+  /**
+   * The task was swiped out of recents. The activity is being destroyed with
+   * it (see MainActivity.onDestroy for the WebView half), and a playback
+   * service outliving the app it belongs to is exactly the "audio with nothing
+   * on screen" report. The sink is usually already null here, so the JS stop
+   * is best effort; standing down is what matters.
+   */
+  override fun onTaskRemoved(rootIntent: Intent?) {
+    commandSink?.invoke("stop")
+    wanted = false
+    standDown()
+    super.onTaskRemoved(rootIntent)
+  }
+
   override fun onDestroy() {
     isRunning = false
+    wanted = false
     session?.isActive = false
     session?.release()
     session = null
@@ -183,6 +255,13 @@ class MediaPlaybackService : Service() {
     s.setPlaybackState(
       PlaybackState.Builder()
         .setActions(actions)
+        // Android 13+ derives the card's buttons from THIS state, not from the
+        // notification's action list: slot 1 is play/pause from the state and
+        // a custom action takes the first free slot. That is the only way to
+        // put a Stop on the card for an app targeting 33+.
+        .addCustomAction(
+          PlaybackState.CustomAction.Builder(CUSTOM_STOP, "Stop", R.drawable.ic_media_stop).build(),
+        )
         .setState(
           if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
           PlaybackState.PLAYBACK_POSITION_UNKNOWN,
@@ -231,28 +310,44 @@ class MediaPlaybackService : Service() {
       return Notification.Action.Builder(Icon_(icon), label, pi).build()
     }
 
+    // If the system ever does remove the card (media cards are exempt from the
+    // user-dismissal change on 14+, so in practice only a "Clear all"), the
+    // service goes with it rather than running on with no surface.
+    val deleteIntent = PendingIntent.getService(
+      this,
+      "delete".hashCode(),
+      Intent(this, MediaPlaybackService::class.java).apply { action = ACTION_STOP },
+      PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+
     val b = Notification.Builder(this, CHANNEL_ID)
       .setSmallIcon(R.drawable.ic_stat_notify)
       .setContentTitle(title)
       .setContentText(artist)
       .setContentIntent(contentIntent)
-      .setOngoing(playing)
+      // While this service exists there is audio to control; a card that can be
+      // swiped away leaves the service with no surface.
+      .setOngoing(true)
+      .setDeleteIntent(deleteIntent)
       .setVisibility(Notification.VISIBILITY_PUBLIC)
       .setOnlyAlertOnce(true)
     art?.let { b.setLargeIcon(it) }
 
-    // The transport button. Play and pause are the same slot, swapped by state.
+    // The action list is honoured on API 26..32 only; from 33 the system builds
+    // the buttons from the PlaybackState pushed in pushSession(). Both
+    // generations get play/pause and a Stop.
     val toggle = if (playing) {
       action(android.R.drawable.ic_media_pause, "Pause", "pause")
     } else {
       action(android.R.drawable.ic_media_play, "Play", "play")
     }
     b.addAction(toggle)
+    b.addAction(action(R.drawable.ic_media_stop, "Stop", "stop"))
 
     session?.sessionToken?.let { token ->
       b.style = Notification.MediaStyle()
         .setMediaSession(token)
-        .setShowActionsInCompactView(0)
+        .setShowActionsInCompactView(0, 1)
     }
     return b.build()
   }

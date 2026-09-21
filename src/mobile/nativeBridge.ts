@@ -5,6 +5,7 @@ interface SNBridge {
   setImmersive?(immersive: boolean): void;
   setBarsLightContent?(light: boolean): void;
   setKeepScreenOn?(on: boolean): void;
+  setPreferredRefreshRate?(fps: number): void;
   setPipEligible?(eligible: boolean): void;
   enterPip?(): void;
   isInPip?(): boolean;
@@ -53,6 +54,16 @@ export function setBarsLightContent(light: boolean): void {
 export function setKeepScreenOn(on: boolean): void {
   try {
     bridge()?.setKeepScreenOn?.(on);
+  } catch {
+    /* bridge absent */
+  }
+}
+
+/** Ask the display for a refresh rate (60 while a stream plays); 0 restores
+ *  the system's choice. See MainActivity.setPreferredRefreshRate. */
+export function setPreferredRefreshRate(fps: number): void {
+  try {
+    bridge()?.setPreferredRefreshRate?.(fps);
   } catch {
     /* bridge absent */
   }

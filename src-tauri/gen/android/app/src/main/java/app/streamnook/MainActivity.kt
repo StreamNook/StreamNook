@@ -71,6 +71,11 @@ class MainActivity : TauriActivity() {
   // by the web shell on its way back to the foreground.
   @Volatile private var pipClosedPending: Boolean = false
 
+  // Set first thing when the activity is finishing for real. The lock-screen
+  // bridge checks it: a page still reporting play state while we tear down
+  // must not re-arm the media service that onDestroy is stopping.
+  @Volatile private var tearingDown: Boolean = false
+
   // Channel login from a tapped notification, waiting for the web shell to pick
   // it up. Needed for the cold case: the tap starts the activity, and there is
   // no WebView to hand it to for some time afterwards.
@@ -155,6 +160,20 @@ class MainActivity : TauriActivity() {
     return b.build()
   }
 
+  /**
+   * The display mode with the active mode's resolution and the refresh rate
+   * closest to `fps`, or 0 (no preference) if the display cannot be read.
+   */
+  private fun nearestModeId(fps: Float): Int {
+    val d = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display else windowManager.defaultDisplay)
+      ?: return 0
+    val current = d.mode
+    return d.supportedModes
+      .filter { it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight }
+      .minByOrNull { kotlin.math.abs(it.refreshRate - fps) }
+      ?.modeId ?: 0
+  }
+
   /** Push the current params without entering PiP. No-ops harmlessly if the
    *  activity is in a state that will not accept them. */
   private fun refreshPipParams() {
@@ -211,6 +230,8 @@ class MainActivity : TauriActivity() {
      */
     @JavascriptInterface
     fun mediaSessionStart(title: String, artist: String, artUrl: String, playing: Boolean) {
+      if (tearingDown) return
+      MediaPlaybackService.wanted = true
       val i = Intent(this@MainActivity, MediaPlaybackService::class.java).apply {
         action = if (MediaPlaybackService.isRunning) {
           MediaPlaybackService.ACTION_UPDATE
@@ -231,7 +252,13 @@ class MainActivity : TauriActivity() {
     /** Tear the session down when playback ends or the stream is closed. */
     @JavascriptInterface
     fun mediaSessionStop() {
-      if (!MediaPlaybackService.isRunning) return
+      val wasWanted = MediaPlaybackService.wanted
+      MediaPlaybackService.wanted = false
+      // Send the stop whenever a start may still be in flight, not only when
+      // the service already reports running: the start is asynchronous and a
+      // stop issued inside that window used to be dropped, leaving the service
+      // foregrounded with nobody left to stop it.
+      if (!MediaPlaybackService.isRunning && !wasWanted) return
       val i = Intent(this@MainActivity, MediaPlaybackService::class.java).apply {
         action = MediaPlaybackService.ACTION_STOP
       }
@@ -240,7 +267,7 @@ class MainActivity : TauriActivity() {
       try {
         startService(i)
       } catch (_: IllegalStateException) {
-        /* already gone */
+        /* already gone, or we are in the background with nothing running */
       }
     }
 
@@ -295,6 +322,33 @@ class MainActivity : TauriActivity() {
     @JavascriptInterface
     fun setKeepScreenOn(on: Boolean) {
       runOnUiThread { webView?.keepScreenOn = on }
+    }
+
+    /**
+     * Ask the display for a refresh rate while a stream plays; 0 restores the
+     * system's choice.
+     *
+     * Measured with a stream playing: RenderThread, the GPU process and the
+     * Viz compositor were the top three threads in the app process, together
+     * about three quarters of a core, because the phone was driving its 90 Hz
+     * mode and every frame was drawn at 90 while the video itself is 60 at
+     * most. A 60 Hz window draws a third fewer frames for the same picture.
+     * The panel goes back to whatever it prefers the moment playback ends.
+     */
+    @JavascriptInterface
+    fun setPreferredRefreshRate(fps: Float) {
+      runOnUiThread {
+        val lp = window.attributes
+        lp.preferredRefreshRate = fps
+        // The rate hint alone registered on the window but the display
+        // director on this ROM kept its 90 Hz mode regardless (measured:
+        // `mAttrs ... preferredRefreshRate=60.0` while `mActiveModeId=7`
+        // stayed). Naming a concrete mode is the stronger request: the mode
+        // with the panel's CURRENT size and the nearest rate to what was
+        // asked, so this never changes resolution, only cadence. 0 clears it.
+        lp.preferredDisplayModeId = if (fps > 0f) nearestModeId(fps) else 0
+        window.attributes = lp
+      }
     }
 
     /** Mark whether leaving the app should enter system picture-in-picture.
@@ -914,10 +968,62 @@ class MainActivity : TauriActivity() {
       }
     }
     screenReceiver = null
+    // A finishing activity (task swiped away, or the OS finishing us for real,
+    // not a configuration change) must take its playback with it. wry never
+    // calls WebView.destroy(), so the Chromium WebContents and the <video> in
+    // it survive as garbage-not-yet-collected, and with the media service
+    // holding the process foregrounded that garbage kept playing: audio with
+    // no app, no PiP window and an inert card. Three belts, cheapest first.
+    if (isFinishing) {
+      tearingDown = true
+      MediaPlaybackService.wanted = false
+      webView?.let { wv ->
+        // 1. Tell the page to end the stream through the same command the
+        //    card's Stop uses. NOT video.pause(): a bare pause fires the
+        //    element's pause event, whose listener reports "paused" to the
+        //    card, which re-arms the very service being stopped. The stop
+        //    command detaches those listeners before the queued event fires.
+        //    Async, and may not run if the page is already frozen, hence 2 and 3.
+        wv.evaluateJavascript(
+          "window.dispatchEvent(new CustomEvent('sn:media-cmd',{detail:'stop'}))",
+          null,
+        )
+        // 2. The suspension wry applies on pause, which onPause undoes only
+        //    while the service runs. It no longer will.
+        wv.onPause()
+      }
+      if (MediaPlaybackService.isRunning) {
+        try {
+          startService(
+            Intent(this, MediaPlaybackService::class.java).apply {
+              action = MediaPlaybackService.ACTION_STOP
+            },
+          )
+        } catch (_: IllegalStateException) {
+          /* service already gone */
+        }
+      }
+    }
     // The sink captures this activity's WebView, so leaving it installed after
     // the activity dies would hold a destroyed view alive and post into it.
     MediaPlaybackService.commandSink = null
     super.onDestroy()
+    // 3. Release the WebContents itself. wry has already been told the webview
+    //    is gone (WryActivity.onDestroy), so nothing on the Rust side will
+    //    address it again; destroy() is what actually stops Chromium's media
+    //    pipeline rather than leaving it to the collector. The platform asks
+    //    for the view to be out of the tree first.
+    if (isFinishing) {
+      webView?.let { wv ->
+        try {
+          (wv.parent as? android.view.ViewGroup)?.removeView(wv)
+          wv.destroy()
+        } catch (_: Exception) {
+          /* already destroyed by the framework */
+        }
+      }
+      webView = null
+    }
   }
 
   companion object {
