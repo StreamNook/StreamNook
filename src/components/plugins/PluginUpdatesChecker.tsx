@@ -7,7 +7,7 @@
 import { useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { compareVersions, type PluginInfo, type SourceInfo, type IndexEntry } from '../../types/plugins';
+import { compareVersions, type PluginInfo, type SourceInfo, type SourceListing } from '../../types/plugins';
 import { usePluginUpdates } from '../../stores/pluginUpdatesStore';
 import { afterBoot } from '../../utils/startupScheduler';
 
@@ -37,8 +37,8 @@ export default function PluginUpdatesChecker() {
         const latest = new Map<string, string>();
         for (const s of ordered) {
           try {
-            const entries = await invoke<IndexEntry[]>('plugins_browse_source', { url: s.url });
-            for (const e of entries) if (!latest.has(e.id)) latest.set(e.id, e.version);
+            const listing = await invoke<SourceListing>('plugins_browse_source', { url: s.url });
+            for (const e of listing.entries) if (!latest.has(e.id)) latest.set(e.id, e.version);
           } catch {
             /* an unreachable source contributes nothing */
           }

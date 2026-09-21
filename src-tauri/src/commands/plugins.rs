@@ -42,7 +42,7 @@ pub async fn plugins_remove_source(url: String, state: State<'_, AppState>) -> R
 pub async fn plugins_browse_source(
     url: String,
     state: State<'_, AppState>,
-) -> Result<Vec<IndexEntry>, String> {
+) -> Result<crate::plugin_host::SourceListing, String> {
     state
         .plugin_host
         .browse_source(&url)

@@ -25,6 +25,22 @@ use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex, RwLock as TokioRwLock};
 use process::SupCmd;
 use registry::{Registry, SourceEntry};
 
+/// One source's catalogue, as the marketplace should present it.
+///
+/// `entries` is already filtered to what this platform can install.
+/// `unavailable_here` is how many were removed by that filter, which is the
+/// only thing that lets the UI tell "nothing reachable" apart from "nothing
+/// built for you yet". Without it both look identical: an empty list.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceListing {
+    pub entries: Vec<install::IndexEntry>,
+    pub unavailable_here: usize,
+    /// The `<os>-<arch>` key the filter tested against, so the UI can name the
+    /// platform it is talking about rather than guessing from the user agent.
+    pub platform: String,
+}
+
 /// What the user answered on a consent prompt.
 #[derive(Debug, Clone, Copy)]
 pub enum ConsentDecision {
@@ -368,7 +384,18 @@ impl PluginHost {
     }
 
     /// Lists what a source offers (verified fetch, no install).
-    pub async fn browse_source(&self, url: &str) -> Result<Vec<install::IndexEntry>> {
+    ///
+    /// Returns the count of entries that exist but have no build for this
+    /// platform alongside the ones that do, because the two empty states need
+    /// different words. "Your sources are unreachable" and "these plugins have
+    /// no build for your platform yet" send a user to debug completely
+    /// different things, and the listing alone cannot tell them apart: both
+    /// arrive as an empty vector.
+    ///
+    /// This became load-bearing the moment Linux existed. Every plugin in the
+    /// official index declares windows and macos builds and no linux one, so a
+    /// Linux user got an empty marketplace whose copy blamed their network.
+    pub async fn browse_source(&self, url: &str) -> Result<SourceListing> {
         let pinned = {
             let registry = self.inner.registry.lock().await;
             registry
@@ -384,10 +411,18 @@ impl PluginHost {
         // available, and showing it only to fail at the final click is worse
         // than never showing it. Also keeps other platforms' artifacts out of
         // the payload entirely, alongside `skip_serializing` on the map itself.
-        Ok(install::installable_on(
-            doc.plugins,
-            &install::current_platform_key(),
-        ))
+        //
+        // The COUNT of what was filtered still travels, because hiding the
+        // entries and hiding the reason are different decisions. The entries
+        // themselves do not.
+        let platform = install::current_platform_key();
+        let total = doc.plugins.len();
+        let entries = install::installable_on(doc.plugins, &platform);
+        Ok(SourceListing {
+            unavailable_here: total - entries.len(),
+            entries,
+            platform,
+        })
     }
 
     /// Install step 1: download, verify, and unpack from a source (SIGNING.md
@@ -806,5 +841,45 @@ impl PluginHost {
             .await
             .into_iter()
             .find(|p| p.id == plugin_id)
+    }
+}
+
+#[cfg(test)]
+mod source_listing_tests {
+    use super::SourceListing;
+
+    /// The field names the marketplace reads are a CONTRACT with
+    /// `src/types/plugins.ts`, and breaking it fails silently in the worst
+    /// possible way: `unavailableHere` comes back `undefined`, `> 0` is false,
+    /// and the Discover tab shows "your sources may be unreachable" to a user
+    /// whose sources loaded perfectly. Nothing errors, nothing logs, the words
+    /// are simply wrong. So the wire names are pinned here rather than trusted
+    /// to the serde attribute staying put.
+    #[test]
+    fn the_wire_names_match_what_the_ui_reads() {
+        let json = serde_json::to_value(SourceListing {
+            entries: Vec::new(),
+            unavailable_here: 3,
+            platform: "linux-x86_64".into(),
+        })
+        .expect("serializes");
+
+        assert_eq!(
+            json.get("unavailableHere").and_then(|v| v.as_u64()),
+            Some(3),
+            "the UI reads `unavailableHere`; a snake_case field reads as \
+             undefined there and silently selects the wrong empty state"
+        );
+        assert!(json.get("entries").is_some(), "the UI reads `entries`");
+        assert_eq!(
+            json.get("platform").and_then(|v| v.as_str()),
+            Some("linux-x86_64"),
+            "the UI turns this into a human platform name"
+        );
+        assert!(
+            json.get("unavailable_here").is_none(),
+            "the snake_case spelling must NOT also be present, or a future \
+             rename could leave the UI reading a field that no longer updates"
+        );
     }
 }

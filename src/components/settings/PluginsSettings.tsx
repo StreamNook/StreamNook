@@ -32,8 +32,25 @@ import {
   IndexEntry,
   PluginInfo,
   SourceInfo,
+  SourceListing,
 } from '../../types/plugins';
 import { Logger } from '../../utils/logger';
+
+/**
+ * Friendly name for an `<os>-<arch>` platform key.
+ *
+ * The key is what the index is filtered against, but "linux-x86_64" is a
+ * developer string: an empty marketplace should say "Linux". Falls back to the
+ * raw key rather than inventing a name, so an unexpected platform still reads
+ * as something rather than as nothing.
+ */
+function osName(platformKey: string): string {
+  const os = platformKey.split('-')[0];
+  if (os === 'linux') return 'Linux';
+  if (os === 'macos') return 'macOS';
+  if (os === 'windows') return 'Windows';
+  return platformKey || 'this system';
+}
 
 // Canonical bevel recipe lives in globals.css as --bevel-tile.
 const TILE_BEVEL = 'var(--bevel-tile)';
@@ -193,6 +210,12 @@ const PluginsSettings = () => {
   // restarting (bounded by the source CDN's cache, ~minutes). `catalogTick`
   // also lets a manual refresh force it.
   const [catalogTick, setCatalogTick] = useState(0);
+  // How many catalogue entries exist but are not built for this platform, how
+  // many sources answered at all, and the os-arch the filter used. Together
+  // these decide which empty state the Discover tab shows.
+  const [otherPlatformOnly, setOtherPlatformOnly] = useState(0);
+  const [sourcesReached, setSourcesReached] = useState(0);
+  const [platformKey, setPlatformKey] = useState('');
   useEffect(() => {
     const id = window.setInterval(() => setCatalogTick((t) => t + 1), 60_000);
     return () => window.clearInterval(id);
@@ -207,10 +230,19 @@ const PluginsSettings = () => {
       const ordered = [...sources].sort((a, b) => Number(b.official) - Number(a.official));
       const combined: { entry: IndexEntry; source: SourceInfo }[] = [];
       const seen = new Set<string>();
+      // Plugins that exist but have no build for this platform. Counted so the
+      // empty state can say which of the two empty states this is, rather than
+      // blaming the user's network for a catalogue that loaded perfectly.
+      let elsewhere = 0;
+      let reached = 0;
+      let platform = '';
       for (const source of ordered) {
         try {
-          const entries = await invoke<IndexEntry[]>('plugins_browse_source', { url: source.url });
-          for (const entry of entries) {
+          const listing = await invoke<SourceListing>('plugins_browse_source', { url: source.url });
+          reached += 1;
+          elsewhere += listing.unavailableHere;
+          platform = listing.platform || platform;
+          for (const entry of listing.entries) {
             if (seen.has(entry.id)) continue;
             seen.add(entry.id);
             combined.push({ entry, source });
@@ -219,7 +251,12 @@ const PluginsSettings = () => {
           /* an unreachable source just contributes nothing */
         }
       }
-      if (!cancelled) setCatalog(combined);
+      if (!cancelled) {
+        setCatalog(combined);
+        setOtherPlatformOnly(elsewhere);
+        setSourcesReached(reached);
+        setPlatformKey(platform);
+      }
     })();
     return () => {
       cancelled = true;
@@ -431,11 +468,27 @@ const PluginsSettings = () => {
             >
               <Puzzle className="h-6 w-6 text-textPrimary" strokeWidth={2} />
             </div>
-            <h2 className="text-[16px] font-semibold text-textPrimary">No plugins to show</h2>
-            <p className="mt-1.5 max-w-[400px] text-[13px] leading-relaxed text-textSecondary">
-              Approved plugins from your sources appear here. If this stays empty, the
-              sources may be unreachable, or you can add one under Sources.
-            </p>
+            {otherPlatformOnly > 0 ? (
+              <>
+                <h2 className="text-[16px] font-semibold text-textPrimary">
+                  Nothing built for {osName(platformKey)} yet
+                </h2>
+                <p className="mt-1.5 max-w-[400px] text-[13px] leading-relaxed text-textSecondary">
+                  Your sources loaded fine. {otherPlatformOnly === 1 ? 'The one plugin' : `All ${otherPlatformOnly} plugins`}{' '}
+                  in them {otherPlatformOnly === 1 ? 'ships' : 'ship'} builds for other systems
+                  only. They will appear here once a {osName(platformKey)} build is published.
+                </p>
+              </>
+            ) : (
+              <>
+                <h2 className="text-[16px] font-semibold text-textPrimary">No plugins to show</h2>
+                <p className="mt-1.5 max-w-[400px] text-[13px] leading-relaxed text-textSecondary">
+                  {sourcesReached === 0
+                    ? 'None of your sources could be reached. Check your connection, or add a source under Sources.'
+                    : 'Approved plugins from your sources appear here. Add a source under Sources to see more.'}
+                </p>
+              </>
+            )}
           </div>
         ) : filteredCatalog.length === 0 ? (
           <p className="py-12 text-center text-[13px] text-textSecondary">

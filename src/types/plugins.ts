@@ -45,6 +45,23 @@ export interface SourceInfo {
   official: boolean;
 }
 
+/**
+ * One source's catalogue.
+ *
+ * `entries` is already filtered to plugins this platform can install, so the
+ * UI never offers something that would fail at the final click. `unavailableHere`
+ * is how many the filter removed, and it exists because the two empty states
+ * need different words: "your sources are unreachable" and "nothing is built
+ * for your platform yet" send a user to debug entirely different things, and
+ * both otherwise arrive as an empty array.
+ */
+export interface SourceListing {
+  entries: IndexEntry[];
+  unavailableHere: number;
+  /** The `<os>-<arch>` the filter tested against, e.g. `linux-x86_64`. */
+  platform: string;
+}
+
 export interface IndexEntry {
   id: string;
   name: string;
