@@ -1,0 +1,252 @@
+name: Linux build check
+
+# Builds the Linux AppImage WITHOUT releasing anything.
+#
+# Why this exists: the real pipeline (`build-release.yml`) has exactly one entry
+# point, and its first job force-pushes `dev` to `main` and creates a GitHub
+# release. So the only way to find out whether the Linux job works was to ship,
+# which makes the first Linux release simultaneously the first test of the apt
+# list, the AppImage bundling, the GPU-loader unbundle step and the artifact
+# shape. That is four unknowns riding on a release users can see.
+#
+# This runs the same steps, on the same runner image, and stops before anything
+# is published: no merge to main, no tag, no GitHub release, no R2 upload, no
+# manifest patch. The AppImage is left as a workflow artifact so it can be pulled
+# down and run on a real desktop, which is the one thing a CI runner cannot do.
+#
+# Delete this file once the Linux release path has shipped a few times and the
+# unknowns are gone.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or SHA to build"
+        required: false
+        default: "dev"
+        type: string
+  pull_request:
+    paths:
+      - "src-tauri/tauri.linux.conf.json"
+      - ".github/workflows/build-release.yml"
+      - ".github/workflows/linux-build-check.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux-check:
+    if: github.repository == 'winters27/StreamNook'
+    # Pinned for the same reason the release job is: glibc is forward-compatible
+    # only, so the OLDEST supported runner is the correct builder. Checking on a
+    # newer image than we ship from would validate the wrong binary.
+    runs-on: ubuntu-22.04
+    # JOB level, not step level. These are `env!()` (not `option_env!`), so they
+    # are hard compile-time requirements: without them cargo fails with 64
+    # errors reading "environment variable TWITCH_APP_CLIENT_ID not defined at
+    # compile time". Locally `build.rs` supplies them by reading `.env`, which is
+    # gitignored and therefore absent on every runner, so a CI job that runs
+    # cargo at all has to provide them itself. Putting them on the build step
+    # alone is not enough, which is how this was first written.
+    #
+    # The client IDs are public by construction (they ship in the binary and are
+    # visible in any network capture) and are the same values build-release.yml
+    # uses. The secret falls back to a placeholder so this check still runs on a
+    # fork or a scratch repo with no secrets configured: it only needs to
+    # COMPILE, and a build check that cannot run without production secrets is a
+    # build check nobody can use.
+    env:
+      TWITCH_APP_CLIENT_ID: "1qgws7yzcp21g5ledlzffw3lmqdvie"
+      TWITCH_ANDROID_CLIENT_ID: "kd1unb4b3q4t58fwlpcbzcbnm76a8fp"
+      TWITCH_WEB_CLIENT_ID: "kimne78kx3ncx6brgo4mv6wki5h1ko"
+      TWITCH_APP_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET || 'ci-check-placeholder' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      # A GitHub runner ships with ~14 GB free, and this job stacks THREE build
+      # profiles on it: `cargo check` (debug metadata), `cargo test` (debug plus
+      # test binaries) and the release build with thin LTO, on top of a 340 MB
+      # AppDir and a ~200 MB AppImage. Without this the release build dies 25
+      # minutes in with "No space left on device", which reads like a compiler
+      # failure and is not one.
+      #
+      # The release job only builds one profile, so it has far more headroom,
+      # but the `df` lines below are the measurement that says by how much.
+      - name: Free disk space
+        run: |
+          echo "before:"; df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      /usr/share/swift 2>/dev/null || true
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          echo "after:"; df -h / | tail -1
+
+      # Kept byte-identical to the release job's list on purpose. If the two
+      # drift, this check stops predicting anything about the real build.
+      - name: Install Linux build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebp-dev \
+            libsoup-3.0-dev \
+            patchelf \
+            file \
+            desktop-file-utils \
+            xdg-utils \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          key: linux-check
+
+      - name: Install dependencies
+        run: npm ci
+
+      # MUST come before any cargo step. `dist/` is gitignored and
+      # `tauri.conf.json` sets `frontendDist: "../dist"`, which `tauri-build`
+      # resolves AT COMPILE TIME inside `generate_context!`. On a fresh checkout
+      # cargo therefore dies with "proc macro panicked ... this path doesn't
+      # exist" and 65 cascading errors, none of which name the real cause.
+      #
+      # A local `cargo check` never reproduces this, because dist/ is already
+      # sitting there from the last build. The release job does not hit it
+      # either: it calls `npm run tauri build`, whose beforeBuildCommand builds
+      # the frontend first. Only a workflow that runs cargo on its own needs
+      # this line, which is exactly what this one does.
+      - name: Build the frontend (cargo needs dist/ to exist)
+        run: npm run build
+
+      # The Rust gates, which the release job does not run at all. Cheap here
+      # because the toolchain and cache are already warm.
+      - name: cargo check
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: cargo test
+        run: cargo test --manifest-path src-tauri/Cargo.toml --no-default-features
+
+      # Reclaim the debug and test artifacts before the release build. They are
+      # several GB and nothing downstream reads them; the Swatinem cache saves
+      # its own copy at job end regardless.
+      - name: Drop the debug artifacts
+        run: |
+          du -sh src-tauri/target 2>/dev/null || true
+          rm -rf src-tauri/target/debug
+          df -h / | tail -1
+
+      - name: Build Tauri app
+        run: npm run tauri build
+
+      - name: Disk headroom after the release build
+        run: |
+          df -h / | tail -1
+          du -sh src-tauri/target 2>/dev/null || true
+
+      - name: Unbundle the host GPU loaders
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: |
+          set -euo pipefail
+          bundle="src-tauri/target/release/bundle/appimage"
+          appdir="$bundle/StreamNook.AppDir"
+          test -d "$appdir" || { echo "no AppDir at $appdir"; ls -R "$bundle" || true; exit 1; }
+
+          # Same two groups as the release job: GPU driver loaders, plus the
+          # low-level libraries mesa/EGL load from the host. Shipping 22.04
+          # copies of these makes the app abort with EGL_BAD_PARAMETER and render
+          # a blank window on any newer host. Verified: deleting these eight made
+          # a previously-blank CI artifact paint in 12s.
+          for lib in libva.so.2 libva-drm.so.2 libva-x11.so.2 libvulkan.so.1                      libwayland-client.so.0 libwayland-egl.so.1                      libwayland-server.so.0 libwayland-cursor.so.0                      libffi.so.8 libzstd.so.1 libelf.so.1 libgomp.so.1; do
+            while IFS= read -r f; do rm -f "$f"; echo "unbundled $lib"; done < <(find "$appdir" -name "$lib")
+          done
+          for keep in libgstlibav.so libgstopenh264.so; do
+            find "$appdir" -name "$keep" | grep -q . || { echo "$keep went missing"; exit 1; }
+          done
+
+          tool=$(find "$HOME/.cache" -name "linuxdeploy-plugin-appimage*.AppImage" -type f 2>/dev/null | head -1)
+          test -n "$tool" || { echo "AppImage packer not found under \$HOME/.cache"; exit 1; }
+          chmod +x "$tool"
+          old=$(find "$bundle" -maxdepth 1 -name '*.AppImage' | head -1)
+          test -n "$old" || { echo "no AppImage to repack"; exit 1; }
+          work="$bundle/repack"; rm -rf "$work"; mkdir -p "$work"
+          ( cd "$work" && LINUXDEPLOY_OUTPUT_APP_NAME=StreamNook "$tool" --appdir ../StreamNook.AppDir )
+          new=$(find "$work" -maxdepth 1 -name '*.AppImage' | head -1)
+          test -s "$new" || { echo "repack produced nothing"; exit 1; }
+          mv -f "$new" "$old"; rm -rf "$work"; chmod +x "$old"
+
+      # Everything the release job asserts about the artifact, asserted here
+      # instead, where failing costs a runner rather than a published release.
+      - name: Inspect the artifact
+        run: |
+          set -euo pipefail
+          bundle="src-tauri/target/release/bundle/appimage"
+          appdir="$bundle/StreamNook.AppDir"
+          app=$(find "$bundle" -maxdepth 1 -name '*.AppImage' | head -1)
+          echo "### Linux build check" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| check | result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+
+          # Type-2 AppImage magic: ELF, then AI\x02 at offset 8.
+          magic=$(head -c 11 "$app" | od -An -tx1 | tr -d ' \n')
+          case "$magic" in
+            7f454c46????????414902) echo "| AppImage magic | ok |" >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "| AppImage magic | FAILED ($magic) |" >> "$GITHUB_STEP_SUMMARY"; exit 1 ;;
+          esac
+
+          echo "| size | $(du -h "$app" | cut -f1) |" >> "$GITHUB_STEP_SUMMARY"
+
+          # The glibc floor decides which distros can run this at all, and it is
+          # set by the runner image. Printing it makes a runner bump visible
+          # instead of silently raising the floor under users.
+          floor=$(objdump -T src-tauri/target/release/StreamNook 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1)
+          echo "| glibc floor | $floor |" >> "$GITHUB_STEP_SUMMARY"
+
+          # The decoders are what stand between a working player and
+          # "HLS is not supported in this browser" on every Linux machine.
+          for p in libgstlibav.so libgstopenh264.so libgstva.so; do
+            found=$(find "$appdir" -name "$p" | head -1)
+            echo "| $p | ${found:+bundled}${found:-MISSING} |" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+          # And these must NOT be bundled: they are host GPU driver loaders.
+          for l in libva.so.2 libvulkan.so.1 libwayland-egl.so.1 libffi.so.8 libelf.so.1; do
+            found=$(find "$appdir" -name "$l" | head -1)
+            if [ -n "$found" ]; then
+              echo "| $l | STILL BUNDLED (breaks hw decode) |" >> "$GITHUB_STEP_SUMMARY"; exit 1
+            fi
+            echo "| $l | correctly absent |" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+          echo "| gstreamer plugins | $(find "$appdir" -path '*gstreamer*' -name '*.so' | wc -l) |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the AppImage for manual testing
+        uses: actions/upload-artifact@v4
+        with:
+          name: StreamNook-linux-check
+          path: src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 7

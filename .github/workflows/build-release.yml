@@ -214,6 +214,329 @@ jobs:
       # Gatekeeper-blocked. So this pipeline is correct for updates and not yet
       # correct for first-time installs.
 
+  # Linux build. Same independent-and-joined-afterwards shape as build-macos:
+  # runs in parallel with Windows, nothing waits on it, and finalize-linux
+  # patches its outputs into the manifest once both have landed. A Linux failure
+  # leaves the Windows (and macOS) release standing.
+  build-linux:
+    needs: merge-to-main
+    runs-on: ubuntu-22.04
+    # NOT ubuntu-latest, and this is not stylistic. glibc is forward-compatible
+    # only: a binary linked against 24.04's glibc refuses to start on 22.04 with
+    # `GLIBC_2.38 not found`, so the OLDEST supported runner is the correct
+    # builder and `ubuntu-latest` silently moves that floor under us on GitHub's
+    # schedule rather than ours. Raise this deliberately or not at all.
+    permissions:
+      contents: write
+    outputs:
+      BUNDLE_NAME: ${{ steps.pack.outputs.BUNDLE_NAME }}
+      SHA256: ${{ steps.pack.outputs.SHA256 }}
+      SIZE: ${{ steps.pack.outputs.SIZE }}
+      SIGNATURE: ${{ steps.sign.outputs.SIGNATURE }}
+      DOWNLOAD_URL: ${{ steps.pack.outputs.DOWNLOAD_URL }}
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      # Release-exists guard, the Linux twin of the macOS and Windows checks.
+      # Same reasoning: every upload below is --clobber, and this workflow fires
+      # on ANY dev push touching Cargo.toml, so without the guard a dependency
+      # bump after a release would rebuild from a different tree and overwrite
+      # published assets under the same tag, breaking every installed client's
+      # pinned hash.
+      - name: Check if release already exists
+        id: check_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "RELEASE_EXISTS=true" >> "$GITHUB_OUTPUT"
+            echo "Release v$version already exists; skipping the Linux build so its published assets are not clobbered"
+          else
+            echo "RELEASE_EXISTS=false" >> "$GITHUB_OUTPUT"
+            echo "Release v$version does not exist; building the Linux bundle"
+          fi
+
+      # Verified against this exact set on Ubuntu 26.04 before the job existed:
+      # webkit2gtk-4.1, javascriptcoregtk-4.1, gtk+-3.0, libsoup-3.0,
+      # ayatana-appindicator3-0.1, librsvg-2.0, openssl and libwebp all resolve,
+      # and the whole crate graph checks and tests clean with no cfg changes.
+      #
+      #   libssl-dev  - openssl-sys, pulled in by tokio-tungstenite's native-tls
+      #                 (reqwest is on rustls, tungstenite is not)
+      #   libwebp-dev - libwebp-sys2, via webp-animation
+      #   appindicator + rsvg - the tray icon
+      #   patchelf, file, desktop-file-utils - the AppImage bundler's own tools
+      #   xdg-utils  - the bundler shells out to `xdg-mime` and dies with
+      #                "xdg-mime binary not found" without it. Found by running
+      #                this build for real: the Rust half finished and only the
+      #                bundling step failed, which is the one part a `cargo
+      #                build` can never tell you about.
+      #
+      # THE GSTREAMER PLUGINS ARE NOT OPTIONAL, and their absence is silent.
+      # WebKitGTK answers `MediaSource.isTypeSupported()` out of whatever
+      # GStreamer decoders it can find, and hls.js gates the entire player on
+      # `isTypeSupported('video/mp4; codecs="avc1.42E01E,mp4a.40.2"')`. With only
+      # plugins-base and plugins-good installed, MediaSource and SourceBuffer both
+      # EXIST and every codec query returns false, so the build succeeds, the app
+      # launches, streams resolve with a full quality ladder, and the player dies
+      # with "HLS is not supported in this browser". Measured on a real build:
+      #
+      #   base+good only : h264+aac false, h264 false, aac false, vp9 false
+      #   + libav/bad/ugly: h264+aac TRUE,  h264 TRUE,  aac TRUE,  vp9 TRUE
+      #
+      # linuxdeploy-plugin-gstreamer bundles whatever is installed HERE into the
+      # AppImage, so this list is what every Linux user's decoder set will be.
+      # vp9 is in that list for YouTube playback, not for Twitch.
+      - name: Install Linux build dependencies
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebp-dev \
+            libsoup-3.0-dev \
+            patchelf \
+            file \
+            desktop-file-utils \
+            xdg-utils \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav
+
+      - name: Setup Node.js
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          key: linux
+
+      - name: Install dependencies
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
+        run: npm ci
+
+      - name: Build Tauri app
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
+        run: npm run tauri build
+        env:
+          # Same values the Windows and macOS jobs use; the client IDs are
+          # public by construction (see the comment on the Windows build step).
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          TWITCH_APP_CLIENT_ID: "1qgws7yzcp21g5ledlzffw3lmqdvie"
+          TWITCH_APP_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
+          TWITCH_ANDROID_CLIENT_ID: "kd1unb4b3q4t58fwlpcbzcbnm76a8fp"
+          TWITCH_WEB_CLIENT_ID: "kimne78kx3ncx6brgo4mv6wki5h1ko"
+          KICK_APP_CLIENT_ID: "01KMKM0HVR6HY0BMA101JFCTW3"
+          KICK_APP_CLIENT_SECRET: ${{ secrets.KICK_APP_CLIENT_SECRET }}
+
+      # Remove the GPU DRIVER LOADERS from the bundle and repack.
+      #
+      # `libva` and `libvulkan` are loaders: they dlopen the HOST's GPU driver
+      # (iHD_drv_video.so, radeonsi_drv_video.so, the Vulkan ICDs), and loader
+      # and driver must be ABI-compatible. Shipping our own means a user on a
+      # different distro gets a loader that cannot open their driver,
+      # va_openDriver() fails, and GStreamer silently falls back to SOFTWARE
+      # decode - on exactly the machines where hardware decode matters most. The
+      # user-visible symptom is a stuttering 1080p60 stream on a perfectly
+      # capable GPU, with nothing logged to explain it.
+      #
+      # linuxdeploy already excludes libGL, libEGL, libdrm and libgbm for this
+      # reason (verified: those come from the host). These four slip past because
+      # linuxdeploy-plugin-gstreamer copies its plugins' own dependencies without
+      # consulting that excludelist.
+      #
+      # The DECODER PLUGINS stay (libgstva, libgstnvcodec, libgstlibav,
+      # libgstopenh264): the plugin is ours to ship, the loader is the host's.
+      # A host with no libva at all just fails to load libgstva and falls through
+      # to software decode, which is what it would have done anyway.
+      #
+      # Verified on a real build: after stripping, the app launches with no
+      # plugin-load failures and Twitch video still decodes and plays.
+      - name: Unbundle the host GPU loaders
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
+        env:
+          # linuxdeploy ships as an AppImage and GitHub runners have no FUSE.
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: |
+          set -euo pipefail
+          bundle="src-tauri/target/release/bundle/appimage"
+          appdir="$bundle/StreamNook.AppDir"
+          test -d "$appdir" || { echo "no AppDir at $appdir"; ls -R "$bundle" || true; exit 1; }
+
+          # Two groups, one principle: anything the HOST's graphics stack loads
+          # must come from the host.
+          #
+          # 1. The GPU driver loaders (libva, libvulkan), which dlopen the host's
+          #    driver and must be ABI-compatible with it.
+          # 2. Low-level libraries that mesa and the EGL stack themselves pull
+          #    in. These are on the AppImage community excludelist for exactly
+          #    this reason, and leaving them in is NOT cosmetic: a CI artifact
+          #    built here died with "Could not create default EGL display:
+          #    EGL_BAD_PARAMETER. Aborting..." and rendered a BLANK WINDOW on a
+          #    newer host. Deleting these eight from the AppDir made the same
+          #    artifact paint in 12 seconds. Measured, not reasoned.
+          #
+          # This is the trap that makes the ubuntu-22.04 pin cut both ways:
+          # building on the oldest distro is right for the glibc floor, and it
+          # also guarantees every bundled library is the OLDEST, which maximises
+          # the mismatch against every user newer than the builder. The
+          # resolution is to not ship these at all.
+          removed=0
+          for lib in libva.so.2 libva-drm.so.2 libva-x11.so.2 libvulkan.so.1 \
+                     libwayland-client.so.0 libwayland-egl.so.1 \
+                     libwayland-server.so.0 libwayland-cursor.so.0 \
+                     libffi.so.8 libzstd.so.1 libelf.so.1 libgomp.so.1; do
+            while IFS= read -r f; do
+              rm -f "$f"; echo "unbundled $lib"; removed=$((removed+1))
+            done < <(find "$appdir" -name "$lib")
+          done
+          echo "unbundled $removed host-coupled librar(ies)"
+
+          # The decoders must survive; without them the player dies with
+          # "HLS is not supported in this browser".
+          for keep in libgstlibav.so libgstopenh264.so; do
+            find "$appdir" -name "$keep" | grep -q . || { echo "$keep went missing"; exit 1; }
+          done
+
+          # Find the packer rather than assuming one path: tauri caches it under
+          # ~/.cache/tauri today, but a hardcoded path that moves would abort the
+          # whole Linux job on a step that is meant to be a refinement.
+          tool=$(find "$HOME/.cache" -name "linuxdeploy-plugin-appimage*.AppImage" -type f 2>/dev/null | head -1)
+          if [ -z "$tool" ]; then
+            echo "::error title=AppImage packer not found::Could not locate linuxdeploy-plugin-appimage under \$HOME/.cache. The GPU driver loaders are still bundled, which silently costs users hardware decode, so this fails rather than shipping that."
+            exit 1
+          fi
+          chmod +x "$tool"
+
+          # Repack BESIDE the original and only replace it once the new one
+          # exists. Deleting first means a failed repack leaves the job with no
+          # artifact at all, turning a refinement into a lost release.
+          old=$(find "$bundle" -maxdepth 1 -name '*.AppImage' | head -1)
+          test -n "$old" || { echo "no AppImage to repack"; exit 1; }
+          work="$bundle/repack"
+          rm -rf "$work"; mkdir -p "$work"
+          ( cd "$work" && LINUXDEPLOY_OUTPUT_APP_NAME=StreamNook "$tool" --appdir ../StreamNook.AppDir )
+          new=$(find "$work" -maxdepth 1 -name '*.AppImage' | head -1)
+          test -s "$new" || { echo "repack produced nothing; keeping the original"; exit 1; }
+          mv -f "$new" "$old"
+          rm -rf "$work"
+          chmod +x "$old"
+          ls -la "$bundle"/*.AppImage
+
+      - name: Name and hash the AppImage
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
+        id: pack
+        run: |
+          set -euo pipefail
+          version=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          src_dir="src-tauri/target/release/bundle/appimage"
+          # The bundler names it StreamNook_<version>_amd64.AppImage. The client
+          # asks for the STABLE name (default_bundle_name() returns
+          # "StreamNook.AppImage" and stage_linux_bundle parks it under that), so
+          # rename rather than teaching the client a version-dependent filename.
+          built=$(find "$src_dir" -maxdepth 1 -name '*.AppImage' | head -1)
+          test -n "$built" || { echo "no .AppImage under $src_dir"; ls -R "$src_dir" || true; exit 1; }
+          bundle="StreamNook.AppImage"
+          mv "$built" "$bundle"
+          chmod +x "$bundle"
+          # Refuse to publish something that is not actually an AppImage. The
+          # client checks these same magic bytes before installing (see
+          # looks_like_an_appimage in commands/components.rs), so checking here
+          # means a bundler change lands as a red runner rather than as a failed
+          # update on a user's machine. 11 bytes = 22 hex chars: the ELF magic,
+          # four bytes of ELF identification, then AI\x02 at offset 8.
+          magic=$(head -c 11 "$bundle" | od -An -tx1 | tr -d ' \n')
+          case "$magic" in
+            7f454c46????????414902) ;;
+            *) echo "built artifact is not a type-2 AppImage (magic: $magic)"; exit 1 ;;
+          esac
+          echo "BUNDLE_NAME=$bundle" >> "$GITHUB_OUTPUT"
+          echo "SHA256=$(sha256sum "$bundle" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "SIZE=$(stat -c%s "$bundle")" >> "$GITHUB_OUTPUT"
+          echo "DOWNLOAD_URL=https://streamnook.app/download/linux" >> "$GITHUB_OUTPUT"
+          echo "Packed $bundle ($(du -h "$bundle" | cut -f1)) for v$version"
+
+      - name: Sign the AppImage with the update key
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
+        id: sign
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          bundle="${{ steps.pack.outputs.BUNDLE_NAME }}"
+          if [ -z "${UPDATE_SIGNING_KEY:-}" ]; then
+            echo "UPDATE_SIGNING_KEY not set - publishing an UNSIGNED Linux update"
+            echo "SIGNATURE=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The SAME key that signs the Windows and macOS bundles; the client
+          # pins one public half as a compile-time const.
+          sudo apt-get install -y --no-install-recommends minisign
+          printf '%s' "$UPDATE_SIGNING_KEY" > ./update.key
+          trap 'rm -f ./update.key' EXIT
+          minisign -S -s ./update.key -m "$bundle" -x "$bundle.minisig"
+          echo "SIGNATURE<<EOF" >> "$GITHUB_OUTPUT"
+          cat "$bundle.minisig" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          echo "Signed $bundle"
+
+      # Same handover as macOS: the GitHub release is created by the Windows
+      # `build` job, which runs in parallel with this one, so this job can never
+      # wait for it.
+      - name: Hand the Linux bundle to the release job
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-bundle
+          path: |
+            ${{ steps.pack.outputs.BUNDLE_NAME }}
+            ${{ steps.pack.outputs.BUNDLE_NAME }}.minisig
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Push Linux bundle to Cloudflare R2
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          bundle="${{ steps.pack.outputs.BUNDLE_NAME }}"
+          npx --yes wrangler@4 r2 object put "streamnook-downloads/linux/$bundle" \
+            --file="$bundle" \
+            --content-type="application/x-executable" \
+            --remote
+          echo "Uploaded linux/$bundle to R2"
+
+      # NO SIGNING GATE HERE, unlike macOS. Linux has no Gatekeeper equivalent:
+      # an AppImage a human downloads runs once they mark it executable, so this
+      # pipeline is correct for first-time installs as well as for updates. The
+      # minisign signature is still published and still the only control that
+      # survives a compromise of the update host.
+
   build:
     # Deliberately does NOT need build-macos. It used to, and the cost was
     # measured: build-macos runs 32-51 min, and `needs` makes Windows WAIT for it
@@ -628,13 +951,48 @@ jobs:
             }
           }
 
-          # NOTE: this manifest is WINDOWS-ONLY by design. The macOS entries are
-          # patched in afterwards by the finalize-macos job, so that Windows users
-          # are not made to wait 32-51 min for a Mac build to publish their
-          # update. Until that job lands, macos-* keys are simply absent, which is
-          # the correct safe state: an entry pointing at a build that does not
-          # exist is worse than no entry, because the client would offer an update
-          # and then fail to download it.
+          # The macOS and Linux entries for the NEW version are patched in
+          # afterwards by finalize-macos / finalize-linux, so Windows users are not
+          # made to wait 32-51 min for a Mac build to publish their update. An entry
+          # pointing at a build that does not exist is worse than no entry, because
+          # the client would offer an update and then fail to download it.
+          #
+          # But dropping the non-Windows keys entirely was ALSO wrong, and cost real
+          # users: with no key for their <os>-<arch>, a Mac gets
+          # `artifact_for_platform() == None` and is told "no update", traced only
+          # by one log line. That happened on EVERY release for the 32-51 min
+          # window, and for the WHOLE cycle whenever build-macos failed, because
+          # finalize-macos is skipped when its outputs are empty.
+          #
+          # So carry the PREVIOUS manifest's macOS and Linux entries forward. They
+          # point at the last build for that platform, which really does exist, so a
+          # client checking during the window is offered the previous release rather
+          # than nothing, and finalize-* overwrites them minutes later. A client
+          # already on that version simply sees no update, which is correct.
+          #
+          # linux-x86_64 is in this list from the day the Linux job landed, not
+          # added later after the same gap bit Linux users too.
+          $prevManifest = $null
+          try {
+            $prevManifest = Invoke-RestMethod -Uri "https://streamnook.app/api/v1/update" -TimeoutSec 20
+          } catch {
+            Write-Host "::warning::Could not read the previous manifest ($($_.Exception.Message)); macOS keys will be absent until finalize-macos runs."
+          }
+          if ($prevManifest -and $prevManifest.platforms) {
+            foreach ($key in @("macos-aarch64", "macos-x86_64", "linux-x86_64")) {
+              $prev = $prevManifest.platforms.$key
+              if ($prev -and $prev.download_url) {
+                $platforms[$key] = [ordered]@{
+                  download_url = $prev.download_url
+                  bundle_name  = $prev.bundle_name
+                  sha256       = $prev.sha256
+                  signature    = $prev.signature
+                  size         = $prev.size
+                }
+                Write-Host "Carried forward $key from the previous manifest (v$($prevManifest.version))"
+              }
+            }
+          }
 
           # The flat fields stay, and stay describing the WINDOWS bundle. Every
           # client already installed reads them and knows nothing about
@@ -912,3 +1270,126 @@ jobs:
             --content-type="application/json" \
             --remote
           echo "Patched macOS ($MAC_BUNDLE) into latest.json for v$VERSION"
+
+  # Warns when the Linux half of a release never landed. Exact twin of
+  # macos-status, and it exists for the same reason: finalize-linux is SKIPPED
+  # when build-linux produced no outputs, a skipped job is green in the run
+  # summary, and the release would then ship with the previous version's Linux
+  # entry standing with nothing saying so.
+  linux-status:
+    needs: [build, build-linux]
+    if: >-
+      ${{ !cancelled()
+          && needs.build.result == 'success'
+          && needs.build.outputs.RELEASE_EXISTS == 'false'
+          && needs.build-linux.outputs.BUNDLE_NAME == '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Say that Linux did not ship
+        run: |
+          echo "::warning title=Linux was not published::v${{ needs.build.outputs.VERSION }} shipped WITHOUT a Linux build (build-linux result: ${{ needs.build-linux.result }}). The manifest still carries the PREVIOUS linux-x86_64 entry, so Linux clients are offered the older build and will not see this release. Re-run the Linux job, or ship the next release once it is fixed."
+          {
+            echo "### Linux was not published"
+            echo ""
+            echo "\`v${{ needs.build.outputs.VERSION }}\` shipped without a Linux build."
+            echo "build-linux result: \`${{ needs.build-linux.result }}\`"
+            echo ""
+            echo "Windows users have the update. Linux clients are still offered the"
+            echo "previous release, which is the intended safe state, but they will not"
+            echo "get this version until a Linux bundle is published."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  finalize-linux:
+    # `finalize-macos` is in `needs` for ONE reason: both jobs do a
+    # read-modify-write of the same latest.json in R2 (download, jq, upload).
+    # Run concurrently they race, and the loser's platform keys are silently
+    # dropped from the manifest that ships, which looks exactly like "the build
+    # never published" while both jobs report success. Serializing them is the
+    # cheap fix; the alternative is one combined finalize job, which would mean
+    # rewriting the macOS path that already works.
+    #
+    # A SKIPPED finalize-macos (no Mac build this cycle) must not skip this job,
+    # which is why the `if` leads with `!cancelled()` rather than relying on the
+    # default needs-success behaviour.
+    needs: [build, build-linux, finalize-macos]
+    if: >-
+      ${{ !cancelled()
+          && needs.build.result == 'success'
+          && needs.build.outputs.RELEASE_EXISTS == 'false'
+          && needs.build-linux.outputs.BUNDLE_NAME != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Fetch the Linux bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-bundle
+          path: linux-bundle
+
+      - name: Attach the Linux bundle to the release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.build.outputs.VERSION }}"
+          bundle="linux-bundle/${{ needs.build-linux.outputs.BUNDLE_NAME }}"
+          gh release upload "v$version" "$bundle" --clobber
+          [ -f "$bundle.minisig" ] && gh release upload "v$version" "$bundle.minisig" --clobber || true
+          echo "Attached $(basename "$bundle") to v$version"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+
+      # Patch rather than rewrite, same as finalize-macos: the Windows job has
+      # already published a complete, correct Windows manifest and re-deriving
+      # its fields here would let the two drift. This only adds the one Linux key.
+      - name: Patch Linux into latest.json
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          LINUX_BUNDLE: ${{ needs.build-linux.outputs.BUNDLE_NAME }}
+          LINUX_SHA: ${{ needs.build-linux.outputs.SHA256 }}
+          LINUX_SIG: ${{ needs.build-linux.outputs.SIGNATURE }}
+          LINUX_SIZE: ${{ needs.build-linux.outputs.SIZE }}
+          LINUX_URL: ${{ needs.build-linux.outputs.DOWNLOAD_URL }}
+          VERSION: ${{ needs.build.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+
+          npx --yes wrangler@4 r2 object get "streamnook-downloads/latest.json" \
+            --file=latest.json --remote
+          test -s latest.json
+
+          # Refuse to patch a manifest for a different release. Without this, a
+          # slow Linux job could staple its bundle onto whatever version shipped
+          # next, which is exactly the "offers an update it cannot download" case
+          # the Windows manifest step guards against.
+          have=$(jq -r '.version' latest.json)
+          if [ "$have" != "$VERSION" ]; then
+            echo "latest.json is v$have but this run is v$VERSION - refusing to patch"
+            exit 1
+          fi
+
+          # --argjson parses LINUX_SIZE as JSON, so a blank or non-numeric value
+          # would abort jq with a parse error rather than anything legible.
+          case "$LINUX_SIZE" in
+            ''|*[!0-9]*) echo "build-linux gave a non-numeric SIZE: '$LINUX_SIZE'"; exit 1 ;;
+          esac
+          test -n "$LINUX_SHA" || { echo "build-linux gave an empty SHA256"; exit 1; }
+
+          # One key only. Unlike macOS there is no universal binary to alias: the
+          # AppImage is x86_64, and an arm64 Linux client correctly resolves to
+          # `None` (no update offered) rather than being handed an amd64 build.
+          jq --arg url "$LINUX_URL" --arg name "$LINUX_BUNDLE" --arg sha "$LINUX_SHA" \
+             --arg sig "$LINUX_SIG" --argjson size "$LINUX_SIZE" \
+             '.platforms["linux-x86_64"] = {download_url:$url, bundle_name:$name, sha256:$sha, signature:$sig, size:$size}' \
+             latest.json > latest.patched.json
+          test -s latest.patched.json
+
+          npx --yes wrangler@4 r2 object put "streamnook-downloads/latest.json" \
+            --file=latest.patched.json \
+            --content-type="application/json" \
+            --remote
+          echo "Patched Linux ($LINUX_BUNDLE) into latest.json for v$VERSION"
