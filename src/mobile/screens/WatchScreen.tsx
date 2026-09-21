@@ -249,16 +249,19 @@ export const WatchScreen: React.FC = () => {
   const autoColumns = sideFits && (!stackFits || sideVideoH >= stackVideoH);
   // Offer the switch only where both actually work; below that there is nothing
   // to choose between.
-  const canChooseLayout = shape.sizeClass === 'expanded' && sideFits && stackFits;
-  // Only `expanded` re-decides. A phone in landscape is after immersive video,
-  // so chat stays opt-in behind the fullscreen toggle there, as before.
+  const canChooseLayout = shape.largeScreen && sideFits && stackFits;
+  // Only a genuinely large screen re-decides (smallest side, see useWindowShape:
+  // an ordinary phone is 900dp wide on its side and is still a phone). A phone
+  // in landscape is after immersive video, so chat stays opt-in behind the
+  // fullscreen toggle there. Deciding this by WIDTH is what put chat on the
+  // right of every landscape phone with no way to dismiss it.
   const twoColumns =
-    shape.sizeClass === 'expanded'
+    shape.largeScreen
       ? watchLayout === 'auto'
         ? autoColumns
         : watchLayout === 'columns' && sideFits
       : landscapeChat;
-  const immersiveLandscape = shape.twoPane && shape.sizeClass !== 'expanded';
+  const immersiveLandscape = shape.twoPane && !shape.largeScreen;
   // Tabletop: the phone is bent across a horizontal hinge. The bend is the
   // natural boundary between picture and chat, so the band ends on it and
   // chat takes the lower half. Posture beats the remembered split and beats
@@ -269,7 +272,7 @@ export const WatchScreen: React.FC = () => {
   const chatBeside = sideBySide && twoColumns;
   // Resizable only where there is genuinely a trade to make. On a phone the
   // 16:9 band is simply right, and there is no surplus to hand to chat.
-  const resizable = shape.sizeClass === 'expanded' && !mini && !pip;
+  const resizable = shape.largeScreen && !mini && !pip;
   // The axis the divider travels along, and the natural split it starts from:
   // a 16:9 player with chat taking whatever is left.
   const axisLen = chatBeside ? shape.w : shape.h;

@@ -53,6 +53,16 @@ export interface WindowShape {
   splitY: number | null;
   /** Whether there is room for two panes side by side at all. */
   twoPane: boolean;
+  /**
+   * A genuinely large screen: tablet or unfolded foldable. Decided by the
+   * SMALLEST side (Android's own sw600dp rule), not by width. An ordinary
+   * 411dp-wide phone is 890 to 915dp wide in landscape, which the width
+   * classes call `expanded`; treating that as a tablet forced the two-column
+   * layout with chat on the right and no way to dismiss it, because the
+   * landscape chat toggle only applies to phones. A phone on its side is
+   * still a phone.
+   */
+  largeScreen: boolean;
 }
 
 function classify(w: number): SizeClass {
@@ -82,7 +92,9 @@ export function deriveShape(size: { w: number; h: number }, fold: FoldInfo | nul
       ? fold.y + fold.height / 2
       : null;
 
-  return { w: size.w, h: size.h, sizeClass, landscape, fold, splitX, splitY, twoPane };
+  const largeScreen = Math.min(size.w, size.h) >= 600;
+
+  return { w: size.w, h: size.h, sizeClass, landscape, fold, splitX, splitY, twoPane, largeScreen };
 }
 
 export function useWindowShape(): WindowShape {

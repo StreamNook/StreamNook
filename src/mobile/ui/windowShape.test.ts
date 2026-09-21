@@ -41,4 +41,20 @@ describe('deriveShape', () => {
     expect(deriveShape({ w: 700, h: 500 }, null).twoPane).toBe(true);
     expect(deriveShape({ w: 700, h: 900 }, null).twoPane).toBe(false);
   });
+
+  it('a phone on its side is still a phone, not a tablet', () => {
+    // A 411dp-wide phone in landscape: wider than the expanded breakpoint,
+    // but its smallest side is a phone's. This is the shape that forced chat
+    // onto the right with no way to dismiss it.
+    const s = deriveShape({ w: 915, h: 411 }, null);
+    expect(s.sizeClass).toBe('expanded');
+    expect(s.twoPane).toBe(true);
+    expect(s.largeScreen).toBe(false);
+  });
+
+  it('recognises tablets and unfolded foldables by their smallest side', () => {
+    expect(deriveShape({ w: 840, h: 757 }, null).largeScreen).toBe(true);
+    expect(deriveShape({ w: 1280, h: 800 }, null).largeScreen).toBe(true);
+    expect(deriveShape({ w: 412, h: 915 }, null).largeScreen).toBe(false);
+  });
 });
