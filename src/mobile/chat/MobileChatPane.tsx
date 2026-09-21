@@ -305,15 +305,34 @@ export const MobileChatPane: React.FC = () => {
     [activeChannel],
   );
 
-  // `isUserScroll` is computed by ChatMessageList (up-intent AND more than 50px
-  // from the bottom) and was previously DISCARDED here, which is the other half
-  // of why a compositor scroll could un-pause. Resume only on a real user scroll
-  // that has actually arrived at the bottom; 30px matches desktop.
+  // Scrolling back to the bottom resumes, the way tapping Resume does.
+  //
+  // This used to gate on the list's `isUserScroll`, which the list defines as
+  // "up-intent AND more than 50px from the bottom". Resume needs LESS than
+  // 30px. The two never overlap, so a scroll back down could never resume and
+  // the Resume button was the only way back to live. The guard existed for
+  // the read-back oscillation (a 6px drag pausing, then the same drag reading
+  // as "at the bottom" and un-pausing under the finger). The honest test for
+  // that is distance, not intent: resume only once the reader has actually
+  // been AWAY from the bottom and then come back to it. A read-back that never
+  // leaves the bottom band stays paused; a real return, dragged or flung,
+  // lands live. ChatMessageList already withholds its own programmatic scrolls
+  // from this callback, so nothing here fires for an auto-scroll.
+  const wasAwayRef = useRef(false);
   const onScroll = useCallback(
-    (distanceToBottom: number, isUserScroll?: boolean) => {
-      if (!isPausedRef.current) return;
-      if (isUserScroll === false) return;
-      if (distanceToBottom < 30) pause(false);
+    (distanceToBottom: number) => {
+      if (!isPausedRef.current) {
+        wasAwayRef.current = false;
+        return;
+      }
+      if (distanceToBottom > 80) {
+        wasAwayRef.current = true;
+        return;
+      }
+      if (distanceToBottom < 30 && wasAwayRef.current) {
+        wasAwayRef.current = false;
+        pause(false);
+      }
     },
     [pause],
   );

@@ -17,12 +17,12 @@ import { useMobileNavStore } from '../navStore';
 import { PullToRefresh } from '../ui/PullToRefresh';
 import { MobileSheet } from '../ui/MobileSheet';
 import { SettleIn, useSettleIn } from '../ui/SettleIn';
-import { getAllUserBadgesWithEarned } from '../../services/badgeService';
 import {
-  deriveBadgeStatus,
-  formatBadgeDateInfo,
-  type BadgeWindowStatus,
-} from '../../utils/badgeWindow';
+  badgeGalleryIsWarm,
+  loadBadgeGallery,
+  useBadgeGallery,
+  type GlobalBadge,
+} from '../rewards/badgeGalleryStore';
 import { gameBoxArt } from '../../utils/boxArt';
 import { openExternal } from '../../utils/openExternal';
 import { Logger } from '../../utils/logger';
@@ -135,26 +135,9 @@ const GameGroupSection: React.FC<{
   </div>
 );
 
-// Mirrors the desktop Global Cosmetics gallery: newest first, with each
-// badge's live earn status derived from its BadgeBase window.
-interface GlobalBadge {
-  key: string;
-  setId: string;
-  versionId: string;
-  title: string;
-  description: string;
-  image: string;
-  /** Precomputed newest-first rank from the badge metadata cache. */
-  position: number;
-  /** Parsed date_added, the authoritative newest-first key. */
-  addedMs: number;
-  usage: number;
-  status: BadgeWindowStatus | null;
-  dateInfo: string;
-  moreInfo: string;
-  infoUrl: string;
-}
-
+// The badge wall itself (GlobalBadge, loading, the metadata backfill) lives in
+// rewards/badgeGalleryStore so it survives this screen unmounting on every
+// tab switch. This file only sorts and draws it.
 type BadgeSort = 'newest' | 'oldest' | 'available' | 'soon' | 'usage';
 
 const BADGE_SORTS: { id: BadgeSort; label: string }[] = [
@@ -164,13 +147,6 @@ const BADGE_SORTS: { id: BadgeSort; label: string }[] = [
   { id: 'usage', label: 'Most used' },
   { id: 'oldest', label: 'Oldest' },
 ];
-
-// "1,234 users" -> 1234, so the usage sort has something numeric to work with.
-function parseUsage(raw: string | null | undefined): number {
-  if (!raw) return 0;
-  const digits = raw.replace(/[^0-9]/g, '');
-  return digits ? parseInt(digits, 10) : 0;
-}
 
 // How long is left to earn a campaign, at the coarsest useful resolution.
 // Anything past a couple of days does not need an hour count, and anything
@@ -184,29 +160,6 @@ function campaignEndsIn(campaign: DropCampaign): string | null {
   if (hours < 1) return `${Math.max(1, Math.round(ms / 60_000))}m left`;
   if (hours < 48) return `${hours}h left`;
   return `${Math.floor(hours / 24)}d left`;
-}
-
-function parseAdded(raw: string | null | undefined): number {
-  if (!raw) return 0;
-  const ms = new Date(raw).getTime();
-  return Number.isNaN(ms) ? 0 : ms;
-}
-
-// A pushed badge has no scraped date_added yet, but its relay enrichment
-// carries the campaign window; the window opening is an honest "how new is
-// this" stand-in, and without it a fresh badge sorts as if it were ancient.
-function enrichmentStartMs(meta: CachedBadgeMeta | undefined): number {
-  const raw = meta?.data?.enrichment?.['starts_utc'];
-  if (typeof raw !== 'string') return 0;
-  const ms = new Date(raw).getTime();
-  return Number.isNaN(ms) ? 0 : ms;
-}
-
-// Version ids are numeric strings in practice; compare them as numbers so
-// "10" beats "9", falling back to string order for anything exotic.
-function versionRank(id: string): number {
-  const n = parseInt(id, 10);
-  return Number.isNaN(n) ? 0 : n;
 }
 
 // Split a badge blurb into its parts so each gets its own treatment instead of
@@ -238,31 +191,6 @@ function splitBadgeBlurb(text: string): {
     .trim();
   return { prose, window, caveat };
 }
-interface GlobalBadgeVersion {
-  id?: string;
-  title?: string;
-  description?: string;
-  image_url_2x?: string;
-  image_url_4x?: string;
-}
-interface GlobalBadgeSet {
-  set_id?: string;
-  versions?: GlobalBadgeVersion[];
-}
-interface GlobalBadgeResponse {
-  data?: GlobalBadgeSet[];
-}
-interface CachedBadgeMeta {
-  data?: {
-    date_added?: string | null;
-    usage_stats?: string | null;
-    more_info?: string | null;
-    enrichment?: Record<string, unknown> | null;
-    info_url?: string;
-  };
-  position?: number;
-}
-
 export const RewardsScreen: React.FC = () => {
   const addToast = useAppStore((s) => s.addToast);
   const currentUser = useAppStore((s) => s.currentUser);
@@ -296,12 +224,16 @@ export const RewardsScreen: React.FC = () => {
   // different campaign starts closed without an effect to reset it.
   const [channelsOpenFor, setChannelsOpenFor] = useState<string | null>(null);
   const startStream = useAppStore((s) => s.startStream);
-  const [globalBadges, setGlobalBadges] = useState<GlobalBadge[]>([]);
-  const [ownedTitles, setOwnedTitles] = useState<Set<string>>(new Set());
-  const [badgesLoading, setBadgesLoading] = useState(false);
+  // The wall comes from the gallery store, which outlives this screen.
+  const globalBadges = useBadgeGallery((s) => s.badges);
+  const ownedTitles = useBadgeGallery((s) => s.ownedTitles);
+  const badgesLoading = useBadgeGallery((s) => s.loading);
+  const metaProgress = useBadgeGallery((s) => s.metaProgress);
+  // Whether the wall was already in memory when this screen mounted: a warm
+  // wall snaps in rather than replaying the settle over every tile.
+  const [warmOnMount] = useState(() => badgeGalleryIsWarm());
   const [badgeSort, setBadgeSort] = useState<BadgeSort>('newest');
   const [badgeDetail, setBadgeDetail] = useState<GlobalBadge | null>(null);
-  const [metaProgress, setMetaProgress] = useState(0);
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [inventory, setInventory] = useState<InventoryResponse | null>(null);
   const [deviceCode, setDeviceCode] = useState<DropsDeviceCodeInfo | null>(null);
@@ -350,121 +282,20 @@ export const RewardsScreen: React.FC = () => {
   }, [focusDropCampaignId, inventory, tab, clearDropFocus]);
 
   // The GLOBAL Twitch badge collection (every badge currently available),
-  // with the ones you already own marked. Same sources the desktop badge wall
-  // uses: the cached global badge set, plus your earned set for ownership.
-  const loadBadges = useCallback(async () => {
-    setBadgesLoading(true);
-    try {
-      let global = await invoke<GlobalBadgeResponse | null>('get_cached_global_badges');
-      if (!global?.data?.length) {
-        await invoke('prefetch_global_badges').catch(() => {});
-        global = await invoke<GlobalBadgeResponse | null>('get_cached_global_badges');
-      }
-
-      // Badge metadata (earn window + newest-first position) comes from the
-      // universal cache in one batch, keyed exactly as the desktop gallery
-      // keys it.
-      let meta: Record<string, CachedBadgeMeta> = {};
-      try {
-        meta =
-          (await invoke<Record<string, CachedBadgeMeta>>('get_all_universal_cached_items', {
-            cacheType: 'badge',
-          })) ?? {};
-      } catch (err) {
-        Logger.warn('[Rewards] badge metadata cache unavailable:', err);
-      }
-
-      const build = (metaMap: Record<string, CachedBadgeMeta>): GlobalBadge[] => {
-        // Keyed by title. The same badge genuinely repeats across sets (keep
-        // the first), but a REVISION arrives as a higher version id in the
-        // SAME set with the same title, and it must replace the original:
-        // first-wins here is how the gallery kept rendering a retired
-        // revision's window ("Ended") for a badge that had just relaunched,
-        // and why pull-to-refresh appeared to do nothing.
-        const byTitle = new Map<string, GlobalBadge>();
-        for (const set of global?.data ?? []) {
-          for (const v of set.versions ?? []) {
-            const image = v.image_url_4x || v.image_url_2x;
-            if (!v.title || !image || !set.set_id || !v.id) continue;
-            const cached = metaMap[`metadata:${set.set_id}-v${v.id}`];
-            const entry: GlobalBadge = {
-              key: `${set.set_id}-${v.id}`,
-              setId: set.set_id,
-              versionId: v.id,
-              title: v.title,
-              description: v.description ?? '',
-              image,
-              position:
-                typeof cached?.position === 'number' ? cached.position : Number.MAX_SAFE_INTEGER,
-              addedMs: parseAdded(cached?.data?.date_added) || enrichmentStartMs(cached),
-              usage: parseUsage(cached?.data?.usage_stats),
-              status: deriveBadgeStatus(cached?.data?.more_info, cached?.data?.enrichment),
-              dateInfo: formatBadgeDateInfo(cached?.data?.more_info),
-              moreInfo: cached?.data?.more_info ?? '',
-              infoUrl: cached?.data?.info_url ?? '',
-            };
-            const prev = byTitle.get(v.title);
-            if (
-              !prev ||
-              (prev.setId === entry.setId &&
-                versionRank(entry.versionId) > versionRank(prev.versionId))
-            ) {
-              byTitle.set(v.title, entry);
-            }
-          }
-        }
-        return [...byTitle.values()];
-      };
-
-      setGlobalBadges(build(meta));
-
-      const uid = currentUser?.user_id;
-      const login = currentUser?.login || currentUser?.username;
-      if (uid && login) {
-        const mine = await getAllUserBadgesWithEarned(uid, login, uid, login);
-        setOwnedTitles(new Set((mine.earnedBadges ?? []).map((b) => b.title)));
-      }
-      setBadgesLoading(false);
-
-      // Mobile had never populated the badge metadata cache, which is why the
-      // gallery had almost no dates or earn windows to sort by. Fetch what is
-      // missing in batches (same commands the desktop gallery uses), then
-      // rebuild from the refreshed cache.
-      try {
-        const missing = await invoke<[string, string][]>('get_badges_missing_metadata');
-        if (missing.length > 0) {
-          setMetaProgress(missing.length);
-          const batchSize = 5;
-          for (let i = 0; i < missing.length; i += batchSize) {
-            await Promise.allSettled(
-              missing.slice(i, i + batchSize).map(([setId, version]) =>
-                invoke('fetch_badge_metadata', { badgeSetId: setId, badgeVersion: version }),
-              ),
-            );
-            setMetaProgress(Math.max(0, missing.length - (i + batchSize)));
-          }
-          const refreshed =
-            (await invoke<Record<string, CachedBadgeMeta>>('get_all_universal_cached_items', {
-              cacheType: 'badge',
-            })) ?? {};
-          setGlobalBadges(build(refreshed));
-        }
-      } catch (err) {
-        Logger.warn('[Rewards] badge metadata backfill failed:', err);
-      } finally {
-        setMetaProgress(0);
-      }
-      return;
-    } catch (err) {
-      Logger.warn('[Rewards] badge load failed:', err);
-    } finally {
-      setBadgesLoading(false);
-    }
-  }, [currentUser?.user_id, currentUser?.login, currentUser?.username]);
+  // with the ones you already own marked. Loading, the metadata backfill and
+  // the memory that survives this screen unmounting all live in the gallery
+  // store; this only asks for it. `force` is the refresh gesture and the
+  // relay push, both of which mean "what you have may be stale".
+  const uid = currentUser?.user_id;
+  const login = currentUser?.login || currentUser?.username;
+  const loadBadges = useCallback(
+    () => loadBadgeGallery({ userId: uid, login, force: true }),
+    [uid, login],
+  );
 
   useEffect(() => {
-    if (tab === 'badges' && globalBadges.length === 0) void loadBadges();
-  }, [tab, globalBadges.length, loadBadges]);
+    if (tab === 'badges') void loadBadgeGallery({ userId: uid, login });
+  }, [tab, uid, login]);
 
   // Relay pushed a badge (or corrected one): the Rust side has already merged
   // the global cache and stored the enrichment, so re-reading surfaces the new
@@ -634,7 +465,7 @@ export const RewardsScreen: React.FC = () => {
     authed === true && inProgressGroups.length + availableGroups.length > 0,
     `drops:${q}`,
   );
-  const badgesSettled = useSettleIn(sortedBadges.length > 0, `badges:${badgeSort}`);
+  const badgesSettled = useSettleIn(sortedBadges.length > 0, `badges:${badgeSort}`, warmOnMount);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -646,7 +477,7 @@ export const RewardsScreen: React.FC = () => {
               key={t}
               onClick={() => setTab(t)}
               className={`px-3.5 py-1.5 rounded-full text-sm transition-colors ${
-                tab === t ? 'glass-button-static text-textPrimary font-semibold' : 'text-textMuted'
+                tab === t ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textPrimary font-semibold' : 'text-textMuted'
               }`}
             >
               {t === 'drops' ? 'Drops' : 'Badges'}
@@ -687,7 +518,7 @@ export const RewardsScreen: React.FC = () => {
                     onClick={() => setBadgeSort(s.id)}
                     className={`shrink-0 px-3 py-1 rounded-full text-[12.5px] transition-colors ${
                       badgeSort === s.id
-                        ? 'glass-button-static text-textPrimary font-semibold'
+                        ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textPrimary font-semibold'
                         : 'text-textMuted'
                     }`}
                   >
@@ -701,7 +532,7 @@ export const RewardsScreen: React.FC = () => {
                   const available = badge.status === 'available';
                   const comingSoon = badge.status === 'coming-soon';
                   return (
-                    <SettleIn key={badge.key} index={bi} settled={badgesSettled}>
+                    <SettleIn key={badge.key} index={bi} settled={badgesSettled} className="sn-badge-tile">
                     <button
                       onClick={() => setBadgeDetail(badge)}
                       className={`glass-panel p-2 flex flex-col items-center gap-1.5 relative active:opacity-80 w-full h-full ${
@@ -712,6 +543,7 @@ export const RewardsScreen: React.FC = () => {
                         src={badge.image}
                         alt=""
                         loading="lazy"
+                        decoding="async"
                         className={`w-11 h-11 object-contain ${
                           owned || available ? '' : 'opacity-45 grayscale'
                         }`}

@@ -105,7 +105,7 @@ const MobileApp: React.FC = () => {
     <div className="sn-mobile bg-background text-textPrimary">
       {isBooting ? (
         <div className="flex-1 min-h-0 flex items-center justify-center">
-          <LoadingWidget fullScreen={false} message="Loading StreamNook" />
+          <LoadingWidget fullScreen={false} message="Loading StreamNook" size={56} />
         </div>
       ) : needsSetup ? (
         /* FIRST RUN WINS OVER AUTH, and the order here is the whole point: the
@@ -119,7 +119,7 @@ const MobileApp: React.FC = () => {
         <Suspense
           fallback={
             <div className="flex-1 min-h-0 flex items-center justify-center">
-              <LoadingWidget fullScreen={false} />
+              <LoadingWidget fullScreen={false} size={56} />
             </div>
           }
         >
@@ -154,7 +154,7 @@ const MobileApp: React.FC = () => {
             </AnimatePresence>
           </div>
           {/* Floating pill bar (fixed) and the full-screen layers above it. */}
-          <MobileTabBar />
+          <MobileTabBar hidden={shellCovered} />
           <CategoryStreamsScreen />
           <WatchScreen />
           <CosmeticsScreen />

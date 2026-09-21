@@ -47,14 +47,24 @@ const MAX_DELAY = 0.4;
  * new rows just appear, while running a new search swaps the key and the fresh
  * results settle in. Leave it out for a list that only ever has one identity.
  */
-export function useSettleIn(ready: boolean, resetKey: string | number = ''): boolean {
+export function useSettleIn(
+  ready: boolean,
+  resetKey: string | number = '',
+  /**
+   * Start already settled. For a list that mounts from a warm cache: the
+   * cards were on screen a moment ago on another tab, and replaying the
+   * shuffle over a few hundred of them reads as the screen loading them all
+   * again, which is exactly the complaint it drew.
+   */
+  startSettled: boolean = false,
+): boolean {
   // Stamped with the list it belongs to and compared during render, rather than
   // cleared from an effect when the key changes. Writing state from an effect
   // is an error under this repo's hook rules, and it would also paint one frame
   // of the previous list's settled state over the new one.
   const [state, setState] = useState<{ key: string | number; done: boolean }>({
     key: resetKey,
-    done: false,
+    done: startSettled,
   });
   const settled = state.key === resetKey && state.done;
 

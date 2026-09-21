@@ -150,9 +150,11 @@ interface LoadingWidgetProps {
   useFunnyMessages?: boolean;
   showProxyNote?: boolean;
   fullScreen?: boolean;
+  /** Mark width in CSS px. Default 100 (desktop). */
+  size?: number;
 }
 
-const LoadingWidget = ({ message, useFunnyMessages = false, showProxyNote = false, fullScreen = true }: LoadingWidgetProps) => {
+const LoadingWidget = ({ message, useFunnyMessages = false, showProxyNote = false, fullScreen = true, size }: LoadingWidgetProps) => {
   const [currentMessageIndex, setCurrentMessageIndex] = useState(() =>
     Math.floor(Math.random() * MESSAGES.length)
   );
@@ -259,7 +261,7 @@ const LoadingWidget = ({ message, useFunnyMessages = false, showProxyNote = fals
 
       <div className="flex flex-col items-center gap-6">
         {/* The StreamNook mark, sharing its geometry with the badges */}
-        <PenroseMarch />
+        <PenroseMarch size={size} />
 
         <p className="text-textSecondary text-sm font-medium flex items-center">
           {useFunnyMessages ? renderMessage(displayMessage) : displayMessage}

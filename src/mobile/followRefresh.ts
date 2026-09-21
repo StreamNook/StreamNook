@@ -22,10 +22,29 @@ const STALE_AFTER_MS = 60_000;
 
 let lastLoadedAt = 0;
 
+// The preview-image generation. Twitch serves a live preview at ONE fixed URL
+// per channel and size and swaps the frame behind it every few minutes, so a
+// card whose URL never changes keeps whatever the WebView cached: a streamer
+// could switch category and the card would still show the old game. Appended
+// to the preview URL as a query string, this changes only when a list is
+// refreshed (pull, resume), which is exactly when a fresh frame is wanted,
+// and stays put across ordinary re-renders so nothing refetches for free.
+let previewGeneration = Date.now();
+
+export function previewStamp(): number {
+  return previewGeneration;
+}
+
+/** New previews next paint. Every explicit list refresh calls this. */
+export function bumpPreviewStamp(): void {
+  previewGeneration = Date.now();
+}
+
 /** Record that the list was just fetched, so a resume moments later is a no-op.
  *  Called by every path that loads it, not just this module's. */
 export function markFollowingFresh(): void {
   lastLoadedAt = Date.now();
+  bumpPreviewStamp();
 }
 
 /**

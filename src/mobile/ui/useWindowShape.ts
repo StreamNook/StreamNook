@@ -44,6 +44,13 @@ export interface WindowShape {
    * otherwise a plain proportional split.
    */
   splitX: number;
+  /**
+   * Where a top/bottom split should fall, in CSS px from the top, when the
+   * device is half-open across a HORIZONTAL hinge (tabletop). Null otherwise.
+   * Flat is one continuous surface and gets no split; only the bent posture
+   * makes the crease a natural boundary.
+   */
+  splitY: number | null;
   /** Whether there is room for two panes side by side at all. */
   twoPane: boolean;
 }
@@ -52,6 +59,30 @@ function classify(w: number): SizeClass {
   if (w < 600) return 'compact';
   if (w < 840) return 'medium';
   return 'expanded';
+}
+
+/** Pure derivation, so the layout decisions can be tested without a window. */
+export function deriveShape(size: { w: number; h: number }, fold: FoldInfo | null): WindowShape {
+  const sizeClass = classify(size.w);
+  const landscape = size.w > size.h;
+
+  // Two panes need real width. `medium` qualifies only in landscape, where the
+  // height would otherwise leave each stacked pane too short to use.
+  const twoPane = sizeClass === 'expanded' || (sizeClass === 'medium' && landscape);
+
+  // A vertical hinge dictates the split. Otherwise favour the player: chat needs
+  // less width than video does.
+  const splitX =
+    fold?.vertical && fold.x > 0 && fold.x < size.w
+      ? fold.x + fold.width / 2
+      : Math.round(size.w * 0.62);
+
+  const splitY =
+    fold && !fold.vertical && fold.posture === 'half' && fold.y > 0 && fold.y < size.h
+      ? fold.y + fold.height / 2
+      : null;
+
+  return { w: size.w, h: size.h, sizeClass, landscape, fold, splitX, splitY, twoPane };
 }
 
 export function useWindowShape(): WindowShape {
@@ -79,19 +110,5 @@ export function useWindowShape(): WindowShape {
     return () => window.removeEventListener('sn:fold', onFold);
   }, []);
 
-  const sizeClass = classify(size.w);
-  const landscape = size.w > size.h;
-
-  // Two panes need real width. `medium` qualifies only in landscape, where the
-  // height would otherwise leave each stacked pane too short to use.
-  const twoPane = sizeClass === 'expanded' || (sizeClass === 'medium' && landscape);
-
-  // A vertical hinge dictates the split. Otherwise favour the player: chat needs
-  // less width than video does.
-  const splitX =
-    fold?.vertical && fold.x > 0 && fold.x < size.w
-      ? fold.x + fold.width / 2
-      : Math.round(size.w * 0.62);
-
-  return { w: size.w, h: size.h, sizeClass, landscape, fold, splitX, twoPane };
+  return deriveShape(size, fold);
 }

@@ -15,6 +15,7 @@ import { AdaptiveGrid } from '../ui/AdaptiveGrid';
 import { Logger } from '../../utils/logger';
 import { gameBoxArt } from '../../utils/boxArt';
 import type { TwitchCategory, TwitchStream } from '../../types';
+import { bumpPreviewStamp } from '../followRefresh';
 
 type BrowseMode = 'live' | 'categories';
 
@@ -200,6 +201,8 @@ export const BrowseScreen: React.FC = () => {
   }, [query, mode]);
 
   const refresh = async () => {
+    // A pull asks for the current state of everything, previews included.
+    bumpPreviewStamp();
     const trimmed = query.trim();
     if (trimmed) {
       const seq = ++searchSeq.current;
@@ -269,7 +272,7 @@ export const BrowseScreen: React.FC = () => {
               onClick={() => setMode(m)}
               className={`px-3.5 py-1.5 rounded-full text-sm transition-colors ${
                 mode === m
-                  ? 'glass-button-static text-textPrimary font-semibold'
+                  ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textPrimary font-semibold'
                   : 'text-textMuted'
               }`}
             >
@@ -348,6 +351,7 @@ export const BrowseScreen: React.FC = () => {
                 >
                   <img
                     loading="lazy"
+                    decoding="async"
                     src={boxArt(c)}
                     alt=""
                     className="w-full aspect-[3/4] object-cover rounded mb-1.5"

@@ -106,7 +106,7 @@ const ClipBody: React.FC<{ url: string; title?: string; onClose: () => void }> =
             />
           ) : (
             <div className="absolute inset-0 grid place-items-center">
-              <PenroseMarch />
+              <PenroseMarch size={40} />
             </div>
           )}
         </div>

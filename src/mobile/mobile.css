@@ -70,3 +70,43 @@
 [data-sn-covered='true'] .hype-train-badge-glass-golden::after {
   animation: none !important;
 }
+
+/* The in-band loading mark. Width first as a plain fallback for a WebView
+   without container-query units, then the real rule. height:auto keeps the
+   SVG's viewBox ratio, overriding the width/height attributes PenroseMarch
+   sets for the desktop default. 18% of the band's height reads as a mark
+   rather than a poster on a phone; the clamp keeps mini and PiP legible and
+   stops a tablet band from growing it back into a poster. */
+.sn-mobile .sn-load-mark {
+  width: 40px;
+  width: clamp(22px, 18cqh, 60px);
+  height: auto;
+}
+
+/* One tile of the badge wall. Several hundred of these mount at once; with
+   content-visibility the browser lays out and decodes only the screenful in
+   view and skips the rest until they scroll near. The intrinsic size keeps the
+   scrollbar honest for the tiles it skipped. */
+.sn-mobile .sn-badge-tile {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 118px;
+}
+
+/* While the full-screen player covers the tab shell, the cards behind it keep
+   their backdrop filters as live compositor effects nobody can see. Off until
+   the shell is visible again; nothing about the covered cards is on screen. */
+[data-sn-covered='true'] .glass-panel {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* A popover that sits OVER SCROLLING CHAT (the drop bar, the pinned banner).
+   The house popover blurs 64px of whatever is behind it, and behind these two
+   is a chat that repaints on every message, so the blur was recomputed on
+   every frame for the whole watch. A firmer tint carries the legibility the
+   blur was providing. */
+.sn-mobile .sn-popover--static {
+  --sn-popover-tint: calc(90% + (1 - var(--glass-strength)) * 10%);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}

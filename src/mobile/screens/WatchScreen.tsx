@@ -51,6 +51,7 @@ import {
   setKeepScreenOn,
   setPipEligible,
   setPipSourceRect,
+  setPreferredRefreshRate,
 } from '../nativeBridge';
 import { readInsets, type ResolvedInsets } from '../nativeInsets';
 import { Logger } from '../../utils/logger';
@@ -258,7 +259,13 @@ export const WatchScreen: React.FC = () => {
         : watchLayout === 'columns' && sideFits
       : landscapeChat;
   const immersiveLandscape = shape.twoPane && shape.sizeClass !== 'expanded';
-  const sideBySide = shape.twoPane && !mini && !pip && (twoColumns || immersiveLandscape);
+  // Tabletop: the phone is bent across a horizontal hinge. The bend is the
+  // natural boundary between picture and chat, so the band ends on it and
+  // chat takes the lower half. Posture beats the remembered split and beats
+  // the columns arrangement; a picture across a bend is the one thing this
+  // posture cannot show.
+  const tabletop = shape.splitY != null && !mini && !pip;
+  const sideBySide = !tabletop && shape.twoPane && !mini && !pip && (twoColumns || immersiveLandscape);
   const chatBeside = sideBySide && twoColumns;
   // Resizable only where there is genuinely a trade to make. On a phone the
   // 16:9 band is simply right, and there is no surplus to hand to chat.
@@ -269,8 +276,12 @@ export const WatchScreen: React.FC = () => {
   const naturalPlayer = chatBeside ? shape.splitX : (shape.w * 9) / 16;
   const MIN_CHAT = chatBeside ? 260 : 150;
   const MIN_PLAYER = chatBeside ? 240 : 120;
-  const desiredPlayer = chatSplit != null ? axisLen * (1 - chatSplit) : naturalPlayer;
-  const playerMain = resizable
+  const desiredPlayer = tabletop
+    ? (shape.splitY as number)
+    : chatSplit != null
+      ? axisLen * (1 - chatSplit)
+      : naturalPlayer;
+  const playerMain = resizable || tabletop
     ? Math.max(MIN_PLAYER, Math.min(axisLen - MIN_CHAT, desiredPlayer))
     : naturalPlayer;
   // Where the seam falls. On a Fold this is the hinge itself, so neither pane is
@@ -352,6 +363,11 @@ export const WatchScreen: React.FC = () => {
   // immersive bars only for full landscape playback.
   useEffect(() => {
     setKeepScreenOn(watching);
+    // A 60 Hz window while a stream plays. The panel's 90 Hz mode was drawing
+    // every frame at 90 for a picture that is 60 at most, and frame
+    // presentation (RenderThread + GPU process + compositor) was the biggest
+    // share of the app's CPU while watching. Restored when playback ends.
+    setPreferredRefreshRate(watching ? 60 : 0);
     // PiP eligibility is what makes leaving the app auto-enter a floating
     // window. Gated on the setting, because with it always on there was no way
     // to simply MINIMISE a stream: every exit became PiP. In 'audio' mode the
@@ -360,6 +376,7 @@ export const WatchScreen: React.FC = () => {
     setPipEligible(watching && backgroundMode !== 'audio');
     return () => {
       setKeepScreenOn(false);
+      setPreferredRefreshRate(0);
       setPipEligible(false);
     };
   }, [watching, backgroundMode]);
@@ -679,7 +696,7 @@ export const WatchScreen: React.FC = () => {
           // the loading band rendered w-full x w-full and then lurched down to
           // 16:9 on the first frame (measured on device: 361px -> 204px).
           `w-full relative shrink-0 min-h-0 z-10 border-b border-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] shadow-[0_3px_8px_-2px_color-mix(in_srgb,var(--color-accent)_10%,transparent),0_8px_18px_-8px_color-mix(in_srgb,var(--color-accent)_6%,transparent)] ${
-            resizable ? '' : 'aspect-video'
+            resizable || tabletop ? '' : 'aspect-video'
           }`;
 
   // Chat is a column below when stacked, a side panel when side by side, and
@@ -751,7 +768,7 @@ export const WatchScreen: React.FC = () => {
             // screen in the stacked arrangement; phones never set it.
             ...(sideBySide
               ? { width: playerWidth }
-              : resizable && shrink === 0
+              : (resizable || tabletop) && shrink === 0
                 ? { height: playerMain }
                 : null),
             touchAction: sideBySide ? undefined : 'none',
@@ -840,7 +857,7 @@ export const WatchScreen: React.FC = () => {
             minPlayer={MIN_PLAYER}
             // Only meaningful across a vertical hinge, and only when the panes
             // are side by side; a horizontal divider cannot land on it.
-            snapAt={chatBeside && shape.fold?.vertical ? shape.splitX : null}
+            snapAt={chatBeside ? (shape.fold?.vertical ? shape.splitX : null) : shape.splitY}
             onDrag={(frac) => {
               setChatSplit(frac);
               writeWatchSplit(frac);

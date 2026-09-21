@@ -15,6 +15,7 @@ import { PullToRefresh } from '../ui/PullToRefresh';
 import { SkeletonCards } from '../ui/SkeletonCards';
 import { Logger } from '../../utils/logger';
 import type { TwitchStream } from '../../types';
+import { bumpPreviewStamp } from '../followRefresh';
 
 type Category = NonNullable<ReturnType<typeof useMobileNavStore.getState>['browseCategory']>;
 
@@ -158,7 +159,13 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
         </button>
         <h1 className="text-lg font-bold text-textPrimary truncate">{category.name}</h1>
       </div>
-      <PullToRefresh onRefresh={load}>
+      <PullToRefresh
+        onRefresh={() => {
+          // A pull asks for the current state of everything, previews included.
+          bumpPreviewStamp();
+          return load();
+        }}
+      >
         {loading ? (
           <SkeletonCards />
         ) : streams.length === 0 ? (

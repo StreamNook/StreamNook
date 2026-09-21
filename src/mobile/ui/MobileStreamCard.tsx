@@ -10,9 +10,15 @@ import StreamTitleWithEmojis from '../../components/StreamTitleWithEmojis';
 import { campaignEarnableOn } from '../dropsEligibility';
 import type { DropsByGame } from '../dropsCampaigns';
 import type { TwitchStream } from '../../types';
+import { previewStamp } from '../followRefresh';
 
+// The stamp is what makes a refreshed list show refreshed previews: Twitch's
+// preview URL is fixed per channel and the WebView caches it, so without a
+// changing query string a pull-to-refresh brought new titles over old frames.
 function thumbUrl(stream: TwitchStream): string {
-  return stream.thumbnail_url.replace('{width}', '640').replace('{height}', '360');
+  const base = stream.thumbnail_url.replace('{width}', '640').replace('{height}', '360');
+  if (!base) return base;
+  return `${base}${base.includes('?') ? '&' : '?'}sn=${previewStamp()}`;
 }
 
 export interface HypeTrainBadgeInfo {
@@ -35,7 +41,10 @@ const HypeTrainBadge: React.FC<{ info: HypeTrainBadgeInfo }> = ({ info }) => (
 );
 
 const StreakBadge: React.FC<{ streak: number }> = ({ streak }) => (
-  <div className="flex items-center gap-1 font-bold text-[10px] leading-tight px-1.5 py-0.5 rounded shadow-[0_0_10px_color-mix(in_srgb,var(--color-warning)_25%,transparent)] bg-amber-500/10 text-amber-400 border border-amber-500/30 backdrop-blur-md">
+  // An opaque-enough fill rather than a backdrop blur: a blur here is a
+  // composited layer PER CARD on a device whose whole cost is compositing,
+  // and over a thumbnail the two read the same.
+  <div className="flex items-center gap-1 font-bold text-[10px] leading-tight px-1.5 py-0.5 rounded shadow-[0_0_10px_color-mix(in_srgb,var(--color-warning)_25%,transparent)] bg-[color-mix(in_srgb,var(--color-background)_82%,transparent)] text-amber-400 border border-amber-500/30">
     <Flame size={10} className="stroke-[2.5]" />
     <span>{streak}</span>
   </div>
@@ -74,6 +83,7 @@ export const MobileStreamCard: React.FC<{
         <div className="relative w-[156px] shrink-0 overflow-hidden rounded self-center">
           <img
             loading="lazy"
+            decoding="async"
             src={thumbUrl(stream)}
             alt=""
             className="w-full aspect-video object-cover"
@@ -169,6 +179,7 @@ export const MobileStreamCard: React.FC<{
       <div className="relative mb-2 overflow-hidden rounded">
         <img
           loading="lazy"
+          decoding="async"
           src={thumbUrl(stream)}
           alt=""
           className="w-full aspect-video object-cover"
@@ -198,6 +209,16 @@ export const MobileStreamCard: React.FC<{
           <StreamTitleWithEmojis title={stream.title} />
         </h3>
         <div className="flex items-center gap-1 text-textSecondary text-[13px]">
+          {stream.profile_image_url && (
+            <img
+              src={stream.profile_image_url}
+              alt=""
+              draggable={false}
+              loading="lazy"
+              decoding="async"
+              className="w-4 h-4 rounded-full object-cover shrink-0 ring-1 ring-borderSubtle"
+            />
+          )}
           <span className="truncate">{stream.user_name}</span>
           {stream.broadcaster_type === 'partner' && (
             <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 16 16" fill="#9146FF">
@@ -209,12 +230,12 @@ export const MobileStreamCard: React.FC<{
             </svg>
           )}
         </div>
-        {stream.game_name && (
-          <div className="flex items-center gap-1 text-textMuted text-[13px]">
-            <span className="line-clamp-1">{stream.game_name}</span>
-            {/* The DROPS badge over the thumbnail already says this. */}
-          </div>
-        )}
+        {/* Always rendered with a reserved height, so cards in a row share a
+            baseline whether or not this one has a category. The DROPS badge
+            over the thumbnail already says the rest. */}
+        <div className="flex items-center gap-1 text-textMuted text-[13px] min-h-4">
+          {stream.game_name && <span className="line-clamp-1">{stream.game_name}</span>}
+        </div>
       </div>
     </button>
   );

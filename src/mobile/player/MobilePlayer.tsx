@@ -6,10 +6,12 @@ import { setPipMuted, shareText } from '../nativeBridge';
 import { toggleChannelMuted } from '../notifyChannels';
 import { useVisibleInterval } from '../../utils/useVisibleInterval';
 import { buildShareUrl } from '../../utils/shareLink';
+import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
+import { unwatchChannel, useChannelState, watchChannel } from '../../stores/channelStateStore';
 import { useMobileHlsEngine } from './useMobileHlsEngine';
 import { setLiveVideo } from './liveVideo';
-import { attachLockScreenAudio, releaseLockScreenAudio } from './lockScreenAudio';
+import { attachLockScreenAudio, releaseLockScreenAudio, updateNowPlaying } from './lockScreenAudio';
 import { QualitySheet } from './QualitySheet';
 import PenroseMarch from '../../components/PenroseMarch';
 
@@ -51,6 +53,45 @@ export const MobilePlayer: React.FC<{
   const { state } = useMobileHlsEngine(videoRef);
   const restartStream = useAppStore((s) => s.restartStream);
   const currentStream = useAppStore((s) => s.currentStream);
+
+  // Live viewer count from the Rust channel_state service (one Helix batch
+  // for every watched channel, emitted only on change), the same source the
+  // desktop chat header uses. Without it the count was whatever startStream
+  // captured and never moved.
+  const channelStateLogin = currentStream?.user_login?.toLowerCase() ?? null;
+  const channelState = useChannelState(channelStateLogin);
+  useEffect(() => {
+    if (!channelStateLogin || !currentStream?.user_id) return;
+    void watchChannel(channelStateLogin, currentStream.user_id);
+    return () => {
+      void unwatchChannel(channelStateLogin);
+    };
+  }, [channelStateLogin, currentStream?.user_id]);
+  const viewerCount = channelState?.viewer_count ?? currentStream?.viewer_count ?? 0;
+
+  // A stream that arrived without its avatar (a lookup hiccup on open) gets
+  // one repair, keyed so a second miss for the same channel does not loop.
+  const healedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!currentStream?.user_id || currentStream.profile_image_url?.trim()) return;
+    if (healedFor.current === currentStream.user_id) return;
+    healedFor.current = currentStream.user_id;
+    const id = currentStream.user_id;
+    void invoke<{ profile_image_url?: string; broadcaster_type?: string }>('get_user_by_id', { userId: id })
+      .then((u) => {
+        const cs = useAppStore.getState().currentStream;
+        if (!cs || cs.user_id !== id || !u?.profile_image_url) return;
+        useAppStore.setState({
+          currentStream: {
+            ...cs,
+            profile_image_url: u.profile_image_url,
+            broadcaster_type: cs.broadcaster_type ?? u.broadcaster_type,
+          },
+        });
+      })
+      .catch(() => {});
+  }, [currentStream?.user_id, currentStream?.profile_image_url]);
+
   // Subscribed rather than read through the helper, so toggling the bell
   // re-renders this overlay instead of leaving a stale icon behind.
   const mutedChannels = useAppStore((s) => s.settings.live_notifications?.muted_live_channels);
@@ -92,15 +133,25 @@ export const MobilePlayer: React.FC<{
   // lives, and the binding has to follow the element. Keyed on the channel so a
   // channel switch re-publishes the metadata; the helper is idempotent for the
   // re-renders in between.
+  const nowPlaying = currentStream
+    ? {
+        title: currentStream.title || currentStream.user_name,
+        artist: currentStream.user_name,
+        artUrl: currentStream.profile_image_url ?? '',
+      }
+    : null;
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !currentStream) return;
-    return attachLockScreenAudio(video, {
-      title: currentStream.title || currentStream.user_name,
-      artist: currentStream.user_name,
-      artUrl: currentStream.profile_image_url ?? '',
-    });
-  }, [currentStream?.user_login, currentStream?.title, currentStream?.user_name, currentStream?.profile_image_url, currentStream]);
+    if (!video || !nowPlaying) return;
+    return attachLockScreenAudio(video, nowPlaying);
+    // Keyed on the CHANNEL only. A title or avatar change is a card repaint,
+    // handled below; re-running this effect would tear the session down.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentStream?.user_login]);
+  useEffect(() => {
+    if (nowPlaying) updateNowPlaying(nowPlaying);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nowPlaying?.title, nowPlaying?.artist, nowPlaying?.artUrl]);
 
   // Leaving the stream entirely must drop the session. Otherwise the foreground
   // service keeps the WebView awake in the background for audio that has ended,
@@ -244,8 +295,14 @@ export const MobilePlayer: React.FC<{
           className={`absolute inset-0 flex items-center justify-center pointer-events-none transition-opacity duration-300 ${
             logoWanted ? 'opacity-100' : 'opacity-0'
           }`}
+          // Sized by the band it sits in, not by a fixed pixel count: a
+          // phone's 16:9 band is ~200px tall and an 84px mark was half of it.
+          // `.sn-load-mark` reads the band's height through a container
+          // query (this overlay is inset-0, so its size IS the band's) and
+          // clamps for mini/PiP at the bottom and tablets at the top.
+          style={{ containerType: 'size' }}
         >
-          <PenroseMarch size={compact ? 44 : 84} />
+          <PenroseMarch className="sn-load-mark" />
         </div>
       )}
 
@@ -257,7 +314,7 @@ export const MobilePlayer: React.FC<{
               e.stopPropagation();
               void restartStream();
             }}
-            className="glass-button px-5 py-2.5 text-sm font-semibold text-white"
+            className="chrome-glaze chrome-glaze--control chrome-glaze--frosted px-5 py-2.5 text-sm font-semibold text-white"
           >
             Retry
           </button>
@@ -328,7 +385,7 @@ export const MobilePlayer: React.FC<{
               <span className="ml-auto flex items-center gap-2 shrink-0 pl-2">
                 <span className="flex items-center gap-1 text-[12px] font-medium text-live">
                   <Eye size={12} weight="fill" />
-                  {currentStream.viewer_count.toLocaleString()}
+                  {viewerCount.toLocaleString()}
                 </span>
                 <span className="text-[12px] text-white/70">
                   {formatUptime(currentStream.started_at, nowMs)}
