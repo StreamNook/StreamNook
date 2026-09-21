@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "identifier": "app.streamnook",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "build": {
     "devUrl": "http://localhost:1430",
     "beforeDevCommand": "SN_DEV_PORT=1430 npx vite"
