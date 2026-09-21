@@ -1070,7 +1070,11 @@ export const WatchScreen: React.FC = () => {
               without painting an empty strip. */}
             <div
               className={
-                (viewingStreamChat && (currentHypeTrain || dropActive)) || pinned.length > 0
+                // The floating landscape column is for reading the room, so
+                // the stream's own banners (pins, drops, hype train) stay out
+                // of it; they are all still one rotation away. hidden keeps
+                // the drop bar mounted and polling.
+                !chatOverlay && ((viewingStreamChat && (currentHypeTrain || dropActive)) || pinned.length > 0)
                   ? // Pure layout now: no background, no border, no blur, no
                     // shadow. Each child already carries its own container
                     // (PinnedBanner is an sn-popover, the hype train draws its
@@ -1116,7 +1120,7 @@ export const WatchScreen: React.FC = () => {
           {/* Poll + prediction cards, exactly the desktop components: they
               self-fetch off the channel and anchor under the header. Stream
               scoped, so same rule as the hype train above. */}
-          {currentStream && viewingStreamChat && (
+          {currentStream && viewingStreamChat && !chatOverlay && (
             <>
               <PredictionOverlay
                 channelId={currentStream.user_id}

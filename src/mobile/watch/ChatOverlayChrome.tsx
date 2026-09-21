@@ -42,7 +42,10 @@ export const ChatOverlayChrome: React.FC<Props> = ({
   onOpacityCommit,
   onHide,
 }) => {
-  const [stripOpen, setStripOpen] = useState(false);
+  // Open on arrival: the strip is the only sign the slider exists, and a
+  // control nobody has been shown is a control nobody finds. It puts itself
+  // away on the same idle timer as always.
+  const [stripOpen, setStripOpen] = useState(true);
   const idle = useRef<ReturnType<typeof setTimeout> | null>(null);
   const commit = useRef<ReturnType<typeof setTimeout> | null>(null);
   const drag = useRef<{ id: number; startX: number; startW: number; lastW: number; moved: boolean } | null>(null);
@@ -101,6 +104,14 @@ export const ChatOverlayChrome: React.FC<Props> = ({
     hapticTick();
     setStripOpen((v) => !v);
   };
+  // The OS took the touch (an edge swipe, the shade): neither a resize nor a
+  // tap. Any width already applied live is kept as the saved value.
+  const onHandleCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    if (!d || d.id !== e.pointerId) return;
+    drag.current = null;
+    if (d.moved) onWidthCommit(d.lastW);
+  };
 
   const onOpacityInput = (v: number) => {
     onOpacityChange(v);
@@ -127,9 +138,12 @@ export const ChatOverlayChrome: React.FC<Props> = ({
         onPointerDown={onHandleDown}
         onPointerMove={onHandleMove}
         onPointerUp={onHandleEnd}
-        onPointerCancel={onHandleEnd}
+        onPointerCancel={onHandleCancel}
       >
-        <div className="w-[5px] h-11 rounded-full bg-white/70 shadow-[0_0_0_1px_rgba(0,0,0,0.35)]" />
+        {/* Quiet: a hairline the eye can find when it looks for an edge,
+            not a control competing with the video. The hit area around it
+            is what makes it grabbable. */}
+        <div className="w-[3px] h-8 rounded-full bg-white/35" />
       </div>
 
       <AnimatePresence>
