@@ -106,6 +106,19 @@ pub async fn finish_mobile_drops_login<R: Runtime>(app: AppHandle<R>) -> Result<
         .map_err(|e| e.to_string())
 }
 
+/// Sign the embedded browser out: drop every cookie and web-storage entry the
+/// login overlay's WebView holds. Called on sign-out so the next sign-in starts
+/// from Twitch's login page rather than the previous account's session.
+#[tauri::command]
+pub async fn clear_mobile_login_cookies<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    let state = app.state::<TwitchLoginState<R>>();
+    state
+        .0
+        .run_mobile_plugin::<serde_json::Value>("clearCookies", ())
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn get_mobile_login_cookies<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
     let state = app.state::<TwitchLoginState<R>>();

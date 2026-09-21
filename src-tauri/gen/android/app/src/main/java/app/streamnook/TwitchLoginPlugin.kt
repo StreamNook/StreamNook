@@ -360,6 +360,26 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    /**
+     * Sign the embedded browser out too. The CookieManager is app-global and
+     * outlives the app's own session: without this, signing out of StreamNook
+     * left the previous person's Twitch web session in the jar, so the next
+     * sign-in skipped Twitch's login page and the silent 7TV re-mint kept
+     * minting for the account that had just left. Web storage goes with it,
+     * since that is where 7TV keeps its token.
+     */
+    @Command
+    fun clearCookies(invoke: Invoke) {
+        activity.runOnUiThread {
+            val cm = CookieManager.getInstance()
+            cm.removeAllCookies {
+                cm.flush()
+                android.webkit.WebStorage.getInstance().deleteAllData()
+                invoke.resolve()
+            }
+        }
+    }
+
     @Command
     fun getCookies(invoke: Invoke) {
         CookieManager.getInstance().flush()

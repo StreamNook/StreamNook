@@ -3532,6 +3532,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     trackActivity('Logged out from Twitch');
     try {
       await invoke('twitch_logout');
+      // The phone's sign-in overlay shares one app-global cookie jar. Signing
+      // out of the app has to sign that browser out as well, or the next
+      // sign-in silently continues as whoever just left.
+      if (IS_MOBILE) await invoke('clear_mobile_login_cookies').catch(() => {});
       set({ isAuthenticated: false, currentUser: null, followedStreams: [] });
 
       get().addToast('Successfully logged out from Twitch', 'success');
