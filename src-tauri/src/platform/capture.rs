@@ -71,6 +71,56 @@ fn screencapture_args(x: i32, y: i32, width: u32, height: u32, out: &Path) -> Ve
     ]
 }
 
+/// The Linux region-capture tools we will try, in order, with their argv.
+///
+/// There is no single `screencapture` on Linux, so this is a preference list
+/// rather than one command. Ordering is deliberate:
+///
+/// 1. `grim` first, because it is the only one of these that works under
+///    Wayland (wlroots: Sway, Hyprland, river). The X11 tools below see a black
+///    or empty screen there rather than failing cleanly, so trying them first
+///    would produce a *wrong picture* instead of a fallthrough.
+/// 2. `maim`, `import` (ImageMagick) and `scrot` for X11, in descending order
+///    of how faithfully they handle compositing and alpha.
+///
+/// Each takes its geometry in a different spelling, which is exactly the kind of
+/// detail that is silent when wrong: you get the wrong pixels, not an error. So
+/// this is a pure function, unit-tested below, for the same reason
+/// `screencapture_args` is.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn linux_capture_commands(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    out: &Path,
+) -> Vec<(&'static str, Vec<String>)> {
+    let o = out.to_string_lossy().to_string();
+    vec![
+        // Wayland (wlroots). `-g "X,Y WxH"` is ONE argument: the space is part
+        // of the geometry string, not an argv separator.
+        ("grim", vec!["-g".into(), format!("{x},{y} {width}x{height}"), o.clone()]),
+        // X11. maim's -g takes an X11 geometry string.
+        ("maim", vec!["-g".into(), format!("{width}x{height}+{x}+{y}"), o.clone()]),
+        // ImageMagick. Grabs the root window and crops; `+repage` drops the
+        // crop offset from the output canvas, without which the PNG carries a
+        // page geometry and decoders place the image at an offset.
+        (
+            "import",
+            vec![
+                "-window".into(),
+                "root".into(),
+                "-crop".into(),
+                format!("{width}x{height}+{x}+{y}"),
+                "+repage".into(),
+                o.clone(),
+            ],
+        ),
+        // scrot's -a is comma-separated and has no size/offset sigils at all.
+        ("scrot", vec!["-o".into(), "-a".into(), format!("{x},{y},{width},{height}"), o]),
+    ]
+}
+
 /// Capture a screen region and return PNG bytes.
 ///
 /// Coordinates are screen-global and in points (the same space the caller's
@@ -128,7 +178,65 @@ pub fn capture_region_png(
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        let out = std::env::temp_dir().join(format!(
+            "streamnook_capture_{}_{}.png",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        ));
+
+        let mut tried: Vec<String> = Vec::new();
+        for (bin, args) in linux_capture_commands(x, y, width, height, &out) {
+            let spawned = std::process::Command::new(bin).args(&args).output();
+            let output = match spawned {
+                // Not installed. Not an error: the next candidate is the point.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    tried.push(format!("{bin} (not installed)"));
+                    continue;
+                }
+                Err(e) => {
+                    tried.push(format!("{bin} ({e})"));
+                    continue;
+                }
+                Ok(o) => o,
+            };
+
+            let bytes = std::fs::read(&out).ok();
+            let _ = std::fs::remove_file(&out);
+            match bytes {
+                Some(b) if !b.is_empty() => return Ok(b),
+                _ => {
+                    let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
+                    // The portal-backed tools say so when the compositor
+                    // refuses, which is the Linux analogue of macOS TCC and
+                    // deserves the same distinct error rather than being
+                    // reported as "the tool is broken".
+                    if stderr.contains("permission")
+                        || stderr.contains("denied")
+                        || stderr.contains("not authorized")
+                    {
+                        return Err(CaptureError::PermissionDenied);
+                    }
+                    tried.push(format!("{bin} ({})", stderr.trim()));
+                }
+            }
+        }
+
+        // Naming what was tried, and what to install, because the alternative
+        // is a user seeing "screen capture failed" on a machine where one
+        // `apt install` fixes it.
+        Err(CaptureError::Failed(format!(
+            "no screen-capture tool available (tried: {}). Install `grim` on Wayland, \
+             or `maim`, `imagemagick` or `scrot` on X11.",
+            tried.join(", ")
+        )))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         // Windows keeps xcap / DXGI in commands/screen_capture.rs; this module
         // is not on its path.
@@ -151,6 +259,86 @@ mod tests {
             capture_region_png(0, 0, 100, 0),
             Err(CaptureError::EmptyRegion)
         ));
+    }
+
+    /// Each Linux tool spells geometry differently and NONE of them error on a
+    /// wrong-but-parseable one: you get the wrong pixels shared publicly. So
+    /// every spelling is pinned exactly, the same way the macOS `-R` string is.
+    ///
+    /// **This pins CONSTRUCTION, not acceptance.** It proves the strings are the
+    /// ones intended; it cannot prove a given tool build accepts them. Learned
+    /// the hard way: `import -window root` is the documented ImageMagick recipe
+    /// and it fails outright on the IM 7.1 build in the WSL test box, where even
+    /// a bare `import -window root out.png` exits with "missing an image
+    /// filename". The chain is designed to survive exactly that - a tool that
+    /// errors or writes nothing falls through to the next candidate - but do not
+    /// read a green test here as "capture works on Linux". Only a real desktop
+    /// with `grim` (Wayland) or `maim`/`scrot` (X11) installed proves that.
+    #[test]
+    fn every_linux_tool_gets_its_own_geometry_spelling() {
+        let cmds = linux_capture_commands(12, 34, 560, 320, Path::new("/tmp/x.png"));
+        let by = |name: &str| -> Vec<String> {
+            cmds.iter()
+                .find(|(b, _)| *b == name)
+                .unwrap_or_else(|| panic!("{name} must be a candidate"))
+                .1
+                .clone()
+        };
+
+        // grim: "X,Y WxH" as ONE argv entry. Split on the space it captures
+        // the whole output instead.
+        let grim = by("grim");
+        assert_eq!(grim[0], "-g");
+        assert_eq!(grim[1], "12,34 560x320");
+
+        // maim and import share the X11 WxH+X+Y form.
+        assert_eq!(by("maim")[1], "560x320+12+34");
+        assert!(by("import").contains(&"560x320+12+34".to_string()));
+
+        // scrot is comma-separated with no sigils at all.
+        let scrot = by("scrot");
+        assert!(scrot.contains(&"12,34,560,320".to_string()));
+    }
+
+    /// wlroots Wayland is the case where a wrong ORDER is worse than a wrong
+    /// flag: the X11 tools do not fail there, they return a black frame.
+    #[test]
+    fn the_wayland_tool_is_tried_before_the_x11_ones() {
+        let cmds = linux_capture_commands(0, 0, 10, 10, Path::new("/tmp/x.png"));
+        let names: Vec<&str> = cmds.iter().map(|(b, _)| *b).collect();
+        assert_eq!(
+            names.first(),
+            Some(&"grim"),
+            "grim must come first: under Wayland the X11 tools succeed and \
+             return a black image rather than failing through to the next one"
+        );
+        for x11 in ["maim", "import", "scrot"] {
+            assert!(names.contains(&x11), "{x11} must remain a candidate");
+        }
+    }
+
+    #[test]
+    fn import_drops_the_crop_page_offset() {
+        let import = linux_capture_commands(5, 5, 10, 10, Path::new("/tmp/x.png"))
+            .into_iter()
+            .find(|(b, _)| *b == "import")
+            .expect("import candidate")
+            .1;
+        assert!(
+            import.contains(&"+repage".to_string()),
+            "without +repage the PNG keeps the crop offset as a page geometry \
+             and decoders place the image inset instead of at the origin"
+        );
+    }
+
+    #[test]
+    fn linux_negative_origins_survive_every_spelling() {
+        // A monitor left of the primary gives negative screen coords.
+        let cmds = linux_capture_commands(-1920, -50, 100, 100, Path::new("/tmp/x.png"));
+        let flat: Vec<String> = cmds.into_iter().flat_map(|(_, a)| a).collect();
+        assert!(flat.iter().any(|a| a == "-1920,-50 100x100"), "grim");
+        assert!(flat.iter().any(|a| a == "100x100+-1920+-50"), "maim/import");
+        assert!(flat.iter().any(|a| a == "-1920,-50,100,100"), "scrot");
     }
 
     #[test]

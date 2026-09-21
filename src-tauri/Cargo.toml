@@ -172,6 +172,20 @@ windows = { version = "0.61", features = [
 # dispatch; a redraw or a Dock click during that pump relocks tao's callback
 # mutex on the same thread and the app hangs for good. Versions are the ones
 # wry 0.55 already resolves to, so the lockfile keeps one copy of each crate.
+# Linux desktop only. `gtk` backs services/window_aspect.rs, which hangs GDK
+# geometry hints on the main GtkWindow so the window manager enforces the
+# aspect-ratio lock during a drag (the Windows build does it with a WM_SIZING
+# subclass instead). Pinned to the 0.18 line tauri and tao already resolve to,
+# so the tree carries one copy.
+#
+# `target_os = "linux"` and NOT the `all(unix, not(macos))` shape the other
+# platform shims use: Android is unix and has no GTK, but its target_os is
+# "android", so this spelling excludes it and that one does not. window_aspect
+# is compiled unconditionally from services/mod.rs, so the Android build would
+# otherwise try to resolve gtk.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = [

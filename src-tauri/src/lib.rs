@@ -254,8 +254,13 @@ fn show_main_window(app: &tauri::AppHandle) {
             #[cfg(windows)]
             if let Ok(hwnd) = win.hwnd() {
                 services::ui_hang_watchdog::start_for_hwnd(hwnd.0 as isize);
-                services::window_aspect::install_for_hwnd(hwnd.0 as isize);
             }
+            // Re-attach the aspect lock to the NEW window. Not `#[cfg(windows)]`
+            // any more: Linux hangs GDK geometry hints on the GtkWindow, and a
+            // recreated window is a new GtkWindow with no hints on it, so
+            // skipping this here would silently leave the lock off for the rest
+            // of the session on that platform.
+            services::window_aspect::install(&win);
         }
         Err(e) => error!("[Main] Failed to recreate main window: {e}"),
     }
@@ -770,12 +775,20 @@ pub fn run() {
                 if let Some(main) = app.get_webview_window("main") {
                     if let Ok(hwnd) = main.hwnd() {
                         services::ui_hang_watchdog::start_for_hwnd(hwnd.0 as isize);
-                        // Aspect-ratio lock. Attached at window creation, inert
-                        // until the frontend pushes a constraint, and the reason
-                        // a locked resize tracks the pointer instead of being
-                        // corrected (and undone) after the drag commits.
-                        services::window_aspect::install_for_hwnd(hwnd.0 as isize);
                     }
+                }
+            }
+            // Aspect-ratio lock. Attached at window creation, inert until the
+            // frontend pushes a constraint, and the reason a locked resize
+            // tracks the pointer instead of being corrected (and undone) after
+            // the drag commits. Windows subclasses WM_SIZING; Linux declares
+            // GDK aspect hints and lets the window manager rubber-band. macOS
+            // has neither yet and keeps the frontend's debounced correction,
+            // which `constrains_live()` reports so only one path ever runs.
+            #[cfg(desktop)]
+            {
+                if let Some(main) = app.get_webview_window("main") {
+                    services::window_aspect::install(&main);
                 }
             }
             // Off Windows there is no message pump to probe, so the watchdog

@@ -37,7 +37,7 @@
 //! Offsets arrive in LOGICAL pixels and are scaled with the window's live DPI
 //! here, not by the caller: a drag can cross onto a monitor with different
 //! scaling mid-gesture, and a cached scale factor would skew the constraint for
-//! the rest of the drag. See `Brain/references/Tauri_Window_Sizing_Units.md`.
+//! the rest of the drag.
 //!
 //! # Platforms
 //!
@@ -80,12 +80,14 @@ pub fn set_constraint(enabled: bool, ratio: f64, extra_width: u32, extra_height:
     let usable = enabled && ratio.is_finite() && ratio > 0.0;
     if !usable {
         ENABLED.store(false, Ordering::Release);
+        push_to_os();
         return;
     }
     RATIO_BITS.store(ratio.to_bits(), Ordering::Relaxed);
     EXTRA_W.store(extra_width, Ordering::Relaxed);
     EXTRA_H.store(extra_height, Ordering::Relaxed);
     ENABLED.store(true, Ordering::Release);
+    push_to_os();
 }
 
 /// True when this platform constrains the window DURING the drag, which is the
@@ -93,24 +95,180 @@ pub fn set_constraint(enabled: bool, ratio: f64, extra_width: u32, extra_height:
 /// real installed state rather than the target OS, so a failed hook falls back
 /// to the old path instead of silently disabling the lock.
 pub fn constrains_live() -> bool {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     {
         imp::is_installed()
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         false
     }
 }
 
-/// Attach the sizing hook to the main window. Called once per window at
-/// creation (setup, and again when the tray recreates the window after Go Live
-/// destroyed it), mirroring `ui_hang_watchdog::start_for_hwnd`. Inert until a
-/// constraint is enabled, so it costs one comparison per `WM_SIZING`.
+/// Attach the platform's live sizing constraint to the main window.
+///
+/// Called once per window at creation (setup, and again when the tray recreates
+/// the window after Go Live destroyed it), mirroring
+/// `ui_hang_watchdog::start_for_hwnd`. Inert until a constraint is enabled.
+///
+/// Takes the window rather than an `isize` HWND because the two platforms that
+/// implement this need different things out of it: Windows wants the raw handle
+/// to subclass, Linux wants the `GtkWindow` to hang geometry hints on. The old
+/// `install_for_hwnd` shape forced every caller to be `#[cfg(windows)]`, which
+/// is exactly why Linux had no lock to install in the first place.
 #[allow(unused_variables)]
-pub fn install_for_hwnd(hwnd_raw: isize) {
+pub fn install(window: &tauri::WebviewWindow) {
     #[cfg(windows)]
-    imp::install(hwnd_raw);
+    {
+        if let Ok(hwnd) = window.hwnd() {
+            imp::install(hwnd.0 as isize);
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        imp::install(window);
+    }
+}
+
+/// Push the stored constraint at the OS.
+///
+/// A no-op on Windows: the subclass reads the atomics when `WM_SIZING` arrives,
+/// so there is nothing to push. Linux is the other way round - the hints ARE the
+/// constraint, and the window manager enforces them, so they have to be written
+/// every time the shape changes.
+#[allow(unused_variables)]
+fn push_to_os() {
+    #[cfg(target_os = "linux")]
+    imp::apply();
+}
+
+/// Linux: the window manager does the constraining, via GTK geometry hints.
+///
+/// # Why hints rather than a resize handler
+///
+/// This is the same argument the module header makes for `WM_SIZING`, arrived at
+/// by a different route. X11 and Wayland both let a client declare an aspect
+/// ratio up front (`GDK_HINT_ASPECT`), and the WM then rubber-bands the drag to
+/// it. The constraint is applied BEFORE the size is committed, every frame, by
+/// the compositor - so the dragged edge tracks the pointer and nothing is ever
+/// corrected after the fact. Functionally identical to the Windows hook.
+///
+/// # Why `base_size` is the load-bearing part
+///
+/// With `GDK_HINT_BASE_SIZE` set, the aspect ratio is enforced on
+/// `(width - base_width) / (height - base_height)` rather than on the window
+/// itself. That is EXACTLY this module's model: the ratio describes the video
+/// box, and `EXTRA_W` / `EXTRA_H` are the chrome around it. Without the base
+/// size the WM would lock the ratio of the whole window including chat and the
+/// title bar, which is the wrong rectangle and would look like the lock was
+/// simply mis-tuned.
+///
+/// Units need no DPI scaling here, unlike Windows: GTK3 window geometry is in
+/// logical pixels already, which is the unit the frontend sends.
+#[cfg(target_os = "linux")]
+mod imp {
+    use super::{
+        ENABLED, EXTRA_H, EXTRA_W, MIN_LOGICAL_H, MIN_LOGICAL_W, RATIO_BITS,
+    };
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::OnceLock;
+
+    static INSTALLED: AtomicBool = AtomicBool::new(false);
+
+    /// The window to hang hints on, resolved fresh each time rather than held
+    /// as a `GtkWindow`. GTK objects are not `Send`, and the tray can destroy
+    /// and recreate the main window, so a stored handle would be both unsound
+    /// to move across threads and stale after a recreate.
+    fn app() -> &'static OnceLock<tauri::AppHandle> {
+        static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
+        &APP
+    }
+
+    pub fn is_installed() -> bool {
+        INSTALLED.load(Ordering::Relaxed)
+    }
+
+    pub fn install(window: &tauri::WebviewWindow) {
+        use tauri::Manager;
+        let _ = app().set(window.app_handle().clone());
+        // Prove the GtkWindow is reachable before claiming the lock is live.
+        // `constrains_live()` is what tells the frontend to stand its own
+        // debounced correction down, so a false positive here means NO
+        // correction from either side and a window that resizes freely.
+        if window.gtk_window().is_ok() {
+            INSTALLED.store(true, Ordering::Relaxed);
+            apply();
+        }
+    }
+
+    /// Write (or clear) the hints for the current constraint.
+    ///
+    /// GTK is main-thread-only and `set_constraint` is called from a Tauri
+    /// command, which is not the main thread. `run_on_main_thread` is the hop;
+    /// doing this inline is the class of mistake that cost 8.6.2 on macOS.
+    pub fn apply() {
+        let Some(app) = app().get().cloned() else {
+            return;
+        };
+        let enabled = ENABLED.load(Ordering::Acquire);
+        let ratio = f64::from_bits(RATIO_BITS.load(Ordering::Relaxed));
+        let extra_w = EXTRA_W.load(Ordering::Relaxed) as i32;
+        let extra_h = EXTRA_H.load(Ordering::Relaxed) as i32;
+
+        let _ = app.clone().run_on_main_thread(move || {
+            use gtk::prelude::*;
+            use tauri::Manager;
+
+            let Some(window) = app.get_webview_window("main") else {
+                return;
+            };
+            let Ok(gtk_window) = window.gtk_window() else {
+                return;
+            };
+
+            // `Geometry` is built in one shot rather than mutated: gdk 0.18
+            // exposes only `new(..)` plus getters, because the struct is a
+            // direct mirror of `GdkGeometry` and the fields the hints mask does
+            // not name are simply never read.
+            //
+            // The minimum is restated on BOTH paths. Clearing the aspect hint
+            // must not also drop `minWidth`/`minHeight` from tauri.conf.json,
+            // which the WM would otherwise forget the moment it is handed a
+            // hints struct that does not mention them.
+            let on_ratio = enabled && ratio.is_finite() && ratio > 0.0;
+            let geo = gtk::gdk::Geometry::new(
+                MIN_LOGICAL_W as i32,
+                MIN_LOGICAL_H as i32,
+                // max: unconstrained. 0 rather than i32::MAX because the mask
+                // below never sets MAX_SIZE, so these are not read at all.
+                0,
+                0,
+                // base_size is the chrome around the video box, and is what
+                // makes the WM apply the ratio to the video rather than to the
+                // whole window.
+                if on_ratio { extra_w } else { 0 },
+                if on_ratio { extra_h } else { 0 },
+                // No resize increments.
+                0,
+                0,
+                // min == max pins the ratio exactly, rather than allowing a
+                // range the WM could settle anywhere inside.
+                if on_ratio { ratio } else { 0.0 },
+                if on_ratio { ratio } else { 0.0 },
+                gtk::gdk::Gravity::NorthWest,
+            );
+
+            let hints = if on_ratio {
+                gtk::gdk::WindowHints::MIN_SIZE
+                    | gtk::gdk::WindowHints::BASE_SIZE
+                    | gtk::gdk::WindowHints::ASPECT
+            } else {
+                gtk::gdk::WindowHints::MIN_SIZE
+            };
+
+            gtk_window.set_geometry_hints(None::<&gtk::Widget>, Some(&geo), hints);
+        });
+    }
 }
 
 #[cfg(windows)]
