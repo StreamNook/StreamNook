@@ -119,6 +119,17 @@ class MainActivity : TauriActivity() {
     }
   }
 
+  /** The drops sign-in redirected with a credential, which the login plugin
+   *  is holding for Rust. The page only learns that it happened. */
+  fun notifyDropsRedirect() {
+    webView?.post {
+      webView?.evaluateJavascript(
+        "window.dispatchEvent(new CustomEvent('sn:drops-redirect'))",
+        null,
+      )
+    }
+  }
+
   /**
    * Hands the shell a value read out of the login WebView's own storage.
    *

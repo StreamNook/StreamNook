@@ -35,6 +35,11 @@ struct CookiesResp {
     cookies: String,
 }
 
+#[derive(Deserialize)]
+struct DropsTokenResp {
+    token: String,
+}
+
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     tauri::plugin::Builder::new("twitch-login")
         .setup(|app, api| {
@@ -76,6 +81,28 @@ pub async fn close_mobile_login<R: Runtime>(app: AppHandle<R>) -> Result<(), Str
         .0
         .run_mobile_plugin::<serde_json::Value>("closeLogin", ())
         .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Finish a drops sign-in the overlay reported (`sn:drops-redirect`): collect
+/// the credential the Kotlin plugin captured off the redirect and store it the
+/// way the device flow used to. The token comes plugin -> Rust -> disk and is
+/// never handed to the page.
+#[tauri::command]
+pub async fn finish_mobile_drops_login<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    let token = {
+        let state = app.state::<TwitchLoginState<R>>();
+        state
+            .0
+            .run_mobile_plugin::<DropsTokenResp>("takeDropsToken", ())
+            .map(|r| r.token)
+            .map_err(|e| e.to_string())?
+    };
+    if token.is_empty() {
+        return Err("Twitch did not hand back a drops credential".to_string());
+    }
+    crate::services::drops_auth_service::DropsAuthService::store_access_token(token)
+        .await
         .map_err(|e| e.to_string())
 }
 

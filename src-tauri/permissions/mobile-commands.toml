@@ -13,6 +13,7 @@ allow = [
   "open_mobile_login",
   "close_mobile_login",
   "get_mobile_login_cookies",
+  "finish_mobile_drops_login",
   "push_register",
   "push_unregister",
   "set_max_video_height",

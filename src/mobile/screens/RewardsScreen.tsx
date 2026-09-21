@@ -28,7 +28,6 @@ import { openExternal } from '../../utils/openExternal';
 import { Logger } from '../../utils/logger';
 import type {
   DropCampaign,
-  DropsDeviceCodeInfo,
   InventoryItem,
   InventoryResponse,
 } from '../../types';
@@ -236,9 +235,7 @@ export const RewardsScreen: React.FC = () => {
   const [badgeDetail, setBadgeDetail] = useState<GlobalBadge | null>(null);
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [inventory, setInventory] = useState<InventoryResponse | null>(null);
-  const [deviceCode, setDeviceCode] = useState<DropsDeviceCodeInfo | null>(null);
   const [connecting, setConnecting] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -310,54 +307,52 @@ export const RewardsScreen: React.FC = () => {
     };
   }, [loadBadges]);
 
+  // The redirect grant, the same one desktop moved to when Twitch closed the
+  // device-code grant on the drops client. The authorize page opens in the
+  // in-app login WebView (already signed in from the main login, so an account
+  // that has approved before sees no consent screen at all), Twitch redirects
+  // back with the credential, the native overlay keeps it and closes itself,
+  // and Rust collects and stores it. The page never sees the token.
   const connect = async () => {
     setConnecting(true);
     setConnectError(null);
     try {
-      const info = await invoke<DropsDeviceCodeInfo>('start_drops_device_flow');
-      setDeviceCode(info);
-      // Copy the code up front, then authorize in the SAME in-app WebView the
-      // main Twitch login uses (no external browser). The overlay covers the
-      // app, so the code must already be on the clipboard when it opens.
-      try {
-        await navigator.clipboard.writeText(info.user_code);
-      } catch {
-        /* the code card stays visible behind the overlay regardless */
-      }
-      await invoke('open_mobile_login', { url: info.verification_uri }).catch(() => {});
-      await invoke('poll_drops_token', {
-        deviceCode: info.device_code,
-        interval: info.interval,
-        expiresIn: info.expires_in,
+      const url = await invoke<string>('start_drops_login');
+      const landed = new Promise<boolean>((resolve) => {
+        const done = (ok: boolean) => {
+          window.removeEventListener('sn:drops-redirect', onLanded);
+          window.removeEventListener('sn:login-cancelled', onCancel);
+          clearTimeout(deadline);
+          resolve(ok);
+        };
+        const onLanded = () => done(true);
+        const onCancel = () => done(false);
+        // Long enough to sign in from scratch if the session had lapsed.
+        const deadline = setTimeout(() => done(false), 5 * 60 * 1000);
+        window.addEventListener('sn:drops-redirect', onLanded);
+        window.addEventListener('sn:login-cancelled', onCancel);
       });
-      setDeviceCode(null);
+      await invoke('open_mobile_login', { url, title: 'Connect drops' });
+      if (!(await landed)) {
+        setConnectError('Sign-in was closed before Twitch approved drops.');
+        return;
+      }
+      await invoke('finish_mobile_drops_login');
       addToast('Drops connected!', 'success');
-      // Trust the successful poll like desktop does; load() then fills the
+      // Trust the stored grant like desktop does; load() then fills the
       // inventory (and the backend check now agrees post-connect).
       setAuthed(true);
       await load();
     } catch (err) {
-      // Surface the real backend reason (expired code, denied, network) instead
-      // of a generic failure, so a stuck connect is diagnosable from the phone.
+      // Surface the real backend reason (denied, network, storage) instead of
+      // a generic failure, so a stuck connect is diagnosable from the phone.
       const reason = err instanceof Error ? err.message : String(err);
       Logger.error('[Rewards] drops connect failed:', err);
       setConnectError(reason);
       addToast(`Drops connection failed: ${reason}`, 'error');
-      setDeviceCode(null);
     } finally {
       await invoke('close_mobile_login').catch(() => {});
       setConnecting(false);
-    }
-  };
-
-  const copyCode = async () => {
-    if (!deviceCode) return;
-    try {
-      await navigator.clipboard.writeText(deviceCode.user_code);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* the code stays visible regardless */
     }
   };
 
@@ -599,38 +594,18 @@ export const RewardsScreen: React.FC = () => {
               <p className="text-[13px] text-textSecondary mb-3 leading-relaxed">
                 Connect drops to track campaign progress and earn while you watch.
               </p>
-              {deviceCode ? (
-                <div className="text-center">
-                  <button
-                    onClick={copyCode}
-                    className="glass-input w-full py-3 font-mono text-2xl tracking-[0.3em] text-textPrimary"
-                  >
-                    {deviceCode.user_code}
-                  </button>
-                  <div className="text-[12px] text-textMuted mt-1.5 min-h-[16px]">
-                    {copied ? 'Copied' : 'Code copied. Paste it on the Twitch page that opens.'}
-                  </div>
-                  <div className="flex items-center justify-center gap-1.5 text-[12.5px] text-textMuted mt-2">
-                    <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
-                    Waiting for authorization…
-                  </div>
+              <button
+                onClick={() => void connect()}
+                disabled={connecting}
+                className="glass-button sn-touch w-full text-[14px] font-semibold text-textPrimary disabled:opacity-60 flex items-center justify-center gap-1.5"
+              >
+                {connecting ? 'Approve on Twitch…' : 'Connect drops'}
+                {!connecting && <ArrowSquareOut size={15} />}
+              </button>
+              {connectError && (
+                <div className="mt-2 text-[12px] text-error leading-snug break-words">
+                  {connectError}
                 </div>
-              ) : (
-                <>
-                  <button
-                    onClick={() => void connect()}
-                    disabled={connecting}
-                    className="glass-button sn-touch w-full text-[14px] font-semibold text-textPrimary disabled:opacity-60 flex items-center justify-center gap-1.5"
-                  >
-                    Connect drops
-                    <ArrowSquareOut size={15} />
-                  </button>
-                  {connectError && (
-                    <div className="mt-2 text-[12px] text-error leading-snug break-words">
-                      {connectError}
-                    </div>
-                  )}
-                </>
               )}
             </div>
           )}

@@ -195,7 +195,11 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
                     view: WebView,
                     request: WebResourceRequest
                 ): Boolean {
-                    return false // keep every navigation inside this WebView
+                    // The drops grant is finished the moment Twitch redirects
+                    // back with the credential on the fragment; the page it
+                    // would land on is never needed. Everything else stays
+                    // inside this WebView.
+                    return captureDropsRedirect(request.url.toString())
                 }
 
                 /**
@@ -236,9 +240,13 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
                 ) {
                     super.onPageStarted(view, url, favicon)
                     val u = url ?: return
+                    // Belt to the override above: a fragment-only landing can
+                    // reach here without an override call.
+                    if (captureDropsRedirect(u)) return
                     // Logged so the real post-approval URL stays visible in
-                    // logcat if Twitch ever moves where it lands.
-                    android.util.Log.i("SNLogin", "nav: $u")
+                    // logcat if Twitch ever moves where it lands. Never the
+                    // fragment: that is where a credential would ride.
+                    android.util.Log.i("SNLogin", "nav: ${u.substringBefore('#')}")
                     rememberRedirectTarget(u)
                     // In watch mode the redirect is NOT the finish line. 7TV's
                     // sign-in also travels through auth.twitch.tv/authorize, so
@@ -364,6 +372,48 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
             dismiss()
             invoke.resolve()
         }
+    }
+
+    // ── Drops sign-in: the implicit grant ────────────────────────────────────
+    // Twitch closed the device-code grant on the drops client, so the phone
+    // signs in the way the desktop now does: an authorize url that redirects to
+    // https://www.twitch.tv/#access_token=... once the account has approved
+    // (no consent screen at all for an account that already has). The token is
+    // taken off that redirect HERE and held natively until Rust asks for it, so
+    // it never travels through the page as an event payload and never loads
+    // as a url anyone could read off a bar or a log.
+
+    @Volatile
+    private var dropsToken: String? = null
+
+    /** True when the url is the drops landing; the overlay closes and the shell
+     *  is told to collect. */
+    private fun captureDropsRedirect(url: String): Boolean {
+        if (!url.startsWith("https://www.twitch.tv/")) return false
+        val fragment = url.substringAfter('#', "")
+        if (fragment.isEmpty()) return false
+        val token = fragment.split('&').firstNotNullOfOrNull { pair ->
+            val kv = pair.split('=', limit = 2)
+            if (kv.size == 2 && kv[0] == "access_token" && kv[1].isNotEmpty()) kv[1] else null
+        } ?: return false
+        dropsToken = token
+        android.util.Log.i("SNLogin", "drops grant landed; credential held for Rust")
+        // Posted, not run inline: this is called from inside the WebView's own
+        // navigation callback, and dismiss() destroys that WebView.
+        storageWatchHandler.post {
+            dismiss()
+            (activity as? MainActivity)?.notifyDropsRedirect()
+        }
+        return true
+    }
+
+    /** Hand over the captured drops token once, or an empty string. */
+    @Command
+    fun takeDropsToken(invoke: Invoke) {
+        val ret = JSObject()
+        ret.put("token", dropsToken ?: "")
+        dropsToken = null
+        invoke.resolve(ret)
     }
 
     /** host+path of where approving will land, read off the authorize URL. */
