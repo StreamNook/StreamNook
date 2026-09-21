@@ -147,6 +147,8 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
                 (activity as? MainActivity)?.notifyLoginCancelled()
             }
             hiddenMode = args.hidden
+            openedUrl = args.url
+            bouncedHome = false
             if (overlay != null) {
                 // Already open — just navigate to the (possibly new) url. The
                 // watch is restarted rather than left alone, since reusing the
@@ -243,6 +245,7 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
                     // Belt to the override above: a fragment-only landing can
                     // reach here without an override call.
                     if (captureDropsRedirect(u)) return
+                    if (bounceHomeToActivate(view, u)) return
                     // Logged so the real post-approval URL stays visible in
                     // logcat if Twitch ever moves where it lands. Never the
                     // fragment: that is where a credential would ride.
@@ -418,6 +421,31 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
 
     /** host+path of where approving will land, read off the authorize URL. */
     private var approvalLanding: String? = null
+
+    /** The url this overlay was opened for, so a detour can be undone. */
+    private var openedUrl: String? = null
+    private var bouncedHome: Boolean = false
+
+    /**
+     * Twitch's mobile site does not always return to the activate page after a
+     * sign-in: a fresh login can land on the home page instead, under an
+     * "Open in App" sheet, with the device code nowhere in sight. Seen on a
+     * user's phone: they closed the overlay from there, and the sign-in never
+     * finished. When the overlay was opened for /activate and the page has
+     * wandered to the bare home page, send it back to the activate url once.
+     * The user is signed in by then, so it shows the code ready to approve.
+     * Once only: a second arrival at home is left alone rather than looped.
+     */
+    private fun bounceHomeToActivate(view: WebView, url: String): Boolean {
+        if (bouncedHome) return false
+        val opened = openedUrl ?: return false
+        if (!opened.contains("/activate")) return false
+        if (hostPath(url) != "www.twitch.tv") return false
+        bouncedHome = true
+        android.util.Log.i("SNLogin", "landed on home mid sign-in; returning to the activate page")
+        view.post { view.loadUrl(opened) }
+        return true
+    }
 
     /** Normalised host+path, so query strings and trailing slashes do not matter. */
     private fun hostPath(url: String): String? {
