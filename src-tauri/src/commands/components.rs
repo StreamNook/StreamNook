@@ -480,6 +480,13 @@ mod update_manifest_tests {
             assert_eq!(name, "StreamNook.app.tar.gz");
         } else if cfg!(target_os = "windows") {
             assert_eq!(name, "StreamNook.7z");
+        } else if cfg!(target_os = "linux") {
+            // Tied to the constant the SWAP step looks for, not to a second copy
+            // of the literal: the download asking for one name while the swap
+            // hunts for another is a silent "no update staged", with a successful
+            // download and nothing installed.
+            assert_eq!(name, super::LINUX_BUNDLE_NAME);
+            assert_eq!(name, "StreamNook.AppImage");
         }
         assert!(!name.is_empty());
     }
@@ -866,6 +873,15 @@ async fn install_bundle_from_status(
         return stage_macos_bundle(&app_handle, &temp_dir, &bundle_path).await;
     }
 
+    // Linux ships an AppImage: a single executable file, nothing to extract. It
+    // had the SAME latent bug macOS carried until 8.6.3: it fell through to the
+    // 7z extractor below and would have died with "Failed to extract 7z bundle"
+    // on the first Linux release, so this is fixed before that release exists
+    // rather than after.
+    if cfg!(target_os = "linux") {
+        return stage_linux_bundle(&app_handle, &temp_dir, &bundle_path).await;
+    }
+
     let _ = app_handle.emit("bundle-update-progress", "Extracting bundle...");
 
     // Extract using native sevenz-rust library (no external 7z dependency)
@@ -1099,6 +1115,95 @@ async fn stage_macos_bundle(
     Ok(())
 }
 
+/// Stage the downloaded AppImage so `restart_to_apply_update` can swap it in.
+///
+/// Much less work than the macOS twin because an AppImage is ONE FILE: there is
+/// nothing to unpack. The two things that must happen are a sanity check that we
+/// really received an AppImage (a 200-page HTML error from a misconfigured CDN
+/// would otherwise be moved over the user's installed app and left unrunnable)
+/// and the executable bit, which is the one attribute an AppImage cannot launch
+/// without.
+async fn stage_linux_bundle(
+    app_handle: &tauri::AppHandle,
+    temp_dir: &Path,
+    bundle_path: &Path,
+) -> Result<(), String> {
+    use tauri::Emitter;
+
+    let _ = app_handle.emit("bundle-update-progress", "Installing components...");
+
+    let extract_dir = temp_dir.join("extracted");
+    let _ = std::fs::remove_dir_all(&extract_dir);
+    std::fs::create_dir_all(&extract_dir)
+        .map_err(|e| format!("Failed to create staging directory: {}", e))?;
+
+    let bytes = std::fs::read(bundle_path)
+        .map_err(|e| format!("Failed to read the downloaded bundle: {}", e))?;
+    if !looks_like_an_appimage(&bytes) {
+        return Err(
+            "The downloaded file is not an AppImage; refusing to install it over the \
+             running application"
+                .to_string(),
+        );
+    }
+
+    let staged = extract_dir.join(LINUX_BUNDLE_NAME);
+    std::fs::copy(bundle_path, &staged)
+        .map_err(|e| format!("Failed to stage the AppImage: {}", e))?;
+    crate::platform::fs::make_executable(&staged).map_err(|e| e.to_string())?;
+
+    let _ = app_handle.emit("bundle-update-progress", "Update installed");
+    Ok(())
+}
+
+/// Filename the staged AppImage is parked under. Shared by the staging step and
+/// the swap step so the two cannot disagree about where the file is.
+const LINUX_BUNDLE_NAME: &str = "StreamNook.AppImage";
+
+/// Does `bytes` start like a type-2 AppImage?
+///
+/// An AppImage is an ELF with the magic bytes `AI\x02` at offset 8, in the
+/// padding of the ELF identification field. Checking both means a truncated
+/// download, an HTML error page or a 7z served by mistake is refused BEFORE it
+/// is moved over the installed app, which is the only point at which refusing is
+/// still cheap.
+///
+/// Pure and taking a slice so every branch is testable from any host, the same
+/// reason `artifact_for_target` takes its target explicitly.
+fn looks_like_an_appimage(bytes: &[u8]) -> bool {
+    bytes.len() > 11 && &bytes[0..4] == b"\x7fELF" && &bytes[8..11] == b"AI\x02"
+}
+
+/// The AppImage this process is running from.
+///
+/// **Must** come from `$APPIMAGE` and not `current_exe()`. Inside a running
+/// AppImage the runtime mounts the payload read-only at `/tmp/.mount_XXXXXX/`
+/// and execs the binary from THERE, so `current_exe()` points into a squashfs
+/// mount that disappears on exit. A swap written against it would report success
+/// into a temp directory, vanish, and leave the user on the old version with no
+/// error anywhere, the same "compiles and does the wrong thing" class as the
+/// `.bat` updater this module replaced.
+///
+/// `$APPIMAGE` is set by the AppImage runtime itself, so its absence means we are
+/// not running as one (a `cargo run`, a `.deb` install, an extracted payload).
+/// Refusing is right in every one of those cases: a `.deb` is updated by the
+/// package manager, and swapping "the file this process came from" for a dev
+/// build would overwrite the developer's own binary.
+fn running_appimage() -> Result<PathBuf, String> {
+    let raw = std::env::var_os("APPIMAGE").ok_or(
+        "This build is not running as an AppImage ($APPIMAGE is unset), so there is \
+         nothing to swap. Update through your package manager instead.",
+    )?;
+    let path = PathBuf::from(raw);
+    if !path.is_file() {
+        return Err(format!(
+            "$APPIMAGE points at {}, which is not a file; refusing to swap",
+            path.display()
+        ));
+    }
+    Ok(path)
+}
+
 /// The `.app` that owns `exe`, if `exe` sits where a bundle keeps its main
 /// executable (`Something.app/Contents/MacOS/<exe>`). Pure, so the shape can
 /// be tested anywhere; `running_app_bundle` adds the filesystem check.
@@ -1192,6 +1297,26 @@ pub async fn restart_to_apply_update(app_handle: tauri::AppHandle) -> Result<(),
         }
     }
 
+    // Linux: the AppImage stage_linux_bundle parked. Same helper, same wait-then-
+    // swap-then-relaunch shape as macOS; only the artifact differs (one file
+    // rather than a bundle directory), which `SwapFlavor::LinuxAppImage` encodes.
+    if cfg!(target_os = "linux") {
+        let staged = temp_dir.join("extracted").join(LINUX_BUNDLE_NAME);
+        if staged.is_file() {
+            let current = running_appimage()?;
+            flush_stores_before_hard_exit(&app_handle);
+            let request = crate::platform::app_update::SwapRequest {
+                current: current.clone(),
+                replacement: staged,
+                pid: std::process::id(),
+                relaunch: current,
+            };
+            crate::platform::app_update::swap_and_relaunch(&request)
+                .map_err(|e| format!("Failed to start the AppImage swap: {}", e))?;
+            std::process::exit(0);
+        }
+    }
+
     let vbs_path = temp_dir.join("update_launcher.vbs");
 
     if vbs_path.exists() {
@@ -1241,4 +1366,63 @@ mod bundle_path_tests {
             None
         );
     }
+}
+
+#[cfg(test)]
+mod appimage_tests {
+    use super::{looks_like_an_appimage, running_appimage};
+
+    /// The first 12 bytes of a type-2 AppImage: the ELF magic, then `AI\x02` in
+    /// the ELF identification padding at offset 8.
+    fn appimage_header() -> Vec<u8> {
+        let mut v = b"\x7fELF\x02\x01\x01\x00".to_vec();
+        v.extend_from_slice(b"AI\x02");
+        v.push(0);
+        v
+    }
+
+    #[test]
+    fn a_real_appimage_header_is_accepted() {
+        assert!(looks_like_an_appimage(&appimage_header()));
+    }
+
+    #[test]
+    fn a_plain_elf_is_refused() {
+        // A bare Linux binary IS an ELF but is not an AppImage. Moving one over
+        // the installed app would leave something that starts and then cannot
+        // find its payload.
+        let mut v = b"\x7fELF\x02\x01\x01\x00".to_vec();
+        v.extend_from_slice(&[0, 0, 0, 0]);
+        assert!(!looks_like_an_appimage(&v));
+    }
+
+    #[test]
+    fn the_things_a_broken_download_actually_delivers_are_refused() {
+        // An HTML error page from a misconfigured CDN or an expired signed URL.
+        assert!(!looks_like_an_appimage(b"<!DOCTYPE html><html><body>404"));
+        // The Windows artifact, served by a manifest that named the wrong key.
+        assert!(!looks_like_an_appimage(b"7z\xbc\xaf\x27\x1c\x00\x04\x00\x00\x00\x00"));
+        // A download that died mid-header.
+        assert!(!looks_like_an_appimage(b"\x7fELF"));
+        assert!(!looks_like_an_appimage(b""));
+    }
+
+    /// `$APPIMAGE` is the ONLY correct source for the swap target. Inside a
+    /// running AppImage `current_exe()` points into a read-only squashfs mount
+    /// under /tmp that disappears on exit, so a swap written against it would
+    /// succeed into nowhere.
+    #[test]
+    fn a_build_that_is_not_an_appimage_refuses_to_swap() {
+        // The test process is not an AppImage, so this is the real unset case
+        // rather than a simulated one. Asserting on the message because it is
+        // what the user sees and it has to name the alternative.
+        if std::env::var_os("APPIMAGE").is_none() {
+            let err = running_appimage().expect_err("must refuse when $APPIMAGE is unset");
+            assert!(
+                err.contains("$APPIMAGE is unset"),
+                "the refusal must say WHY, got: {err}"
+            );
+        }
+    }
+
 }
