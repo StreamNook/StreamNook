@@ -43,7 +43,16 @@ import { scrollChatToMessage } from '../../utils/scrollChatToMessage';
 // it causes from fighting each other frame by frame. See `pause` below.
 const PAUSE_SETTLE_MS = 120;
 
-export const MobileChatPane: React.FC = () => {
+/** What the read-only overlay leaves out of the fan. Module-level so the fan
+ *  sees one array, not a fresh one per render. */
+const READ_ONLY_HIDES: FanAction[] = ['reply'];
+
+/**
+ * `readOnly`: the landscape overlay. Chat is for reading there; the composer,
+ * tap-to-reply and the fan's Reply are gone, because a keyboard over a
+ * sideways video is not something anyone asked for.
+ */
+export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = false }) => {
   const currentStream = useAppStore((s) => s.currentStream);
   const currentUser = useAppStore((s) => s.currentUser);
   const addToast = useAppStore((s) => s.addToast);
@@ -561,7 +570,7 @@ export const MobileChatPane: React.FC = () => {
   // the data attribute below) so the gesture is discoverable rather than secret.
   const onListClick = useCallback(
     (e: React.MouseEvent) => {
-      if (!isPaused || press.isArmed()) return;
+      if (readOnly || !isPaused || press.isArmed()) return;
       const el = e.target as HTMLElement;
       // Usernames and links keep their own behaviour.
       if (el.closest('a,[data-no-drag],button')) return;
@@ -577,7 +586,7 @@ export const MobileChatPane: React.FC = () => {
         channel: activeChannel ?? '',
       });
     },
-    [isPaused, press, describeMessage, activeChannel],
+    [readOnly, isPaused, press, describeMessage, activeChannel],
   );
 
 
@@ -599,7 +608,7 @@ export const MobileChatPane: React.FC = () => {
         onClick={onListClick}
         // While paused, rows are tappable to reply. Signposted by the hint pill
         // below rather than left as a secret gesture.
-        data-tap-reply={isPaused ? 'true' : undefined}
+        data-tap-reply={isPaused && !readOnly ? 'true' : undefined}
       >
         <ChatMessageList
           messages={messages}
@@ -620,9 +629,11 @@ export const MobileChatPane: React.FC = () => {
         />
         {isPaused && (
           <div className="absolute bottom-2 left-0 right-0 flex flex-col items-center gap-1 z-10 pointer-events-none">
-            <span className="glass-badge rounded-full px-2 py-0.5 text-[10.5px] text-textMuted">
-              Tap a message to reply
-            </span>
+            {!readOnly && (
+              <span className="glass-badge rounded-full px-2 py-0.5 text-[10.5px] text-textMuted">
+                Tap a message to reply
+              </span>
+            )}
             <button
               onClick={resumeLive}
               className="pointer-events-auto glass-button flex items-center gap-1 whitespace-nowrap rounded-full px-3 py-1 text-[12px] font-medium text-textPrimary"
@@ -633,21 +644,23 @@ export const MobileChatPane: React.FC = () => {
           </div>
         )}
       </div>
-      <MobileChatInput
-        channel={activeChannel}
-        channelId={broadcasterId}
-        channelLabel={activeTab?.label ?? null}
-        gating={gating}
-        emotes={emotes}
-        replyTo={replyTo}
-        onCancelReply={handleCancelReply}
-        isModerator={isModerator}
-        modToolsOn={modToolsOn}
-        onToggleModTools={toggleModTools}
-        onAddChat={handleAddChat}
-        onReload={handleReload}
-        onCloseChat={handleCloseChat}
-      />
+      {!readOnly && (
+        <MobileChatInput
+          channel={activeChannel}
+          channelId={broadcasterId}
+          channelLabel={activeTab?.label ?? null}
+          gating={gating}
+          emotes={emotes}
+          replyTo={replyTo}
+          onCancelReply={handleCancelReply}
+          isModerator={isModerator}
+          modToolsOn={modToolsOn}
+          onToggleModTools={toggleModTools}
+          onAddChat={handleAddChat}
+          onReload={handleReload}
+          onCloseChat={handleCloseChat}
+        />
+      )}
       {/* Channel context matters: Twitch badges like sub tiers and moderator are
           scoped to the room, so without it the profile shows only global ones. */}
       <UserProfileSheet
@@ -663,6 +676,7 @@ export const MobileChatPane: React.FC = () => {
         target={fanTarget}
         isModerator={modToolsArmed}
         canPin={modToolsArmed && !!broadcasterId}
+        hide={readOnly ? READ_ONLY_HIDES : undefined}
         onCommit={runFanAction}
         onCancel={closeFan}
       />

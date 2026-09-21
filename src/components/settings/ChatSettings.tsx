@@ -636,7 +636,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         >
           <SettingsRow
             title="Chat in landscape"
-            description="Turn the phone sideways and tap the chat button on the player. Chat can float over the video, or take a column beside it."
+            description="Turn the phone sideways and tap the chat button on the player. Chat can float over the video, or take a column beside it. Floating chat is read-only: drag its edge to resize it, tap the edge for the see-through slider."
           >
             <SegmentedSelect<'overlay' | 'beside'>
               value={settings.fullscreen_chat?.phone_layout ?? 'overlay'}

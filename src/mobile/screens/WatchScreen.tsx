@@ -58,6 +58,8 @@ import {
   setScreenBrightness,
 } from '../nativeBridge';
 import { DialIndicator, type DialAxis, type DialReading } from '../watch/DialIndicator';
+import { ChatOverlayChrome } from '../watch/ChatOverlayChrome';
+import type { FullscreenChatSettings } from '../../types';
 import { hapticStep } from '../ui/haptics';
 import { readInsets, type ResolvedInsets } from '../nativeInsets';
 import { Logger } from '../../utils/logger';
@@ -309,9 +311,24 @@ export const WatchScreen: React.FC = () => {
   const chatBeside = sideBySide && twoColumns;
   const chatOverlay = sideBySide && immersiveLandscape && landscapeChat && phoneOverlayChat;
   const overlaySide: 'left' | 'right' = fsChat?.side === 'left' ? 'left' : 'right';
+  // The overlay's own controls change width and see-through IN PLACE (a drag on
+  // its edge, a slider on its strip). The live value leads while the finger is
+  // down and until the saved setting catches up; the setting is what survives.
+  const [overlayWidthLive, setOverlayWidthLive] = useState<number | null>(null);
+  const [overlayOpacityLive, setOverlayOpacityLive] = useState<number | null>(null);
+  // updateSettings applies the new value to the store only after the save
+  // resolves, so the live value is released THEN: never a frame on the old
+  // saved value between the finger lifting and the write landing.
+  const writeOverlay = useCallback(async (patch: Partial<FullscreenChatSettings>) => {
+    const s = useAppStore.getState();
+    await s.updateSettings({ ...s.settings, fullscreen_chat: { ...s.settings.fullscreen_chat, ...patch } });
+    if (patch.width != null) setOverlayWidthLive(null);
+    if (patch.opacity != null) setOverlayOpacityLive(null);
+  }, []);
   // Never more than half the picture, whatever the desktop slider was set to.
-  const overlayWidth = Math.min(Math.max(240, fsChat?.width ?? 340), Math.round(shape.w * 0.5));
-  const overlayOpacity = Math.max(0, Math.min(100, fsChat?.opacity ?? 55));
+  const overlayMaxWidth = Math.round(shape.w * 0.5);
+  const overlayWidth = Math.min(Math.max(240, overlayWidthLive ?? fsChat?.width ?? 340), overlayMaxWidth);
+  const overlayOpacity = Math.max(0, Math.min(100, overlayOpacityLive ?? fsChat?.opacity ?? 55));
   // Resizable only where there is genuinely a trade to make. On a phone the
   // 16:9 band is simply right, and there is no surplus to hand to chat.
   const resizable = shape.largeScreen && !mini && !pip;
@@ -1112,7 +1129,21 @@ export const WatchScreen: React.FC = () => {
             </>
           )}
 
-          <MobileChatPane />
+          <MobileChatPane readOnly={chatOverlay} />
+          {chatOverlay && (
+            <ChatOverlayChrome
+              side={overlaySide}
+              width={overlayWidth}
+              minWidth={240}
+              maxWidth={overlayMaxWidth}
+              opacity={overlayOpacity}
+              onWidthChange={setOverlayWidthLive}
+              onWidthCommit={(w) => void writeOverlay({ width: w })}
+              onOpacityChange={setOverlayOpacityLive}
+              onOpacityCommit={(o) => void writeOverlay({ opacity: o })}
+              onHide={() => setLandscapeChat(false)}
+            />
+          )}
         </div>
       </div>
 

@@ -87,6 +87,8 @@ interface Props {
   canPin: boolean;
   onCommit: (action: FanAction, timeoutSecs?: number) => void;
   onCancel: () => void;
+  /** Actions to leave out (the read-only landscape overlay drops Reply). */
+  hide?: FanAction[];
 }
 
 export const ChatFanOut: React.FC<Props> = ({
@@ -95,6 +97,7 @@ export const ChatFanOut: React.FC<Props> = ({
   canPin,
   onCommit,
   onCancel,
+  hide,
 }) => {
   const { fold } = useWindowShape();
   const paintShadowMode = useAppStore((s) => s.settings.cosmetics?.paint_shadows) ?? 'all';
@@ -106,9 +109,9 @@ export const ChatFanOut: React.FC<Props> = ({
   );
 
   const buckets = useMemo(() => {
-    const list = [...EVERYONE, ...(isModerator ? MOD_ONLY : [])];
+    const list = [...EVERYONE, ...(isModerator ? MOD_ONLY : [])].filter((b) => !hide?.includes(b.id));
     return canPin ? list : list.filter((b) => b.id !== 'pin');
-  }, [isModerator, canPin]);
+  }, [hide, isModerator, canPin]);
 
   // Tile centres, fanned upward from a fixed origin.
   //
