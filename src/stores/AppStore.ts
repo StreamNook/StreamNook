@@ -2612,15 +2612,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       // frontend loop on top multiplied a transient failure into minutes of
       // spinner and delayed the chat-only fallback below. A hiccup is retried
       // by the backend; when this rejects, the failure is real.
-      // A promoted tile arrives already playing. Its quality was chosen by the
-      // TILE's resolve, so no fallback notice is owed here: the viewer picked
-      // that quality on the tile and is not being moved off it.
       // An audio-only swap still resolving would otherwise land AFTER this
       // start and re-point the relay at the channel we just left.
       await settleTransientSwap();
-      const result = preResolved
-        ?? await invoke<StreamStartResult>('start_stream', { url: `https://twitch.tv/${channel}`, quality: requestedQuality });
-      if (!preResolved) logQualityFallback(requestedQuality, result.quality);
+      const result = await invoke<StreamStartResult>('start_stream', { url: `https://twitch.tv/${channel}`, quality: requestedQuality });
+      logQualityFallback(requestedQuality, result.quality);
 
       // Use the provided stream info, or find it from followed streams, or fetch it
       let info: TwitchStream;
