@@ -110,3 +110,24 @@
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
+
+/* Chat floating over landscape video on a phone. The desktop overlay's
+   recipe (a tint of the theme background at the chosen opacity, a faint top
+   sheen, one inset hairline on the video edge) minus its backdrop blur: the
+   thing behind this column is a video repainting every frame, and a blur
+   over that is a full-time compositor pass on a device whose limit is
+   compositing. The tint alone carries legibility. --fs-chat-opacity is set
+   inline from the overlay setting. */
+.sn-mobile .sn-chat-overlay {
+  --fs-chat-opacity: 55%;
+  background-color: color-mix(in srgb, var(--color-background) var(--fs-chat-opacity), transparent);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 25%);
+  box-shadow:
+    inset 1px 0 0 0 rgba(255, 255, 255, 0.1),
+    0 0 40px -10px rgba(0, 0, 0, 0.6);
+}
+.sn-mobile .sn-chat-overlay--left {
+  box-shadow:
+    inset -1px 0 0 0 rgba(255, 255, 255, 0.1),
+    0 0 40px -10px rgba(0, 0, 0, 0.6);
+}

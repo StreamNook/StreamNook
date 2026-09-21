@@ -5,11 +5,10 @@
 // (background, never kill).
 import { create } from 'zustand';
 import { useAppStore } from '../stores/AppStore';
+import { startTab } from './phonePrefs';
 import type { TwitchCategory } from '../types';
 
 export type MobileTab = 'following' | 'browse' | 'rewards' | 'you';
-
-export const DEFAULT_TAB: MobileTab = 'following';
 
 interface MobileNavState {
   activeTab: MobileTab;
@@ -41,13 +40,15 @@ interface MobileNavState {
   setCosmeticsOpen: (open: boolean) => void;
   setPlayerMode: (mode: 'full' | 'mini') => void;
   /** Back chain: top sheet -> settings -> cosmetics -> minimize the watch layer
-   *  -> category drill -> non-default tab -> not consumed (native backgrounds
-   *  the task). */
+   *  -> category drill -> a tab other than the start tab -> not consumed
+   *  (native backgrounds the task). */
   handleBack: () => boolean;
 }
 
 export const useMobileNavStore = create<MobileNavState>((set, get) => ({
-  activeTab: DEFAULT_TAB,
+  // The chosen start tab, read synchronously so the very first frame is the
+  // right tab rather than Following flashing before an effect corrects it.
+  activeTab: startTab(),
   sheetStack: [],
   settingsView: null,
   browseCategory: null,
@@ -106,8 +107,12 @@ export const useMobileNavStore = create<MobileNavState>((set, get) => ({
       set({ browseCategory: null });
       return true;
     }
-    if (activeTab !== DEFAULT_TAB) {
-      set({ activeTab: DEFAULT_TAB });
+    // Back unwinds to the tab the app OPENS on, not to Following: someone who
+    // starts on Browse expects back from Following to land on Browse, the
+    // same way it would if they had never changed the default.
+    const home = startTab();
+    if (activeTab !== home) {
+      set({ activeTab: home });
       return true;
     }
     return false;

@@ -4,7 +4,9 @@ import React, { useEffect, useState } from 'react';
 import { ArrowCircleDown, PaintBrush, SignOut } from 'phosphor-react';
 import { ChevronRight } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
-import { useMobileNavStore } from '../navStore';
+import { useMobileNavStore, type MobileTab } from '../navStore';
+import { usePhonePrefs } from '../phonePrefs';
+import { SegmentedSelect } from '../../components/settings/_primitives';
 import { checkForAndroidUpdate, openAndroidUpdate, type AndroidUpdate } from '../updateCheck';
 import { OwnIdentityHeader } from '../profile/OwnIdentityHeader';
 import { SETTINGS_ROWS } from './SettingsScreen';
@@ -14,6 +16,8 @@ export const YouScreen: React.FC = () => {
   const signOutActiveAccount = useAppStore((s) => s.signOutActiveAccount);
   const openSettings = useMobileNavStore((s) => s.openSettings);
   const setCosmeticsOpen = useMobileNavStore((s) => s.setCosmeticsOpen);
+  const startTab = usePhonePrefs((s) => s.startTab);
+  const setStartTab = usePhonePrefs((s) => s.setStartTab);
   const addToast = useAppStore((s) => s.addToast);
   const [confirmSignOut, setConfirmSignOut] = useState(false);
 
@@ -134,6 +138,26 @@ export const YouScreen: React.FC = () => {
           </span>
           <ChevronRight size={16} className="text-textMuted shrink-0" />
         </button>
+      </div>
+
+      {/* Where the app lands on open. Following is the right default for most
+          people, but someone who lives in Browse or checks drops first should
+          not have to swipe past it every time; back unwinds to this tab too. */}
+      <div className="text-[12px] font-semibold text-textMuted uppercase tracking-wide px-4 mb-1">
+        Open the app on
+      </div>
+      <div className="px-4 mb-4">
+        <SegmentedSelect<MobileTab>
+          value={startTab}
+          onChange={setStartTab}
+          fullWidth
+          options={[
+            { value: 'following', label: 'Following' },
+            { value: 'browse', label: 'Browse' },
+            { value: 'rewards', label: 'Rewards' },
+            { value: 'you', label: 'You' },
+          ]}
+        />
       </div>
 
       <div className="text-[12px] font-semibold text-textMuted uppercase tracking-wide px-4 mb-1">

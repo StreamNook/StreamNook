@@ -912,6 +912,10 @@ export interface FullscreenChatSettings {
   auto_hide?: boolean;
   // Which edge; 'auto' follows chat_placement (bottom docks to the right).
   side?: 'auto' | 'left' | 'right';
+  // Phone only. In landscape the chat toggle either floats chat over the video
+  // (sharing opacity, width and side with the desktop overlay) or gives it a
+  // column beside the picture. Default 'overlay'.
+  phone_layout?: 'overlay' | 'beside';
 }
 
 export interface Settings {

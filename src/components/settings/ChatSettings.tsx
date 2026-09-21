@@ -21,6 +21,7 @@ import UserCommandsSettings from './UserCommandsSettings';
 import RemindersSettings from './RemindersSettings';
 import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
 import { Toggle } from '../ui/Toggle';
+import { usePhonePrefs } from '../../mobile/phonePrefs';
 import SpellcheckDictionary from './SpellcheckDictionary';
 import IgnoredPhrasesSettings from './IgnoredPhrasesSettings';
 import CustomSoundsSettings from './CustomSoundsSettings';
@@ -334,6 +335,9 @@ const HiddenNameEditor = ({
 
 const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {}) => {
   const { settings, updateSettings } = useAppStore();
+  // Phone-shell preferences (see mobile/phonePrefs.ts); only read on the phone.
+  const mentionHaptic = usePhonePrefs((s) => s.mentionHaptic);
+  const setMentionHaptic = usePhonePrefs((s) => s.setMentionHaptic);
 
   const stored = settings.chat_design;
   const cd = {
@@ -619,6 +623,107 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           />
         )}
       </SettingsSection>
+      )}
+
+      {/* The phone's counterpart to Chat Placement: how chat shares the screen
+          with landscape video, and how it gets your attention. The overlay's
+          opacity, width and side are the SAME keys as the desktop overlay, so
+          one preference follows you between the two. */}
+      {IS_MOBILE && (
+        <SettingsSection
+          label="Chat on your phone"
+          description="How chat behaves when the phone is on its side, and how a mention reaches you."
+        >
+          <SettingsRow
+            title="Chat in landscape"
+            description="Turn the phone sideways and tap the chat button on the player. Chat can float over the video, or take a column beside it."
+          >
+            <SegmentedSelect<'overlay' | 'beside'>
+              value={settings.fullscreen_chat?.phone_layout ?? 'overlay'}
+              onChange={(phone_layout) =>
+                updateSettings({
+                  ...settings,
+                  fullscreen_chat: { ...settings.fullscreen_chat, phone_layout },
+                })
+              }
+              options={[
+                { value: 'overlay', label: 'Over the video' },
+                { value: 'beside', label: 'Beside the video' },
+              ]}
+            />
+          </SettingsRow>
+          {(settings.fullscreen_chat?.phone_layout ?? 'overlay') === 'overlay' && (
+            <>
+              <SettingsRow
+                title="How much video shows through"
+                description="Lower is clearer video behind the chat; higher is easier reading."
+                control={
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={5}
+                      value={settings.fullscreen_chat?.opacity ?? 55}
+                      onChange={(e) =>
+                        updateSettings({
+                          ...settings,
+                          fullscreen_chat: { ...settings.fullscreen_chat, opacity: Number(e.target.value) },
+                        })
+                      }
+                      className="w-32 accent-accent"
+                    />
+                    <span className="text-[12px] text-textMuted tabular-nums w-9 text-right">
+                      {settings.fullscreen_chat?.opacity ?? 55}%
+                    </span>
+                  </div>
+                }
+              />
+              <SettingsRow
+                title="How wide"
+                description="Never more than half the screen, whatever you pick here."
+                control={
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="range"
+                      min={240}
+                      max={480}
+                      step={20}
+                      value={Math.min(480, settings.fullscreen_chat?.width ?? 340)}
+                      onChange={(e) =>
+                        updateSettings({
+                          ...settings,
+                          fullscreen_chat: { ...settings.fullscreen_chat, width: Number(e.target.value) },
+                        })
+                      }
+                      className="w-32 accent-accent"
+                    />
+                    <span className="text-[12px] text-textMuted tabular-nums w-12 text-right">
+                      {Math.min(480, settings.fullscreen_chat?.width ?? 340)}px
+                    </span>
+                  </div>
+                }
+              />
+              <SettingsRow title="Which side" description="Where the chat column floats.">
+                <SegmentedSelect<'left' | 'right'>
+                  value={settings.fullscreen_chat?.side === 'left' ? 'left' : 'right'}
+                  onChange={(side) =>
+                    updateSettings({ ...settings, fullscreen_chat: { ...settings.fullscreen_chat, side } })
+                  }
+                  options={[
+                    { value: 'left', label: 'Left' },
+                    { value: 'right', label: 'Right' },
+                  ]}
+                />
+              </SettingsRow>
+            </>
+          )}
+          <SettingsRow
+            title="Buzz when someone mentions you"
+            description="A short vibration when a message says your name, on top of the highlight."
+            control={<Toggle enabled={mentionHaptic} onChange={() => setMentionHaptic(!mentionHaptic)} />}
+          />
+        </SettingsSection>
       )}
 
       <SettingsSection

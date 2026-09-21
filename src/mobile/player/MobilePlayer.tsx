@@ -1,7 +1,7 @@
 // Touch-first player surface: the video element plus a tap-driven glass control
 // overlay. No Plyr; hls.js runs via useMobileHlsEngine.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowClockwise, ArrowsOut, Bell, BellSlash, Columns, Eye, Gear, Pause, PictureInPicture, Play, Rows, ShareNetwork, SpeakerHigh, SpeakerSlash } from 'phosphor-react';
+import { ArrowClockwise, Bell, BellSlash, ChatTeardropText, Columns, Eye, Gear, Pause, PictureInPicture, Play, Rows, ShareNetwork, SpeakerHigh, SpeakerSlash } from 'phosphor-react';
 import { setPipMuted, shareText } from '../nativeBridge';
 import { toggleChannelMuted } from '../notifyChannels';
 import { useVisibleInterval } from '../../utils/useVisibleInterval';
@@ -41,6 +41,10 @@ export const MobilePlayer: React.FC<{
   layoutMode?: 'columns' | 'stacked';
   /** Set only where both arrangements fit, which is what gates the control. */
   onToggleLayout?: () => void;
+  /** Whether landscape chat is showing, for the toggle's icon and label. */
+  chatOpen?: boolean;
+  /** Keep the control layer off one edge: landscape chat floats there. */
+  controlsInset?: { side: 'left' | 'right'; px: number };
 }> = ({
   immersive = false,
   onToggleFullscreen,
@@ -48,6 +52,8 @@ export const MobilePlayer: React.FC<{
   compact = false,
   layoutMode,
   onToggleLayout,
+  chatOpen = false,
+  controlsInset,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const { state } = useMobileHlsEngine(videoRef);
@@ -331,6 +337,7 @@ export const MobilePlayer: React.FC<{
         style={{
           background:
             'linear-gradient(to bottom, rgba(0,0,0,0.72) 0%, rgba(0,0,0,0.28) 26%, transparent 46%, transparent 62%, rgba(0,0,0,0.6) 100%)',
+          ...(controlsInset ? { [controlsInset.side]: controlsInset.px } : null),
         }}
       >
         {/* Stream info, top-left */}
@@ -512,9 +519,12 @@ export const MobilePlayer: React.FC<{
                   onToggleFullscreen();
                 }}
                 className="sn-touch flex items-center justify-center text-white"
-                aria-label="Fullscreen"
+                aria-label={chatOpen ? 'Hide chat' : 'Show chat'}
               >
-                <ArrowsOut size={21} />
+                {/* One glyph, filled while chat is showing: this button is
+                    "chat" in both states, and a crossed-out icon read as a
+                    warning rather than as the way back. */}
+                <ChatTeardropText size={21} weight={chatOpen ? 'fill' : 'regular'} />
               </button>
             )}
           </div>

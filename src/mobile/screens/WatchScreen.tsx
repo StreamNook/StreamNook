@@ -46,13 +46,19 @@ import PollOverlay from '../../components/PollOverlay';
 import PredictionOverlay from '../../components/PredictionOverlay';
 import {
   consumePipClosed,
+  getMediaVolume,
+  getScreenBrightness,
   isInPip,
   setImmersive,
   setKeepScreenOn,
+  setMediaVolume,
   setPipEligible,
   setPipSourceRect,
   setPreferredRefreshRate,
+  setScreenBrightness,
 } from '../nativeBridge';
+import { DialIndicator, type DialAxis, type DialReading } from '../watch/DialIndicator';
+import { hapticStep } from '../ui/haptics';
 import { readInsets, type ResolvedInsets } from '../nativeInsets';
 import { Logger } from '../../utils/logger';
 import { isBackgrounded } from '../backgroundGate';
@@ -154,6 +160,15 @@ export const WatchScreen: React.FC = () => {
   // Only surface pins that belong to the room currently on screen.
   const pinned = pinnedFor.channel === chatChannelId ? pinnedFor.items : [];
   const backgroundMode = useAppStore((s) => s.settings.video_player?.background_mode) ?? 'pip';
+  // The landscape chat overlay shares its knobs with the desktop overlay:
+  // opacity, width and side are one preference however big the screen is.
+  const fsChat = useAppStore((s) => s.settings.fullscreen_chat);
+  // The dial being turned right now (brightness or volume), for the readout.
+  const [dial, setDial] = useState<DialReading | null>(null);
+  const dialHide = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Whether this session ever overrode the window brightness, so the reset
+  // when playback ends is only sent if there is something to reset.
+  const brightnessTouched = useRef(false);
   const [viewport, setViewport] = useState(() => ({
     w: window.innerWidth,
     h: window.innerHeight,
@@ -180,7 +195,10 @@ export const WatchScreen: React.FC = () => {
   // `progress` rides along so pointerup reads it without a stale closure.
   const gesture = useRef<{
     id: number;
-    kind: 'shrink' | 'move';
+    /** shrink: portrait drag-down to the mini box; move: dragging the mini
+     *  box; dial: a vertical swipe over landscape video turning brightness
+     *  (left half) or volume (right half). */
+    kind: 'shrink' | 'move' | 'dial';
     x: number;
     y: number;
     px: number;
@@ -190,6 +208,17 @@ export const WatchScreen: React.FC = () => {
     vy: number;
     progress: number;
     moved: boolean;
+    dial?: {
+      axis: DialAxis;
+      /** The level when the finger landed; the drag is relative to it. */
+      start: number;
+      /** Pixels of travel for the full 0..1 swing. */
+      travel: number;
+      /** Last tenth crossed, for the haptic tick. */
+      lastStep: number;
+      /** Last hundredth pushed to the bridge, so a still finger costs nothing. */
+      lastPushed: number;
+    };
   } | null>(null);
 
   // One visibility flag for the whole layer (computed here because the mode
@@ -255,12 +284,20 @@ export const WatchScreen: React.FC = () => {
   // in landscape is after immersive video, so chat stays opt-in behind the
   // fullscreen toggle there. Deciding this by WIDTH is what put chat on the
   // right of every landscape phone with no way to dismiss it.
+  //
+  // On a phone the landscape chat toggle does not carve a column out of the
+  // picture by default: a phone on its side is ~800px wide, and a 300px chat
+  // column pillarboxes the video to a strip. Chat floats OVER the picture
+  // instead, translucent, at the width and opacity the overlay settings say,
+  // and the player keeps the whole screen. "Beside the video" is still there
+  // as a choice for anyone who prefers the split.
+  const phoneOverlayChat = !shape.largeScreen && (fsChat?.phone_layout ?? 'overlay') === 'overlay';
   const twoColumns =
     shape.largeScreen
       ? watchLayout === 'auto'
         ? autoColumns
         : watchLayout === 'columns' && sideFits
-      : landscapeChat;
+      : landscapeChat && !phoneOverlayChat;
   const immersiveLandscape = shape.twoPane && !shape.largeScreen;
   // Tabletop: the phone is bent across a horizontal hinge. The bend is the
   // natural boundary between picture and chat, so the band ends on it and
@@ -270,6 +307,11 @@ export const WatchScreen: React.FC = () => {
   const tabletop = shape.splitY != null && !mini && !pip;
   const sideBySide = !tabletop && shape.twoPane && !mini && !pip && (twoColumns || immersiveLandscape);
   const chatBeside = sideBySide && twoColumns;
+  const chatOverlay = sideBySide && immersiveLandscape && landscapeChat && phoneOverlayChat;
+  const overlaySide: 'left' | 'right' = fsChat?.side === 'left' ? 'left' : 'right';
+  // Never more than half the picture, whatever the desktop slider was set to.
+  const overlayWidth = Math.min(Math.max(240, fsChat?.width ?? 340), Math.round(shape.w * 0.5));
+  const overlayOpacity = Math.max(0, Math.min(100, fsChat?.opacity ?? 55));
   // Resizable only where there is genuinely a trade to make. On a phone the
   // 16:9 band is simply right, and there is no surplus to hand to chat.
   const resizable = shape.largeScreen && !mini && !pip;
@@ -477,7 +519,40 @@ export const WatchScreen: React.FC = () => {
   // mid-gesture cannot reroute a drag that is already in flight.
   const onBandPointerDown = useCallback(
     (e: React.PointerEvent) => {
-      if (pip || sideBySide) return;
+      if (pip) return;
+      if (sideBySide) {
+        // Landscape video has no layer to drag, so a vertical swipe is a dial:
+        // brightness over the left half of the picture, volume over the right,
+        // the way every phone video player reads those gestures. Most of the
+        // band height is the whole 0..1 swing. A tap still falls through as a
+        // click (controls toggle), because nothing commits until the finger
+        // has moved past the slop.
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        const axis: DialAxis = e.clientX - rect.left < rect.width / 2 ? 'brightness' : 'volume';
+        const start = axis === 'brightness' ? getScreenBrightness() : getMediaVolume();
+        gesture.current = {
+          id: e.pointerId,
+          kind: 'dial',
+          x: e.clientX,
+          y: e.clientY,
+          px: 0,
+          py: 0,
+          lastY: e.clientY,
+          lastT: e.timeStamp,
+          vy: 0,
+          progress: 0,
+          moved: false,
+          dial: {
+            axis,
+            start,
+            travel: Math.max(140, rect.height * 0.8),
+            lastStep: Math.round(start * 10),
+            lastPushed: Math.round(start * 100),
+          },
+        };
+        suppressClick.current = false;
+        return;
+      }
       gesture.current = {
         id: e.pointerId,
         kind: mini ? 'move' : 'shrink',
@@ -527,6 +602,34 @@ export const WatchScreen: React.FC = () => {
       g.lastY = e.clientY;
       g.lastT = e.timeStamp;
 
+      if (g.kind === 'dial' && g.dial) {
+        const d = g.dial;
+        const value = Math.max(0, Math.min(1, d.start - dy / d.travel));
+        const hundredth = Math.round(value * 100);
+        if (hundredth !== d.lastPushed) {
+          d.lastPushed = hundredth;
+          if (d.axis === 'brightness') {
+            setScreenBrightness(value);
+            brightnessTouched.current = true;
+          } else {
+            setMediaVolume(value);
+          }
+          // One light tick per tenth crossed, never per frame: a buzz that
+          // tracks the finger reads as a fault, one at each notch reads as a
+          // dial.
+          const step = Math.round(value * 10);
+          if (step !== d.lastStep) {
+            d.lastStep = step;
+            hapticStep();
+          }
+        }
+        if (dialHide.current) {
+          clearTimeout(dialHide.current);
+          dialHide.current = null;
+        }
+        setDial({ axis: d.axis, value });
+        return;
+      }
       if (g.kind === 'move') {
         setMiniPos(clampMini(g.px + dx, g.py + dy, viewport.w, viewport.h, readInsets()));
         return;
@@ -547,6 +650,16 @@ export const WatchScreen: React.FC = () => {
       gesture.current = null;
       suppressClick.current = g.moved;
       setDragging(false);
+
+      if (g.kind === 'dial') {
+        // The readout lingers for a beat so the final value can be read, then
+        // clears itself. A dial never moves the layer, so nothing to commit.
+        if (g.moved) {
+          if (dialHide.current) clearTimeout(dialHide.current);
+          dialHide.current = setTimeout(() => setDial(null), 650);
+        }
+        return;
+      }
 
       if (g.kind === 'move') {
         // Tap on the mini box expands. Decided here rather than in an onClick so
@@ -591,7 +704,29 @@ export const WatchScreen: React.FC = () => {
     suppressClick.current = false;
     setDragging(false);
     setShrink(0);
+    if (g.kind === 'dial') {
+      if (dialHide.current) clearTimeout(dialHide.current);
+      dialHide.current = setTimeout(() => setDial(null), 650);
+    }
   }, []);
+
+  // A dialled brightness is a viewing choice, not a phone setting: it lasts
+  // while a stream plays and hands the screen back to the system slider when
+  // playback ends or the layer goes away.
+  useEffect(() => {
+    if (watching) return;
+    if (brightnessTouched.current) {
+      brightnessTouched.current = false;
+      setScreenBrightness(-1);
+    }
+  }, [watching]);
+  useEffect(
+    () => () => {
+      if (brightnessTouched.current) setScreenBrightness(-1);
+      if (dialHide.current) clearTimeout(dialHide.current);
+    },
+    [],
+  );
 
   // NOTE: `show` is computed near the top of the component (the mode
   // derivation needs it). There used to be a separate full-screen loading
@@ -710,7 +845,14 @@ export const WatchScreen: React.FC = () => {
     : sideBySide
       ? chatBeside
         ? 'flex-1 min-w-0 relative flex flex-col bg-background'
-        : 'hidden'
+        : chatOverlay
+          ? // Floats over the picture at the chosen edge. z-30 puts it above
+            // the player's control layer, which is inset away from this edge
+            // (see controlsInset below) so the two never fight for a touch.
+            `absolute top-0 bottom-0 z-30 flex flex-col sn-chat-overlay ${
+              overlaySide === 'left' ? 'left-0 sn-chat-overlay--left' : 'right-0'
+            }`
+          : 'hidden'
       : mini
         ? 'hidden'
         : 'flex-1 min-h-0 relative flex flex-col';
@@ -743,7 +885,8 @@ export const WatchScreen: React.FC = () => {
       transition={dragging ? { duration: 0 } : SPRING}
     >
       <div
-        className={`w-full h-full flex ${sideBySide ? 'flex-row' : 'flex-col'}`}
+        // relative: the landscape chat overlay positions against this box.
+        className={`w-full h-full flex relative ${sideBySide ? 'flex-row' : 'flex-col'}`}
         style={{
           // Only portrait-full needs to clear the status bar; landscape draws
           // under it deliberately and mini/PiP have no bar over them.
@@ -763,7 +906,9 @@ export const WatchScreen: React.FC = () => {
           // gesture's disposition at touchstart and never re-reads the property
           // mid-gesture (see the note in chat/useLongPressDrag.ts), so the old
           // `mini ? 'none' : undefined` only ever applied AFTER the drag that
-          // needed it. Nothing under the band scrolls, so `none` is safe here.
+          // needed it. Nothing under the band scrolls, so `none` is safe here,
+          // in every mode: landscape needs it too, for the brightness and
+          // volume dials.
           style={{
             // Mid-shrink the explicit resizable height is dropped, so the band
             // falls back to `aspect-video` and scales with the layer instead of
@@ -774,7 +919,7 @@ export const WatchScreen: React.FC = () => {
               : (resizable || tabletop) && shrink === 0
                 ? { height: playerMain }
                 : null),
-            touchAction: sideBySide ? undefined : 'none',
+            touchAction: 'none',
           }}
           onPointerDown={onBandPointerDown}
           onPointerMove={onBandPointerMove}
@@ -794,6 +939,11 @@ export const WatchScreen: React.FC = () => {
             compact={mini || pip}
             onMinimize={mini || pip ? undefined : () => setPlayerMode('mini')}
             onToggleFullscreen={sideBySide ? () => setLandscapeChat((v) => !v) : undefined}
+            chatOpen={chatOverlay || chatBeside}
+            // With chat floating over one edge, the controls keep to the
+            // picture that is still visible: otherwise the chat toggle sat
+            // under the very column it was meant to dismiss.
+            controlsInset={chatOverlay ? { side: overlaySide, px: overlayWidth } : undefined}
             layoutMode={twoColumns ? 'columns' : 'stacked'}
             onToggleLayout={
               canChooseLayout && !mini && !pip
@@ -807,6 +957,7 @@ export const WatchScreen: React.FC = () => {
                 : undefined
             }
           />
+          <DialIndicator dial={dial} />
           {/* IN-APP mini only. In system PiP the OS draws its own close and
               expand buttons over the window, so rendering ours too gave two
               exit buttons; and taps inside a PiP window go to the OS chrome,
@@ -878,7 +1029,18 @@ export const WatchScreen: React.FC = () => {
             // Side by side, the row deliberately carries no top padding so the
             // video runs edge to edge under the status bar. Chat is not video:
             // without its own inset the first message renders behind the clock.
-            sideBySide && chatBeside ? { paddingTop: 'var(--sn-safe-t, 0px)' } : undefined
+            sideBySide && chatBeside
+              ? { paddingTop: 'var(--sn-safe-t, 0px)' }
+              : chatOverlay
+                ? ({
+                    width: overlayWidth,
+                    '--fs-chat-opacity': `${overlayOpacity}%`,
+                    // The bars are hidden in landscape but a camera cutout is
+                    // not; keep the column's edge off it.
+                    [overlaySide === 'left' ? 'paddingLeft' : 'paddingRight']:
+                      `var(--sn-safe-${overlaySide === 'left' ? 'l' : 'r'}, 0px)`,
+                  } as React.CSSProperties)
+                : undefined
           }
         >
           {/* Chat header carries only live, transient signal now: the hype

@@ -30,6 +30,9 @@ import { banUser, deleteMessage, isModeratorFrom, pinMessage, unbanUser } from '
 import { deriveChatGating } from './chatGating';
 import { useFollowStatus } from './useFollowStatus';
 import { ChatFanOut, type FanAction, type FanTarget } from './ChatFanOut';
+import { hapticCommit } from '../ui/haptics';
+import { usePhonePrefs } from '../phonePrefs';
+import { isWindowHidden } from '../../utils/windowVisibility';
 import { useLongPressDrag } from './useLongPressDrag';
 import { usePinStore } from '../../stores/pinStore';
 import { formatDuration } from '../../utils/timeoutRamp';
@@ -84,6 +87,44 @@ export const MobileChatPane: React.FC = () => {
   } = chat;
 
   const emotes = useChannelEmotes(activeChannel, activeTab?.channelId ?? null, 'twitch');
+
+  // A mention buzzes once. The flash the row paints is easy to miss on a
+  // phone held at arm's length, or with the screen dimmed for a long watch.
+  // Rust stamps is_mentioned on every message, so this only has to notice
+  // NEW rows: the ref remembers the newest id it has seen, and the first pass
+  // for a room (or a reload's backfill) only primes it. Rows older than a few
+  // seconds are history catching up, never a live mention.
+  const mentionHaptic = usePhonePrefs((s) => s.mentionHaptic);
+  const mentionCursor = useRef<{ channel: string | null; lastId: string | null }>({
+    channel: null,
+    lastId: null,
+  });
+  useEffect(() => {
+    const cur = mentionCursor.current;
+    const last = messages[messages.length - 1] as BackendChatMessage | string | undefined;
+    const lastId = last && typeof last !== 'string' ? last.id : null;
+    if (cur.channel !== activeChannel || cur.lastId === null) {
+      mentionCursor.current = { channel: activeChannel, lastId };
+      return;
+    }
+    if (lastId === cur.lastId) return;
+    let buzz = false;
+    const now = Date.now();
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i] as BackendChatMessage | string;
+      if (typeof m === 'string') continue;
+      if (m.id === cur.lastId) break;
+      if (!m.metadata?.is_mentioned) continue;
+      if (m.user_id && m.user_id === currentUser?.user_id) continue;
+      const ts = Number(m.timestamp);
+      const at = Number.isFinite(ts) ? (ts < 1e12 ? ts * 1000 : ts) : Date.parse(m.timestamp);
+      if (Number.isFinite(at) && now - at > 8000) continue;
+      buzz = true;
+      break;
+    }
+    mentionCursor.current = { channel: activeChannel, lastId };
+    if (buzz && mentionHaptic && !isWindowHidden()) hapticCommit();
+  }, [messages, activeChannel, mentionHaptic, currentUser?.user_id]);
 
   // Rebuilds the connection if it dies while the app is open. Every room rides
   // one connection, so watching the active one covers all of them.

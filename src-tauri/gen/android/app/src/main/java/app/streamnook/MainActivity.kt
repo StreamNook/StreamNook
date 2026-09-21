@@ -13,12 +13,14 @@ import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.drawable.Icon
 import android.hardware.display.DisplayManager
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Rational
+import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.activity.OnBackPressedCallback
@@ -75,6 +77,10 @@ class MainActivity : TauriActivity() {
   // bridge checks it: a page still reporting play state while we tear down
   // must not re-arm the media service that onDestroy is stopping.
   @Volatile private var tearingDown: Boolean = false
+  /** The player's brightness override, or -1 while the system is in charge.
+   *  Mirrored here so the bridge can answer without touching window
+   *  attributes off the UI thread. */
+  @Volatile private var brightnessOverride: Float = -1f
 
   // Channel login from a tapped notification, waiting for the web shell to pick
   // it up. Needed for the cold case: the tap starts the activity, and there is
@@ -322,6 +328,62 @@ class MainActivity : TauriActivity() {
     @JavascriptInterface
     fun setKeepScreenOn(on: Boolean) {
       runOnUiThread { webView?.keepScreenOn = on }
+    }
+
+    /**
+     * The brightness the player's swipe dial starts from, 0..1: our own
+     * override while one is in force, otherwise the system slider's position.
+     * Reading the system value needs no permission; only writing it would.
+     */
+    @JavascriptInterface
+    fun getScreenBrightness(): Float {
+      val override = brightnessOverride
+      if (override >= 0f) return override
+      return try {
+        Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS) / 255f
+      } catch (_: Exception) {
+        0.5f
+      }
+    }
+
+    /**
+     * Brightness for THIS window only, as a window attribute: no permission,
+     * no change to the system slider, and it goes away with the window. A
+     * negative value hands control back to the system. The floor is not zero
+     * on purpose: a screen dialled fully dark cannot be dialled back up.
+     */
+    @JavascriptInterface
+    fun setScreenBrightness(level: Float) {
+      val value = if (level < 0f) WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE else level.coerceIn(0.02f, 1f)
+      brightnessOverride = value
+      runOnUiThread {
+        val lp = window.attributes
+        lp.screenBrightness = value
+        window.attributes = lp
+      }
+    }
+
+    /** Media-stream volume, 0..1. The dial moves the DEVICE volume: a WebView
+     *  ignores the element's own volume property, so this is the only lever. */
+    @JavascriptInterface
+    fun getMediaVolume(): Float {
+      val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return 1f
+      val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+      return if (max > 0) am.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / max else 1f
+    }
+
+    @JavascriptInterface
+    fun setMediaVolume(level: Float) {
+      val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+      val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+      if (max <= 0) return
+      try {
+        // No UI flag: the page draws its own indicator, and the system's
+        // volume panel over the video is exactly the chrome the dial avoids.
+        am.setStreamVolume(AudioManager.STREAM_MUSIC, Math.round(level.coerceIn(0f, 1f) * max), 0)
+      } catch (_: SecurityException) {
+        /* Do Not Disturb can veto volume changes; the dial simply does nothing */
+      }
     }
 
     /**

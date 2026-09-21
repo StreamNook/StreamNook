@@ -27,6 +27,10 @@ interface SNBridge {
   mediaSessionStart?(title: string, artist: string, artUrl: string, playing: boolean): void;
   mediaSessionStop?(): void;
   displayShortEdge?(): number;
+  getScreenBrightness?(): number;
+  setScreenBrightness?(level: number): void;
+  getMediaVolume?(): number;
+  setMediaVolume?(level: number): void;
 }
 
 function bridge(): SNBridge | undefined {
@@ -64,6 +68,55 @@ export function setKeepScreenOn(on: boolean): void {
 export function setPreferredRefreshRate(fps: number): void {
   try {
     bridge()?.setPreferredRefreshRate?.(fps);
+  } catch {
+    /* bridge absent */
+  }
+}
+
+/**
+ * The window's brightness as a 0..1 fraction: our override while one is set,
+ * otherwise the system slider's position. 0.5 when neither can be read.
+ */
+export function getScreenBrightness(): number {
+  try {
+    const v = bridge()?.getScreenBrightness?.();
+    return typeof v === 'number' && Number.isFinite(v) ? v : 0.5;
+  } catch {
+    return 0.5;
+  }
+}
+
+/**
+ * Brightness for THIS window only (a window attribute, so it needs no
+ * permission and never touches the system slider). -1 hands control back to
+ * the system; anything else is clamped so the screen can never go fully dark.
+ */
+export function setScreenBrightness(level: number): void {
+  try {
+    bridge()?.setScreenBrightness?.(level);
+  } catch {
+    /* bridge absent */
+  }
+}
+
+/** The media stream's volume as a 0..1 fraction. 1 when there is no bridge. */
+export function getMediaVolume(): number {
+  try {
+    const v = bridge()?.getMediaVolume?.();
+    return typeof v === 'number' && Number.isFinite(v) ? v : 1;
+  } catch {
+    return 1;
+  }
+}
+
+/**
+ * Set the media stream's volume from a 0..1 fraction. The DEVICE volume, not
+ * the element's: Android WebView ignores video.volume, so the element cannot
+ * be turned down from the page at all.
+ */
+export function setMediaVolume(level: number): void {
+  try {
+    bridge()?.setMediaVolume?.(level);
   } catch {
     /* bridge absent */
   }
