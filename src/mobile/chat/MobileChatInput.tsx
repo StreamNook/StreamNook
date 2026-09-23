@@ -15,6 +15,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { DotsThreeVertical, X } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
 import { incrementStat } from '../../services/supabaseService';
@@ -36,7 +37,6 @@ import { StreakBanners } from './StreakBanners';
 import type { ChatGating } from './chatGating';
 import type { ProviderId } from '../../types/providers';
 import { isTwitchStream } from '../../utils/streamProvider';
-import { sendToSource } from '../../utils/sendToSource';
 import { usePlatformAccountStore } from '../../stores/platformAccountStore';
 
 // Shorter than the desktop's 520px so the panel still clears the soft keyboard,
@@ -206,13 +206,23 @@ const MobileChatInputImpl: React.FC<Props> = ({
       }
       setSending(true);
       try {
-        // On a refusal sendToSource writes the reason into the room and throws,
-        // so the draft is kept for another try.
-        await sendToSource(
-          { channel, provider },
-          message,
-          replyTo ? { parentId: replyTo.messageId, parentUser: replyTo.username } : undefined,
+        // The platform can accept the request and still refuse the message
+        // (slow mode, followers-only, a banned word). Say so and keep the draft.
+        const outcome = await invoke<{ is_sent: boolean; drop_reason: string | null }>(
+          'provider_send_message',
+          {
+            provider,
+            channel: channel.toLowerCase(),
+            text: message,
+            replyTo: replyTo?.messageId ?? null,
+          },
         );
+        if (outcome && outcome.is_sent === false) {
+          useAppStore
+            .getState()
+            .addToast(`Your message was not sent: ${outcome.drop_reason || 'the room refused it'}`, 'error');
+          return;
+        }
         setText('');
         onCancelReply?.();
       } catch (err) {

@@ -16,10 +16,18 @@ import { Logger } from '../../utils/logger';
 import type { TwitchStream } from '../../types';
 import { ProviderMark } from '../../components/ProviderLogo';
 import { useFollowsStore } from '../../stores/followsStore';
-import { parseKickLink } from '../../utils/parseChannelInput';
 import { isTwitchStream, streamKey, streamProvider } from '../../utils/streamProvider';
 import { mergeFollowedLive } from '../followingMerge';
 import { orderSearchResults } from './searchOrder';
+
+/** A Kick slug from a pasted kick.com link or a `kick:slug` / `kick/slug` prefix. */
+function parseKickLink(input: string): string | null {
+  const s = input.trim();
+  const m =
+    s.match(/^(?:https?:\/\/)?(?:www\.)?kick\.com\/(@?[a-z0-9_-]+)/i) ||
+    s.match(/^kick[:/](@?[a-z0-9_-]+)$/i);
+  return m ? m[1].replace(/^@/, '').toLowerCase() : null;
+}
 
 export const AddChatSheet: React.FC<{ open: boolean; onClose: () => void }> = ({
   open,
