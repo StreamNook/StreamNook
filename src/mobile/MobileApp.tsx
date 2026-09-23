@@ -35,12 +35,16 @@ import { MobileClipSheet } from './watch/MobileClipSheet';
 import LoadingWidget from '../components/LoadingWidget';
 import DeviceLoginOverlay from '../components/DeviceLoginOverlay';
 import ToastManager from '../components/ToastManager';
+import { usePlatformAccountSync } from '../hooks/usePlatformAccountSync';
 
 const TAB_ORDER = ['following', 'browse', 'rewards', 'you'] as const;
 
 const MobileApp: React.FC = () => {
   useThemeBoot();
   useMobileBoot();
+  // Kick account state (connected, name, busy) for the composer and Accounts.
+  // Mounted exactly once; the hook warns on a second mount.
+  usePlatformAccountSync();
   useKeyboardInsets();
   // Shared with the desktop shell: the watched stream's viewer count is written
   // once at playback start and never refreshed without this.

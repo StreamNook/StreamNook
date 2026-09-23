@@ -1,5 +1,5 @@
 // Followed live channels: card feed or compact list, user's choice persisted.
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { SettleIn, useSettleIn } from '../ui/SettleIn';
 import { ListBullets, SquaresFour } from 'phosphor-react';
@@ -11,6 +11,31 @@ import { PullToRefresh } from '../ui/PullToRefresh';
 import { SkeletonCards } from '../ui/SkeletonCards';
 import { AdaptiveGrid } from '../ui/AdaptiveGrid';
 import type { TwitchStream } from '../../types';
+import { useFollowsStore } from '../../stores/followsStore';
+import { isTwitchStream, streamKey, streamProvider } from '../../utils/streamProvider';
+import { mergeFollowedLive } from '../followingMerge';
+import { ProviderMark } from '../../components/ProviderLogo';
+import { PROVIDERS } from '../../types/providers';
+
+/** Which platform Following shows. null is everything. */
+type PlatformFilter = 'twitch' | 'kick' | null;
+const FILTER_KEY = 'sn-following-platform';
+function readFilter(): PlatformFilter {
+  try {
+    const v = localStorage.getItem(FILTER_KEY);
+    return v === 'twitch' || v === 'kick' ? v : null;
+  } catch {
+    return null;
+  }
+}
+function writeFilter(v: PlatformFilter): void {
+  try {
+    if (v) localStorage.setItem(FILTER_KEY, v);
+    else localStorage.removeItem(FILTER_KEY);
+  } catch {
+    /* a remembered filter is a convenience; losing it shows everything */
+  }
+}
 
 export type StreamViewMode = 'cards' | 'list';
 // One shared view preference for every stream list (Following + Browse).
@@ -28,6 +53,23 @@ export function writeStreamView(mode: StreamViewMode): void {
 
 export const FollowingScreen: React.FC = () => {
   const followedStreams = useAppStore((s) => s.followedStreams);
+  // Live Kick follows, pushed by Rust's provider_live_service.
+  const providerLive = useFollowsStore((s) => s.liveByKey);
+  const merged = useMemo(() => mergeFollowedLive(followedStreams, providerLive), [followedStreams, providerLive]);
+  // The filter only exists once there is a second platform to filter by.
+  const hasKick = useFollowsStore((s) => s.follows.some((f) => f.provider === 'kick'));
+  const [filter, setFilter] = useState<PlatformFilter>(readFilter);
+  const activeFilter = hasKick ? filter : null;
+  const rows = useMemo(
+    () => (activeFilter ? merged.filter((s) => streamProvider(s) === activeFilter) : merged),
+    [merged, activeFilter],
+  );
+  // Tap a platform to show only it; tap it again to show everything.
+  const toggleFilter = (p: 'twitch' | 'kick') => {
+    const next = filter === p ? null : p;
+    setFilter(next);
+    writeFilter(next);
+  };
   const loadFollowedStreams = useAppStore((s) => s.loadFollowedStreams);
   const startStream = useAppStore((s) => s.startStream);
   const activeHypeTrainChannels = useAppStore((s) => s.activeHypeTrainChannels);
@@ -41,7 +83,7 @@ export const FollowingScreen: React.FC = () => {
   // row changes shape and size in that swap, which is a big enough visual
   // change to deserve being animated rather than snapping; a refresh, where the
   // same cards stay the same shape, still does not replay.
-  const settled = useSettleIn(!firstLoad && followedStreams.length > 0, view);
+  const settled = useSettleIn(!firstLoad && rows.length > 0, `${view}:${activeFilter ?? 'all'}`);
 
   const setViewPersisted = (mode: StreamViewMode) => {
     setView(mode);
@@ -69,6 +111,7 @@ export const FollowingScreen: React.FC = () => {
   }, []);
 
   const refresh = async () => {
+    void useFollowsStore.getState().refreshLive();
     await loadFollowedStreams();
     // Shares the throttle with the resume path, so pulling to refresh and then
     // switching away and back does not fetch the same thing twice.
@@ -105,15 +148,41 @@ export const FollowingScreen: React.FC = () => {
           </button>
         </div>
       </div>
+      {hasKick && (
+        <div className="flex items-center gap-1.5 px-4 pb-2 shrink-0">
+          {(['twitch', 'kick'] as const).map((p) => {
+            const on = activeFilter === p;
+            return (
+              <button
+                key={p}
+                onClick={() => toggleFilter(p)}
+                aria-pressed={on}
+                className={`flex items-center gap-1.5 pl-2.5 pr-3.5 py-1.5 rounded-full text-sm transition-colors ${
+                  on
+                    ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textPrimary font-semibold'
+                    : 'text-textMuted'
+                }`}
+              >
+                <ProviderMark provider={p} size={15} />
+                {PROVIDERS[p].label}
+              </button>
+            );
+          })}
+        </div>
+      )}
       <PullToRefresh
         onRefresh={refresh}
         className="px-0 [padding-left:var(--sn-safe-l)] [padding-right:var(--sn-safe-r)]"
       >
         {firstLoad ? (
           <SkeletonCards />
-        ) : followedStreams.length === 0 ? (
+        ) : rows.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 gap-1">
-            <div className="text-sm text-textMuted">No followed channels are live right now.</div>
+            <div className="text-sm text-textMuted">
+              {activeFilter
+                ? `No ${PROVIDERS[activeFilter].label} channels you follow are live right now.`
+                : 'No followed channels are live right now.'}
+            </div>
             <div className="text-[13px] text-textMuted">Pull down to refresh.</div>
           </div>
         ) : (
@@ -122,15 +191,17 @@ export const FollowingScreen: React.FC = () => {
             gap={view === 'list' ? 8 : 12}
             className="px-4 sn-tabbar-clearance"
           >
-            {followedStreams.map((s, i) => (
-              <SettleIn key={s.id} index={i} settled={settled}>
+            {rows.map((s, i) => (
+              <SettleIn key={streamKey(s)} index={i} settled={settled}>
                 <MobileStreamCard
                   stream={s}
                   dropsGameNames={dropsGameNames}
-                  hypeTrain={activeHypeTrainChannels.get(s.user_id) ?? undefined}
-                  watchStreak={watchStreaks[s.user_id]}
+                  hypeTrain={isTwitchStream(s) ? (activeHypeTrainChannels.get(s.user_id) ?? undefined) : undefined}
+                  watchStreak={isTwitchStream(s) ? watchStreaks[s.user_id] : undefined}
                   onPress={onPress}
                   variant={view === 'list' ? 'row' : 'card'}
+                  // Marks tell platforms apart; a filtered list is one platform.
+                  showPlatform={!activeFilter}
                 />
               </SettleIn>
             ))}

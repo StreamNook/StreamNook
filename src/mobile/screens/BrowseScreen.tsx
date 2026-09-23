@@ -16,8 +16,32 @@ import { Logger } from '../../utils/logger';
 import { gameBoxArt } from '../../utils/boxArt';
 import type { TwitchCategory, TwitchStream } from '../../types';
 import { bumpPreviewStamp } from '../followRefresh';
+import { ProviderMark } from '../../components/ProviderLogo';
+import { isTwitchStream, streamKey } from '../../utils/streamProvider';
+import type { ProviderCategory } from '../../types/providers';
+import { KickBrowseBody } from './KickBrowseBody';
 
 type BrowseMode = 'live' | 'categories';
+type BrowsePlatform = 'twitch' | 'kick';
+
+const PLATFORM_KEY = 'sn-browse-platform';
+function readPlatform(): BrowsePlatform {
+  try {
+    return localStorage.getItem(PLATFORM_KEY) === 'kick' ? 'kick' : 'twitch';
+  } catch {
+    return 'twitch';
+  }
+}
+function writePlatform(p: BrowsePlatform): void {
+  try {
+    localStorage.setItem(PLATFORM_KEY, p);
+  } catch {
+    /* a remembered tab is a convenience; losing it is fine */
+  }
+}
+
+/** Stable empty list, so Kick mode hands the hype-train hook nothing to look up. */
+const NO_STREAMS: TwitchStream[] = [];
 
 function boxArt(category: TwitchCategory): string {
   return gameBoxArt(category.box_art_url, 285, 380);
@@ -46,6 +70,15 @@ export const BrowseScreen: React.FC = () => {
   const dropsGameNames = useDropsGameNames();
 
   const [mode, setMode] = useState<BrowseMode>('live');
+  const [platform, setPlatform] = useState<BrowsePlatform>(readPlatform);
+  const [kickCategory, setKickCategory] = useState<ProviderCategory | null>(null);
+  const switchPlatform = (p: BrowsePlatform) => {
+    if (p === platform) return;
+    setPlatform(p);
+    writePlatform(p);
+    setQuery('');
+    setKickCategory(null);
+  };
   const [view, setView] = useState<StreamViewMode>(readStreamView);
   const activeHypeTrainChannels = useAppStore((s) => s.activeHypeTrainChannels);
   const watchStreaks = useAppStore((s) => s.watchStreaks);
@@ -135,9 +168,9 @@ export const BrowseScreen: React.FC = () => {
   };
 
   useEffect(() => {
-    if (mode === 'categories' && categories.length === 0) void loadCategories();
+    if (platform === 'twitch' && mode === 'categories' && categories.length === 0) void loadCategories();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode]);
+  }, [mode, platform]);
 
   // Load the next page when the end of the list comes into view.
   //
@@ -187,6 +220,11 @@ export const BrowseScreen: React.FC = () => {
 
   // Debounced search in whichever mode is active.
   useEffect(() => {
+    // Kick searches inside its own body.
+    if (platform !== 'twitch') {
+      setSearching(false);
+      return;
+    }
     const trimmed = query.trim();
     if (!trimmed) {
       setStreamResults(null);
@@ -198,7 +236,7 @@ export const BrowseScreen: React.FC = () => {
     const seq = ++searchSeq.current;
     const t = setTimeout(() => void runSearch(trimmed, seq, mode), 350);
     return () => clearTimeout(t);
-  }, [query, mode]);
+  }, [query, mode, platform]);
 
   const refresh = async () => {
     // A pull asks for the current state of everything, previews included.
@@ -218,7 +256,7 @@ export const BrowseScreen: React.FC = () => {
   const shownStreams = streamResults ?? recommendedStreams;
   // Browse already drew the badge but never fetched the statuses, so a train
   // only ever showed for channels that happened to also be in your following.
-  useHypeTrains(shownStreams);
+  useHypeTrains(platform === 'twitch' ? shownStreams : NO_STREAMS);
   const shownCategories = categoryResults ?? categories;
 
   // Keyed on WHICH list is showing, not on its contents. A new search is a new
@@ -238,7 +276,26 @@ export const BrowseScreen: React.FC = () => {
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       <div className="px-4 pt-3 pb-2 shrink-0">
-        <h1 className="text-xl font-bold text-textPrimary mb-3">Browse</h1>
+        <div className="flex items-center justify-between mb-3">
+          <h1 className="text-xl font-bold text-textPrimary">Browse</h1>
+          <div className="flex items-center gap-1">
+            {(['twitch', 'kick'] as BrowsePlatform[]).map((p) => (
+              <button
+                key={p}
+                onClick={() => switchPlatform(p)}
+                aria-label={p === 'kick' ? 'Browse Kick' : 'Browse Twitch'}
+                aria-pressed={platform === p}
+                className={`sn-touch flex items-center justify-center rounded-full transition-opacity ${
+                  platform === p
+                    ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control'
+                    : 'opacity-50'
+                }`}
+              >
+                <ProviderMark provider={p} size={18} />
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="relative mb-2.5">
           <MagnifyingGlass
             size={17}
@@ -247,7 +304,9 @@ export const BrowseScreen: React.FC = () => {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={mode === 'live' ? 'Search channels' : 'Search categories'}
+            placeholder={
+              mode === 'live' ? (platform === 'kick' ? 'Search Kick channels' : 'Search channels') : 'Search categories'
+            }
             className="glass-input w-full h-11 pl-10 pr-10 text-[15px] text-textPrimary placeholder:text-textMuted bg-transparent outline-none"
             autoCapitalize="none"
             autoCorrect="off"
@@ -303,84 +362,99 @@ export const BrowseScreen: React.FC = () => {
           )}
         </div>
       </div>
-      <PullToRefresh onRefresh={refresh}>
-        {mode === 'live' ? (
-          firstLoad || (searching && shownStreams.length === 0) ? (
-            <SkeletonCards />
-          ) : shownStreams.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20 gap-1">
-              <div className="text-sm text-textMuted">
-                {streamResults ? 'No channels found.' : 'Nothing to recommend yet.'}
+      {platform === 'kick' ? (
+        <KickBrowseBody
+          mode={mode}
+          query={query}
+          view={view}
+          category={kickCategory}
+          onPickCategory={(c) => {
+            setKickCategory(c);
+            setQuery('');
+            setMode('live');
+          }}
+          onClearCategory={() => setKickCategory(null)}
+        />
+      ) : (
+        <PullToRefresh onRefresh={refresh}>
+          {mode === 'live' ? (
+            firstLoad || (searching && shownStreams.length === 0) ? (
+              <SkeletonCards />
+            ) : shownStreams.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 gap-1">
+                <div className="text-sm text-textMuted">
+                  {streamResults ? 'No channels found.' : 'Nothing to recommend yet.'}
+                </div>
+                <div className="text-[13px] text-textMuted">Pull down to refresh.</div>
               </div>
-              <div className="text-[13px] text-textMuted">Pull down to refresh.</div>
+            ) : (
+              <AdaptiveGrid
+                variant={view === 'list' ? 'row' : 'card'}
+                gap={view === 'list' ? 8 : 12}
+                className="px-4 sn-tabbar-clearance"
+              >
+                {shownStreams.map((s, i) => (
+                  <SettleIn key={streamKey(s)} index={i} settled={streamsSettled}>
+                    <MobileStreamCard
+                      stream={s}
+                      dropsGameNames={dropsGameNames}
+                      hypeTrain={isTwitchStream(s) ? (activeHypeTrainChannels.get(s.user_id) ?? undefined) : undefined}
+                      watchStreak={isTwitchStream(s) ? watchStreaks[s.user_id] : undefined}
+                      onPress={(stream) => void startStream(stream.user_login, stream)}
+                      variant={view === 'list' ? 'row' : 'card'}
+                    />
+                  </SettleIn>
+                ))}
+              </AdaptiveGrid>
+            )
+          ) : categoriesLoading || (searching && shownCategories.length === 0) ? (
+            <SkeletonCards />
+          ) : shownCategories.length === 0 ? (
+            <div className="flex items-center justify-center py-20 text-sm text-textMuted">
+              {categoryResults ? 'No categories found.' : 'No categories yet, pull to refresh.'}
             </div>
           ) : (
-            <AdaptiveGrid
-              variant={view === 'list' ? 'row' : 'card'}
-              gap={view === 'list' ? 8 : 12}
-              className="px-4 sn-tabbar-clearance"
-            >
-              {shownStreams.map((s, i) => (
-                <SettleIn key={s.id} index={i} settled={streamsSettled}>
-                  <MobileStreamCard
-                    stream={s}
-                    dropsGameNames={dropsGameNames}
-                    hypeTrain={activeHypeTrainChannels.get(s.user_id) ?? undefined}
-                    watchStreak={watchStreaks[s.user_id]}
-                    onPress={(stream) => void startStream(stream.user_login, stream)}
-                    variant={view === 'list' ? 'row' : 'card'}
-                  />
+            <>
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3 px-4">
+              {shownCategories.map((c, i) => (
+                <SettleIn key={c.id} index={i} settled={categoriesSettled}>
+                  <button
+                    onClick={() => openBrowseCategory(c)}
+                    className="glass-panel media-card p-2 text-left active:opacity-80 transition-opacity w-full"
+                  >
+                    <img
+                      loading="lazy"
+                      decoding="async"
+                      src={boxArt(c)}
+                      alt=""
+                      className="w-full aspect-[3/4] object-cover rounded mb-1.5"
+                      draggable={false}
+                    />
+                    <div className="text-[13px] font-medium text-textPrimary line-clamp-1">
+                      {c.name}
+                    </div>
+                  </button>
                 </SettleIn>
               ))}
-            </AdaptiveGrid>
-          )
-        ) : categoriesLoading || (searching && shownCategories.length === 0) ? (
-          <SkeletonCards />
-        ) : shownCategories.length === 0 ? (
-          <div className="flex items-center justify-center py-20 text-sm text-textMuted">
-            {categoryResults ? 'No categories found.' : 'No categories yet, pull to refresh.'}
-          </div>
-        ) : (
-          <>
-          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3 px-4">
-            {shownCategories.map((c, i) => (
-              <SettleIn key={c.id} index={i} settled={categoriesSettled}>
-                <button
-                  onClick={() => openBrowseCategory(c)}
-                  className="glass-panel media-card p-2 text-left active:opacity-80 transition-opacity w-full"
-                >
-                  <img
-                    loading="lazy"
-                    decoding="async"
-                    src={boxArt(c)}
-                    alt=""
-                    className="w-full aspect-[3/4] object-cover rounded mb-1.5"
-                    draggable={false}
-                  />
-                  <div className="text-[13px] font-medium text-textPrimary line-clamp-1">
-                    {c.name}
-                  </div>
-                </button>
-              </SettleIn>
-            ))}
-          </div>
-          {/* Sits below the grid so coming into view means the list is running
-              out. Only while browsing: search returns one fixed set of results
-              and has no cursor to follow. The tab-bar clearance moved here from
-              the grid so it stays the last thing on the page. */}
-          {!categoryResults && (
-            <div ref={moreSentinel} className="sn-tabbar-clearance">
-              {loadingMore && (
-                <div className="py-4 text-center text-[12px] text-textMuted">
-                  Loading more categories
-                </div>
-              )}
             </div>
+            {/* Sits below the grid so coming into view means the list is running
+                out. Only while browsing: search returns one fixed set of results
+                and has no cursor to follow. The tab-bar clearance moved here from
+                the grid so it stays the last thing on the page. */}
+            {!categoryResults && (
+              <div ref={moreSentinel} className="sn-tabbar-clearance">
+                {loadingMore && (
+                  <div className="py-4 text-center text-[12px] text-textMuted">
+                    Loading more categories
+                  </div>
+                )}
+              </div>
+            )}
+            {categoryResults && <div className="sn-tabbar-clearance" />}
+            </>
           )}
-          {categoryResults && <div className="sn-tabbar-clearance" />}
-          </>
-        )}
-      </PullToRefresh>
+        </PullToRefresh>
+      )}
     </div>
   );
 };

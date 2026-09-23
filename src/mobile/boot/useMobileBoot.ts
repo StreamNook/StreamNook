@@ -40,6 +40,9 @@ import {
   syncBackgroundChecks,
 } from '../notifications';
 import { consumePendingChannel } from '../nativeBridge';
+import { useFollowsStore, type ProviderStreamRow } from '../../stores/followsStore';
+import type { ProviderId } from '../../types/providers';
+import { streamProvider } from '../../utils/streamProvider';
 import { Logger } from '../../utils/logger';
 
 export function useMobileBoot(): void {
@@ -210,6 +213,29 @@ export function useMobileBoot(): void {
       // Follow/unfollow actions elsewhere ask the shell to refresh the list.
       await addListener<void>('refresh-following-list', () => {
         void useAppStore.getState().loadFollowedStreams();
+      });
+
+      // Kick follows. The app keeps its own list (Kick exposes none to us) and
+      // Rust's provider_live_service owns liveness, pushing provider-live-update.
+      // The initial pull only paints what it already knows. Mirrors App.tsx.
+      void useFollowsStore.getState().hydrate();
+      void useFollowsStore.getState().refreshLive();
+      await addListener<{ provider: ProviderId; streams: ProviderStreamRow[] }>(
+        'provider-live-update',
+        (event) => {
+          useFollowsStore.getState().setProviderLive(event.payload.provider, event.payload.streams ?? []);
+        },
+      );
+      // The Kick stream being watched ended, reported the moment the backend
+      // learns it. Without this the player froze on its last frame until the
+      // slower liveness poll agreed. Same match as desktop.
+      await addListener<{ provider: ProviderId; channel: string }>('provider-stream-offline', (event) => {
+        const watching = useAppStore.getState().currentStream;
+        if (!watching) return;
+        const sameChannel =
+          (watching.user_login || '').toLowerCase() === (event.payload.channel || '').toLowerCase();
+        if (streamProvider(watching) !== event.payload.provider || !sameChannel) return;
+        void useAppStore.getState().handleStreamOffline();
       });
 
       // ---- System notifications -------------------------------------------

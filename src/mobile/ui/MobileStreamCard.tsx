@@ -11,6 +11,8 @@ import { campaignEarnableOn } from '../dropsEligibility';
 import type { DropsByGame } from '../dropsCampaigns';
 import type { TwitchStream } from '../../types';
 import { previewStamp } from '../followRefresh';
+import { ProviderMark } from '../../components/ProviderLogo';
+import { isTwitchStream, streamProvider } from '../../utils/streamProvider';
 
 // The stamp is what makes a refreshed list show refreshed previews: Twitch's
 // preview URL is fixed per channel and the WebView caches it, so without a
@@ -56,9 +58,12 @@ export const MobileStreamCard: React.FC<{
   hypeTrain?: HypeTrainBadgeInfo;
   watchStreak?: number;
   onPress: (stream: TwitchStream) => void;
+  /** Mark non-Twitch rows with their platform. Off where the screen already
+   *  says which platform every row is on (Browse switched to Kick). */
+  showPlatform?: boolean;
   /** 'card' = big thumbnail stack; 'row' = compact list row (thumb left). */
   variant?: 'card' | 'row';
-}> = ({ stream, dropsGameNames, hypeTrain, watchStreak, onPress, variant = 'card' }) => {
+}> = ({ stream, dropsGameNames, hypeTrain, watchStreak, onPress, variant = 'card', showPlatform = true }) => {
   // The icon means "you can earn drops HERE", not "this game has drops".
   //
   // It used to mean the latter, which put a gift on every channel in a
@@ -67,7 +72,10 @@ export const MobileStreamCard: React.FC<{
   // deliberately no third state for "this category has drops but not on this
   // channel": that is a promise the channel cannot keep, and a card is the
   // wrong place to explain someone else's campaign rules.
-  const hasDrops = !!(
+  const isTwitch = isTwitchStream(stream);
+  // Drops are Twitch campaigns matched by category name; a Kick stream in the
+  // same category earns nothing.
+  const hasDrops = isTwitch && !!(
     stream.game_name &&
     (dropsGameNames?.get(stream.game_name.toLowerCase()) ?? []).some((c) =>
       campaignEarnableOn(c, stream.user_login),
@@ -144,6 +152,7 @@ export const MobileStreamCard: React.FC<{
           </h3>
           <div className="flex items-center gap-1 text-textSecondary text-[12px]">
             <span className="truncate">{stream.user_name}</span>
+            {showPlatform && !isTwitch && <ProviderMark provider={streamProvider(stream)} size={12} />}
             {stream.broadcaster_type === 'partner' && (
               <svg className="w-2.5 h-2.5 flex-shrink-0" viewBox="0 0 16 16" fill="#9146FF">
                 <path
@@ -220,6 +229,7 @@ export const MobileStreamCard: React.FC<{
             />
           )}
           <span className="truncate">{stream.user_name}</span>
+          {showPlatform && !isTwitch && <ProviderMark provider={streamProvider(stream)} size={12} />}
           {stream.broadcaster_type === 'partner' && (
             <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 16 16" fill="#9146FF">
               <path
