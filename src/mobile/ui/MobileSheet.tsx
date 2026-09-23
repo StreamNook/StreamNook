@@ -23,6 +23,12 @@ export interface MobileSheetProps {
 
 const DISMISS_DISTANCE = 96;
 
+// The sheet portals into <body>, OUTSIDE .sn-mobile, which is where
+// --sn-safe-t/-b are defined, so inside a sheet those resolve to nothing. Read
+// the raw bridge values (set on <html>) with the same env() fallback instead.
+const SAFE_T = 'var(--sn-inset-t, env(safe-area-inset-top, 0px))';
+const SAFE_B = 'var(--sn-inset-b, env(safe-area-inset-bottom, 0px))';
+
 // Stiff and well damped: quick and snappy without the wobble an underdamped
 // spring gives.
 const SETTLE = { type: 'spring', stiffness: 560, damping: 42, mass: 0.7 } as const;
@@ -89,9 +95,19 @@ const SheetSurface: React.FC<Omit<MobileSheetProps, 'open'>> = ({
         // Capped and centred rather than edge to edge: a sheet stretched across a
         // tablet or an unfolded Fold puts its controls a hand-span apart.
         className="absolute inset-x-0 bottom-0 mx-auto w-full max-w-[640px] glass-modal rounded-b-none flex flex-col"
+        // Rides the soft keyboard. The app draws edge to edge, so the viewport
+        // never shrinks for the IME; the native bridge reports its height as
+        // --sn-kb instead (the keyboard MINUS the gesture bar, which the
+        // safe-b padding below already clears). Without this a sheet with a
+        // search field sat under the keyboard in its entirety. The height cap
+        // shrinks by the same amount so a tall sheet cannot grow past the top.
+        // Both are 0 with the keyboard closed, so sheets without an input are
+        // unchanged.
         style={{
-          maxHeight: `calc(100dvh * ${maxHeightFraction})`,
-          paddingBottom: 'var(--sn-safe-b, 0px)',
+          bottom: 'var(--sn-kb, 0px)',
+          maxHeight: `min(calc(100dvh * ${maxHeightFraction}), calc(100dvh - var(--sn-kb, 0px) - ${SAFE_T} - 12px))`,
+          paddingBottom: SAFE_B,
+          transition: 'bottom 0.15s ease-out',
         }}
         initial={{ y: '100%' }}
         animate={{ y: dragY }}
