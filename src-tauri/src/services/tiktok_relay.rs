@@ -1507,7 +1507,10 @@ async fn flv_pump(id: String, s: Arc<Session>) {
                 }
             }
             Err(FlvStop::Unplayable(why)) => {
-                log::info!("[TikTokRelay] '{}' cannot play @{}: {}", id, s.handle, why);
+                // A warning, not info: the file log keeps only warnings unless
+                // Diagnostics is on, and this is the one line that says which
+                // format a room was refused for.
+                log::warn!("[TikTokRelay] '{}' cannot play @{}: {}", id, s.handle, why);
                 end_flv(&s, format!("@{} is streaming in a format StreamNook can't play", s.handle));
                 remove_if_same(&id, &s);
                 return;
