@@ -6,6 +6,7 @@ import { setPipMuted, shareText } from '../nativeBridge';
 import { toggleChannelMuted } from '../notifyChannels';
 import { useVisibleInterval } from '../../utils/useVisibleInterval';
 import { buildShareUrl } from '../../utils/shareLink';
+import { buildProviderUrl, isTwitchStream, streamProvider } from '../../utils/streamProvider';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
 import { unwatchChannel, useChannelState, watchChannel } from '../../stores/channelStateStore';
@@ -59,12 +60,16 @@ export const MobilePlayer: React.FC<{
   const { state } = useMobileHlsEngine(videoRef);
   const restartStream = useAppStore((s) => s.restartStream);
   const currentStream = useAppStore((s) => s.currentStream);
+  // Channel state, avatar repair and live alerts are Twitch services keyed by
+  // login or numeric id; a Kick slug or id would address an unrelated Twitch
+  // channel of the same name.
+  const streamIsTwitch = isTwitchStream(currentStream);
 
   // Live viewer count from the Rust channel_state service (one Helix batch
   // for every watched channel, emitted only on change), the same source the
   // desktop chat header uses. Without it the count was whatever startStream
   // captured and never moved.
-  const channelStateLogin = currentStream?.user_login?.toLowerCase() ?? null;
+  const channelStateLogin = streamIsTwitch ? (currentStream?.user_login?.toLowerCase() ?? null) : null;
   const channelState = useChannelState(channelStateLogin);
   useEffect(() => {
     if (!channelStateLogin || !currentStream?.user_id) return;
@@ -79,7 +84,7 @@ export const MobilePlayer: React.FC<{
   // one repair, keyed so a second miss for the same channel does not loop.
   const healedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!currentStream?.user_id || currentStream.profile_image_url?.trim()) return;
+    if (!streamIsTwitch || !currentStream?.user_id || currentStream.profile_image_url?.trim()) return;
     if (healedFor.current === currentStream.user_id) return;
     healedFor.current = currentStream.user_id;
     const id = currentStream.user_id;
@@ -96,7 +101,7 @@ export const MobilePlayer: React.FC<{
         });
       })
       .catch(() => {});
-  }, [currentStream?.user_id, currentStream?.profile_image_url]);
+  }, [streamIsTwitch, currentStream?.user_id, currentStream?.profile_image_url]);
 
   // Subscribed rather than read through the helper, so toggling the bell
   // re-renders this overlay instead of leaving a stale icon behind.
@@ -375,20 +380,22 @@ export const MobilePlayer: React.FC<{
               {/* Live-alert opt-out for this channel, next to who it is rather
                   than down in the playback controls: it is a fact about the
                   channel, not about this session's playback. */}
-              <button
-                onClick={() => void toggleChannelMuted(currentStream.user_login)}
-                aria-label={
-                  alertsOff
-                    ? `Turn on live alerts for ${currentStream.user_name}`
-                    : `Turn off live alerts for ${currentStream.user_name}`
-                }
-                aria-pressed={!alertsOff}
-                className={`shrink-0 flex items-center justify-center p-1 transition-colors ${
-                  alertsOff ? 'text-white/45' : 'text-white'
-                }`}
-              >
-                {alertsOff ? <BellSlash size={15} /> : <Bell size={15} weight="fill" />}
-              </button>
+              {streamIsTwitch && (
+                <button
+                  onClick={() => void toggleChannelMuted(currentStream.user_login)}
+                  aria-label={
+                    alertsOff
+                      ? `Turn on live alerts for ${currentStream.user_name}`
+                      : `Turn off live alerts for ${currentStream.user_name}`
+                  }
+                  aria-pressed={!alertsOff}
+                  className={`shrink-0 flex items-center justify-center p-1 transition-colors ${
+                    alertsOff ? 'text-white/45' : 'text-white'
+                  }`}
+                >
+                  {alertsOff ? <BellSlash size={15} /> : <Bell size={15} weight="fill" />}
+                </button>
+              )}
               <span className="ml-auto flex items-center gap-2 shrink-0 pl-2">
                 <span className="flex items-center gap-1 text-[12px] font-medium text-live">
                   <Eye size={12} weight="fill" />
@@ -447,7 +454,11 @@ export const MobilePlayer: React.FC<{
                   // carries the day tag that keeps Discord from serving a
                   // stale preview card. Same helper the desktop share uses.
                   shareText(
-                    `${currentStream.user_name} is live: ${buildShareUrl(currentStream.user_login)}`,
+                    `${currentStream.user_name} is live: ${
+                      streamIsTwitch
+                        ? buildShareUrl(currentStream.user_login)
+                        : buildProviderUrl(streamProvider(currentStream), currentStream.user_login)
+                    }`,
                     currentStream.title || currentStream.user_name,
                   );
                 }}

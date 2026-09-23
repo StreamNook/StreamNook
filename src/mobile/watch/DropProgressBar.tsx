@@ -19,6 +19,7 @@ import { Logger } from '../../utils/logger';
 import { channelHasEarnableCampaign, useDropsGameNames } from '../dropsCampaigns';
 import type { InventoryResponse, TimeBasedDrop } from '../../types';
 import { isBackgrounded } from '../backgroundGate';
+import { isTwitchStream } from '../../utils/streamProvider';
 
 // Inventory is a network round trip, and accrued minutes only ever move once a
 // minute, so there is nothing a faster poll could learn.
@@ -71,7 +72,9 @@ export const DropProgressBar: React.FC<Props> = ({ onActiveChange, visible = tru
   const channelLogin = currentStream?.user_login;
 
   const dropsByGame = useDropsGameNames();
-  const earnable = channelHasEarnableCampaign(dropsByGame, gameName, channelLogin);
+  // Drops are Twitch's; a Kick stream in a drops category earns nothing.
+  const earnable =
+    isTwitchStream(currentStream) && channelHasEarnableCampaign(dropsByGame, gameName, channelLogin);
 
   const refresh = useCallback(async () => {
     if (!gameName && !channelLogin) {

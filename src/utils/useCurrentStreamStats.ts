@@ -14,6 +14,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../stores/AppStore';
 import { useVisibleInterval } from './useVisibleInterval';
 import type { TwitchStream } from '../types';
+import { isTwitchStream } from './streamProvider';
 
 // Matches the MultiChat viewer counter's cadence. Viewer counts move slowly
 // enough that a faster poll buys nothing, and this is one Helix call per
@@ -23,11 +24,14 @@ const STATS_POLL_MS = 45_000;
 export function useCurrentStreamStats(): void {
   const login = useAppStore((s) => s.currentStream?.user_login);
   const mediaType = useAppStore((s) => s.currentMediaType);
+  // check_stream_online is Twitch: asked with a Kick slug it answers for the
+  // Twitch channel of the same name and paints ITS viewer count on the stream.
+  const isTwitch = useAppStore((s) => isTwitchStream(s.currentStream));
 
   useVisibleInterval(async () => {
     // Live streams only. A clip or VOD has no live viewer count, and its
     // `view_count` is a total that does not move while you watch it.
-    if (!login || mediaType !== 'live') return;
+    if (!login || !isTwitch || mediaType !== 'live') return;
     try {
       const fresh = await invoke<TwitchStream | null>('check_stream_online', {
         userLogin: login,

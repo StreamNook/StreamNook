@@ -64,6 +64,7 @@ import { hapticStep } from '../ui/haptics';
 import { readInsets, type ResolvedInsets } from '../nativeInsets';
 import { Logger } from '../../utils/logger';
 import { isBackgrounded } from '../backgroundGate';
+import { isTwitchStream } from '../../utils/streamProvider';
 
 interface PinnedMessage {
   id: string;
@@ -158,6 +159,9 @@ export const WatchScreen: React.FC = () => {
   const [dropActive, setDropActive] = useState(false);
   const chatTabsVisible = useChatTabsVisible();
   const viewingStreamChat = useViewingStreamChat();
+  // Hype train, drops, polls and predictions are Twitch contracts keyed by a
+  // numeric user_id; a Kick id would name an unrelated Twitch channel.
+  const streamScoped = viewingStreamChat && isTwitchStream(currentStream);
   const chatChannelId = useActiveChatChannelId();
   // Only surface pins that belong to the room currently on screen.
   const pinned = pinnedFor.channel === chatChannelId ? pinnedFor.items : [];
@@ -1074,7 +1078,7 @@ export const WatchScreen: React.FC = () => {
                 // the stream's own banners (pins, drops, hype train) stay out
                 // of it; they are all still one rotation away. hidden keeps
                 // the drop bar mounted and polling.
-                !chatOverlay && ((viewingStreamChat && (currentHypeTrain || dropActive)) || pinned.length > 0)
+                !chatOverlay && ((streamScoped && (currentHypeTrain || dropActive)) || pinned.length > 0)
                   ? // Pure layout now: no background, no border, no blur, no
                     // shadow. Each child already carries its own container
                     // (PinnedBanner is an sn-popover, the hype train draws its
@@ -1097,7 +1101,7 @@ export const WatchScreen: React.FC = () => {
               {/* Hype train and drop progress belong to the STREAM, not to
                   whichever chat tab you are reading. Showing them over another
                   room's chat credits them to the wrong channel. */}
-              {viewingStreamChat && currentHypeTrain && (
+              {streamScoped && currentHypeTrain && (
                 <HypeTrainBanner
                   train={currentHypeTrain}
                   onExpire={() => useAppStore.getState().setCurrentHypeTrain(null)}
@@ -1108,7 +1112,7 @@ export const WatchScreen: React.FC = () => {
                   so its poll keeps running; it just does not render there. */}
               <DropProgressBar
                 onActiveChange={setDropActive}
-                visible={viewingStreamChat}
+                visible={streamScoped}
               />
               <PinnedBanner
                 pins={pinned}
@@ -1120,7 +1124,7 @@ export const WatchScreen: React.FC = () => {
           {/* Poll + prediction cards, exactly the desktop components: they
               self-fetch off the channel and anchor under the header. Stream
               scoped, so same rule as the hype train above. */}
-          {currentStream && viewingStreamChat && !chatOverlay && (
+          {currentStream && streamScoped && !chatOverlay && (
             <>
               <PredictionOverlay
                 channelId={currentStream.user_id}
