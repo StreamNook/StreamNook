@@ -50,6 +50,24 @@ function nameSizeClass(name: string): string {
   return 'text-[18.5px]';
 }
 
+/** Twitch badge sets that only mean something inside one channel. */
+const CHANNEL_SCOPED_SETS = new Set([
+  'broadcaster',
+  'moderator',
+  'lead_moderator',
+  'vip',
+  'subscriber',
+  'founder',
+  'bits',
+  'bits-leader',
+  'sub-gifter',
+  'sub-gift-leader',
+  'artist-badge',
+  'predictions',
+  'hype-train',
+  'clip-champ',
+]);
+
 export const OwnIdentityHeader: React.FC<Props> = ({ userId, displayName, login }) => {
   // Chat already holds paint and badge for anyone who has spoken, including
   // you, so prefer it and let the profile fill in what chat does not carry.
@@ -115,6 +133,18 @@ export const OwnIdentityHeader: React.FC<Props> = ({ userId, displayName, login 
 
   const grouped = normalizeProfileBadges({ cachedProfile: profile });
 
+  // Twitch: the badges you DISPLAY, never the earned inventory. Asked in the
+  // context of your own channel, so channel-only badges (broadcaster, your own
+  // sub or mod badge and the like) are dropped: the header is who you are
+  // everywhere, not in one room.
+  const displayed = new Set<string>(profile?.displayBadgeIds ?? []);
+  const twitchWornIds = new Set<string>(
+    ((profile?.twitchBadges ?? []) as { id?: string; setID?: string }[])
+      .filter((b) => b.id && displayed.has(b.id) && !CHANNEL_SCOPED_SETS.has(b.setID ?? ''))
+      .map((b) => b.id as string),
+  );
+  const twitchWorn = grouped.twitch.filter((b) => twitchWornIds.has(b.id));
+
   // WORN, not OWNED.
   //
   // `normalizeProfileBadges` returns COLLECTIONS, which is right for the profile
@@ -158,7 +188,7 @@ export const OwnIdentityHeader: React.FC<Props> = ({ userId, displayName, login 
   // appear twice. The slice is a backstop, not a design: nothing should reach
   // it, but this header must never again be able to eat the screen.
   const seen = new Set<string>();
-  const badges: NormalizedBadge[] = [...seventvWorn, ...otherActive]
+  const badges: NormalizedBadge[] = [...twitchWorn, ...seventvWorn, ...otherActive]
     .filter((b) => {
       if (!b.src || seen.has(b.id)) return false;
       seen.add(b.id);
@@ -175,11 +205,26 @@ export const OwnIdentityHeader: React.FC<Props> = ({ userId, displayName, login 
         a 7TV paint is drawn with. `break-words` handles a long single-token
         name; the size step above keeps even a 25 character name to two lines.
       */}
-      <div
-        className={`font-bold text-textPrimary leading-tight break-words ${nameSizeClass(displayName)}`}
-        style={nameStyle}
-      >
-        {displayName}
+      <div className="flex items-center gap-2 min-w-0">
+        <div
+          className={`font-bold text-textPrimary leading-tight break-words shrink-0 max-w-full ${nameSizeClass(displayName)}`}
+          style={nameStyle}
+        >
+          {displayName}
+        </div>
+        {/* The applied 7TV paint by name, drawn in the paint itself, the same
+            way the Cosmetics list previews one. It stays on the name's line and
+            gives way first: a long paint name truncates, the name never does. */}
+        {paint?.name && (
+          <span className="glass-badge inline-flex items-center min-w-0 px-2 py-px rounded-full">
+            <span
+              className="text-[11px] font-bold truncate leading-snug"
+              style={computePaintStyle(paint, '#9146FF')}
+            >
+              {paint.name}
+            </span>
+          </span>
+        )}
       </div>
 
       {login && login.toLowerCase() !== displayName.toLowerCase() && (

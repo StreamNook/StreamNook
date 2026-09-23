@@ -16,6 +16,10 @@ export interface CachedProfile {
   channelId?: string;
   channelName?: string;
   twitchBadges: any[];
+  /** Ids of the Twitch badges this person DISPLAYS (Twitch's displayBadges),
+   *  as opposed to every badge they have earned, which `twitchBadges` merges
+   *  in. Absent on profiles built by the lighter paths. */
+  displayBadgeIds?: string[];
   seventvCosmetics: CachedCosmetics;
   thirdPartyBadges: any[];
   lastUpdated: number;
@@ -467,6 +471,7 @@ export async function getFullProfileWithFallback(
         channelId: effectiveChannelId,
         channelName: effectiveChannelName,
         twitchBadges,
+        displayBadgeIds: badgeData.displayBadges.map((badge: any) => badge.id),
         seventvCosmetics,
         thirdPartyBadges,
         lastUpdated: Date.now()

@@ -1,7 +1,7 @@
-// The You tab: account header with sign out beside it, then settings sections
-// inline (no intermediate menu).
+// The You tab: who you are, the accounts you are signed in with (each with its
+// own sign in / sign out), then settings sections inline (no intermediate menu).
 import React, { useEffect, useState } from 'react';
-import { ArrowCircleDown, PaintBrush, SignOut } from 'phosphor-react';
+import { ArrowCircleDown, PaintBrush } from 'phosphor-react';
 import { ChevronRight } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { useMobileNavStore, type MobileTab } from '../navStore';
@@ -10,16 +10,15 @@ import { SegmentedSelect } from '../../components/settings/_primitives';
 import { checkForAndroidUpdate, openAndroidUpdate, type AndroidUpdate } from '../updateCheck';
 import { OwnIdentityHeader } from '../profile/OwnIdentityHeader';
 import { SETTINGS_ROWS } from './SettingsScreen';
+import { AccountsCard } from '../profile/AccountsCard';
 
 export const YouScreen: React.FC = () => {
   const currentUser = useAppStore((s) => s.currentUser);
-  const signOutActiveAccount = useAppStore((s) => s.signOutActiveAccount);
   const openSettings = useMobileNavStore((s) => s.openSettings);
   const setCosmeticsOpen = useMobileNavStore((s) => s.setCosmeticsOpen);
   const startTab = usePhonePrefs((s) => s.startTab);
   const setStartTab = usePhonePrefs((s) => s.setStartTab);
   const addToast = useAppStore((s) => s.addToast);
-  const [confirmSignOut, setConfirmSignOut] = useState(false);
 
   // Checked once when this tab mounts rather than at boot: a sideloaded app has
   // no store to notify anyone, but an update prompt is also not worth delaying
@@ -40,7 +39,7 @@ export const YouScreen: React.FC = () => {
     <div className="sn-mobile-screen sn-tabbar-clearance">
       {/* items-start, not items-center: the identity block can run to two lines
           for a long name plus a badge row, and centring against it would drag
-          the avatar and the sign out control off the name they belong to. */}
+          the avatar off the name it belongs to. */}
       <div className="flex items-start gap-3 px-4 pt-4 pb-3">
         {currentUser?.profile_image_url ? (
           <img
@@ -64,35 +63,6 @@ export const YouScreen: React.FC = () => {
           </div>
         )}
 
-        {/* Sign out belongs WITH the account, not at the end of a scroll list.
-            It used to sit under the settings rows, which put it behind the
-            floating tab bar at rest and made it something you had to go looking
-            for. Here it reads as an action on the account it acts on, and the
-            list below is purely settings.
-
-            Two-tap confirm is kept - signing out drops the token, the cookie
-            jar and the emote cache - and the armed state expands to say so,
-            because an icon alone cannot tell you it is waiting for a second
-            tap. */}
-        <button
-          onClick={() => {
-            if (!confirmSignOut) {
-              setConfirmSignOut(true);
-              setTimeout(() => setConfirmSignOut(false), 3000);
-              return;
-            }
-            void signOutActiveAccount();
-          }}
-          className={`sn-touch shrink-0 flex items-center gap-1.5 rounded-full text-error active:opacity-70 transition-all ${
-            confirmSignOut ? 'px-3 bg-error/10' : 'px-2'
-          }`}
-          aria-label={confirmSignOut ? 'Tap again to sign out' : 'Sign out'}
-        >
-          <SignOut size={20} className="shrink-0" />
-          {confirmSignOut && (
-            <span className="text-[13px] font-semibold whitespace-nowrap">Tap again</span>
-          )}
-        </button>
       </div>
 
       {/* Only rendered when there is genuinely a newer build. Sideloaded apps
@@ -138,6 +108,16 @@ export const YouScreen: React.FC = () => {
           </span>
           <ChevronRight size={16} className="text-textMuted shrink-0" />
         </button>
+      </div>
+
+      {/* Sign-in and sign-out live on each account's own row, so the action
+          reads as acting on the account beside it, and nothing about signing
+          out is hidden behind the floating tab bar. */}
+      <div className="text-[12px] font-semibold text-textMuted uppercase tracking-wide px-4 mb-1">
+        Accounts
+      </div>
+      <div className="px-4 mb-4">
+        <AccountsCard />
       </div>
 
       {/* Where the app lands on open. Following is the right default for most
