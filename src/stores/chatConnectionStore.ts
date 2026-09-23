@@ -32,7 +32,7 @@ import {
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { PROVIDERS, type ProviderId } from '../types/providers';
-import { makeKey, parseKey } from '../utils/providerKey';
+import { makeKey, parseKey, sliceLookupKey } from '../utils/providerKey';
 import { streamProvider } from '../utils/streamProvider';
 import { parseBadges } from '../services/twitchBadges';
 import { invoke } from '@tauri-apps/api/core';
@@ -888,9 +888,9 @@ function emptySlice(
  *  NOT the same as the message-routing key: routing lowercases a whole composite
  *  string, this folds (provider, channel). Both land on lowercase because storage
  *  is lowercase. Do not unify them by making either side case-preserving. */
-function sliceLookupKey(provider: ProviderId, channel: string): string {
-  return (provider === 'twitch' ? channel : makeKey(provider, channel)).toLowerCase();
-}
+// sliceLookupKey lives in utils/providerKey (pure, testable without this store)
+// and is re-exported so every existing importer keeps working.
+export { sliceLookupKey };
 
 /** Stores a slice, lowercasing the key unconditionally, which makes storage the
  *  authority on key shape: an acquireChannel key of `youtube:HVtwmO9RLNw` is

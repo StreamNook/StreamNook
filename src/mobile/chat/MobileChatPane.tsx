@@ -37,6 +37,7 @@ import { useLongPressDrag } from './useLongPressDrag';
 import { usePinStore } from '../../stores/pinStore';
 import { formatDuration } from '../../utils/timeoutRamp';
 import { scrollChatToMessage } from '../../utils/scrollChatToMessage';
+import { streamProvider } from '../../utils/streamProvider';
 
 // How long a pause/resume transition is protected from being reversed. Matches
 // desktop's ChatWidget, and is what stops a touchmove and the compositor scroll
@@ -46,6 +47,9 @@ const PAUSE_SETTLE_MS = 120;
 /** What the read-only overlay leaves out of the fan. Module-level so the fan
  *  sees one array, not a fresh one per render. */
 const READ_ONLY_HIDES: FanAction[] = ['reply'];
+/** A non-Twitch room has no profile the phone can show: the sheet is Helix-backed. */
+const OTHER_PLATFORM_HIDES: FanAction[] = ['profile'];
+const OTHER_PLATFORM_READ_ONLY_HIDES: FanAction[] = ['reply', 'profile'];
 
 /**
  * `readOnly`: the landscape overlay. Chat is for reading there; the composer,
@@ -63,19 +67,24 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
   const removeTab = useChatTabsStore((s) => s.removeTab);
   const reload = useChatTabsStore((s) => s.reload);
 
-  // Keep the stream-following tab pointed at whatever is playing.
+  // Keep the stream-following tab pointed at whatever is playing, on the
+  // platform it plays on: a Kick stream's room is `kick:slug`, never a Twitch
+  // room that happens to share the name.
+  const streamProv = streamProvider(currentStream);
   useEffect(() => {
     syncStreamTab(
       currentStream?.user_login ?? null,
       currentStream?.user_id ?? null,
       currentStream?.user_name || currentStream?.user_login || '',
       currentStream?.profile_image_url ?? null,
+      streamProv,
     );
   }, [
     currentStream?.user_login,
     currentStream?.user_id,
     currentStream?.user_name,
     currentStream?.profile_image_url,
+    streamProv,
     syncStreamTab,
   ]);
 
@@ -95,7 +104,9 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
     isConnected,
   } = chat;
 
-  const emotes = useChannelEmotes(activeChannel, activeTab?.channelId ?? null, 'twitch');
+  const activeProvider = activeTab?.provider ?? 'twitch';
+  const isTwitchRoom = activeProvider === 'twitch';
+  const emotes = useChannelEmotes(activeTab?.login ?? null, activeTab?.channelId ?? null, activeProvider);
 
   // A mention buzzes once. The flash the row paints is easy to miss on a
   // phone held at arm's length, or with the screen dimmed for a long watch.
@@ -137,18 +148,22 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
 
   // Rebuilds the connection if it dies while the app is open. Every room rides
   // one connection, so watching the active one covers all of them.
-  useChatWatchdog(activeChannel);
+  // Twitch only: Kick rooms ride their own adapter, whose health the connection
+  // store watches itself.
+  useChatWatchdog(isTwitchRoom ? activeChannel : null);
 
-  const isModerator = isModeratorFrom(userBadges);
+  const isModerator = isTwitchRoom && isModeratorFrom(userBadges);
   /** Every Helix mod action keys off the channel's numeric id. */
   const broadcasterId = activeTab?.channelId ?? null;
   // Only asked when follower mode is actually on, so an unrestricted room costs
   // nothing. -1 is off; 0 and above are some flavour of followers-only.
   const isFollowing = useFollowStatus(broadcasterId, (roomState?.followersOnly ?? -1) >= 0);
-  const gating = useMemo(
-    () => deriveChatGating(roomState, userBadges, isFollowing),
-    [roomState, userBadges, isFollowing],
-  );
+  const gating = useMemo(() => {
+    const g = deriveChatGating(roomState, userBadges, isFollowing);
+    // Badge-based blocking reads Twitch IRC badges. A Kick room has none, so it
+    // would lock subscribers out of a subs-only room. Show the room state, never block.
+    return isTwitchRoom ? g : { ...g, blocked: null, reason: null };
+  }, [roomState, userBadges, isFollowing, isTwitchRoom]);
   // Moderator tools are ON wherever you have the badge. A mod opening their own
   // channel expects their tools, and making them hunt for a toggle every time is
   // the wrong default. The destructive actions are protected by the fan's
@@ -277,7 +292,19 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
         } else {
           const backend = message as BackendChatMessage;
           const parsed = parseMessage(backend);
-          userId = backend.tags['user-id'] || backend.user_id;
+          // Namespaced the way the desktop keys this store: bare for Twitch,
+          // `provider:id` otherwise. Only Twitch carries a `user-id` tag, so a
+          // Kick or YouTube chatter falls through to the raw platform id, and a
+          // bare Kick id is indistinguishable from a Twitch one — same numeric
+          // range, so the two chatters would share a row, share cosmetics, and
+          // overwrite each other in the mention index.
+          const rawId = backend.tags['user-id'] || backend.user_id;
+          const msgProvider = backend.provider ?? 'twitch';
+          userId = rawId
+            ? msgProvider === 'twitch'
+              ? rawId
+              : `${msgProvider}:${rawId}`
+            : undefined;
           username = backend.username;
           displayName = backend.display_name || backend.username;
           userColor = backend.color || parsed.color;
@@ -430,9 +457,12 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
 
   const onUsernameClick = useCallback(
     (userId: string, username: string, displayName: string, color: string) => {
+      // The profile sheet is Helix-backed; a Kick chatter's id would open an
+      // unrelated Twitch account.
+      if (!isTwitchRoom) return;
       setSheetUser({ userId, username, displayName, color });
     },
-    [],
+    [isTwitchRoom],
   );
 
   /** Pull the author and body out of a rendered row's message id. */
@@ -625,6 +655,9 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
           deletedMessageIds={deletedMessageIds}
           clearedUserContexts={clearedUserContexts}
           emotes={emotes}
+          // The room's own platform: rows from it carry no platform mark, which
+          // is only for telling sources apart in a combined chat.
+          homeProvider={activeProvider}
           getMessageId={getMessageId}
         />
         {isPaused && (
@@ -646,7 +679,8 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
       </div>
       {!readOnly && (
         <MobileChatInput
-          channel={activeChannel}
+          channel={activeTab?.login ?? null}
+          provider={activeProvider}
           channelId={broadcasterId}
           channelLabel={activeTab?.label ?? null}
           gating={gating}
@@ -664,7 +698,7 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
       {/* Channel context matters: Twitch badges like sub tiers and moderator are
           scoped to the room, so without it the profile shows only global ones. */}
       <UserProfileSheet
-        user={sheetUser}
+        user={isTwitchRoom ? sheetUser : null}
         channelId={broadcasterId}
         channelName={activeChannel}
         onClose={handleCloseSheet}
@@ -676,7 +710,15 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
         target={fanTarget}
         isModerator={modToolsArmed}
         canPin={modToolsArmed && !!broadcasterId}
-        hide={readOnly ? READ_ONLY_HIDES : undefined}
+        hide={
+          isTwitchRoom
+            ? readOnly
+              ? READ_ONLY_HIDES
+              : undefined
+            : readOnly
+              ? OTHER_PLATFORM_READ_ONLY_HIDES
+              : OTHER_PLATFORM_HIDES
+        }
         onCommit={runFanAction}
         onCancel={closeFan}
       />

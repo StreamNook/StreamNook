@@ -21,6 +21,17 @@ export function makeKey(provider: ProviderId, channel: string): string {
   return `${provider}:${normalizeChannel(provider, channel)}`;
 }
 
+/** The key a (provider, channel) pair's chat slice is STORED under.
+ *
+ *  Exported because anything addressing a slice from outside — a merged feed's
+ *  per-source revision sum, a pause fanned out across sources — has to fold the
+ *  same way. Opening this derivation a second time is how a lookup starts
+ *  silently missing its own slice: `makeKey` preserves case for YouTube while
+ *  storage lowercases unconditionally. */
+export function sliceLookupKey(provider: ProviderId, channel: string): string {
+  return (provider === 'twitch' ? channel : makeKey(provider, channel)).toLowerCase();
+}
+
 export interface ParsedKey {
   provider: ProviderId;
   channel: string;

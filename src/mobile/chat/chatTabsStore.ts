@@ -11,13 +11,24 @@
 // tracks a single "current channel" and releases the previous one on switch,
 // which is exactly the behaviour multi-chat must not have.
 import { create } from 'zustand';
+import { invoke } from '@tauri-apps/api/core';
 import { acquireChannel, releaseChannel } from '../../stores/chatConnectionStore';
+import type { ProviderId } from '../../types/providers';
+import { normalizeChannel, sliceLookupKey } from '../../utils/providerKey';
 import { Logger } from '../../utils/logger';
 
 export interface ChatTab {
-  /** Lowercased login; the channel key used by the connection store. */
+  /** Slice key in chatConnectionStore's space: bare lowercased login for Twitch,
+   *  `kick:slug` otherwise. Unique per tab, and what useChannelChat reads. */
   channel: string;
-  /** Numeric Twitch id, needed for mod actions and emote loads. */
+  /** Platform the room is on. */
+  provider: ProviderId;
+  /** The bare name the platform addresses the room by (login or slug). What
+   *  acquire/release, emote loads and sending take. */
+  login: string;
+  /** Numeric TWITCH id, for Helix mod actions, points, follow and pins. Always
+   *  null on other platforms: a Kick id is numeric too, and passed to Helix it
+   *  names an unrelated Twitch account. */
   channelId: string | null;
   /** Display name for the tab label. */
   label: string;
@@ -40,16 +51,30 @@ interface ChatTabsState {
     channelId: string | null,
     label: string,
     avatar?: string | null,
+    provider?: ProviderId,
   ) => void;
   addTab: (
     channel: string,
     channelId: string | null,
     label: string,
     avatar?: string | null,
+    provider?: ProviderId,
   ) => void;
   removeTab: (channel: string) => void;
+  /** Fill in a tab's label or avatar after it opened (e.g. from a pasted link). */
+  patchTab: (channel: string, patch: Partial<Pick<ChatTab, 'label' | 'avatar'>>) => void;
   setActive: (channel: string) => void;
   reload: (channel: string) => void;
+}
+
+/** One place that turns (name, id, provider) into a tab's identity. */
+function tabIdentity(channel: string, channelId: string | null, provider: ProviderId) {
+  const login = normalizeChannel(provider, channel.trim());
+  return {
+    key: sliceLookupKey(provider, login),
+    login,
+    channelId: provider === 'twitch' ? channelId : null,
+  };
 }
 
 export const useChatTabsStore = create<ChatTabsState>((set, get) => ({
@@ -57,7 +82,7 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => ({
   activeChannel: null,
   reloadNonce: {},
 
-  syncStreamTab: (channel, channelId, label, avatar) => {
+  syncStreamTab: (channel, channelId, label, avatar, provider = 'twitch') => {
     const { tabs, activeChannel } = get();
     const existingStreamTab = tabs.find((t) => t.pinnedToStream);
 
@@ -65,7 +90,7 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => ({
       // Stream closed. Drop the pinned tab but keep any manually added chats,
       // so moderating several rooms survives closing the player.
       if (existingStreamTab) {
-        void releaseChannel(existingStreamTab.channel).catch(() => {});
+        void releaseChannel(existingStreamTab.login, existingStreamTab.provider).catch(() => {});
         const rest = tabs.filter((t) => !t.pinnedToStream);
         set({
           tabs: rest,
@@ -76,22 +101,22 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => ({
       return;
     }
 
-    const key = channel.toLowerCase();
+    const { key, login, channelId: id } = tabIdentity(channel, channelId, provider);
     if (existingStreamTab?.channel === key) return;
 
     // If this channel is already open as a manually added tab, promote it
     // rather than opening a duplicate.
     const alreadyOpen = tabs.find((t) => t.channel === key);
 
-    if (existingStreamTab) void releaseChannel(existingStreamTab.channel).catch(() => {});
+    if (existingStreamTab) void releaseChannel(existingStreamTab.login, existingStreamTab.provider).catch(() => {});
     if (!alreadyOpen) {
-      void acquireChannel(key, channelId).catch((err) =>
+      void acquireChannel(login, id, provider).catch((err) =>
         Logger.warn('[ChatTabs] acquire failed:', err),
       );
     }
 
     const next: ChatTab[] = [
-      { channel: key, channelId, label, avatar, pinnedToStream: true },
+      { channel: key, provider, login, channelId: id, label, avatar, pinnedToStream: true },
       ...tabs.filter((t) => !t.pinnedToStream && t.channel !== key),
     ];
     set({
@@ -104,20 +129,42 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => ({
     });
   },
 
-  addTab: (channel, channelId, label, avatar) => {
-    const key = channel.toLowerCase();
+  addTab: (channel, channelId, label, avatar, provider = 'twitch') => {
+    const { key, login, channelId: id } = tabIdentity(channel, channelId, provider);
     const { tabs } = get();
     if (tabs.some((t) => t.channel === key)) {
       set({ activeChannel: key });
       return;
     }
-    void acquireChannel(key, channelId).catch((err) =>
+    void acquireChannel(login, id, provider).catch((err) =>
       Logger.warn('[ChatTabs] acquire failed:', err),
     );
     set({
-      tabs: [...tabs, { channel: key, channelId, label, avatar, pinnedToStream: false }],
+      tabs: [...tabs, { channel: key, provider, login, channelId: id, label, avatar, pinnedToStream: false }],
       activeChannel: key,
     });
+    // A room opened from a pasted link (or a search row without a picture)
+    // knows only its slug. Ask the platform for the real name and avatar so the
+    // tab reads like every other one instead of a lowercase slug and a letter.
+    if (provider !== 'twitch' && (!avatar || label === login)) {
+      void invoke<{ user_name?: string; profile_image_url?: string }>('provider_channel_meta', {
+        provider,
+        channel: login,
+      })
+        .then((meta) => {
+          get().patchTab(key, {
+            ...(meta?.user_name ? { label: meta.user_name } : {}),
+            ...(meta?.profile_image_url ? { avatar: meta.profile_image_url } : {}),
+          });
+        })
+        .catch((err) => Logger.debug('[ChatTabs] channel meta unavailable:', err));
+    }
+  },
+
+  patchTab: (channel, patch) => {
+    const key = channel.toLowerCase();
+    if (!get().tabs.some((t) => t.channel === key)) return;
+    set((s) => ({ tabs: s.tabs.map((t) => (t.channel === key ? { ...t, ...patch } : t)) }));
   },
 
   removeTab: (channel) => {
@@ -125,7 +172,7 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => ({
     const { tabs, activeChannel } = get();
     const tab = tabs.find((t) => t.channel === key);
     if (!tab || tab.pinnedToStream) return;
-    void releaseChannel(key).catch(() => {});
+    void releaseChannel(tab.login, tab.provider).catch(() => {});
     const rest = tabs.filter((t) => t.channel !== key);
     set({
       tabs: rest,
@@ -139,6 +186,29 @@ export const useChatTabsStore = create<ChatTabsState>((set, get) => ({
     const key = channel.toLowerCase();
     const tab = get().tabs.find((t) => t.channel === key);
     if (!tab) return;
+    // Non-Twitch rooms are not on the Twitch IRC service, so the full cycle
+    // below does nothing for them. Rebuild the room's own adapter instead.
+    //
+    // At the ADAPTER, not the page store: the store is reference-counted, and
+    // the player holds its own reference on the watched room, so a release and
+    // re-acquire there only moved a counter and never reconnected anything.
+    // The adapter counts one claim per window, so dropping and retaking it
+    // closes the room's socket and opens a fresh one. The page's slice stays
+    // attached to the shared bridge throughout and simply resumes.
+    if (tab.provider !== 'twitch') {
+      void (async () => {
+        try {
+          await invoke('provider_chat_disconnect', { provider: tab.provider, channel: tab.login }).catch(
+            () => {},
+          );
+          await invoke('provider_chat_connect', { provider: tab.provider, channel: tab.login });
+        } catch (err) {
+          Logger.warn('[ChatTabs] reload failed:', err);
+        }
+        set((s) => ({ reloadNonce: { ...s.reloadNonce, [key]: (s.reloadNonce[key] ?? 0) + 1 } }));
+      })();
+      return;
+    }
     // Rebuild the whole chat service rather than just this room.
     //
     // Dropping and retaking the reference is only a PART and a re-JOIN, which

@@ -3,6 +3,7 @@
 import React from 'react';
 import { X, Broadcast } from 'phosphor-react';
 import { useChatTabsStore } from './chatTabsStore';
+import { ProviderMark } from '../../components/ProviderLogo';
 
 /** Fixed so the chat header, which is absolutely positioned over the top of the
  *  chat column, can offset itself by exactly this much and stop covering the
@@ -49,6 +50,9 @@ export function useViewingStreamChat(): boolean {
 // tells it nothing it did not already know.
 const ChatTabStripImpl: React.FC = () => {
   const tabs = useChatTabsStore((s) => s.tabs);
+  // Platform marks only earn their place when the open rooms span platforms;
+  // with every tab on Kick (or every tab on Twitch) they say nothing.
+  const mixedPlatforms = new Set(tabs.map((t) => t.provider)).size > 1;
   const activeChannel = useChatTabsStore((s) => s.activeChannel);
   const setActive = useChatTabsStore((s) => s.setActive);
   const removeTab = useChatTabsStore((s) => s.removeTab);
@@ -87,6 +91,10 @@ const ChatTabStripImpl: React.FC = () => {
               )}
               {tab.pinnedToStream && (
                 <Broadcast size={11} weight="fill" className="text-accent shrink-0" />
+              )}
+              {/* Two rooms can share a name across platforms; the mark tells them apart. */}
+              {mixedPlatforms && tab.provider !== 'twitch' && (
+                <ProviderMark provider={tab.provider} size={11} />
               )}
               <span
                 className={`text-[13px] truncate ${

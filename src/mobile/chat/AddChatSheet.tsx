@@ -14,6 +14,12 @@ import { useAppStore } from '../../stores/AppStore';
 import { useChatTabsStore } from './chatTabsStore';
 import { Logger } from '../../utils/logger';
 import type { TwitchStream } from '../../types';
+import { ProviderMark } from '../../components/ProviderLogo';
+import { useFollowsStore } from '../../stores/followsStore';
+import { parseKickLink } from '../../utils/parseChannelInput';
+import { isTwitchStream, streamKey, streamProvider } from '../../utils/streamProvider';
+import { mergeFollowedLive } from '../followingMerge';
+import { orderSearchResults } from './searchOrder';
 
 export const AddChatSheet: React.FC<{ open: boolean; onClose: () => void }> = ({
   open,
@@ -27,6 +33,32 @@ export const AddChatSheet: React.FC<{ open: boolean; onClose: () => void }> = ({
   const [results, setResults] = useState<TwitchStream[]>([]);
   const [searching, setSearching] = useState(false);
 
+  // Live Kick follows sit beside the Twitch ones.
+  const providerLive = useFollowsStore((s) => s.liveByKey);
+  const liveNow = useMemo(() => mergeFollowedLive(followedStreams, providerLive), [followedStreams, providerLive]);
+  // A pasted kick.com link (or `kick:slug`) opens that room directly, live or
+  // not, without a search round trip.
+  const kickLink = parseKickLink(query);
+  const pasted = useMemo<TwitchStream | null>(
+    () =>
+      kickLink
+        ? ({
+            id: `kick:${kickLink}`,
+            user_id: '',
+            user_login: kickLink,
+            user_name: kickLink,
+            title: '',
+            viewer_count: 0,
+            game_name: '',
+            thumbnail_url: '',
+            started_at: '',
+            provider: 'kick',
+            is_live: false,
+          } as TwitchStream)
+        : null,
+    [kickLink],
+  );
+
   const openSet = useMemo(
     () => new Set(openTabs.map((t) => t.channel)),
     [openTabs],
@@ -34,7 +66,7 @@ export const AddChatSheet: React.FC<{ open: boolean; onClose: () => void }> = ({
 
   useEffect(() => {
     const q = query.trim();
-    if (q.length < 2) {
+    if (q.length < 2 || parseKickLink(q)) {
       setResults([]);
       return;
     }
@@ -42,8 +74,24 @@ export const AddChatSheet: React.FC<{ open: boolean; onClose: () => void }> = ({
     setSearching(true);
     const timer = setTimeout(async () => {
       try {
-        const found = await invoke<TwitchStream[]>('search_channels', { query: q });
-        if (!cancelled) setResults(found ?? []);
+        // Both platforms, settled independently so one failing never empties
+        // the other.
+        const [tw, kick] = await Promise.allSettled([
+          invoke<TwitchStream[]>('search_channels', { query: q }),
+          invoke<{ streams: TwitchStream[] }>('provider_search', { provider: 'kick', query: q }),
+        ]);
+        if (tw.status === 'rejected') Logger.warn('[AddChat] twitch search failed:', tw.reason);
+        if (kick.status === 'rejected') Logger.warn('[AddChat] kick search failed:', kick.reason);
+        if (!cancelled) {
+          setResults(
+            orderSearchResults([
+              ...(tw.status === 'fulfilled' ? (tw.value ?? []) : []),
+              ...(kick.status === 'fulfilled'
+                ? (kick.value?.streams ?? []).map((st) => ({ ...st, provider: 'kick' as const }))
+                : []),
+            ]),
+          );
+        }
       } catch (err) {
         Logger.warn('[AddChat] search failed:', err);
         if (!cancelled) setResults([]);
@@ -63,12 +111,13 @@ export const AddChatSheet: React.FC<{ open: boolean; onClose: () => void }> = ({
       stream.user_id || null,
       stream.user_name || stream.user_login,
       stream.profile_image_url ?? null,
+      streamProvider(stream),
     );
     setQuery('');
     onClose();
   };
 
-  const list = query.trim().length >= 2 ? results : followedStreams;
+  const list = pasted ? [pasted] : query.trim().length >= 2 ? results : liveNow;
 
   return (
     <MobileSheet open={open} onClose={onClose} title="Add a chat" maxHeightFraction={0.7}>
@@ -77,14 +126,14 @@ export const AddChatSheet: React.FC<{ open: boolean; onClose: () => void }> = ({
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search any channel, live or not"
+          placeholder="Search, or paste a kick.com link"
           className="flex-1 bg-transparent py-2.5 text-[15px] text-textPrimary placeholder:text-textMuted outline-none"
           autoCapitalize="off"
           autoCorrect="off"
         />
       </div>
 
-      {query.trim().length < 2 && (
+      {query.trim().length < 2 && !pasted && (
         <div className="px-1 pb-1.5 text-[12px] font-semibold uppercase tracking-wide text-textMuted">
           Live now
         </div>
@@ -101,14 +150,14 @@ export const AddChatSheet: React.FC<{ open: boolean; onClose: () => void }> = ({
       ) : (
         <div className="flex flex-col">
           {list.map((stream) => {
-            const already = openSet.has(stream.user_login.toLowerCase());
+            const already = openSet.has(streamKey(stream));
             // Followed streams come from the live query, so absent `is_live`
             // there still means live. Search sets it explicitly.
             const live = stream.is_live ?? true;
             const avatar = stream.profile_image_url;
             return (
               <button
-                key={stream.user_login}
+                key={streamKey(stream)}
                 onClick={() => !already && pick(stream)}
                 disabled={already}
                 className="flex items-center gap-3 py-2 px-1 text-left active:opacity-70 disabled:opacity-45"
@@ -143,11 +192,14 @@ export const AddChatSheet: React.FC<{ open: boolean; onClose: () => void }> = ({
                   )}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="text-[15px] text-textPrimary truncate">
-                    {stream.user_name || stream.user_login}
+                  <div className="flex items-center gap-1.5 text-[15px] text-textPrimary">
+                    <span className="truncate">{stream.user_name || stream.user_login}</span>
+                    {!isTwitchStream(stream) && (
+                      <ProviderMark provider={streamProvider(stream)} size={12} />
+                    )}
                   </div>
                   <div className="text-[12.5px] text-textMuted truncate">
-                    {live ? stream.game_name || 'Live' : 'Offline'}
+                    {stream === pasted ? 'Open this Kick chat' : live ? stream.game_name || 'Live' : 'Offline'}
                   </div>
                 </div>
                 {already ? (

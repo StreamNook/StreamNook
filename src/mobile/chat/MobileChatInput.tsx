@@ -34,6 +34,10 @@ import { MobileCommandSheet } from './MobileCommandSheet';
 import { handleSlashCommand } from '../../utils/commandHandler';
 import { StreakBanners } from './StreakBanners';
 import type { ChatGating } from './chatGating';
+import type { ProviderId } from '../../types/providers';
+import { isTwitchStream } from '../../utils/streamProvider';
+import { sendToSource } from '../../utils/sendToSource';
+import { usePlatformAccountStore } from '../../stores/platformAccountStore';
 
 // Shorter than the desktop's 520px so the panel still clears the soft keyboard,
 // and opaque rather than the panel's own 95%. That 5% reads as solid over a
@@ -53,7 +57,11 @@ const PANEL_CLASS =
   'absolute bottom-full left-0 right-0 mb-2 h-[52vh] max-h-[min(420px,calc(100dvh-var(--sn-kb,0px)-var(--sn-safe-t,0px)-140px))] border border-borderSubtle rounded-xl shadow-lg flex flex-col overflow-hidden origin-bottom z-50 !bg-background';
 
 interface Props {
+  /** The room's bare name on its platform (login or slug). */
   channel: string | null;
+  /** The platform the room is on. Only Twitch rooms get points, commands and
+   *  the Twitch send path; anything else sends through its own adapter. */
+  provider: ProviderId;
   channelId: string | null;
   channelLabel: string | null;
   gating: ChatGating;
@@ -76,6 +84,7 @@ interface Props {
 // keep them in useCallback on the pane side.
 const MobileChatInputImpl: React.FC<Props> = ({
   channel,
+  provider,
   channelId,
   channelLabel,
   gating,
@@ -91,6 +100,10 @@ const MobileChatInputImpl: React.FC<Props> = ({
 }) => {
   const currentUser = useAppStore((s) => s.currentUser);
   const chatInput = useAppStore((s) => s.settings.chat_input);
+  const isTwitch = provider === 'twitch';
+  const kickConnected = usePlatformAccountStore((s) => s.kick.connected);
+  const kickBusy = usePlatformAccountStore((s) => s.kick.busy);
+  const needsKickSignIn = provider === 'kick' && !kickConnected;
   const [text, setText] = useState('');
   const [emotesOpen, setEmotesOpen] = useState(false);
   const [pointsOpen, setPointsOpen] = useState(false);
@@ -112,8 +125,14 @@ const MobileChatInputImpl: React.FC<Props> = ({
   // Desktop resolves it the same way and has multi-channel chat too: its
   // ChatWidget keys the points panel to currentStream, never to the focused
   // room. Sending stays on the tab; only the points readout moves.
-  const pointsChannel = useAppStore((s) => s.currentStream?.user_login) ?? channel;
-  const pointsChannelId = useAppStore((s) => s.currentStream?.user_id) ?? channelId;
+  //
+  // Points are Twitch's. While a Kick stream plays, currentStream carries a Kick
+  // numeric id, and handed to GQL that id names an unrelated Twitch channel.
+  const streamIsTwitch = useAppStore((s) => isTwitchStream(s.currentStream));
+  const streamLogin = useAppStore((s) => s.currentStream?.user_login);
+  const streamId = useAppStore((s) => s.currentStream?.user_id);
+  const pointsChannel = streamLogin && streamIsTwitch ? streamLogin : isTwitch ? channel : null;
+  const pointsChannelId = streamId && streamIsTwitch ? streamId : isTwitch ? channelId : null;
   const points = useChannelPoints(pointsChannel, pointsChannelId);
   const emoteOwnerNames = useEmoteOwnerNames(emotes);
 
@@ -178,7 +197,32 @@ const MobileChatInputImpl: React.FC<Props> = ({
 
   const send = async () => {
     const message = text.trim();
-    if (!message || !currentUser || !channel || sending) return;
+    if (!message || !channel || sending) return;
+    if (!isTwitch) {
+      // Slash commands are Twitch calls; typed here they would post as text.
+      if (message.startsWith('/')) {
+        useAppStore.getState().addToast('Commands only work in Twitch chats', 'info');
+        return;
+      }
+      setSending(true);
+      try {
+        // On a refusal sendToSource writes the reason into the room and throws,
+        // so the draft is kept for another try.
+        await sendToSource(
+          { channel, provider },
+          message,
+          replyTo ? { parentId: replyTo.messageId, parentUser: replyTo.username } : undefined,
+        );
+        setText('');
+        onCancelReply?.();
+      } catch (err) {
+        Logger.warn('[MobileChatInput] send failed:', err);
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
+    if (!currentUser) return;
     setSending(true);
     try {
       // Slash commands are Helix/GQL calls on the desktop handler, never chat
@@ -360,34 +404,44 @@ const MobileChatInputImpl: React.FC<Props> = ({
               </span>
             )}
           </button>
-          <textarea
-            ref={inputRef}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-            placeholder={gating.blocked ? (gating.reason ?? 'Chat restricted') : 'Send a message'}
-            // Typing is switched off, not just discouraged, when the badges prove
-            // the send would be rejected. The amber placeholder says why.
-            disabled={!!gating.blocked}
-            rows={1}
-            className={`flex-1 min-w-0 resize-none bg-transparent py-2 text-[15px] leading-[1.4] text-textPrimary outline-none max-h-[96px] ${
-              gating.blocked
-                ? 'placeholder:text-warning placeholder:font-medium'
-                : 'placeholder:text-textMuted'
-            }`}
-            enterKeyHint="send"
-          />
+          {needsKickSignIn ? (
+            <button
+              onClick={() => void usePlatformAccountStore.getState().connect('kick')}
+              disabled={kickBusy}
+              className="flex-1 min-w-0 py-2 text-left text-[15px] font-medium text-accent disabled:opacity-60"
+            >
+              {kickBusy ? 'Waiting for you to sign in' : 'Sign in to Kick to chat'}
+            </button>
+          ) : (
+            <textarea
+              ref={inputRef}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  void send();
+                }
+              }}
+              placeholder={gating.blocked ? (gating.reason ?? 'Chat restricted') : 'Send a message'}
+              // Typing is switched off, not just discouraged, when the badges prove
+              // the send would be rejected. The amber placeholder says why.
+              disabled={!!gating.blocked}
+              rows={1}
+              className={`flex-1 min-w-0 resize-none bg-transparent py-2 text-[15px] leading-[1.4] text-textPrimary outline-none max-h-[96px] ${
+                gating.blocked
+                  ? 'placeholder:text-warning placeholder:font-medium'
+                  : 'placeholder:text-textMuted'
+              }`}
+              enterKeyHint="send"
+            />
+          )}
           {/* Icon only. The balance was briefly shown here to prove earning was
               happening, and once proven it went back: it cost the message field
               real width to state a number nobody needs at rest, and the menu has
               always printed it in full. What matters is the MOMENT of earning,
               which the flash and the floating amount carry. */}
-          {points.balance !== null && channel && (
+          {isTwitch && points.balance !== null && channel && (
             <button
               onClick={() => {
                 // A waiting chest is collected on the way in. The rewards menu
@@ -530,8 +584,8 @@ const MobileChatInputImpl: React.FC<Props> = ({
           open={emotesOpen}
           onClose={() => setEmotesOpen(false)}
           emotes={emotes}
-          isTwitch
-          isKick={false}
+          isTwitch={isTwitch}
+          isKick={provider === 'kick'}
           channelId={channelId ?? undefined}
           channelLogin={channel ?? undefined}
           isLoadingEmotes={!emotes}
@@ -593,7 +647,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
         onToggleModTools={onToggleModTools}
         onAddChat={onAddChat}
         onReload={onReload}
-        onBrowseCommands={channel ? () => setCommandsOpen(true) : undefined}
+        onBrowseCommands={channel && isTwitch ? () => setCommandsOpen(true) : undefined}
         onCloseChat={onCloseChat}
       />
       <MobileCommandSheet

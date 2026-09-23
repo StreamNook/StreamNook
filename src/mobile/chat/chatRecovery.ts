@@ -44,7 +44,10 @@ export async function hardCycleChat(reason: string, force = false): Promise<bool
   if (cycling) return false;
   if (!force && Date.now() - lastCycleAt < COOLDOWN_MS) return false;
 
-  const { tabs } = useChatTabsStore.getState();
+  // Twitch rooms only. Kick rooms ride their own adapters (and the player holds
+  // its own reference on the watched Kick slice), so this service cycle can
+  // neither fix nor fully release them; chatTabsStore.reload handles those.
+  const tabs = useChatTabsStore.getState().tabs.filter((t) => t.provider === 'twitch');
   if (tabs.length === 0) return false;
 
   cycling = true;
@@ -60,11 +63,12 @@ export async function hardCycleChat(reason: string, force = false): Promise<bool
     // store close that socket deliberately and forget its port, so the
     // re-acquire below takes the full cold bring-up path rather than a JOIN.
     //
-    // Each tab holds exactly one reference, because this store is the only
-    // thing on mobile that acquires, so one release per tab empties it exactly.
+    // Each Twitch tab holds exactly one reference, because the tab store is the
+    // only thing on mobile that acquires a Twitch room, so one release per tab
+    // empties it exactly.
     for (const tab of tabs) {
       try {
-        await releaseChannel(tab.channel);
+        await releaseChannel(tab.login, 'twitch');
       } catch (err) {
         Logger.warn(`[ChatRecovery] release ${tab.channel} failed:`, err);
       }
@@ -80,7 +84,7 @@ export async function hardCycleChat(reason: string, force = false): Promise<bool
 
     for (const tab of tabs) {
       try {
-        await acquireChannel(tab.channel, tab.channelId);
+        await acquireChannel(tab.login, tab.channelId, 'twitch');
       } catch (err) {
         Logger.warn(`[ChatRecovery] re-acquire ${tab.channel} failed:`, err);
       }
