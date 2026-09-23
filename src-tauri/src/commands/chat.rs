@@ -339,6 +339,10 @@ pub async fn kick_disconnect(app: tauri::AppHandle, state: State<'_, AppState>) 
         // the credentials are already gone either way. The next sign-in recreates it.
         log::debug!("[Kick] could not remove {}: {}", profile.display(), e);
     }
+    // The phone keeps the kick.com session in the overlay's app-global jar, not
+    // a profile directory. Expire only Kick's cookies so Twitch stays signed in.
+    #[cfg(target_os = "android")]
+    crate::twitch_login_plugin::expire_cookies(&app, &["https://kick.com", "https://id.kick.com"]);
     if let Err(e) = crate::commands::provider_browse::clear_imported_follows("kick", &state) {
         log::warn!("[Kick] could not clear imported follows: {}", e);
     }
@@ -357,10 +361,6 @@ pub async fn kick_account_name() -> Option<String> {
 }
 
 /// Ban (omit duration) or time out (duration in minutes) a Kick user. Addressed by
-    // The phone keeps the kick.com session in the overlay's app-global jar, not
-    // a profile directory. Expire only Kick's cookies so Twitch stays signed in.
-    #[cfg(target_os = "android")]
-    crate::twitch_login_plugin::expire_cookies(&app, &["https://kick.com", "https://id.kick.com"]);
 /// numeric Kick user ids: the channel's broadcaster id + the target chatter's id.
 #[tauri::command]
 pub async fn kick_ban_user(
