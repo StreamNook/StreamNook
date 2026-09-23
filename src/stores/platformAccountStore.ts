@@ -46,7 +46,10 @@ export interface PlatformAccountState {
 interface PlatformAccountStore {
   kick: PlatformAccountState;
   youtube: PlatformAccountState;
-  /** Re-read connection state from the backend for both platforms. */
+  /** Signed in only to play age-restricted LIVEs; TikTok chat stays read-only
+   *  whether or not this is connected. */
+  tiktok: PlatformAccountState;
+  /** Re-read connection state from the backend for every platform. */
   refresh: () => Promise<void>;
   /** The one connect action for a platform. */
   connect: (provider: PlatformId) => Promise<void>;
@@ -104,7 +107,7 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
    * reported yet", which is also what a report that could not be sent falls
    * back to, so the next read retries it.
    */
-  const reported: Record<PlatformId, boolean | null> = { kick: null, youtube: null };
+  const reported: Record<PlatformId, boolean | null> = { kick: null, youtube: null, tiktok: null };
 
   /**
    * Tell the account database that a platform was connected or disconnected.
@@ -119,6 +122,9 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
    * backfills it with no extra wiring.
    */
   const report = (provider: PlatformId, connected: boolean, state: PlatformAccountState) => {
+    // TikTok's sign-in unlocks age-restricted LIVEs and claims nothing about who
+    // you are in its chat, so there is no linked account to record for it.
+    if (provider === 'tiktok') return;
     if (reported[provider] === connected) return;
     const twitchUserId = useAppStore.getState().currentUser?.user_id;
     if (!twitchUserId) return;
@@ -158,9 +164,10 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
   return {
     kick: { ...IDLE },
     youtube: { ...IDLE },
+    tiktok: { ...IDLE },
 
     refresh: async () => {
-      await Promise.all([refreshOne('kick'), refreshOne('youtube')]);
+      await Promise.all([refreshOne('kick'), refreshOne('youtube'), refreshOne('tiktok')]);
     },
 
     connect: async (provider) => {
@@ -173,6 +180,9 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
           // failing never blocks the connection, so its state is read back below
           // rather than inferred from this call succeeding.
           await useFollowsStore.getState().syncKick(true);
+        } else if (provider === 'tiktok') {
+          // The sign-in IS the whole connection: there is no follow list to read.
+          await platformAccounts.beginTiktokSession();
         } else {
           // Two calls, one action: the sign-in only makes the channels READABLE,
           // so without the second the Following tab stays empty and connecting

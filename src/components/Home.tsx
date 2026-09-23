@@ -27,6 +27,7 @@ import { useFollowsStore } from '../stores/followsStore';
 import { useFavoritesStore } from '../stores/favoritesStore';
 import { favoriteIdOf, favoriteMetaOf, dedupeByFavoriteId } from '../utils/favorites';
 import { streamProvider, streamKey, followIdentifier } from '../utils/streamProvider';
+import { isPortraitGrid, thumbFitFor } from '../utils/thumbFit';
 import { makeKey } from '../utils/providerKey';
 
 import { GlassSelect } from './ui/GlassSelect';
@@ -372,6 +373,22 @@ const Home = () => {
     const providerFollows = useFollowsStore((s) => s.follows);
     // Scoped to one non-Twitch platform: the grid is entirely that platform's.
     const isProviderView = providerFilter !== 'all' && providerFilter !== 'twitch';
+    // The scoped platform's directory shape. A platform with no category
+    // taxonomy has nothing to show on a Categories tab, so it does not get one.
+    const providerBrowse = isProviderView
+        ? PROVIDER_WATCH[providerFilter as ProviderId]?.browse ?? null
+        : null;
+    // Portrait wells when the grid shows only a portrait-first platform. The
+    // mixed view keeps landscape wells so every row stays one height.
+    const portraitGrid = isPortraitGrid(isProviderView ? (providerFilter as ProviderId) : null);
+    // Portrait cards are about a third as wide as landscape ones at the same
+    // height, so the column count comes from a minimum card width rather than
+    // the fixed breakpoints, which would make each portrait card enormous.
+    // Twitch, the unified view, and platforms with a real taxonomy keep the tab.
+    const showsCategoriesTab = !isProviderView || providerBrowse === 'categories';
+    const streamGridClass = portraitGrid
+        ? 'grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3'
+        : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3';
     // Connection state, read from the account store rather than inferred from
     // "has this platform any follows". Those are different questions, and
     // answering the first with the second told a connected user with an empty
@@ -394,6 +411,10 @@ const Home = () => {
               : false,
     );
     const connectPlatformAccount = usePlatformAccountStore((s) => s.connect);
+    // Whether connecting this platform brings its follow list in. TikTok has an
+    // account to connect too, but it only unlocks age-restricted LIVEs; its
+    // follows are the ones made here, so an empty list is not a sign-in problem.
+    const connectImportsFollows = providerFilter === 'kick' || providerFilter === 'youtube';
     // The unified view. Twitch's own surfaces still render (they're the richest),
     // and every other platform's live rows are folded in alongside them, ranked
     // together by viewers. Anything with no cross-platform equivalent — drops,
@@ -1613,11 +1634,16 @@ const Home = () => {
             if (!cancelled) setUnifiedProviderStreams(pages.flat());
         });
         Promise.all(
-            others.map((p) =>
-                invoke<{ categories: ProviderCategory[] }>('provider_categories', { provider: p, limit: 20 })
-                    .then((page) => page.categories ?? [])
-                    .catch(() => [] as ProviderCategory[]),
-            ),
+            // Only platforms that actually have a taxonomy. The rejection was
+            // already swallowed below, so asking anyway was harmless but cost a
+            // refused round trip on every mount of the merged view.
+            others
+                .filter((p) => PROVIDER_WATCH[p].browse === 'categories')
+                .map((p) =>
+                    invoke<{ categories: ProviderCategory[] }>('provider_categories', { provider: p, limit: 20 })
+                        .then((page) => page.categories ?? [])
+                        .catch(() => [] as ProviderCategory[]),
+                ),
         ).then((pages) => {
             if (!cancelled) setUnifiedCategories(pages.flat());
         });
@@ -1628,8 +1654,16 @@ const Home = () => {
 
     // The Categories tab shows category TILES until one is picked; every other
     // tab (and a drilled-into category) shows a stream grid.
+    //
+    // Gated on the platform's declared browse SHAPE, not just on being a
+    // provider view: a platform with no category taxonomy answers the
+    // categories call with an explicit error, and without this check its
+    // Browse tab renders that error where a stream list belongs.
     const showsProviderCategories =
-        isProviderView && activeTab === 'browse' && !providerCategory;
+        isProviderView &&
+        PROVIDER_WATCH[providerFilter as ProviderId]?.browse === 'categories' &&
+        activeTab === 'browse' &&
+        !providerCategory;
 
     // Load the platform's categories for the tile grid.
     useEffect(() => {
@@ -1676,6 +1710,13 @@ const Home = () => {
     useEffect(() => {
         if (activeTab !== 'browse' && providerCategory) setProviderCategory(null);
     }, [activeTab, providerCategory]);
+
+    // A platform with no category taxonomy has no Categories tab. Switching to
+    // one while standing on that tab would leave you on a tab with no button to
+    // leave by, so you are moved to Discover, which is where its directory lives.
+    useEffect(() => {
+        if (!showsCategoriesTab && activeTab === 'browse') setActiveTab('recommended');
+    }, [showsCategoriesTab, activeTab, setActiveTab]);
 
     // The drill-down only applies on the Categories tab. Derived rather than read
     // straight from state because the clearing effect above runs AFTER render, so
@@ -1854,6 +1895,7 @@ const Home = () => {
                                         // Check if stream's game has active drops
                                         const streamDropsCampaign = stream.game_name ? dropsGameNames.get(stream.game_name.toLowerCase()) : undefined;
                                         const hasDrops = !!streamDropsCampaign;
+                                        const fit = thumbFitFor(streamProvider(stream), portraitGrid);
                                         return (() => {
                                             const isQueued = isInMultiNook(stream.user_login, streamProvider(stream));
                                             const isSuckingUp = suckUpKey === makeKey(streamProvider(stream), stream.user_login);
@@ -1900,7 +1942,7 @@ const Home = () => {
                                                         /* Ghost state — recall button + label */
                                                         <>
                                                             <div className="invisible">
-                                                                <div className="relative mb-2 overflow-hidden rounded aspect-video" />
+                                                                <div className={`relative mb-2 overflow-hidden rounded ${fit === 'portrait' ? 'aspect-[9/16]' : 'aspect-video'}`} />
                                                                 <div className="flex items-end justify-between mt-1">
                                                                     <div className="space-y-0.5 flex-1 min-w-0 pr-2 pb-1">
                                                                         <div className="h-4" />
@@ -1935,13 +1977,41 @@ const Home = () => {
                                                         <div className={isSuckingUp ? 'animate-multinook-suck-up' : isMaterializing ? 'animate-multinook-materialize' : undefined}>
                                                             {!isSuckingUp && <QuickAddButton stream={stream} />}
                                                             <div className="relative mb-2 overflow-hidden rounded">
-                                                                <img
-                                                                    loading="lazy"
-                                                                    src={getThumbnailUrl(stream.thumbnail_url)}
-                                                                    alt={stream.title}
-                                                                    {...glowThumbProps(getThumbnailUrl(stream.thumbnail_url))}
-                                                                    className="w-full aspect-video object-cover group-hover:scale-105 transition-transform duration-200"
-                                                                />
+                                                                {fit === 'pillar' ? (
+                                                                    // A portrait picture in a landscape well: shown whole,
+                                                                    // over a blurred copy of itself so the sides are the
+                                                                    // stream's own colour rather than dead bars. Painted,
+                                                                    // not sampled, so it needs no cross-origin read.
+                                                                    <div className="relative w-full aspect-video overflow-hidden bg-black/40">
+                                                                        <img
+                                                                            loading="lazy"
+                                                                            src={getThumbnailUrl(stream.thumbnail_url)}
+                                                                            alt=""
+                                                                            aria-hidden="true"
+                                                                            className="absolute inset-0 w-full h-full object-cover scale-125 blur-xl opacity-60"
+                                                                        />
+                                                                        <img
+                                                                            loading="lazy"
+                                                                            src={getThumbnailUrl(stream.thumbnail_url)}
+                                                                            alt={stream.title}
+                                                                            className="relative w-full h-full object-contain group-hover:scale-[1.03] transition-transform duration-200"
+                                                                        />
+                                                                    </div>
+                                                                ) : (
+                                                                    <img
+                                                                        loading="lazy"
+                                                                        src={getThumbnailUrl(stream.thumbnail_url)}
+                                                                        alt={stream.title}
+                                                                        {...glowThumbProps(getThumbnailUrl(stream.thumbnail_url))}
+                                                                        // A 9:16 well moves further for the same scale, so it
+                                                                        // lifts less on hover; the landscape card is unchanged.
+                                                                        className={
+                                                                            fit === 'portrait'
+                                                                                ? 'w-full aspect-[9/16] object-cover group-hover:scale-[1.03] transition-transform duration-200'
+                                                                                : 'w-full aspect-video object-cover group-hover:scale-105 transition-transform duration-200'
+                                                                        }
+                                                                    />
+                                                                )}
                                                                 <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
                                                                     <div className="live-dot text-xs px-1.5 py-0.5">LIVE</div>
                                                                     {hasDrops && (
@@ -2724,6 +2794,7 @@ const Home = () => {
                                 )}
                                 <span className={`relative z-10 inline-block transition-all duration-300 ${activeTab !== 'recommended' ? 'group-hover:drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]' : ''}`}>Discover</span>
                             </button>
+                            {showsCategoriesTab && (
                             <button
                                 onClick={handleBrowseClick}
                                 className={`group relative px-3 py-1 text-sm font-medium rounded-lg transition-all duration-300 whitespace-nowrap ${activeTab === 'browse'
@@ -2742,6 +2813,7 @@ const Home = () => {
                                 )}
                                 <span className={`relative z-10 inline-block transition-all duration-300 ${activeTab !== 'browse' ? 'group-hover:drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]' : ''}`}>Categories</span>
                             </button>
+                            )}
                             {(searchResults.length > 0 || categorySearchResults.length > 0) && (
                                 <button
                                     onClick={() => setActiveTab('search')}
@@ -3753,7 +3825,9 @@ const Home = () => {
                                                         // Nothing here yet because the account isn't connected —
                                                         // say that, rather than implying we checked and found
                                                         // nobody live.
-                                                        ? `Connect your ${providerLabel(providerFilter as ProviderId)} account in Settings to see the channels you follow.`
+                                                        ? connectImportsFollows
+                                                            ? `Connect your ${providerLabel(providerFilter as ProviderId)} account in Settings to see the channels you follow.`
+                                                            : `Follow ${providerLabel(providerFilter as ProviderId)} creators you find in Discover and they will show up here.`
                                                         : `None of the ${providerLabel(providerFilter as ProviderId)} channels you follow are live.`
                                                     : `Nothing live on ${providerLabel(providerFilter as ProviderId)} right now.`
                                             : activeTab === 'following'
@@ -3771,7 +3845,9 @@ const Home = () => {
                                         thing the user was being asked to do. */}
                                     {isProviderView && activeTab === 'following' && !providerError && providerConnected && (
                                         <button
-                                            onClick={() => setActiveTab('browse')}
+                                            // A feed platform has no Categories tab, so its
+                                            // directory is Discover.
+                                            onClick={() => setActiveTab(showsCategoriesTab ? 'browse' : 'recommended')}
                                             className="glass-button mt-4 px-4 py-2 text-sm font-medium rounded-lg transition-all hover:scale-105 mx-auto"
                                         >
                                             Browse {providerLabel(providerFilter as ProviderId)}
@@ -3884,7 +3960,7 @@ const Home = () => {
                                             putting one here would make the section's own count
                                             mean two different things. Offline favourites are still
                                             reachable in the Offline Channels roster below. */}
-                                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
+                                        <div className={streamGridClass}>
                                             <AnimatePresence mode="popLayout" initial={false}>
                                                 {liveFavorites.map(renderStreamCard)}
                                             </AnimatePresence>
@@ -3910,7 +3986,7 @@ const Home = () => {
                                     </div>
                                 )}
                                 {displayStreams.length > 0 && !(activeTab === 'search' && searchMode === 'categories') && (
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
+                                    <div className={streamGridClass}>
                                     {/* Switching platforms replaces most of this grid, and
                                         without exits the old set vanished on the same frame the
                                         new one appeared. `popLayout` pulls a leaving card out of

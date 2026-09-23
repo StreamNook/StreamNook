@@ -198,6 +198,28 @@ pub fn get_tiktok_channel_meta(
     crate::services::providers::tiktok::channel_meta(&slug)
 }
 
+/// Sign in to TikTok in the login overlay. The session plays age-restricted
+/// LIVEs and nothing else; see `tiktok_auth_service` for why it stops there.
+#[tauri::command]
+pub async fn tiktok_connect() -> Result<(), String> {
+    crate::services::tiktok_auth_service::connect()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Sign out of TikTok. There are no imported follows to clear: TikTok's follow
+/// list is never read, and in-app follows are the user's own and stay.
+#[tauri::command]
+pub async fn tiktok_disconnect() -> Result<(), String> {
+    crate::services::tiktok_auth_service::disconnect();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn tiktok_is_connected() -> bool {
+    crate::services::tiktok_auth_service::is_connected()
+}
+
 /// Sign into YouTube (webview-session): opens a login window, harvests the session
 /// cookies once the user finishes, so send/moderation can drive the private API.
 #[tauri::command]
@@ -457,6 +479,10 @@ pub async fn platform_account_info(provider: String) -> PlatformAccountInfo {
                 crate::services::youtube_auth_service::account_identity().await;
             PlatformAccountInfo { name, avatar_url }
         }
+        "tiktok" => {
+            let (name, avatar_url) = crate::services::tiktok_auth_service::account_identity().await;
+            PlatformAccountInfo { name, avatar_url }
+        }
         _ => PlatformAccountInfo::default(),
     }
 }
@@ -486,6 +512,11 @@ pub async fn validate_platform_sessions(app: tauri::AppHandle) -> Vec<String> {
         && crate::services::youtube_auth_service::validate_session().await == Some(false)
     {
         signed_out.push("youtube".to_string());
+    }
+    if crate::services::tiktok_auth_service::is_connected()
+        && crate::services::tiktok_auth_service::validate_session().await == Some(false)
+    {
+        signed_out.push("tiktok".to_string());
     }
 
     // Tell every window, so a popout's composer goes read-only without needing a

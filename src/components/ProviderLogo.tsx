@@ -2,11 +2,14 @@
 // colored SVGs. Falls back to a brand-color dot for providers whose logo isn't
 // bundled yet. Used on MultiChat tabs, per-column headers, and mod-panel cells.
 
+import { useEffect, useState } from 'react';
 import { Tooltip } from './ui/Tooltip';
 import twitchLogo from '../assets/provider-logos/twitch.svg?url';
 import kickLogo from '../assets/provider-logos/kick.svg?url';
 import youtubeLogo from '../assets/provider-logos/youtube.svg?url';
 import tiktokLogo from '../assets/provider-logos/tiktok.svg?url';
+import tiktokLogoLight from '../assets/provider-logos/tiktok-light.svg?url';
+import { isThemeDark } from '../themes';
 import { PROVIDERS, type ProviderId } from '../types/providers';
 
 const LOGOS: Partial<Record<ProviderId, string>> = {
@@ -16,9 +19,35 @@ const LOGOS: Partial<Record<ProviderId, string>> = {
   tiktok: tiktokLogo,
 };
 
+/** Marks whose ink is light and therefore vanish on a light theme.
+ *
+ *  TikTok's is three stacked copies of one shape, and the top copy is solid
+ *  white. On a light panel that copy disappears and all that is left is the
+ *  cyan and magenta offset fringes, which reads as a rendering fault rather
+ *  than as a logo. The variant swaps that one layer for the brand's own dark
+ *  body, which is what TikTok itself uses on light backgrounds. */
+const LOGOS_ON_LIGHT: Partial<Record<ProviderId, string>> = {
+  tiktok: tiktokLogoLight,
+};
+
 /** The bundled brand-logo URL for a provider, or undefined if not bundled. */
-export function providerLogo(provider: ProviderId): string | undefined {
-  return LOGOS[provider];
+export function providerLogo(provider: ProviderId, onLight = false): string | undefined {
+  return (onLight ? LOGOS_ON_LIGHT[provider] : undefined) ?? LOGOS[provider];
+}
+
+/** Tracks the palette's light/dark sense.
+ *
+ *  Themes are the app's own, not the OS's, so a media query cannot see them.
+ *  `applyTheme` announces each change on the window, which is also what the
+ *  phone's status-bar code listens to. */
+function useThemeIsDark(): boolean {
+  const [dark, setDark] = useState(isThemeDark);
+  useEffect(() => {
+    const onApplied = () => setDark(isThemeDark());
+    window.addEventListener('sn:theme-applied', onApplied);
+    return () => window.removeEventListener('sn:theme-applied', onApplied);
+  }, []);
+  return dark;
 }
 
 /** Optical correction, not a layout fudge. Every logo ships on a 24x24 canvas
@@ -68,7 +97,8 @@ export function ProviderMark({
   className?: string;
   opticalAlign?: OpticalAlign;
 }) {
-  const src = providerLogo(provider);
+  const isDark = useThemeIsDark();
+  const src = providerLogo(provider, !isDark);
   const transform = opticalTransform(provider, opticalAlign);
   return (
     <span

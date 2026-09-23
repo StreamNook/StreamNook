@@ -23,7 +23,7 @@ import { Tooltip } from '../ui/Tooltip';
  * "import", "sync", "OAuth" or "session".
  */
 
-const PLATFORMS: PlatformId[] = ['kick', 'youtube'];
+const PLATFORMS: PlatformId[] = ['kick', 'youtube', 'tiktok'];
 
 export default function PlatformAccountRows() {
   return (
@@ -37,6 +37,10 @@ export default function PlatformAccountRows() {
       <p className="text-xs text-textMuted">
         Watching on one of these uses that account — for following, chatting and
         anything it unlocks.
+      </p>
+      <p className="text-xs text-textMuted">
+        TikTok is the exception. Signing in only lets age-restricted LIVEs play,
+        and TikTok chat stays read-only either way.
       </p>
     </div>
   );
@@ -60,13 +64,19 @@ function PlatformRow({ provider }: { provider: PlatformId }) {
   const title = connected ? (name ?? meta.label) : meta.label;
   // A step message replaces the subtitle while something is happening, so the row
   // says what it is doing instead of freezing on a stale line.
+  // TikTok's session only plays age-restricted LIVEs and imports nothing, so
+  // its row says that rather than counting channels it never read.
   const subtitle =
     step ??
-    (connected
-      ? channelCount > 0
-        ? `${meta.label} · ${channelCount} channel${channelCount === 1 ? '' : 's'}`
-        : meta.label
-      : 'Not connected');
+    (provider === 'tiktok'
+      ? connected
+        ? `${meta.label} · age-restricted LIVEs play`
+        : 'Sign in to watch age-restricted LIVEs'
+      : connected
+        ? channelCount > 0
+          ? `${meta.label} · ${channelCount} channel${channelCount === 1 ? '' : 's'}`
+          : meta.label
+        : 'Not connected');
 
   return (
     <div className="flex items-center gap-3 rounded-lg px-3 py-2.5 bg-white/[0.03]">

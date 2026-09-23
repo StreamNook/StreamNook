@@ -9,10 +9,13 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 /// How the resolved stream is delivered, which decides the player path:
-/// `Hls` rides the localhost HLS relay; `Flv` rides the streaming FLV relay
-/// (mpegts.js on the frontend); `Mp4` is a direct `video.src` URL; `LocalHls`
-/// is HLS the adapter is ALREADY serving from localhost, so it must be handed
-/// to the player untouched rather than proxied a second time.
+/// `Hls` rides the shared localhost HLS relay; `Mp4` is a direct `video.src`
+/// URL; `LocalHls` is HLS the adapter is ALREADY serving from localhost, so it
+/// must be handed to the player untouched rather than proxied a second time.
+///
+/// `Flv` is unused. The page runs one media engine, so an adapter whose
+/// upstream is FLV rewrites the container in Rust and serves `LocalHls`
+/// instead of asking the frontend to load a second one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PlaybackKind {

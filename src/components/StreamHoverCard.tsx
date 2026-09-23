@@ -2,6 +2,8 @@ import StreamTitleWithEmojis from './StreamTitleWithEmojis';
 import { Package } from 'phosphor-react';
 import { formatStreamUptime } from '../utils/chatCommands';
 import type { TwitchStream } from '../types';
+import { streamProvider } from '../utils/streamProvider';
+import { thumbFitFor } from '../utils/thumbFit';
 
 // Replaces the tooltip's default centered pill. Padding lives on the content
 // block instead, so the preview can run edge to edge under the rounded corners.
@@ -44,14 +46,33 @@ const StreamHoverCard = ({ stream, hasDrops }: StreamHoverCardProps) => {
                 lands, so the tooltip measures the card correctly on first
                 paint instead of shifting once it loads. */}
             <div className="relative w-full aspect-video overflow-hidden bg-white/5">
-                {stream.thumbnail_url && (
+                {stream.thumbnail_url && thumbFitFor(streamProvider(stream), false) === 'pillar' ? (
+                    // A portrait picture keeps this card's landscape height (the
+                    // tooltip is measured before it loads) and is shown whole over
+                    // a blurred copy of itself instead of cropped to a strip.
+                    <>
+                        <img
+                            src={thumbnailUrl(stream.thumbnail_url)}
+                            alt=""
+                            aria-hidden="true"
+                            draggable={false}
+                            className="absolute inset-0 w-full h-full object-cover scale-125 blur-xl opacity-60"
+                        />
+                        <img
+                            src={thumbnailUrl(stream.thumbnail_url)}
+                            alt=""
+                            draggable={false}
+                            className="relative w-full h-full object-contain"
+                        />
+                    </>
+                ) : stream.thumbnail_url ? (
                     <img
                         src={thumbnailUrl(stream.thumbnail_url)}
                         alt=""
                         draggable={false}
                         className="w-full h-full object-cover"
                     />
-                )}
+                ) : null}
 
                 <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
                     <div className="live-dot text-xs px-1.5 py-0.5">LIVE</div>

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop_capability.json",
   "identifier": "remote-bridge-capability",
-  "description": "The only native surface reachable from the remote twitch.tv, kick.com and youtube.com pages StreamNook loads in its hidden and overlay webviews. Everything else is denied to those origins.",
+  "description": "The only native surface reachable from the remote twitch.tv, kick.com, youtube.com and tiktok.com pages StreamNook loads in its hidden and overlay webviews. Everything else is denied to those origins.",
   "windows": [
     "whisper-scraper",
     "identity-fetch-*",
@@ -12,7 +12,8 @@
     "kick-resolve-*",
     "kick-sync-*",
     "kick-login",
-    "youtube-login"
+    "youtube-login",
+    "tiktok-login"
   ],
   "remote": {
     "urls": [
@@ -22,7 +23,9 @@
       "https://*.kick.com/*",
       "https://youtube.com/*",
       "https://*.youtube.com/*",
-      "https://accounts.google.com/*"
+      "https://accounts.google.com/*",
+      "https://tiktok.com/*",
+      "https://*.tiktok.com/*"
     ]
   },
   "permissions": [

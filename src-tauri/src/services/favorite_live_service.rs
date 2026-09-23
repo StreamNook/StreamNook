@@ -21,10 +21,9 @@
 //!                 signed out this simply doesn't run.
 //!   kick    60s   one batched `live_check` per 50 slugs.
 //!   youtube 180s  per-channel page fetches, hard-capped per sweep. See below.
-//!   tiktok  never TikTok registers a chat/playback provider but no
-//!                 `StreamSource`, so there is no live check to call. TikTok
-//!                 favourites are stored and reachable from the offline roster;
-//!                 they are never reported live.
+//!   tiktok  180s  per-channel profile fetches, capped per sweep. TikTok has no
+//!                 batched liveness endpoint, and a channel whose chat socket is
+//!                 already open is answered from that instead of a fetch.
 //!
 //! Channels already covered by `provider_follows` are skipped here, so a channel
 //! that is both followed and favourited costs one platform call, not two.

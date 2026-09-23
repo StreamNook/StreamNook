@@ -35,6 +35,7 @@ import { usePlatformAccountStore } from '../stores/platformAccountStore';
 import { ProviderMark } from './ProviderLogo';
 import { streamProvider } from '../utils/streamProvider';
 import { WATCHABLE_PROVIDERS, providerLabel, type ProviderId } from '../types/providers';
+import { deckGeometry } from '../utils/markDeck';
 
 type Platform = ProviderId | 'all';
 
@@ -54,12 +55,8 @@ const labelOf = (p: Platform): string => (p === 'all' ? 'All platforms' : provid
  *  nothing is painted on it. No tile fill, no ring, no shadow. Both were tried
  *  and both read as logos sitting on chips rather than as a stack of marks. */
 function AllMark({ size }: { size: number }) {
-  const card = Math.round(size * 0.88);
-  const glyph = Math.round(card * 0.72);
-  const dx = Math.round(card * 0.44);
-  const dy = Math.round(card * 0.3);
   const n = WATCHABLE_PROVIDERS.length;
-  const spread = card + dx * (n - 1);
+  const { card, glyph, dx, dy, spread, height } = deckGeometry(size, n);
   return (
     // The deck is wider than a single mark, so it occupies the SAME slot the
     // single marks do and centres itself in it, overhanging evenly on both
@@ -68,7 +65,7 @@ function AllMark({ size }: { size: number }) {
     // as "the stack is pushed right".
     <span
       className="relative block flex-shrink-0"
-      style={{ width: size, height: card + dy * (n - 1) }}
+      style={{ width: size, height }}
     >
       {WATCHABLE_PROVIDERS.map((p, i) => (
         <span

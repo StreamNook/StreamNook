@@ -1,6 +1,9 @@
 # The ONLY commands reachable from the remote pages StreamNook loads in its
-# hidden/overlay webviews (twitch.tv, kick.com, and youtube.com/accounts.google.com
-# for the YouTube sign-in overlay). Each one is a narrow, one-way reporting callback
+# hidden/overlay webviews (twitch.tv, kick.com, youtube.com/accounts.google.com
+# for the YouTube sign-in overlay, and tiktok.com for TikTok's, which is there for
+# the same URL-bar reason and the same Rust-side cookie read as YouTube's; the
+# hidden TikTok directory window answers through its URL fragment and needs no
+# entry). Each one is a narrow, one-way reporting callback
 # invoked by an injected script; none of them read credentials or take destructive
 # action.
 #

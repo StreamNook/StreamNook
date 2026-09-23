@@ -307,6 +307,8 @@ pub async fn stop_multi_nook(stream_id: String) -> Result<(), String> {
     debug!("[MultiNook] Stopping stream: {}", stream_id);
     // No-op unless this tile was a YouTube one holding a DASH relay.
     crate::services::youtube_dash::stop(&stream_id).await;
+    // Likewise for a TikTok tile's relay session.
+    crate::services::tiktok_relay::stop(&stream_id);
     MultiNookServer::stop_instance(&stream_id)
         .await
         .map_err(|e| e.to_string())
@@ -321,6 +323,9 @@ pub async fn stop_all_multi_nooks() -> Result<(), String> {
     // the solo player remounts on it.
     crate::services::youtube_dash::stop_all_except(crate::services::stream_server::SOLO_STREAM_ID)
         .await;
+    crate::services::tiktok_relay::stop_all_except(
+        crate::services::stream_server::SOLO_STREAM_ID,
+    );
     MultiNookServer::stop_all().await.map_err(|e| e.to_string())
 }
 

@@ -66,11 +66,17 @@ export interface ProviderWatchMeta {
   // app-local follow list. null when following isn't offered.
   followedLive: 'native' | 'inApp' | null;
   liveCheck: boolean;
+  // The shape this platform's pictures usually are. Declared rather than
+  // measured because a thumbnail's dimensions are not known before it decodes,
+  // and a card that changes shape after paint is worse than one that starts
+  // right. Playback corrects itself from the real frame, so this is only ever
+  // the starting assumption, never the final word.
+  thumbAspect: 'landscape' | 'portrait';
 }
 
 export const PROVIDER_WATCH: Record<ProviderId, ProviderWatchMeta> = {
-  twitch: { playback: true, browse: 'categories', search: true, followedLive: 'native', liveCheck: true },
-  kick: { playback: true, browse: 'categories', search: true, followedLive: 'inApp', liveCheck: true },
+  twitch: { playback: true, browse: 'categories', search: true, followedLive: 'native', liveCheck: true, thumbAspect: 'landscape' },
+  kick: { playback: true, browse: 'categories', search: true, followedLive: 'inApp', liveCheck: true, thumbAspect: 'landscape' },
   // browse is 'categories' off YouTube's OWN games directory (/gaming/games), not
   // a synthesised taxonomy: each entry is a real game with box art, live viewers,
   // and a topic channel whose /live page lists that game's streams.
@@ -79,10 +85,16 @@ export const PROVIDER_WATCH: Record<ProviderId, ProviderWatchMeta> = {
   // falls back to the in-app list otherwise. Nothing in src/ reads this field
   // today, so the divergence is inert; resolve it against the Rust before wiring
   // any UI to it.
-  youtube: { playback: true, browse: 'categories', search: true, followedLive: 'native', liveCheck: true },
-  tiktok: { playback: false, browse: 'feed', search: false, followedLive: 'inApp', liveCheck: true },
-  rumble: { playback: false, browse: null, search: false, followedLive: null, liveCheck: false },
-  x: { playback: false, browse: null, search: false, followedLive: null, liveCheck: false },
+  youtube: { playback: true, browse: 'categories', search: true, followedLive: 'native', liveCheck: true, thumbAspect: 'landscape' },
+  // `browse` is the shape the surface takes WHEN it has data. TikTok serves no
+  // live directory to a signed-out client, so the Rust adapter reports
+  // `directory: false` and the Browse tab falls back to the follow list until a
+  // session exists. `search` is an exact-handle jump, not a real search index,
+  // which is why it stays false: the grid picker would otherwise promise to
+  // find a creator by name and return nothing for every partial word.
+  tiktok: { playback: true, browse: 'feed', search: false, followedLive: 'inApp', liveCheck: true, thumbAspect: 'portrait' },
+  rumble: { playback: false, browse: null, search: false, followedLive: null, liveCheck: false, thumbAspect: 'landscape' },
+  x: { playback: false, browse: null, search: false, followedLive: null, liveCheck: false, thumbAspect: 'landscape' },
 };
 
 /// Providers whose browse + watch surface is live in this build.
@@ -103,6 +115,9 @@ export const WATCHABLE_PROVIDERS: ProviderId[] = PROVIDER_IDS.filter((p) => PROV
 // The map stays because the NEXT platform in that position should be refused
 // here with a reason, not discovered by a user. Anything listed is refused with
 // its message; anything absent is allowed if it can play at all.
+// TikTok was the most recent entry: it played solo before its tile could fit a
+// portrait picture (a landscape cell cropped it to a strip). Its relay is keyed
+// per stream and the tile now switches to `contain` for a portrait source.
 export const GRID_BLOCKED: Partial<Record<ProviderId, string>> = {};
 
 /** True when this platform can be a tile in the grid. */

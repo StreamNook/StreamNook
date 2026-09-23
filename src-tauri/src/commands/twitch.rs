@@ -913,6 +913,7 @@ pub async fn mount_twitch_overlay(
     let profile = match profile.as_deref() {
         Some("kick-account") => crate::services::providers::kick::account_profile_dir(&app),
         Some("youtube-account") => crate::services::youtube_auth_service::youtube_profile_dir(),
+        Some("tiktok-account") => crate::services::tiktok_auth_service::tiktok_profile_dir(),
         _ => active_twitch_web_profile_dir()?,
     };
     let parsed = url.parse().map_err(|e| format!("Invalid URL: {}", e))?;

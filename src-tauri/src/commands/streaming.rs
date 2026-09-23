@@ -791,6 +791,8 @@ pub async fn stop_stream() -> Result<(), String> {
     // Without it a stopped stream's session stayed registered, held its init
     // segments and cache, and counted against the relay cap.
     crate::services::youtube_dash::stop(crate::services::stream_server::SOLO_STREAM_ID).await;
+    // Same for the TikTok relay, and same reasoning: unknown ids are a no-op.
+    crate::services::tiktok_relay::stop(crate::services::stream_server::SOLO_STREAM_ID);
     StreamServer::stop().await.map_err(|e| e.to_string())
 }
 

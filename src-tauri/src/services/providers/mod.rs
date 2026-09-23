@@ -15,6 +15,8 @@ pub mod kick_media;
 pub mod kick_profile;
 pub mod source;
 pub mod tiktok;
+pub mod tiktok_feed;
+pub mod tiktok_media;
 pub mod watch_urls;
 pub mod youtube;
 pub mod youtube_account;
@@ -189,6 +191,7 @@ pub async fn registry() -> &'static ProviderRegistry {
             // Watch/browse adapters, added per platform phase.
             reg.register_source(Arc::new(kick_media::KickSource::new()));
             reg.register_source(Arc::new(youtube_media::YouTubeSource::new()));
+            reg.register_source(Arc::new(tiktok_media::TikTokSource::new()));
             reg
         })
         .await

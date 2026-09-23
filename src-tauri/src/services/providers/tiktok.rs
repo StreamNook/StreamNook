@@ -302,7 +302,7 @@ async fn handle_event(event: TikTokLiveEvent, channel_key: &str, id_lc: &str) {
         }
         TikTokLiveEvent::RoomUserSeq(m) => update_viewers(id_lc, &m),
         TikTokLiveEvent::ImDelete(m) => emit_deletions(&m, channel_key).await,
-        TikTokLiveEvent::LiveEnded(_) => set_live(id_lc, false),
+        TikTokLiveEvent::LiveEnded(_) => announce_ended(id_lc),
         _ => {}
     }
 }
@@ -648,6 +648,29 @@ fn set_live(id_lc: &str, live: bool) {
         if let Some(meta) = m.get_mut(id_lc) {
             meta.is_live = live;
         }
+    }
+}
+
+/// The broadcast ended, reported by the room itself.
+///
+/// Only for the control message that says so. A socket that merely dropped is
+/// not evidence: the outer loop re-resolves and reconnects, and announcing an
+/// ending there would eject the player from a stream that is still running.
+///
+/// The watch side would otherwise wait two cycles of its liveness poll before
+/// believing it, which is up to three minutes of a frozen last frame. The
+/// frontend already listens for this event generically, so emitting it is the
+/// whole fix.
+fn announce_ended(id_lc: &str) {
+    set_live(id_lc, false);
+    // The room id and its rendition urls die with the broadcast.
+    crate::services::providers::tiktok_media::invalidate(id_lc);
+    if let Some(app) = super::app_handle() {
+        use tauri::Emitter;
+        let _ = app.emit(
+            "provider-stream-offline",
+            serde_json::json!({ "provider": "tiktok", "channel": id_lc }),
+        );
     }
 }
 

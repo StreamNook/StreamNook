@@ -137,6 +137,54 @@ pub struct RoomInfo {
     pub raw_json: String,
 }
 
+/// One pullable tier of a LIVE room.
+///
+/// TikTok publishes several packagings of the same tier side by side, and which
+/// of them a room carries varies by room, region and encoder. An absent
+/// packaging is usually an EMPTY STRING rather than a missing key, so every URL
+/// here is `None` unless it is a non-empty `http(s)` string.
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
+pub struct TikTokRendition {
+    /// The `sdk_key`: "origin", "uhd", "hd", "sd", "ld", "ao".
+    pub tier: String,
+    /// TikTok's own display name for the tier, falling back to `tier`.
+    pub label: String,
+    /// Ordering value from the room's qualities ladder. Higher is better.
+    pub level: i64,
+    pub flv: Option<String>,
+    pub hls: Option<String>,
+    /// fMP4-packaged HLS. Plays natively wherever plain HLS does, and is the
+    /// lowest-latency packaging TikTok offers.
+    pub cmaf: Option<String>,
+    pub dash: Option<String>,
+    /// Decoded from `sdk_params`, which is itself a JSON string.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub fps: Option<f64>,
+    pub vbitrate: Option<u64>,
+    /// "h264", "bytevc1" (HEVC), "bytevc2". A tier whose codec the player
+    /// cannot decode has to be demoted before it is selected, not after.
+    pub vcodec: Option<String>,
+}
+
+impl TikTokRendition {
+    /// True when nothing playable was published for this tier.
+    pub fn is_empty(&self) -> bool {
+        self.flv.is_none() && self.hls.is_none() && self.cmaf.is_none() && self.dash.is_none()
+    }
+
+    /// The short side of the frame. TikTok is portrait, so `height` is the LONG
+    /// side and comparing a requested "720p" against it selects the wrong tier.
+    pub fn short_side(&self) -> Option<u32> {
+        match (self.width, self.height) {
+            (Some(w), Some(h)) => Some(w.min(h)),
+            (Some(w), None) => Some(w),
+            (None, Some(h)) => Some(h),
+            (None, None) => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct StreamUrl {
     pub flv_origin: Option<String>,
@@ -144,6 +192,13 @@ pub struct StreamUrl {
     pub flv_sd: Option<String>,
     pub flv_ld: Option<String>,
     pub flv_ao: Option<String>,
+    /// Every published tier, best first. The five fields above are DERIVED from
+    /// this, so there is one parser rather than two that can disagree.
+    #[serde(default)]
+    pub renditions: Vec<TikTokRendition>,
+    /// The tier TikTok's own player would open on.
+    #[serde(default)]
+    pub default_tier: Option<String>,
 }
 
 impl WebcastGiftMessage {

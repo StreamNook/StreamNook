@@ -1019,7 +1019,7 @@ impl BitReader {
 
 /// Decode coded width/height from an SPS NAL (with its header byte). Only the
 /// fields up to the cropping window are read.
-fn parse_sps_dimensions(sps: &[u8]) -> Option<(u16, u16)> {
+pub(crate) fn parse_sps_dimensions(sps: &[u8]) -> Option<(u16, u16)> {
     let mut r = BitReader::new(sps.get(1..)?);
     let profile_idc = r.bits(8)?;
     r.bits(8)?; // constraint flags + reserved

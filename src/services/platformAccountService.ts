@@ -12,10 +12,22 @@ import { invoke } from '@tauri-apps/api/core';
 
 /** Platforms with an account you can connect. Twitch is not one of these: it is
  *  the app's native account and lives in `accountService`. */
-export type PlatformId = 'kick' | 'youtube';
+export type PlatformId = 'kick' | 'youtube' | 'tiktok';
+
+const IS_CONNECTED: Record<PlatformId, string> = {
+  kick: 'kick_is_connected',
+  youtube: 'youtube_is_connected',
+  tiktok: 'tiktok_is_connected',
+};
+
+const DISCONNECT: Record<PlatformId, string> = {
+  kick: 'kick_disconnect',
+  youtube: 'youtube_disconnect',
+  tiktok: 'tiktok_disconnect',
+};
 
 export function isConnected(provider: PlatformId): Promise<boolean> {
-  return invoke<boolean>(provider === 'kick' ? 'kick_is_connected' : 'youtube_is_connected');
+  return invoke<boolean>(IS_CONNECTED[provider]);
 }
 
 export interface PlatformAccountInfo {
@@ -35,7 +47,16 @@ export function accountInfo(provider: PlatformId): Promise<PlatformAccountInfo> 
 }
 
 export function disconnect(provider: PlatformId): Promise<void> {
-  return invoke<void>(provider === 'kick' ? 'kick_disconnect' : 'youtube_disconnect');
+  return invoke<void>(DISCONNECT[provider]);
+}
+
+/**
+ * Open the TikTok sign-in overlay and keep the session. That is the whole of
+ * connecting TikTok: the session exists to play age-restricted LIVEs, and
+ * nothing is imported.
+ */
+export function beginTiktokSession(): Promise<void> {
+  return invoke<void>('tiktok_connect');
 }
 
 /**

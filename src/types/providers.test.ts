@@ -26,9 +26,18 @@ describe('canGridProvider', () => {
   });
 
   it('refuses platforms with no playback at all', () => {
-    for (const p of ['tiktok', 'rumble', 'x'] as const) {
+    for (const p of ['rumble', 'x'] as const) {
       expect(canGridProvider(p)).toBe(false);
     }
+  });
+
+  // TikTok was refused here while its tile cropped a portrait picture to a
+  // strip. Flipped rather than deleted, like YouTube's: the record that the gate
+  // was opened on purpose, once each tile had its own relay session and fit.
+  it('admits TikTok now that a tile fits a portrait picture', () => {
+    expect(PROVIDER_WATCH.tiktok.playback).toBe(true);
+    expect(canGridProvider('tiktok')).toBe(true);
+    expect(GRID_BLOCKED.tiktok).toBeUndefined();
   });
 });
 
