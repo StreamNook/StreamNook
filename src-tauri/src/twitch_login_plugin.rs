@@ -40,6 +40,26 @@ struct DropsTokenResp {
     token: String,
 }
 
+#[derive(Serialize)]
+struct CookieUrlArgs<'a> {
+    url: &'a str,
+}
+
+#[derive(Serialize)]
+struct ExpireCookiesArgs<'a> {
+    urls: &'a [&'a str],
+}
+
+#[derive(Deserialize)]
+struct OpenResp {
+    open: bool,
+}
+
+#[derive(Deserialize)]
+struct KickRedirectResp {
+    url: String,
+}
+
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     tauri::plugin::Builder::new("twitch-login")
         .setup(|app, api| {
@@ -127,4 +147,69 @@ pub async fn get_mobile_login_cookies<R: Runtime>(app: AppHandle<R>) -> Result<S
         .run_mobile_plugin::<CookiesResp>("getCookies", ())
         .map(|r| r.cookies)
         .map_err(|e| e.to_string())
+}
+
+// ── Driven from Rust ─────────────────────────────────────────────────────────
+// The Kick sign-in runs the overlay itself (open, poll, collect, close) rather
+// than bouncing through the page, so these are plain functions, not commands,
+// and need no ACL grant.
+
+fn handle(app: &AppHandle) -> tauri::State<'_, TwitchLoginState<tauri::Wry>> {
+    app.state::<TwitchLoginState<tauri::Wry>>()
+}
+
+/// Show (or re-navigate) the login overlay.
+pub fn open_overlay(app: &AppHandle, url: &str, title: &str) -> Result<(), String> {
+    handle(app)
+        .0
+        .run_mobile_plugin::<serde_json::Value>(
+            "openLogin",
+            OpenLoginArgs {
+                url: url.to_string(),
+                watch_storage_key: None,
+                title: Some(title.to_string()),
+                hidden: None,
+            },
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+pub fn overlay_is_open(app: &AppHandle) -> bool {
+    handle(app)
+        .0
+        .run_mobile_plugin::<OpenResp>("isOpen", ())
+        .map(|r| r.open)
+        .unwrap_or(false)
+}
+
+pub fn close_overlay(app: &AppHandle) {
+    let _ = handle(app)
+        .0
+        .run_mobile_plugin::<serde_json::Value>("closeLogin", ());
+}
+
+/// The overlay's cookie header for `url` (`a=b; c=d`), HttpOnly included.
+pub fn cookies_for(app: &AppHandle, url: &str) -> String {
+    handle(app)
+        .0
+        .run_mobile_plugin::<CookiesResp>("getCookiesFor", CookieUrlArgs { url })
+        .map(|r| r.cookies)
+        .unwrap_or_default()
+}
+
+/// The Kick consent redirect the overlay caught, once; empty when none.
+pub fn take_kick_redirect(app: &AppHandle) -> String {
+    handle(app)
+        .0
+        .run_mobile_plugin::<KickRedirectResp>("takeKickRedirect", ())
+        .map(|r| r.url)
+        .unwrap_or_default()
+}
+
+/// Expire every cookie on these origins, leaving other sites signed in.
+pub fn expire_cookies(app: &AppHandle, urls: &[&str]) {
+    let _ = handle(app)
+        .0
+        .run_mobile_plugin::<serde_json::Value>("expireCookies", ExpireCookiesArgs { urls });
 }

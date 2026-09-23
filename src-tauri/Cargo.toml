@@ -126,7 +126,10 @@ reqwest = { version = "0.12.24", features = ["json", "gzip", "cookies", "multipa
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
-reqwest = { version = "0.12.24", default-features = false, features = ["json", "gzip", "cookies", "multipart", "rustls-tls"] }
+# http2 is load-bearing for Kick: its edge answers rustls over h1 with a 403
+# and rustls over h2 with a 200 (see HTTP_RESOLVE in providers/kick.rs).
+# default-features = false drops it, so it is named here.
+reqwest = { version = "0.12.24", default-features = false, features = ["json", "gzip", "cookies", "multipart", "rustls-tls", "http2"] }
 
 # webview2-com powers services/twitch_auth_service.rs (CookieManager).
 # The windows crate features cover both that and the DXGI Output

@@ -79,6 +79,16 @@ class OpenLoginArgs {
     var hidden: Boolean = false
 }
 
+@InvokeArg
+class CookieUrlArgs {
+    lateinit var url: String
+}
+
+@InvokeArg
+class ExpireCookiesArgs {
+    var urls: Array<String> = emptyArray()
+}
+
 /** A hidden re-mint either completes on its own quickly or it will not at all. */
 private const val HIDDEN_WATCH_TIMEOUT_MS = 30 * 1000L
 
@@ -117,11 +127,25 @@ private const val UA_CLIENT_HINTS_SPOOF = """
 })();
 """
 
+// Opens Kick's login form on its mobile site (see onPageFinished). The button
+// is Kick's own `data-testid="login"`, present in the header on every page.
+private const val KICK_OPEN_LOGIN = """
+(function(){
+  var n = 0;
+  var t = setInterval(function(){
+    if (document.querySelector('input[type=password]') || ++n > 20) { clearInterval(t); return; }
+    var b = document.querySelector('button[data-testid="login"]');
+    if (b) b.click();
+  }, 500);
+})();
+"""
+
 // In-app Twitch login: shows Twitch's own login page in a native WebView overlay
 // (no external browser), then the auth-token session cookie is read back from the
 // app-global CookieManager. Mirrors the desktop embedded-webview harvest.
 @TauriPlugin
 class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
+    @Volatile
     private var overlay: FrameLayout? = null
     private var webView: WebView? = null
 
@@ -147,6 +171,9 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
                 (activity as? MainActivity)?.notifyLoginCancelled()
             }
             hiddenMode = args.hidden
+            // A redirect left from an abandoned attempt carries a stale state
+            // and would fail the next exchange.
+            kickRedirect = null
             openedUrl = args.url
             bouncedHome = false
             if (overlay != null) {
@@ -188,7 +215,10 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
                 WebViewCompat.addDocumentStartJavaScript(
                     wv,
                     UA_CLIENT_HINTS_SPOOF,
-                    setOf("https://twitch.tv", "https://*.twitch.tv")
+                    setOf(
+                        "https://twitch.tv", "https://*.twitch.tv",
+                        "https://kick.com", "https://*.kick.com"
+                    )
                 )
             }
 
@@ -197,11 +227,34 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
                     view: WebView,
                     request: WebResourceRequest
                 ): Boolean {
-                    // The drops grant is finished the moment Twitch redirects
-                    // back with the credential on the fragment; the page it
+                    // The drops grant and Kick consent are finished the moment
+                    // the site redirects back with the credential; the page it
                     // would land on is never needed. Everything else stays
                     // inside this WebView.
-                    return captureDropsRedirect(request.url.toString())
+                    val u = request.url.toString()
+                    if (captureDropsRedirect(u) || captureKickRedirect(u)) return true
+                    // An app-store or intent:// hop (a site's "Open in app")
+                    // has nothing to load in here; swallowing it keeps the
+                    // sign-in page instead of an unknown-scheme error page.
+                    if (!u.startsWith("http://") && !u.startsWith("https://")) {
+                        android.util.Log.i("SNLogin", "ignored non-web navigation: ${u.substringBefore(':')}")
+                        return true
+                    }
+                    return false
+                }
+
+                /**
+                 * Kick's mobile site ignores /login and shows its home page with
+                 * the form closed, so a person asked to sign in has to hunt for
+                 * the account icon. Press Kick's own Log In button for them.
+                 * Retried briefly because the site hydrates after load, and it
+                 * stops the moment a password field exists.
+                 */
+                override fun onPageFinished(view: WebView, url: String?) {
+                    super.onPageFinished(view, url)
+                    val u = url ?: return
+                    if (hostPath(u) != "kick.com/login") return
+                    view.evaluateJavascript(KICK_OPEN_LOGIN, null)
                 }
 
                 /**
@@ -244,7 +297,7 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
                     val u = url ?: return
                     // Belt to the override above: a fragment-only landing can
                     // reach here without an override call.
-                    if (captureDropsRedirect(u)) return
+                    if (captureDropsRedirect(u) || captureKickRedirect(u)) return
                     if (bounceHomeToActivate(view, u)) return
                     // Logged so the real post-approval URL stays visible in
                     // logcat if Twitch ever moves where it lands. Never the
@@ -389,6 +442,56 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve(ret)
     }
 
+    /** Cookies for any origin. The Kick sign-in reads kick.com's HttpOnly
+     *  session from here, which page script cannot see. */
+    @Command
+    fun getCookiesFor(invoke: Invoke) {
+        val args = invoke.parseArgs(CookieUrlArgs::class.java)
+        CookieManager.getInstance().flush()
+        val cookies = CookieManager.getInstance().getCookie(args.url) ?: ""
+        val ret = JSObject()
+        ret.put("cookies", cookies)
+        invoke.resolve(ret)
+    }
+
+    /** Whether the overlay is on screen. Rust polls it to notice a close.
+     *  Read directly (the field is @Volatile) rather than hopping to the UI
+     *  thread, so a busy UI thread never stalls the Rust poller. */
+    @Command
+    fun isOpen(invoke: Invoke) {
+        val ret = JSObject()
+        ret.put("open", overlay != null)
+        invoke.resolve(ret)
+    }
+
+    /**
+     * Sign one site out of the embedded browser without touching the others.
+     * CookieManager has no per-site removal, so each cookie is overwritten as
+     * expired, both host-only and on the parent domain, since Kick sets some
+     * on `.kick.com`.
+     */
+    @Command
+    fun expireCookies(invoke: Invoke) {
+        val args = invoke.parseArgs(ExpireCookiesArgs::class.java)
+        activity.runOnUiThread {
+            val cm = CookieManager.getInstance()
+            for (u in args.urls) {
+                val raw = cm.getCookie(u) ?: continue
+                val host = Uri.parse(u).host ?: continue
+                val parent = "." + host.split('.').takeLast(2).joinToString(".")
+                raw.split(';')
+                    .map { it.substringBefore('=').trim() }
+                    .filter { it.isNotEmpty() }
+                    .forEach { name ->
+                        cm.setCookie(u, "$name=; Max-Age=0; Path=/")
+                        cm.setCookie(u, "$name=; Max-Age=0; Path=/; Domain=$parent")
+                    }
+            }
+            cm.flush()
+            invoke.resolve()
+        }
+    }
+
     @Command
     fun closeLogin(invoke: Invoke) {
         activity.runOnUiThread {
@@ -436,6 +539,35 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
         val ret = JSObject()
         ret.put("token", dropsToken ?: "")
         dropsToken = null
+        invoke.resolve(ret)
+    }
+
+    // ── Kick consent: the authorization-code redirect ───────────────────────
+    // Kick registers exactly one redirect, http://localhost:3000/callback. On
+    // the phone nothing listens there, so the navigation is taken here and
+    // cancelled, and Rust collects the url (code + state) with takeKickRedirect.
+    // The url is stored BEFORE the overlay closes; the Rust relay reads the
+    // open flag first and the redirect second, and relies on that order.
+
+    @Volatile
+    private var kickRedirect: String? = null
+
+    private fun captureKickRedirect(url: String): Boolean {
+        if (!url.startsWith("http://localhost:3000/callback?")) return false
+        kickRedirect = url
+        android.util.Log.i("SNLogin", "kick consent landed; redirect held for Rust")
+        // Posted for the same reason as the drops capture: dismiss() destroys
+        // the WebView whose callback this is.
+        storageWatchHandler.post { dismiss() }
+        return true
+    }
+
+    /** Hand over the captured Kick redirect once, or an empty string. */
+    @Command
+    fun takeKickRedirect(invoke: Invoke) {
+        val ret = JSObject()
+        ret.put("url", kickRedirect ?: "")
+        kickRedirect = null
         invoke.resolve(ret)
     }
 

@@ -85,10 +85,29 @@ pub async fn is_connected() -> bool {
 /// window closes itself. Non-interactive runs hidden and fails fast when there
 /// is no session yet.
 pub async fn import(interactive: bool) -> Result<KickImportReport> {
-    #[cfg(mobile)]
+    // The phone's overlay shares the app-global cookie jar, so a silent import
+    // is just a read of that jar; there is no window to run.
+    #[cfg(target_os = "android")]
     {
         let _ = interactive;
-        return Err(anyhow!("Kick account sync is only wired for the desktop app so far"));
+        let app = app_handle().ok_or_else(|| anyhow!("app handle not available for Kick sync"))?;
+        let jar = without_edge_cookies(jar_from_header(&crate::twitch_login_plugin::cookies_for(
+            &app,
+            "https://kick.com",
+        )));
+        return match follows_from_jar(&jar).await {
+            Some(channels) => Ok(KickImportReport {
+                status: "ok".to_string(),
+                channels,
+                shape: None,
+            }),
+            None => Err(anyhow!("not signed in to kick.com")),
+        };
+    }
+    #[cfg(all(mobile, not(target_os = "android")))]
+    {
+        let _ = interactive;
+        return Err(anyhow!("Kick account sync is not available on this platform"));
     }
     #[cfg(desktop)]
     {
@@ -516,20 +535,114 @@ pub async fn sign_in() -> Result<KickImportReport> {
     }
 }
 
-#[cfg(mobile)]
+/// The phone's sign-in: the same two legs as desktop, in the native login
+/// overlay. Site login first (consent at id.kick.com does not leave kick.com
+/// cookies), then consent in the same overlay, whose redirect the overlay
+/// catches and this function relays to `kick_auth_service`.
+#[cfg(target_os = "android")]
 pub async fn sign_in() -> Result<KickImportReport> {
-    Err(anyhow!("Kick sign-in is only wired for the desktop app so far"))
+    use crate::twitch_login_plugin as overlay;
+
+    const TITLE: &str = "Sign in to Kick";
+    let app = app_handle().ok_or_else(|| anyhow!("app handle not available for Kick sign-in"))?;
+    overlay::open_overlay(&app, "https://kick.com/login", TITLE).map_err(|e| {
+        log::warn!("[Kick] could not open the sign-in overlay: {}", e);
+        anyhow!("The Kick sign-in window could not open.")
+    })?;
+
+    // Leg 1: the site session. The overlay's jar sees HttpOnly cookies.
+    let mut report: Option<KickImportReport> = None;
+    // Signed in but the list will not load (a 401/403 from the site API) is a
+    // different state from "not signed in yet": waiting cannot fix it, and
+    // polling on would leave the person staring at kick.com for five minutes.
+    let mut read_failures = 0u8;
+    for _ in 0..150 {
+        if !overlay::overlay_is_open(&app) {
+            log::info!("[Kick] sign-in overlay dismissed by the user");
+            return Err(anyhow!("Sign-in was cancelled"));
+        }
+        let jar = without_edge_cookies(jar_from_header(&overlay::cookies_for(&app, "https://kick.com")));
+        let has_session = jar.contains_key("session_token");
+        if let Some(channels) = follows_from_jar(&jar).await {
+            report = Some(KickImportReport {
+                status: "ok".to_string(),
+                channels,
+                shape: None,
+            });
+            break;
+        }
+        if has_session {
+            read_failures += 1;
+            if read_failures >= 3 {
+                log::warn!("[Kick] signed in to kick.com but the follow list would not load; continuing to authorization");
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    if report.is_none() {
+        log::warn!("[Kick] no kick.com follow list; continuing to authorization");
+    }
+
+    // Leg 2: consent in the same overlay. The overlay takes the localhost
+    // redirect off the navigation; this relays it to the waiting exchange.
+    match crate::services::kick_auth_service::begin_auth().await {
+        Ok((auth_url, auth_pending)) => {
+            let _ = overlay::open_overlay(&app, &auth_url, TITLE);
+            let relay = async {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(400)).await;
+                    // Open flag FIRST, then the redirect. The overlay stores the
+                    // redirect before it closes itself, so once a closed overlay
+                    // is seen here, the take below is guaranteed to see any
+                    // redirect that closed it. The reverse order loses a sign-in
+                    // whenever the capture lands between the two reads.
+                    let open = overlay::overlay_is_open(&app);
+                    let url = overlay::take_kick_redirect(&app);
+                    if !url.is_empty() {
+                        if !crate::services::kick_auth_service::capture_redirect(&url) {
+                            log::warn!("[Kick] consent redirect arrived with nothing waiting");
+                        }
+                        // finish_auth owns the outcome from here.
+                        std::future::pending::<()>().await;
+                    }
+                    if !open {
+                        return;
+                    }
+                }
+            };
+            tokio::select! {
+                r = crate::services::kick_auth_service::finish_auth(auth_pending) => match r {
+                    Ok(()) => log::info!("[Kick] OAuth complete (phone overlay)"),
+                    Err(e) => log::warn!("[Kick] OAuth leg failed: {}", e),
+                },
+                _ = relay => log::info!("[Kick] consent overlay closed before authorizing"),
+            }
+        }
+        Err(e) => log::warn!("[Kick] could not start the authorization leg: {}", e),
+    }
+    overlay::close_overlay(&app);
+
+    match report {
+        Some(report) => {
+            log::info!(
+                "[Kick] sign-in {}: {} channel(s)",
+                report.status,
+                report.channels.len()
+            );
+            Ok(report)
+        }
+        // Authorization may still have succeeded, so this is a failed follow
+        // import rather than necessarily a failed sign-in.
+        None => Err(anyhow!("Signed in, but couldn't read your Kick follows")),
+    }
 }
 
-/// Read the kick.com session from the sign-in window and pull the follow list
-/// from Rust.
-///
-/// This exists because page script CANNOT see an HttpOnly cookie. The injected
-/// script built its `Authorization: Bearer` from `document.cookie`, so if Kick
-/// marks `session_token` HttpOnly the header was simply absent, every request
-/// came back 401, and the window sat there waiting for a session the user had
-/// already established. The webview's cookie manager has no such blind spot, and
-/// our rustls client already talks to kick.com successfully.
+#[cfg(all(mobile, not(target_os = "android")))]
+pub async fn sign_in() -> Result<KickImportReport> {
+    Err(anyhow!("Kick sign-in is not available on this platform"))
+}
+
 #[cfg(desktop)]
 async fn follows_via_cookies(app: &tauri::AppHandle, label: &str) -> Option<Vec<KickFollowedChannel>> {
     let jar = crate::services::youtube_auth_service::fetch_cookies_for_origin(
@@ -541,6 +654,42 @@ async fn follows_via_cookies(app: &tauri::AppHandle, label: &str) -> Option<Vec<
     )
     .await
     .ok()?;
+    follows_from_jar(&jar).await
+}
+
+/// Parse a `Cookie`-style header (`a=b; c=d`) into a jar. Values stay encoded,
+/// exactly as a browser would send them; `follows_from_jar` decodes the bearer.
+fn jar_from_header(raw: &str) -> HashMap<String, String> {
+    raw.split(';')
+        .filter_map(|part| {
+            let (k, v) = part.split_once('=')?;
+            let k = k.trim();
+            (!k.is_empty()).then(|| (k.to_string(), v.trim().to_string()))
+        })
+        .collect()
+}
+
+/// Cloudflare's clearance cookies are bound to the browser that earned them
+/// (its user agent and TLS handshake). The phone's overlay is a mobile WebView
+/// while our requests present as desktop Chrome over rustls, so replayed they
+/// can only mismatch. Leaving them out makes the request match the channel
+/// lookup, which already succeeds with no cookies at all.
+fn without_edge_cookies(mut jar: HashMap<String, String>) -> HashMap<String, String> {
+    jar.retain(|k, _| !matches!(k.as_str(), "cf_clearance" | "__cf_bm" | "_cfuvid"));
+    jar
+}
+
+/// Pull the follow list with a kick.com site session read from a cookie jar.
+/// None means the jar holds no usable session yet, which is what the sign-in
+/// loops poll on.
+///
+/// This exists because page script CANNOT see an HttpOnly cookie. The injected
+/// script built its `Authorization: Bearer` from `document.cookie`, so if Kick
+/// marks `session_token` HttpOnly the header was simply absent, every request
+/// came back 401, and the window sat there waiting for a session the user had
+/// already established. The webview's cookie manager has no such blind spot, and
+/// our rustls client already talks to kick.com successfully.
+async fn follows_from_jar(jar: &HashMap<String, String>) -> Option<Vec<KickFollowedChannel>> {
     if jar.is_empty() {
         return None;
     }
@@ -623,4 +772,28 @@ async fn follows_via_cookies(app: &tauri::AppHandle, label: &str) -> Option<Vec<
     }
     log::info!("[Kick] read {} follow(s) from the webview session", out.len());
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jar_from_header_keeps_encoded_values_and_skips_junk() {
+        let jar = jar_from_header("session_token=12%7Cabc; XSRF-TOKEN=x%3D; ; novalue; a = b ");
+        assert_eq!(jar.get("session_token").map(String::as_str), Some("12%7Cabc"));
+        assert_eq!(jar.get("XSRF-TOKEN").map(String::as_str), Some("x%3D"));
+        assert_eq!(jar.get("a").map(String::as_str), Some("b"));
+        assert_eq!(jar.len(), 3);
+    }
+
+    #[test]
+    fn edge_cookies_are_never_replayed() {
+        let jar = without_edge_cookies(jar_from_header(
+            "session_token=t; cf_clearance=c; __cf_bm=b; _cfuvid=u; XSRF-TOKEN=x",
+        ));
+        let mut keys: Vec<_> = jar.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, ["XSRF-TOKEN", "session_token"]);
+    }
 }
