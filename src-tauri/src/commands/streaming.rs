@@ -385,18 +385,28 @@ async fn start_provider_stream(
         // DASH-backed 1440p/2160p renditions). Sending it through the relay
         // would proxy a local server through another local server and rewrite
         // playlists that are already exactly what the player needs.
-        PlaybackKind::LocalHls => Ok(StreamStartResult {
-            url: resolved.url,
-            quality: resolved.quality,
-            mode: None,
-            entitled: false,
-            proxy_region: None,
-            available: hls_master::quality_names(&resolved.qualities),
-            clip_source: None,
-            vod: None,
-            kind: Some("hls".to_string()),
-        }),
-        // FLV/MP4 platforms land here once their adapters ship (TikTok).
+        PlaybackKind::LocalHls => {
+            // The relay is not used on this path, so a refresher registered by
+            // an EARLIER stream would otherwise stay installed for the rest of
+            // the session: `StreamServer::stop` clears the proxy url but not
+            // the refresher. Inert while nothing re-signs, and wrong the moment
+            // something does.
+            crate::services::stream_server::set_manifest_refresher(None).await;
+            Ok(StreamStartResult {
+                url: resolved.url,
+                quality: resolved.quality,
+                mode: None,
+                entitled: false,
+                proxy_region: None,
+                available: hls_master::quality_names(&resolved.qualities),
+                clip_source: None,
+                vod: None,
+                kind: Some("hls".to_string()),
+            })
+        }
+        // Nothing returns these: an adapter whose upstream is FLV serves it
+        // through its own local relay and reports `LocalHls`, so the player
+        // never needs a second media engine.
         other => Err(format!(
             "{} playback kind {:?} is not wired up yet",
             provider, other

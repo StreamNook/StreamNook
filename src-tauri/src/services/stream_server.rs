@@ -319,6 +319,11 @@ fn prefetch_segment(index: u32) {
         let Some(url) = m.by_index.get(&index).cloned() else {
             return;
         };
+        // Refused here too, not only when the player asks: a prefetch is a
+        // fetch the relay makes entirely on the playlist's say-so.
+        if !relay_may_fetch(&url) {
+            return;
+        }
         m.inflight.insert(index);
         url
     };
@@ -346,29 +351,95 @@ fn pseg_map() -> &'static std::sync::Mutex<PsegMap> {
     &PSEG
 }
 
-/// Rewrite absolute `http(s)://` segment URIs in a media playlist to `pseg/<n>`.
-/// Comment lines are left alone, so tags keep whatever absolute URLs they carry
-/// (a `#EXT-X-MAP` URI is handled by the same rule when it stands on its own).
-fn rewrite_absolute_segments(playlist: &str) -> String {
+/// Whether the relay may fetch `url` on a playlist's say-so.
+///
+/// The relay returns what it fetches to the page under a permissive CORS header,
+/// so a URL taken on trust turns it into a fetcher for anything reachable from
+/// this machine. Every platform on this path serves segments over HTTPS from
+/// named CDN hosts, so the rule costs them nothing: HTTPS only, and never an
+/// address literal or a loopback name. Certificate validation then does the
+/// rest, since a local service cannot present a valid certificate for a name
+/// the playlist invented.
+fn relay_may_fetch(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    if parsed.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if host.parse::<std::net::IpAddr>().is_ok() || host.starts_with('[') {
+        return false;
+    }
+    host != "localhost" && !host.ends_with(".localhost")
+}
+
+/// Rewrite absolute `http(s)://` URIs in a media playlist to `pseg/<n>`.
+///
+/// Two shapes carry one: a bare segment line, and the `URI="..."` attribute of
+/// `#EXT-X-MAP`, which is how an fMP4 playlist names its init segment. A rule
+/// that only looked at lines starting with `http` missed the second entirely,
+/// and every fMP4 upstream would then have fetched its init straight from the
+/// CDN, bypassing the relay whose whole purpose is carrying the CORS header.
+///
+/// Returns the playlist plus the indices of the segment lines and of the init,
+/// so the caller decides what to fetch ahead. Pure apart from interning, which
+/// is what makes it testable without a runtime.
+fn rewrite_uris(playlist: &str) -> (String, Vec<u32>, Option<u32>) {
     let mut out = String::with_capacity(playlist.len());
-    let mut seen_indices: Vec<u32> = Vec::new();
+    let mut segments: Vec<u32> = Vec::new();
+    let mut init: Option<u32> = None;
     for line in playlist.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-            let idx = match pseg_map().lock() {
-                Ok(mut m) => m.intern(trimmed),
-                Err(_) => {
-                    out.push_str(line);
-                    out.push('\n');
-                    continue;
+            match pseg_map().lock() {
+                Ok(mut m) => {
+                    let idx = m.intern(trimmed);
+                    segments.push(idx);
+                    out.push_str(&format!("pseg/{}", idx));
                 }
-            };
-            seen_indices.push(idx);
-            out.push_str(&format!("pseg/{}", idx));
+                Err(_) => out.push_str(line),
+            }
+        } else if trimmed.starts_with("#EXT-X-MAP") {
+            out.push_str(&rewrite_map_line(line, &mut init));
         } else {
             out.push_str(line);
         }
         out.push('\n');
+    }
+    (out, segments, init)
+}
+
+/// Rewrite an absolute `URI="..."` on an `#EXT-X-MAP` line to `pseg/<n>`.
+fn rewrite_map_line(line: &str, init: &mut Option<u32>) -> String {
+    let Some(open) = line.find("URI=\"") else {
+        return line.to_string();
+    };
+    let value_start = open + 5;
+    let Some(close_rel) = line[value_start..].find('"') else {
+        return line.to_string();
+    };
+    let close = value_start + close_rel;
+    let uri = &line[value_start..close];
+    if !(uri.starts_with("http://") || uri.starts_with("https://")) {
+        return line.to_string();
+    }
+    let Ok(mut m) = pseg_map().lock() else {
+        return line.to_string();
+    };
+    let idx = m.intern(uri);
+    *init = Some(idx);
+    format!("{}pseg/{}{}", &line[..value_start], idx, &line[close..])
+}
+
+fn rewrite_absolute_segments(playlist: &str) -> String {
+    let (out, seen_indices, init) = rewrite_uris(playlist);
+    // The init is needed before any segment can be decoded, so it goes first.
+    if let Some(idx) = init {
+        prefetch_segment(idx);
     }
 
     // Prefetch ONLY the newest few segments, never the whole playlist. A live
@@ -712,6 +783,10 @@ impl StreamServer {
         }
 
         if let Some(target) = pseg_target(request_path) {
+            if !relay_may_fetch(&target) {
+                warn!("[StreamServer] refused a segment url that is not an https CDN host");
+                return Ok(empty_cors(403));
+            }
             return Ok(match HTTP_CLIENT.get(&target).send().await {
                 Ok(res) if res.status().is_success() => match res.bytes().await {
                     // `media_response` sniffs TS vs fMP4 and carries the CORS
@@ -1005,5 +1080,56 @@ impl StreamServer {
             .lock()
             .await
             .ok_or_else(|| anyhow::anyhow!("No server running"))
+    }
+}
+
+#[cfg(test)]
+mod relay_rewrite_tests {
+    use super::*;
+
+    #[test]
+    fn the_init_named_by_ext_x_map_comes_through_the_relay_too() {
+        let playlist = concat!(
+            "#EXTM3U\n",
+            "#EXT-X-VERSION:7\n",
+            "#EXT-X-MAP:URI=\"https://cdn.example.com/live/init.mp4\"\n",
+            "#EXTINF:2.000,\n",
+            "https://cdn.example.com/live/seg-1.m4s\n",
+        );
+        let (out, segments, init) = rewrite_uris(playlist);
+        let init = init.expect("the EXT-X-MAP uri must be interned");
+        assert!(
+            out.contains(&format!("#EXT-X-MAP:URI=\"pseg/{}\"", init)),
+            "the init must be served by the relay, not fetched from the CDN: {out}"
+        );
+        assert_eq!(segments.len(), 1);
+        assert!(!out.contains("cdn.example.com"), "an upstream url leaked: {out}");
+    }
+
+    #[test]
+    fn a_relative_map_uri_is_left_for_the_existing_relative_handling() {
+        let playlist = "#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:2.0,\nseg.ts\n";
+        let (out, segments, init) = rewrite_uris(playlist);
+        assert_eq!(init, None);
+        assert!(segments.is_empty());
+        assert!(out.contains("#EXT-X-MAP:URI=\"init.mp4\""), "{out}");
+    }
+
+    #[test]
+    fn the_relay_will_not_fetch_on_a_playlists_say_so_outside_https_cdns() {
+        // Every platform on this path looks like these, and must keep working.
+        assert!(relay_may_fetch("https://rr5---sn-q4fl6nsd.googlevideo.com/videoplayback/x"));
+        assert!(relay_may_fetch(
+            "https://fa723fc1b171.us-west-2.playback.live-video.net/api/video/v1/x.ts"
+        ));
+        // Everything that would make the relay a fetcher for this machine.
+        assert!(!relay_may_fetch("http://rr5---sn-q4fl6nsd.googlevideo.com/videoplayback/x"));
+        assert!(!relay_may_fetch("https://127.0.0.1:8080/admin"));
+        assert!(!relay_may_fetch("https://192.168.1.1/cgi-bin/reboot"));
+        assert!(!relay_may_fetch("https://[::1]/x"));
+        assert!(!relay_may_fetch("https://localhost/x"));
+        assert!(!relay_may_fetch("https://api.localhost./x"));
+        assert!(!relay_may_fetch("file:///etc/passwd"));
+        assert!(!relay_may_fetch("not a url"));
     }
 }
