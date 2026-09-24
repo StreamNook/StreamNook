@@ -69,4 +69,45 @@ if [[ "$LABEL" == release ]]; then
   AS=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | tail -1)
   echo "=== signature ==="
   "$AS" verify --print-certs "$APK" 2>&1 | grep -E "certificate DN|SHA-256 digest" | head -2
+
+  # Write the update manifest FROM THE BUILD, so it cannot disagree with the APK.
+  #
+  # It used to be hand-written, and on 2026-09-19 the published manifest served
+  # 0.1.11 while tauri.android.conf.json said 0.1.12 - so no phone was ever
+  # offered 0.1.12, and the live data agreed: 13 members on 0.1.11 and zero on
+  # 0.1.12. Nothing in increment-version.js, release_manager.ps1 or this script
+  # touched the Android version or its manifest, so the only link between the
+  # build and what phones were told was somebody retyping it.
+  #
+  # Version comes from the same config Gradle builds from; sha256 and size come
+  # from the APK that was just produced. Notes are carried over from whatever is
+  # currently published, because CHANGELOG.md is the desktop changelog and the
+  # Android notes are written per release by hand.
+  #
+  # The UPLOAD is still Brandon's: it needs the R2 credentials and is the step
+  # that makes a release live. This only removes the transcription.
+  VERSION=$(node -e "process.stdout.write(require('./src-tauri/tauri.android.conf.json').version)")
+  SHA=$(sha256sum "$APK" | cut -d' ' -f1)
+  SIZE=$(stat -c%s "$APK")
+  NOTES=$(curl -fsS --max-time 20 "https://streamnook.app/api/v1/update-android" 2>/dev/null \
+    | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{process.stdout.write(JSON.parse(s).notes||'')}catch{process.stdout.write('')}})" \
+    || echo "")
+  OUT=latest-android.json
+  VERSION="$VERSION" SHA="$SHA" SIZE="$SIZE" NOTES="$NOTES" node -e '
+    const fs = require("fs");
+    fs.writeFileSync("latest-android.json", JSON.stringify({
+      version: process.env.VERSION,
+      download_url: "https://streamnook.app/download/android",
+      bundle_name: "StreamNook.apk",
+      sha256: process.env.SHA,
+      size: Number(process.env.SIZE),
+      notes: process.env.NOTES,
+    }, null, 2));
+  '
+  echo
+  echo "=== $OUT (v$VERSION) ==="
+  echo "Wrote $OUT from this build. Notes were carried over from the live manifest;"
+  echo "edit them before publishing if this release needs its own."
+  echo "To publish (yours to run, after the APK is uploaded):"
+  echo "  wrangler r2 object put streamnook-downloads/$OUT --file=$OUT --content-type=application/json --remote"
 fi

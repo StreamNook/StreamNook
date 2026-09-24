@@ -1007,6 +1007,32 @@ jobs:
             platforms     = $platforms
             notes         = (Get-Content ./changelog_section.md -Raw).TrimEnd()
             min_supported = "0.0.0"
+            # Server-controlled client switches, read by src/services/clientConfig.ts.
+            #
+            # This block was MISSING, and the omission was silent and total. The
+            # client reads `client_config.write_via_api` from this manifest to decide
+            # whether privileged writes go to the StreamNook API or straight to
+            # Supabase under the anon key, and this step rebuilds the manifest from
+            # scratch on every release, so any hand-added block was wiped by the next
+            # ship. The flag was therefore NEVER true in production: /api/v1/user/sync
+            # received no traffic and `user_clients.version` had zero rows, which is
+            # exactly the per-platform adoption signal it was built to provide.
+            #
+            # `min_supported_version` mirrors the top-level `min_supported` above,
+            # which the Rust updater reads. Two names for one idea was the other half
+            # of the bug: the client looked for a key nothing ever wrote.
+            #
+            # Kept at false here on purpose. The flag is a kill switch and its whole
+            # point is being flippable WITHOUT a release, so flipping it is an edit to
+            # latest.json in R2, not to this file. What matters is that the key now
+            # EXISTS on every ship, so such an edit survives the next release.
+            # Telemetry does not read it: the heartbeat in
+            # services/telemetry_heartbeat.rs always posts to the API, because
+            # telemetry gated on a flag nobody sets is telemetry that is off.
+            client_config = [ordered]@{
+              write_via_api         = $false
+              min_supported_version = "0.0.0"
+            }
             published_at  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
           }
           $manifest | ConvertTo-Json -Depth 6 | Out-File -FilePath ./latest.json -Encoding utf8 -NoNewline
@@ -1187,6 +1213,36 @@ jobs:
   # anything if build-macos actually produced a bundle. Everything here used to
   # live at the end of the Windows job, which is what forced Windows to wait for
   # macOS; moving it out is the whole point of the split.
+  # Warns when the macOS half of a release never landed.
+  #
+  # `finalize-macos` below is SKIPPED when build-macos produced no outputs, and a
+  # skipped job is green in the run summary, so a release could ship with the
+  # previous version's macOS entries standing and nothing said so. Every Mac then
+  # stayed on the old build for the whole cycle, traced only by one log line on
+  # the user's own machine. This job exists purely to make that visible.
+  macos-status:
+    needs: [build, build-macos]
+    if: >-
+      ${{ !cancelled()
+          && needs.build.result == 'success'
+          && needs.build.outputs.RELEASE_EXISTS == 'false'
+          && needs.build-macos.outputs.BUNDLE_NAME == '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Say that macOS did not ship
+        run: |
+          echo "::warning title=macOS was not published::v${{ needs.build.outputs.VERSION }} shipped WITHOUT a macOS build (build-macos result: ${{ needs.build-macos.result }}). The manifest still carries the PREVIOUS macOS entries, so Macs are offered the older build and will not see this release. Re-run the macOS job, or ship the next release once it is fixed."
+          {
+            echo "### macOS was not published"
+            echo ""
+            echo "\`v${{ needs.build.outputs.VERSION }}\` shipped without a macOS build."
+            echo "build-macos result: \`${{ needs.build-macos.result }}\`"
+            echo ""
+            echo "Windows users have the update. Macs are still offered the previous"
+            echo "release, which is the intended safe state, but they will not get this"
+            echo "version until a macOS bundle is published."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   finalize-macos:
     needs: [build, build-macos]
     if: >-
