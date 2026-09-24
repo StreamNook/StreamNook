@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef, memo, useSyncExternalStore, type JSX } from 'react';
 import { Gift } from 'lucide-react';
+import { parseBadges } from '../services/twitchBadges';
 import { Tooltip } from './ui/Tooltip';
 import { parseMessage } from '../services/twitchChat';
 import { queueEmoteForDisplayCaching, getCachedEmoteUrl, getEmoteLookup, inlineEmoteTier, sevenTvTierUrl, EmoteSet } from '../services/emoteService';
@@ -169,6 +170,18 @@ const wrapWithEmoteEffects = (
 
 // Giant (gigantified) emote sizing: 4x the 2em inline height (112px at the
 // default 14px chat font, matching FFZ), tracking font size and emote scale.
+/** Twitch's own gift art (the Sub Gifter badge) for sub notices. Read from the
+ *  global badge cache every chat connection fills; the drawn gift stands in
+ *  only until that cache has loaded. */
+const SubGiftIcon = () => {
+  const art = parseBadges('sub-gifter/1')[0]?.info?.image_url_2x as string | undefined;
+  return art ? (
+    <img src={art} alt="" draggable={false} className="w-5 h-5 object-contain" />
+  ) : (
+    <Gift size={20} className="text-accent" />
+  );
+};
+
 const GIANT_EMOTE_HEIGHT = 'calc(8em * var(--sn-emote-scale, 1))';
 const GIANT_EMOTE_MAX_WIDTH = 'calc(24em * var(--sn-emote-scale, 1))';
 
@@ -3033,13 +3046,13 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
 
         <div className="flex items-center gap-2.5">
           <div className="flex-shrink-0">
-            {/* Prime logo for Prime subs, Gift box for other subs */}
+            {/* Prime logo for Prime subs, Twitch's gift for other subs */}
             {msgParamSubPlan === 'Prime' ? (
               <svg className="w-5 h-5 text-info" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" clipRule="evenodd" d="M18 5v8a2 2 0 0 1-2 2H4a2.002 2.002 0 0 1-2-2V5l4 3 4-4 4 4 4-3z" />
               </svg>
             ) : (
-              <Gift size={20} className="text-accent" />
+              <SubGiftIcon />
             )}
           </div>
           <div

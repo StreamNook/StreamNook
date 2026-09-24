@@ -4,14 +4,14 @@
 // between tabs. The You tab becomes your avatar once signed in.
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Compass, Gift, Heart, UserCircle } from 'phosphor-react';
+import { Compass, Heart, Package, UserCircle } from 'phosphor-react';
 import { useAppStore } from '../stores/AppStore';
 import { useMobileNavStore, type MobileTab } from './navStore';
 
 const TABS: { id: MobileTab; label: string; Icon: typeof Heart }[] = [
   { id: 'following', label: 'Following', Icon: Heart },
   { id: 'browse', label: 'Browse', Icon: Compass },
-  { id: 'rewards', label: 'Rewards', Icon: Gift },
+  { id: 'rewards', label: 'Rewards', Icon: Package },
   { id: 'you', label: 'You', Icon: UserCircle },
 ];
 
