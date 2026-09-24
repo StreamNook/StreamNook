@@ -492,56 +492,6 @@ class MainActivity : TauriActivity() {
       }
     }
 
-    /**
-     * Zip the log files and hand the archive to the share sheet. They live in
-     * the app's private data dir (<dataDir>/StreamNook/logs, where Rust writes
-     * them), which no file manager can open without root, so the archive is
-     * built in the cache, which the FileProvider exposes. Returns "shared",
-     * "empty" (nothing logged yet) or "failed". Runs on the bridge's binder
-     * thread, so the copy never blocks the UI.
-     */
-    @JavascriptInterface
-    fun shareLogs(): String {
-      return try {
-        val logs = java.io.File(applicationInfo.dataDir, "StreamNook/logs")
-        val files = logs.listFiles { f -> f.isFile && f.length() > 0 }?.sortedBy { it.name }.orEmpty()
-        if (files.isEmpty()) return "empty"
-        val outDir = java.io.File(cacheDir, "shared-logs").apply {
-          deleteRecursively()
-          mkdirs()
-        }
-        val zip = java.io.File(outDir, "streamnook-logs.zip")
-        java.util.zip.ZipOutputStream(zip.outputStream().buffered()).use { out ->
-          for (f in files) {
-            out.putNextEntry(java.util.zip.ZipEntry(f.name))
-            f.inputStream().use { it.copyTo(out) }
-            out.closeEntry()
-          }
-        }
-        val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", zip)
-        runOnUiThread {
-          try {
-            val send = Intent(Intent.ACTION_SEND).apply {
-              type = "application/zip"
-              putExtra(Intent.EXTRA_STREAM, uri)
-              putExtra(Intent.EXTRA_SUBJECT, "StreamNook logs")
-              // The grant rides the ClipData; without it the chooser's
-              // preview and some targets cannot read the file.
-              clipData = android.content.ClipData.newRawUri("streamnook-logs.zip", uri)
-              addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            startActivity(Intent.createChooser(send, "Share StreamNook logs"))
-          } catch (e: Exception) {
-            android.util.Log.w("SNLogs", "share sheet failed: ${e.message}")
-          }
-        }
-        "shared"
-      } catch (e: Exception) {
-        android.util.Log.w("SNLogs", "could not package logs: ${e.message}")
-        "failed"
-      }
-    }
-
     /** Enter system picture-in-picture on demand.
      *
      *  No UI calls this any more, and that is deliberate: the activity IS the

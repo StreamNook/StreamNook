@@ -213,3 +213,47 @@ pub fn expire_cookies(app: &AppHandle, urls: &[&str]) {
         .0
         .run_mobile_plugin::<serde_json::Value>("expireCookies", ExpireCookiesArgs { urls });
 }
+
+// ── File handoff ─────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct FileHandoffArgs<'a> {
+    path: &'a str,
+    name: &'a str,
+    mime: &'a str,
+}
+
+#[derive(Deserialize)]
+struct StatusResp {
+    status: String,
+}
+
+/// Copy a file into the public Downloads collection as `name`. `Ok(false)`
+/// when the OS is too old to do that without a storage permission (below
+/// Android 10), so the caller can fall back to sharing.
+pub fn save_to_downloads(
+    app: &AppHandle,
+    path: &std::path::Path,
+    name: &str,
+    mime: &str,
+) -> Result<bool, String> {
+    let path = path.to_string_lossy();
+    handle(app)
+        .0
+        .run_mobile_plugin::<StatusResp>(
+            "saveToDownloads",
+            FileHandoffArgs { path: &path, name, mime },
+        )
+        .map(|r| r.status == "saved")
+        .map_err(|e| e.to_string())
+}
+
+/// Open the share sheet with this file.
+pub fn share_file(app: &AppHandle, path: &std::path::Path, name: &str, mime: &str) -> Result<(), String> {
+    let path = path.to_string_lossy();
+    handle(app)
+        .0
+        .run_mobile_plugin::<serde_json::Value>("shareFile", FileHandoffArgs { path: &path, name, mime })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}

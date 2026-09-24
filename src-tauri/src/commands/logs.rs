@@ -137,3 +137,126 @@ pub async fn open_logs_folder() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     Ok(())
 }
+
+/// Zip every non-empty file in `logs_dir` into `dest`, in name order. Returns
+/// how many went in; 0 means there was nothing to send and no archive is left.
+/// `dest` must sit outside `logs_dir`, or the archive would try to include
+/// itself.
+pub(crate) fn zip_logs(logs_dir: &std::path::Path, dest: &std::path::Path) -> anyhow::Result<usize> {
+    use std::io::Write;
+
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(logs_dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.metadata().map(|m| m.is_file() && m.len() > 0).unwrap_or(false))
+        .collect();
+    files.sort();
+    if files.is_empty() {
+        let _ = std::fs::remove_file(dest);
+        return Ok(0);
+    }
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(dest)?);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    for path in &files {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("log");
+        zip.start_file(name, options)?;
+        std::io::copy(&mut std::fs::File::open(path)?, &mut zip)?;
+    }
+    zip.finish()?.flush()?;
+    Ok(files.len())
+}
+
+/// Hand the phone's logs over. They live in the app's private data folder,
+/// which no file manager can open without root, so they are zipped into the
+/// cache and then saved to Downloads (`to = "downloads"`) or offered to the
+/// share sheet (`to = "share"`). Answers "saved", "shared" or "empty". On
+/// Android 9 and older, Downloads needs a storage permission the app does not
+/// hold, so a save falls back to the share sheet and answers "shared".
+#[cfg(target_os = "android")]
+#[command]
+pub async fn export_logs(app: tauri::AppHandle, to: String) -> Result<String, String> {
+    use tauri::Manager;
+
+    const MIME: &str = "application/zip";
+    let logs_dir = crate::services::file_log::log_file_path()
+        .map_err(|e| e.to_string())?
+        .parent()
+        .ok_or_else(|| "logs dir has no parent".to_string())?
+        .to_path_buf();
+    let dest = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("shared-logs")
+        .join("streamnook-logs.zip");
+    let zip_dest = dest.clone();
+    let count = tauri::async_runtime::spawn_blocking(move || zip_logs(&logs_dir, &zip_dest))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| {
+            log::warn!("[Logs] could not package the logs: {}", e);
+            e.to_string()
+        })?;
+    if count == 0 {
+        return Ok("empty".to_string());
+    }
+
+    // Dated, so a second save sits beside the first instead of "(1)".
+    let saved_name = format!("streamnook-logs-{}.zip", chrono::Local::now().format("%Y-%m-%d-%H%M"));
+    let result = match to.as_str() {
+        "downloads" => match crate::twitch_login_plugin::save_to_downloads(&app, &dest, &saved_name, MIME)? {
+            true => "saved",
+            false => {
+                crate::twitch_login_plugin::share_file(&app, &dest, &saved_name, MIME)?;
+                "shared"
+            }
+        },
+        "share" => {
+            crate::twitch_login_plugin::share_file(&app, &dest, "streamnook-logs.zip", MIME)?;
+            "shared"
+        }
+        other => return Err(format!("unknown log destination: {}", other)),
+    };
+    log::info!("[Logs] exported {} file(s): {}", count, result);
+    Ok(result.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::zip_logs;
+
+    #[test]
+    fn zip_logs_packs_non_empty_files_and_skips_the_rest() {
+        let root = std::env::temp_dir().join(format!("sn-zip-logs-{}", std::process::id()));
+        let logs = root.join("logs");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(logs.join("nested")).unwrap();
+        std::fs::write(logs.join("streamnook.log"), "line one\nline two\n").unwrap();
+        std::fs::write(logs.join("errors.log"), "boom\n").unwrap();
+        std::fs::write(logs.join("empty.log"), "").unwrap();
+        let dest = root.join("out").join("logs.zip");
+
+        assert_eq!(zip_logs(&logs, &dest).unwrap(), 2);
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(&dest).unwrap()).unwrap();
+        let mut names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["errors.log", "streamnook.log"]);
+        let mut body = String::new();
+        std::io::Read::read_to_string(&mut archive.by_name("streamnook.log").unwrap(), &mut body).unwrap();
+        assert_eq!(body, "line one\nline two\n");
+
+        // Nothing logged: no archive, and a stale one from before is removed.
+        for f in ["streamnook.log", "errors.log"] {
+            std::fs::write(logs.join(f), "").unwrap();
+        }
+        assert_eq!(zip_logs(&logs, &dest).unwrap(), 0);
+        assert!(!dest.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

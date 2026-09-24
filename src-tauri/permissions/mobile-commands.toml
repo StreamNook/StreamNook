@@ -21,4 +21,5 @@ allow = [
   "fetch_chat_identity_badges_gql",
   "update_chat_identity_gql",
   "flush_persistent_stores",
+  "export_logs",
 ]

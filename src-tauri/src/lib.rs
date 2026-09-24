@@ -1208,6 +1208,8 @@ pub fn run() {
             #[cfg(target_os = "android")]
             twitch_login_plugin::clear_mobile_login_cookies,
             #[cfg(target_os = "android")]
+            export_logs,
+            #[cfg(target_os = "android")]
             android_notify::push_register,
             #[cfg(target_os = "android")]
             android_notify::push_unregister,

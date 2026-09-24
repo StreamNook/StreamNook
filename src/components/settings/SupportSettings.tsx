@@ -5,7 +5,6 @@ import streamnookLogo from '../../assets/streamnook-logo.png';
 import { SettingsSection, SettingsRow } from './_primitives';
 import { useAppStore } from '../../stores/AppStore';
 import { IS_MOBILE } from '../../utils/platform';
-import { shareLogs } from '../../mobile/nativeBridge';
 
 import { Logger } from '../../utils/logger';
 
@@ -247,6 +246,19 @@ const SupportSettings = () => {
  * Lives on Support because that is where a person goes when something is wrong,
  * and it is the page a maintainer will point them at.
  */
+/** Phone only: Rust zips the logs and hands them to Downloads or the share sheet. */
+async function exportLogs(to: 'downloads' | 'share') {
+    const toast = useAppStore.getState().addToast;
+    try {
+        const result = await invoke<string>('export_logs', { to });
+        if (result === 'saved') toast('Saved to your Downloads folder.', 'success');
+        else if (result === 'empty') toast('Nothing has been logged yet.', 'info');
+    } catch (e) {
+        Logger.warn('[Support] export logs failed:', e);
+        toast('Could not get the logs. Try again.', 'error');
+    }
+}
+
 const DiagnosticLoggingSection = () => {
     const { settings, updateSettings } = useAppStore();
     // Absent means ON, matching how AppStore reads it (`!== false`), so an
@@ -274,26 +286,23 @@ const DiagnosticLoggingSection = () => {
                 // The phone keeps its logs in the app's private folder, which a
                 // file manager cannot open without root, so they are shared.
                 <SettingsRow
-                    title="Share the log file"
-                    description="Packs your logs into one zip and opens the share sheet, so you can send it with a bug report."
+                    title="Get the log file"
+                    description="Saves your logs as one zip in Downloads, or sends it straight to an app, so you can attach it to a bug report."
                     control={
-                        <button
-                            onClick={() => {
-                                const result = shareLogs();
-                                if (result === 'shared') return;
-                                useAppStore
-                                    .getState()
-                                    .addToast(
-                                        result === 'empty'
-                                            ? 'Nothing has been logged yet.'
-                                            : 'Could not package the logs. Try again.',
-                                        'info',
-                                    );
-                            }}
-                            className="px-3 py-1.5 rounded-md text-sm text-textPrimary bg-white/[0.06] hover:bg-white/[0.1] transition-colors"
-                        >
-                            Share logs
-                        </button>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => void exportLogs('downloads')}
+                                className="px-3 py-1.5 rounded-md text-sm text-textPrimary bg-white/[0.1] hover:bg-white/[0.14] transition-colors"
+                            >
+                                Save to Downloads
+                            </button>
+                            <button
+                                onClick={() => void exportLogs('share')}
+                                className="px-3 py-1.5 rounded-md text-sm text-textPrimary bg-white/[0.06] hover:bg-white/[0.1] transition-colors"
+                            >
+                                Share
+                            </button>
+                        </div>
                     }
                 />
             ) : (

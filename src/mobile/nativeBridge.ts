@@ -13,7 +13,6 @@ interface SNBridge {
   setPipSourceRect?(l: number, t: number, r: number, b: number): void;
   setPipMuted?(muted: boolean): void;
   share?(text: string, subject: string): void;
-  shareLogs?(): string;
   areNotificationsEnabled?(): boolean;
   channelImportance?(id: string): number;
   shouldShowNotificationRationale?(): boolean;
@@ -207,23 +206,6 @@ export function shareText(text: string, subject = ''): boolean {
   }
   void navigator.clipboard?.writeText(text).catch(() => {});
   return false;
-}
-
-/**
- * Zips the log files and opens the system share sheet with the archive. The
- * logs live in the app's private data folder, which no file manager can open
- * without root, so sharing them is the only way to hand them over.
- * 'shared' when the sheet opened, 'empty' when there is nothing logged yet,
- * 'failed' otherwise (bridge absent included).
- */
-export function shareLogs(): 'shared' | 'empty' | 'failed' {
-  try {
-    const r = bridge()?.shareLogs?.();
-    if (r === 'shared' || r === 'empty') return r;
-  } catch {
-    /* fall through */
-  }
-  return 'failed';
 }
 
 // ---- Notifications --------------------------------------------------------

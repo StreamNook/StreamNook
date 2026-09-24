@@ -89,6 +89,13 @@ class ExpireCookiesArgs {
     var urls: Array<String> = emptyArray()
 }
 
+@InvokeArg
+class FileHandoffArgs {
+    lateinit var path: String
+    lateinit var name: String
+    lateinit var mime: String
+}
+
 /** A hidden re-mint either completes on its own quickly or it will not at all. */
 private const val HIDDEN_WATCH_TIMEOUT_MS = 30 * 1000L
 
@@ -456,6 +463,89 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
         val ret = JSObject()
         ret.put("cookies", cookies)
         invoke.resolve(ret)
+    }
+
+    // ── File handoff ────────────────────────────────────────────────────────
+    // The only app-local plugin, so the two file steps only Android can do live
+    // here too. Rust builds the file and decides; these just hand it over.
+
+    /**
+     * Copy a file into the public Downloads collection. MediaStore needs no
+     * storage permission from Android 10; below that it would, so the answer is
+     * "unsupported" and the caller offers the share sheet instead.
+     */
+    @Command
+    fun saveToDownloads(invoke: Invoke) {
+        val args = invoke.parseArgs(FileHandoffArgs::class.java)
+        val ret = JSObject()
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) {
+            ret.put("status", "unsupported")
+            invoke.resolve(ret)
+            return
+        }
+        val resolver = activity.contentResolver
+        val collection = android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        var uri: Uri? = null
+        try {
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Downloads.DISPLAY_NAME, args.name)
+                put(android.provider.MediaStore.Downloads.MIME_TYPE, args.mime)
+                put(android.provider.MediaStore.Downloads.IS_PENDING, 1)
+            }
+            uri = resolver.insert(collection, values) ?: throw java.io.IOException("Downloads refused the file")
+            resolver.openOutputStream(uri)?.use { out ->
+                java.io.File(args.path).inputStream().use { it.copyTo(out) }
+            } ?: throw java.io.IOException("could not open the Downloads file")
+            values.clear()
+            values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+            ret.put("status", "saved")
+            invoke.resolve(ret)
+        } catch (e: Exception) {
+            // A half-written pending row would linger invisibly; drop it.
+            uri?.let { runCatching { resolver.delete(it, null, null) } }
+            invoke.reject(e.message ?: "could not save to Downloads")
+        }
+    }
+
+    /**
+     * Offer a file to the share sheet. FileProvider only serves the cache dir
+     * (res/xml/file_paths.xml), so a file anywhere else is copied in first.
+     */
+    @Command
+    fun shareFile(invoke: Invoke) {
+        val args = invoke.parseArgs(FileHandoffArgs::class.java)
+        try {
+            val cache = activity.cacheDir.canonicalFile
+            var file = java.io.File(args.path).canonicalFile
+            if (!file.path.startsWith(cache.path + java.io.File.separator)) {
+                val copy = java.io.File(java.io.File(cache, "shared"), args.name)
+                copy.parentFile?.mkdirs()
+                file.copyTo(copy, overwrite = true)
+                file = copy
+            }
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                activity, "${activity.packageName}.fileprovider", file
+            )
+            val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                type = args.mime
+                putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                // The read grant rides the ClipData; without it the chooser's
+                // preview and some targets cannot open the file.
+                clipData = android.content.ClipData.newRawUri(args.name, uri)
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            activity.runOnUiThread {
+                try {
+                    activity.startActivity(android.content.Intent.createChooser(send, null))
+                    invoke.resolve()
+                } catch (e: Exception) {
+                    invoke.reject(e.message ?: "no app can receive the file")
+                }
+            }
+        } catch (e: Exception) {
+            invoke.reject(e.message ?: "could not share the file")
+        }
     }
 
     /** Whether the overlay is on screen. Rust polls it to notice a close.
