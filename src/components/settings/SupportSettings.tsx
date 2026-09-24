@@ -4,6 +4,8 @@ import { DiscordGlyph } from '../ui/DiscordGlyph';
 import streamnookLogo from '../../assets/streamnook-logo.png';
 import { SettingsSection, SettingsRow } from './_primitives';
 import { useAppStore } from '../../stores/AppStore';
+import { IS_MOBILE } from '../../utils/platform';
+import { shareLogs } from '../../mobile/nativeBridge';
 
 import { Logger } from '../../utils/logger';
 
@@ -259,8 +261,8 @@ const DiagnosticLoggingSection = () => {
         >
             <SettingsRow
                 title="Keep a detailed log for bug reports"
-                description="Records connection, playback, and chat activity to streamnook.log on this PC so a problem can be traced after the fact."
-                help="Leave it on if you might report a bug; with it off the log holds almost nothing worth sending. The file stays on your PC until you choose to share it."
+                description="Records connection, playback, and chat activity to streamnook.log on this device so a problem can be traced after the fact."
+                help="Leave it on if you might report a bug; with it off the log holds almost nothing worth sending. The file stays on your device until you choose to share it."
                 control={
                     <Toggle
                         enabled={enabled}
@@ -268,22 +270,50 @@ const DiagnosticLoggingSection = () => {
                     />
                 }
             />
-            <SettingsRow
-                title="Find the log file"
-                description="Opens the folder that holds streamnook.log so you can attach it to a bug report."
-                control={
-                    <button
-                        onClick={() => {
-                            void invoke('open_logs_folder').catch((e) =>
-                                Logger.warn('[Support] open logs folder failed:', e),
-                            );
-                        }}
-                        className="px-3 py-1.5 rounded-md text-sm text-textPrimary bg-white/[0.06] hover:bg-white/[0.1] transition-colors"
-                    >
-                        Open logs folder
-                    </button>
-                }
-            />
+            {IS_MOBILE ? (
+                // The phone keeps its logs in the app's private folder, which a
+                // file manager cannot open without root, so they are shared.
+                <SettingsRow
+                    title="Share the log file"
+                    description="Packs your logs into one zip and opens the share sheet, so you can send it with a bug report."
+                    control={
+                        <button
+                            onClick={() => {
+                                const result = shareLogs();
+                                if (result === 'shared') return;
+                                useAppStore
+                                    .getState()
+                                    .addToast(
+                                        result === 'empty'
+                                            ? 'Nothing has been logged yet.'
+                                            : 'Could not package the logs. Try again.',
+                                        'info',
+                                    );
+                            }}
+                            className="px-3 py-1.5 rounded-md text-sm text-textPrimary bg-white/[0.06] hover:bg-white/[0.1] transition-colors"
+                        >
+                            Share logs
+                        </button>
+                    }
+                />
+            ) : (
+                <SettingsRow
+                    title="Find the log file"
+                    description="Opens the folder that holds streamnook.log so you can attach it to a bug report."
+                    control={
+                        <button
+                            onClick={() => {
+                                void invoke('open_logs_folder').catch((e) =>
+                                    Logger.warn('[Support] open logs folder failed:', e),
+                                );
+                            }}
+                            className="px-3 py-1.5 rounded-md text-sm text-textPrimary bg-white/[0.06] hover:bg-white/[0.1] transition-colors"
+                        >
+                            Open logs folder
+                        </button>
+                    }
+                />
+            )}
         </SettingsSection>
     );
 };
