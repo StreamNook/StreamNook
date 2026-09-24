@@ -400,6 +400,11 @@ impl DropsAuthService {
     pub async fn logout() -> Result<()> {
         Self::delete_token_file()?;
         let _ = Self::delete_cookies().await;
+        // Settled drop ids are per ACCOUNT. Carrying them into the next sign-in
+        // would skip the auto-claim for drops that account has genuinely not
+        // claimed, which fails silently because a skipped drop looks identical
+        // to one already collected.
+        crate::services::drops_service::clear_attempted_claims();
         debug!("[DROPS_AUTH] Drops logout complete - all tokens cleared");
         Ok(())
     }

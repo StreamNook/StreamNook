@@ -64,6 +64,33 @@ pub struct MissingBadge {
     pub category: Option<String>,
 }
 
+/// The US price of one Tier 1 subscription, in cents.
+pub const SUB_PRICE_US_CENTS: u32 = 599;
+
+/// What it takes to earn every badge in `missing_now`, done efficiently.
+///
+/// Twitch counts one subscription or one stretch of watching toward every
+/// campaign in the category it happens in, so badges that share a category
+/// share the effort: subs are the most any one of them needs, and watch time is
+/// the most any of them needs on each day, summed over the days.
+#[derive(Serialize, Clone, Debug, PartialEq, Default)]
+pub struct CatchUp {
+    pub subs: u32,
+    /// `subs` at the US Tier 1 price.
+    pub sub_cost_cents: u32,
+    pub watch_minutes: u32,
+    /// Event passes to buy. Priced by the event, so not in `sub_cost_cents`.
+    pub tickets: u32,
+    /// Badges drawn at random from a pool: the totals get you a draw, not a
+    /// promise of that badge, so they are a floor.
+    pub random: u32,
+    /// Badges with no number to add up (cheer, create, attend, other, or a
+    /// watch with no stated time).
+    pub unpriced: u32,
+    /// Some numbers were read from copy rather than the campaign's own.
+    pub estimated: bool,
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct BadgeStanding {
     pub login: Option<String>,
@@ -90,6 +117,8 @@ pub struct BadgeStanding {
     /// Absent when the catalogue does not have them; a surface falls back to a
     /// drawn icon.
     pub earn_icons: HashMap<String, String>,
+    /// The cost of earning everything in `missing_now`. `None` when it is empty.
+    pub catch_up: Option<CatchUp>,
     pub generated_ms: i64,
 }
 
@@ -151,7 +180,9 @@ fn read_persisted() -> Option<Cached> {
 /// Written to a temp file and renamed, so a crash mid-write can never leave a
 /// truncated collection for the next launch to trust.
 fn persist(cached: &Cached) {
-    let Some(path) = collection_path() else { return };
+    let Some(path) = collection_path() else {
+        return;
+    };
     let tmp = path.with_extension("json.tmp");
     let result = serde_json::to_vec(cached)
         .map_err(|e| e.to_string())
@@ -213,7 +244,10 @@ pub fn collection_may_have_changed(app: &tauri::AppHandle) {
 }
 
 enum Identity {
-    SignedIn { user_id: String, login: String },
+    SignedIn {
+        user_id: String,
+        login: String,
+    },
     SignedOut,
     /// Could not tell (offline, Twitch down); keep whatever is known.
     Unknown(String),
@@ -236,7 +270,10 @@ fn token_hash(token: &str) -> u64 {
 /// `verify_token_health`, which can clear accounts as a side effect.
 async fn signed_in_identity() -> Identity {
     if let Some(account) = AccountStore::primary() {
-        return Identity::SignedIn { user_id: account.user_id, login: account.login };
+        return Identity::SignedIn {
+            user_id: account.user_id,
+            login: account.login,
+        };
     }
     let token = match crate::services::twitch_service::TwitchService::get_token().await {
         Ok(t) => t,
@@ -246,7 +283,10 @@ async fn signed_in_identity() -> Identity {
     if let Ok(slot) = TOKEN_IDENTITY.lock() {
         if let Some((h, uid, login)) = slot.as_ref() {
             if *h == hash {
-                return Identity::SignedIn { user_id: uid.clone(), login: login.clone() };
+                return Identity::SignedIn {
+                    user_id: uid.clone(),
+                    login: login.clone(),
+                };
             }
         }
     }
@@ -277,7 +317,10 @@ async fn signed_in_identity() -> Identity {
             if let Ok(mut slot) = TOKEN_IDENTITY.lock() {
                 *slot = Some((hash, uid.to_string(), login.to_string()));
             }
-            Identity::SignedIn { user_id: uid.to_string(), login: login.to_string() }
+            Identity::SignedIn {
+                user_id: uid.to_string(),
+                login: login.to_string(),
+            }
         }
         _ => Identity::Unknown("validate returned no user".into()),
     }
@@ -321,7 +364,9 @@ async fn refresh() {
         crate::commands::badge_service::initialize_badge_service().await;
     }
     let guard = service_lock.read().await;
-    let Some(service) = guard.as_ref() else { return };
+    let Some(service) = guard.as_ref() else {
+        return;
+    };
 
     let previous = cached_for(Some(&user_id)).await;
 
@@ -341,7 +386,10 @@ async fn refresh() {
             fresh
         }
         Err(error) => {
-            warn!("[BadgeStanding] Could not read the badge collection for @{}: {}", login, error);
+            warn!(
+                "[BadgeStanding] Could not read the badge collection for @{}: {}",
+                login, error
+            );
             match previous {
                 // Keep the last good read as it was, completeness included, and
                 // say it is stale. A blip must not blank the collection.
@@ -398,7 +446,9 @@ async fn load_catalogue() -> Vec<CatalogueBadge> {
         // into one Helix call.
         _ => crate::commands::badges::fetch_global_badges().await.ok(),
     };
-    let Some(response) = response else { return Vec::new() };
+    let Some(response) = response else {
+        return Vec::new();
+    };
     response
         .data
         .into_iter()
@@ -431,7 +481,11 @@ fn meta_from_entry(entry: &universal_cache_service::UniversalCacheEntry) -> Badg
             .get("more_info")
             .and_then(|v| v.as_str())
             .map(String::from),
-        enrichment: entry.data.get("enrichment").filter(|v| !v.is_null()).cloned(),
+        enrichment: entry
+            .data
+            .get("enrichment")
+            .filter(|v| !v.is_null())
+            .cloned(),
     }
 }
 
@@ -463,7 +517,8 @@ fn string_field(value: &serde_json::Value, key: &str) -> Option<String> {
 }
 
 /// The global badges whose art stands for a way of earning, by earn-step kind.
-const EARN_ICON_BADGES: [(&str, &str, &str); 2] = [("subscribe", "sub-gifter", "1"), ("cheer", "bits", "100")];
+const EARN_ICON_BADGES: [(&str, &str, &str); 2] =
+    [("subscribe", "sub-gifter", "1"), ("cheer", "bits", "100")];
 
 fn earn_icons(catalogue: &[CatalogueBadge]) -> HashMap<String, String> {
     EARN_ICON_BADGES
@@ -491,8 +546,11 @@ fn build_standing(
     let mut next_change_ms: Option<i64> = None;
     for badge in catalogue {
         let key = badge.key();
-        let Some(meta) = metadata.get(&key) else { continue };
-        let Some(window) = badge_window::resolve(meta.more_info.as_deref(), meta.enrichment.as_ref())
+        let Some(meta) = metadata.get(&key) else {
+            continue;
+        };
+        let Some(window) =
+            badge_window::resolve(meta.more_info.as_deref(), meta.enrichment.as_ref())
         else {
             continue;
         };
@@ -503,7 +561,9 @@ fn build_standing(
     }
 
     let catalogue_ready = !catalogue.is_empty() && !metadata.is_empty();
-    let state = collection.map(|c| c.state).unwrap_or(CollectionState::Partial);
+    let state = collection
+        .map(|c| c.state)
+        .unwrap_or(CollectionState::Partial);
     let owned: Vec<String> = collection.map(|c| c.ids.clone()).unwrap_or_default();
     let owned_set: HashSet<&str> = owned.iter().map(String::as_str).collect();
 
@@ -514,7 +574,9 @@ fn build_standing(
             if owned_set.contains(key.as_str()) {
                 continue;
             }
-            let Some(runs) = windows.get(&key) else { continue };
+            let Some(runs) = windows.get(&key) else {
+                continue;
+            };
             if badge_window::status_at(runs, now) != WindowStatus::Available {
                 continue;
             }
@@ -554,11 +616,75 @@ fn build_standing(
         catalogue_ready,
         owned,
         windows,
-        missing_now,
         next_change_ms,
         earn_icons: earn_icons(catalogue),
+        catch_up: catch_up(&missing_now),
+        missing_now,
         generated_ms: now,
     }
+}
+
+/// Totals for `CatchUp`. Badges are grouped by category (a badge with none is
+/// its own group), because effort in one category counts toward all of it.
+fn catch_up(missing: &[MissingBadge]) -> Option<CatchUp> {
+    use crate::services::badge_earn::EarnStep;
+    if missing.is_empty() {
+        return None;
+    }
+    // Per group: the most subs any badge needs, and each badge's daily watch.
+    let mut groups: HashMap<String, (u32, Vec<(u32, u32)>)> = HashMap::new();
+    let mut out = CatchUp::default();
+    for badge in missing {
+        let group = badge
+            .category
+            .as_deref()
+            .map(str::to_lowercase)
+            .unwrap_or_else(|| badge.key.clone());
+        let entry = groups.entry(group).or_default();
+        let mut priced = false;
+        for step in &badge.earn.steps {
+            match step {
+                EarnStep::Subscribe { count } => {
+                    entry.0 = entry.0.max(count.unwrap_or(1));
+                    priced = true;
+                }
+                EarnStep::Watch {
+                    minutes: Some(m),
+                    days,
+                } => {
+                    entry.1.push((*m, days.unwrap_or(1).max(1)));
+                    priced = true;
+                }
+                EarnStep::Purchase { ticket: true } => {
+                    out.tickets += 1;
+                    priced = true;
+                }
+                _ => {}
+            }
+        }
+        if !priced {
+            out.unpriced += 1;
+        }
+        if badge.earn.random_of.is_some_and(|n| n > 1) {
+            out.random += 1;
+        }
+        out.estimated |= badge.earn.inferred;
+    }
+    for (subs, watches) in groups.values() {
+        out.subs += subs;
+        // Day d needs the most any badge still asking for a day d wants.
+        let longest = watches.iter().map(|&(_, d)| d).max().unwrap_or(0);
+        for day in 0..longest {
+            out.watch_minutes += watches
+                .iter()
+                .filter(|&&(_, d)| d > day)
+                .map(|&(m, _)| m)
+                .max()
+                .unwrap_or(0);
+        }
+    }
+    out.sub_cost_cents = out.subs * SUB_PRICE_US_CENTS;
+    Some(out)
 }
 
 /// Twitch has changed id formats before without a word. When most of a fresh
@@ -567,11 +693,16 @@ fn check_id_drift(collection: &Cached, catalogue: &[CatalogueBadge]) {
     if collection.state != CollectionState::Complete || collection.stale || catalogue.is_empty() {
         return;
     }
-    if DRIFT_CHECKED_AT.swap(collection.fetched_at_ms, Ordering::AcqRel) == collection.fetched_at_ms {
+    if DRIFT_CHECKED_AT.swap(collection.fetched_at_ms, Ordering::AcqRel) == collection.fetched_at_ms
+    {
         return;
     }
     let known: HashSet<String> = catalogue.iter().map(CatalogueBadge::key).collect();
-    let unmatched = collection.ids.iter().filter(|id| !known.contains(*id)).count();
+    let unmatched = collection
+        .ids
+        .iter()
+        .filter(|id| !known.contains(*id))
+        .count();
     if unmatched * 4 > collection.ids.len() {
         warn!(
             "[BadgeStanding] {} of {} owned badge ids match nothing in the catalogue; the id format may have changed",
@@ -627,7 +758,14 @@ pub async fn get_standing(app: &tauri::AppHandle, force: bool) -> BadgeStanding 
         if let Some(c) = cached.as_ref() {
             check_id_drift(c, &catalogue);
         }
-        build_standing(login, cached.as_ref(), refreshing, &catalogue, &metadata, now)
+        build_standing(
+            login,
+            cached.as_ref(),
+            refreshing,
+            &catalogue,
+            &metadata,
+            now,
+        )
     })
     .await;
 
@@ -650,7 +788,8 @@ pub async fn get_standing(app: &tauri::AppHandle, force: bool) -> BadgeStanding 
 
 /// One badge's earn window, for a surface that shows a single badge.
 pub async fn window_for(set_id: &str, version: &str) -> Option<Vec<WindowRun>> {
-    let entry = universal_cache_service::peek_cached_entry(&metadata_key(set_id, version)).ok()??;
+    let entry =
+        universal_cache_service::peek_cached_entry(&metadata_key(set_id, version)).ok()??;
     if entry.cache_type != CacheType::Badge {
         return None;
     }
@@ -682,7 +821,9 @@ mod tests {
         };
         BadgeMeta {
             more_info: None,
-            enrichment: Some(json!({ "starts_utc": iso(start), "ends_utc": iso(end), "action": "Watch it" })),
+            enrichment: Some(
+                json!({ "starts_utc": iso(start), "ends_utc": iso(end), "action": "Watch it" }),
+            ),
         }
     }
 
@@ -713,7 +854,13 @@ mod tests {
         meta.insert("chains/1".into(), window(NOW - HOUR, NOW + 2 * HOUR));
         meta.insert("old/1".into(), window(NOW - 48 * HOUR, NOW - HOUR));
         meta.insert("soon/1".into(), window(NOW + HOUR, NOW + 48 * HOUR));
-        meta.insert("permanent/1".into(), BadgeMeta { more_info: Some("Given to subscribers.".into()), enrichment: None });
+        meta.insert(
+            "permanent/1".into(),
+            BadgeMeta {
+                more_info: Some("Given to subscribers.".into()),
+                enrichment: None,
+            },
+        );
         (catalogue, meta)
     }
 
@@ -736,8 +883,14 @@ mod tests {
         catalogue.push(badge("bits", "1", "cheer 1"));
         catalogue.push(badge("bits", "100", "cheer 100"));
         let icons = earn_icons(&catalogue);
-        assert_eq!(icons.get("subscribe").map(String::as_str), Some("https://img/sub-gifter/1"));
-        assert_eq!(icons.get("cheer").map(String::as_str), Some("https://img/bits/100"));
+        assert_eq!(
+            icons.get("subscribe").map(String::as_str),
+            Some("https://img/sub-gifter/1")
+        );
+        assert_eq!(
+            icons.get("cheer").map(String::as_str),
+            Some("https://img/bits/100")
+        );
         assert!(earn_icons(&fixture().0).is_empty());
     }
 
@@ -775,12 +928,92 @@ mod tests {
 
     #[test]
     fn owning_one_version_does_not_hide_an_earnable_relaunch() {
-        let catalogue = vec![badge("glitch", "1", "Glitch"), badge("glitch", "2", "Glitch")];
+        let catalogue = vec![
+            badge("glitch", "1", "Glitch"),
+            badge("glitch", "2", "Glitch"),
+        ];
         let mut meta = HashMap::new();
         meta.insert("glitch/2".into(), window(NOW - HOUR, NOW + HOUR));
         let c = collection(&["glitch/1"], CollectionState::Complete);
         let s = build_standing(None, Some(&c), false, &catalogue, &meta, NOW);
-        assert_eq!(s.missing_now.iter().map(|m| m.key.as_str()).collect::<Vec<_>>(), vec!["glitch/2"]);
+        assert_eq!(
+            s.missing_now
+                .iter()
+                .map(|m| m.key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["glitch/2"]
+        );
+    }
+
+    #[test]
+    fn catch_up_shares_effort_within_a_category_and_adds_across_them() {
+        use crate::services::badge_earn::{EarnPath, EarnStep};
+        let m = |key: &str, cat: Option<&str>, steps: Vec<EarnStep>, random_of: Option<u32>| {
+            MissingBadge {
+                key: key.into(),
+                set_id: key.into(),
+                version: "1".into(),
+                title: key.into(),
+                image_url: String::new(),
+                ends_ms: None,
+                earn: EarnPath {
+                    steps,
+                    random_of,
+                    inferred: false,
+                    detail: None,
+                },
+                category: cat.map(Into::into),
+            }
+        };
+        let missing = vec![
+            // One game: a sub plus 60 min, and 20 min on each of 3 days. The
+            // 60 covers day one of the other, so 60 + 20 + 20.
+            m(
+                "a",
+                Some("Pokemon"),
+                vec![
+                    EarnStep::Subscribe { count: None },
+                    EarnStep::Watch {
+                        minutes: Some(60),
+                        days: None,
+                    },
+                ],
+                None,
+            ),
+            m(
+                "b",
+                Some("pokemon"),
+                vec![EarnStep::Watch {
+                    minutes: Some(20),
+                    days: Some(3),
+                }],
+                Some(3),
+            ),
+            // Another game needs its own two subs and its own watching.
+            m(
+                "c",
+                Some("CONTROL"),
+                vec![
+                    EarnStep::Subscribe { count: Some(2) },
+                    EarnStep::Watch {
+                        minutes: Some(30),
+                        days: None,
+                    },
+                ],
+                None,
+            ),
+            m("d", None, vec![EarnStep::Purchase { ticket: true }], None),
+            m("e", None, vec![EarnStep::Cheer], None),
+        ];
+        let c = catch_up(&missing).expect("totals");
+        assert_eq!(c.subs, 3);
+        assert_eq!(c.sub_cost_cents, 3 * 599);
+        assert_eq!(c.watch_minutes, 100 + 30);
+        assert_eq!(c.tickets, 1);
+        assert_eq!(c.random, 1);
+        assert_eq!(c.unpriced, 1);
+        assert!(!c.estimated);
+        assert_eq!(catch_up(&[]), None);
     }
 
     #[test]

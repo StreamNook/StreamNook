@@ -9,6 +9,56 @@ use crate::services::drops_auth_service::{DropsAuthService, DropsDeviceCodeInfo}
 use log::{debug, error, warn};
 use tauri::{AppHandle, Emitter, State};
 
+/// The Drops page model (services/drops_overview.rs): campaigns joined with
+/// live progress and the inventory, per game, with ownership worked out.
+///
+/// `reuse_campaigns` rebuilds from the cached campaigns (after a claim, which
+/// only moves a reward into the inventory); otherwise campaigns are loaded
+/// first, since that load is what refreshes the live progress map, and new
+/// campaigns in favourite games are announced.
+#[tauri::command]
+pub async fn get_drops_overview(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    reuse_campaigns: bool,
+) -> Result<crate::services::drops_overview::DropsOverview, String> {
+    use crate::services::drops_overview;
+
+    let gather = async {
+        let drops_service = state.drops_service.lock().await;
+        let cached = if reuse_campaigns {
+            drops_service.cached_campaigns_snapshot().await
+        } else {
+            None
+        };
+        let campaigns = match cached {
+            Some(campaigns) => campaigns,
+            None => drops_service
+                .get_all_active_campaigns_cached()
+                .await
+                .unwrap_or_default(),
+        };
+        let statistics = Some(drops_service.get_statistics().await);
+        let inventory = drops_service.fetch_inventory().await.ok();
+        let progress = drops_service.get_drop_progress().await;
+        let favorites = drops_service.get_settings().await.favorite_games;
+        (campaigns, statistics, inventory, progress, favorites)
+    };
+    let ((campaigns, statistics, inventory, progress, favorites), known) =
+        tokio::join!(gather, drops_overview::badge_titles());
+
+    let overview = drops_overview::overview(&campaigns, progress, inventory, statistics, known);
+    if !reuse_campaigns {
+        let announce = state
+            .settings
+            .lock()
+            .map(|s| s.live_notifications.show_favorite_drops_notifications)
+            .unwrap_or(false);
+        drops_overview::announce_new_favorite_campaigns(&app, &overview.games, &favorites, announce);
+    }
+    Ok(overview)
+}
+
 #[tauri::command]
 pub async fn get_drops_settings(state: State<'_, AppState>) -> Result<DropsSettings, String> {
     let drops_service = state.drops_service.lock().await;
@@ -159,15 +209,17 @@ pub async fn claim_channel_points(
             .map_err(|e| e.to_string())?
     };
 
-    // Surface the watched channel's claim as a channel-points notification on the
-    // path that actually delivers — a successful GQL claim. The legacy PubSub
-    // points-earned push (channel_points_websocket_service) is dead since Twitch
-    // decommissioned pubsub-edge, so this re-emits the same event shape the socket
-    // used. DynamicIsland's listener (gated by show_channel_points_notifications)
-    // and the lifetime/history accumulator in background_service then behave
-    // exactly as they did when the socket worked. Background-collected channels are
-    // covered separately by the GQL balance poll in background_service.
-    if result.points_earned > 0 {
+    // Report the watched channel's claim as a channel-points notification unless
+    // the realtime socket already did: Twitch pushes the same claim as a
+    // points-earned (reason CLAIM) on community-points-user-v1, and either can
+    // land first. Keeping this emit, deduped, means the claim is still reported
+    // when the socket is down or mid-reconnect. DynamicIsland's listener (gated
+    // by show_channel_points_notifications) and the lifetime/history accumulator
+    // in background_service consume the event either way. Background-collected
+    // channels are covered separately by the GQL balance poll in background_service.
+    if result.points_earned > 0
+        && crate::services::channel_points_websocket_service::claim_emit_is_first(&channel_id)
+    {
         let _ = app.emit(
             "channel-points-earned",
             serde_json::json!({

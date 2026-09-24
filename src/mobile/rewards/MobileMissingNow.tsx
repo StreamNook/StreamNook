@@ -2,8 +2,10 @@
 // above the badge wall. The list, its order and every fact on it come ready
 // from Rust (`get_badge_standing`); this only lays it out at phone density.
 import { useState } from 'react';
-import { timeLeftLabel, type BadgeStanding, type MissingBadge } from '../../services/badgeStanding';
+import { closesInLabel, timeLeftLabel, type BadgeStanding, type MissingBadge } from '../../services/badgeStanding';
+import { CatchUpPanel } from '../../components/badge/CatchUpPanel';
 import { EarnChips, RandomDrawNote } from '../../components/badge/EarnChips';
+import { CardChip } from '../../components/ui/CardChip';
 
 const COLLAPSED_ROWS = 4;
 
@@ -23,16 +25,43 @@ export function MobileMissingNow({
     !standing || !standing.catalogue_ready || (standing.collection === 'partial' && standing.collection_reason !== 'fetch_failed');
   const failed = standing?.collection === 'partial' && standing.collection_reason === 'fetch_failed';
   const rows = expanded ? missing : missing.slice(0, COLLAPSED_ROWS);
+  const showList = !loading && !failed && missing.length > 0;
+  // Rust sorts the list soonest-closing first.
+  const soonest = showList ? closesInLabel(missing[0].ends_ms) : '';
 
   return (
     <section className="pb-3">
-      <div className="flex items-baseline gap-1.5 pb-1.5">
-        <span className="text-[13px] font-semibold text-textPrimary">Missing, earnable now</span>
-        {!loading && !failed && missing.length > 0 && (
-          <span className="text-[12px] font-semibold text-success">{missing.length}</span>
-        )}
-        {standing?.refreshing && <span className="text-[11.5px] text-textMuted">· checking…</span>}
-      </div>
+      <header className="pb-2.5">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <span className="missing-now-title">Missing, earnable now</span>
+            {showList && (
+              <CardChip kind="ready" flat>
+                {missing.length}
+              </CardChip>
+            )}
+          </div>
+          <p className="flex items-center gap-1.5 text-[11.5px] text-textMuted truncate">
+            {standing?.refreshing ? (
+              <>
+                <span aria-hidden className="missing-now-pulse" />
+                <span>Checking Twitch</span>
+              </>
+            ) : (
+              soonest && (
+                <span>
+                  The next one closes <span className="font-medium text-textSecondary">{soonest}</span>
+                </span>
+              )
+            )}
+          </p>
+        </div>
+      </header>
+      {showList && standing?.catch_up && (
+        <div className="pb-2.5">
+          <CatchUpPanel totals={standing.catch_up} stacked />
+        </div>
+      )}
 
       {loading ? (
         <div className="h-[52px] rounded-xl glass-panel animate-pulse" />

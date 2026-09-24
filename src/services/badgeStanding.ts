@@ -60,7 +60,24 @@ export interface BadgeStanding {
   next_change_ms: number | null;
   /** Twitch's own art for earn chips, by step kind (`subscribe`: the gift, `cheer`: the gem). */
   earn_icons: Record<string, string>;
+  /** What earning everything in `missing_now` takes; null when it is empty. */
+  catch_up: CatchUp | null;
   generated_ms: number;
+}
+
+/** Totals for earning every missing badge, effort shared within a category (Rust `CatchUp`). */
+export interface CatchUp {
+  subs: number;
+  /** `subs` at the US Tier 1 price. */
+  sub_cost_cents: number;
+  watch_minutes: number;
+  /** Event passes; priced by the event, so not in the cost. */
+  tickets: number;
+  /** Badges drawn at random: the totals are a floor for them. */
+  random: number;
+  /** Badges with no number to add up (cheer, create, other). */
+  unpriced: number;
+  estimated: boolean;
 }
 
 /** Rust answers from its cache at once; a due refresh follows as `badge-standing-changed`. */
@@ -160,4 +177,27 @@ export function timeLeftLabel(endsMs: number | null, now: number = Date.now()): 
   if (hours >= 48) return `${Math.floor(hours / 24)}d left`;
   if (hours >= 1) return `${hours}h left`;
   return 'ends soon';
+}
+
+/** "$17.97" from cents. */
+export function usdLabel(cents: number): string {
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
+}
+
+/** "45m", "6h 20m", "2d 3h": watch time at a glance. */
+export function watchTimeLabel(minutes: number): string {
+  const m = Math.max(0, Math.round(minutes));
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return m % 60 ? `${h}h ${m % 60}m` : `${h}h`;
+  return h % 24 ? `${Math.floor(h / 24)}d ${h % 24}h` : `${Math.floor(h / 24)}d`;
+}
+
+/** The same countdown as a phrase to finish a sentence: "in 6d", "in 5h", "soon". */
+export function closesInLabel(endsMs: number | null, now: number = Date.now()): string {
+  if (endsMs == null) return '';
+  const hours = Math.floor((endsMs - now) / 3_600_000);
+  if (hours >= 48) return `in ${Math.floor(hours / 24)}d`;
+  if (hours >= 1) return `in ${hours}h`;
+  return 'soon';
 }

@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowUpRight, ChevronDown } from 'lucide-react';
+import { CardChip } from '../ui/CardChip';
 import { useAppStore } from '../../stores/AppStore';
-import { timeLeftLabel, type BadgeStanding, type MissingBadge } from '../../services/badgeStanding';
+import {
+  closesInLabel,
+  timeLeftLabel,
+  type BadgeStanding,
+  type MissingBadge,
+} from '../../services/badgeStanding';
+import { CatchUpPanel } from './CatchUpPanel';
 import { EarnChips, RandomDrawNote } from './EarnChips';
 
 // Every card is the same height, so a collapsed list always ends on a row
@@ -32,6 +39,8 @@ export const MissingNowStrip = ({
     !standing || !standing.catalogue_ready || (standing.collection === 'partial' && standing.collection_reason !== 'fetch_failed');
   const failed = standing?.collection === 'partial' && standing.collection_reason === 'fetch_failed';
   const showGrid = !loading && !failed && missing.length > 0;
+  // Rust sorts the list soonest-closing first.
+  const soonest = showGrid ? closesInLabel(missing[0].ends_ms) : '';
 
   useEffect(() => {
     const el = gridRef.current;
@@ -46,16 +55,37 @@ export const MissingNowStrip = ({
 
   return (
     <section className="mb-6">
-      <div className="flex items-baseline gap-2 mb-2.5">
-        <h3 className="text-sm font-semibold text-textPrimary">Missing, earnable now</h3>
-        {showGrid && <span className="text-xs font-semibold text-success">{missing.length}</span>}
-        {standing?.login && <span className="text-xs text-textMuted">@{standing.login}</span>}
-        {standing?.refreshing ? (
-          <span className="text-xs text-textMuted">· checking…</span>
-        ) : standing?.stale && standing.collection === 'complete' ? (
-          <span className="text-xs text-textMuted">· last checked earlier</span>
-        ) : null}
-      </div>
+      {/* The totals sit to the right and drop under the title when the panel
+          is too narrow for both. */}
+      <header className="flex flex-wrap items-center gap-x-4 gap-y-3">
+        <div className="min-w-[14rem] flex-1">
+          <div className="flex items-center gap-2">
+            <h3 className="missing-now-title">Missing, earnable now</h3>
+            {showGrid && <CardChip kind="ready">{missing.length}</CardChip>}
+          </div>
+          <p className="mt-0.5 flex items-center gap-1.5 text-[11.5px] text-textMuted truncate">
+            {standing?.refreshing ? (
+              <>
+                <span aria-hidden className="missing-now-pulse" />
+                <span>Checking Twitch</span>
+              </>
+            ) : (
+              <>
+                {soonest && (
+                  <span>
+                    The next one closes <span className="font-medium text-textSecondary">{soonest}</span>
+                  </span>
+                )}
+                {standing?.stale && standing.collection === 'complete' && (
+                  <span>{soonest ? '· ' : ''}Last checked earlier</span>
+                )}
+              </>
+            )}
+          </p>
+        </div>
+        {showGrid && standing?.catch_up && <CatchUpPanel totals={standing.catch_up} />}
+      </header>
+      <div aria-hidden className="missing-now-rule" />
 
       {loading ? (
         <div

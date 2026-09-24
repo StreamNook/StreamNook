@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { earnChipHint, earnChipText, refetchDelay, timeLeftLabel, windowStatusAt } from './badgeStanding';
+import {
+  closesInLabel,
+  earnChipHint,
+  earnChipText,
+  refetchDelay,
+  timeLeftLabel,
+  usdLabel,
+  watchTimeLabel,
+  windowStatusAt,
+} from './badgeStanding';
 
 const HOUR = 3_600_000;
 
@@ -66,5 +75,28 @@ describe('timeLeftLabel', () => {
     expect(timeLeftLabel(5 * HOUR, 0)).toBe('5h left');
     expect(timeLeftLabel(HOUR / 2, 0)).toBe('ends soon');
     expect(timeLeftLabel(null, 0)).toBe('');
+  });
+});
+
+describe('closesInLabel', () => {
+  it('finishes a sentence', () => {
+    expect(closesInLabel(3 * 24 * HOUR, 0)).toBe('in 3d');
+    expect(closesInLabel(5 * HOUR, 0)).toBe('in 5h');
+    expect(closesInLabel(HOUR / 2, 0)).toBe('soon');
+    expect(closesInLabel(null, 0)).toBe('');
+  });
+});
+
+describe('catch-up labels', () => {
+  it('prices subs in dollars', () => {
+    expect(usdLabel(3 * 599)).toBe('$17.97');
+    expect(usdLabel(0)).toBe('$0.00');
+  });
+  it('reads watch time at a glance', () => {
+    expect(watchTimeLabel(45)).toBe('45m');
+    expect(watchTimeLabel(120)).toBe('2h');
+    expect(watchTimeLabel(380)).toBe('6h 20m');
+    expect(watchTimeLabel(51 * 60)).toBe('2d 3h');
+    expect(watchTimeLabel(72 * 60)).toBe('3d');
   });
 });

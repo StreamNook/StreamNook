@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../stores/AppStore';
-import { listen, emit } from '@tauri-apps/api/event';
+import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Search, Gift, MonitorPlay, BarChart3, Package, ArrowDownUp, SlidersHorizontal, Check, ChevronDown, ChevronUp } from 'lucide-react';
 import { usePluginUiRegistry, selectSlot } from '../plugins-ui/registry';
@@ -10,7 +10,7 @@ import { Dropdown } from './ui/Dropdown';
 import { SegmentedSelect } from './settings/_primitives';
 import {
     UnifiedGame, DropCampaign, DropProgress, DropsStatistics,
-    DropProgressStatus, InventoryResponse, InventoryItem, CompletedDrop, TwitchStream
+    DropProgressStatus, InventoryItem, CompletedDrop, TwitchStream, DropsOverview
 } from '../types';
 
 import LoadingWidget from './LoadingWidget';
@@ -18,7 +18,6 @@ import GameCard from './drops/GameCard';
 import GameDetailPanel from './drops/GameDetailPanel';
 import DropsStatsTab from './drops/DropsStatsTab';
 import DropsInventoryTab from './drops/DropsInventoryTab';
-import { getAllUserBadgesWithEarned } from '../services/badgeService';
 import { Tooltip } from './ui/Tooltip';
 
 import { Logger } from '../utils/logger';
@@ -69,7 +68,6 @@ export default function DropsCenter() {
     const [completedDrops, setCompletedDrops] = useState<CompletedDrop[]>([]);
     const [statistics, setStatistics] = useState<DropsStatistics | null>(null);
     const [progress, setProgress] = useState<DropProgress[]>([]);
-    const [, setEarnedBadgeIds] = useState<Set<string>>(new Set());
     const [earnedBadgeTitles, setEarnedBadgeTitles] = useState<Set<string>>(new Set());
     // Earned badge titles plus Twitch's global badge catalog. Used to tell a global
     // badge reward (e.g. "YOU GOT THIS") apart from an in-game item, since both can carry
@@ -111,7 +109,7 @@ export default function DropsCenter() {
     const [showCompletedGames, setShowCompletedGames] = useState(false);
     const [selectedGame, setSelectedGame] = useState<UnifiedGame | null>(null);
     const [, setIsLoadingGameDetail] = useState(false);
-    const { addToast, setShowDropsOverlay, currentUser, dropsSearchTerm, setDropsSearchTerm } = useAppStore();
+    const { addToast, setShowDropsOverlay, dropsSearchTerm, setDropsSearchTerm } = useAppStore();
     
 
 
@@ -126,9 +124,6 @@ export default function DropsCenter() {
     // Track the previously automation game to detect when automation starts
     const prevAutomationGameRef = useRef<string | null>(null);
 
-    // Track previous campaign IDs for notification detection
-    const prevCampaignIdsRef = useRef<Set<string>>(new Set());
-
     // Derived state for filtering AND sorting (favorites first)
     const filteredGames = useMemo(() => {
         const favoriteGames = dropsSettings?.favorite_games || [];
@@ -139,7 +134,12 @@ export default function DropsCenter() {
         const progressGameName = (dropProgress?.active
             ? dropProgress.current_drop?.game_name || dropProgress.current_channel?.game_name
             : null)?.toLowerCase() || null;
-        let games = unifiedGames;
+        // Which game is being collected is live UI state (the automation status
+        // pushed through the bridge), so it is marked here rather than in Rust.
+        let games = unifiedGames.map(g => {
+            const active = progressGameName !== null && g.name.toLowerCase() === progressGameName;
+            return g.active === active ? g : { ...g, active };
+        });
 
         // "Mineable only" (default): drop fully non-mineable campaigns from each
         // game, then any game with nothing left to mine. "All drops" keeps them,
@@ -165,17 +165,6 @@ export default function DropsCenter() {
             );
         }
         
-        // A game's "release recency" = the most recent campaign start among its
-        // active campaigns (newest campaign to come out for that game).
-        const releaseTime = (g: UnifiedGame) => {
-            let t = 0;
-            for (const c of g.active_campaigns) {
-                const ms = Date.parse(c.start_at);
-                if (!Number.isNaN(ms) && ms > t) t = ms;
-            }
-            return t;
-        };
-
         // Sort: actively-automation game first, then still-collectible favorites, then by the selected sort mode.
         return [...games].sort((a, b) => {
             // Actively-automation game pinned at the very top, above favorites.
@@ -193,7 +182,9 @@ export default function DropsCenter() {
 
             // Explicit date sort: newest or oldest by most-recent campaign release.
             if (sortMode === 'newest' || sortMode === 'oldest') {
-                const diff = releaseTime(b) - releaseTime(a); // newest-first baseline
+                // A game's release recency (Rust's `release_ms`) is its newest
+                // active campaign's start.
+                const diff = b.release_ms - a.release_ms; // newest-first baseline
                 if (diff !== 0) return sortMode === 'newest' ? diff : -diff;
                 return a.name.localeCompare(b.name);
             }
@@ -213,66 +204,18 @@ export default function DropsCenter() {
         });
     }, [unifiedGames, searchTerm, dropsSettings?.favorite_games, sortMode, dropProgress, showAllDrops]);
 
-    // Fetch earned badges on mount for badge drop ownership verification
-    useEffect(() => {
-        const fetchEarnedBadges = async () => {
-            if (!currentUser?.user_id || !currentUser?.login) return;
-            
-            try {
-                Logger.debug('[DropsCenter] Fetching earned badges for user:', currentUser.login);
-                const badges = await getAllUserBadgesWithEarned(
-                    currentUser.user_id,
-                    currentUser.login,
-                    currentUser.user_id, // Use user's own channel ID
-                    currentUser.login // Use user's own channel name
-                );
-                
-                // Extract earned badge IDs from the flat badge structure
-                const earnedIds = new Set<string>();
-                const badgeTitles = new Set<string>();
-                badges.earnedBadges?.forEach((badge) => {
-                    if (badge.id) earnedIds.add(badge.id);
-                    if (badge.title) badgeTitles.add(badge.title.toLowerCase());
-                });
-                // Also include third-party badges
-                badges.thirdPartyBadges?.forEach((badge) => {
-                    if (badge.id) earnedIds.add(badge.id);
-                    if (badge.title) badgeTitles.add(badge.title.toLowerCase());
-                });
-                
-                setEarnedBadgeIds(earnedIds);
-                setEarnedBadgeTitles(badgeTitles);
-                Logger.debug('[DropsCenter] Loaded earned badge IDs:', earnedIds.size);
-                Logger.debug('[DropsCenter] Loaded earned badge titles:', badgeTitles.size);
-                Logger.debug('[DropsCenter] Sample badge titles:', Array.from(badgeTitles).slice(0, 5));
-
-                // Add the global badge catalog so the rewards list can label an unearned
-                // global badge correctly (in-game items aren't in the catalog).
-                try {
-                    const { invoke } = await import('@tauri-apps/api/core');
-                    let globalBadges = await invoke<{ data?: Array<{ versions?: Array<{ title?: string }> }> } | null>('get_cached_global_badges');
-                    if (!globalBadges) {
-                        await invoke('prefetch_global_badges').catch(() => {});
-                        globalBadges = await invoke<{ data?: Array<{ versions?: Array<{ title?: string }> }> } | null>('get_cached_global_badges');
-                    }
-                    const known = new Set<string>(badgeTitles);
-                    globalBadges?.data?.forEach(set => set.versions?.forEach(v => {
-                        const t = v.title?.toLowerCase().trim();
-                        if (t) known.add(t);
-                    }));
-                    setKnownBadgeTitles(known);
-                    Logger.debug('[DropsCenter] Known badge titles (earned + global):', known.size);
-                } catch (e) {
-                    setKnownBadgeTitles(new Set(badgeTitles));
-                    Logger.warn('[DropsCenter] Failed to load global badge catalog for reward labeling:', e);
-                }
-            } catch (err) {
-                Logger.error('[DropsCenter] Failed to fetch earned badges:', err);
-            }
-        };
-        
-        fetchEarnedBadges();
-    }, [currentUser?.user_id, currentUser?.login]);
+    // Take the Drops model Rust built (services/drops_overview.rs). The open
+    // detail panel holds a snapshot of one game, so it is re-picked by id.
+    const applyOverview = (overview: DropsOverview) => {
+        setProgress(overview.progress);
+        if (overview.statistics) setStatistics(overview.statistics);
+        setInventoryItems(overview.inventory_items);
+        setCompletedDrops(overview.completed_drops);
+        setEarnedBadgeTitles(new Set(overview.earned_badge_titles));
+        setKnownBadgeTitles(new Set(overview.known_badge_titles));
+        setUnifiedGames(overview.games);
+        setSelectedGame(prev => (prev ? overview.games.find(g => g.id === prev.id) ?? prev : prev));
+    };
 
     // ---- Authentication Logic ----
     const checkAuthentication = async () => {
@@ -325,103 +268,12 @@ export default function DropsCenter() {
             addToast('Drop claimed successfully!', 'success');
 
             // Mark the drop claimed locally for instant feedback.
-            const nextProgress = progress.map(p =>
-                p.drop_id === dropId ? { ...p, is_claimed: true } : p
-            );
-            setProgress(nextProgress);
+            setProgress(prev => prev.map(p => (p.drop_id === dropId ? { ...p, is_claimed: true } : p)));
 
-            // A claim only moves a reward into your inventory. It does NOT change the
-            // active campaigns or the live automation-progress cache, so we deliberately
-            // skip the full loadDropsData() reload here. That reload would blank the
-            // panel behind a spinner AND re-fetch campaigns, which clears the backend's
-            // live progress map and makes the title-bar automation progress snap backwards
-            // until it slowly re-accumulates. Instead: refresh only the inventory
-            // (silently) and patch the claimed game's flags in place.
-            const inventoryData = await invoke<InventoryResponse>('get_drops_inventory').catch(() => null);
-            if (inventoryData?.items) setInventoryItems(inventoryData.items);
-            if (inventoryData?.completed_drops) setCompletedDrops(inventoryData.completed_drops);
-
-            // Owned-reward sets from the freshly fetched inventory, matching how the
-            // full rebuild decides ownership: a reward counts as earned by its claim
-            // flag, by drop id, by benefit id, or (badges only) by benefit name.
-            const ownedBenefitIds = new Set<string>((inventoryData?.completed_drops || []).map(d => d.id));
-            const ownedBenefitNames = new Set<string>(
-                (inventoryData?.completed_drops || []).map(d => (d.name || '').toLowerCase().trim()).filter(Boolean)
-            );
-            const ownedDropIds = new Set<string>();
-            inventoryData?.items?.forEach(item => {
-                item.campaign.time_based_drops.forEach(drop => {
-                    if (drop.progress?.is_claimed === true) ownedDropIds.add(drop.id);
-                });
-            });
-            // Name matching is badge-only: a held badge can't be earned again, but
-            // a consumable reward reissued under a new campaign instance (same
-            // name, new benefit ids) is genuinely earnable again and must not be
-            // counted as already claimed.
-            const ownedByName = (name?: string) => {
-                const n = (name || '').toLowerCase().trim();
-                return !!n && ownedBenefitNames.has(n) && knownBadgeTitles.has(n);
-            };
-
-            const gameOwnsDrop = (game: UnifiedGame) =>
-                game.active_campaigns.some(c => c.time_based_drops.some(d => d.id === dropId));
-
-            const recomputeGame = (game: UnifiedGame): UnifiedGame => {
-                let hasClaimable = false;
-                let totalDrops = 0;
-                let claimedCount = 0;
-                game.active_campaigns.forEach(campaign => {
-                    campaign.time_based_drops.forEach(drop => {
-                        totalDrops++;
-                        const dp = nextProgress.find(p => p.drop_id === drop.id) || drop.progress;
-                        const hasCurrentProgress = !!dp && ((dp.current_minutes_watched || 0) > 0 || dp.is_claimed === true);
-                        // An inventory drop flagged is_claimed is a proven claim of THIS
-                        // drop instance (reissues mint new drop ids), so it counts even
-                        // while a stale progress record still carries watch minutes.
-                        // Benefit id/name matching stays gated on no-current-progress.
-                        const owned = dp?.is_claimed === true
-                            || ownedDropIds.has(drop.id)
-                            || (!hasCurrentProgress && (
-                                drop.benefit_edges?.some(b =>
-                                    ownedBenefitIds.has(b.id) || ownedByName(b.name)
-                                ) ?? false
-                            ));
-                        if (owned) {
-                            claimedCount++;
-                        } else if (dp && dp.required_minutes_watched > 0 && dp.current_minutes_watched >= dp.required_minutes_watched) {
-                            hasClaimable = true;
-                        }
-                    });
-                });
-                const freshClaimed = inventoryData?.items
-                    ? inventoryData.items
-                        .filter(it => it.campaign.game_id === game.id)
-                        .reduce((sum, it) => sum + it.claimed_drops, 0)
-                    : game.total_claimed;
-                return {
-                    ...game,
-                    has_claimable: hasClaimable,
-                    all_drops_claimed: totalDrops > 0 && claimedCount === totalDrops,
-                    total_claimed: freshClaimed,
-                };
-            };
-
-            // Re-sort with the same ordering loadDropsData uses, so a now fully-claimed
-            // game sinks to the bottom without a reload.
-            const sortGames = (a: UnifiedGame, b: UnifiedGame) => {
-                if (a.active !== b.active) return a.active ? -1 : 1;
-                if (a.all_drops_claimed !== b.all_drops_claimed) return a.all_drops_claimed ? 1 : -1;
-                if (a.has_claimable !== b.has_claimable) return a.has_claimable ? -1 : 1;
-                if (a.active_campaigns.length !== b.active_campaigns.length) {
-                    return b.active_campaigns.length - a.active_campaigns.length;
-                }
-                return a.name.localeCompare(b.name);
-            };
-
-            setUnifiedGames(prev =>
-                prev.map(g => (gameOwnsDrop(g) ? recomputeGame(g) : g)).sort(sortGames)
-            );
-            setSelectedGame(prev => (prev && gameOwnsDrop(prev) ? recomputeGame(prev) : prev));
+            // A claim only moves a reward into your inventory, so the model is
+            // rebuilt from the CACHED campaigns: re-fetching them would reset the
+            // backend's live progress map and snap the title-bar progress back.
+            applyOverview(await invoke<DropsOverview>('get_drops_overview', { reuseCampaigns: true }));
         } catch (err) {
             Logger.error('Failed to claim drop:', err);
             addToast('Failed to claim drop', 'error');
@@ -571,97 +423,8 @@ export default function DropsCenter() {
         setSelectedGame(game);
 
         try {
-            Logger.debug('[DropsCenter] Fetching fresh inventory for game:', game.name);
-            
-            // Poll inventory to get the latest progress data
-            const inventoryData = await invoke<InventoryResponse>('get_drops_inventory');
-            
-            if (inventoryData?.items) {
-                Logger.debug('[DropsCenter] Got fresh inventory with', inventoryData.items.length, 'items');
-                
-                // Update global inventory items state
-                setInventoryItems(inventoryData.items);
-                
-                // Extract progress data from inventory and merge into progress state
-                const progressFromInventory: DropProgress[] = [];
-                
-                inventoryData.items.forEach(item => {
-                    item.campaign.time_based_drops.forEach(drop => {
-                        if (drop.progress) {
-                            progressFromInventory.push({
-                                campaign_id: item.campaign.id,
-                                drop_id: drop.id,
-                                current_minutes_watched: drop.progress.current_minutes_watched,
-                                required_minutes_watched: drop.progress.required_minutes_watched,
-                                is_claimed: drop.progress.is_claimed,
-                                last_updated: drop.progress.last_updated,
-                                drop_instance_id: drop.progress.drop_instance_id,
-                            });
-                        }
-                    });
-                });
-                
-                Logger.debug('[DropsCenter] Extracted', progressFromInventory.length, 'progress entries from inventory');
-                
-                // Merge inventory progress with existing progress (inventory takes priority for matching drops)
-                setProgress(prevProgress => {
-                    const mergedProgress = [...prevProgress];
-                    
-                    progressFromInventory.forEach(inventoryProg => {
-                        const existingIndex = mergedProgress.findIndex(p => p.drop_id === inventoryProg.drop_id);
-                        
-                        if (existingIndex >= 0) {
-                            // Update existing entry with inventory data (inventory is authoritative)
-                            mergedProgress[existingIndex] = {
-                                ...mergedProgress[existingIndex],
-                                ...inventoryProg,
-                            };
-                        } else {
-                            // Add new entry from inventory
-                            mergedProgress.push(inventoryProg);
-                        }
-                    });
-                    
-                    Logger.debug('[DropsCenter] Merged progress now has', mergedProgress.length, 'entries');
-                    return mergedProgress;
-                });
-                
-                // Update the selected game with fresh inventory items
-                const freshInventoryForGame = inventoryData.items.filter(item => {
-                    // Match by game name (case-insensitive) or game_id
-                    const itemGameName = item.campaign.game_name?.toLowerCase() || '';
-                    const gameNameLower = game.name.toLowerCase();
-                    return itemGameName === gameNameLower || item.campaign.game_id === game.id;
-                });
-                
-                if (freshInventoryForGame.length > 0) {
-                    Logger.debug('[DropsCenter] Found', freshInventoryForGame.length, 'inventory items for game:', game.name);
-                    
-                    // Update the selected game with fresh inventory
-                    setSelectedGame(prevGame => {
-                        if (!prevGame) return null;
-                        return {
-                            ...prevGame,
-                            inventory_items: freshInventoryForGame,
-                            total_claimed: freshInventoryForGame.reduce((sum, item) => sum + item.claimed_drops, 0),
-                        };
-                    });
-                    
-                    // Also update this game in the unifiedGames array
-                    setUnifiedGames(prevGames => {
-                        return prevGames.map(g => {
-                            if (g.id === game.id) {
-                                return {
-                                    ...g,
-                                    inventory_items: freshInventoryForGame,
-                                    total_claimed: freshInventoryForGame.reduce((sum, item) => sum + item.claimed_drops, 0),
-                                };
-                            }
-                            return g;
-                        });
-                    });
-                }
-            }
+            // Fresh inventory, rebuilt into the model without re-fetching campaigns.
+            applyOverview(await invoke<DropsOverview>('get_drops_overview', { reuseCampaigns: true }));
         } catch (err) {
             Logger.error('[DropsCenter] Failed to fetch inventory for game:', err);
             // Don't show error toast - we still show the panel with cached data
@@ -756,20 +519,10 @@ export default function DropsCenter() {
             setIsLoading(true);
             setError(null);
 
-            // IMPORTANT:
-            // `get_active_drop_campaigns` is responsible for refreshing the backend's internal
-            // drop progress map (via `DropsService::update_campaigns_and_progress`).
-            // If we fetch `get_drop_progress` in parallel, it can race and return an empty
-            // list, which makes the UI show 0 minutes for everything.
-            //
-            // So: fetch campaigns first, then fetch progress.
-            const [campaignsData, statsData, inventoryData] = await Promise.all([
-                invoke<DropCampaign[]>('get_active_drop_campaigns').catch(() => [] as DropCampaign[]),
-                invoke<DropsStatistics>('get_drops_statistics').catch(() => null),
-                invoke<InventoryResponse>('get_drops_inventory').catch(() => null),
-            ]);
-
-            const progressData = await invoke<DropProgress[]>('get_drop_progress').catch(() => [] as DropProgress[]);
+            // Rust loads campaigns first (that load refreshes its live progress
+            // map), then statistics, inventory and progress, and joins them. It
+            // also announces new campaigns in favourite games.
+            const overview = await invoke<DropsOverview>('get_drops_overview', { reuseCampaigns: false });
 
             // Seed automation status from the bridge-cached live status: a plugin
             // powering automation reports through the bridge into the store and keeps
@@ -779,203 +532,7 @@ export default function DropsCenter() {
             if (liveStatus) {
                 setDropProgress(liveStatus);
             }
-
-            if (progressData) setProgress(progressData);
-            if (statsData) setStatistics(statsData);
-            if (inventoryData?.items) setInventoryItems(inventoryData.items);
-            if (inventoryData?.completed_drops) {
-                Logger.debug(`[DropsCenter] Found ${inventoryData.completed_drops.length} completed drops`);
-                setCompletedDrops(inventoryData.completed_drops);
-            }
-
-            // Merge data into unified games
-            const gamesMap = new Map<string, UnifiedGame>();
-
-            const getOrCreateGame = (id: string, name: string, boxArt: string): UnifiedGame => {
-                let game = gamesMap.get(id);
-                if (!game) {
-                    game = {
-                        id,
-                        name,
-                        box_art_url: boxArt,
-                        active_campaigns: [],
-                        total_active_drops: 0,
-                        drops_in_progress: 0,
-                        inventory_items: [],
-                        total_claimed: 0,
-                        active: false,
-                        has_claimable: false,
-                        all_drops_claimed: false
-                    };
-                    gamesMap.set(id, game);
-                }
-                return game;
-            };
-
-            // Process Active Campaigns and merge progress data from inventory
-            if (campaignsData) {
-                campaignsData.forEach(campaign => {
-                    // IMPORTANT: Merge progress data into each drop BEFORE the collectible
-                    // check + adding to game, so embedded/inventory progress is counted.
-                    const campaignWithProgress = {
-                        ...campaign,
-                        time_based_drops: campaign.time_based_drops.map(drop => {
-                            // Find progress from progressData (real-time updates)
-                            const prog = progressData?.find(p => p.drop_id === drop.id);
-                            
-                            // If no progress in progressData, check inventory items
-                            let inventoryProgress = null;
-                            if (!prog && inventoryData?.items) {
-                                // Find matching inventory item for this campaign
-                                const inventoryItem = inventoryData.items.find(item => 
-                                    item.campaign.id === campaign.id ||
-                                    item.campaign.name === campaign.name
-                                );
-                                if (inventoryItem) {
-                                    const inventoryDrop = inventoryItem.campaign.time_based_drops.find(d => d.id === drop.id);
-                                    inventoryProgress = inventoryDrop?.progress;
-                                }
-                            }
-                            
-                            // Use whichever progress source is available
-                            const progressToUse = prog || inventoryProgress;
-                            
-                            return {
-                                ...drop,
-                                progress: progressToUse || drop.progress // Keep existing or use merged
-                            };
-                        })
-                    };
-
-                    // Include every active campaign (mineable or not). The grid's
-                    // "Mineable only / All drops" toggle filters non-mineable ones at
-                    // render (see filteredGames), so flipping it never reloads.
-                    const game = getOrCreateGame(campaign.game_id, campaign.game_name, campaign.image_url);
-                    game.active_campaigns.push(campaignWithProgress);
-                    game.total_active_drops += campaign.time_based_drops.length;
-
-                    // Update game stats based on merged progress
-                    campaignWithProgress.time_based_drops.forEach(drop => {
-                        const prog = progressData?.find(p => p.drop_id === drop.id) || drop.progress;
-                        if (prog && !prog.is_claimed && prog.current_minutes_watched >= prog.required_minutes_watched) {
-                            game.has_claimable = true;
-                        }
-                        if (prog && !prog.is_claimed && prog.current_minutes_watched > 0) {
-                            game.drops_in_progress++;
-                        }
-                    });
-                });
-            }
-
-            // Process Inventory Items
-            if (inventoryData?.items) {
-                inventoryData.items.forEach(item => {
-                    let gameId = item.campaign.game_id;
-                    const gameName = item.campaign.game_name || "Unknown Game";
-                    if (!gameId) gameId = `generated-${gameName.toLowerCase().replace(/\s+/g, '-')}`;
-
-                    const game = getOrCreateGame(gameId, gameName, item.campaign.image_url);
-                    game.inventory_items.push(item);
-                    game.total_claimed += item.claimed_drops;
-                });
-            }
-
-            // Get the current automation game name (case-insensitive). Prefer the
-            // freshly-read live status (set by the plugin bridge and held in the
-            // store while the overlay is closed) over the stale component state.
-            const activeAutomationStatus = liveStatus || dropProgress;
-            const progressGameName = activeAutomationStatus?.current_drop?.game_name?.toLowerCase() ||
-                activeAutomationStatus?.current_channel?.game_name?.toLowerCase();
-
-            // Drops the user has genuinely EARNED, from unambiguous sources only: the
-            // permanent gameEventDrops list + any inventory drop explicitly is_claimed.
-            // Match by benefit id, plus benefit NAME for badges only (a held badge
-            // can't be re-earned; a consumable reissued under a new campaign with the
-            // same name and new ids can be). NOTE: NOT claimed-by-index or "100%
-            // watched" here; those over-matched in-progress drops as earned.
-            const ownedBenefitIds = new Set<string>((inventoryData?.completed_drops || []).map(d => d.id));
-            const ownedBenefitNames = new Set<string>(
-                (inventoryData?.completed_drops || []).map(d => (d.name || '').toLowerCase().trim()).filter(Boolean)
-            );
-            const ownedDropIds = new Set<string>();
-            inventoryData?.items?.forEach(item => {
-                item.campaign.time_based_drops.forEach(drop => {
-                    if (drop.progress?.is_claimed === true) {
-                        ownedDropIds.add(drop.id);
-                        drop.benefit_edges?.forEach(b => {
-                            ownedBenefitIds.add(b.id);
-                            if (b.name) ownedBenefitNames.add(b.name.toLowerCase().trim());
-                        });
-                    }
-                });
-            });
-            const ownedByName = (name?: string) => {
-                const n = (name || '').toLowerCase().trim();
-                return !!n && ownedBenefitNames.has(n) && knownBadgeTitles.has(n);
-            };
-
-            // Update active flag and calculate all_drops_claimed for each game
-            gamesMap.forEach(game => {
-                if (activeAutomationStatus?.active && progressGameName) {
-                    game.active = game.name.toLowerCase() === progressGameName;
-                }
-
-                // Check if all drops in all active campaigns have been claimed
-                if (game.active_campaigns.length > 0 && game.total_active_drops > 0) {
-                    let totalDropsInCampaigns = 0;
-                    let claimedDropsCount = 0;
-
-                    game.active_campaigns.forEach(campaign => {
-                        campaign.time_based_drops.forEach(drop => {
-                            totalDropsInCampaigns++;
-                            const dp = progressData?.find(p => p.drop_id === drop.id) || drop.progress;
-                            // Claimed here, OR already earned elsewhere (by benefit id/name) but
-                            // ONLY when this drop isn't itself in progress. A drop with watch-time
-                            // is being actively collected and must not be counted as already-earned.
-                            const hasCurrentProgress = !!dp && ((dp.current_minutes_watched || 0) > 0 || dp.is_claimed === true);
-                            // An inventory drop flagged is_claimed is a proven claim of
-                            // THIS drop instance (reissues mint new drop ids), so it
-                            // counts even while a stale progress record still carries
-                            // watch minutes. Benefit id/name matching stays gated.
-                            const owned = dp?.is_claimed === true
-                                || ownedDropIds.has(drop.id)
-                                || (!hasCurrentProgress && (
-                                    drop.benefit_edges?.some(b =>
-                                        ownedBenefitIds.has(b.id) || ownedByName(b.name)
-                                    ) ?? false
-                                ));
-                            if (owned) {
-                                claimedDropsCount++;
-                            }
-                        });
-                    });
-
-                    // All drops claimed if we have drops and all are claimed.
-                    // Prefer embedded per-drop progress (campaign.time_based_drops[].progress) as a fallback,
-                    // because `progressData` can be empty before the backend progress map is populated.
-                    // Prefer progressData, but also fall back to embedded drop.progress (from CampaignDetails)
-                    // to avoid false negatives when progressData isn't populated yet.
-                    game.all_drops_claimed = totalDropsInCampaigns > 0 && claimedDropsCount === totalDropsInCampaigns;
-                }
-            });
-
-            // Only surface games that have at least one campaign with something left to
-            // collect. Games whose campaigns are all event-only, or that only appear via
-            // earned inventory, have nothing actionable here and live in the Inventory tab.
-            setUnifiedGames(Array.from(gamesMap.values()).filter(g => g.active_campaigns.length > 0).sort((a, b) => {
-                // Automation games first
-                if (a.active !== b.active) return a.active ? -1 : 1;
-                // Completed games (all drops claimed) go to bottom
-                if (a.all_drops_claimed !== b.all_drops_claimed) return a.all_drops_claimed ? 1 : -1;
-                // Games with claimable drops next
-                if (a.has_claimable !== b.has_claimable) return a.has_claimable ? -1 : 1;
-                // Then by number of active campaigns
-                if (a.active_campaigns.length !== b.active_campaigns.length) {
-                    return b.active_campaigns.length - a.active_campaigns.length;
-                }
-                return a.name.localeCompare(b.name);
-            }));
-
+            applyOverview(overview);
         } catch (err) {
             Logger.error('Failed to load unified drops data:', err);
             setError(err instanceof Error ? err.message : String(err));
@@ -1004,102 +561,6 @@ export default function DropsCenter() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // ---- Favorite Drops Notification Logic ----
-    // Check if any favorited categories have new drops since last session
-    const FAVORITE_CAMPAIGNS_CACHE_KEY = 'streamnook_favorite_campaigns_cache';
-    
-    const checkForNewFavoriteDrops = () => {
-        // Get app settings to check if notification is enabled
-        const appSettings = useAppStore.getState().settings;
-        if (!appSettings.live_notifications?.show_favorite_drops_notifications) {
-            Logger.debug('[DropsCenter] Favorite drops notifications disabled');
-            return;
-        }
-        
-        // Get current favorite games
-        const favoriteGames = dropsSettings?.favorite_games || [];
-        if (favoriteGames.length === 0) {
-            Logger.debug('[DropsCenter] No favorited games, skipping new drops check');
-            return;
-        }
-        
-        Logger.debug('[DropsCenter] Checking for new drops in favorited games:', favoriteGames);
-        
-        // Get previously cached campaign data
-        let cachedData: Record<string, string[]> = {};
-        try {
-            const cached = localStorage.getItem(FAVORITE_CAMPAIGNS_CACHE_KEY);
-            if (cached) {
-                cachedData = JSON.parse(cached);
-            }
-        } catch (e) {
-            Logger.warn('[DropsCenter] Failed to parse cached campaign data:', e);
-        }
-        
-        // Build current campaign map for favorited games
-        const currentCampaignMap: Record<string, { campaignIds: string[]; gameName: string; boxArt: string }> = {};
-        
-        unifiedGames.forEach(game => {
-            const isFavorite = favoriteGames.some(
-                pg => pg.toLowerCase() === game.name.toLowerCase()
-            );
-            if (!isFavorite) return;
-            
-            currentCampaignMap[game.name.toLowerCase()] = {
-                campaignIds: game.active_campaigns.map(c => c.id),
-                gameName: game.name,
-                boxArt: game.box_art_url
-            };
-        });
-        
-        // Find new campaigns in favorited games
-        const newDropNotifications: { gameName: string; boxArt: string; newCount: number; campaignNames: string[] }[] = [];
-        
-        Object.entries(currentCampaignMap).forEach(([gameKey, data]) => {
-            const previousCampaignIds = cachedData[gameKey] || [];
-            const newCampaignIds = data.campaignIds.filter(id => !previousCampaignIds.includes(id));
-            
-            if (newCampaignIds.length > 0) {
-                // Find campaign names for the new campaigns
-                const game = unifiedGames.find(g => g.name.toLowerCase() === gameKey);
-                const campaignNames = game?.active_campaigns
-                    .filter(c => newCampaignIds.includes(c.id))
-                    .map(c => c.name) || [];
-                
-                newDropNotifications.push({
-                    gameName: data.gameName,
-                    boxArt: data.boxArt,
-                    newCount: newCampaignIds.length,
-                    campaignNames
-                });
-            }
-        });
-        
-        // Emit notifications for each game with new drops
-        newDropNotifications.forEach(({ gameName, boxArt, newCount, campaignNames }) => {
-            Logger.debug(`[DropsCenter] New drops available for ${gameName}:`, campaignNames);
-            
-            emit('new-favorite-drops', {
-                game_name: gameName,
-                game_image: boxArt,
-                new_count: newCount,
-                campaign_names: campaignNames
-            });
-        });
-        
-        // Update cache with current campaign IDs
-        const newCacheData: Record<string, string[]> = {};
-        Object.entries(currentCampaignMap).forEach(([gameKey, data]) => {
-            newCacheData[gameKey] = data.campaignIds;
-        });
-        
-        try {
-            localStorage.setItem(FAVORITE_CAMPAIGNS_CACHE_KEY, JSON.stringify(newCacheData));
-        } catch (e) {
-            Logger.warn('[DropsCenter] Failed to save campaign cache:', e);
-        }
-    };
-
     // ---- Effects ----
     useEffect(() => {
         const init = async () => {
@@ -1116,9 +577,6 @@ export default function DropsCenter() {
                     Logger.error(e);
                 }
                 await loadDropsData();
-                
-                // Check for new drops in favorited categories on startup
-                checkForNewFavoriteDrops();
             } else {
                 setIsLoading(false);
             }
@@ -1235,75 +693,7 @@ export default function DropsCenter() {
 
         // Update the ref for next comparison
         prevAutomationGameRef.current = currentAutomationGame;
-
-        setUnifiedGames(prevGames => {
-            const updated = prevGames.map(game => ({
-                ...game,
-                active: dropProgress.active && progressGameName
-                    ? game.name.toLowerCase() === progressGameName
-                    : false
-            }));
-
-            // Re-sort with full sorting logic
-            return updated.sort((a, b) => {
-                // Automation games first
-                if (a.active !== b.active) return a.active ? -1 : 1;
-                // Completed games (all drops claimed) go to bottom
-                if (a.all_drops_claimed !== b.all_drops_claimed) return a.all_drops_claimed ? 1 : -1;
-                // Games with claimable drops next
-                if (a.has_claimable !== b.has_claimable) return a.has_claimable ? -1 : 1;
-                // Then by number of active campaigns
-                if (a.active_campaigns.length !== b.active_campaigns.length) {
-                    return b.active_campaigns.length - a.active_campaigns.length;
-                }
-                return a.name.localeCompare(b.name);
-            });
-        });
     }, [dropProgress, unifiedGames.length]);
-
-    // Notification effect: Detect new campaigns from favorite games
-    useEffect(() => {
-        if (!dropsSettings || unifiedGames.length === 0) return;
-        
-        const favoriteGames = dropsSettings.favorite_games || [];
-        if (favoriteGames.length === 0) return; // No favorites, skip
-        
-        // Build current campaign IDs set
-        const currentCampaignIds = new Set<string>();
-        const newFavoriteCampaigns: { gameName: string; campaignName: string }[] = [];
-        
-        unifiedGames.forEach(game => {
-            const isFavorite = favoriteGames.some(
-                pg => pg.toLowerCase() === game.name.toLowerCase()
-            );
-            
-            game.active_campaigns.forEach(campaign => {
-                currentCampaignIds.add(campaign.id);
-                
-                // Check if this is a NEW campaign from a favorite game
-                if (isFavorite && !prevCampaignIdsRef.current.has(campaign.id)) {
-                    // Only notify if we have previous data (not first load)
-                    if (prevCampaignIdsRef.current.size > 0) {
-                        newFavoriteCampaigns.push({
-                            gameName: game.name,
-                            campaignName: campaign.name
-                        });
-                    }
-                }
-            });
-        });
-        
-        // Send notifications for new favorite campaigns
-        if (newFavoriteCampaigns.length > 0 && dropsSettings.notify_on_drop_available) {
-            newFavoriteCampaigns.forEach(({ gameName, campaignName }) => {
-                addToast(`New drop for ${gameName}: ${campaignName}`, 'success');
-                Logger.debug(`[DropsCenter] New favorite campaign notification: ${gameName} - ${campaignName}`);
-            });
-        }
-        
-        // Update the ref for next comparison
-        prevCampaignIdsRef.current = currentCampaignIds;
-    }, [unifiedGames, dropsSettings, addToast]);
 
     // ---- Render: Authentication Screen ----
     if (!isAuthenticated) {

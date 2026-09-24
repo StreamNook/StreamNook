@@ -4,6 +4,7 @@ import type { UnifiedGame, DropProgress, DropProgressStatus } from '../../types'
 import { Tooltip } from '../ui/Tooltip';
 import { deriveDropProgressDisplay } from '../../utils/dropProgressDisplay';
 import { useAppStore } from '../../stores/AppStore';
+import { CardChip } from '../ui/CardChip';
 
 interface GameCardProps {
     game: UnifiedGame;
@@ -243,19 +244,19 @@ export default function GameCard({
                 <div className="absolute top-2 left-2 z-10 flex flex-col gap-1.5">
                     {/* Claimable badge */}
                     {claimableCount > 0 && (
-                        <div className="drops-badge-glass-lg !bg-success/50 !border-success/70">
+                        <CardChip kind="ready" size="lg">
                             <Check size={14} className="text-white" />
                             <span className="text-white">{claimableCount} READY</span>
-                        </div>
+                        </CardChip>
                     )}
                     {/* Done badge — every drop for this game is already earned. Marks
                         the card so it's not re-opened expecting something to collect.
                         Suppressed while anything is claimable or actively collecting. */}
                     {game.all_drops_claimed && claimableCount === 0 && !isDropProgressing && (
-                        <div className="drops-badge-glass-lg !bg-black/45 !border-success/50">
+                        <CardChip kind="done" size="lg">
                             <Check size={14} className="text-success" />
                             <span className="text-success">DONE</span>
-                        </div>
+                        </CardChip>
                     )}
                 </div>
 
