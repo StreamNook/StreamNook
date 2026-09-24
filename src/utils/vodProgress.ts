@@ -104,10 +104,10 @@ export function vodThumbUrl(url: string | undefined, width = 440, height = 248):
   return url.replace('%{width}', String(width)).replace('%{height}', String(height));
 }
 
-/** "42m ago" / "1h 05m ago" / "just now" for a distance behind live. */
+/** "42s ago" / "42m ago" / "1h 05m ago" for a distance behind live. */
 export function formatAgo(behindSecs: number): string {
   const s = Math.max(0, Math.round(behindSecs));
-  if (s < 60) return 'just now';
+  if (s < 60) return `${s}s ago`;
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   if (h > 0) return `${h}h ${m.toString().padStart(2, '0')}m ago`;

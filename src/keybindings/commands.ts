@@ -394,6 +394,16 @@ function build(): BindableCommand[] {
       run: () => app().restartStream(),
     },
     {
+      id: 'player.goLive',
+      label: 'Jump to live',
+      category: 'Player',
+      context: 'player',
+      defaultBindings: ['L'],
+      keywords: 'live edge catch up latest jump',
+      isAvailable: () => isPlayerControllable() && app().currentMediaType === 'live',
+      run: () => pc()?.goLive(),
+    },
+    {
       id: 'cs.stopStream',
       label: 'Stop / close current stream',
       category: 'Player',

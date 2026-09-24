@@ -59,7 +59,7 @@ describe('vodProgressLabel', () => {
 
 describe('formatAgo', () => {
   it('rounds to minutes and hours', () => {
-    expect(formatAgo(20)).toBe('just now');
+    expect(formatAgo(20)).toBe('20s ago');
     expect(formatAgo(42 * 60 + 10)).toBe('42m ago');
     expect(formatAgo(3600 + 5 * 60)).toBe('1h 05m ago');
   });

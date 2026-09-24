@@ -22,6 +22,8 @@ export interface PlayerControls {
   togglePip(): void;
   speedUp(): void;
   speedDown(): void;
+  /** Jump to the live edge, or back to live from the broadcast recording. */
+  goLive(): void;
 }
 
 let current: PlayerControls | null = null;
