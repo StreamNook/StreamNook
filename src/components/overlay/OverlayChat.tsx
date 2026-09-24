@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { KNOWN_BOTS, isChatBotBadge } from '../../utils/knownBots';
 import type { CSSProperties, HTMLAttributeReferrerPolicy, ReactNode } from 'react';
-import { Gift, Star, Users, Megaphone, DollarSign, Flame, Heart } from 'lucide-react';
+import { Gift, Star, Users, Megaphone, DollarSign, Flame, Heart, Sparkles } from 'lucide-react';
 import { computePaintStyle } from '../../services/paintStyle';
 import { PROVIDERS, type ProviderId } from '../../types/providers';
 import type { MessageSegment } from '../../services/twitchChat';
@@ -26,6 +26,8 @@ import { ProviderIcon } from './ProviderIcon';
 import { AtmosphereChatWash } from './AtmosphereChatWash';
 import { convertMoneyInText, loadRates, ratesReady } from './currency';
 import { giftBombOriginOf, isGiftBombAnnouncement, isGiftBombChild } from '../../utils/giftBombCollapse';
+import { adjustNameColor } from '../../utils/nameColor';
+import { overlayBackdropIsDark, zeroWidthLayout } from './overlayLayout';
 
 // The StreamNook identity badge on the overlay is just the member's equipped
 // cosmetic image (the app's rich hover card doesn't belong on a broadcast). The
@@ -239,6 +241,21 @@ const categoryOf = (msgType?: string): EventCategory =>
 const isCheerMessage = (m: OverlayMessage): boolean =>
   (m.provider ?? 'twitch') === 'twitch' && (m.metadata?.bits_amount ?? 0) > 0;
 
+// A channel-point redemption with no text. Chat never carries one: the feed builds
+// the row from Twitch's channel points feed and names the reward in `sn-reward-title`
+// (cost and image ride `sn-reward-cost` / `sn-reward-image`). Rewards that ask for
+// text still arrive as ordinary chat messages, so they are not events here.
+const rewardTitleOf = (m: OverlayMessage): string | undefined =>
+  (m.provider ?? 'twitch') === 'twitch' ? (m.tags?.['sn-reward-title'] || undefined) : undefined;
+
+// Twitch's default channel points glyph, for a points amount or a reward with no art.
+const PointsGlyph = ({ size = '0.9em' }: { size?: string }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style={{ display: 'inline', verticalAlign: '-0.1em', marginRight: '0.15em' }}>
+    <path d="M12 5v2a5 5 0 0 1 5 5h2a7 7 0 0 0-7-7Z" />
+    <path fillRule="evenodd" d="M1 12C1 5.925 5.925 1 12 1s11 4.925 11 11-4.925 11-11 11S1 18.075 1 12Zm11 9a9 9 0 1 1 0-18 9 9 0 0 1 0 18Z" clipRule="evenodd" />
+  </svg>
+);
+
 // Twitch's own animated gem for the tier, matching the in-app cheer card.
 const cheerGemUrl = (bits: number): string => {
   const tier = bits >= 10000 ? '10000' : bits >= 5000 ? '5000' : bits >= 1000 ? '1000' : bits >= 100 ? '100' : '1';
@@ -247,7 +264,7 @@ const cheerGemUrl = (bits: number): string => {
 
 const CATEGORY_ICON: Record<EventCategory, typeof Gift> = {
   subscription: Star, gift: Gift, raid: Users, cheer: DollarSign,
-  milestone: Flame, follow: Heart, announcement: Megaphone,
+  milestone: Flame, redemption: Sparkles, follow: Heart, announcement: Megaphone,
 };
 
 // StreamNook event style — each category gets the app's own signature wash, so a
@@ -262,6 +279,7 @@ const CATEGORY_GRADIENT: Record<EventCategory, string> = {
   milestone: 'sn-ev-watchstreak',
   cheer: 'sn-ev-bits',
   raid: 'sn-ev-raid',
+  redemption: 'sn-ev-redemption',
   follow: 'sn-ev-follow',
   announcement: 'sn-ev-announcement',
 };
@@ -275,6 +293,7 @@ const eventFallback = (category: EventCategory, name: string): string => {
     case 'raid': return `${name} is raiding!`;
     case 'cheer': return `${name} cheered!`;
     case 'milestone': return `${name} hit a milestone!`;
+    case 'redemption': return `${name} redeemed a reward`;
     case 'follow': return `${name} followed!`;
     default: return `${name} — event`;
   }
@@ -391,6 +410,34 @@ const OverlaySegment = ({ segment, style, emoteScale, giant = false }: { segment
   // Plain text: under a vendor style, image any unicode emoji sitting in the text.
   return <span>{emojiStyle === 'system' ? segment.content : renderTextWithEmoji(segment.content, emojiStyle)}</span>;
 };
+
+/** A base emote with its zero-width overlays drawn in the same cell. */
+const StackedEmote = ({
+  segs,
+  style,
+  emoteScale,
+  giant = false,
+}: {
+  segs: MessageSegment[];
+  style: OverlayStyle;
+  emoteScale?: number;
+  giant?: boolean;
+}) => (
+  <span
+    style={{
+      display: 'inline-grid',
+      alignItems: 'center',
+      justifyItems: 'center',
+      verticalAlign: giant ? 'middle' : '-0.35em',
+    }}
+  >
+    {segs.map((seg, k) => (
+      <span key={k} style={{ gridArea: '1 / 1', display: 'inline-flex' }}>
+        <OverlaySegment segment={seg} style={style} emoteScale={emoteScale} giant={giant} />
+      </span>
+    ))}
+  </span>
+);
 
 const SourceTag = ({ provider, mode }: { provider: ProviderId; mode: OverlayStyle['sourceTag'] }) => {
   if (mode === 'none') return null;
@@ -577,6 +624,9 @@ const eventTemplateContext = (
 
     points: tagCount(t['msg-param-copoReward']),
 
+    reward: tagText(t['sn-reward-title']),
+    cost: tagCount(t['sn-reward-cost'])?.toLocaleString(),
+
     // The channel key is composite off Twitch ("youtube:slug"), so show the part
     // a viewer would recognize.
     channel: (message.channel ?? '').split(':').pop() || undefined,
@@ -588,7 +638,9 @@ const eventTemplateContext = (
 
 const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; style: OverlayStyle; expiring?: boolean }) => {
   const provider = (message.provider ?? 'twitch') as ProviderId;
-  const color = message.color || '#9147ff';
+  const rawColor = message.color || '#9147ff';
+  const color =
+    style.readableNameColors === false ? rawColor : adjustNameColor(rawColor, 'hsl_loop', overlayBackdropIsDark(style));
   // The overlay renders paints at full fidelity ('all' shadows) so the hosted page
   // and the builder preview always match, independent of any personal chat setting.
   // 7TV paint on the name, unless the streamer turned paints off.
@@ -771,11 +823,14 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
   // its cheer card ahead of every other branch.
   const cheerBits = message.metadata?.bits_amount ?? 0;
   const asCheerEvent = style.cheerDisplay === 'event' && isCheerMessage(message);
-  if (systemMessage || asCheerEvent || (msgType && !!CATEGORY_OF[msgType])) {
-    const category: EventCategory = asCheerEvent ? 'cheer' : categoryOf(msgType);
+  const rewardTitle = rewardTitleOf(message);
+  if (systemMessage || asCheerEvent || rewardTitle || (msgType && !!CATEGORY_OF[msgType])) {
+    const category: EventCategory = asCheerEvent ? 'cheer' : rewardTitle ? 'redemption' : categoryOf(msgType);
     const rawEventText = asCheerEvent
       ? `cheered ${cheerBits.toLocaleString()} bits`
-      : systemMessage || eventFallback(category, message.display_name || message.username);
+      : rewardTitle
+        ? `redeemed ${rewardTitle}`
+        : systemMessage || eventFallback(category, message.display_name || message.username);
     // Convert the amount in a YouTube Super Chat / Super Sticker to the chosen target
     // currency (no-op unless a target is set + rates are loaded).
     const converted = style.superchatCurrency && (msgType === 'superchat' || msgType === 'supersticker')
@@ -797,7 +852,15 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
     // TikTok stamps the action itself as the message body (e.g. "sent Team Power",
     // "followed"), which just duplicates the event line — so skip it. Twitch resubs
     // and YouTube Super Chats carry a real separate message, so those keep it.
-    const hasBody = !!message.content && (message.segments?.length ?? 0) > 0 && provider !== 'tiktok';
+    // A redemption row built in-app carries the reward name as its body too, which the
+    // event line already says.
+    const hasBody = !!message.content && (message.segments?.length ?? 0) > 0 && provider !== 'tiktok' && !rewardTitle;
+    const rewardCost = rewardTitle ? tagCount(message.tags?.['sn-reward-cost']) ?? 0 : 0;
+    const rewardImage = rewardTitle ? message.tags?.['sn-reward-image'] || undefined : undefined;
+    // Twitch draws reward art on the reward's own colour; the default art is a pale
+    // glyph that disappears without it.
+    const rawRewardBg = rewardImage ? message.tags?.['sn-reward-bg'] ?? '' : '';
+    const rewardBg = /^#[0-9a-f]{3,8}$/i.test(rawRewardBg) ? rawRewardBg : undefined;
     // Each event reflects its actual type (the icon) AND its source (the provider's
     // brand color), so a watch-streak Milestone never looks like a Subscription.
     const meta = PROVIDERS[provider] ?? PROVIDERS.twitch;
@@ -905,6 +968,18 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
               // Twitch's own animated gem for the tier, so a promoted cheer reads the
               // same as the in-app cheer card rather than a generic currency glyph.
               <img src={cheerGemUrl(cheerBits)} alt="" style={{ height: '1.25em', width: 'auto', objectFit: 'contain' }} />
+            ) : rewardImage ? (
+              // The reward's own art, the way Twitch draws it on the redemption.
+              <img
+                src={rewardImage}
+                alt=""
+                style={{
+                  height: '1.25em', width: '1.25em', objectFit: 'contain', boxSizing: 'border-box',
+                  ...(rewardBg ? { background: rewardBg, borderRadius: '0.3em', padding: '0.12em' } : null),
+                }}
+              />
+            ) : rewardTitle ? (
+              <span style={{ color: meta.color, display: 'inline-flex' }}><PointsGlyph size="1em" /></span>
             ) : isWatchStreak ? (
               // Twitch's own fire glyph, matching the in-app watch-streak card.
               <svg width="1em" height="1em" viewBox="0 0 20 20" fill="#fb923c" aria-hidden="true">
@@ -927,14 +1002,22 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
               {nameAndBadges}
               {/* Weight comes from the container (style.fontWeight), so event text
                   tracks the streamer's choice alongside message text. */}
-              <span> {finalAction}</span>
+              {rewardTitle && !templated ? (
+                // Twitch's own wording, with the reward named in bold as Twitch chat does.
+                <span> redeemed <span style={{ fontWeight: 700 }}>{rewardTitle}</span></span>
+              ) : (
+                <span> {finalAction}</span>
+              )}
               {streakPoints > 0 && (
                 <span style={{ color: '#fb923c', fontWeight: 700, marginLeft: '0.35em', whiteSpace: 'nowrap' }}>
-                  <svg width="0.9em" height="0.9em" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style={{ display: 'inline', verticalAlign: '-0.1em', marginRight: '0.15em' }}>
-                    <path d="M12 5v2a5 5 0 0 1 5 5h2a7 7 0 0 0-7-7Z" />
-                    <path fillRule="evenodd" d="M1 12C1 5.925 5.925 1 12 1s11 4.925 11 11-4.925 11-11 11S1 18.075 1 12Zm11 9a9 9 0 1 1 0-18 9 9 0 0 1 0 18Z" clipRule="evenodd" />
-                  </svg>
+                  <PointsGlyph />
                   +{streakPoints.toLocaleString()}
+                </span>
+              )}
+              {rewardCost > 0 && !templated && (
+                <span style={{ opacity: 0.7, fontWeight: 600, marginLeft: '0.35em', whiteSpace: 'nowrap' }}>
+                  <PointsGlyph />
+                  {rewardCost.toLocaleString()}
                 </span>
               )}
               {giftSegments.map((seg, i) => (
@@ -984,6 +1067,9 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
   // it onto its own line below and only choose that line's alignment.
   const giantAlign = style.giantEmoteAlign ?? 'center';
   const giantInline = giantIdx >= 0 && giantAlign === 'inline';
+  // Zero-width emotes ride on their base, so a plucked giant takes its overlays
+  // with it rather than leaving them orphaned in the text.
+  const zw = zeroWidthLayout(bodySegs, (s) => !(s.type === 'emote' && s.is_personal && style.showPersonalEmotes === false));
 
   // Twitch chat GIFs share the giant placement: plucked onto the line below
   // (Left / Center / Right) or left where they were typed (Inline), always at
@@ -1033,11 +1119,14 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
         {replyMention && (
           <span style={{ fontWeight: 700, opacity: 0.85 }}>@{stripAt(replyMention.parent_display_name)} </span>
         )}
-        {bodySegs.map((seg, i) => (
-          (i === giantIdx && !giantInline) || (gifsPlucked && seg.type === 'gif')
-            ? null
-            : <OverlaySegment key={i} segment={seg} style={style} giant={i === giantIdx && giantInline} />
-        ))}
+        {bodySegs.map((seg, i) => {
+          if (zw.skip.has(i) || (i === giantIdx && !giantInline) || (gifsPlucked && seg.type === 'gif')) return null;
+          const giant = i === giantIdx && giantInline;
+          const overlays = zw.attached.get(i);
+          return overlays
+            ? <StackedEmote key={i} segs={[seg, ...overlays.map((o) => bodySegs[o])]} style={style} giant={giant} />
+            : <OverlaySegment key={i} segment={seg} style={style} giant={giant} />;
+        })}
       </span>
     </div>
   );
@@ -1054,7 +1143,11 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
         marginTop: '0.2em',
       }}
     >
-      {giantIdx >= 0 && !giantInline && <OverlaySegment segment={bodySegs[giantIdx]} style={style} giant />}
+      {giantIdx >= 0 && !giantInline && (
+        zw.attached.has(giantIdx)
+          ? <StackedEmote segs={[bodySegs[giantIdx], ...zw.attached.get(giantIdx)!.map((o) => bodySegs[o])]} style={style} giant />
+          : <OverlaySegment segment={bodySegs[giantIdx]} style={style} giant />
+      )}
       {gifsPlucked && gifIdxs.map((i) => <OverlaySegment key={`gif-${i}`} segment={bodySegs[i]} style={style} giant />)}
     </div>
   ) : null;
@@ -1371,7 +1464,8 @@ export const OverlayChat = ({ messages, style: rawStyle, superSample = 1 }: { me
       if (style.hideBots && isBotMessage(m)) return false;
       if (isBlockedUser(m)) return false;
       const mt = m.metadata?.msg_type || m.tags?.['msg-id'];
-      const isEvent = !!(m.metadata?.system_message || m.tags?.['system-msg']) || (mt ? !!CATEGORY_OF[mt] : false);
+      const isRedemption = !!rewardTitleOf(m);
+      const isEvent = isRedemption || !!(m.metadata?.system_message || m.tags?.['system-msg']) || (mt ? !!CATEGORY_OF[mt] : false);
       // A cheer joins events for the category hide ONLY. It stays subject to the command
       // and phrase filters below, in both display modes, because unlike a sub — whose
       // text is Twitch's own system-msg — a cheer body is arbitrary user-typed text, and
@@ -1398,7 +1492,7 @@ export const OverlayChat = ({ messages, style: rawStyle, superSample = 1 }: { me
         // nothing for Twitch cheers was a plain bug, and "hiding bits only works if you
         // also display them as cards" would be indefensible. Display mode is rendering
         // only.
-        const cat = isEvent ? categoryOf(mt) : 'cheer';
+        const cat = isRedemption ? 'redemption' : isEvent ? categoryOf(mt) : 'cheer';
         if (style.hiddenEvents?.includes(cat)) return false;
         // Per-platform hide: e.g. 'tiktok:follow' hides follows on TikTok only.
         const prov = m.provider ?? 'twitch';
@@ -1699,6 +1793,12 @@ export const OverlayChat = ({ messages, style: rawStyle, superSample = 1 }: { me
             color-mix(in srgb, #6bff9d 10%, transparent) 50%,
             color-mix(in srgb, #6bff9d 12%, transparent) 75%,
             color-mix(in srgb, #6bff9d 15%, transparent) 100%); }
+        .sn-ev-redemption { background-color: #0c0c0d; background-size: 100% 100%;
+          background-image: linear-gradient(90deg,
+            color-mix(in srgb, #9147ff 18%, transparent) 0%,
+            color-mix(in srgb, #bf94ff 14%, transparent) 33%,
+            color-mix(in srgb, #9147ff 11%, transparent) 66%,
+            color-mix(in srgb, #9147ff 16%, transparent) 100%); }
         .sn-ev-raid { background-color: #0c0c0d; background-size: 100% 100%;
           background-image: linear-gradient(90deg,
             color-mix(in srgb, #6b9dff 16%, transparent) 0%,

@@ -105,16 +105,26 @@ function adapt(m: BackendChatMessage, users: UsersMap): OverlayMessage {
     if (resolved.length > 0) badges = resolved;
   }
 
-  const user = m.user_id ? users.get(m.user_id) : undefined;
+  // Two different id spaces, and reading one as the other shows a stranger's
+  // cosmetics under someone's name. The chat store is keyed the way chat keys
+  // it: bare for Twitch, `provider:id` otherwise. A bare Kick id read as a chat
+  // key returns whichever Twitch chatter shares that number.
+  const cosmeticsKey =
+    m.user_id ? (provider === 'twitch' ? m.user_id : `${provider}:${m.user_id}`) : undefined;
+  const user = cosmeticsKey ? users.get(cosmeticsKey) : undefined;
   const seventvBadge = user?.seventvBadge;
   const extraBadges = (user?.thirdPartyBadges ?? [])
     .filter((b) => b && b.imageUrl)
     .map((b) => ({ url: b.imageUrl as string, title: b.title, source: b.provider }));
+  // Membership is a Twitch id, so only a Twitch chatter can be looked up. Kick
+  // ids are small integers from the same range as Twitch's, so passing one here
+  // matches an unrelated member and paints their number and badge.
+  const memberId = provider === 'twitch' ? m.user_id : undefined;
   const streamNookUserNumber =
-    m.user_id && isStreamNookUser(m.user_id) ? (getStreamNookUserNumber(m.user_id) ?? null) : null;
+    memberId && isStreamNookUser(memberId) ? (getStreamNookUserNumber(memberId) ?? null) : null;
   // The member's equipped StreamNook cosmetic badge (bundled asset URL); the twin
   // falls back to the default logo when there's none.
-  const snSlug = m.user_id && streamNookUserNumber != null ? getActiveCosmeticSlug(m.user_id) : null;
+  const snSlug = memberId && streamNookUserNumber != null ? getActiveCosmeticSlug(memberId) : null;
   const streamNookBadgeUrl = snSlug ? (COSMETIC_ASSET_BY_SLUG[snSlug] ?? null) : null;
   const atmosphere = user?.atmosphereId ? toOverlayAtmosphere(getAtmosphere(user.atmosphereId)) : null;
 

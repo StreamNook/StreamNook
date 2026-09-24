@@ -20,11 +20,9 @@ const SYMBOL_TO_CODE: Array<[string, string]> = [
   ['₫', 'VND'], ['₺', 'TRY'], ['₴', 'UAH'], ['฿', 'THB'], ['₦', 'NGN'],
 ];
 
-// Targets a user can pick (all present in the Frankfurter set).
-export const CURRENCY_OPTIONS = [
-  'USD', 'EUR', 'GBP', 'CAD', 'AUD', 'JPY', 'INR', 'BRL', 'MXN', 'KRW', 'PHP',
-  'SGD', 'SEK', 'CHF', 'PLN', 'TRY', 'ZAR', 'NZD', 'HKD', 'TWD', 'THB', 'IDR', 'MYR', 'CNY',
-];
+// The list lives with the overlay's pure currency module so the overlay builder
+// can use it on the website too.
+export { CURRENCY_OPTIONS } from '../components/overlay/currency';
 
 const CODE_SYMBOL: Record<string, string> = {
   USD: '$', EUR: '€', GBP: '£', JPY: '¥', CAD: 'CA$', AUD: 'A$', NZD: 'NZ$',

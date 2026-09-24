@@ -380,6 +380,14 @@ export const SAMPLE_MESSAGES: OverlayMessage[] = [
       },
     },
   ),
+  // A channel-point redemption with no text. The feed names the reward in tags,
+  // so the card, the points glyph and the cost all preview.
+  base('m31', 'twitch', 'hydrohomie', 'HydroHomie', '#4fc3f7', [],
+    {
+      tags: { 'sn-reward-title': 'Hydrate', 'sn-reward-cost': '5000' },
+      metadata: { is_action: false, is_mentioned: false, is_first_message: false, is_from_shared_chat: false, formatted_timestamp: '9:47 PM' },
+    },
+  ),
   // A community gift bomb: the "gifting N subs" announcement plus one individual
   // gift that shares its origin id. The overlay collapses these to just the
   // announcement (m20 is dropped), so a 20-sub bomb is one row, not 21.
@@ -445,6 +453,14 @@ export const SAMPLE_MESSAGES: OverlayMessage[] = [
     },
   ),
   base('m18', 'tiktok', 'ttchat', 'TT Chat', '#00f2ea', [t('showed up, said hi, immediately leaving')]),
+  // A zero-width 7TV emote (RainTime) sits on the emote before it, and the navy
+  // name shows Readable name colors at work.
+  base('m32', 'twitch', 'rainyday', 'RainyDay', '#1a237e', [
+    t('forecast says '),
+    { type: 'emote', content: 'peepoHappy', emote_id: '01KTR4A3Z08TPFNFA5CRVM9319', emote_url: 'https://cdn.7tv.app/emote/01KTR4A3Z08TPFNFA5CRVM9319/2x.webp' },
+    t(' '),
+    { type: 'emote', content: 'RainTime', emote_id: '01FCY771D800007PQ2DF3GDTN6', emote_url: 'https://cdn.7tv.app/emote/01FCY771D800007PQ2DF3GDTN6/2x.webp', is_zero_width: true },
+  ]),
 ];
 
 // ── Flowing preview ────────────────────────────────────────────────────────
@@ -640,6 +656,13 @@ const eventFor = (c: FlowChatter): FlowEvent | null => {
       { msg_type: 'viewermilestone', system_message: `${c.display} is on a ${pick([5, 10, 25, 50, 100])}-stream watch streak` },
       { msg_type: 'submysterygift', system_message: `${c.display} is gifting ${bomb} ${tierName} Subs to the community!`,
         tags: { 'msg-id': 'submysterygift', 'msg-param-mass-gift-count': String(bomb), 'msg-param-sub-plan': tier } },
+      // A redemption carries no msg-id or system message; the reward tags make it one.
+      { msg_type: '', system_message: '',
+        tags: pick([
+          { 'sn-reward-title': 'Hydrate', 'sn-reward-cost': '5000' },
+          { 'sn-reward-title': 'Pick the next map', 'sn-reward-cost': '25000' },
+          { 'sn-reward-title': 'Posture check', 'sn-reward-cost': '1000' },
+        ]) },
     ]);
   }
   if (c.provider === 'youtube') {

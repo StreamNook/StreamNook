@@ -34,6 +34,12 @@ let loading: Promise<void> | null = null;
 const today = () => new Date().toISOString().slice(0, 10);
 
 /** True once today's rates are in memory. */
+// Targets a user can pick (all present in the Frankfurter set).
+export const CURRENCY_OPTIONS = [
+  'USD', 'EUR', 'GBP', 'CAD', 'AUD', 'JPY', 'INR', 'BRL', 'MXN', 'KRW', 'PHP',
+  'SGD', 'SEK', 'CHF', 'PLN', 'TRY', 'ZAR', 'NZD', 'HKD', 'TWD', 'THB', 'IDR', 'MYR', 'CNY',
+];
+
 export function ratesReady(): boolean {
   return !!rates && ratesDay === today();
 }

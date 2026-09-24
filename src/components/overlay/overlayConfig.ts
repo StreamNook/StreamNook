@@ -8,7 +8,7 @@ import type { ProviderId } from '../../types/providers';
 // Overlay event categories — each stream event reflects its actual type (a watch
 // streak is a Milestone, never a Subscription). Kept here (not in OverlayChat) so
 // both the renderer and the builder's event filter share one source of truth.
-export type EventCategory = 'subscription' | 'gift' | 'raid' | 'cheer' | 'milestone' | 'follow' | 'announcement';
+export type EventCategory = 'subscription' | 'gift' | 'raid' | 'cheer' | 'milestone' | 'redemption' | 'follow' | 'announcement';
 
 export const EVENT_CATEGORIES: { id: EventCategory; label: string }[] = [
   { id: 'subscription', label: 'Subscriptions' },
@@ -16,6 +16,7 @@ export const EVENT_CATEGORIES: { id: EventCategory; label: string }[] = [
   { id: 'raid', label: 'Raids' },
   { id: 'cheer', label: 'Bits & Super Chats' },
   { id: 'milestone', label: 'Milestones' },
+  { id: 'redemption', label: 'Channel points' },
   { id: 'follow', label: 'Follows' },
   { id: 'announcement', label: 'Announcements' },
 ];
@@ -236,6 +237,9 @@ export interface OverlayStyle {
   /** Show the @ some platforms put in front of usernames (YouTube handles are
    *  "@name"). Off strips the leading @ wherever a name renders. */
   showAtSign: boolean;
+  /** Walk a chatter's own name color lighter (or darker) until it reads against
+   *  the overlay's backdrop. Hue and saturation stay; 7TV paints are untouched. */
+  readableNameColors: boolean;
   /** Legacy reply toggle. Superseded by replyStyle: clampOverlayStyle migrates
    *  `false` here into replyStyle 'off'. Kept in the type only so old saved
    *  configs still parse. */
@@ -312,6 +316,11 @@ export interface OverlayStyle {
   /** Restore the last on-screen messages after an OBS/browser source reload.
    *  Off (default) = the overlay comes back cleared on reload / stream start. */
   restoreOnReload: boolean;
+  /** Fill the overlay with the Twitch channel's recent chat when it starts. */
+  loadRecentChat: boolean;
+  /** Let the broadcaster and moderators type !refreshoverlay or !clearoverlay in
+   *  Twitch chat to reload or clear the overlay without touching OBS. */
+  modCommands: boolean;
   /** Render the last emote of a "Gigantify an Emote" power-up message at 4x
    *  below the message, like Twitch does. Off shows it inline at normal size. */
   giantEmotes: boolean;
@@ -379,6 +388,12 @@ export interface EventTemplateContext {
   /** Donation amount, already formatted with its currency symbol. */
   amount?: string;
 
+  // ── Channel points ───────────────────────────────────────────────────────
+  /** The reward a viewer spent channel points on, as the channel named it. */
+  reward?: string;
+  /** What that reward cost, in channel points, with thousands separators. */
+  cost?: string;
+
   // ── Raid ─────────────────────────────────────────────────────────────────
   /** Viewers brought by a raid. */
   viewers?: number;
@@ -432,6 +447,8 @@ export const EVENT_TEMPLATE_TOKENS: {
   { token: 'amount', label: 'Donation amount, currency symbol included', example: '$12.34', group: 'Money' },
   { token: 'viewers', label: 'How many viewers the raid brought', example: '237', group: 'Raid' },
   { token: 'points', label: 'Channel points earned from a watch streak', example: '350', group: 'Milestones' },
+  { token: 'reward', label: 'The reward they spent points on', example: 'Hydrate', group: 'Channel points' },
+  { token: 'cost', label: 'What the reward cost in points', example: '5,000', group: 'Channel points' },
   { token: 'channel', label: 'The channel it happened in', example: 'mathox', group: 'Context' },
   { token: 'platform', label: 'Which platform it came from', example: 'Twitch', group: 'Context' },
   { token: 'time', label: 'When it happened', example: '3:45 PM', group: 'Context' },
@@ -454,6 +471,7 @@ export const CATEGORY_DEFAULT_EXAMPLES: Record<EventCategory, string> = {
   raid: 'is raiding with 237 viewers',
   cheer: 'cheered 1000 bits',
   milestone: 'watched 12 consecutive streams',
+  redemption: 'redeemed Hydrate',
   follow: 'followed',
   announcement: 'we go live an hour early tomorrow',
 };
@@ -478,6 +496,7 @@ export const CATEGORY_TEMPLATE_TOKENS: Record<EventCategory, (keyof EventTemplat
   raid: ['viewers', ...COMMON_TOKENS],
   cheer: ['bits', 'charity', 'amount', ...COMMON_TOKENS],
   milestone: ['streak', 'points', 'months', ...COMMON_TOKENS],
+  redemption: ['reward', 'cost', ...COMMON_TOKENS],
   follow: [...COMMON_TOKENS],
   announcement: [...COMMON_TOKENS],
 };
@@ -489,6 +508,7 @@ export const EVENT_TEMPLATE_EXAMPLES: Record<EventCategory, string> = {
   raid: '{username} is raiding with {viewers} viewers!',
   cheer: '{username} cheered {bits} bits!',
   milestone: '{username} has been watching for {streak} in a row!',
+  redemption: '{username} spent {cost} points on {reward}',
   follow: 'Welcome in, {username}!',
   announcement: '{username} says: {default}',
 };
@@ -534,7 +554,7 @@ export function sanitizeEventTemplates(raw: unknown): Partial<Record<EventCatego
 // event toggles in the builder so a provider only shows togglable event types it
 // produces (Twitch has raids/milestones, TikTok has follows, etc.).
 export const PROVIDER_EVENT_CATEGORIES: Partial<Record<ProviderId, EventCategory[]>> = {
-  twitch: ['subscription', 'gift', 'cheer', 'raid', 'milestone', 'announcement'],
+  twitch: ['subscription', 'gift', 'cheer', 'raid', 'milestone', 'redemption', 'announcement'],
   kick: ['subscription', 'gift', 'follow', 'raid'],
   youtube: ['subscription', 'gift', 'cheer'],
   tiktok: ['gift', 'cheer', 'follow'],
@@ -643,6 +663,7 @@ export const DEFAULT_OVERLAY_STYLE: OverlayStyle = {
   maxMessageLines: 0,
   showAvatars: true,
   showAtSign: true,
+  readableNameColors: true,
   showReplies: true,
   replyStyle: 'full',
   linkStyle: 'accent',
@@ -657,6 +678,8 @@ export const DEFAULT_OVERLAY_STYLE: OverlayStyle = {
   direction: 'newBottom',
   entrance: 'fade',
   restoreOnReload: false,
+  loadRecentChat: false,
+  modCommands: true,
   giantEmotes: true,
   giantEmoteAlign: 'center',
   showGifs: true,
