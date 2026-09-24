@@ -265,7 +265,7 @@ const ChatMessageList = memo(function ChatMessageList({
   const hiddenEvents = useAppStore((s) => s.settings.chat_events?.hidden_provider_events);
   const intrinsicSizeCSS = useMemo(() => {
     const fontSize = chatDesign?.font_size ?? 14;
-    const messageSpacing = chatDesign?.message_spacing ?? 2;
+    const messageSpacing = chatDesign?.message_spacing ?? 8;
     // One content line ≈ font_size * 1.5 (browser default leading) plus
     // top + bottom padding (each = max(4, spacing / 2)) and the optional
     // 1px divider border underneath.

@@ -404,8 +404,11 @@ impl Default for ChatDesignSettings {
         Self {
             show_dividers: false,
             alternating_backgrounds: false,
-            message_spacing: 16,
-            font_size: 18,
+            // Twitch's own chat, measured: 14px text, 4px above and below each
+            // message (spacing 8 renders as 8 / 2 per side). Emotes are 2em, so
+            // 14px text also gives Twitch's 28px emotes.
+            message_spacing: 8,
+            font_size: 14,
             font_weight: 400,
             mention_color: "#ff4444".to_string(),
             reply_color: "#ff6b6b".to_string(),

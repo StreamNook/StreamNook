@@ -385,7 +385,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
   const cd = {
     show_dividers: stored?.show_dividers ?? true,
     alternating_backgrounds: stored?.alternating_backgrounds ?? false,
-    message_spacing: stored?.message_spacing ?? 2,
+    message_spacing: stored?.message_spacing ?? 8,
     font_size: stored?.font_size ?? 14,
     activity_font_size: stored?.activity_font_size ?? 14,
     font_weight: stored?.font_weight ?? 400,
@@ -1174,7 +1174,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
 
         <SettingsRow
-          title={`Message spacing: ${cd.message_spacing ?? 2}px`}
+          title={`Message spacing: ${cd.message_spacing ?? 8}px`}
           description="Blank space between one message and the next; more room means fewer messages on screen."
         >
           <input
@@ -1182,7 +1182,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             min="0"
             max="20"
             step="1"
-            value={cd.message_spacing ?? 2}
+            value={cd.message_spacing ?? 8}
             onChange={(e) => setDesign({ message_spacing: parseInt(e.target.value) })}
             className="w-full accent-accent cursor-pointer"
           />
