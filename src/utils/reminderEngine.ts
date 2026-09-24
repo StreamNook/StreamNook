@@ -1,16 +1,13 @@
-// Reminder firing engine.
+// Reminder posting.
 //
 // A reminder is a message StreamNook posts into a streamer's chat on your
 // behalf, triggered by one of five "avenues": a repeating interval, a one-time
 // delay after you join, a clock time, a stream-uptime threshold, or a keyword
-// appearing in chat. The first four are time-based and driven by tickTimeReminders()
-// (called on an interval by the headless <ReminderEngine /> component). The
-// keyword avenue is message-driven: checkRemindersForMessage() is called from
-// the chat message ingestion path, mirroring the /nuke engine.
-//
-// Runtime firing state (last-fired timestamps, per-arming flags) lives in this
-// module so it survives React re-renders. Reminders themselves are persisted in
-// settings.reminders.
+// appearing in chat. WHEN one fires is Rust's (services/reminder_service.rs),
+// which announces `reminders://fire`; the headless <ReminderEngine /> hands that
+// to fireReminderFromRust, which expands the message and posts it, because the
+// sent row belongs to this window's chat store. Reminders themselves are
+// persisted in settings.reminders. The /remind parser lives here too.
 
 import { useAppStore } from '../stores/AppStore';
 import {
@@ -20,12 +17,7 @@ import {
 } from '../stores/chatConnectionStore';
 import { expandUserCommand, formatStreamUptime, type TemplateContext, type CommandDefinition } from './chatCommands';
 import { Logger } from './logger';
-import type {
-  Reminder,
-  ReminderKeywordFrom,
-  ReminderKeywordMatch,
-} from '../types';
-import type { BackendChatMessage } from '../services/twitchChat';
+import type { Reminder } from '../types';
 
 // Invisible Plane-14 tag character. Twitch's duplicate-message detector ignores
 // it but the IRC pipeline accepts it, so appending a varying number of copies
@@ -61,41 +53,6 @@ function makeId(): string {
     : `rmd-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-// ── Per-reminder runtime state ──────────────────────────────────────────────
-
-interface ReminderRuntime {
-  // The channel key this reminder is currently armed for. When it changes
-  // (you switch channels, or reconnect), interval/delay timers restart.
-  armedChannel: string | null;
-  armedAt: number;
-  lastIntervalFireAt: number;
-  delayFired: boolean;
-  // Local date string the clock trigger last fired on (fire once per day).
-  clockFiredDate: string | null;
-  // started_at value the uptime trigger last fired for (fire once per stream).
-  uptimeFiredFor: string | null;
-  keywordLastFiredAt: number;
-}
-
-const runtimes = new Map<string, ReminderRuntime>();
-
-function getRuntime(id: string): ReminderRuntime {
-  let rt = runtimes.get(id);
-  if (!rt) {
-    rt = {
-      armedChannel: null,
-      armedAt: 0,
-      lastIntervalFireAt: 0,
-      delayFired: false,
-      clockFiredDate: null,
-      uptimeFiredFor: null,
-      keywordLastFiredAt: 0,
-    };
-    runtimes.set(id, rt);
-  }
-  return rt;
-}
-
 // ── Target resolution + sending ─────────────────────────────────────────────
 
 interface ReminderTarget {
@@ -104,26 +61,17 @@ interface ReminderTarget {
   isCurrent: boolean; // whether this target is the channel you're actively watching
 }
 
-/** Resolve which channel a reminder posts to, or null if it can't right now
- *  (current-scope with nothing being watched, or specific-scope with no channel). */
-function resolveTarget(reminder: Reminder): ReminderTarget | null {
+/** Post the reminder Rust says is due now, into the channel Rust resolved.
+ *  A reminder deleted or disabled since is ignored. */
+export async function fireReminderFromRust(id: string, channel: string, isCurrent: boolean): Promise<void> {
   const app = useAppStore.getState();
-  const currentLogin = app.currentStream?.user_login?.toLowerCase() || null;
-
-  if (reminder.channel_scope === 'specific') {
-    const login = (reminder.channel_login || '').toLowerCase();
-    if (!login) return null;
-    const isCurrent = currentLogin === login;
-    return {
-      key: login,
-      channelId: isCurrent ? app.currentStream?.user_id ?? null : reminder.channel_id ?? null,
-      isCurrent,
-    };
-  }
-
-  // 'current' scope (default): follow whatever channel is being watched.
-  if (!currentLogin) return null;
-  return { key: currentLogin, channelId: app.currentStream?.user_id ?? null, isCurrent: true };
+  const reminder = app.settings.reminders?.reminders?.find((r) => r.id === id);
+  if (!reminder || !reminder.enabled) return;
+  await fireReminder(reminder, {
+    key: channel,
+    channelId: isCurrent ? app.currentStream?.user_id ?? null : reminder.channel_id ?? null,
+    isCurrent,
+  });
 }
 
 function isConnected(key: string): boolean {
@@ -196,165 +144,6 @@ export async function fireReminderNow(message: string, repeat: number): Promise<
     { key: login, channelId: app.currentStream?.user_id ?? null, isCurrent: true },
   );
   return true;
-}
-
-// ── Time-based tick (interval / delay / clock / uptime) ──────────────────────
-
-function localDateKey(d: Date): string {
-  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-}
-
-/** Evaluate every enabled time-based reminder once. Called on a short interval
- *  by <ReminderEngine />. Cheap to run: it no-ops the moment there are no
- *  reminders or you're signed out. */
-export function tickTimeReminders(): void {
-  const app = useAppStore.getState();
-  if (!app.currentUser?.user_id) return;
-  const reminders = app.settings.reminders?.reminders;
-  if (!reminders || reminders.length === 0) return;
-
-  const now = Date.now();
-  for (const reminder of reminders) {
-    if (!reminder.enabled) continue;
-    if (reminder.trigger === 'keyword') continue; // message-driven, handled elsewhere
-
-    const target = resolveTarget(reminder);
-    const rt = getRuntime(reminder.id);
-
-    // Not posting anywhere right now — disarm so interval/delay restart from a
-    // clean slate when the channel reconnects.
-    if (!target || !isConnected(target.key)) {
-      rt.armedChannel = null;
-      continue;
-    }
-
-    // (Re)arm when the target channel changes. Resets the relative timers;
-    // the per-day (clock) and per-stream (uptime) guards intentionally persist.
-    if (rt.armedChannel !== target.key) {
-      rt.armedChannel = target.key;
-      rt.armedAt = now;
-      rt.lastIntervalFireAt = now;
-      rt.delayFired = false;
-    }
-
-    switch (reminder.trigger) {
-      case 'interval': {
-        const secs = Math.floor(getIntervalSeconds(reminder));
-        if (secs < 1) break;
-        if (now - rt.lastIntervalFireAt >= secs * 1000) {
-          rt.lastIntervalFireAt = now;
-          void fireReminder(reminder, target);
-        }
-        break;
-      }
-      case 'delay': {
-        const secs = Math.floor(getDelaySeconds(reminder));
-        if (secs < 1) break;
-        if (!rt.delayFired && now - rt.armedAt >= secs * 1000) {
-          rt.delayFired = true;
-          void fireReminder(reminder, target);
-        }
-        break;
-      }
-      case 'clock': {
-        if (!reminder.clock_time) break;
-        const parts = reminder.clock_time.split(':');
-        const th = parseInt(parts[0], 10);
-        const tm = parseInt(parts[1], 10);
-        if (Number.isNaN(th) || Number.isNaN(tm)) break;
-        const d = new Date(now);
-        const today = localDateKey(d);
-        const nowMinutes = d.getHours() * 60 + d.getMinutes();
-        const targetMinutes = th * 60 + tm;
-        // Fire once per day, within a 2-minute catch-up window so a missed tick
-        // (or connecting just after the time) still fires, but a stale time hours
-        // ago does not.
-        if (rt.clockFiredDate !== today && nowMinutes >= targetMinutes && nowMinutes - targetMinutes <= 2) {
-          rt.clockFiredDate = today;
-          void fireReminder(reminder, target);
-        }
-        break;
-      }
-      case 'uptime': {
-        if (!target.isCurrent) break; // need the watched stream's started_at
-        const started = app.currentStream?.started_at;
-        if (!started) break;
-        const startMs = Date.parse(started);
-        if (!Number.isFinite(startMs)) break;
-        const secs = Math.floor(getUptimeSeconds(reminder));
-        if (secs < 1) break;
-        const uptimeSeconds = (now - startMs) / 1000;
-        if (rt.uptimeFiredFor !== started && uptimeSeconds >= secs) {
-          rt.uptimeFiredFor = started;
-          void fireReminder(reminder, target);
-        }
-        break;
-      }
-    }
-  }
-}
-
-// ── Keyword trigger (message-driven) ─────────────────────────────────────────
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function keywordMatches(content: string, keyword: string, mode: ReminderKeywordMatch | undefined): boolean {
-  const c = content.toLowerCase();
-  const k = keyword.toLowerCase();
-  switch (mode) {
-    case 'exact':
-      return c.trim() === k;
-    case 'word':
-      return new RegExp(`(?:^|[^\\p{L}\\p{N}_])${escapeRegExp(k)}(?:$|[^\\p{L}\\p{N}_])`, 'iu').test(content);
-    case 'contains':
-    default:
-      return c.includes(k);
-  }
-}
-
-function senderPassesFilter(msg: BackendChatMessage, from: ReminderKeywordFrom | undefined): boolean {
-  if (!from || from === 'anyone') return true;
-  const badgeNames = Array.isArray(msg.badges) ? msg.badges.map((b) => b.name) : [];
-  const isBroadcaster = badgeNames.includes('broadcaster');
-  if (from === 'broadcaster') return isBroadcaster;
-  if (from === 'mods') return isBroadcaster || badgeNames.includes('moderator');
-  return true;
-}
-
-/** Called for each incoming chat message. Fires any keyword reminder scoped to
- *  this channel whose keyword the message matches (respecting the sender filter
- *  and a per-reminder cooldown). Own messages are skipped to avoid self-triggering. */
-export function checkRemindersForMessage(channel: string, msg: BackendChatMessage): void {
-  const app = useAppStore.getState();
-  const me = app.currentUser?.user_id;
-  if (!me) return;
-  if (!msg.user_id || msg.user_id === me) return;
-  if (!msg.content) return;
-
-  const reminders = app.settings.reminders?.reminders;
-  if (!reminders || reminders.length === 0) return;
-
-  const channelKey = channel.toLowerCase();
-  const now = Date.now();
-
-  for (const reminder of reminders) {
-    if (!reminder.enabled || reminder.trigger !== 'keyword') continue;
-    const keyword = (reminder.keyword || '').trim();
-    if (!keyword) continue;
-
-    const target = resolveTarget(reminder);
-    if (!target || target.key !== channelKey) continue;
-    if (!senderPassesFilter(msg, reminder.keyword_from)) continue;
-    if (!keywordMatches(msg.content, keyword, reminder.keyword_match)) continue;
-
-    const rt = getRuntime(reminder.id);
-    const cooldownMs = Math.max(0, Math.floor(reminder.keyword_cooldown_minutes ?? 5)) * 60000;
-    if (now - rt.keywordLastFiredAt < cooldownMs) continue;
-    rt.keywordLastFiredAt = now;
-    void fireReminder(reminder, target);
-  }
 }
 
 // ── /remind quick-create parser ──────────────────────────────────────────────
