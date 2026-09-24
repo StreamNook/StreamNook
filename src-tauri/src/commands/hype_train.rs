@@ -399,3 +399,30 @@ pub async fn get_hype_train_status(
         is_golden_kappa: train_status.is_golden_kappa_train.unwrap_or(false),
     })
 }
+
+/// Show `login`'s hype train in this window. One poll per channel serves every
+/// surface in every window (see services/hype_train_watch.rs).
+#[tauri::command]
+pub async fn hype_train_watch(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    login: String,
+    channel_id: Option<String>,
+    name: Option<String>,
+) -> Result<(), String> {
+    crate::services::hype_train_watch::watch(
+        &app,
+        window.label(),
+        &login,
+        channel_id,
+        name.as_deref().unwrap_or_default(),
+    );
+    Ok(())
+}
+
+/// Stop showing `login`'s hype train in this window.
+#[tauri::command]
+pub async fn hype_train_unwatch(window: tauri::WebviewWindow, login: String) -> Result<(), String> {
+    crate::services::hype_train_watch::unwatch(window.label(), &login);
+    Ok(())
+}

@@ -19,9 +19,8 @@ import type { TwitchStream, HypeTrainData } from '../../types';
 import type { ProviderId } from '../../types/providers';
 import { Logger } from '../../utils/logger';
 import { useVisibleInterval } from '../../utils/useVisibleInterval';
-import { useActivityStore } from '../../stores/activityStore';
 import { ensureChannelHistory } from '../../stores/chatConnectionStore';
-import { makeKey } from '../../utils/providerKey';
+import { recordHypeTrainActivity, watchHypeTrains } from '../../services/hypeTrainWatch';
 
 export interface MultiChatPaneProps {
   channel: string;
@@ -157,12 +156,11 @@ function TwitchChatPane({ channel, channelId, channelName, isActive, filterId, o
     };
   }, [stream, userInfo, channelKey, channelId, channelName, isActive]);
 
-  // Hype Train: poll this channel's train (auth-free GQL, works for any channel,
-  // unaffected by the Jan-2026 EventSub v1 withdrawal) and surface its start +
-  // each level-up in the combined activity panel, Golden Kappa flagged. Adaptive:
-  // 3s while a train runs, 15s idle. Only polls while the channel is live, since
-  // trains only run on live channels. The per-train+level event id dedups, so a
-  // poller restart (e.g. on go-live) never double-posts a level already seen.
+  // Hype Train: show this channel's train (Rust polls it once for every surface
+  // showing it) and surface its start + each level-up in the combined activity
+  // panel, Golden Kappa flagged. Only while the channel is live, since trains
+  // only run on live channels. The per-train+level event id dedups, so a restart
+  // (e.g. on go-live) never double-posts a level already seen.
   const hypeChannelId = stream?.user_id || channelId || userInfo?.id || '';
   const isLive = stream !== null;
   // Per-pane hype train: drives both the in-pane progress banner (passed to
@@ -174,75 +172,12 @@ function TwitchChatPane({ channel, channelId, channelName, isActive, filterId, o
   if (!isLive && paneHypeTrain !== null) setPaneHypeTrain(null);
   useEffect(() => {
     if (!hypeChannelId || !isLive) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-    let prevLevel = 0;
-    let wasActive = false;
-    const poll = async () => {
-      if (cancelled) return;
-      let active = false;
-      let imminent = false;
-      try {
-        const s = await invoke<{
-          is_active: boolean;
-          id?: string;
-          level: number;
-          progress: number;
-          goal: number;
-          total: number;
-          started_at?: string;
-          expires_at?: string;
-          is_golden_kappa: boolean;
-        }>('get_hype_train_status', { channelId: hypeChannelId, channelLogin: channelKey });
-        active = s.is_active;
-        // Poll fast (1s) when a level-up is imminent so the celebration fires ASAP.
-        imminent = s.is_active && s.goal > 0 && s.progress / s.goal > 0.85;
-        if (s.is_active && s.level >= 1) {
-          // Feed the in-pane banner with the full live status every poll.
-          setPaneHypeTrain({
-            id: s.id || '',
-            broadcaster_user_id: hypeChannelId,
-            broadcaster_user_login: channelKey,
-            broadcaster_user_name: channelName || channelKey,
-            level: s.level,
-            total: s.total,
-            progress: s.progress,
-            goal: s.goal,
-            top_contributions: [],
-            started_at: s.started_at || '',
-            expires_at: s.expires_at || '',
-            is_golden_kappa: s.is_golden_kappa,
-          });
-          // Level 1 = the train starting; higher levels = level-ups.
-          if (s.level > prevLevel || !wasActive) {
-            prevLevel = s.level;
-            useActivityStore.getState().addEvent({
-              id: `hype-${channelKey}-${s.id ?? 'train'}-L${s.level}`,
-              timestamp: new Date().toISOString(),
-              provider: 'twitch',
-              channel: makeKey('twitch', channelKey),
-              channel_display: channelName || channelKey,
-              kind: 'hypetrain',
-              actor: { username: channelKey, display_name: channelName || channelKey },
-              system_text: s.is_golden_kappa ? `Level ${s.level} · Golden Kappa` : `Level ${s.level}`,
-            });
-          }
-          wasActive = true;
-        } else {
-          setPaneHypeTrain(null);
-          wasActive = false;
-          prevLevel = 0;
-        }
-      } catch (err) {
-        Logger.warn('[MultiChatPane] get_hype_train_status failed:', err);
-      }
-      if (!cancelled) timer = setTimeout(poll, active ? (imminent ? 1000 : 3000) : 15000);
-    };
-    timer = setTimeout(poll, 0);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
+    const login = channelKey.toLowerCase();
+    const display = channelName || channelKey;
+    return watchHypeTrains([{ login, channelId: hypeChannelId, name: display }], (_login, train, levelChanged) => {
+      setPaneHypeTrain(train);
+      if (train && levelChanged) recordHypeTrainActivity(login, display, train);
+    });
   }, [hypeChannelId, isLive, channelKey, channelName]);
 
   return (
