@@ -1,7 +1,7 @@
 // Touch-first player surface: the video element plus a tap-driven glass control
 // overlay. No Plyr; hls.js runs via useMobileHlsEngine.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowClockwise, Bell, BellSlash, ChatTeardropText, Columns, Eye, Gear, Pause, PictureInPicture, Play, Rows, ShareNetwork, SpeakerHigh, SpeakerSlash, Star } from 'phosphor-react';
+import { ArrowClockwise, Bell, BellSlash, ChatTeardropText, Columns, Gear, Pause, PictureInPicture, Play, Rows, ShareNetwork, SpeakerHigh, SpeakerSlash, Star, UsersThree } from 'phosphor-react';
 import { setPipMuted, shareText } from '../nativeBridge';
 import { toggleChannelMuted } from '../notifyChannels';
 import { useVisibleInterval } from '../../utils/useVisibleInterval';
@@ -17,6 +17,9 @@ import { setLiveVideo } from './liveVideo';
 import { attachLockScreenAudio, releaseLockScreenAudio, updateNowPlaying } from './lockScreenAudio';
 import { QualitySheet } from './QualitySheet';
 import PenroseMarch from '../../components/PenroseMarch';
+import { CollabAvatarStack } from '../../components/SharedViewers';
+import { collabLabel } from '../../utils/sharedViewers';
+import { TogetherSheet } from './TogetherSheet';
 
 const CONTROLS_HIDE_MS = 3000;
 
@@ -93,6 +96,9 @@ export const MobilePlayer: React.FC<{
       void unwatchChannel(channelStateLogin);
     };
   }, [channelStateLogin, currentStream?.user_id]);
+  // Shared Viewership: a Together chip beside the channel's own count, tapped
+  // open into who else is on.
+  const collab = channelState?.collab ?? null;
   const viewerCount = channelState?.viewer_count ?? currentStream?.viewer_count ?? 0;
 
   // A stream that arrived without its avatar (a lookup hiccup on open) gets
@@ -127,6 +133,7 @@ export const MobilePlayer: React.FC<{
   const [paused, setPaused] = useState(false);
   const [muted, setMuted] = useState(false);
   const [qualityOpen, setQualityOpen] = useState(false);
+  const [togetherOpen, setTogetherOpen] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -425,8 +432,18 @@ export const MobilePlayer: React.FC<{
                 </button>
               )}
               <span className="ml-auto flex items-center gap-2 shrink-0 pl-2">
+                {collab && (
+                  <button
+                    onClick={() => setTogetherOpen(true)}
+                    aria-label={collabLabel(collab)}
+                    className="flex items-center gap-1 rounded-full bg-white/15 py-0.5 pl-0.5 pr-2 text-[11.5px] font-semibold text-white leading-none active:scale-95 transition-transform"
+                  >
+                    <CollabAvatarStack collab={collab} size={16} ringClass="ring-black/60" />
+                    Together
+                  </button>
+                )}
                 <span className="flex items-center gap-1 text-[12px] font-medium text-live">
-                  <Eye size={12} weight="fill" />
+                  <UsersThree size={12} weight="fill" />
                   {viewerCount.toLocaleString()}
                 </span>
                 <span className="text-[12px] text-white/70">
@@ -571,6 +588,7 @@ export const MobilePlayer: React.FC<{
       </div>
 
       <QualitySheet open={qualityOpen} onClose={() => setQualityOpen(false)} />
+      <TogetherSheet collab={collab} open={togetherOpen} onClose={() => setTogetherOpen(false)} />
     </div>
   );
 };

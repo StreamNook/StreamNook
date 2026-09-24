@@ -124,13 +124,16 @@ impl UriMap {
 /// video and `mp4a` audio with an `init...mp4`. So serving DASH as HLS is a
 /// manifest translation and nothing else: no container rewriting, no bitstream
 /// work, no second media engine in the page.
+///
+/// FLV, though, starts far sooner, which is why the adapter asks for it first
+/// (see `tiktok_media::delivery_order`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Packaging {
     /// An upstream `.m3u8` we fetch, rewrite and relay.
     Hls,
     /// An upstream `.mpd` we translate into HLS.
     Dash,
-    /// An upstream FLV pull we cut into fMP4 segments, for the rooms that
-    /// publish nothing else.
+    /// An upstream FLV pull we cut into fMP4 segments.
     Flv,
 }
 
@@ -360,7 +363,7 @@ pub async fn start(stream_id: &str, handle: &str, up: Upstream) -> Result<String
         // Same reasoning as the DASH manifest read above: a pull that cannot
         // be played fails here, with its reason, not as a playlist that never
         // fills. The codecs arrive within the first tags, well inside this.
-        if let Err(e) = flv_first_init(&session, START_WAIT).await {
+        if let Err(e) = flv_first_init(&session, FLV_FIRST_INIT_WAIT).await {
             remove_if_same(stream_id, &session);
             retire(&session);
             return Err(e);
@@ -1364,9 +1367,23 @@ async fn upstream_bytes(s: &Session, idx: u32) -> Result<Bytes> {
 // segments TikTok's CDN has already dropped. The player sees the same HLS
 // either way.
 
-/// A pull silent for this long is dead and is reopened. Live video never
-/// pauses anywhere near this long, and a stalled read otherwise waits forever.
-const FLV_STALL: Duration = Duration::from_secs(10);
+/// A pull silent for this long is dead and is reopened. Live FLV never pauses
+/// anywhere near this long (an audio tag arrives every 43 ms), and every second
+/// of it is a second the player sits frozen before the reconnect can help.
+const FLV_STALL: Duration = Duration::from_secs(6);
+/// How long a new pull may take to name its codecs before the start gives up
+/// on FLV and the adapter moves on to the next delivery. They come in the
+/// CDN's opening burst, measured at a tenth to half a second.
+const FLV_FIRST_INIT_WAIT: Duration = Duration::from_secs(4);
+/// Media a new session's first playlist waits to hold. The player starts at
+/// the first segment and learns of each new one within about a second (its
+/// reload interval tracks the one second segments), so three seconds keeps a
+/// second in reserve at the worst moment. The CDN's opening burst usually
+/// covers some of it, which is why an FLV start is quick.
+const FLV_START_SECONDS: f64 = 3.0;
+/// Segments held per FLV session: thirty seconds of one second segments, the
+/// same span the DASH window keeps.
+const FLV_WINDOW: usize = 30;
 /// Reopens in a row, none of them producing a segment, before the broadcast
 /// is treated as over.
 const FLV_MAX_RETRIES: u32 = 5;
@@ -1460,9 +1477,9 @@ impl FlvState {
                         bytes: Bytes::from(seg.bytes),
                     },
                 );
-                // The same window as DASH, for the same reason: the player's
-                // cushion has to sit well inside it.
-                while self.segs.len() > DASH_WINDOW as usize {
+                // The same thirty seconds as DASH, for the same reason: the
+                // player's cushion has to sit well inside it.
+                while self.segs.len() > FLV_WINDOW {
                     self.segs.pop_first();
                 }
                 // An init no listed segment names is dead weight, except the
@@ -1573,7 +1590,7 @@ async fn flv_connection(
             return Ok(produced);
         }
         let chunk = match tokio::time::timeout(FLV_STALL, res.chunk()).await {
-            Err(_) => return Err(FlvStop::Retry("no data for ten seconds".into())),
+            Err(_) => return Err(FlvStop::Retry(format!("no data for {} s", FLV_STALL.as_secs()))),
             Ok(Err(e)) => return Err(FlvStop::Retry(format!("read: {}", e))),
             Ok(Ok(None)) => return Ok(produced),
             Ok(Ok(Some(c))) => c,
@@ -1650,8 +1667,10 @@ fn flv_master_body(s: &Session, id: &str, st: &FlvState, codecs: &str) -> String
         attrs.push_str(&format!(",FRAME-RATE={:.3}", seg.frames as f64 / seg.duration));
     }
     attrs.push_str(&format!(",CODECS=\"{}\"", codecs));
+    // No `#EXT-X-INDEPENDENT-SEGMENTS`: segments after the first may open
+    // mid-GOP (see `flv_fmp4`), so the claim would be false.
     format!(
-        "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n#EXT-X-STREAM-INF:{},NAME=\"{}\"\n/s/{}/flv.m3u8\n",
+        "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-STREAM-INF:{},NAME=\"{}\"\n/s/{}/flv.m3u8\n",
         attrs, s.tier, id
     )
 }
@@ -1660,18 +1679,19 @@ async fn flv_media(s: &Session, id: &str) -> Result<String> {
     flv_media_within(s, id, START_WAIT).await
 }
 
-/// The media playlist, holding a new session's first answer for the same
-/// start cushion the DASH path waits for.
+/// The media playlist, holding a new session's first answer until it has
+/// `FLV_START_SECONDS` of media to offer.
 async fn flv_media_within(s: &Session, id: &str, wait: Duration) -> Result<String> {
     let deadline = Instant::now() + wait;
     loop {
         {
             let st = s.flv.lock().map_err(|_| anyhow!("poisoned"))?;
             let held = st.segs.len();
+            let held_seconds: f64 = st.segs.values().map(|g| g.duration).sum();
             let out_of_time = Instant::now() >= deadline;
             // A pull that has ended will cut nothing more, so there is no
             // cushion worth waiting for.
-            if held >= START_SEGMENTS || (held > 0 && (out_of_time || st.ended.is_some())) {
+            if held_seconds >= FLV_START_SECONDS || (held > 0 && (out_of_time || st.ended.is_some())) {
                 return Ok(flv_media_body(id, &st));
             }
             if held == 0 {
@@ -2331,9 +2351,9 @@ mod tests {
             Ok(n) => n,
             Err(FlvStop::Retry(e)) | Err(FlvStop::Unplayable(e)) => panic!("pull failed: {e}"),
         };
-        // Four whole GOPs; the fifth is still open when the body ends, and is
-        // kept for the reconnect rather than cut short.
-        assert_eq!(produced, 4);
+        // Eight one second segments out of four GOPs; the ninth is still open
+        // when the body ends, and is kept for the reconnect rather than cut short.
+        assert_eq!(produced, 8);
         {
             let st = s.flv.lock().unwrap();
             let codecs = st.codecs.clone().expect("codecs from the pull");
@@ -2345,8 +2365,9 @@ mod tests {
             assert!(master.contains("/s/t1/flv.m3u8"), "{master}");
             let body = flv_media_body("t1", &st);
             assert!(body.contains("#EXT-X-MAP:URI=\"/s/t1/fi/0\""), "{body}");
-            assert!(body.contains("#EXT-X-TARGETDURATION:2\n"), "{body}");
-            assert!(body.contains("/s/t1/f/0\n") && body.contains("/s/t1/f/3\n"), "{body}");
+            assert!(body.contains("#EXT-X-TARGETDURATION:1\n"), "{body}");
+            assert!(body.contains("/s/t1/f/0\n") && body.contains("/s/t1/f/7\n"), "{body}");
+            assert!(!master.contains("INDEPENDENT-SEGMENTS"), "segments may open mid-GOP: {master}");
             assert!(!body.contains("DISCONTINUITY\n"), "one timeline: {body}");
             assert_eq!(&st.segs[&0].bytes[4..8], b"moof");
             assert_eq!(&st.inits[&0][4..8], b"ftyp");
@@ -2433,8 +2454,8 @@ mod tests {
             seg.number = n;
             st.take(flv_fmp4::Output::Segment(seg));
         }
-        assert_eq!(st.segs.len(), DASH_WINDOW as usize);
-        assert_eq!(st.segs.keys().next(), Some(&(40 - DASH_WINDOW)));
+        assert_eq!(st.segs.len(), FLV_WINDOW);
+        assert_eq!(st.segs.keys().next(), Some(&(40 - FLV_WINDOW as u64)));
         // Epoch 0 is named by nothing left; 1 and 2 still are.
         assert_eq!(st.inits.keys().copied().collect::<Vec<_>>(), vec![1, 2]);
     }

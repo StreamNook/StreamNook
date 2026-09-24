@@ -655,6 +655,9 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
           deletedMessageIds={deletedMessageIds}
           clearedUserContexts={clearedUserContexts}
           emotes={emotes}
+          // The room's own platform: rows from it carry no platform mark, which
+          // is only for telling sources apart in a combined chat.
+          homeProvider={activeProvider}
           getMessageId={getMessageId}
         />
         {isPaused && (

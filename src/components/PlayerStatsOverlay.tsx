@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import type Hls from 'hls.js';
 import { Activity, Radio, X } from 'lucide-react';
-import { LL_DISPLAY_CALIBRATION } from '../utils/latency';
+import { behindLiveFromEdge } from '../utils/latency';
 
-// Live playback telemetry overlay (the "behind live" + FPS readout). Reads hls.js
+// Live playback stats overlay (the "behind live" + FPS readout). Reads hls.js
 // and the <video> element directly each second while open, so it costs nothing
 // when collapsed. "Behind live" is the playhead's distance from the live edge. On the
 // LL-HLS-origin path it's `hls.latency` (the gap to the newest real part the origin
@@ -96,22 +96,18 @@ function readMetrics(hls: Hls | null, video: HTMLVideoElement | null): Metrics {
     if (typeof hls.bandwidthEstimate === 'number' && hls.bandwidthEstimate > 0) {
       m.bandwidthMbps = hls.bandwidthEstimate / 1_000_000;
     }
-    // "Behind live" = distance from the playhead to the live edge.
-    //
-    // On the parts-based LL path ('ll'), `hls.latency` is honest (the origin lists only
-    // real parts, no phantom-future edge), but it measures playhead-to-edge, which sits
-    // ~1s above the glass-to-glass "latency to broadcaster" figure Twitch reports. We
-    // subtract a fixed calibration so the displayed number is comparable to Twitch's
-    // (the real ride is ~1s more; the governor drives the true value to ~3.5s). The
-    // stable path shows hls.latency directly, with PDT then the playlist edge as
-    // fallbacks when hls.latency is unavailable.
+    // "Behind live" = seconds behind the broadcaster as heard. On the parts
+    // tier that is the edge distance plus the measured delay of the origin's
+    // edge (the same figure the governor targets); the other tiers show the
+    // edge distance. Never the programme date: it is the broadcaster's clock
+    // and can sit tens of seconds off real time.
     let lat: number | null = null;
     const hlsLat = typeof hls.latency === 'number' && hls.latency > 0 ? hls.latency : null;
     const playingDate = hls.playingDate;
     const pdtLat = playingDate ? (Date.now() - playingDate.getTime()) / 1000 : null;
     const pathHint = (hls as unknown as { __snPathHint?: string }).__snPathHint;
     if (pathHint === 'll' && hlsLat != null) {
-      lat = Math.max(0, hlsLat - LL_DISPLAY_CALIBRATION);
+      lat = behindLiveFromEdge(hlsLat);
     } else if (hlsLat != null) {
       lat = hlsLat;
     } else if (pdtLat != null && pdtLat > 0.2 && pdtLat < 60) {

@@ -61,10 +61,12 @@ export async function refreshFollowingIfStale(maxAgeMs = STALE_AFTER_MS): Promis
   markFollowingFresh();
   try {
     await store.loadFollowedStreams();
-    // Hype-train statuses are a section of the Rust-owned Home snapshot now
-    // (services::home_snapshot); the result lands as a `home-snapshot` event
-    // the store applies. Floored at 15 s per section on the Rust side.
+    // Hype-train statuses and collaborations are sections of the Rust-owned
+    // Home snapshot now (services::home_snapshot); the results land as
+    // `home-snapshot` events the store applies. Floored at 15 s per section on
+    // the Rust side.
     await invoke('refresh_home_section', { section: 'hype_trains' });
+    await invoke('refresh_home_section', { section: 'collaborations' });
   } catch (err) {
     Logger.warn('[Following] resume refresh failed:', err);
   }

@@ -74,8 +74,8 @@ pub async fn get_live_broadcast(broadcaster_id: String) -> Result<LiveBroadcast,
 // Helix Create Clip is live-only; clipping a VOD at a timestamp uses Twitch's
 // web GQL flow (CreateRawMedia -> CreateClipFromRawMedia). Reuses the Android-
 // client, no-integrity GQL pattern the watch-event path's sendSpadeEvents uses,
-// with the drops (Android-client) token. Hashes/shape were reverse-engineered
-// from a real capture (see Brain: references/Twitch_Clip_Creation_GQL).
+// with the drops (Android-client) token. Hashes and shape were
+// reverse-engineered from live traffic; there is no published schema.
 
 const ANDROID_CLIENT_ID: &str = env!("TWITCH_ANDROID_CLIENT_ID");
 const H_CREATE_RAW_MEDIA: &str = "19cbfe94f0aff2e1338fd8ee472d90c8d334e17a84ebe8b06dcb236bd9394dfd";
@@ -732,6 +732,88 @@ fn active_twitch_web_profile_dir() -> Result<PathBuf, String> {
 #[cfg(any(windows, test))]
 const CONTAIN_POPUPS_IN_OVERLAY: &[&str] = &["youtube-login"];
 
+/// Overlays whose sign-in hands off to a provider popup that answers the page
+/// that OPENED it, so the popup has to be a real window that keeps
+/// `window.opener`. Navigating the overlay to it, the way the YouTube sign-in
+/// contains its account picker, would cut that link and the sign-in would
+/// finish into nothing.
+///
+/// TikTok's page does this for Apple (`appleid.apple.com/auth/authorize` with
+/// `response_mode=web_message`) and Google (`accounts.google.com` with
+/// `redirect_uri=gis_transform`). Unhandled, both were refused and TikTok
+/// said `popup_blocked_by_browser`.
+#[cfg(any(desktop, test))]
+const OPENER_POPUPS_IN_OVERLAY: &[&str] = &["tiktok-login"];
+
+#[cfg(desktop)]
+static SIGN_IN_POPUP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Every sign-in popup of an overlay starts with this. No capability names it,
+/// so a provider's page gets no bridge into the app.
+#[cfg(any(desktop, test))]
+fn sign_in_popup_prefix(owner_label: &str) -> String {
+    format!("{owner_label}-popup-")
+}
+
+#[cfg(any(desktop, test))]
+fn sign_in_popup_label(owner_label: &str, n: u64) -> String {
+    format!("{}{n}", sign_in_popup_prefix(owner_label))
+}
+
+/// Open a sign-in popup as a real window: placed and sized as the page asked,
+/// owned by the overlay so it stays above it, and sharing the overlay's web
+/// profile through `window_features`, so the session the provider completes
+/// lands in the cookie jar the sign-in reads.
+#[cfg(desktop)]
+fn sign_in_popup(
+    app: &AppHandle,
+    owner_label: &str,
+    url: tauri::Url,
+    features: tauri::webview::NewWindowFeatures,
+) -> tauri::webview::NewWindowResponse<tauri::Wry> {
+    use tauri::webview::NewWindowResponse;
+
+    // A provider's page is https; a scripted popup starts blank and is pointed
+    // somewhere afterwards. Nothing else gets a window.
+    if url.scheme() != "https" && url.as_str() != "about:blank" {
+        log::warn!("[overlay] refused a popup to {}", url);
+        return NewWindowResponse::Deny;
+    }
+    let n = SIGN_IN_POPUP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let label = sign_in_popup_label(owner_label, n);
+    let Ok(blank) = "about:blank".parse() else {
+        return NewWindowResponse::Deny;
+    };
+    let builder = tauri::WebviewWindowBuilder::new(app, &label, WebviewUrl::External(blank))
+        .window_features(features)
+        .title("Sign in")
+        .on_document_title_changed(|window, title| {
+            let _ = window.set_title(&title);
+        })
+        .skip_taskbar(true)
+        .focused(true);
+    let builder = match app.get_webview_window(owner_label) {
+        Some(owner) => match builder.parent(&owner) {
+            Ok(b) => b,
+            Err(e) => {
+                error!("[overlay] couldn't own the sign-in popup to '{}': {}", owner_label, e);
+                return NewWindowResponse::Deny;
+            }
+        },
+        None => builder,
+    };
+    match builder.build() {
+        Ok(window) => {
+            debug!("[overlay] sign-in popup '{}' -> {}", label, url);
+            NewWindowResponse::Create { window }
+        }
+        Err(e) => {
+            error!("[overlay] couldn't open the sign-in popup: {}", e);
+            NewWindowResponse::Deny
+        }
+    }
+}
+
 /// Make a popup from `win`'s page navigate the overlay itself instead of opening a
 /// separate window.
 ///
@@ -939,6 +1021,14 @@ pub async fn mount_twitch_overlay(
         });
     }
 
+    // Provider popups that must keep their opener (see OPENER_POPUPS_IN_OVERLAY).
+    if OPENER_POPUPS_IN_OVERLAY.contains(&label.as_str()) {
+        let popup_app = app.clone();
+        let owner = label.clone();
+        builder = builder
+            .on_new_window(move |url, features| sign_in_popup(&popup_app, &owner, url, features));
+    }
+
     let win = builder
         .parent(&main)
         .map_err(|e| format!("Failed to own overlay to main window: {}", e))?
@@ -1023,6 +1113,14 @@ pub fn dismiss_login_overlay(app: &AppHandle, label: &str) {
     use tauri::Emitter;
     if let Some(win) = app.get_webview_window(label) {
         let _ = win.close();
+    }
+    // Its sign-in popups go with it. A provider page usually closes itself once
+    // it has answered, but one left open would float over the app afterwards.
+    let popup_prefix = sign_in_popup_prefix(label);
+    for (popup_label, popup) in app.webview_windows() {
+        if popup_label.starts_with(&popup_prefix) {
+            let _ = popup.close();
+        }
     }
     crate::services::ui_hang_watchdog::set_active_overlay(None);
     let _ = app.emit("twitch-overlay-close", serde_json::json!({ "label": label }));
@@ -2427,6 +2525,45 @@ mod overlay_script_tests {
                 "{} must keep native popups",
                 label,
             );
+        }
+    }
+
+    /// TikTok's Apple and Google popups must keep their opener, so its overlay
+    /// opens real windows; YouTube's contains its popup instead. An overlay in
+    /// both lists would do neither properly.
+    #[test]
+    fn opener_popups_are_scoped_to_the_tiktok_login() {
+        assert!(OPENER_POPUPS_IN_OVERLAY.contains(&"tiktok-login"));
+        for label in OPENER_POPUPS_IN_OVERLAY {
+            assert!(!CONTAIN_POPUPS_IN_OVERLAY.contains(label), "{} is in both lists", label);
+        }
+        for label in ["twitch-login", "kick-login", "drops-login", "subscribe-abc-123"] {
+            assert!(!OPENER_POPUPS_IN_OVERLAY.contains(&label), "{} must keep native popups", label);
+        }
+    }
+
+    /// A sign-in popup shows a provider's page (Apple, Google). No capability
+    /// may name its window, or that page would get a bridge into the app.
+    #[test]
+    fn a_sign_in_popup_is_granted_nothing() {
+        let popup = sign_in_popup_label("tiktok-login", 7);
+        assert_eq!(popup, "tiktok-login-popup-7");
+        assert!(popup.starts_with(&sign_in_popup_prefix("tiktok-login")));
+        for file in [
+            include_str!("../../capabilities/desktop.json"),
+            include_str!("../../capabilities/remote-bridge.json"),
+            include_str!("../../capabilities/mobile.json"),
+        ] {
+            let cap: serde_json::Value = serde_json::from_str(file).expect("capability json");
+            for key in ["windows", "webviews"] {
+                for pattern in cap[key].as_array().into_iter().flatten().filter_map(|p| p.as_str()) {
+                    let matches = match pattern.strip_suffix('*') {
+                        Some(prefix) => popup.starts_with(prefix),
+                        None => popup == pattern,
+                    };
+                    assert!(!matches, "capability pattern '{}' would grant the popup '{}'", pattern, popup);
+                }
+            }
         }
     }
 

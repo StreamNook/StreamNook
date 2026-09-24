@@ -98,6 +98,27 @@ export interface LatencyGovernorOptions {
   /** Current behind-live seconds (e.g. `() => hls.latency`). Paired with `latencyTarget`. */
   getLatency?: () => number | null;
   /**
+   * Latency-targeting only: how close to the target (seconds) a catch-up
+   * runs before it lets go. The band decides when to ENGAGE; this decides
+   * when to RELEASE. Without it the governor released the moment the excess
+   * was back inside the band, so every session that started behind (a cold
+   * start lands past the cushion) settled at target + band and stayed there.
+   * The two thresholds are the hysteresis: jitter inside the band never
+   * re-engages, a real drift still does, and a catch-up once begun runs to
+   * the target. Inside the band the catch-up runs at a fixed `finishRate`
+   * rather than a proportional glide, so the audible part is one step up,
+   * a hold, one step down: a glide wrote a new rate every tick for the
+   * whole approach, and each write is a pitch-corrector artifact. The slow
+   * side does not extend: too close to the edge is corrected only past
+   * -band and let go inside it, because a slowed, pitch-corrected stream is
+   * what a viewer hears as distortion and the buffer there is ample anyway.
+   * Default 0.15.
+   */
+  release?: number;
+  /** Rate used to finish a catch-up inside the band. Default 1.03: audible
+   *  through the pitch corrector only as a slight brightness, unlike 1.05. */
+  finishRate?: number;
+  /**
    * Catch-up gain: rate increase per second of excess past the band. Default
    * 0.03 suits multi-second drift recovery, but it's far too weak for holding
    * a tight latency target — at 0.3s over it yields 1.003x (invisible, and
@@ -154,6 +175,10 @@ export function startLatencyGovernor(
   // floor and the latency-target slow side (below) can ease the rate down to
   // slowRate, so either one makes slowRate the governor-owned minimum.
   const lowestOwned = floor != null || options.latencyTarget != null ? slowRate : 1.0;
+  const release = options.release ?? 0.15;
+  const finishRate = options.finishRate ?? 1.03;
+  // Latency-targeting hysteresis: a catch-up in progress (see `release`).
+  let catchingUp = false;
   const getTarget =
     options.getTarget ??
     (() => {
@@ -229,14 +254,30 @@ export function startLatencyGovernor(
       floor != null
         ? 1 + (ceiling - 1) * Math.min(1, Math.max(0, (fb - floor) / engageSpan))
         : ceiling;
-    const desired =
-      floor != null && fb < floor
-        ? slowRate
-        : excess > band
-          ? Math.max(1.0, Math.min(effCeiling, 1 + gain * (excess - band)))
-          : usingLatency && excess < -band
-            ? Math.min(1.0, Math.max(slowRate, 1 + gain * (excess + band)))
-            : 1.0;
+    let desired: number;
+    if (floor != null && fb < floor) {
+      desired = slowRate;
+      catchingUp = false;
+    } else if (usingLatency) {
+      // Engage past the band, run to within `release` of the target, let go.
+      if (catchingUp && excess <= release) catchingUp = false;
+      if (!catchingUp && excess > band) catchingUp = true;
+      if (catchingUp) {
+        // Past the band: proportional, as before. Inside it: the fixed
+        // finish rate, so the last stretch is a hold, not a glide.
+        const proportional = excess > band ? 1 + gain * (excess - band) : 1.0;
+        desired = Math.max(1.0, Math.min(effCeiling, Math.max(finishRate, proportional)));
+      } else if (excess < -band) {
+        desired = Math.min(1.0, Math.max(slowRate, 1 + gain * (excess + band)));
+      } else {
+        desired = 1.0;
+      }
+    } else {
+      // Forward-buffer mode settles between target and target + band by
+      // design: delivery adds a whole segment at a time, so a tighter hold
+      // would oscillate on every arrival.
+      desired = excess > band ? Math.max(1.0, Math.min(effCeiling, 1 + gain * (excess - band))) : 1.0;
+    }
     const rampStep =
       typeof options.rampStep === 'function' ? options.rampStep() : options.rampStep;
     let next = rampStep
@@ -248,7 +289,11 @@ export function startLatencyGovernor(
     // becomes a hard stall). One step down to real time is far less audible
     // than the stall it prevents; the ramp still handles 1.0 -> slowRate.
     if (floor != null && fb < floor && next > 1.0) next = 1.0;
-    if (Math.abs(next - rate) > 0.0049) {
+    // Real time means exactly 1.0. A residual like 1.004 sat inside the write
+    // threshold below and was never cleared, which kept the browser's
+    // time-stretcher engaged for most of a session (measured 88% of ticks).
+    if (desired === 1.0 && rate !== 1.0 && Math.abs(rate - 1.0) <= 0.0049) next = 1.0;
+    if (Math.abs(next - rate) > 0.0049 || (next === 1.0 && rate !== 1.0)) {
       // Round away float dust so repeated ramp arithmetic stays on clean values.
       video.playbackRate = Math.round(next * 1000) / 1000;
       const detail = usingLatency

@@ -57,6 +57,63 @@ pub async fn provider_search(provider: String, query: String) -> Result<StreamPa
         .map_err(|e| e.to_string())
 }
 
+/// One platform's search results, sent the moment that platform answers.
+#[derive(Clone, serde::Serialize)]
+pub struct SearchBatch {
+    pub provider: String,
+    /// The rows exactly as that platform's own search command returns them.
+    pub streams: serde_json::Value,
+    /// Set when the platform failed, as opposed to matching nothing.
+    pub error: Option<String>,
+}
+
+/// Search several platforms at once. Each one's rows go to `on_batch` as soon
+/// as it answers, so a slow or failing platform never holds back the others;
+/// the call itself returns once every platform has answered.
+#[tauri::command]
+pub async fn search_platforms(
+    state: State<'_, AppState>,
+    query: String,
+    providers: Vec<String>,
+    on_batch: tauri::ipc::Channel<SearchBatch>,
+) -> Result<(), String> {
+    let state: &AppState = &state;
+    let (query, on_batch) = (query.as_str(), &on_batch);
+    futures::future::join_all(providers.into_iter().map(|provider| async move {
+        let found = if provider == "twitch" {
+            crate::services::twitch_service::TwitchService::search_channels(state, query)
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|rows| serde_json::to_value(rows).map_err(|e| e.to_string()))
+        } else {
+            match source_for(&provider).await {
+                Ok(src) => src
+                    .search(query)
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|page| serde_json::to_value(page.streams).map_err(|e| e.to_string())),
+                Err(e) => Err(e),
+            }
+        };
+        let batch = match found {
+            Ok(streams) => SearchBatch { provider, streams, error: None },
+            Err(e) => {
+                log::warn!("[Search] {} search failed: {}", provider, e);
+                SearchBatch {
+                    provider,
+                    streams: serde_json::Value::Array(Vec::new()),
+                    error: Some(e),
+                }
+            }
+        };
+        if let Err(e) = on_batch.send(batch) {
+            log::debug!("[Search] the page stopped listening: {}", e);
+        }
+    }))
+    .await;
+    Ok(())
+}
+
 /// Channel metadata WITHOUT connecting chat, so the watch path can poll viewers
 /// and title while a stream is open.
 #[tauri::command]
@@ -86,14 +143,16 @@ pub async fn get_favorite_live() -> Result<Vec<ProviderStream>, String> {
     Ok(crate::services::favorite_live_service::snapshot().await)
 }
 
-/// Sweep favourites now instead of waiting out the cadence, so a channel you
+/// Check favourites now instead of waiting out the cadence, so a channel you
 /// just favourited shows up as live immediately rather than up to a minute later.
+/// `key` is that favourite, and then only it is checked.
 #[tauri::command]
 pub async fn refresh_favorites(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
+    key: Option<String>,
 ) -> Result<(), String> {
-    crate::services::favorite_live_service::refresh_favorites(app, (*state).clone()).await;
+    crate::services::favorite_live_service::refresh_favorites(app, (*state).clone(), key).await;
     Ok(())
 }
 
@@ -111,27 +170,21 @@ pub async fn provider_live_check(
         .map_err(|e| e.to_string())
 }
 
-/// Channel avatars for the provider stream cards currently ON SCREEN.
-///
-/// Only YouTube needs this, and only for CATEGORY streams: search and the
-/// subscriptions feed both ship an avatar with the row, but a game's live grid
-/// ships none. Resolving one costs a full channel browse, so the caller sends just
-/// what it is displaying and the adapter caches per session.
-///
-/// Ids with no avatar are absent from the map rather than blank, so the caller
-/// keeps whatever placeholder it already draws.
+/// Avatars for the stream cards a page is drawing, keyed `provider:id`: whatever
+/// is cached now, with the rest looked up in the background, every platform at
+/// once, and broadcast as `channel-avatars`. Ids with no avatar never appear, so
+/// the page keeps whatever placeholder it already draws. `legacy` is the page's
+/// old avatar store, handed over once.
 #[tauri::command]
-pub async fn provider_channel_avatars(
-    provider: String,
-    channel_ids: Vec<String>,
+pub async fn request_channel_avatars(
+    app: tauri::AppHandle,
+    channels: Vec<crate::services::channel_avatars::AvatarRequest>,
+    legacy: Option<std::collections::HashMap<String, crate::services::channel_avatars::LegacyEntry>>,
 ) -> Result<std::collections::HashMap<String, String>, String> {
-    match provider.as_str() {
-        "youtube" => Ok(crate::services::providers::youtube_media::channel_avatars(&channel_ids).await),
-        // Kick rows address the channel by SLUG, which is what its avatar
-        // endpoint takes.
-        "kick" => Ok(crate::services::providers::kick::channel_avatars(&channel_ids).await),
-        _ => Ok(std::collections::HashMap::new()),
+    if let Some(legacy) = legacy {
+        crate::services::channel_avatars::import_legacy(legacy);
     }
+    Ok(crate::services::channel_avatars::request(&app, channels))
 }
 
 /// Whether a channel sells memberships, and whether the viewer holds one.
@@ -619,6 +672,13 @@ pub async fn provider_categories(
     cursor: Option<String>,
     limit: Option<u32>,
 ) -> Result<CategoryPage, String> {
+    // The first page is shared with the unified view's row and kept a while
+    // (see `services::provider_categories`); a later page is asked for as is.
+    if cursor.is_none() {
+        return crate::services::provider_categories::get(&provider, limit.unwrap_or(40))
+            .await
+            .map(|categories| CategoryPage { categories, cursor: None });
+    }
     let reg = registry().await;
     let source = reg
         .get_source(&provider)

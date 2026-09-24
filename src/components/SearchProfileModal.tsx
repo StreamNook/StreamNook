@@ -9,6 +9,7 @@ import StreamerAboutPanel from './StreamerAboutPanel';
 import StreamerMedia from './StreamerMedia';
 import { Tooltip } from './ui/Tooltip';
 import { Logger } from '../utils/logger';
+import { CardChip } from './ui/CardChip';
 
 type ProfileTab = 'about' | 'clips' | 'videos';
 
@@ -99,7 +100,7 @@ export const SearchProfileModal = ({ user, onClose }: { user: TwitchStream, onCl
                                     <User size={24} className={isLive ? 'text-red-500' : 'text-accent'} />
                                 )}
                                 {isLive && (
-                                    <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 live-dot text-[8px] px-1 py-0 shadow-lg">LIVE</div>
+                                    <CardChip kind="live" className="absolute -bottom-1 left-1/2 -translate-x-1/2 !h-[14px] !px-1.5 !text-[8px] !gap-[3px]">LIVE</CardChip>
                                 )}
                             </div>
                             <div className="flex-1 min-w-0">

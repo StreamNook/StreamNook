@@ -32,6 +32,12 @@ import { streamProvider } from './streamProvider.ts';
  *   tiktok   @handle             Stored so you can return to the channel;
  *                                TikTok ships no live check, so it is never
  *                                reported live.
+ *
+ * Rust twin: `favorite_id` in src-tauri/src/services/providers/key.rs. The two
+ * must agree exactly: Rust drops a live favourite from the unified Discover
+ * list by that one while the Favourites section is chosen by this one, so a
+ * disagreement shows a channel twice or not at all. Change both together; their
+ * tests share one table.
  */
 export function favoriteIdOf(
   stream: Pick<TwitchStream, 'provider' | 'user_id' | 'user_login'> | null | undefined,

@@ -3,6 +3,10 @@
 // The key rule here is the whole feature. A favourite that is keyed by anything
 // the platform's live check won't accept is a favourite that silently never
 // shows up as live, which is indistinguishable from the channel being offline.
+//
+// The favoriteIdOf cases are mirrored in Rust by
+// `favorite_id_agrees_with_its_typescript_twin` (src-tauri/src/services/providers/key.rs),
+// because the unified Discover list applies the Rust twin. Add a case to both.
 
 import { test } from 'vitest';
 import assert from 'node:assert/strict';

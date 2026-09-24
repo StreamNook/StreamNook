@@ -51,6 +51,26 @@ pub struct ResolvedPlayback {
     pub qualities: Vec<PlaybackQuality>,
 }
 
+/// A stream the platform serves only to a signed-in account, returned as the
+/// error of `resolve_playback`. Typed rather than worded, so the player can put
+/// the sign-in right where the stream failed instead of naming a settings page.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SignInRequired {
+    /// The platform whose account unlocks the stream ("tiktok").
+    pub provider: &'static str,
+    pub channel: String,
+    /// What to tell the person, complete on its own.
+    pub message: String,
+}
+
+impl std::fmt::Display for SignInRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SignInRequired {}
+
 /// What a platform adapter supports in this build. The frontend renders
 /// browse/search/follow affordances from this instead of hard-coding platforms.
 #[derive(Debug, Clone, Copy, serde::Serialize)]

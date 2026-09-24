@@ -4,6 +4,8 @@ import type { PlatformId } from '../services/platformAccountService';
 import { useAppStore } from './AppStore';
 import { useFollowsStore } from './followsStore';
 import { clearLinkedAccount, recordLinkedAccount } from '../services/supabaseService';
+import { invalidateMemberAliases } from '../services/memberAliasService';
+import { setMemberAliases } from '../utils/memberIdentity';
 import { Logger } from '../utils/logger';
 
 /**
@@ -37,6 +39,12 @@ export interface PlatformAccountState {
   /** The signed-in account's own picture, so Accounts can show WHO is connected
    *  and not merely THAT something is. */
   avatarUrl: string | null;
+  /** The id this platform's chat stamps on the account's messages. Null until it
+   *  resolves, and permanently null for a YouTube account with no channel. */
+  id: string | null;
+  /** The @handle, where a platform has one apart from the display name (TikTok,
+   *  whose nicknames can be stylized past recognition). */
+  handle: string | null;
   /** A connect/disconnect is in flight. Blocks a second one. */
   busy: boolean;
   /** What the connect flow is doing right now, shown instead of the subtitle. */
@@ -62,6 +70,8 @@ const IDLE: PlatformAccountState = {
   connected: false,
   name: null,
   avatarUrl: null,
+  id: null,
+  handle: null,
   busy: false,
   step: null,
 };
@@ -107,7 +117,23 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
    * reported yet", which is also what a report that could not be sent falls
    * back to, so the next read retries it.
    */
-  const reported: Record<PlatformId, boolean | null> = { kick: null, youtube: null, tiktok: null };
+  const reported: Record<PlatformId, string | null> = { kick: null, youtube: null, tiktok: null };
+
+  /**
+   * When a claim lost to somebody else's, the earliest we may ask again.
+   *
+   * The server protects a fresh claim for a short cooldown so two clients cannot
+   * trade an account back and forth. Without this, losing once would mark the
+   * claim as reported and it would never be retried until the app restarted —
+   * which is the real owner of an account being unable to take it back.
+   */
+  const retryNotBefore: Record<PlatformId, number> = { kick: 0, youtube: 0, tiktok: 0 };
+
+  /** Default wait when the server did not say how long, matching its cooldown. */
+  const CONFLICT_RETRY_MINUTES = 15;
+
+  /** Wait before retrying a claim that never reached the server. */
+  const UNREACHABLE_RETRY_MINUTES = 5;
 
   /**
    * Tell the account database that a platform was connected or disconnected.
@@ -125,13 +151,52 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
     // TikTok's sign-in unlocks age-restricted LIVEs and claims nothing about who
     // you are in its chat, so there is no linked account to record for it.
     if (provider === 'tiktok') return;
-    if (reported[provider] === connected) return;
+    // The account id is part of what we report, so a brand-channel switch has to
+    // count as news even though "connected" did not change.
+    const key = connected ? `on:${state.id ?? ''}` : 'off';
+    if (reported[provider] === key) return;
+    // A connected report that has LOST its id must never overwrite one we already
+    // sent. The id resolves lazily, and an account with no channel never has one,
+    // while this runs on every window focus and on a 30-second backstop. Treating
+    // an absent id as a change would release and re-take the claim twice a minute.
+    // Only an explicit disconnect releases it.
+    if (connected && !state.id && reported[provider]?.startsWith('on:')) return;
+    // Lost a claim recently: wait out the server's cooldown rather than asking
+    // on every focus and backstop tick, which it would only refuse again.
+    if (Date.now() < retryNotBefore[provider]) return;
     const twitchUserId = useAppStore.getState().currentUser?.user_id;
     if (!twitchUserId) return;
-    reported[provider] = connected;
+    reported[provider] = key;
     void (connected
-      ? recordLinkedAccount(twitchUserId, provider, state.name, state.avatarUrl)
-      : clearLinkedAccount(twitchUserId, provider));
+      ? recordLinkedAccount(twitchUserId, provider, state.name, state.avatarUrl, state.id)
+      : clearLinkedAccount(twitchUserId, provider)
+    ).then((result) => {
+      if (result.kind === 'conflict') {
+        // Somebody else claimed this account moments ago. Forget that we
+        // reported, so the next refresh after the cooldown takes it back.
+        reported[provider] = null;
+        const minutes = result.retryAfterMinutes ?? CONFLICT_RETRY_MINUTES;
+        retryNotBefore[provider] = Date.now() + minutes * 60_000;
+        Logger.info(`[platform] ${provider} claim is held by someone else; retrying in ${minutes} min`);
+        return;
+      }
+      if (result.kind === 'unavailable' || result.kind === 'failed') {
+        // Nothing was recorded — we were offline, the endpoint was not there
+        // yet, or the server failed. Marking it reported would mean it is never
+        // tried again until the app restarts, so forget it and let a refresh
+        // after a short wait try once more. Short enough to heal a blip, long
+        // enough that a missing endpoint is not asked every focus.
+        reported[provider] = null;
+        retryNotBefore[provider] = Date.now() + UNREACHABLE_RETRY_MINUTES * 60_000;
+        return;
+      }
+      // OUR OWN claim just moved, so every cached answer about it is stale —
+      // including the "nobody" that would have been cached for our own account
+      // before we connected it. Clearing both sides is what makes the badge
+      // appear on our own messages now rather than after a restart.
+      setMemberAliases(new Map());
+      void invalidateMemberAliases();
+    });
   };
 
   const refreshOne = async (provider: PlatformId) => {
@@ -139,7 +204,7 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
       const connected = await platformAccounts.isConnected(provider);
       if (!connected) {
         const wasConnected = get()[provider].connected;
-        patch(provider, { connected, name: null, avatarUrl: null });
+        patch(provider, { connected, name: null, avatarUrl: null, id: null, handle: null });
         // Deliberately NOT clearProvider here. A session dying mid-run must not
         // blank the sidebar: Kick liveness never needed the login (the sweep
         // runs on an app token) and the follow list survives backend-side for
@@ -153,7 +218,13 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
         return;
       }
       const info = await platformAccounts.accountInfo(provider);
-      patch(provider, { connected, name: info.name, avatarUrl: info.avatar_url });
+      patch(provider, {
+        connected,
+        name: info.name,
+        avatarUrl: info.avatar_url,
+        id: info.id,
+        handle: info.handle ?? null,
+      });
       report(provider, true, get()[provider]);
     } catch (e) {
       // Leave the previous state: an IPC failure is not evidence of a sign-out.

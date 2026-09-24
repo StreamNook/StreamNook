@@ -6,12 +6,13 @@ import Plyr from 'plyr';
 // Plyr's CSS ships once, layered, via globals.css (@import ... layer(vendor));
 // a second unlayered copy here would beat the app's control-bar overrides.
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, RefreshCcw, Home, LayoutGrid, Shield, ShieldCheck, ShieldAlert, Clapperboard, Music, Share2, Check, Radio, VolumeX } from 'lucide-react';
+import { Loader2, RefreshCcw, Home, LayoutGrid, Shield, ShieldCheck, ShieldAlert, Clapperboard, Music, Share2, Check, VolumeX } from 'lucide-react';
 import { Heart, HeartBreak, ArrowLeft, X as XIcon } from 'phosphor-react';
 import { useAppStore } from '../stores/AppStore';
 import { streamProvider } from '../utils/streamProvider';
 import { makeKey } from '../utils/providerKey';
 import { useMediaGlow } from '../utils/mediaGlow';
+import { useContentZoom } from '../utils/contentZoom';
 import { canGridProvider, gridRefusal } from '../types/providers';
 import { platformTerms } from '../utils/platformTerms';
 import { useContextMenuStore } from '../stores/contextMenuStore';
@@ -27,6 +28,11 @@ import { formatVodTime } from '../utils/vodProgress';
 import { createLiveEdgeTracker } from '../utils/liveEdge';
 import BroadcastTimeline from './BroadcastTimeline';
 import VodMutedMarks from './VodMutedMarks';
+import { injectPlyrControl } from '../utils/plyrControls';
+import { pickStoryboardVariant, storyboardToPlyrThumbnails, type PlyrThumbnailSet } from '../utils/storyboard';
+import { useCurrentChapter } from '../hooks/useCurrentChapter';
+import VodChapterMarks from './VodChapterMarks';
+import VodChaptersMenu from './VodChaptersMenu';
 import { Tooltip } from './ui/Tooltip';
 import { TwitchVerifiedMark } from './ui/TwitchGlyph';
 import { registerPlayerControls, type PlayerControls } from '../keybindings';
@@ -35,7 +41,7 @@ import { qualitiesEquivalent } from '../utils/quality';
 import { Logger } from '../utils/logger';
 import { syncTauriWindowFullscreen } from '../utils/windowFullscreen';
 import { startLatencyGovernor, DEFAULT_LATENCY_BAND } from '../utils/liveLatencyGovernor';
-import { LL_DISPLAY_CALIBRATION, LL_TARGET_DEFAULT } from '../utils/latency';
+import { behindLiveFromEdge, edgeTargetForGap, resolveLiveEdgeGap, type LivePath } from '../utils/latency';
 import { startLLDiagnostics, stopLLDiagnostics, llDiagNote, isLLDiagEnabled } from '../utils/llDiagnostics';
 import {
   applyAudioBoost,
@@ -45,7 +51,7 @@ import {
   AUDIO_GRAPH_SUPPORTED,
   AUDIO_GRAPH_REFUSAL,
 } from '../utils/audioBoost';
-import type { AudioBoostSettings, MutedRange } from '../types';
+import type { AudioBoostSettings, MutedRange, VodChapter } from '../types';
 import { Fader, Toggle } from './AudioBoostFaders';
 
 /** A backward scrub on a live stream smaller than this is treated as a
@@ -58,6 +64,45 @@ const LIVE_DVR_MAX_BEHIND_SECS = 55;
 /** Stable empty list, so the muted-notice effect does not re-subscribe on
  *  every render of a stream that has no muted ranges. */
 const NO_MUTED_RANGES: MutedRange[] = [];
+/** On the parts origin the first frame plays this much (or more) further
+ *  behind the edge than the cushion asks, because the first parts load
+ *  while the edge keeps moving (measured: 0.3 s on a warm restart, 1.5 to
+ *  2 s on a cold start). Past this, the first `playing` snaps forward into
+ *  buffer that is already there instead of stretching audio for half a
+ *  minute to catch up. */
+const COLD_START_SNAP_MIN_SECS = 0.3;
+/** The snap never runs the buffer closer to its end than this. */
+const COLD_START_SNAP_RESERVE_SECS = 1.0;
+/** How long after the first frame the snap keeps waiting for enough buffer. */
+const COLD_START_SNAP_WINDOW_MS = 8000;
+/** A stall whose buffered media resumes within this many seconds past the
+ *  playhead is a SEAM (a segment whose tail never arrived, so its successor
+ *  starts a few frames later), not a delivery drought. Observed seams run
+ *  70 ms to 1.8 s; a whole missing 2 s segment is a drought and stays out. */
+const SEAM_MAX_SECS = 1.95;
+const NO_CHAPTERS: VodChapter[] = [];
+/** The Chapters control's markup (lucide `list-video`); the label is
+ *  written afterwards, so this stays static. */
+const CHAPTERS_BUTTON_HTML =
+  '<svg class="plyr__icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 5H3"></path><path d="M10 12H3"></path><path d="M10 19H3"></path><path d="M15 12.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997a1 1 0 0 1-1.517-.86z"></path></svg>' +
+  '<span class="sn-chapters-btn__label"></span>' +
+  '<span class="plyr__tooltip" role="tooltip">Chapters</span>';
+
+type LiveButtonState = 'live' | 'behind' | 'catching-up';
+const LIVE_BUTTON_TIPS: Record<LiveButtonState, string> = {
+  live: 'Watching live',
+  behind: 'Behind live · click to catch up',
+  'catching-up': 'Catching up…',
+};
+/** Paints the injected LIVE control. Idempotent: returns at once when the
+ *  state it shows already matches, so callers can be generous with it. */
+function paintLiveButton(btn: HTMLButtonElement, state: LiveButtonState) {
+  if (btn.dataset.state === state) return;
+  btn.dataset.state = state;
+  btn.setAttribute('aria-label', LIVE_BUTTON_TIPS[state]);
+  const tip = btn.querySelector('.plyr__tooltip');
+  if (tip) tip.textContent = LIVE_BUTTON_TIPS[state];
+}
 
 import { open as openExternalUrl } from '@tauri-apps/plugin-shell';
 import { setActiveVideo } from '../utils/activeVideo';
@@ -239,6 +284,11 @@ const VideoPlayer = () => {
   // nothing on screen changes faster than the card rim, so the sampler stays
   // on its once-a-second path and costs what it always did.
   useMediaGlow(videoRef, containerRef, glowKey, glowOn, immersive);
+  // A TikTok co-host LIVE draws its picture in a band across a 9:16 frame, the
+  // rest black; zoom to that band so the people fill the player. The channel
+  // routes Rust's co-host layout events to this player.
+  const isTikTokLive = streamProvider(currentStream) === 'tiktok' && currentMediaType === 'live';
+  useContentZoom(videoRef, isTikTokLive, isTikTokLive ? (currentStream?.user_login ?? null) : null);
   // Platform vocabulary. On YouTube the free relationship is "Subscribe" and the
   // paid one is "Join", the inverse of Twitch's words, so a button labelled
   // "Subscribe" there would point a viewer at the paid page.
@@ -283,7 +333,7 @@ const VideoPlayer = () => {
   const [playerReady, setPlayerReady] = useState(false);
   // Overlay visibility state (works in both normal and fullscreen modes)
   const [showOverlay, setShowOverlay] = useState(false);
-  // Live telemetry panel ("behind live" + FPS). Toggled from the Plyr settings
+  // Live playback stats panel ("behind live" + FPS). Toggled from the Plyr settings
   // menu's "Stats" item; the ref lets the menu injection read the latest value.
   const [showStats, setShowStats] = useState(false);
   const showStatsRef = useRef(showStats);
@@ -339,6 +389,10 @@ const VideoPlayer = () => {
   // does the quick on/off).
   const [audioPanelOpen, setAudioPanelOpen] = useState(false);
   const audioPanelRef = useRef<HTMLDivElement>(null);
+  // The VOD chapter list, opened from the injected Chapters control.
+  const [chaptersOpen, setChaptersOpen] = useState(false);
+  const chaptersMenuRef = useRef<HTMLDivElement>(null);
+  const currentChapterTitleRef = useRef<string | null>(null);
 
   // Write a patch to the persisted audio_boost settings. Reads fresh state so a
   // rapid edit never clobbers a concurrent change; the apply effect and the
@@ -416,6 +470,51 @@ const VideoPlayer = () => {
     paintAudioBoostButton(btn ?? null, audioBoostEnabled);
   }, [audioBoostEnabled, playerReady]);
 
+  // The LIVE button: the control bar's one statement of "at the live edge"
+  // (red) or not (grey: behind, buffering, rewound into the recording, or a
+  // swap in flight), and the one action that gets back there. Live streams
+  // only; sits right after the time readout. Its state is painted by the
+  // 4 Hz half of updateLiveTimeDisplay.
+  const isLiveStream = currentMediaType === 'live';
+  useEffect(() => {
+    if (!playerReady || !isLiveStream) return;
+    const container = containerRef.current;
+    if (!container) return;
+    return injectPlyrControl(container, {
+      attr: 'data-streamnook-live',
+      className: 'sn-live-btn',
+      html:
+        '<span class="sn-live-btn__dot" aria-hidden="true"></span>' +
+        '<span class="sn-live-btn__label">LIVE</span>' +
+        '<span class="plyr__tooltip" role="tooltip"></span>',
+      onClick: () => liveActionRef.current(),
+      place: (controls) => {
+        // After the LAST time node: a rewound recording also shows Plyr's
+        // duration, and Plyr draws its separator between adjacent time nodes.
+        const times = controls.querySelectorAll(':scope > .plyr__time');
+        const last = times[times.length - 1];
+        if (last) return { after: last };
+        const progress = controls.querySelector('.plyr__progress__container');
+        return progress ? { after: progress } : null;
+      },
+      onInserted: (btn) => {
+        liveBtnNodeRef.current = btn;
+        const initial: LiveButtonState = useAppStore.getState().liveRewind ? 'behind' : liveStateRef.current;
+        liveStateRef.current = initial;
+        paintLiveButton(btn, initial);
+      },
+    });
+  }, [playerReady, isLiveStream]);
+
+  // Rewound: the rAF loop is off (Plyr runs the recording as a VOD), so the
+  // button is told directly.
+  useEffect(() => {
+    if (!liveRewind) return;
+    const btn = containerRef.current?.querySelector<HTMLButtonElement>('[data-streamnook-live]');
+    liveStateRef.current = 'behind';
+    if (btn) paintLiveButton(btn, 'behind');
+  }, [liveRewind, playerReady]);
+
   // Close the popover on Escape or an outside click (but not on the toggle
   // itself, so right-click can open/close it cleanly). Capture phase so it runs
   // before the player's own pointer handlers.
@@ -443,6 +542,7 @@ const VideoPlayer = () => {
   // Close the popover when the stream changes (the control bar is rebuilt then).
   useEffect(() => {
     setAudioPanelOpen(false);
+    setChaptersOpen(false);
   }, [streamUrl]);
 
   // Transient top-left "stream note" (ad source + any quality fallback). Shows
@@ -467,6 +567,9 @@ const VideoPlayer = () => {
   // Live-only: a backward scrub past what the live window can serve hands
   // off into the broadcast recording (see the seeking handler in createPlayer).
   const onSeekingRef = useRef<(() => void) | null>(null);
+  const onWaitingRef = useRef<(() => void) | null>(null);
+  const onFirstPlayingRef = useRef<(() => void) | null>(null);
+  const onPlayingFlagRef = useRef<(() => void) | null>(null);
   const onTimeUpdateRef = useRef<(() => void) | null>(null);
   const lastPlayheadRef = useRef<number>(0);
 
@@ -745,7 +848,7 @@ const VideoPlayer = () => {
 
   // Update time display for live streams: "LIVE" at the edge, the broadcast's
   // elapsed time at the playhead when behind it.
-  const liveTimeNodeRef = useRef<Element | null>(null);
+  const liveTimeNodeRef = useRef<HTMLElement | null>(null);
   const liveStartedAtRef = useRef<{ raw: string; ms: number } | null>(null);
   // Smoothed distance from the live edge. The raw `buffered.end - currentTime`
   // is a sawtooth that swings by a whole segment, which made this label flip
@@ -755,6 +858,15 @@ const VideoPlayer = () => {
   const liveTextComputedAtRef = useRef(0);
   const liveTextRef = useRef('LIVE');
   const liveAtLiveRef = useRef(true);
+  // The LIVE button (injected into the control bar below) and what feeds it.
+  const liveBtnNodeRef = useRef<HTMLButtonElement | null>(null);
+  const liveStateRef = useRef<LiveButtonState>('live');
+  const bufferingRef = useRef(false);
+  const catchingUpUntilRef = useRef(0);
+  const liveActionRef = useRef<() => void>(() => {});
+  // The viewer scrubbed back inside the live buffer on purpose; the
+  // low-latency watchdog must not "recover" them to the edge.
+  const deliberateBehindRef = useRef(false);
   const updateLiveTimeDisplay = useCallback(() => {
     const video = videoRef.current;
     const container = containerRef.current;
@@ -782,8 +894,14 @@ const VideoPlayer = () => {
     // bar, so revalidate via isConnected (cheap) and re-query only then.
     let currentTimeDisplay = liveTimeNodeRef.current;
     if (!currentTimeDisplay || !currentTimeDisplay.isConnected) {
-      currentTimeDisplay = container.querySelector('.plyr__time--current');
+      currentTimeDisplay = container.querySelector<HTMLElement>('.plyr__time--current');
       liveTimeNodeRef.current = currentTimeDisplay;
+      // A rebuilt bar: apply the last known state at once rather than
+      // letting Plyr's session clock show until the next 4 Hz tick.
+      if (currentTimeDisplay) currentTimeDisplay.hidden = liveAtLiveRef.current;
+      const btn = container.querySelector<HTMLButtonElement>('[data-streamnook-live]');
+      liveBtnNodeRef.current = btn;
+      if (btn) paintLiveButton(btn, liveStateRef.current);
     }
     if (currentTimeDisplay) {
       // The VALUE only changes about once a second, but this loop runs every
@@ -793,7 +911,7 @@ const VideoPlayer = () => {
       const now = performance.now();
       if (now - liveTextComputedAtRef.current >= 250) {
         liveTextComputedAtRef.current = now;
-        let nextText = 'LIVE';
+        let nextText: string | null = null;
         const nextAtLive = !liveEdgeRef.current.isBehind(video);
         if (!nextAtLive) {
           const behindSeconds = Math.floor(liveEdgeRef.current.behind(video));
@@ -820,27 +938,40 @@ const VideoPlayer = () => {
                   : `${m}:${s.toString().padStart(2, '0')}`;
             }
           }
-          if (nextText === 'LIVE') {
+          if (nextText === null) {
             // No usable start time: fall back to the behind-the-edge delta.
             const mins = Math.floor(behindSeconds / 60);
             const secs = behindSeconds % 60;
             nextText = `-${mins}:${secs.toString().padStart(2, '0')}`;
           }
         }
-        liveTextRef.current = nextText;
+        // Buffering, a swap in flight, or the recording: not at the edge in
+        // any sense the button should claim.
+        const store = useAppStore.getState();
+        const atEdge = nextAtLive && !store.liveRewind && !store.isRestartingStream && !bufferingRef.current;
+        let nextState: LiveButtonState = atEdge ? 'live' : 'behind';
+        if (atEdge) catchingUpUntilRef.current = 0;
+        else if (catchingUpUntilRef.current > now) nextState = 'catching-up';
+        liveTextRef.current = nextText ?? '';
         liveAtLiveRef.current = nextAtLive;
+        liveStateRef.current = nextState;
+        // Plyr never touches `hidden` or the button, so both are written
+        // here at 4 Hz, not in the per-frame repair below.
+        if (currentTimeDisplay.hidden !== nextAtLive) currentTimeDisplay.hidden = nextAtLive;
+        const btn = liveBtnNodeRef.current;
+        if (btn && btn.isConnected) paintLiveButton(btn, nextState);
       }
       const nextText = liveTextRef.current;
-      const atLive = liveAtLiveRef.current;
-      // Compare against what is ACTUALLY in the DOM, never against a cached
-      // copy of our own last write, so a Plyr clobber is caught and repaired
-      // on the next frame. Reading textContent does not force layout; the
-      // mismatch gate keeps steady-state writes at zero.
-      if (currentTimeDisplay.textContent !== nextText) {
+      // Behind the edge the readout is the broadcast timestamp, repaired per
+      // frame because Plyr writes its own session clock into this node on
+      // every timeupdate. Compare against what is ACTUALLY in the DOM, never
+      // a cached copy of our own last write, so a clobber is caught on the
+      // next frame; reading textContent does not force layout and the
+      // mismatch gate keeps steady-state writes at zero. At the edge the
+      // node is hidden (set at 4 Hz above) and the LIVE button carries the
+      // state.
+      if (!liveAtLiveRef.current && currentTimeDisplay.textContent !== nextText) {
         currentTimeDisplay.textContent = nextText;
-      }
-      if (currentTimeDisplay.classList.contains('plyr__time--live') !== atLive) {
-        currentTimeDisplay.classList.toggle('plyr__time--live', atLive);
       }
     }
 
@@ -1011,20 +1142,31 @@ const VideoPlayer = () => {
         return;
       }
       Logger.debug(`[HLS] LL-HLS origin active=${isLowLatencyChannel}`);
-      setIsLowLatencyPath(isLowLatencyChannel);
+      // The second relay fact: is this a low-latency BROADCAST (PREFETCH
+      // hints) the origin did not take over? That ride is tighter and
+      // thinner than a normal-latency one, and the automatic gap differs.
+      let prefetchPresent = false;
+      if (!isLowLatencyChannel && streamProvider(useAppStore.getState().currentStream) === 'twitch') {
+        try {
+          prefetchPresent = await invoke<boolean>('get_stream_prefetch_present');
+        } catch { /* command unavailable / stream gone */ }
+        if (seq !== createSeqRef.current) {
+          Logger.debug('[HLS] Player init superseded mid-probe; aborting this invocation');
+          return;
+        }
+      }
+      const livePath: LivePath = isLowLatencyChannel ? 'll' : prefetchPresent ? 'promotion' : 'plain';
 
       // The viewer's preferred behind-live target (displayed seconds), converted to the
       // real cushion/governor value PER PATH so the displayed number tracks the setting
-      // either way: the parts path's overlay subtracts the display calibration (so target
-      // a calibration higher), while the plain whole-segment path shows hls.latency
-      // directly (so target the number as-is). This applies on EVERY channel — a
+      // either way: on the parts path the edge trails the broadcaster by a measured
+      // delay (so the edge target is that much lower), while the plain whole-segment
+      // path shows hls.latency directly (so target the number as-is). This applies on EVERY channel — a
       // normal-latency broadcast just can't always sustain the tightest values (whole
       // segments arrive with delivery jitter), so the per-channel stall-adaptive cushion
       // settles it where that channel stays smooth.
-      const llTargetDisplayed = currentSettings.ll_target_latency ?? LL_TARGET_DEFAULT;
-      const llTargetRaw = isLowLatencyChannel
-        ? llTargetDisplayed + LL_DISPLAY_CALIBRATION
-        : llTargetDisplayed;
+      const llTargetDisplayed = resolveLiveEdgeGap(currentSettings.ll_target_latency, livePath);
+      const llTargetRaw = isLowLatencyChannel ? edgeTargetForGap(llTargetDisplayed) : llTargetDisplayed;
 
       // Create HLS.js instance with optimized settings
       // Read from the store, not the closure: createPlayer is memoized on
@@ -1136,6 +1278,11 @@ const VideoPlayer = () => {
         // as a micro-hitch; 86 steps in one capture). liveLatencyGovernor owns
         // catch-up on both paths instead, with a smooth ramp.
         maxLiveSyncPlaybackRate: 1,
+        // hls.js also raises its internal target latency by this much per
+        // stall (capped at one target duration). StreamNook's stall-adaptive
+        // cushion owns that reaction, and this second ramp only moved where
+        // Go Live lands, a second further back after every seam.
+        liveSyncOnStallIncrease: 0,
         liveDurationInfinity: !isVodPlayback, // Live is endless; a VOD (even one still recording) has a real, growing duration
         // Where a VOD begins: the stored resume position or a live rewind's
         // mapped broadcast position. -1 (live) lets hls.js pick the edge.
@@ -1148,7 +1295,10 @@ const VideoPlayer = () => {
         levelLoadingRetryDelay: 1000, // Wait 1s between retries
         fragLoadingTimeOut: 20000, // 20s timeout for fragments
         fragLoadingMaxRetry: 6, // Retry fragments 6 times
-        fragLoadingRetryDelay: 1000, // Wait 1s between retries
+        // A part request that dies on a closed keep-alive connection (the
+        // relay is local, so the retry is free) must not idle a second on a
+        // path whose whole reserve is a few seconds.
+        fragLoadingRetryDelay: isLowLatencyChannel ? 250 : 1000,
         startLevel: currentSettings.start_quality || -1, // Start quality level
         // ABR tuning
         abrEwmaDefaultEstimate: 1_500_000, // 1.5Mbps — balanced start to prevent initial bandwidth spike
@@ -1162,11 +1312,15 @@ const VideoPlayer = () => {
       // metric. 'll' = the parts-based LL-HLS origin (hls.latency is honest there, and
       // the overlay subtracts a fixed calibration so the number is Twitch-comparable);
       // 'plain' = the stable whole-segment path (hls.latency shown directly).
-      (hls as unknown as { __snPathHint?: string }).__snPathHint = isLowLatencyChannel
-        ? 'll'
-        : 'plain';
+      (hls as unknown as { __snPathHint?: string }).__snPathHint = livePath;
 
       hlsRef.current = hls;
+      // Dev bundles expose the live hls.js instance beside the store
+      // (`window.__snStore`, main.tsx) so a CDP session can read latency,
+      // buffer and playing date on every path without the recorder.
+      if (import.meta.env.DEV) {
+        (window as unknown as { __snHls?: Hls }).__snHls = hls;
+      }
 
       // Record playback diagnostics on the LL-origin path (per-track buffer ends,
       // fragment PTS/DTS, latency, errors) to a file for offline drift analysis.
@@ -1208,11 +1362,12 @@ const VideoPlayer = () => {
             // stalls; if the chosen target is too tight for a system the stall-adaptive
             // bump raises it for that channel. Read live (not the construction-time
             // llTargetRaw) so moving the gap slider mid-stream takes effect at once.
-            latencyTarget: () =>
-              (playerSettingsRef.current.ll_target_latency ?? LL_TARGET_DEFAULT) +
-              LL_DISPLAY_CALIBRATION,
+            // Both in seconds behind the broadcaster as heard: the edge
+            // distance plus the measured delay of the origin's edge, so the
+            // gap the viewer sets is what they hear against twitch.tv.
+            latencyTarget: () => resolveLiveEdgeGap(playerSettingsRef.current.ll_target_latency, 'll'),
             getLatency: () =>
-              typeof hls.latency === 'number' && hls.latency > 0 ? hls.latency : null,
+              typeof hls.latency === 'number' && hls.latency > 0 ? behindLiveFromEdge(hls.latency) : null,
             gain: 0.12,
             // 1.05 is the edge of pitch-corrector transparency; the old 1.08 was
             // audible as crackle whenever a large behind-live excess pinned the
@@ -1343,6 +1498,14 @@ const VideoPlayer = () => {
           // spikes from triggering a visible snap. A huge value (DVR scrub-back) is the
           // user's, left alone.
           if (fwd > cushion + 5 && fwd < 120) {
+            // The viewer put the playhead here (an in-buffer scrub): not a
+            // drought, nothing to recover. Cleared by Go Live, a rebuild, or
+            // the playhead catching up on its own below.
+            if (deliberateBehindRef.current) {
+              over = 0;
+              frozen = 0;
+              return;
+            }
             over += 1;
             frozen = 0;
             if (over >= 2 && Date.now() - lastRecover > 15000) {
@@ -1402,6 +1565,7 @@ const VideoPlayer = () => {
             // is downloaded ahead of the playhead), not the advertised edge.
             over = 0;
             frozen = 0;
+            deliberateBehindRef.current = false;
           }
         }, 2000);
       }
@@ -1434,6 +1598,17 @@ const VideoPlayer = () => {
 
         // Initialize Plyr AFTER we have the video loaded
         if (!playerRef.current) {
+          // Storyboard seek previews, finished VODs only. Decided here, not
+          // later: Plyr hides its seek tooltip the moment previews are on, so
+          // enabling without sets would leave the bar with no tooltip at all.
+          const previewVariant =
+            vodStart && !vodStart.rewound_from_live && vodStart.storyboard
+              ? pickStoryboardVariant(vodStart.storyboard)
+              : null;
+          const previewSets =
+            previewVariant && vodStart?.storyboard
+              ? storyboardToPlyrThumbnails(previewVariant, vodStart.storyboard.base_url, vodStart.length_seconds ?? 0)
+              : [];
           const player = new Plyr(video, {
             controls: [
               'play-large',
@@ -1475,6 +1650,16 @@ const VideoPlayer = () => {
             fullscreen: { enabled: true, fallback: 'force', iosNative: false },
             // Disable Plyr's built-in localStorage - we manage settings via Tauri backend
             storage: { enabled: false },
+            // Plyr's typings only know the VTT-url form; a function source is
+            // supported (previews.js getThumbnails) and hands the sets over.
+            ...(previewSets.length > 0
+              ? {
+                  previewThumbnails: {
+                    enabled: true,
+                    src: ((cb: (sets: PlyrThumbnailSet[]) => void) => cb(previewSets)) as unknown as string,
+                  },
+                }
+              : {}),
           });
 
           playerRef.current = player;
@@ -1588,7 +1773,33 @@ const VideoPlayer = () => {
 
           // Handle buffer stalled errors with active recovery
           if (data.details === 'bufferStalledError') {
+            // The outgoing instance of a restart or quality change starves as
+            // the relay is torn down under it. That stall says nothing about
+            // the channel's delivery, and ramping (and remembering) the cushion
+            // for it charged every restart to the viewer's latency.
+            if (useAppStore.getState().isRestartingStream) {
+              Logger.debug('[HLS] Buffer stalled during a restart; ignored');
+              return;
+            }
             Logger.debug('[HLS] Buffer stalled, attempting recovery...');
+
+            // A seam, not a drought: buffered media resumes just past the
+            // playhead. hls.js seeks over it by itself, and more cushion cannot
+            // help because the media on both sides is already downloaded, so
+            // ramping (and remembering) the cushion here would charge the
+            // viewer latency, permanently per channel, for every lost tail.
+            // Read off the event's own buffer geometry.
+            const info = data.bufferInfo;
+            const seamSecs =
+              info && typeof info.nextStart === 'number' && info.nextStart > video.currentTime
+                ? info.nextStart - video.currentTime
+                : null;
+            const seam = seamSecs != null && seamSecs <= SEAM_MAX_SECS;
+            if (seam) {
+              Logger.debug(
+                `[HLS] seam: ${(seamSecs * 1000).toFixed(0)} ms hole at ${video.currentTime.toFixed(2)}; cushion unchanged`,
+              );
+            }
 
             // Stall-adaptive cushion (LL path): each real stall proves this
             // session's delivery is wobblier than the cushion tolerates, so
@@ -1605,7 +1816,7 @@ const VideoPlayer = () => {
             // it decay back over days. Only Twitch's NON-LL path is excluded,
             // where the cushion is the viewer's own setting rather than something
             // we discovered.
-            if (isLowLatencyChannel || !isTwitchPlayback) {
+            if (!seam && (isLowLatencyChannel || !isTwitchPlayback)) {
               const fallbackTarget = isTwitchPlayback ? llTargetRaw : providerCushionBase;
               const cur =
                 typeof hls.config.liveSyncDuration === 'number' &&
@@ -1915,6 +2126,53 @@ const VideoPlayer = () => {
       video.addEventListener('loadedmetadata', onLoadedMetadata);
       video.addEventListener('playing', onPlaying);
 
+      // Parts origin: the first frame plays further behind the edge than the
+      // cushion asks, by however long the first parts took to arrive. The
+      // buffer at that moment already holds the media between here and the
+      // target (parts stream in faster than real time), so one forward seek
+      // into it lands the session on its gap at once, silently. The
+      // alternative, the governor stretching audio at 1.03 to 1.05x for tens
+      // of seconds, is what a viewer hears as distortion. Same kind of
+      // in-buffer forward seek Go Live makes; never past the reserve.
+      if (isLowLatencyChannel && !isVodPlayback) {
+        // The buffer holds only ~1 s at the first frame (the gate starts play
+        // there); the backlog between here and the target lands over the next
+        // second or two. So the snap waits on timeupdate until the buffer can
+        // cover the jump plus a reserve, and gives up after a few seconds
+        // (the governor then finishes the job).
+        let snapDeadline = 0;
+        const trySnap = () => {
+          if (snapDeadline === 0) snapDeadline = performance.now() + COLD_START_SNAP_WINDOW_MS;
+          const done = () => {
+            video.removeEventListener('timeupdate', trySnap);
+            onFirstPlayingRef.current = null;
+          };
+          const latency =
+            typeof hls.latency === 'number' && Number.isFinite(hls.latency)
+              ? behindLiveFromEdge(hls.latency)
+              : null;
+          if (latency == null) return;
+          const target = resolveLiveEdgeGap(playerSettingsRef.current.ll_target_latency, 'll');
+          const over = latency - target;
+          if (over < COLD_START_SNAP_MIN_SECS) {
+            done();
+            return;
+          }
+          const b = video.buffered;
+          const end = b.length > 0 ? b.end(b.length - 1) : 0;
+          const fwd = end - video.currentTime;
+          if (fwd >= over + COLD_START_SNAP_RESERVE_SECS) {
+            Logger.debug(`[HLS] first seconds ${over.toFixed(2)}s past the gap; snapping forward into ${fwd.toFixed(2)}s of buffer`);
+            video.currentTime = video.currentTime + over;
+            done();
+            return;
+          }
+          if (performance.now() > snapDeadline) done();
+        };
+        onFirstPlayingRef.current = trySnap;
+        video.addEventListener('timeupdate', trySnap);
+      }
+
       // Scrubbing BACK on a live Twitch stream. The live window cannot hold a
       // position: the low-latency origin serves ~12 s and its watchdog snaps
       // a lagging playhead to the edge within seconds, and the whole-segment
@@ -1925,22 +2183,38 @@ const VideoPlayer = () => {
       // this file moves FORWARD (edge snaps, stall nudges, Go Live), so
       // "backward by more than a few seconds" is the user's own intent.
       lastPlayheadRef.current = 0;
+      deliberateBehindRef.current = false;
+      bufferingRef.current = false;
       const onTimeUpdate = () => {
         if (!video.seeking) lastPlayheadRef.current = video.currentTime;
       };
       const onSeeking = () => {
+        const from = lastPlayheadRef.current;
+        const to = video.currentTime;
+        // Every seek re-bases the live-edge smoothing window by exactly the
+        // jump, so a small forward seek does not leave the readout on the
+        // pre-seek distance for a full window.
+        if (isLiveRef.current && from > 0) liveEdgeRef.current.shift(to - from);
+        // Two seeks inside one timeupdate interval must not both measure
+        // from the same origin: the second would re-apply the first shift.
+        // The hand-off below re-seeks to `from`, which fires this again and
+        // shifts back by exactly as much.
+        lastPlayheadRef.current = to;
         if (isVodPlayback || !isTwitchPlayback) return;
         const store = useAppStore.getState();
         if (store.currentMediaType !== 'live' || store.liveRewind || store.isRestartingStream) return;
-        const from = lastPlayheadRef.current;
-        const to = video.currentTime;
         if (!(from > 0) || to > from - LIVE_SCRUB_HANDOFF_SECS) return;
         const b = video.buffered;
         const edge = b.length > 0 ? b.end(b.length - 1) : from;
         const held = b.length > 0 ? b.start(0) : from;
-        // Inside what is already buffered (and, off the LL path, inside the
-        // 60 s hls.js tolerates) the live player can serve the scrub itself.
-        if (to >= held && (isLowLatencyChannel ? false : edge - to < LIVE_DVR_MAX_BEHIND_SECS)) return;
+        // Inside what is already buffered, and inside the 60 s hls.js
+        // tolerates, the live player serves the scrub itself on both paths.
+        // Remember it was the viewer's choice so the low-latency watchdog does
+        // not "recover" them to the edge (it exists for droughts, not drags).
+        if (to >= held && edge - to < LIVE_DVR_MAX_BEHIND_SECS) {
+          deliberateBehindRef.current = true;
+          return;
+        }
         const behind = Math.max(0, edge - to);
         if (store.liveRewindAvailable === false) {
           // Nothing to rewind into: keep the live position and say why, once
@@ -1960,6 +2234,18 @@ const VideoPlayer = () => {
       onSeekingRef.current = onSeeking;
       video.addEventListener('timeupdate', onTimeUpdate);
       video.addEventListener('seeking', onSeeking);
+      // Buffering greys the LIVE button: a stalled playhead is not at the
+      // edge whatever the buffer geometry says.
+      const onWaiting = () => {
+        bufferingRef.current = true;
+      };
+      const onPlayingFlag = () => {
+        bufferingRef.current = false;
+      };
+      onWaitingRef.current = onWaiting;
+      onPlayingFlagRef.current = onPlayingFlag;
+      video.addEventListener('waiting', onWaiting);
+      video.addEventListener('playing', onPlayingFlag);
 
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       // Native HLS support (Safari)
@@ -1967,6 +2253,15 @@ const VideoPlayer = () => {
       video.src = streamUrl;
 
       // Initialize Plyr for Safari
+      const vodStart = useAppStore.getState().vodPlayback;
+      const previewVariant =
+        vodStart && !vodStart.rewound_from_live && vodStart.storyboard
+          ? pickStoryboardVariant(vodStart.storyboard)
+          : null;
+      const previewSets =
+        previewVariant && vodStart?.storyboard
+          ? storyboardToPlyrThumbnails(previewVariant, vodStart.storyboard.base_url, vodStart.length_seconds ?? 0)
+          : [];
       const player = new Plyr(video, {
         controls: [
           'play-large',
@@ -1996,6 +2291,14 @@ const VideoPlayer = () => {
         fullscreen: { enabled: true, fallback: 'force', iosNative: false },
         // Disable Plyr's built-in localStorage - we manage settings via Tauri backend
         storage: { enabled: false },
+        ...(previewSets.length > 0
+          ? {
+              previewThumbnails: {
+                enabled: true,
+                src: ((cb: (sets: PlyrThumbnailSet[]) => void) => cb(previewSets)) as unknown as string,
+              },
+            }
+          : {}),
       });
 
       playerRef.current = player;
@@ -2171,10 +2474,17 @@ const VideoPlayer = () => {
         const metadataHandler = onLoadedMetadataRef.current;
         const seekingHandler = onSeekingRef.current;
         const timeUpdateHandler = onTimeUpdateRef.current;
+        const waitingHandler = onWaitingRef.current;
+        const firstPlayingHandler = onFirstPlayingRef.current;
+        if (firstPlayingHandler) videoElement.removeEventListener('timeupdate', firstPlayingHandler);
+        onFirstPlayingRef.current = null;
+        const playingFlagHandler = onPlayingFlagRef.current;
         if (playingHandler) videoElement.removeEventListener('playing', playingHandler);
         if (metadataHandler) videoElement.removeEventListener('loadedmetadata', metadataHandler);
         if (seekingHandler) videoElement.removeEventListener('seeking', seekingHandler);
         if (timeUpdateHandler) videoElement.removeEventListener('timeupdate', timeUpdateHandler);
+        if (waitingHandler) videoElement.removeEventListener('waiting', waitingHandler);
+        if (playingFlagHandler) videoElement.removeEventListener('playing', playingFlagHandler);
       }
       const debouncer = volumeDebounceRef.current;
       const gateTimeout = bufferGateTimeoutRef.current;
@@ -2224,7 +2534,7 @@ const VideoPlayer = () => {
     // Apply the new mode to the backend origin kill switch FIRST, then restart so the
     // origin probe at stream start honors it (the parts path is gated by this).
     invoke('set_experimental_low_latency', {
-      enabled: playerSettings.experimental_low_latency ?? false,
+      enabled: playerSettings.experimental_low_latency ?? true,
     })
       .catch(() => {})
       .finally(() => {
@@ -2286,6 +2596,7 @@ const VideoPlayer = () => {
         const i = SPEEDS.indexOf(p.speed);
         p.speed = SPEEDS[Math.max(0, (i < 0 ? 3 : i) - 1)];
       },
+      goLive: () => liveActionRef.current(),
     };
     registerPlayerControls(controls);
     return () => registerPlayerControls(null);
@@ -2512,6 +2823,77 @@ const VideoPlayer = () => {
   const isVodTimeline = !!vodPlayback && !vodPlayback.rewound_from_live;
   const mutedRanges = isVodTimeline ? (vodPlayback.muted_segments ?? NO_MUTED_RANGES) : NO_MUTED_RANGES;
   const activeMute = useMutedSegmentNotice(videoRef, mutedRanges);
+  // Chapters: the categories the broadcast ran under, for the bar gaps, the
+  // hover name and the list. From two chapters (one is the category the
+  // card already shows). Same gate as the muted marks: a real VOD timeline.
+  const chapters = isVodTimeline ? (vodPlayback.chapters ?? NO_CHAPTERS) : NO_CHAPTERS;
+  const hasChapters = chapters.length >= 2;
+  const currentChapter = useCurrentChapter(videoRef, chapters);
+  // The same pick the Plyr constructor makes, so "has a preview" here is
+  // exactly whether Plyr was given frames. O(variants), no expansion.
+  const hasPreview = isVodTimeline && !!vodPlayback.storyboard && pickStoryboardVariant(vodPlayback.storyboard) !== null;
+
+  // The Chapters control: current chapter's name in the bar, click for the
+  // list. Removed outright when a VOD has no chapters to show.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    if (!hasChapters) {
+      container.querySelector('[data-streamnook-chapters]')?.remove();
+      return;
+    }
+    if (!playerReady) return;
+    return injectPlyrControl(container, {
+      attr: 'data-streamnook-chapters',
+      className: 'sn-chapters-btn',
+      html: CHAPTERS_BUTTON_HTML,
+      onClick: () => setChaptersOpen((o) => !o),
+      place: (controls) => {
+        const times = controls.querySelectorAll(':scope > .plyr__time');
+        const last = times[times.length - 1];
+        if (last) return { after: last };
+        const menu = controls.querySelector('.plyr__menu');
+        return menu ? { before: menu } : null;
+      },
+      onInserted: (btn) => {
+        const label = btn.querySelector('.sn-chapters-btn__label');
+        if (label) label.textContent = currentChapterTitleRef.current ?? 'Chapters';
+      },
+    });
+  }, [playerReady, hasChapters]);
+
+  // The label follows the playhead's chapter (two renders per chapter, see
+  // useCurrentChapter). The ref covers a control inserted after this ran.
+  useEffect(() => {
+    currentChapterTitleRef.current = currentChapter?.title ?? null;
+    if (!hasChapters) return;
+    const label = containerRef.current?.querySelector('[data-streamnook-chapters] .sn-chapters-btn__label');
+    if (label) label.textContent = currentChapter?.title ?? 'Chapters';
+  }, [currentChapter, playerReady, hasChapters]);
+
+  // Close the chapter list on Escape or an outside click (not the control
+  // itself, so a second click closes it cleanly). Capture phase, like the
+  // Audio Boost popover, so it runs before the player's own handlers.
+  useEffect(() => {
+    if (!chaptersOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setChaptersOpen(false);
+    };
+    const onDown = (e: MouseEvent) => {
+      const panel = chaptersMenuRef.current;
+      const btn = containerRef.current?.querySelector('[data-streamnook-chapters]');
+      const target = e.target as Node;
+      if (panel && !panel.contains(target) && !(btn && btn.contains(target))) {
+        setChaptersOpen(false);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onDown, true);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onDown, true);
+    };
+  }, [chaptersOpen]);
   // VOD position checkpoints to Rust, the owner of the resume store. Null
   // (live, clips, rewinds, offline auto-play, idle) attaches nothing.
   useVodProgressReporter(
@@ -2537,11 +2919,6 @@ const VideoPlayer = () => {
   }, [vodPlayback]);
   const rewindLive = useAppStore((s) => s.rewindLive);
   const returnToLive = useAppStore((s) => s.returnToLive);
-  // Which delivery path the current hls.js instance rides; the broadcast
-  // timeline uses it to decide how far a live seek can go before it must
-  // hand off to the recording. State, not a ref, because it is read in
-  // render (a ref read there is what the React Compiler refuses).
-  const [isLowLatencyPath, setIsLowLatencyPath] = useState(false);
   // Plyr's `.plyr__progress` element, captured right after Plyr builds its
   // controls and cleared when it is destroyed; the timeline portals into it.
   const [timelineHost, setTimelineHost] = useState<HTMLElement | null>(null);
@@ -2553,6 +2930,7 @@ const VideoPlayer = () => {
     const hls = hlsRef.current;
     const video = videoRef.current;
     if (!hls || !video) return;
+    deliberateBehindRef.current = false;
     const b = video.buffered;
     const bufferedEnd = b.length > 0 ? b.end(b.length - 1) : 0;
     const pos = hls.liveSyncPosition;
@@ -2567,6 +2945,27 @@ const VideoPlayer = () => {
     }
     if (video.paused) video.play().catch(() => { /* autoplay policy / teardown */ });
   }, [restartStream]);
+
+  // What the LIVE button (and the go-live hotkey) does: back to the edge,
+  // or back out of the recording. Held in a ref so the DOM listener the
+  // injection bound once never goes stale.
+  useEffect(() => {
+    liveActionRef.current = () => {
+      const rewound = !!useAppStore.getState().liveRewind;
+      // Already at the edge: nothing to catch up on, so no transient state
+      // flash; goLive is a harmless no-op there.
+      if (!rewound && liveStateRef.current === 'live') {
+        goLive();
+        return;
+      }
+      catchingUpUntilRef.current = performance.now() + 6000;
+      liveStateRef.current = 'catching-up';
+      const btn = liveBtnNodeRef.current;
+      if (btn && btn.isConnected) paintLiveButton(btn, 'catching-up');
+      if (rewound) void returnToLive();
+      else goLive();
+    };
+  }, [returnToLive, goLive]);
 
   // Mirror the overlay state to the store only while fullscreen, so the
   // fullscreen chat column can fade with the controls. Windowed hover never
@@ -3015,6 +3414,32 @@ const VideoPlayer = () => {
         />
       )}
 
+      {/* Chapter boundaries on the same bar, and the chapter under the
+          pointer (inside Plyr's preview thumb when the VOD has one). */}
+      {hasChapters && (
+        <VodChapterMarks
+          host={timelineHost}
+          chapters={chapters}
+          videoRef={videoRef}
+          fallbackLengthSecs={vodPlayback?.length_seconds ?? 0}
+          hasPreview={hasPreview}
+        />
+      )}
+      <AnimatePresence>
+        {chaptersOpen && hasChapters && (
+          <VodChaptersMenu
+            ref={chaptersMenuRef}
+            chapters={chapters}
+            current={currentChapter}
+            onSeek={(secs) => {
+              const v = videoRef.current;
+              if (v) v.currentTime = secs;
+              setChaptersOpen(false);
+            }}
+          />
+        )}
+      </AnimatePresence>
+
       {/* Why the audio went silent, for as long as it is silent. Static text
           per range: a ticking countdown would re-render the player every
           second for three minutes. */}
@@ -3038,7 +3463,7 @@ const VideoPlayer = () => {
           videoRef={videoRef}
           anchorIso={timelineAnchor}
           rewound={!!liveRewind}
-          liveSeekWindowSecs={isLowLatencyPath ? 5 : LIVE_DVR_MAX_BEHIND_SECS}
+          liveSeekWindowSecs={LIVE_DVR_MAX_BEHIND_SECS}
           visible={showOverlay}
           onSeekLive={(t) => {
             const v = videoRef.current;
@@ -3050,20 +3475,7 @@ const VideoPlayer = () => {
         />
       )}
 
-      {/* Rewound into the broadcast recording: a persistent way back to the
-          live edge (a normal live start on the same channel). */}
-      {liveRewind && (
-        <button
-          onClick={() => void returnToLive()}
-          className="absolute left-1/2 top-3 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full glass-button px-3 py-1.5 text-[12px] font-semibold text-white"
-          style={{ backdropFilter: 'blur(16px)' }}
-        >
-          <Radio className="h-3.5 w-3.5 text-red-400" />
-          Back to live
-        </button>
-      )}
-
-      {/* Live telemetry panel, bottom-left. Collapsed toggle rides the hover
+      {/* Live playback stats panel, bottom-left. Collapsed toggle rides the hover
           overlay; the panel itself persists once opened. Live streams only. */}
       {currentMediaType === 'live' && !liveRewind && streamUrl && streamUrl !== 'offline' && (
         <PlayerStatsOverlay

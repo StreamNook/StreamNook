@@ -14,13 +14,21 @@
 //! (the `avcC` payload, verbatim), each video tag's NAL units are already
 //! length-prefixed, and the AAC sequence header IS the `AudioSpecificConfig`.
 //! So there is no bitstream rewriting: the work is reading tags, cutting
-//! segments on keyframes, and writing `moof` + `mdat` with the box writers
-//! `ts_fmp4` already has.
+//! segments, and writing `moof` + `mdat` with the box writers `ts_fmp4`
+//! already has.
+//!
+//! Segments are one second, not one GOP. A player's start waits for whole
+//! segments, and cutting on keyframes alone meant waiting for two two-second
+//! GOPs to finish arriving. Only the FIRST segment has to open on a keyframe
+//! (the player starts there); after it the player appends in order, so a
+//! segment may begin mid-GOP, and one still opens on a keyframe wherever the
+//! stream puts one near the cut.
 //!
 //! What the stream looks like, measured from a live pull (the rules below are
 //! shaped by each of these):
 //!   * the CDN opens with a replay of its cache: every cached AUDIO tag first,
-//!     then the video sequence header, then the cached GOP from its keyframe;
+//!     then the video sequence header, then the cached video from its oldest
+//!     keyframe (the current GOP, sometimes the one before it too);
 //!   * sequence headers carry timestamps unrelated to the media (0 and 50 ms
 //!     against a media clock in the millions), so they never drive timing;
 //!   * two second GOPs, B-frames (non-zero composition offsets), and SPS/PPS
@@ -48,20 +56,23 @@ const VIDEO_TIMESCALE: u32 = 90_000;
 /// toward it would let a broken stream grow memory without bound. A 4K
 /// keyframe is a few megabytes; TikTok's 720p ones are about thirty kilobytes.
 const MAX_TAG: usize = 8 * 1024 * 1024;
-/// A keyframe closer than this to the start of the open segment is carried
-/// inside it rather than starting a new one, so a stream with very short GOPs
-/// does not fill the playlist with one second segments.
-const MIN_SEGMENT_MS: u32 = 1_500;
+/// A segment is cut once it holds this much video. Short, because the relay's
+/// start hold waits for a few seconds of whole segments, and a long segment is
+/// a long wait for its last frame.
+const SEGMENT_MS: u32 = 1_000;
+/// A keyframe at least this far into the open segment cuts it early, so the
+/// next segment opens on the keyframe rather than just after it.
+const KEY_CUT_MS: u32 = 500;
 /// How much audio an audio-only segment holds.
-const AUDIO_SEGMENT_MS: u32 = 2_000;
+const AUDIO_SEGMENT_MS: u32 = 1_000;
 /// A timestamp this far from the previous one, in either direction, is a new
 /// clock rather than a late or replayed frame. A reconnect replays at most one
 /// GOP, a few seconds.
 const MAX_JUMP_MS: u32 = 10_000;
 /// Closed video segments allowed to wait for their audio before the oldest is
 /// written without the audio it is still missing. Bounds the delay a stalled
-/// audio track can add.
-const MAX_WAITING: usize = 2;
+/// audio track can add, to about this many seconds.
+const MAX_WAITING: usize = 4;
 /// Samples per AAC frame. HE-AAC decodes to twice this, but its core frames,
 /// which are what the container counts, are the same length.
 const AAC_FRAME: u64 = 1024;
@@ -633,11 +644,16 @@ impl Muxer {
         }
         self.last_video_dts = Some(dts);
 
-        let cut = key
-            && match &self.open {
-                None => true,
-                Some(o) => dts.saturating_sub(o.start) >= MIN_SEGMENT_MS,
-            };
+        // Only a keyframe may open a timeline (nothing before one decodes);
+        // once open, a segment is cut at a keyframe from half a second in, or
+        // at any frame once it is a second long.
+        let cut = match &self.open {
+            None => key,
+            Some(o) => {
+                let held = dts.saturating_sub(o.start);
+                (key && held >= KEY_CUT_MS) || held >= SEGMENT_MS
+            }
+        };
         if cut {
             if let Some(o) = self.open.take() {
                 self.waiting.push_back(Closed {
@@ -647,9 +663,9 @@ impl Muxer {
                     discontinuity: o.discontinuity,
                 });
             }
-            // The header promised audio that never configured. After two
-            // whole GOPs, play the picture without it rather than nothing.
-            if self.announced.is_none() && self.audio.is_none() && self.waiting.len() >= 2 {
+            // The header promised audio that never configured. After a few
+            // seconds of picture, play it without the audio rather than nothing.
+            if self.announced.is_none() && self.audio.is_none() && self.waiting.len() >= MAX_WAITING {
                 self.declared_audio = false;
                 self.announce(out);
             }
@@ -1078,7 +1094,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn segments_start_on_keyframes_and_carry_both_tracks() {
+    fn segments_are_a_second_long_and_carry_both_tracks() {
         let mut bytes = header(true, true);
         bytes.extend(audio_config());
         bytes.extend(video_config());
@@ -1096,14 +1112,46 @@ pub(crate) mod tests {
         }
 
         let segs = segments(&out);
-        assert_eq!(segs.len(), 3, "three whole GOPs closed");
+        assert_eq!(segs.len(), 6, "six seconds closed, as one second segments");
         for (i, s) in segs.iter().enumerate() {
             assert_eq!(s.number, i as u64);
-            assert!((s.duration - 2.0).abs() < 1e-9, "{}", s.duration);
-            assert_eq!(s.video_frames, 50);
+            assert!((s.duration - 1.0).abs() < 1e-9, "{}", s.duration);
+            assert_eq!(s.video_frames, 25);
             assert!(!s.discontinuity);
             assert_eq!(&s.bytes[4..8], b"moof");
             assert!(has_box(&s.bytes, b"mdat"));
+            // Two second GOPs: every other segment opens on the keyframe, and
+            // the first always does, since that is where a player starts.
+            assert_eq!(opens_on_keyframe(&s.bytes), i % 2 == 0, "segment {i}");
+        }
+    }
+
+    /// Whether the first video sample of a fragment is a sync sample. The video
+    /// run is written first and carries per-sample flags.
+    fn opens_on_keyframe(seg: &[u8]) -> bool {
+        let at = seg.windows(4).position(|w| w == b"trun").expect("trun");
+        // type, version+flags, count, data offset, then sample 0: duration,
+        // size, flags.
+        let p = at + 4 + 4 + 4 + 4 + 4 + 4;
+        u32::from_be_bytes(seg[p..p + 4].try_into().unwrap()) == SAMPLE_FLAGS_SYNC
+    }
+
+    #[test]
+    fn a_keyframe_early_in_a_segment_does_not_cut_it_short() {
+        // A keyframe every 400 ms: one only cuts once the open segment is half
+        // a second long, so no segment comes out shorter than that.
+        let mut bytes = header(false, true);
+        bytes.extend(video_config());
+        for i in 0..60u32 {
+            let ts = 1_000 + i * 40;
+            bytes.extend(video(ts, (i * 40) % 400 == 0, 0));
+        }
+        let segs_out = run(&bytes, 999);
+        let segs = segments(&segs_out);
+        assert!(!segs.is_empty());
+        for s in &segs {
+            assert!(s.duration >= 0.5 - 1e-9, "a {} s segment", s.duration);
+            assert!(s.duration <= 1.0 + 1e-9, "a {} s segment", s.duration);
         }
     }
 
@@ -1119,7 +1167,7 @@ pub(crate) mod tests {
         // tfdt plus 1024 per frame written in segment one, with no seam.
         let tfdts: Vec<u64> = segs.iter().map(|s| audio_tfdt(&s.bytes)).collect();
         let counts: Vec<u64> = segs.iter().map(|s| audio_samples(&s.bytes)).collect();
-        assert!(counts[0] > 40, "{counts:?}");
+        assert!(counts[0] > 20, "{counts:?}");
         assert_eq!(tfdts[1], tfdts[0] + counts[0] * AAC_FRAME);
         assert_eq!(tfdts[2], tfdts[1] + counts[1] * AAC_FRAME);
     }
@@ -1165,7 +1213,7 @@ pub(crate) mod tests {
         let frames: u32 = segs.iter().map(|s| s.video_frames).sum();
         assert_eq!(frames, 150, "10 000 to 16 000 once, at 25 fps");
         assert!(segs.iter().all(|s| !s.discontinuity));
-        assert_eq!(segs.iter().map(|s| s.number).collect::<Vec<_>>(), vec![0, 1, 2]);
+        assert_eq!(segs.iter().map(|s| s.number).collect::<Vec<_>>(), (0..6).collect::<Vec<u64>>());
     }
 
     #[test]
@@ -1232,7 +1280,7 @@ pub(crate) mod tests {
         let segs = segments(&out);
         assert!(segs.len() >= 3, "{}", segs.len());
         for s in &segs {
-            assert!((1.9..2.2).contains(&s.duration), "{}", s.duration);
+            assert!((0.9..1.2).contains(&s.duration), "{}", s.duration);
             assert_eq!(s.video_frames, 0);
         }
     }
@@ -1264,7 +1312,7 @@ pub(crate) mod tests {
         assert!(!segs.is_empty());
         // The first segment has its audio: the frames that arrived before the
         // video configuration were held, not thrown away.
-        assert!(audio_samples(&segs[0].bytes) >= 45, "{}", audio_samples(&segs[0].bytes));
+        assert!(audio_samples(&segs[0].bytes) >= 20, "{}", audio_samples(&segs[0].bytes));
         // And none of it from before the keyframe.
         let first_audio = audio_tfdt(&segs[0].bytes);
         assert!(first_audio >= 9_500 * 24, "audio at {} ms precedes the keyframe", first_audio / 24);

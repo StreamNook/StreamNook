@@ -36,8 +36,8 @@ export const PROVIDERS: Record<ProviderId, ProviderMeta> = {
   kick: { id: 'kick', label: 'Kick', chatEnabled: true, send: 'oauth', readNeedsWebview: false, color: '#53fc18' },
   youtube: { id: 'youtube', label: 'YouTube', chatEnabled: true, send: 'webview', readNeedsWebview: false, color: '#ff0000' },
   rumble: { id: 'rumble', label: 'Rumble', chatEnabled: false, send: 'webview', readNeedsWebview: false, color: '#85c742' },
-  // TikTok reads anonymously; sending is a ban risk, so the adapter is read-only.
-  tiktok: { id: 'tiktok', label: 'TikTok', chatEnabled: true, send: 'none', readNeedsWebview: false, color: '#00f2ea' },
+  // TikTok reads anonymously; it sends through TikTok's own page on the signed-in profile.
+  tiktok: { id: 'tiktok', label: 'TikTok', chatEnabled: true, send: 'webview', readNeedsWebview: false, color: '#00f2ea' },
   x: { id: 'x', label: 'X', chatEnabled: false, send: 'webview', readNeedsWebview: true, color: '#1d9bf0' },
 };
 
@@ -86,13 +86,11 @@ export const PROVIDER_WATCH: Record<ProviderId, ProviderWatchMeta> = {
   // today, so the divergence is inert; resolve it against the Rust before wiring
   // any UI to it.
   youtube: { playback: true, browse: 'categories', search: true, followedLive: 'native', liveCheck: true, thumbAspect: 'landscape' },
-  // `browse` is the shape the surface takes WHEN it has data. TikTok serves no
-  // live directory to a signed-out client, so the Rust adapter reports
-  // `directory: false` and the Browse tab falls back to the follow list until a
-  // session exists. `search` is an exact-handle jump, not a real search index,
-  // which is why it stays false: the grid picker would otherwise promise to
-  // find a creator by name and return nothing for every partial word.
-  tiktok: { playback: true, browse: 'feed', search: false, followedLive: 'inApp', liveCheck: true, thumbAspect: 'portrait' },
+  // `browse` is a flat live feed, read from TikTok's own directory page.
+  // `search` is TikTok's own LIVE search, which finds live creators by name or
+  // handle signed out; a handle it misses is looked up directly, so an offline
+  // creator is still found by @handle.
+  tiktok: { playback: true, browse: 'feed', search: true, followedLive: 'inApp', liveCheck: true, thumbAspect: 'portrait' },
   rumble: { playback: false, browse: null, search: false, followedLive: null, liveCheck: false, thumbAspect: 'landscape' },
   x: { playback: false, browse: null, search: false, followedLive: null, liveCheck: false, thumbAspect: 'landscape' },
 };

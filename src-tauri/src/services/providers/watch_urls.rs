@@ -134,9 +134,56 @@ fn host_path<'a>(stripped: &'a str, host: &str) -> Option<&'a str> {
     })
 }
 
+/// The watch URL for `channel` on `provider`, for a row built without one (an
+/// offline follow, a favourite): the shape a live row's `watch_url` has, which
+/// `classify` reads back to the same channel.
+///
+/// A YouTube `@handle` or channel id addresses the channel's live page; anything
+/// else is a video id. The channel-id test is the id's SHAPE (24 characters,
+/// `UC`), case-insensitive so rows persisted lowercased before normalisation
+/// still route to the channel: an 11-character video id can start with `UC`.
+/// Twin of `buildProviderUrl` in src/utils/streamProvider.ts; both are held to
+/// src/utils/providerTwins.fixtures.json.
+pub fn watch_url(provider: &str, channel: &str) -> String {
+    match provider {
+        "kick" => format!("https://kick.com/{}", channel),
+        "youtube" if channel.starts_with('@') => format!("https://www.youtube.com/{}/live", channel),
+        "youtube" if channel.len() == 24 && channel[..2].eq_ignore_ascii_case("uc") => {
+            format!("https://www.youtube.com/channel/{}/live", channel)
+        }
+        "youtube" => format!("https://www.youtube.com/watch?v={}", channel),
+        "tiktok" => format!("https://www.tiktok.com/@{}/live", channel.trim_start_matches('@')),
+        _ => format!("https://twitch.tv/{}", channel),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_built_watch_url_reads_back_to_its_channel() {
+        for (p, c) in [
+            ("kick", "xqc"),
+            ("youtube", "UCX6OQ3DkcsbYNE6H8uQQuVA"),
+            ("youtube", "@jynxzi"),
+            ("tiktok", "ryback"),
+        ] {
+            assert_eq!(classify(&watch_url(p, c)), provider(p, c), "{p} {c}");
+        }
+        assert_eq!(classify(&watch_url("twitch", "shroud")), WatchTarget::Twitch);
+    }
+
+    #[test]
+    fn watch_urls_match_the_shared_fixtures() {
+        let fixtures: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../src/utils/providerTwins.fixtures.json"))
+                .expect("fixture file parses");
+        for case in fixtures["watch_url"].as_array().expect("watch_url cases") {
+            let [p, c, want] = [0, 1, 2].map(|i| case[i].as_str().expect("string"));
+            assert_eq!(watch_url(p, c), want, "{p} {c}");
+        }
+    }
 
     fn provider(p: &'static str, c: &str) -> WatchTarget {
         WatchTarget::Provider {

@@ -33,14 +33,26 @@ export function isConnected(provider: PlatformId): Promise<boolean> {
 export interface PlatformAccountInfo {
   name: string | null;
   avatar_url: string | null;
+  /**
+   * The id this platform's chat identifies the account by: Kick's numeric
+   * account id, YouTube's `UC…` channel id. It is what lets a member's
+   * StreamNook cosmetics follow them into that platform's chat.
+   *
+   * `null` is normal, not an error. A YouTube account can have no channel, and
+   * a session stored before this existed fills it on the next read.
+   */
+  id: string | null;
+  /** The @handle, sent only where a platform has one apart from the display
+   *  name (TikTok). */
+  handle?: string | null;
 }
 
 /**
- * Who is signed in on a platform — display name AND profile picture.
+ * Who is signed in on a platform — display name, profile picture and account id.
  *
- * One call, because both come out of the same upstream response. Asking for the
- * name and then the avatar separately would be a second authenticated round trip
- * for something we already had in hand.
+ * One call, because all three come out of the same upstream response. Asking for
+ * them separately would be extra authenticated round trips for something we
+ * already had in hand.
  */
 export function accountInfo(provider: PlatformId): Promise<PlatformAccountInfo> {
   return invoke<PlatformAccountInfo>('platform_account_info', { provider });

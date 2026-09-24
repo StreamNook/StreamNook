@@ -1,4 +1,4 @@
-//! Process-tree resource telemetry: one `[Resource]` line per minute in the
+//! Process-tree resource logging: one `[Resource]` line per minute in the
 //! file log, so a memory report can be read off the log instead of needing a
 //! live debugger on the user's machine.
 //!
@@ -36,7 +36,7 @@ const TRAY_PERIOD: Duration = Duration::from_secs(300);
 const FIRST_SAMPLE_DELAY: Duration = Duration::from_secs(20);
 /// How long one tick waits for the UI thread to answer the WebView2
 /// process-kind query. A wedged UI thread (the ui_hang_watchdog case) must
-/// not stall telemetry; the tick logs the tree unclassified instead.
+/// not stall the log; the tick logs the tree unclassified instead.
 const KIND_QUERY_TIMEOUT: Duration = Duration::from_millis(1500);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

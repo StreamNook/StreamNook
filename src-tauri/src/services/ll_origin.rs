@@ -110,6 +110,22 @@ const MIDSTREAM_CHUNK_TIMEOUT: Duration = Duration::from_secs(2);
 /// real time and the famine only grows. Measured from the FIRST chunk (a
 /// preopened connection legitimately idles until the segment starts).
 const SEGMENT_DEADLINE_GRACE: f64 = 1.5;
+/// Byte-exact pickups attempted on a fresh connection before a segment's
+/// tail is abandoned. Each is bounded by the delivery deadline above, so a
+/// second attempt costs nothing on a dead segment and recovers a tail whose
+/// first pickup connection died the same way the original did.
+const RESUME_ATTEMPTS: u8 = 2;
+/// A body that ends cleanly but this far short of the segment's expected
+/// duration was cut at a fragment boundary: the CDN closed the in-progress
+/// object early while the segment kept growing. Captured 2026-09-21 on a
+/// 1440p60 CMAF channel: 16 of 19 fragments, no partial box, no timeout,
+/// a 283 ms hole in the player. One fragment of slack: two or more missing
+/// fragments earn the pickup, a single one (a 100 ms seam hls.js steps over)
+/// does not hold the reader.
+const SHORT_SEGMENT_TOLERANCE: f64 = 0.15;
+/// The one pickup a clean-but-short body gets. Short, because the reader is
+/// sequential and a legitimately short segment must not hold the next one.
+const SHORT_PICKUP_TIMEOUT: Duration = Duration::from_millis(700);
 /// Master switch for the MPEG-TS low-latency origin. Twitch serves H.264 (the
 /// "chunked"/source quality on the vast majority of channels) as MPEG-TS with NO
 /// `#EXT-X-MAP`; only HEVC/AV1 variants are CMAF. The CMAF origin silently no-ops
@@ -185,6 +201,77 @@ impl Chunker {
             Chunker::Ts(c) => c.flush(),
         }
     }
+    fn is_cmaf(&self) -> bool {
+        matches!(self, Chunker::Cmaf(_))
+    }
+    /// Bytes of a fragment the body cut short at the current end of input.
+    /// Only the CMAF chunker can tell: a TS tail is cut at PES boundaries by
+    /// `flush`.
+    fn truncated_fragment_bytes(&self) -> usize {
+        match self {
+            Chunker::Cmaf(c) => c.truncated_fragment_bytes(),
+            Chunker::Ts(_) => 0,
+        }
+    }
+}
+
+/// Type of the last complete box in a run of boxes, or None when the bytes
+/// do not parse as whole boxes.
+fn last_box_type(bytes: &[u8]) -> Option<[u8; 4]> {
+    let mut at = 0usize;
+    let mut last = None;
+    while bytes.len() - at >= 8 {
+        let size32 = u32::from_be_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]) as usize;
+        let len = if size32 == 1 {
+            if bytes.len() - at < 16 {
+                return None;
+            }
+            u64::from_be_bytes(bytes[at + 8..at + 16].try_into().unwrap()) as usize
+        } else {
+            size32
+        };
+        if len < 8 || at + len > bytes.len() {
+            return None;
+        }
+        last = Some([bytes[at + 4], bytes[at + 5], bytes[at + 6], bytes[at + 7]]);
+        at += len;
+    }
+    last
+}
+
+/// True when a segment that ended cleanly holds clearly less media than the
+/// broadcast's segment length: cut at a fragment boundary, not finished.
+fn ended_short(held_secs: f64, expected_secs: f64) -> bool {
+    expected_secs > 0.0 && held_secs + SHORT_SEGMENT_TOLERANCE < expected_secs
+}
+
+/// How many trailing bytes of what the reader already holds are compared
+/// against the same offsets of a full-body pickup before its remainder is
+/// trusted. A pickup that restarts the object must be byte-identical up to
+/// the held length; if it is not, continuing would splice foreign bytes into
+/// the middle of a fragment, which the decoder plays as garbage.
+const PICKUP_FINGERPRINT_BYTES: usize = 64;
+
+/// Keep the last `PICKUP_FINGERPRINT_BYTES` of a growing byte stream.
+fn remember_tail(tail: &mut Vec<u8>, bytes: &[u8]) {
+    tail.extend_from_slice(bytes);
+    if tail.len() > PICKUP_FINGERPRINT_BYTES {
+        let cut = tail.len() - PICKUP_FINGERPRINT_BYTES;
+        tail.drain(..cut);
+    }
+}
+
+/// Drop the leading bytes of a resumed body that the reader already holds.
+/// A pickup answered with a full body (200) restarts the object from byte 0;
+/// the first `skip` bytes are the ones already chunked, so the stream stays
+/// byte-exact once they are discarded. `skip` counts down across chunks.
+fn skip_prefix<'a>(skip: &mut u64, bytes: &'a [u8]) -> &'a [u8] {
+    if *skip == 0 {
+        return bytes;
+    }
+    let n = (*skip).min(bytes.len() as u64) as usize;
+    *skip -= n as u64;
+    &bytes[n..]
 }
 
 /// What `start()` found, so the relay can tell the player apart three ways: a real
@@ -346,6 +433,41 @@ impl BoxChunker {
             }
         }
         parts
+    }
+
+    /// Bytes of a fragment that has started but not completed: a partial box
+    /// in `buf`, or complete boxes (a `moof`) still waiting for their `mdat`.
+    /// Non-zero at end of body means the transfer ended mid-fragment.
+    fn pending(&self) -> usize {
+        self.buf.len() + self.current.len()
+    }
+
+    /// Bytes of a fragment the body cut short: a box header whose declared
+    /// size exceeds what arrived, or a `moof` still waiting for its `mdat`.
+    /// Complete trailing boxes that are not media (an `emsg`, a `prft`) and
+    /// sub-header scraps are not a cut fragment; flush() drops those. The
+    /// distinction matters: a clean end of body with a cut fragment is worth
+    /// a pickup, a clean end with a trailing box must not cost one.
+    fn truncated_fragment_bytes(&self) -> usize {
+        let partial_box = self.buf.len() >= 8 && {
+            let size32 = u32::from_be_bytes([self.buf[0], self.buf[1], self.buf[2], self.buf[3]]) as usize;
+            let declared = if size32 == 1 {
+                if self.buf.len() >= 16 {
+                    u64::from_be_bytes(self.buf[8..16].try_into().unwrap()) as usize
+                } else {
+                    usize::MAX
+                }
+            } else {
+                size32
+            };
+            declared > self.buf.len()
+        };
+        let moof_waiting = last_box_type(&self.current) == Some(*b"moof");
+        if partial_box || moof_waiting {
+            self.buf.len() + self.current.len()
+        } else {
+            0
+        }
     }
 
     /// Stream ended: DROP any leftovers. A published part must be a complete
@@ -867,6 +989,7 @@ impl LlOrigin {
         let base = base_of(&upstream_playlist_url);
         let up = parse_upstream(&text, &base);
         let has_prefetch = !up.prefetch.is_empty();
+        UPSTREAM_HAS_PREFETCH.store(has_prefetch, Ordering::SeqCst);
         let inactive = StartOutcome {
             active: false,
             has_prefetch,
@@ -1570,7 +1693,15 @@ async fn stream_response(
     let deadline_secs = origin.expected_segment_secs() + SEGMENT_DEADLINE_GRACE;
     let mut received: u64 = 0;
     let mut resp = first;
-    let mut resume_left = resume.is_some();
+    let mut resumes_left: u8 = if resume.is_some() { RESUME_ATTEMPTS } else { 0 };
+    // Bytes of a resumed full-body reply still to discard (see skip_prefix).
+    let mut skip: u64 = 0;
+    // A clean-but-short body gets exactly one pickup (see ended_short).
+    let mut short_pickup_tried = false;
+    // Fingerprint of what was streamed so far, and of the prefix a full-body
+    // pickup replays, compared once the skip completes.
+    let mut held_tail: Vec<u8> = Vec::new();
+    let mut replay_tail: Vec<u8> = Vec::new();
     loop {
         if gen != origin.generation.load(Ordering::SeqCst) {
             return;
@@ -1586,11 +1717,34 @@ async fn stream_response(
                 MIDSTREAM_CHUNK_TIMEOUT.min(Duration::from_secs_f64(remaining))
             }
         };
-        match tokio::time::timeout(limit, resp.chunk()).await {
+        // What went wrong this iteration, if anything; None = keep reading.
+        let failure: Option<String> = match tokio::time::timeout(limit, resp.chunk()).await {
             Ok(Ok(Some(bytes))) => {
                 first_chunk_at.get_or_insert_with(tokio::time::Instant::now);
-                received += bytes.len() as u64;
-                for (part, dur) in chunker.push(&bytes) {
+                let raw: &[u8] = &bytes;
+                let skipping = skip > 0;
+                let before = skip;
+                let rest = skip_prefix(&mut skip, raw);
+                if skipping {
+                    // The bytes just discarded are the pickup's replay of
+                    // what we hold; remember their tail for the check.
+                    let n = (before - skip) as usize;
+                    remember_tail(&mut replay_tail, &raw[..n]);
+                    if skip == 0 && replay_tail != held_tail {
+                        warn!("[LLOrigin] sn {sn}: pickup replayed different bytes than held at {received}; abandoning the tail");
+                        crate::services::ll_diagnostics::event(&format!(
+                            "\"ev\":\"o_abandon\",\"sn\":{sn},\"why\":\"pickup prefix mismatch\",\"received\":{received},\"parts\":{},\"pending\":0",
+                            origin.parts_held(sn)
+                        ));
+                        break;
+                    }
+                }
+                if rest.is_empty() {
+                    continue;
+                }
+                remember_tail(&mut held_tail, rest);
+                received += rest.len() as u64;
+                for (part, dur) in chunker.push(rest) {
                     let Some((part, dur)) = origin.convert_part(part, dur) else {
                         continue;
                     };
@@ -1599,29 +1753,85 @@ async fn stream_response(
                     }
                     origin.wake_serves();
                 }
+                None
+            }
+            Ok(Ok(None)) if skip > 0 => {
+                // The pickup body ended before reaching the bytes we lack.
+                Some(format!("pickup body ended {skip} bytes short"))
+            }
+            Ok(Ok(None)) if chunker.truncated_fragment_bytes() > 0 => {
+                // A clean end of body in the middle of a fragment: the CDN
+                // closed the in-progress object early while the segment kept
+                // growing. Treated like a stalled transfer, so the tail is
+                // picked up instead of dropped.
+                Some(format!(
+                    "body ended mid-fragment ({} bytes cut)",
+                    chunker.truncated_fragment_bytes()
+                ))
             }
             Ok(Ok(None)) => {
+                let held = origin.held_secs(sn);
+                let expected = origin.expected_segment_secs();
+                // CMAF only: a TS segment's final part is still inside the
+                // chunker here (flush() cuts it after the loop), so its held
+                // duration always reads one part short at end of body and a
+                // pickup would fire on healthy segments (seen on caseoh_).
+                if chunker.is_cmaf() && ended_short(held, expected) {
+                    let parts = origin.parts_held(sn);
+                    if !short_pickup_tried {
+                        short_pickup_tried = true;
+                        if let Some((client, url)) = resume {
+                            let why = format!("body ended after {held:.2}s of {expected:.1}s ({parts} parts)");
+                            if let Some((r2, to_skip)) =
+                                range_resume(client, url, received, sn, &why, SHORT_PICKUP_TIMEOUT).await
+                            {
+                                resp = r2;
+                                skip = to_skip;
+                                replay_tail.clear();
+                                continue;
+                            }
+                        }
+                    }
+                    // Still short after the pickup (or none possible): the
+                    // segment is what it is. Recorded so a capture can tell a
+                    // genuinely short segment from a lost tail.
+                    info!("[LLOrigin] sn {sn} finished short: {held:.2}s of {expected:.1}s ({parts} parts, {received} bytes)");
+                    crate::services::ll_diagnostics::event(&format!(
+                        "\"ev\":\"o_short\",\"sn\":{sn},\"held\":{held:.3},\"expected\":{expected:.3},\"parts\":{parts},\"received\":{received}"
+                    ));
+                }
                 completed = true;
                 break;
             }
-            outcome => {
-                let why = match &outcome {
-                    Ok(Err(e)) => format!("read error: {e}"),
-                    _ => "read timed out".to_string(),
-                };
-                if resume_left {
-                    resume_left = false;
-                    if let Some((client, url)) = resume {
-                        if let Some(r2) = range_resume(client, url, received, sn, &why).await {
-                            resp = r2;
-                            continue;
-                        }
-                    }
+            Ok(Err(e)) => Some(format!("read error: {e}")),
+            Err(_) => Some("read timed out".to_string()),
+        };
+        let Some(why) = failure else {
+            continue;
+        };
+        if resumes_left > 0 {
+            resumes_left -= 1;
+            if let Some((client, url)) = resume {
+                if let Some((r2, to_skip)) =
+                    range_resume(client, url, received, sn, &why, Duration::from_millis(1500)).await
+                {
+                    resp = r2;
+                    skip = to_skip;
+                    replay_tail.clear();
+                    continue;
                 }
-                warn!("[LLOrigin] in-progress {why} for sn {sn}; abandoning the tail");
-                break;
             }
         }
+        let parts = origin.parts_held(sn);
+        warn!(
+            "[LLOrigin] in-progress {why} for sn {sn} after {received} bytes / {parts} parts; abandoning the tail"
+        );
+        crate::services::ll_diagnostics::event(&format!(
+            "\"ev\":\"o_abandon\",\"sn\":{sn},\"why\":\"{}\",\"received\":{received},\"parts\":{parts},\"pending\":{}",
+            why.replace('"', "'"),
+            chunker.truncated_fragment_bytes()
+        ));
+        break;
     }
     if let Some((tail, dur)) = chunker.flush() {
         if let Some((tail, dur)) = origin.convert_part(tail, dur) {
@@ -1644,28 +1854,39 @@ async fn stream_response(
 }
 
 /// Byte-exact pickup of a stalled segment transfer on a fresh connection.
-/// Only a 206 continues the stream; a 200 would restart the body (duplicate
-/// bytes) and anything else is a refusal — both fall back to abandoning.
+/// Returns the response and how many leading bytes of it to discard: 0 for
+/// a 206 that continues at `received`, `received` for a 200. The CDN answers
+/// a range on a still-growing object with 200 far more often than 206
+/// (15 of 20 pickups in one release log), and refusing those threw away
+/// tails that were fully retrievable: the body restarts at byte 0, so
+/// dropping the bytes already held keeps the stream byte-exact. Anything
+/// else is a refusal and falls back to abandoning.
 async fn range_resume(
     client: &Client,
     url: &str,
     received: u64,
     sn: u64,
     why: &str,
-) -> Option<Response> {
+    timeout: Duration,
+) -> Option<(Response, u64)> {
     let resp = client
         .get(url)
         .header(reqwest::header::RANGE, format!("bytes={received}-"))
-        .timeout(Duration::from_millis(1500))
+        .timeout(timeout)
         .send()
         .await
         .ok()?;
-    if resp.status() == reqwest::StatusCode::PARTIAL_CONTENT {
-        info!("[LLOrigin] sn {sn}: {why} at byte {received}; resumed on a fresh ranged connection");
+    let status = resp.status();
+    if status == reqwest::StatusCode::PARTIAL_CONTENT || status == reqwest::StatusCode::OK {
+        let skip = if status == reqwest::StatusCode::OK { received } else { 0 };
+        info!(
+            "[LLOrigin] sn {sn}: {why} at byte {received}; resumed on a fresh connection ({status}, skipping {skip} bytes)"
+        );
         crate::services::ll_diagnostics::event(&format!(
-            "\"ev\":\"o_resume\",\"sn\":{sn},\"at\":{received}"
+            "\"ev\":\"o_resume\",\"sn\":{sn},\"at\":{received},\"status\":{},\"skip\":{skip}",
+            status.as_u16()
         ));
-        Some(resp)
+        Some((resp, skip))
     } else {
         warn!(
             "[LLOrigin] sn {sn}: range resume refused ({})",
@@ -1712,6 +1933,25 @@ impl LlOrigin {
     /// while the audio coalesces, giving progressive A/V drift of roughly half a
     /// second per re-fetch. The earlier even-split rewrite here was the cause.
     /// Returns false if the edge is gone.
+    /// Media seconds currently held for `sn`, from its parts' measured
+    /// durations (0 when the edge or segment is gone).
+    fn held_secs(&self, sn: u64) -> f64 {
+        let g = self.live_edge.lock().unwrap();
+        g.as_ref()
+            .and_then(|edge| edge.segments.iter().find(|s| s.sn == sn))
+            .map(|s| s.parts.iter().map(|p| p.duration).sum())
+            .unwrap_or(0.0)
+    }
+
+    /// Parts currently held for `sn` (0 when the edge or segment is gone).
+    fn parts_held(&self, sn: u64) -> usize {
+        let g = self.live_edge.lock().unwrap();
+        g.as_ref()
+            .and_then(|edge| edge.segments.iter().find(|s| s.sn == sn))
+            .map(|s| s.parts.len())
+            .unwrap_or(0)
+    }
+
     fn finish_segment(&self, sn: u64) -> bool {
         let mut g = self.live_edge.lock().unwrap();
         match g.as_mut() {
@@ -2038,6 +2278,15 @@ impl LlOrigin {
 /// solo relay's call sites on a single global origin.
 static SOLO: Lazy<Arc<LlOrigin>> = Lazy::new(|| LlOrigin::new(MAX_SEGMENTS));
 
+/// Whether the upstream playlist probed at the last `start()` carried
+/// `#EXT-X-TWITCH-PREFETCH` hints: a low-latency broadcast, whether or not
+/// this origin took it over. The player picks its cushion tier from it.
+static UPSTREAM_HAS_PREFETCH: AtomicBool = AtomicBool::new(false);
+
+pub fn upstream_has_prefetch() -> bool {
+    UPSTREAM_HAS_PREFETCH.load(Ordering::SeqCst)
+}
+
 pub fn is_active() -> bool {
     SOLO.is_active()
 }
@@ -2283,6 +2532,88 @@ mod tests {
         // Parts reassemble into the original byte stream exactly.
         let rejoined: Vec<u8> = parts.concat();
         assert_eq!(rejoined, full);
+    }
+
+    #[test]
+    fn chunker_reports_a_fragment_cut_short_at_end_of_body() {
+        // A complete moof followed by an mdat whose bytes stop early: the
+        // pending count is what a clean end of body must NOT drop silently.
+        let mut c = BoxChunker::new();
+        let moof = make_box(b"moof", &[1, 2, 3, 4]);
+        let mdat = make_box(b"mdat", &[9; 32]);
+        assert!(c.push(&moof).is_empty());
+        assert_eq!(c.pending(), moof.len(), "a moof waiting for its mdat is pending");
+        assert_eq!(c.truncated_fragment_bytes(), moof.len(), "and it is a cut fragment");
+        assert!(c.push(&mdat[..20]).is_empty());
+        assert_eq!(c.pending(), moof.len() + 20);
+        assert_eq!(c.truncated_fragment_bytes(), moof.len() + 20);
+        let parts = c.push(&mdat[20..]);
+        assert_eq!(parts.len(), 1);
+        assert_eq!(c.pending(), 0, "a completed fragment leaves nothing pending");
+        assert_eq!(c.truncated_fragment_bytes(), 0);
+    }
+
+    #[test]
+    fn trailing_metadata_box_is_not_a_cut_fragment() {
+        // A complete fragment followed by a whole non-media box (an emsg) and
+        // a sub-header scrap: pending, but nothing a pickup could recover.
+        let mut c = BoxChunker::new();
+        c.push(&make_box(b"moof", &[1; 12]));
+        assert_eq!(c.push(&make_box(b"mdat", &[2; 40])).len(), 1);
+        c.push(&make_box(b"emsg", &[3; 20]));
+        c.push(&[0, 0, 0]);
+        assert!(c.pending() > 0);
+        assert_eq!(c.truncated_fragment_bytes(), 0);
+    }
+
+    #[test]
+    fn a_clean_end_well_short_of_the_segment_is_a_cut() {
+        // The captured case: 16 of 19 fragments (~1.7 s of 2.0 s).
+        assert!(ended_short(1.7, 2.0));
+        // Two fragments short still earns the pickup.
+        assert!(ended_short(1.8, 2.0));
+        // One fragment short does not: a 100 ms seam is not worth holding
+        // the reader for.
+        assert!(!ended_short(1.9, 2.0));
+        assert!(!ended_short(2.0, 2.0));
+        // No expectation yet (no playlist seen): never short.
+        assert!(!ended_short(0.5, 0.0));
+    }
+
+    #[test]
+    fn pickup_fingerprint_keeps_only_the_tail_and_detects_a_foreign_prefix() {
+        let mut held = Vec::new();
+        for chunk in [vec![1u8; 50], vec![2u8; 50], vec![3u8; 10]] {
+            remember_tail(&mut held, &chunk);
+        }
+        assert_eq!(held.len(), PICKUP_FINGERPRINT_BYTES);
+        // Bytes 46..110 of the stream: four 1s, fifty 2s, ten 3s.
+        assert_eq!(&held[..4], &[1u8; 4][..]);
+        assert_eq!(&held[4..54], &[2u8; 50][..]);
+        assert_eq!(&held[54..], &[3u8; 10][..]);
+        // A replay of the same 110 bytes in different chunking matches...
+        let mut replay = Vec::new();
+        let same: Vec<u8> = [vec![1u8; 50], vec![2u8; 50], vec![3u8; 10]].concat();
+        for piece in same.chunks(7) {
+            remember_tail(&mut replay, piece);
+        }
+        assert_eq!(replay, held);
+        // ...and a replay that differs anywhere in the last 64 bytes does not.
+        let mut other = Vec::new();
+        let mut changed = same.clone();
+        changed[100] = 9;
+        remember_tail(&mut other, &changed);
+        assert_ne!(other, held);
+    }
+
+    #[test]
+    fn resume_skips_exactly_the_bytes_already_held() {
+        let mut skip: u64 = 10;
+        assert_eq!(skip_prefix(&mut skip, &[1, 2, 3, 4]), &[] as &[u8]);
+        assert_eq!(skip, 6);
+        assert_eq!(skip_prefix(&mut skip, &[0, 0, 0, 0, 0, 0, 7, 8]), &[7, 8]);
+        assert_eq!(skip, 0);
+        assert_eq!(skip_prefix(&mut skip, &[9]), &[9], "nothing left to skip passes through");
     }
 
     #[test]

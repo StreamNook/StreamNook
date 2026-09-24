@@ -3760,6 +3760,33 @@ impl TwitchService {
         Ok(resp)
     }
 
+    /// Shared Viewership for a batch of Twitch channel ids, one aliased
+    /// request: each `cN` alias answers with the stream's own and combined
+    /// counts and the channel's collaboration group (null when it is not in
+    /// one). Anonymous on the Android client id. The raw `data` object comes
+    /// back for `services::collaboration` to read per alias.
+    pub async fn get_collaborations(ids: &[String]) -> Result<serde_json::Value> {
+        let mut vars = serde_json::Map::new();
+        let mut params = Vec::with_capacity(ids.len());
+        let mut fields = String::new();
+        for (i, id) in ids.iter().enumerate() {
+            params.push(format!("$i{i}: ID!"));
+            vars.insert(format!("i{i}"), serde_json::Value::String(id.clone()));
+            fields.push_str(&format!(
+                "c{i}: user(id: $i{i}) {{ id stream {{ viewersCount collaborationViewersCount }} \
+                 channel {{ collaboration {{ collaborators {{ role status user {{ id login displayName \
+                 profileImageURL(width: 70) stream {{ viewersCount }} }} }} }} }} }}\n"
+            ));
+        }
+        let body = serde_json::json!({
+            "operationName": "StreamNookCollaborations",
+            "query": format!("query StreamNookCollaborations({}) {{\n{fields}}}", params.join(", ")),
+            "variables": vars,
+        });
+        let resp = Self::gql_public_read(body).await?;
+        Ok(resp.get("data").cloned().unwrap_or(serde_json::Value::Null))
+    }
+
     /// One streamer's clips, fetched the way the Twitch website's Clips tab does:
     /// `user.clips(criteria: { filter: <period> })`. Unlike Helix `/clips`, this
     /// returns the correct time window (Helix caps an open-ended `started_at` at

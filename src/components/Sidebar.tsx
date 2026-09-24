@@ -1,21 +1,21 @@
 import { useEffect, useState, useRef, useCallback, useMemo, memo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { useAppStore, ensureHomeSnapshotSync } from '../stores/AppStore';
+import { useAppStore, ensureHomeSnapshotSync, announceSidebar, refreshDiscover } from '../stores/AppStore';
 import { ChevronLeft, ChevronRight, Users, Sparkles, Radio, Heart, Flame, Star } from 'lucide-react';
 import { Package } from 'phosphor-react';
-import type { TwitchStream } from '../types';
-import { invoke } from '@tauri-apps/api/core';
+import type { Collaboration, TwitchStream } from '../types';
 import { getSidebarSettings, type SidebarMode } from './settings/InterfaceSettings';
-import { WATCHABLE_PROVIDERS, providerLabel, type ProviderId } from '../types/providers';
+import { providerLabel, type ProviderId } from '../types/providers';
 
 import { useContextMenuStore } from '../stores/contextMenuStore';
 import { usemultiNookStore } from '../stores/multiNookStore';
 import { Tooltip } from './ui/Tooltip';
+import { TogetherTag } from './SharedViewers';
+import { collabFor } from '../utils/sharedViewers';
 import StreamHoverCard, { STREAM_HOVER_CARD_CLASS } from './StreamHoverCard';
 import { ProviderLogo } from './ProviderLogo';
 import { useFollowsStore } from '../stores/followsStore';
-import { useFavoritesStore } from '../stores/favoritesStore';
-import { favoriteIdOf, favoriteMetaOf, dedupeByFavoriteId } from '../utils/favorites';
+import { favoriteIdOf, favoriteMetaOf } from '../utils/favorites';
 import { streamProvider, streamKey } from '../utils/streamProvider';
 import { useStreamAvatars } from '../hooks/useStreamAvatars';
 
@@ -31,6 +31,8 @@ const SIDEBAR_CLOSE_DELAY = 150; // milliseconds delay before closing in hidden 
 const SIDEBAR_EXPAND_MS = 200; // width-animation duration for compact / expand-on-hover
 const SIDEBAR_BLUR_SETTLE_DELAY = SIDEBAR_EXPAND_MS + 40; // fade the glass in just after the expand settles
 const SIDEBAR_WIDTH_STORAGE_KEY = 'sidebar-expanded-width';
+/** One empty list, so "nothing for this scope yet" keeps a stable identity. */
+const NO_STREAMS: TwitchStream[] = [];
 
 // Get persisted sidebar width from localStorage
 const getPersistedWidth = (): number => {
@@ -105,6 +107,8 @@ interface StreamItemProps {
     hasDrops: boolean;
     hypeTrainStatus: HypeTrainStatus | undefined;
     watchStreak: number;
+    /** Twitch's Shared Viewership group, when the channel is in one. */
+    collab: Collaboration | undefined;
     isHeartAnimating: boolean;
     profileImage: string;
     onStreamClick: (e: React.MouseEvent, stream: TwitchStream) => void;
@@ -127,6 +131,7 @@ const StreamItem = memo(({
     hasDrops,
     hypeTrainStatus,
     watchStreak,
+    collab,
     isHeartAnimating,
     profileImage,
     onStreamClick,
@@ -134,7 +139,7 @@ const StreamItem = memo(({
 }: StreamItemProps) => {
     return (
         <Tooltip
-            content={<StreamHoverCard stream={stream} hasDrops={hasDrops} />}
+            content={<StreamHoverCard stream={stream} hasDrops={hasDrops} collab={collab} />}
             containerClassName={STREAM_HOVER_CARD_CLASS}
             delay={300}
             side="right"
@@ -219,6 +224,9 @@ const StreamItem = memo(({
                                 <path fillRule="evenodd" d="M12.5 3.5 8 2 3.5 3.5 2 8l1.5 4.5L8 14l4.5-1.5L14 8l-1.5-4.5ZM7 11l4.5-4.5L10 5 7 8 5.5 6.5 4 8l3 3Z" clipRule="evenodd" />
                             </svg>
                         )}
+                        {/* Streaming with others: "+2" beside the name. Who they
+                            are is on the hover card this row already opens. */}
+                        {collab && <TogetherTag collab={collab} />}
                         {watchStreak > 0 && (
                             <Tooltip content={`${watchStreak} Watch Streak`} delay={200} side="top">
                                 <div className="flex items-center gap-[2px] ml-0.5 text-orange-400 opacity-90 transition-opacity hover:opacity-100 cursor-default">
@@ -307,6 +315,7 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
         // Hype Train status for stream badges
         activeHypeTrainChannels,
         watchStreaks,
+        collaborations,
     } = useAppStore(
         useShallow((s) => ({
             followedStreams: s.followedStreams,
@@ -317,6 +326,7 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
             isAuthenticated: s.isAuthenticated,
             activeHypeTrainChannels: s.activeHypeTrainChannels,
             watchStreaks: s.watchStreaks,
+            collaborations: s.collaborations,
             // Not destructured, and still load-bearing: `isFavoriteStreamer` is
             // called during render (the Favorites section, the heart on each
             // row) and reads settings.favorite_streamers, which is not itself
@@ -490,6 +500,10 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
                 loadFollowedStreams();
             }
             loadRecommendedStreams();
+            // The other platforms' directories too, where due. Nothing polls
+            // them for the sidebar alone, so closing it is when its list
+            // refreshes, and the reshuffle happens out of sight.
+            refreshDiscover();
         }
     }, [isHovered, isEdgeHovered, isManuallyExpanded, isAuthenticated, loadFollowedStreams, loadRecommendedStreams, sidebarMode]);
 
@@ -596,12 +610,19 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
     // Avatars for the rows being rendered, across platforms: Twitch needs a Helix
     // users lookup, and YouTube CATEGORY rows need a per-channel resolve (search
     // and the subscriptions feed already ship theirs on the row).
-    // Declared here rather than beside its fetch below so the avatar hook can see
-    // it: the platform directory is the surface whose rows lack an avatar.
-    const [platformTopLive, setPlatformTopLive] = useState<TwitchStream[]>([]);
+    // The second section, finished in Rust for the platform scope the app shows
+    // (see the claim below). Declared here so the avatar hook can see it: the
+    // platform directories are the rows that lack an avatar. A list built for
+    // another scope is the one from before a platform switch and is not shown.
+    const sidebarScope = sidebarMode !== 'disabled' && showRecommended ? activePlatform : null;
+    const sidebarDiscover = useAppStore((s) => s.sidebarDiscover);
+    const secondSectionStreams = useMemo(
+        () => (sidebarDiscover?.scope === activePlatform ? sidebarDiscover.streams : NO_STREAMS),
+        [sidebarDiscover, activePlatform],
+    );
     const providerRows = useMemo(
-        () => [...followedStreams, ...recommendedStreams, ...platformTopLive],
-        [followedStreams, recommendedStreams, platformTopLive],
+        () => [...followedStreams, ...recommendedStreams, ...secondSectionStreams],
+        [followedStreams, recommendedStreams, secondSectionStreams],
     );
     const rowAvatars = useStreamAvatars(providerRows);
 
@@ -751,52 +772,22 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
         setBlurReady(false);
     }, [showExpanded]);
 
-    // Live channels followed on other platforms. The backend poller keeps this
-    // fresh via `provider-live-update` (subscribed once in App), so the sidebar
-    // just reads the snapshot.
-    const providerFollowsLive = useFollowsStore((s) => s.liveByKey);
-    // Live rows for favourites the backend sweeps because they're followed
-    // nowhere. Merged with the follow sources below, never shown on its own.
-    const favoritesLive = useFavoritesStore((s) => s.liveByKey);
+    // Your live channels across every platform, merged in Rust and kept fresh by
+    // the `following` snapshot section.
+    const following = useAppStore((s) => s.following);
     // Composite keys the user subscribes to, imported alongside the follow list.
     const providerFollows = useFollowsStore((s) => s.follows);
 
-    // The other platforms' directories. On a single platform this is that
-    // platform's ranked list, standing in for Twitch's recommendations. On
-    // `all` it is EVERY non-Twitch platform's, which then gets merged with the
-    // Twitch picks below: the second section used to stay Twitch-only there,
-    // so the sidebar said "all platforms" while recommending one.
+    // The second section is built in Rust (services/unified_discover.rs):
+    // Twitch's picks and the other platforms' directories for the scope shown,
+    // minus anything the Favourites and Followed sections above already list.
+    // The sidebar only says which scope that is. None while it is disabled or
+    // the section is switched off, so nothing is fetched for a list nobody sees.
     useEffect(() => {
-        if (activePlatform === 'twitch') {
-            setPlatformTopLive([]);
-            return;
-        }
-        const onAllPlatforms = activePlatform === 'all';
-        const targets = onAllPlatforms
-            ? WATCHABLE_PROVIDERS.filter((p) => p !== 'twitch')
-            : [activePlatform];
-        let cancelled = false;
-        // Settled per platform, not all-or-nothing: one platform being down
-        // must not empty the section for the others.
-        Promise.all(
-            targets.map((provider) =>
-                invoke<{ streams: TwitchStream[] }>('provider_directory', {
-                    provider,
-                    // One ranked page: the sorted endpoint has no cursor, so a
-                    // short list could never grow. Smaller when merging, since
-                    // the Twitch picks are carrying most of the section.
-                    limit: onAllPlatforms ? 25 : 50,
-                })
-                    .then((page) => page.streams ?? [])
-                    .catch(() => [] as TwitchStream[]),
-            ),
-        ).then((pages) => {
-            if (!cancelled) setPlatformTopLive(pages.flat());
-        });
-        return () => {
-            cancelled = true;
-        };
-    }, [activePlatform]);
+        if (!sidebarScope) return;
+        announceSidebar(sidebarScope);
+        return () => announceSidebar(null);
+    }, [sidebarScope]);
     const subscribedKeys = useMemo(
         () =>
             new Set(
@@ -821,74 +812,24 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
     // by service; on a platform it becomes that platform's sidebar entirely.
     const onTwitch = activePlatform === 'twitch';
     const onAll = activePlatform === 'all';
-    const providerLiveStreams = Object.values(providerFollowsLive)
-        .filter((row) => row.is_live && (onAll || row.provider === activePlatform))
-        .sort((a, b) => b.viewer_count - a.viewer_count);
-
-    const twitchFollowed = onAll || onTwitch ? followedStreams : [];
-
-    // Live favourites, from all three places a live row can come from: your
-    // Twitch follows, the provider follow poller, and the favourites sweep
-    // (which covers channels you follow nowhere and is the whole reason a
-    // favourite works without a follow).
-    //
-    // Deduped on the FAVOURITE id, not `streamKey`: on YouTube the same channel
-    // arrives keyed by video id from a browse row and by UC id from a live
-    // check, and a streamKey dedupe would list it twice.
-    const favoriteLiveRows = Object.values(favoritesLive).filter(
-        (row) => row.is_live && (onAll || row.provider === activePlatform),
-    );
-    const isFavoriteRow = (s: TwitchStream) => {
-        const id = favoriteIdOf(s);
-        return !!id && isFavoriteStreamer(id);
-    };
-    const favoriteStreams = dedupeByFavoriteId([
-        ...twitchFollowed,
-        ...providerLiveStreams,
-        ...favoriteLiveRows,
-    ])
-        .filter(isFavoriteRow)
-        .sort((a, b) => (b.viewer_count ?? 0) - (a.viewer_count ?? 0));
-
-    // Everything already shown under Favourites is excluded below, provider rows
-    // included: that exclusion used to cover only Twitch, so a favourited Kick
-    // channel appeared in both sections.
-    const favoriteShownKeys = new Set(favoriteStreams.map((s) => streamKey(s)));
-    const followedNonFavoriteStreams = [
-        ...twitchFollowed,
-        ...providerLiveStreams,
-    ].filter((s) => !favoriteShownKeys.has(streamKey(s)));
+    // Built in Rust across every platform (services/unified_following.rs): live
+    // favourites from all three places a live row comes from, and the other live
+    // follows ranked by viewers, each channel once by its favourite id. The
+    // sidebar keeps the platform it is scoped to.
+    const inScope = (s: TwitchStream) => onAll || streamProvider(s) === activePlatform;
+    const favoriteStreams = following.favorites.filter(inScope);
+    const followedNonFavoriteStreams = following.live.filter(inScope);
 
     // Second section: Twitch has real personalized recommendations; the other
-    // platforms don't, so they show their viewer-ranked directory instead. The
-    // label changes with it rather than calling a directory "Recommended".
-    //
-    // On `all` the two are merged and ranked together, the same way the Followed
-    // section above merges. Leaving it as Twitch's picks alone was the sidebar
-    // claiming every platform in one section and exactly one in the next.
-    const rawSecondSection = onAll
-        ? {
-              label: 'Recommended',
-              streams: [...recommendedStreams, ...platformTopLive].sort(
-                  (a, b) => (b.viewer_count ?? 0) - (a.viewer_count ?? 0),
-              ),
-          }
-        : onTwitch
-          ? { label: 'Recommended', streams: recommendedStreams }
-          : { label: 'Top live', streams: platformTopLive };
-
-    // Nothing already listed above gets recommended below it. Twitch's own
-    // recommendations already exclude your follows, but a platform DIRECTORY is
-    // just "who is live, ranked", so a Kick channel you follow was appearing in
-    // Followed and again three rows down. Deduping against what is actually
-    // rendered rather than against the follow list also covers a favourite,
-    // which is the same channel in a third section.
-    const shownKeys = new Set(
-        [...favoriteStreams, ...followedNonFavoriteStreams].map((s) => streamKey(s)),
-    );
+    // platforms don't, so on its own a platform shows its viewer-ranked
+    // directory instead, and the label says so rather than calling a directory
+    // "Recommended". The rows arrive finished from Rust: on `all` Twitch's picks
+    // and every directory ranked together, and never a channel the Favourites or
+    // Followed sections above already list, matched by channel so a YouTube
+    // broadcast is caught against its channel's follow.
     const secondSection = {
-        label: rawSecondSection.label,
-        streams: rawSecondSection.streams.filter((s) => !shownKeys.has(streamKey(s))),
+        label: onAll || onTwitch ? 'Recommended' : 'Top live',
+        streams: secondSectionStreams,
     };
 
     // Section-presence flags drive both the headers and the dividers between them.
@@ -897,7 +838,9 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
     // follow is real without being in any follow list.
     const hasFavorites = favoriteStreams.length > 0;
     // Only Twitch's list needs a Twitch login; the others browse signed out.
-    const hasFollowed = followedNonFavoriteStreams.length > 0 && (isAuthenticated || providerLiveStreams.length > 0);
+    const hasFollowed =
+        followedNonFavoriteStreams.length > 0 &&
+        (isAuthenticated || followedNonFavoriteStreams.some((s) => streamProvider(s) !== 'twitch'));
     const hasRecommended = showRecommended && secondSection.streams.length > 0;
 
     // Shared row renderer so Favorites / Followed / Recommended stay identical.
@@ -916,6 +859,7 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
             hasDrops={stream.game_name ? dropsGameNames.has(stream.game_name.toLowerCase()) : false}
             hypeTrainStatus={activeHypeTrainChannels.get(stream.user_id)}
             watchStreak={watchStreaks[stream.user_id] ?? 0}
+            collab={collabFor(collaborations, stream)}
             isHeartAnimating={(() => { const id = favoriteIdOf(stream); return !!id && animatingHearts.has(id); })()}
             profileImage={getProfileImage(stream)}
             onStreamClick={handleStreamClick}

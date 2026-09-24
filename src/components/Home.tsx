@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { useAppStore, ensureHomeSnapshotSync, clipSourceOf, HomeTab } from '../stores/AppStore';
+import { useAppStore, ensureHomeSnapshotSync, announceHome, clipSourceOf, HomeTab } from '../stores/AppStore';
 import { IS_MOBILE } from '../utils/platform';
 import { createPortal } from 'react-dom';
 import { glowThumbProps } from '../utils/mediaGlow';
 import { Search, Heart, X, Pickaxe, LayoutGrid, Flame, ArrowUpRight, Undo2, Users, User, Loader2, Clock, Play, Check, Plus } from 'lucide-react';
-import { Package } from 'phosphor-react';
+import { Package, UsersThree } from 'phosphor-react';
 import { MediaCard } from './MediaCard';
 import ContinueWatchingRow from './ContinueWatchingRow';
 import { formatCardDate, mediaKindOfVideo, videoDurationLabel, vodThumbUrl, VOD_FALLBACK_THUMB } from '../utils/vodProgress';
@@ -13,6 +13,7 @@ import { motion, LayoutGroup, AnimatePresence } from 'framer-motion';
 import { usemultiNookStore } from '../stores/multiNookStore';
 
 import { invoke } from '@tauri-apps/api/core';
+import { searchPlatforms } from '../services/platformSearch';
 import type { TwitchStream, TwitchCategory, CategoryInfo, TwitchClip, TwitchVideo } from '../types';
 import LoadingWidget from './LoadingWidget';
 import StreamTitleWithEmojis from './StreamTitleWithEmojis';
@@ -24,9 +25,8 @@ import { usePlatformAccountStore } from '../stores/platformAccountStore';
 import { PlatformLoginButton } from './PlatformLoginButton';
 import { WATCHABLE_PROVIDERS, PROVIDER_WATCH, providerLabel, type ProviderId, type ProviderCategory } from '../types/providers';
 import { useFollowsStore } from '../stores/followsStore';
-import { useFavoritesStore } from '../stores/favoritesStore';
-import { favoriteIdOf, favoriteMetaOf, dedupeByFavoriteId } from '../utils/favorites';
-import { streamProvider, streamKey, followIdentifier } from '../utils/streamProvider';
+import { favoriteIdOf, favoriteMetaOf } from '../utils/favorites';
+import { streamProvider, streamKey, followIdentifier, isTwitchStream } from '../utils/streamProvider';
 import { isPortraitGrid, thumbFitFor } from '../utils/thumbFit';
 import { makeKey } from '../utils/providerKey';
 
@@ -47,6 +47,10 @@ import { useVisibleAvatarKeys } from '../hooks/useVisibleAvatarKeys';
 import { Logger } from '../utils/logger';
 import { useVisibleInterval } from '../utils/useVisibleInterval';
 import { gameBoxArt } from '../utils/boxArt';
+import { CardChip } from './ui/CardChip';
+import { AutomationPulse } from './ui/AutomationPulse';
+import { TogetherChip } from './SharedViewers';
+import { collabFor } from '../utils/sharedViewers';
 // Types for drops data
 interface DropCampaign {
     id: string;
@@ -208,16 +212,12 @@ const Home = () => {
         // Hype Train status for stream badges
         activeHypeTrainChannels,
         watchStreaks,
-        offlineFollowedChannels,
+        collaborations,
         homeCategoryTab,
         clipsPeriod,
         videosSort,
         videosPeriod,
         mediaSearchQuery,
-        // Destructured now (it used to be tracked only for re-render): the live
-        // favourites list derives from it, so the memo needs it as a dependency.
-        favoriteStreamers,
-        favoriteChannels,
     } = useAppStore(
         useShallow((s) => ({
             followedStreams: s.followedStreams,
@@ -236,19 +236,16 @@ const Home = () => {
             cachedTopGamesTimestamp: s.cachedTopGamesTimestamp,
             activeHypeTrainChannels: s.activeHypeTrainChannels,
             watchStreaks: s.watchStreaks,
-            offlineFollowedChannels: s.offlineFollowedChannels,
+            collaborations: s.collaborations,
             homeCategoryTab: s.homeCategoryTab,
             clipsPeriod: s.clipsPeriod,
             videosSort: s.videosSort,
             videosPeriod: s.videosPeriod,
             mediaSearchQuery: s.mediaSearchQuery,
-            // `isFavoriteStreamer` is called during render (the favourite sort
-            // and the hearts) and reads settings.favorite_streamers, which isn't
+            // Selected, never read: `isFavoriteStreamer` is called during render
+            // (the hearts) and reads settings.favorite_streamers, which isn't
             // itself reactive, so this slice is what re-renders on a toggle.
             favoriteStreamers: s.settings.favorite_streamers,
-            // Identity for favourites, so the offline roster can draw a channel
-            // you don't follow anywhere.
-            favoriteChannels: s.settings.favorite_channels,
         })),
     );
     const externalDropsProvider = useAppStore((s) => s.externalDropsProvider);
@@ -367,9 +364,9 @@ const Home = () => {
     const [isLoadingProvider, setIsLoadingProvider] = useState(false);
     const [providerError, setProviderError] = useState<string | null>(null);
     const providerFollowsLive = useFollowsStore((s) => s.liveByKey);
-    // Live rows for favourites the backend sweeps because they're followed
-    // nowhere. Merged with the two follow sources below, not used on its own.
-    const favoritesLive = useFavoritesStore((s) => s.liveByKey);
+    // The unified Discover list, built in Rust from Twitch's picks and every
+    // other platform's directory. Rendered as-is.
+    const unifiedDiscover = useAppStore((s) => s.unifiedDiscover);
     const providerFollows = useFollowsStore((s) => s.follows);
     // Scoped to one non-Twitch platform: the grid is entirely that platform's.
     const isProviderView = providerFilter !== 'all' && providerFilter !== 'twitch';
@@ -381,13 +378,13 @@ const Home = () => {
     // Portrait wells when the grid shows only a portrait-first platform. The
     // mixed view keeps landscape wells so every row stays one height.
     const portraitGrid = isPortraitGrid(isProviderView ? (providerFilter as ProviderId) : null);
-    // Portrait cards are about a third as wide as landscape ones at the same
-    // height, so the column count comes from a minimum card width rather than
-    // the fixed breakpoints, which would make each portrait card enormous.
+    // Portrait cards size from a minimum card width rather than the fixed
+    // breakpoints. 220px puts them at about a landscape card's width on the same
+    // screen (five across on a wide window); at 150px they read as thumbnails.
     // Twitch, the unified view, and platforms with a real taxonomy keep the tab.
     const showsCategoriesTab = !isProviderView || providerBrowse === 'categories';
     const streamGridClass = portraitGrid
-        ? 'grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3'
+        ? 'grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3'
         : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3';
     // Connection state, read from the account store rather than inferred from
     // "has this platform any follows". Those are different questions, and
@@ -415,6 +412,10 @@ const Home = () => {
     // account to connect too, but it only unlocks age-restricted LIVEs; its
     // follows are the ones made here, so an empty list is not a sign-in problem.
     const connectImportsFollows = providerFilter === 'kick' || providerFilter === 'youtube';
+    // TikTok's own account state. It never gates anything above (TikTok browses
+    // and plays signed out), so it is read separately, only to offer the sign-in.
+    const tiktokSignedIn = usePlatformAccountStore((s) => s.tiktok.connected);
+    const tiktokConnecting = usePlatformAccountStore((s) => s.tiktok.busy);
     // The unified view. Twitch's own surfaces still render (they're the richest),
     // and every other platform's live rows are folded in alongside them, ranked
     // together by viewers. Anything with no cross-platform equivalent — drops,
@@ -478,6 +479,9 @@ const Home = () => {
     const [animatingHearts, setAnimatingHearts] = useState<Set<string>>(new Set());
     const [isSearchExpanded, setIsSearchExpanded] = useState(false);
     const searchInputRef = useRef<HTMLInputElement>(null);
+    // Bumped per search, so a platform answering an earlier search late never
+    // lands on a newer one's results.
+    const searchSeqRef = useRef(0);
     // The recent-searches dropdown is portaled to <body> because the top nav frame
     // clips overflow — an in-flow absolute dropdown gets cut off and reads as
     // invisible. We anchor it to the search bar's rect instead.
@@ -549,17 +553,22 @@ const Home = () => {
 
         // Rust owns the Home data (src-tauri/src/services/home_snapshot.rs).
         // Mounting hydrates the store from the current snapshot (no network on
-        // the critical path) and tells Rust a Home is on screen, which refreshes
-        // any stale section right away and runs the recommended poll while we
-        // are up. The old 300 ms deferred refetch is gone: nothing here fetches.
+        // the critical path); the effect below tells Rust a Home is on screen.
+        // The old 300 ms deferred refetch is gone: nothing here fetches.
         useAppStore.setState((state) => ({ homeOpenCount: state.homeOpenCount + 1 }));
         void ensureHomeSnapshotSync();
-        void invoke('set_home_mounted', { mounted: true }).catch(() => {});
-
-        return () => {
-            void invoke('set_home_mounted', { mounted: false }).catch(() => {});
-        };
     }, []);
+
+    // Tell Rust a Home is on screen, and whether it shows every platform. That
+    // refreshes any stale section right away and runs the recommended poll while
+    // we are up, and on the unified view it is what has Rust fetch the other
+    // platforms' directories and build the Discover list. Switching view
+    // announces this Home again as the new one, which is cheap: every mount
+    // refresh over there only runs for a section that is stale.
+    useEffect(() => {
+        announceHome(true, isUnifiedView);
+        return () => announceHome(false, isUnifiedView);
+    }, [isUnifiedView]);
 
     // Save the grid's scroll offset for the next mount. A layout-effect cleanup
     // runs before the node leaves the DOM (a passive cleanup would read 0).
@@ -574,6 +583,7 @@ const Home = () => {
     // its data is on screen. The stagger below runs on the first mount only.
     const homeOpenCount = useAppStore((s) => s.homeOpenCount);
     const isReopen = homeOpenCount > 1;
+    const isBooting = useAppStore((s) => s.isBooting);
     useLayoutEffect(() => {
         if (!isReopen) return;
         const container = scrollContainerRef.current;
@@ -690,13 +700,14 @@ const Home = () => {
         if (match) setActiveAutomationIds(prev => (prev.has(match.id) ? prev : new Set(prev).add(match.id)));
     }, [liveDropProgressForHome, dropsCampaigns]);
 
-    // Hype trains are polled in Rust for followed + recommended; the category
-    // grid and search results are only known here, so hand their ids over
-    // (debounced) and Rust folds them into the same poll.
+    // Hype trains and collaborations are polled in Rust for followed +
+    // recommended; the category grid and search results are only known here,
+    // so hand their ids over (debounced) and Rust folds them into the same
+    // polls. Twitch ids only: another platform's id would name a stranger.
     useEffect(() => {
         const ids = new Set<string>();
-        categoryStreams.forEach(s => ids.add(s.user_id));
-        searchResults.forEach(s => ids.add(s.user_id));
+        categoryStreams.forEach(s => { if (isTwitchStream(s)) ids.add(s.user_id); });
+        searchResults.forEach(s => { if (isTwitchStream(s)) ids.add(s.user_id); });
         if (hypeTrainRefreshTimeoutRef.current) {
             clearTimeout(hypeTrainRefreshTimeoutRef.current);
         }
@@ -1262,6 +1273,7 @@ const Home = () => {
         }
 
         setIsSearching(true);
+        const seq = ++searchSeqRef.current;
         let usedMode: SearchMode = 'streamers';
         try {
             const forceStreamers = opts?.mode === 'streamers';
@@ -1304,24 +1316,24 @@ const Home = () => {
                 setSearchMode('streamers');
                 setActiveTab('search');
                 // Unified: Twitch plus every platform that advertises search, the
-                // same way unified Discover merges directories. Each platform is
-                // settled INDEPENDENTLY so one failing never empties the results.
-                const others = isUnifiedView
-                    ? WATCHABLE_PROVIDERS.filter((pv) => pv !== 'twitch' && PROVIDER_WATCH[pv].search)
-                    : [];
-                const [twitchResults, ...providerPages] = await Promise.all([
-                    (invoke('search_channels', { query: q }) as Promise<TwitchStream[]>).catch(() => []),
-                    ...others.map((pv) =>
-                        invoke<{ streams: TwitchStream[] }>('provider_search', { provider: pv, query: q })
-                            .then((page) => page.streams ?? [])
-                            .catch(() => [] as TwitchStream[]),
-                    ),
-                ]);
-                setSearchResults([
-                    ...(twitchResults ?? []),
-                    ...providerPages.flat(),
-                ]);
+                // same way unified Discover merges directories. Rust searches them
+                // all at once and hands back each platform's rows as it answers,
+                // so a slow or failing platform never holds back the others.
+                const platforms: ProviderId[] = [
+                    'twitch',
+                    ...(isUnifiedView
+                        ? WATCHABLE_PROVIDERS.filter((pv) => pv !== 'twitch' && PROVIDER_WATCH[pv].search)
+                        : []),
+                ];
+                const found = new Map<ProviderId, TwitchStream[]>();
                 setCategorySearchResults([]);
+                await searchPlatforms(q, platforms, (batch) => {
+                    if (seq !== searchSeqRef.current) return;
+                    if (batch.error) Logger.warn(`${batch.provider} search failed:`, batch.error);
+                    found.set(batch.provider, batch.streams);
+                    // In a fixed order, whatever order the platforms answer in.
+                    setSearchResults(platforms.flatMap((pv) => found.get(pv) ?? []));
+                });
             }
             setRecentSearches(addRecentSearch(searchScope, q, usedMode));
         } catch (e) {
@@ -1329,7 +1341,7 @@ const Home = () => {
             setSearchResults([]);
             setCategorySearchResults([]);
         } finally {
-            setIsSearching(false);
+            if (seq === searchSeqRef.current) setIsSearching(false);
         }
     };
 
@@ -1494,21 +1506,6 @@ const Home = () => {
         }
     };
 
-    const sortStreamsByFavorites = (streams: TwitchStream[]) => {
-        return [...streams].sort((a, b) => {
-            // `favoriteIdOf`, not `user_id`: platform ids collide across
-            // services, so a Kick row could sort as a Twitch favourite.
-            const aId = favoriteIdOf(a);
-            const bId = favoriteIdOf(b);
-            const aIsFavorite = !!aId && isFavoriteStreamer(aId);
-            const bIsFavorite = !!bId && isFavoriteStreamer(bId);
-
-            if (aIsFavorite && !bIsFavorite) return -1;
-            if (!aIsFavorite && bIsFavorite) return 1;
-            return 0;
-        });
-    };
-
     const handleScroll = useCallback(() => {
         const container = scrollContainerRef.current;
         if (!container) return;
@@ -1604,53 +1601,11 @@ const Home = () => {
         }
     }, [activeTab, recommendedStreams.length, hasMoreRecommended, isLoadingMore, loadMoreRecommendedStreams]);
 
-    // How many live rows to pull PER PLATFORM for the unified Discover grid. The
-    // old value of 20 was one YouTube search page, which made Discover look nearly
-    // empty next to Twitch's recommendations. YouTube now follows its search
-    // continuations to fill this, so the cost is a few requests, not one per row.
-    const DISCOVER_PER_PROVIDER = 100;
-
-    // Every other platform's live streams + categories, loaded for the unified
-    // view so Discover and Categories aren't silently Twitch-only there.
-    const [unifiedProviderStreams, setUnifiedProviderStreams] = useState<TwitchStream[]>([]);
-    const [unifiedCategories, setUnifiedCategories] = useState<ProviderCategory[]>([]);
-    useEffect(() => {
-        if (!isUnifiedView) {
-            setUnifiedProviderStreams([]);
-            setUnifiedCategories([]);
-            return;
-        }
-        let cancelled = false;
-        const others = WATCHABLE_PROVIDERS.filter((p) => p !== 'twitch');
-        // Per-platform failures must not empty the merged view, so each is
-        // settled independently and a rejection contributes nothing.
-        Promise.all(
-            others.map((p) =>
-                invoke<{ streams: TwitchStream[] }>('provider_directory', { provider: p, limit: DISCOVER_PER_PROVIDER })
-                    .then((page) => page.streams ?? [])
-                    .catch(() => [] as TwitchStream[]),
-            ),
-        ).then((pages) => {
-            if (!cancelled) setUnifiedProviderStreams(pages.flat());
-        });
-        Promise.all(
-            // Only platforms that actually have a taxonomy. The rejection was
-            // already swallowed below, so asking anyway was harmless but cost a
-            // refused round trip on every mount of the merged view.
-            others
-                .filter((p) => PROVIDER_WATCH[p].browse === 'categories')
-                .map((p) =>
-                    invoke<{ categories: ProviderCategory[] }>('provider_categories', { provider: p, limit: 20 })
-                        .then((page) => page.categories ?? [])
-                        .catch(() => [] as ProviderCategory[]),
-                ),
-        ).then((pages) => {
-            if (!cancelled) setUnifiedCategories(pages.flat());
-        });
-        return () => {
-            cancelled = true;
-        };
-    }, [isUnifiedView]);
+    // Every other platform's categories for the unified view, so the Categories
+    // tab isn't silently Twitch-only there. Built in Rust from each platform's
+    // cached categories, each landing on its own; the Discover list likewise
+    // arrives finished (`unifiedDiscover`).
+    const unifiedCategories = useAppStore((s) => s.otherCategories);
 
     // The Categories tab shows category TILES until one is picked; every other
     // tab (and a drilled-into category) shows a stream grid.
@@ -1788,36 +1743,18 @@ const Home = () => {
         [isProviderView, isUnifiedView, providerFilter, providerFollowsLive],
     );
 
-    // Composite keys of the provider channels the Following tab is showing, so
-    // Discover can leave them out instead of listing the same channel twice.
-    const followedProviderKeys = useMemo(
-        () => new Set(providerFollowedLive.map((s) => streamKey(s))),
-        [providerFollowedLive],
+    // Your channels, merged in Rust across every platform
+    // (services/unified_following.rs): live favourites from all three places a
+    // live row comes from, the other live follows ranked by viewers, and the
+    // offline roster, each channel once by its favourite id. This view only
+    // keeps the platform it shows.
+    const following = useAppStore((s) => s.following);
+    const inScope = useCallback(
+        (s: TwitchStream) => providerFilter === 'all' || streamProvider(s) === providerFilter,
+        [providerFilter],
     );
-
-    // Live FAVOURITES, merged from all three places a live row can come from:
-    // your Twitch follows, the provider follow poller, and the favourites sweep
-    // (which covers channels you follow nowhere). Deduped on the FAVOURITE id
-    // rather than `streamKey`, because on YouTube the same channel arrives keyed
-    // by video id from a browse row and by UC id from a live check, and a
-    // streamKey dedupe lets both through.
-    const liveFavorites = useMemo(() => {
-        const merged = dedupeByFavoriteId([
-            ...followedStreams,
-            ...providerFollowedLive,
-            ...Object.values(favoritesLive),
-        ]);
-        return merged
-            .filter((s) => {
-                const id = favoriteIdOf(s);
-                return !!id && isFavoriteStreamer(id);
-            })
-            .filter((s) => providerFilter === 'all' || streamProvider(s) === providerFilter)
-            .sort((a, b) => (b.viewer_count ?? 0) - (a.viewer_count ?? 0));
-        // `favoriteStreamers` is tracked so the list re-derives when a heart is
-        // toggled; `isFavoriteStreamer` reads it but isn't itself reactive.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [followedStreams, providerFollowedLive, favoritesLive, favoriteStreamers, providerFilter]);
+    const liveFavorites = useMemo(() => following.favorites.filter(inScope), [following, inScope]);
+    const followingLive = useMemo(() => following.live.filter(inScope), [following, inScope]);
 
     const favoriteKeys = useMemo(
         () => new Set(liveFavorites.map((s) => streamKey(s))),
@@ -1826,31 +1763,20 @@ const Home = () => {
 
     const rawDisplayStreams = isProviderView
         ? (activeTab === 'following'
-            ? providerFollowedLive
+            ? followingLive
             // Without this the search tab rendered the platform DIRECTORY, which is
             // why searching a name appeared to return everything.
             : activeTab === 'search'
               ? searchResults
               : providerStreams)
         : activeTab === 'following'
-        // Unified: your Twitch follows and every other platform's live follows in
-        // one list. Favorites still float to the top; the rest rank by viewers.
-        ? sortStreamsByFavorites([...followedStreams, ...providerFollowedLive])
+        // Your live follows on this platform, or on every one when unified,
+        // ranked by viewers. Favourites have their own section above.
+        ? followingLive
         : activeTab === 'recommended'
-            // Unified Discover: Twitch's personalized picks plus what's big on the
-            // other platforms right now, ranked together.
             // Unified Discover: Twitch's picks plus the other platforms' live
-            // streams, ranked together by viewers, same as the Twitch-only list.
-            ? (isUnifiedView
-                // Minus anything the Following tab is already showing you.
-                // Twitch's recommendations exclude your follows upstream, but a
-                // platform DIRECTORY is just "who is live, ranked", so a Kick
-                // channel you follow was turning up on both tabs.
-                ? [
-                    ...recommendedStreams,
-                    ...unifiedProviderStreams.filter((s) => !followedProviderKeys.has(streamKey(s))),
-                  ].sort((a, b) => b.viewer_count - a.viewer_count)
-                : recommendedStreams)
+            // streams, which Rust ranks together and hands over finished.
+            ? (isUnifiedView ? unifiedDiscover : recommendedStreams)
             : activeTab === 'category'
                 ? categoryStreams
                 : searchResults.filter(s => s.viewer_count > 0 || s.is_live);
@@ -1861,6 +1787,11 @@ const Home = () => {
     // twice. React's duplicate-key warning is the visible symptom; the real
     // hazard is rows sharing identity and swapping content during updates.
     const displayStreams = useMemo(() => {
+        // The unified Discover list arrives finished (services/unified_discover.rs):
+        // ranked, one card per channel, follows and live favourites already out,
+        // matched by channel identity where this filter's `streamKey` misses a
+        // YouTube channel keyed by video id on one side and UC id on the other.
+        if (isUnifiedView && activeTab === 'recommended') return rawDisplayStreams;
         const seen = new Set<string>();
         return rawDisplayStreams.filter((s) => {
             // The COMPOSITE key, never the bare platform id: Twitch and Kick both
@@ -1876,7 +1807,7 @@ const Home = () => {
             seen.add(key);
             return true;
         });
-    }, [rawDisplayStreams, activeTab, favoriteKeys]);
+    }, [rawDisplayStreams, activeTab, favoriteKeys, isUnifiedView]);
 
     // Channel avatars for the cards on screen. A stream row does not reliably carry
     // one: Twitch needs a Helix users lookup, and YouTube category rows need a
@@ -1896,6 +1827,11 @@ const Home = () => {
                                         const streamDropsCampaign = stream.game_name ? dropsGameNames.get(stream.game_name.toLowerCase()) : undefined;
                                         const hasDrops = !!streamDropsCampaign;
                                         const fit = thumbFitFor(streamProvider(stream), portraitGrid);
+                                        // A portrait card is about two thirds as wide as a landscape
+                                        // one, so the landscape card's 10px frame read as a heavy
+                                        // border around a 9:16 preview. 6px is the same share of the
+                                        // card, and the text still lines up with the preview's edge.
+                                        const portraitCard = fit === 'portrait';
                                         return (() => {
                                             const isQueued = isInMultiNook(stream.user_login, streamProvider(stream));
                                             const isSuckingUp = suckUpKey === makeKey(streamProvider(stream), stream.user_login);
@@ -1908,7 +1844,10 @@ const Home = () => {
                                                     // scaling element fights `layout`'s own scale
                                                     // correction and the card's text and rounded
                                                     // corners smear while it settles.
-                                                    initial={isReopen ? false : { opacity: 0, y: 8 }}
+                                                    // No entrance under the boot veil: it is
+                                                    // blurred out of sight, and the veil's fade
+                                                    // already eases the grid in.
+                                                    initial={isReopen || isBooting ? false : { opacity: 0, y: 8 }}
                                                     animate={{ opacity: 1, y: 0 }}
                                                     exit={{ opacity: 0, y: -4 }}
                                                     transition={{
@@ -1928,7 +1867,7 @@ const Home = () => {
                                                     // slot to new slot instead of a fade-out/fade-in.
                                                     layoutId={`card-${streamKey(stream)}`}
                                                     data-avatar-key={streamKey(stream)}
-                                                    className={`p-2.5 transition-all duration-200 group relative ${
+                                                    className={`${portraitCard ? 'p-1.5' : 'p-2.5'} transition-all duration-200 group relative ${
                                                         isQueued && !isSuckingUp
                                                             ? 'ghost-card rounded-lg cursor-default'
                                                             : isQueued && isSuckingUp
@@ -1976,7 +1915,9 @@ const Home = () => {
                                                         /* Normal content, suck-up, or materialize animation */
                                                         <div className={isSuckingUp ? 'animate-multinook-suck-up' : isMaterializing ? 'animate-multinook-materialize' : undefined}>
                                                             {!isSuckingUp && <QuickAddButton stream={stream} />}
-                                                            <div className="relative mb-2 overflow-hidden rounded">
+                                                            {/* Inner radius follows the tighter portrait frame so the
+                                                                preview's corners stay concentric with the card's. */}
+                                                            <div className={`relative mb-2 overflow-hidden ${portraitCard ? 'rounded-md' : 'rounded'}`}>
                                                                 {fit === 'pillar' ? (
                                                                     // A portrait picture in a landscape well: shown whole,
                                                                     // over a blurred copy of itself so the sides are the
@@ -2013,51 +1954,63 @@ const Home = () => {
                                                                     />
                                                                 )}
                                                                 <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
-                                                                    <div className="live-dot text-xs px-1.5 py-0.5">LIVE</div>
+                                                                    <CardChip kind="live">LIVE</CardChip>
                                                                     {hasDrops && (
-                                                                        <div className="drops-badge-glass">
+                                                                        <CardChip kind="drops">
                                                                             <Package size={10} />
                                                                             <span>DROPS</span>
-                                                                        </div>
+                                                                        </CardChip>
                                                                     )}
                                                                     {activeHypeTrainChannels.get(stream.user_id) && (
-                                                                        <div className={activeHypeTrainChannels.get(stream.user_id)?.isGolden ? 'hype-train-badge-glass-golden' : 'hype-train-badge-glass'}>
+                                                                        <CardChip kind={activeHypeTrainChannels.get(stream.user_id)?.isGolden ? 'hype-golden' : 'hype'}>
                                                                             <svg className="w-2.5 h-2.5" viewBox="0 0 15 13" fill="none">
                                                                                 <path fillRule="evenodd" clipRule="evenodd" d="M4.10001 0.549988H2.40001V4.79999H0.700012V10.75H1.55001C1.55001 11.6889 2.31113 12.45 3.25001 12.45C4.1889 12.45 4.95001 11.6889 4.95001 10.75H5.80001C5.80001 11.6889 6.56113 12.45 7.50001 12.45C8.4389 12.45 9.20001 11.6889 9.20001 10.75H10.05C10.05 11.6889 10.8111 12.45 11.75 12.45C12.6889 12.45 13.45 11.6889 13.45 10.75H14.3V0.549988H6.65001V2.24999H7.50001V4.79999H4.10001V0.549988ZM12.6 9.04999V6.49999H2.40001V9.04999H12.6ZM9.20001 4.79999H12.6V2.24999H9.20001V4.79999Z" fill="currentColor" />
                                                                             </svg>
                                                                             <span>LVL {activeHypeTrainChannels.get(stream.user_id)?.level}</span>
-                                                                        </div>
+                                                                        </CardChip>
                                                                     )}
                                                                 </div>
                                                                 <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1">
-                                                                    <div className="px-2 py-0.5 glass-badge text-white text-xs font-medium rounded">
-                                                                        {stream.viewer_count.toLocaleString()} viewers
-                                                                    </div>
+                                                                    <CardChip kind="neutral">
+                                                                        <UsersThree size={12} weight="bold" className="shrink-0 opacity-80" aria-label="viewers" />
+                                                                        {stream.viewer_count.toLocaleString()}
+                                                                    </CardChip>
                                                                 </div>
                                                                 {/* Bottom-right corner: watch streak and platform mark share
                                                                     one row so they can never overlap. */}
                                                                 <div className="absolute bottom-1.5 right-1.5 flex items-center gap-1">
                                                                     {watchStreaks[stream.user_id] > 0 && (
                                                                         <Tooltip content={`${watchStreaks[stream.user_id]} Stream Watch Streak`} side="top">
-                                                                        <div className="flex items-center gap-1 font-bold text-[10px] leading-tight px-1.5 py-0.5 rounded shadow-[0_0_10px_color-mix(in_srgb,var(--color-warning)_25%,transparent)] bg-amber-500/10 text-amber-400 border border-amber-500/30 backdrop-blur-md">
+                                                                        <CardChip kind="streak">
                                                                             <Flame size={10} className="stroke-[2.5]" />
                                                                             <span>{watchStreaks[stream.user_id]}</span>
-                                                                        </div>
+                                                                        </CardChip>
                                                                         </Tooltip>
                                                                     )}
                                                                 </div>
                                                             </div>
-                                                            <div className="flex items-end justify-between mt-1">
-                                                                <div className="space-y-0.5 flex-1 min-w-0 pr-2 pb-1">
-                                                                    <h3 className="text-textPrimary font-medium text-sm line-clamp-1 group-hover:text-accent transition-colors">
+                                                            {/* Title and channel span the card. The follow, favourite and
+                                                                platform controls sit in the category row instead: they are
+                                                                invisible until hover, but as a column beside all three
+                                                                lines they reserved their width on every one, so names were
+                                                                cut off next to empty space. */}
+                                                            <div className="mt-1">
+                                                                <div className="space-y-0.5 min-w-0 pb-1">
+                                                                    {/* min-h keeps an untitled room's line, so its channel
+                                                                        sits level with its neighbours'. */}
+                                                                    <h3 className="text-textPrimary font-medium text-sm line-clamp-1 min-h-5 group-hover:text-accent transition-colors">
                                                                         <StreamTitleWithEmojis title={stream.title} />
                                                                     </h3>
+                                                                    {/* The name, and while the channel streams with others, "+2" beside
+                                                                        it: the credit reads as part of the name, and it opens who they
+                                                                        are, each one playable, and the whole group into MultiNook. */}
+                                                                    <div className="flex items-center gap-1.5 min-w-0">
                                                                     <button 
                                                                         onClick={(e) => { 
                                                                             e.stopPropagation(); 
                                                                             useAppStore.getState().setProfileModalUser(stream); 
                                                                         }}
-                                                                        className="flex items-center gap-1 text-textSecondary text-xs hover:text-textPrimary hover:bg-glass-hover px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded transition-all cursor-pointer text-left focus:outline-none w-max max-w-full"
+                                                                        className="flex items-center gap-1 text-textSecondary text-xs hover:text-textPrimary hover:bg-glass-hover px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded transition-all cursor-pointer text-left focus:outline-none w-max max-w-full min-w-0"
                                                                     >
                                                                         {/* Channel avatar. Resolved per platform; falls back to a
                                                                             monogram rather than a broken image or a foreign
@@ -2079,103 +2032,127 @@ const Home = () => {
                                                                             </svg>
                                                                         )}
                                                                     </button>
+                                                                    {(() => {
+                                                                        const collab = collabFor(collaborations, stream);
+                                                                        return collab && (
+                                                                            <TogetherChip
+                                                                                variant="name"
+                                                                                collab={collab}
+                                                                                onOpenChannel={(login) => void startStream(login)}
+                                                                                allowMultiNook
+                                                                            />
+                                                                        );
+                                                                    })()}
+                                                                    </div>
                                                                     {/* min-h reserves this line even when a platform sends no
-                                                                        category (YouTube), so the bottom-anchored platform mark
-                                                                        sits on the same baseline on every card in the row
-                                                                        instead of riding up on shorter info blocks. */}
-                                                                    <div className="flex items-center w-full min-h-4">
-                                                                        {stream.game_name && (
-                                                                        <Tooltip content={stream.game_name} side="bottom">
-                                                                            <button 
-                                                                                onClick={(e) => {
-                                                                                    e.stopPropagation();
-                                                                                    if (stream.game_id && stream.game_name) {
-                                                                                        handleCategoryClick({ 
-                                                                                            id: stream.game_id, 
-                                                                                            name: stream.game_name, 
-                                                                                            box_art_url: '' 
-                                                                                        });
-                                                                                    }
-                                                                                }}
-                                                                                className="flex items-center gap-1 text-textMuted text-xs hover:text-textPrimary hover:bg-glass-hover px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded transition-all text-left cursor-pointer focus:outline-none overflow-hidden"
+                                                                        category (YouTube), so the controls that live in it sit
+                                                                        on the same line on every card in the row instead of
+                                                                        riding up on shorter info blocks. */}
+                                                                    <div className="flex items-center gap-2 w-full min-h-4">
+                                                                        <div className="flex flex-1 min-w-0 items-center">
+                                                                            {stream.game_name && (
+                                                                            <Tooltip content={stream.game_name} side="bottom">
+                                                                                {/* A link only where the platform has a category
+                                                                                    to open; TikTok's is a label, and a hover that
+                                                                                    leads nowhere is a dead control. */}
+                                                                                {!stream.game_id ? (
+                                                                                    <span className="text-textMuted text-xs line-clamp-1">{stream.game_name}</span>
+                                                                                ) : (
+                                                                                <button
+                                                                                    onClick={(e) => {
+                                                                                        e.stopPropagation();
+                                                                                        if (stream.game_id && stream.game_name) {
+                                                                                            handleCategoryClick({ 
+                                                                                                id: stream.game_id, 
+                                                                                                name: stream.game_name, 
+                                                                                                box_art_url: '' 
+                                                                                            });
+                                                                                        }
+                                                                                    }}
+                                                                                    className="flex items-center gap-1 text-textMuted text-xs hover:text-textPrimary hover:bg-glass-hover px-1.5 py-0.5 -mx-1.5 -my-0.5 rounded transition-all text-left cursor-pointer focus:outline-none overflow-hidden"
+                                                                                >
+                                                                                    <span className="line-clamp-1">{stream.game_name}</span>
+    {/* No mark beside the category here. The card already carries the
+                                                                                        animated DROPS badge over its thumbnail, which is the
+                                                                                        same package glyph saying the same thing about the same
+                                                                                        card. One signal per card. */}
+                                                                                </button>
+                                                                                )}
+                                                                            </Tooltip>
+                                                                            )}
+                                                                        </div>
+                                                                        {/* -my-1: the 24px buttons center on this 16px line
+                                                                            without making it taller. */}
+                                                                        <div className="flex flex-shrink-0 items-center -my-1">
+                                                                            {/* Follow toggle for platforms with no follow API of
+                                                                                their own — StreamNook keeps the list. Shown on every
+                                                                                tab, since the platform's directory is where you find
+                                                                                channels to follow in the first place. */}
+                                                                            {/* FOLLOW, and only where following is the question — a
+                                                                                platform's directory or search. On the Following tab every
+                                                                                row is already followed, so a filled heart on each would
+                                                                                say nothing; that tab gets the favourite toggle instead,
+                                                                                exactly like Twitch's. Plus (not a heart) so it never reads
+                                                                                as the favourite control. */}
+                                                                            {isProviderView && activeTab !== 'following' && (
+                                                                                <Tooltip content={isProviderFollowed(stream) ? `Unfollow on ${providerLabel(streamProvider(stream))}` : `Follow on ${providerLabel(streamProvider(stream))}`} side="top">
+                                                                                <button
+                                                                                    onClick={(e) => handleProviderFollowClick(e, stream)}
+                                                                                    className="p-1 flex items-center justify-center bg-transparent transition-transform duration-300 hover:scale-110 active:scale-95"
+                                                                                >
+                                                                                    {isProviderFollowed(stream) ? (
+                                                                                        <Check size={16} className="text-accent" strokeWidth={2.5} />
+                                                                                    ) : (
+                                                                                        <Plus size={16} className="text-textSecondary hover:text-textPrimary opacity-0 group-hover:opacity-100 transition-all duration-300" strokeWidth={2.5} />
+                                                                                    )}
+                                                                                </button>
+                                                                                </Tooltip>
+                                                                            )}
+                                                                            {/* FAVOURITE, on every tab. A favourite is a personal
+                                                                                watchlist entry, not a re-ordering of your follows:
+                                                                                the whole point is hearting something you found in
+                                                                                Discover or a category and having it turn up when it
+                                                                                goes live, without following the channel. On a
+                                                                                provider directory row this sits beside the follow
+                                                                                control above, which is correct - they are different
+                                                                                actions - and the heart is always the rightmost. */}
+                                                                            <Tooltip content={isFavorite ? 'Remove from favorites' : 'Add to favorites'} side="top">
+                                                                            <button
+                                                                                onClick={(e) => { void handleFavoriteClick(e, stream); }}
+                                                                                className={`p-1 flex items-center justify-center bg-transparent transition-transform duration-300 hover:scale-110 active:scale-95`}
                                                                             >
-                                                                                <span className="line-clamp-1">{stream.game_name}</span>
-{/* No mark beside the category here. The card already carries the
-                                                                                    animated DROPS badge over its thumbnail, which is the
-                                                                                    same package glyph saying the same thing about the same
-                                                                                    card. One signal per card. */}
+                                                                                <Heart
+                                                                                    size={16}
+                                                                                    fill={isFavorite ? "url(#glass-heart-fill)" : "none"}
+                                                                                    stroke={isFavorite ? "url(#glass-heart-stroke)" : "currentColor"}
+                                                                                    strokeWidth={isFavorite ? 1.5 : 2}
+                                                                                    className={`transition-all duration-300 ${isFavorite ? 'drop-shadow-[0_4px_8px_color-mix(in_srgb,var(--color-highlight-pink)_50%,transparent)]' : 'text-textSecondary hover:text-textPrimary opacity-0 group-hover:opacity-100'} ${favoriteId && animatingHearts.has(favoriteId) ? 'animate-heart-break' : ''}`}
+                                                                                />
                                                                             </button>
-                                                                        </Tooltip>
-                                                                        )}
+                                                                            </Tooltip>
+                                                                            {/* Platform, in the card's bottom-right corner — on the card
+                                                                                itself, not over the preview, where it would compete with
+                                                                                the artwork. Bare mark, no chip or button: at this size
+                                                                                these read by colour, and a container would make a passive
+                                                                                label look clickable. Shown ONLY while the grid is mixed,
+                                                                                and then on EVERY card including Twitch, since with
+                                                                                platforms mixed an unmarked card is a guess. */}
+                                                                            {isUnifiedView && (
+                                                                                <Tooltip content={providerLabel(streamProvider(stream))} side="top">
+                                                                                    {/* Same 24px box the heart button uses (p-1 + 16px icon),
+                                                                                        mark centered, so the two icons share one center line
+                                                                                        instead of mixing padded-box and bottom-padded
+                                                                                        geometries. Cross-card alignment comes from the
+                                                                                        reserved category line, so center optical mode is
+                                                                                        right here. */}
+                                                                                    <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center opacity-80">
+                                                                                        <ProviderLogo provider={streamProvider(stream)} size={13} />
+                                                                                    </span>
+                                                                                </Tooltip>
+                                                                            )}
+                                                                        </div>
                                                                     </div>
                                                                 </div>
-
-                                                                {/* Follow toggle for platforms with no follow API of
-                                                                    their own — StreamNook keeps the list. Shown on every
-                                                                    tab, since the platform's directory is where you find
-                                                                    channels to follow in the first place. */}
-                                                                {/* FOLLOW, and only where following is the question — a
-                                                                    platform's directory or search. On the Following tab every
-                                                                    row is already followed, so a filled heart on each would
-                                                                    say nothing; that tab gets the favourite toggle instead,
-                                                                    exactly like Twitch's. Plus (not a heart) so it never reads
-                                                                    as the favourite control. */}
-                                                                {isProviderView && activeTab !== 'following' && (
-                                                                    <Tooltip content={isProviderFollowed(stream) ? `Unfollow on ${providerLabel(streamProvider(stream))}` : `Follow on ${providerLabel(streamProvider(stream))}`} side="top">
-                                                                    <button
-                                                                        onClick={(e) => handleProviderFollowClick(e, stream)}
-                                                                        className="p-1 flex items-center justify-center bg-transparent transition-transform duration-300 hover:scale-110 active:scale-95"
-                                                                    >
-                                                                        {isProviderFollowed(stream) ? (
-                                                                            <Check size={16} className="text-accent" strokeWidth={2.5} />
-                                                                        ) : (
-                                                                            <Plus size={16} className="text-textSecondary hover:text-textPrimary opacity-0 group-hover:opacity-100 transition-all duration-300" strokeWidth={2.5} />
-                                                                        )}
-                                                                    </button>
-                                                                    </Tooltip>
-                                                                )}
-                                                                {/* FAVOURITE, on every tab. A favourite is a personal
-                                                                    watchlist entry, not a re-ordering of your follows:
-                                                                    the whole point is hearting something you found in
-                                                                    Discover or a category and having it turn up when it
-                                                                    goes live, without following the channel. On a
-                                                                    provider directory row this sits beside the follow
-                                                                    control above, which is correct - they are different
-                                                                    actions - and the heart is always the rightmost. */}
-                                                                <Tooltip content={isFavorite ? 'Remove from favorites' : 'Add to favorites'} side="top">
-                                                                <button
-                                                                    onClick={(e) => { void handleFavoriteClick(e, stream); }}
-                                                                    className={`p-1 flex items-center justify-center bg-transparent transition-transform duration-300 hover:scale-110 active:scale-95`}
-                                                                >
-                                                                    <Heart
-                                                                        size={16}
-                                                                        fill={isFavorite ? "url(#glass-heart-fill)" : "none"}
-                                                                        stroke={isFavorite ? "url(#glass-heart-stroke)" : "currentColor"}
-                                                                        strokeWidth={isFavorite ? 1.5 : 2}
-                                                                        className={`transition-all duration-300 ${isFavorite ? 'drop-shadow-[0_4px_8px_color-mix(in_srgb,var(--color-highlight-pink)_50%,transparent)]' : 'text-textSecondary hover:text-textPrimary opacity-0 group-hover:opacity-100'} ${favoriteId && animatingHearts.has(favoriteId) ? 'animate-heart-break' : ''}`}
-                                                                    />
-                                                                </button>
-                                                                </Tooltip>
-                                                                {/* Platform, in the card's bottom-right corner — on the card
-                                                                    itself, not over the preview, where it would compete with
-                                                                    the artwork. Bare mark, no chip or button: at this size
-                                                                    these read by colour, and a container would make a passive
-                                                                    label look clickable. Shown ONLY while the grid is mixed,
-                                                                    and then on EVERY card including Twitch, since with
-                                                                    platforms mixed an unmarked card is a guess. */}
-                                                                {isUnifiedView && (
-                                                                    <Tooltip content={providerLabel(streamProvider(stream))} side="top">
-                                                                        {/* Same 24px box the heart button uses (p-1 + 16px icon),
-                                                                            mark centered, so the two icons share one center line
-                                                                            instead of mixing padded-box and bottom-padded
-                                                                            geometries. Cross-card alignment comes from the
-                                                                            reserved category line, so center optical mode is
-                                                                            right here. */}
-                                                                        <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center opacity-80">
-                                                                            <ProviderLogo provider={streamProvider(stream)} size={13} />
-                                                                        </span>
-                                                                    </Tooltip>
-                                                                )}
                                                             </div>
                                                         </div>
                                                     )}
@@ -2350,112 +2327,10 @@ const Home = () => {
     const tagMode = selectedCategoryTags.length > 0;
     const baseLiveStreams = tagMode ? tagStreams : categoryStreams;
 
-    // Followed provider channels that are NOT live, so the Following tab shows an
-    // offline roster for them the way it already does for Twitch.
-    //
-    // Matching "which follows are live" cannot be done on the composite key: a
-    // YouTube live row is keyed by its VIDEO id while a follow is stored under the
-    // channel's UC id, so the keys never line up. Both shapes DO agree on the
-    // channel though, which is what this compares.
-    const offlineProviderFollows = useMemo<TwitchStream[]>(() => {
-        if (!(isProviderView || isUnifiedView)) return [];
-        const liveChannels = new Set<string>();
-        for (const row of Object.values(providerFollowsLive)) {
-            if (row.user_id) liveChannels.add(`${row.provider}:${row.user_id.toLowerCase()}`);
-            if (row.user_login) liveChannels.add(`${row.provider}:${row.user_login.toLowerCase()}`);
-        }
-        return providerFollows
-            .filter((f) => isUnifiedView || f.provider === providerFilter)
-            .filter((f) => !liveChannels.has(`${f.provider}:${f.channel.toLowerCase()}`))
-            .map((f) => ({
-                id: f.channel,
-                // The channel id doubles as the user id so the avatar resolver,
-                // which keys off `user_id`, can look it up like any other row.
-                user_id: f.channel,
-                user_login: f.channel,
-                user_name: f.display_name || f.channel,
-                provider: f.provider,
-                key: makeKey(f.provider, f.channel),
-                title: '',
-                viewer_count: 0,
-                game_id: '',
-                game_name: '',
-                thumbnail_url: '',
-                started_at: '',
-                is_live: false,
-                // Captured when the follow was imported, so the roster paints
-                // immediately instead of resolving each face on every app start.
-                // Rows imported before this existed have none and fall through to
-                // the per-card resolver as before.
-                profile_image_url: f.avatar,
-            } as unknown as TwitchStream));
-    }, [isProviderView, isUnifiedView, providerFilter, providerFollows, providerFollowsLive]);
-
-    // Favourites that aren't live anywhere, so you can still get back to them.
-    //
-    // Built from the identity sidecar rather than a live row, because there is
-    // no live row: that's the point. Rows whose id has left `favorite_streamers`
-    // are filtered out HERE rather than pruned from settings on startup, which
-    // would mean a settings write racing every other write during launch.
-    const offlineFavorites = useMemo<TwitchStream[]>(() => {
-        const identities = favoriteChannels ?? [];
-        if (identities.length === 0) return [];
-        const favorites = new Set(favoriteStreamers ?? []);
-        // What is already live, by favourite id, across all three sources.
-        const liveIds = new Set(
-            liveFavorites.map((s) => favoriteIdOf(s)).filter((id): id is string => !!id),
-        );
-        // Prefer a REAL offline row where one exists (a Twitch follow, or a
-        // provider follow): it carries the proper id, so the "last live" lookup
-        // below resolves, and the avatar resolver keys off it. The sidecar row
-        // is the fallback for a favourite followed nowhere, which has no real
-        // row anywhere by definition.
-        const realRows = new Map<string, TwitchStream>();
-        for (const row of [...(isProviderView ? [] : offlineFollowedChannels), ...offlineProviderFollows]) {
-            const id = favoriteIdOf(row);
-            if (id && !realRows.has(id)) realRows.set(id, row);
-        }
-        return identities
-            .filter((f) => favorites.has(f.id) && !liveIds.has(f.id))
-            .filter((f) => providerFilter === 'all' || f.provider === providerFilter)
-            .map((f) => realRows.get(f.id) ?? ({
-                id: f.channel,
-                // For Twitch the sidecar id IS the user id, which is what the
-                // avatar resolver and the profile modal key off. Other platforms
-                // have no such id here, so the channel stands in, matching what
-                // `offlineProviderFollows` already does.
-                user_id: f.provider === 'twitch' ? f.id : f.channel,
-                user_login: f.channel,
-                user_name: f.display_name || f.channel,
-                provider: f.provider,
-                key: makeKey(f.provider, f.channel),
-                title: '',
-                viewer_count: 0,
-                game_id: '',
-                game_name: '',
-                thumbnail_url: '',
-                started_at: '',
-                is_live: false,
-                profile_image_url: f.avatar,
-            } as unknown as TwitchStream));
-    }, [favoriteChannels, favoriteStreamers, liveFavorites, providerFilter, isProviderView, offlineFollowedChannels, offlineProviderFollows]);
-
-    // The offline roster: Twitch's own list (only meaningful when Twitch is in
-    // view), followed provider channels that aren't live, and favourites that
-    // aren't live anywhere. Deduped on channel identity, since a favourite you
-    // also follow is in two of those three lists.
-    const offlineChannels = useMemo<TwitchStream[]>(
-        // Offline favourites belong HERE, not in the Favourites section: that
-        // shelf is live-only. This is also the only way a favourite you follow
-        // nowhere is reachable while it is offline, since no follow list carries
-        // it. Deduped, because a favourite you also follow is in two of these.
-        () => dedupeByFavoriteId([
-            ...(isProviderView ? [] : offlineFollowedChannels),
-            ...offlineProviderFollows,
-            ...offlineFavorites,
-        ]),
-        [isProviderView, offlineFollowedChannels, offlineProviderFollows, offlineFavorites],
-    );
+    // The offline roster: Twitch's own list, followed channels on the other
+    // platforms that aren't live, and favourites live nowhere, each channel
+    // once. Built in Rust (`following.offline`); this view keeps its platform.
+    const offlineChannels = useMemo(() => following.offline.filter(inScope), [following, inScope]);
 
     // Rows the Favourites section will draw. Load-bearing in the empty-state test
     // further down, not just for rendering: favourites are SUBTRACTED from
@@ -2519,10 +2394,10 @@ const Home = () => {
                     )}
                     {hasDrops && (
                         <div className="absolute top-2 left-2 z-10">
-                            <div className="drops-badge-glass-lg">
+                            <CardChip kind="drops" size="lg">
                                 <Package size={14} className="drop-shadow-lg" />
                                 <span>DROPS</span>
-                            </div>
+                            </CardChip>
                         </div>
                     )}
                     {hasDrops && externalDropsProvider && (
@@ -3088,10 +2963,12 @@ const Home = () => {
                                                 openDropsWithSearch(selectedCategory.name);
                                             }
                                         }}
-                                        className="drops-badge-glass hover:brightness-125 hover:scale-105 active:scale-95 transition-all cursor-pointer !text-[10px] !px-2 !py-0.5 mr-1"
+                                        className="mr-1 rounded-full hover:brightness-125 hover:scale-105 active:scale-95 transition-all cursor-pointer"
                                     >
-                                        <Package size={11} />
-                                        <span>DROPS ENABLED</span>
+                                        <CardChip kind="drops">
+                                            <Package size={11} />
+                                            <span>DROPS ENABLED</span>
+                                        </CardChip>
                                     </button>
                                 )}
                                 {isLoadingCategoryDetails ? (
@@ -3533,32 +3410,33 @@ const Home = () => {
                                                                         className="w-full aspect-video object-cover group-hover:scale-105 transition-transform duration-200"
                                                                     />
                                                                     <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
-                                                                        <div className="live-dot text-xs px-1.5 py-0.5">LIVE</div>
+                                                                        <CardChip kind="live">LIVE</CardChip>
                                                                         {hasDrops && (
-                                                                            <div className="drops-badge-glass">
+                                                                            <CardChip kind="drops">
                                                                                 <Package size={10} />
                                                                                 <span>DROPS</span>
-                                                                            </div>
+                                                                            </CardChip>
                                                                         )}
                                                                         {activeHypeTrainChannels.get(stream.user_id) && (
-                                                                            <div className={activeHypeTrainChannels.get(stream.user_id)?.isGolden ? 'hype-train-badge-glass-golden' : 'hype-train-badge-glass'}>
+                                                                            <CardChip kind={activeHypeTrainChannels.get(stream.user_id)?.isGolden ? 'hype-golden' : 'hype'}>
                                                                                 <svg className="w-2.5 h-2.5" viewBox="0 0 15 13" fill="none">
                                                                                     <path fillRule="evenodd" clipRule="evenodd" d="M4.10001 0.549988H2.40001V4.79999H0.700012V10.75H1.55001C1.55001 11.6889 2.31113 12.45 3.25001 12.45C4.1889 12.45 4.95001 11.6889 4.95001 10.75H5.80001C5.80001 11.6889 6.56113 12.45 7.50001 12.45C8.4389 12.45 9.20001 11.6889 9.20001 10.75H10.05C10.05 11.6889 10.8111 12.45 11.75 12.45C12.6889 12.45 13.45 11.6889 13.45 10.75H14.3V0.549988H6.65001V2.24999H7.50001V4.79999H4.10001V0.549988ZM12.6 9.04999V6.49999H2.40001V9.04999H12.6ZM9.20001 4.79999H12.6V2.24999H9.20001V4.79999Z" fill="currentColor" />
                                                                                 </svg>
                                                                                 <span>LVL {activeHypeTrainChannels.get(stream.user_id)?.level}</span>
-                                                                            </div>
+                                                                            </CardChip>
                                                                         )}
                                                                     </div>
-                                                                    <div className="absolute bottom-1.5 left-1.5 px-2 py-0.5 glass-badge text-white text-[10px] font-medium rounded">
-                                                                        {stream.viewer_count.toLocaleString()} viewers
-                                                                    </div>
+                                                                    <CardChip kind="neutral" className="absolute bottom-1.5 left-1.5">
+                                                                        <UsersThree size={12} weight="bold" className="shrink-0 opacity-80" aria-label="viewers" />
+                                                                        {stream.viewer_count.toLocaleString()}
+                                                                    </CardChip>
                                                                     {watchStreaks[stream.user_id] > 0 && (
                                                                         <div className="absolute bottom-1.5 right-1.5">
                                                                             <Tooltip content={`${watchStreaks[stream.user_id]} Stream Watch Streak`} side="top">
-                                                                            <div className="flex items-center gap-1 font-bold text-[10px] leading-tight px-1.5 py-0.5 rounded shadow-[0_0_10px_color-mix(in_srgb,var(--color-warning)_25%,transparent)] bg-amber-500/10 text-amber-400 border border-amber-500/30 backdrop-blur-md">
+                                                                            <CardChip kind="streak">
                                                                                 <Flame size={10} className="stroke-[2.5]" />
                                                                                 <span>{watchStreaks[stream.user_id]}</span>
-                                                                            </div>
+                                                                            </CardChip>
                                                                             </Tooltip>
                                                                         </div>
                                                                     )}
@@ -3583,6 +3461,19 @@ const Home = () => {
                                                                                     <path fillRule="evenodd" d="M12.5 3.5 8 2 3.5 3.5 2 8l1.5 4.5L8 14l4.5-1.5L14 8l-1.5-4.5ZM7 11l4.5-4.5L10 5 7 8 5.5 6.5 4 8l3 3Z" clipRule="evenodd"></path>
                                                                                 </svg>
                                                                             )}
+                                                                            {(() => {
+                                                                                const collab = collabFor(collaborations, stream);
+                                                                                return collab && (
+                                                                                    <span className="ml-0.5 flex">
+                                                                                        <TogetherChip
+                                                                                            variant="name"
+                                                                                            collab={collab}
+                                                                                            onOpenChannel={(login) => void startStream(login)}
+                                                                                            allowMultiNook
+                                                                                        />
+                                                                                    </span>
+                                                                                );
+                                                                            })()}
                                                                         </div>
                                                                         {/* Browsing a category is one of the two places you
                                                                             actually FIND someone new, so it needs the same
@@ -3812,7 +3703,7 @@ const Home = () => {
                                     <h3 className="text-base font-bold text-textPrimary mb-1">
                                         {providerError
                                             ? 'Could Not Load Streams'
-                                            : isProviderView && activeTab === 'following' && providerFollows.every((f) => f.provider !== providerFilter)
+                                            : isProviderView && activeTab === 'following' && providerFollows.every((f) => f.provider !== providerFilter) && !(providerFilter === 'tiktok' && tiktokSignedIn)
                                                 ? `No ${providerLabel(providerFilter as ProviderId)} Channels Yet`
                                                 : activeTab === 'following' ? 'No Live Streams' : activeTab === 'recommended' ? 'No Streams' : 'No Results'}
                                     </h3>
@@ -3821,13 +3712,15 @@ const Home = () => {
                                             ? providerError
                                                 ? `${providerLabel(providerFilter as ProviderId)} could not be reached right now.`
                                                 : activeTab === 'following'
-                                                    ? providerFollows.every((f) => f.provider !== providerFilter)
+                                                    ? providerFollows.every((f) => f.provider !== providerFilter) && !(providerFilter === 'tiktok' && tiktokSignedIn)
                                                         // Nothing here yet because the account isn't connected —
                                                         // say that, rather than implying we checked and found
                                                         // nobody live.
                                                         ? connectImportsFollows
                                                             ? `Connect your ${providerLabel(providerFilter as ProviderId)} account in Settings to see the channels you follow.`
-                                                            : `Follow ${providerLabel(providerFilter as ProviderId)} creators you find in Discover and they will show up here.`
+                                                            : providerFilter === 'tiktok'
+                                                                ? 'Sign in to see the TikTok creators you follow.'
+                                                                : `Follow ${providerLabel(providerFilter as ProviderId)} creators you find in Discover and they will show up here.`
                                                         : `None of the ${providerLabel(providerFilter as ProviderId)} channels you follow are live.`
                                                     : `Nothing live on ${providerLabel(providerFilter as ProviderId)} right now.`
                                             : activeTab === 'following'
@@ -3843,7 +3736,32 @@ const Home = () => {
                                         Only shown once CONNECTED — otherwise it competed with
                                         the login panel above, offering to browse away from the
                                         thing the user was being asked to do. */}
-                                    {isProviderView && activeTab === 'following' && !providerError && providerConnected && (
+                                    {/* TikTok signed out: the sign-in comes first, since it is
+                                        what brings in who you follow. TikTok still browses and
+                                        plays signed out, so Discover stays offered beneath it
+                                        rather than hidden behind a wall. */}
+                                    {isProviderView && providerFilter === 'tiktok' && activeTab === 'following' && !providerError && !tiktokSignedIn ? (
+                                        <>
+                                            <div className="mt-4 flex justify-center">
+                                                <PlatformLoginButton
+                                                    provider="tiktok"
+                                                    onClick={() => void connectPlatformAccount('tiktok')}
+                                                    busy={tiktokConnecting}
+                                                />
+                                            </div>
+                                            <div className="mt-4 pt-4 border-t border-borderSubtle">
+                                                <p className="text-textSecondary text-xs mb-3">
+                                                    Or follow creators you find in Discover
+                                                </p>
+                                                <button
+                                                    onClick={() => setActiveTab('recommended')}
+                                                    className="glass-button px-4 py-2 text-sm font-medium rounded-lg transition-all hover:scale-105 mx-auto"
+                                                >
+                                                    Browse TikTok
+                                                </button>
+                                            </div>
+                                        </>
+                                    ) : isProviderView && activeTab === 'following' && !providerError && providerConnected && (
                                         <button
                                             // A feed platform has no Categories tab, so its
                                             // directory is Discover.
@@ -4098,10 +4016,9 @@ const Home = () => {
                         }}
                     >
                         <div className="animate-fly-up-fade">
-                            <Package
-                                size={24}
-                                className="automation-shimmer-gold"
-                            />
+                            <AutomationPulse tone="gold">
+                                <Package size={24} />
+                            </AutomationPulse>
                         </div>
                     </div>
                 )}

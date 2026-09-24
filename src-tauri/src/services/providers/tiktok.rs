@@ -1,4 +1,4 @@
-//! TikTok LIVE chat adapter (read-only).
+//! TikTok LIVE chat adapter.
 //!
 //! Reads a creator's LIVE webcast over TikTok's anonymous WebSocket and normalizes
 //! each event into the shared `ChatMessage` published onto the local-WS bus. The
@@ -12,8 +12,9 @@
 //! signing API (it ships a Rust SDK and a per-user free tier).
 //!
 //! What we surface (the multistreamer command-center asks): live chat, follows,
-//! gifts (roses etc.), shares, and hearts/likes -> the activity feed + inline. Sends
-//! are ban-risk on TikTok, so `send_capability` reports read-only.
+//! gifts (roses etc.), shares, and hearts/likes -> the activity feed + inline.
+//! Reading needs no account. Sending does, and goes out through TikTok's own
+//! page on the signed-in profile (`tiktok_send`), only when someone presses send.
 
 use super::{
     dec_bridge_users, inc_bridge_users, key, publish_chat_message, publish_frame, ChatProvider,
@@ -190,17 +191,35 @@ impl ChatProvider for TikTokProvider {
         });
     }
 
-    async fn send(&self, _channel: &str, _text: &str, _reply_to: Option<&str>) -> Result<SendOutcome> {
-        // Sending to TikTok LIVE from outside the app is ban-risk, so v1 is read-only.
-        Ok(SendOutcome {
+    /// Chat as the signed-in account, through TikTok's own page (see
+    /// `tiktok_send`). TikTok chat has no reply threads, so a reply arrives here
+    /// already written as the @mention TikTok's own client sends.
+    async fn send(&self, channel: &str, text: &str, _reply_to: Option<&str>) -> Result<SendOutcome> {
+        let refused = |why: &str| SendOutcome {
             message_id: None,
             is_sent: false,
-            drop_reason: Some("Sending to TikTok isn't available".to_string()),
-        })
+            drop_reason: Some(why.to_string()),
+        };
+        let text = text.trim();
+        if text.is_empty() {
+            return Ok(refused("Nothing to send"));
+        }
+        if !crate::services::tiktok_auth_service::is_connected() {
+            return Ok(refused("Sign in to TikTok to chat"));
+        }
+        let handle = clean_handle(channel).to_lowercase();
+        let Some(room_id) = crate::services::providers::tiktok_media::room_id_for(&handle).await? else {
+            return Ok(refused(&format!("@{} isn't live right now", handle)));
+        };
+        crate::services::providers::tiktok_send::send(&room_id, text).await
     }
 
     async fn send_capability(&self, _channel: &str) -> SendCapability {
-        SendCapability::ReadOnly
+        if crate::services::tiktok_auth_service::is_connected() {
+            SendCapability::Sendable
+        } else {
+            SendCapability::NeedsLogin
+        }
     }
 }
 
@@ -303,7 +322,45 @@ async fn handle_event(event: TikTokLiveEvent, channel_key: &str, id_lc: &str) {
         TikTokLiveEvent::RoomUserSeq(m) => update_viewers(id_lc, &m),
         TikTokLiveEvent::ImDelete(m) => emit_deletions(&m, channel_key).await,
         TikTokLiveEvent::LiveEnded(_) => announce_ended(id_lc),
+        // A co-host joining or leaving, a layout switch, a battle starting or
+        // ending: the picture's place inside the frame is about to move. Score
+        // and ticket updates (Armies, FanTicket, BattleTask) are left out: they
+        // tick constantly and never move anything.
+        TikTokLiveEvent::LinkMicLayoutState(_)
+        | TikTokLiveEvent::LinkLayer(_)
+        | TikTokLiveEvent::LinkMicMethod(_)
+        | TikTokLiveEvent::LinkMessage(_)
+        | TikTokLiveEvent::LinkState(_)
+        | TikTokLiveEvent::LinkMicBattle(_)
+        | TikTokLiveEvent::LinkMicBattlePunishFinish(_) => announce_layout(id_lc),
         _ => {}
+    }
+}
+
+/// Tell the player the room's co-host layout is changing, so it re-measures
+/// the picture now instead of on its slow safety-net clock. Link messages come
+/// in bursts at a transition; one event per burst is enough, since the player
+/// looks several times over the next few seconds.
+fn announce_layout(id_lc: &str) {
+    static LAST: OnceLock<std::sync::Mutex<HashMap<String, Instant>>> = OnceLock::new();
+    {
+        let Ok(mut last) = LAST.get_or_init(Default::default).lock() else {
+            return;
+        };
+        if last
+            .get(id_lc)
+            .is_some_and(|t| t.elapsed() < Duration::from_millis(400))
+        {
+            return;
+        }
+        last.insert(id_lc.to_string(), Instant::now());
+    }
+    if let Some(app) = super::app_handle() {
+        use tauri::Emitter;
+        let _ = app.emit(
+            "provider-stream-layout",
+            serde_json::json!({ "provider": "tiktok", "channel": id_lc }),
+        );
     }
 }
 

@@ -1,5 +1,5 @@
-//! TikTok's browse + watch adapter (`StreamSource`), sibling of the read-only
-//! chat adapter in `tiktok.rs`.
+//! TikTok's browse + watch adapter (`StreamSource`), sibling of the chat
+//! adapter in `tiktok.rs`.
 //!
 //! Resolution is two hops, both anonymous: a profile scrape gives the room id
 //! (non-empty only while the creator is live), and `room/info` gives the
@@ -12,7 +12,7 @@
 use crate::models::provider_stream::{CategoryPage, ProviderStream, StreamPage};
 use crate::services::providers::key::make_key;
 use crate::services::providers::source::{
-    PlaybackKind, PlaybackQuality, ResolvedPlayback, SourceCaps, StreamSource,
+    PlaybackKind, PlaybackQuality, ResolvedPlayback, SignInRequired, SourceCaps, StreamSource,
 };
 use crate::services::tiktok_relay;
 use anyhow::{anyhow, Result};
@@ -53,6 +53,11 @@ static ROOMS: Lazy<Mutex<HashMap<String, (Instant, Option<String>)>>> =
 /// starts a new one the id changes, so a dead ladder can never be replayed.
 static RENDITIONS: Lazy<Mutex<HashMap<String, (Instant, Vec<TikTokRendition>)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+/// Signed in, creators followed only in StreamNook are still checked one
+/// request each, so they keep the signed-out pace while the account's own list
+/// (one request) is read more often. Between checks their last answer stands.
+const IN_APP_CHECK_EVERY: Duration = Duration::from_secs(90);
+static IN_APP_LIVE: Lazy<Mutex<Option<(Instant, Vec<ProviderStream>)>>> = Lazy::new(|| Mutex::new(None));
 
 pub struct TikTokSource;
 
@@ -115,6 +120,39 @@ pub fn note_live_room(handle: &str, room_id: &str) {
     }
 }
 
+/// Record a room's tiers, learned from the live feed, which carries the same
+/// stream data room info does. A click on that card then starts playing
+/// without asking TikTok about the room at all.
+pub fn note_renditions(room_id: &str, renditions: Vec<TikTokRendition>) {
+    if room_id.is_empty() || renditions.is_empty() {
+        return;
+    }
+    if let Ok(mut cache) = RENDITIONS.lock() {
+        cache.insert(room_id.to_string(), (Instant::now(), renditions));
+    }
+}
+
+#[cfg(test)]
+pub fn has_renditions(room_id: &str) -> bool {
+    RENDITIONS.lock().map(|c| c.contains_key(room_id)).unwrap_or(false)
+}
+
+/// A creator's public face on TikTok: the nickname and picture their profile
+/// shows everyone. One anonymous profile read.
+pub async fn public_identity(handle: &str) -> Result<(String, String)> {
+    let h = clean_handle(handle);
+    let token = ttwid().await?;
+    let profile = scrape_profile(&h, &token, HTTP_TIMEOUT, None, None, None)
+        .await
+        .map_err(|e| anyhow!("{}", friendly(&e, &h)))?;
+    let avatar = if profile.avatar_medium.is_empty() {
+        profile.avatar_thumb
+    } else {
+        profile.avatar_medium
+    };
+    Ok((profile.nickname, avatar))
+}
+
 /// Forget everything cached for a handle. Called when a broadcast is observed
 /// to have ended, so the next resolve starts clean rather than replaying a
 /// ladder whose URLs are already dead.
@@ -135,7 +173,7 @@ pub fn invalidate(handle: &str) {
 /// A scrape answers this AND the identity the metadata surfaces need, which is
 /// why it is preferred over the narrower room-id endpoint: one request serves
 /// liveness, display name, avatar and follower count.
-async fn room_id_for(handle: &str) -> Result<Option<String>> {
+pub(crate) async fn room_id_for(handle: &str) -> Result<Option<String>> {
     if let Ok(cache) = ROOMS.lock() {
         if let Some((at, room)) = cache.get(handle) {
             let ttl = if room.is_some() {
@@ -175,10 +213,12 @@ async fn renditions_for(room_id: &str, handle: &str) -> Result<Vec<TikTokRenditi
         Ok(info) => info,
         Err(E::AgeRestricted(_)) => {
             let Some(cookies) = crate::services::tiktok_auth_service::cookie_header() else {
-                return Err(anyhow!(
-                    "@{}'s LIVE is age restricted. Sign in to TikTok in Settings, Accounts to watch it",
-                    handle
-                ));
+                return Err(SignInRequired {
+                    provider: "tiktok",
+                    channel: handle.to_string(),
+                    message: format!("@{}'s LIVE is 18+. Sign in to TikTok to watch it.", handle),
+                }
+                .into());
             };
             let signed = FetchParams {
                 cookies: Some(&cookies),
@@ -188,7 +228,7 @@ async fn renditions_for(room_id: &str, handle: &str) -> Result<Vec<TikTokRenditi
                 Ok(info) => info,
                 Err(E::AgeRestricted(_)) => {
                     return Err(anyhow!(
-                        "@{}'s LIVE is age restricted, and your TikTok account can't watch it",
+                        "@{}'s LIVE is 18+, and your TikTok account can't watch it",
                         handle
                     ))
                 }
@@ -214,7 +254,7 @@ fn friendly(e: &tiktok_live::errors::TikTokLiveError, handle: &str) -> String {
     match e {
         E::UserNotFound(_) | E::ProfileNotFound(_) => format!("@{} was not found on TikTok", handle),
         E::ProfilePrivate(_) => format!("@{}'s profile is private", handle),
-        E::AgeRestricted(_) => "This TikTok LIVE is age restricted".to_string(),
+        E::AgeRestricted(_) => "This TikTok LIVE is 18+".to_string(),
         E::HostNotOnline(_) | E::RoomIdMissing => {
             format!("@{} isn't live right now", handle)
         }
@@ -230,6 +270,35 @@ fn friendly(e: &tiktok_live::errors::TikTokLiveError, handle: &str) -> String {
 /// on one while an H.264 tier exists.
 fn risky_codec(codec: Option<&str>) -> bool {
     matches!(codec, Some(c) if c.starts_with("bytevc"))
+}
+
+/// Which deliveries to try for a tier, fastest first.
+///
+/// FLV first when the tier is H.264. TikTok's FLV CDN answers a new connection
+/// with the GOPs it has cached, so the two segments a player's start needs are
+/// cut one to three seconds after connecting. Its DASH CDN keeps only the
+/// segment in production, so a new session waits for two brand-new segments to
+/// be made: four to six seconds, measured on the same rooms.
+///
+/// DASH next (already fMP4, and published by every room that is not FLV-only),
+/// then TikTok's own HLS, which mostly answers 504 but costs nothing to keep.
+/// An HEVC tier leaves FLV out: the remux takes H.264 only, while an HEVC DASH
+/// stream may still decode where the machine has a decoder for it.
+fn delivery_order(r: &TikTokRendition) -> Vec<(String, tiktok_relay::Packaging)> {
+    use tiktok_relay::Packaging::{Dash, Flv, Hls};
+    let mut out = Vec::new();
+    if !risky_codec(r.vcodec.as_deref()) {
+        if let Some(u) = &r.flv {
+            out.push((u.clone(), Flv));
+        }
+    }
+    if let Some(u) = &r.cmaf {
+        out.push((u.clone(), Dash));
+    }
+    if let Some(u) = &r.hls {
+        out.push((u.clone(), Hls));
+    }
+    out
 }
 
 /// Menu row for one tier.
@@ -458,9 +527,10 @@ impl StreamSource for TikTokSource {
             // Exact-handle jump, the same shape Kick uses: typing a creator's
             // name takes you to them. There is no anonymous search endpoint.
             search: true,
-            // TikTok's own following list needs a session; follows live in
-            // `Settings.provider_follows` and are swept by `live_check`.
-            native_follows: false,
+            // Signed in, the account's own follows (see `tiktok_following`),
+            // polled like every other platform's. Signed out, follows made in
+            // StreamNook are swept anonymously by `live_check`.
+            native_follows: crate::services::tiktok_auth_service::is_connected(),
             live_check: true,
         }
     }
@@ -483,55 +553,52 @@ impl StreamSource for TikTokSource {
             .ok_or_else(|| anyhow!("@{} published no playable rendition", handle))?;
         let chosen = &renditions[idx];
 
-        // DASH first, which is the opposite of what the field names suggest.
-        //
-        // `cmaf` is not HLS: it is an `index.mpd`. It is also the only delivery
-        // that reliably works. Measured across live rooms, the `hls` endpoint
-        // answers 504 on most of TikTok's fleet, and where it does answer it
-        // serves a frozen playlist whose segments 404 even when fetched
-        // straight from the CDN with no relay involved. The DASH manifest
-        // updates and its segments fetch clean, and because those segments are
-        // already fMP4 there is no container work to do.
-        //
-        // `hls` stays as the fallback rather than being dropped: it is the
-        // cheaper path when it works, and TikTok may repair it.
-        //
-        // FLV last. It is the only packaging some rooms publish (two in eleven
-        // of TikTok's Top live, measured), and the relay has to rewrite its
-        // container rather than just its manifest, so it is the costliest.
-        let (upstream, packaging) = match (&chosen.cmaf, &chosen.hls, &chosen.flv) {
-            (Some(mpd), _, _) => (mpd.clone(), tiktok_relay::Packaging::Dash),
-            (None, Some(m3u8), _) => (m3u8.clone(), tiktok_relay::Packaging::Hls),
-            (None, None, Some(flv)) => (flv.clone(), tiktok_relay::Packaging::Flv),
-            (None, None, None) => {
-                return Err(anyhow!(
-                    "@{} is streaming in a format StreamNook can't play",
-                    handle
-                ))
+        let order = delivery_order(chosen);
+        if order.is_empty() {
+            return Err(anyhow!(
+                "@{} is streaming in a format StreamNook can't play",
+                handle
+            ));
+        }
+        // Each start fails fast and says why (an FLV pull that never names its
+        // codecs, a manifest that will not load), so a delivery that cannot be
+        // served costs a few seconds and the next one is tried, rather than the
+        // whole start failing on the first.
+        let mut last_err = None;
+        for (upstream, packaging) in order {
+            let started = tiktok_relay::start(
+                stream_id,
+                &handle,
+                tiktok_relay::Upstream {
+                    url: upstream,
+                    packaging,
+                    tier: chosen.tier.clone(),
+                    width: chosen.width,
+                    height: chosen.height,
+                    fps: chosen.fps,
+                    bandwidth: chosen.vbitrate,
+                },
+            )
+            .await;
+            match started {
+                Ok(url) => {
+                    return Ok(ResolvedPlayback {
+                        kind: PlaybackKind::LocalHls,
+                        url,
+                        quality: label,
+                        qualities: menu,
+                    })
+                }
+                Err(e) => {
+                    log::warn!("[TikTok] @{} {:?} start failed, trying the next delivery: {}", handle, packaging, e);
+                    last_err = Some(e);
+                }
             }
-        };
-
-        let url = tiktok_relay::start(
-            stream_id,
-            &handle,
-            tiktok_relay::Upstream {
-                url: upstream,
-                packaging,
-                tier: chosen.tier.clone(),
-                width: chosen.width,
-                height: chosen.height,
-                fps: chosen.fps,
-                bandwidth: chosen.vbitrate,
-            },
-        )
-        .await?;
-
-        Ok(ResolvedPlayback {
-            kind: PlaybackKind::LocalHls,
-            url,
-            quality: label,
-            qualities: menu,
-        })
+        }
+        // Nothing here played, so nothing cached for this room is trusted
+        // again: a retry asks TikTok afresh rather than replaying the same URLs.
+        invalidate(&handle);
+        Err(last_err.unwrap_or_else(|| anyhow!("@{} could not be started", handle)))
     }
 
     /// Session free, unlike the trait default.
@@ -575,7 +642,12 @@ impl StreamSource for TikTokSource {
         })
     }
 
+    /// TikTok's own LIVE search, by name or handle, which answers signed out.
+    /// When the query could be a handle and the search did not bring that exact
+    /// creator back, the creator is looked up directly too, so an exact handle
+    /// is found live or offline.
     async fn search(&self, query: &str) -> Result<StreamPage> {
+        let query = query.trim();
         let handle = clean_handle(query);
         if handle.is_empty() {
             return Ok(StreamPage {
@@ -583,17 +655,37 @@ impl StreamSource for TikTokSource {
                 cursor: None,
             });
         }
-        match self.row_for(&handle).await {
-            Ok(row) => Ok(StreamPage {
-                streams: vec![row],
-                cursor: None,
-            }),
-            // Not found is an empty result, not a failure.
-            Err(_) => Ok(StreamPage {
-                streams: vec![],
-                cursor: None,
-            }),
+        let found = crate::services::providers::tiktok_feed::search(query).await;
+        let handle_like = handle.len() <= 64
+            && handle
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.');
+        let named = |rows: &[ProviderStream]| rows.iter().any(|r| r.user_login == handle);
+        let exact = match &found {
+            Ok(rows) if named(rows) => None,
+            _ if handle_like => self.row_for(&handle).await.ok(),
+            _ => None,
+        };
+        let mut streams = match found {
+            Ok(rows) => rows,
+            Err(e) if exact.is_some() => {
+                log::warn!("[TikTok] search for {:?} failed: {}", query, e);
+                Vec::new()
+            }
+            Err(e) => return Err(e),
+        };
+        if let Some(row) = exact {
+            // The creator the query names, ahead of the matches while live.
+            if row.is_live {
+                streams.insert(0, row);
+            } else {
+                streams.push(row);
+            }
         }
+        Ok(StreamPage {
+            streams,
+            cursor: None,
+        })
     }
 
     async fn categories(&self, _cursor: Option<&str>, _limit: u32) -> Result<CategoryPage> {
@@ -649,9 +741,64 @@ impl StreamSource for TikTokSource {
         Ok(out)
     }
 
+    /// Signed in only: who the account follows on TikTok and is live, plus any
+    /// creator followed in StreamNook itself that the account does not follow.
     async fn followed_live(&self) -> Result<Vec<ProviderStream>> {
-        Err(anyhow!("followed_live is not supported on tiktok"))
+        let mut rows = crate::services::providers::tiktok_following::followed_live().await?;
+        let extra: Vec<String> = in_app_follows()
+            .into_iter()
+            .filter(|h| !rows.iter().any(|r| r.user_login == *h))
+            .collect();
+        if !extra.is_empty() {
+            rows.extend(self.in_app_live(&extra).await);
+        }
+        Ok(rows)
     }
+}
+
+impl TikTokSource {
+    /// The live ones among `handles`, checked at most every `IN_APP_CHECK_EVERY`.
+    async fn in_app_live(&self, handles: &[String]) -> Vec<ProviderStream> {
+        let last = IN_APP_LIVE.lock().ok().and_then(|c| c.clone());
+        let live = match last {
+            Some((at, rows)) if at.elapsed() < IN_APP_CHECK_EVERY => rows,
+            last => match self.live_check(handles).await {
+                Ok(rows) => {
+                    let live: Vec<ProviderStream> = rows.into_iter().filter(|r| r.is_live).collect();
+                    if let Ok(mut c) = IN_APP_LIVE.lock() {
+                        *c = Some((Instant::now(), live.clone()));
+                    }
+                    live
+                }
+                Err(e) => {
+                    log::debug!("[TikTok] live check of in-app follows failed: {}", e);
+                    last.map(|(_, rows)| rows).unwrap_or_default()
+                }
+            },
+        };
+        // Only those still wanted: one unfollowed since the check, or now on the
+        // account's own list, is not added twice.
+        live.into_iter().filter(|r| handles.contains(&r.user_login)).collect()
+    }
+}
+
+/// Creators followed in StreamNook itself, by handle.
+fn in_app_follows() -> Vec<String> {
+    use tauri::Manager;
+    let Some(app) = crate::services::providers::app_handle() else {
+        return Vec::new();
+    };
+    let state = app.state::<crate::models::settings::AppState>();
+    let Ok(settings) = state.settings.lock() else {
+        return Vec::new();
+    };
+    settings
+        .provider_follows
+        .iter()
+        .filter(|f| f.provider == "tiktok")
+        .map(|f| clean_handle(&f.channel))
+        .filter(|h| !h.is_empty())
+        .collect()
 }
 
 #[cfg(test)]
@@ -755,6 +902,47 @@ mod tests {
         // The menu row must not advertise a url the player cannot use.
         assert_eq!(quality_of(&r).url, "", "a DASH url must not reach the menu");
         assert!(r.hls.is_none());
+    }
+
+    fn published(flv: bool, cmaf: bool, hls: bool, codec: &str) -> TikTokRendition {
+        let url = |s: &str| Some(format!("https://pull.tiktokcdn.com/x.{s}"));
+        TikTokRendition {
+            tier: "hd".into(),
+            label: "hd".into(),
+            flv: if flv { url("flv") } else { None },
+            cmaf: if cmaf { url("mpd") } else { None },
+            hls: if hls { url("m3u8") } else { None },
+            vcodec: Some(codec.into()),
+            ..Default::default()
+        }
+    }
+
+    fn kinds(order: &[(String, tiktok_relay::Packaging)]) -> Vec<tiktok_relay::Packaging> {
+        order.iter().map(|(_, p)| *p).collect()
+    }
+
+    #[test]
+    fn flv_is_tried_first_because_it_starts_soonest() {
+        use tiktok_relay::Packaging::{Dash, Flv, Hls};
+        let order = delivery_order(&published(true, true, true, "h264"));
+        assert_eq!(kinds(&order), vec![Flv, Dash, Hls]);
+        assert!(order[0].0.ends_with(".flv"), "{order:?}");
+    }
+
+    #[test]
+    fn an_hevc_tier_never_goes_to_the_remux() {
+        use tiktok_relay::Packaging::{Dash, Hls};
+        assert_eq!(kinds(&delivery_order(&published(true, true, true, "bytevc1"))), vec![Dash, Hls]);
+        // HEVC over FLV alone: nothing here can serve it.
+        assert!(delivery_order(&published(true, false, false, "bytevc1")).is_empty());
+    }
+
+    #[test]
+    fn a_room_publishing_one_delivery_gets_that_one() {
+        use tiktok_relay::Packaging::{Dash, Flv};
+        assert_eq!(kinds(&delivery_order(&published(true, false, false, "h264"))), vec![Flv]);
+        assert_eq!(kinds(&delivery_order(&published(false, true, false, "h264"))), vec![Dash]);
+        assert!(delivery_order(&published(false, false, false, "h264")).is_empty());
     }
 
     #[test]
@@ -862,6 +1050,89 @@ mod tests {
     /// SN_TIKTOK_HANDLE=<handle> cargo test --lib --no-default-features \
     ///     -- --ignored --nocapture resolves_a_real_live_room
     /// ```
+    /// How long each delivery takes to become playable, through the real relay:
+    /// relay start, then the first media playlist (which is the start hold),
+    /// then the init and first segment. `SN_TIKTOK_HANDLES=a,b,c`.
+    #[tokio::test]
+    #[ignore = "needs live TikTok rooms; set SN_TIKTOK_HANDLES"]
+    async fn times_a_start_per_delivery() {
+        let handles = std::env::var("SN_TIKTOK_HANDLES").expect("SN_TIKTOK_HANDLES");
+        let client = reqwest::Client::new();
+        for handle in handles.split(',').map(clean_handle) {
+            let t = Instant::now();
+            let Some(room) = room_id_for(&handle).await.expect("room") else {
+                println!("@{handle}: not live");
+                continue;
+            };
+            let renditions = renditions_for(&room, &handle).await.expect("renditions");
+            let resolve_ms = t.elapsed().as_millis();
+            let menu: Vec<PlaybackQuality> = renditions.iter().map(quality_of).collect();
+            let codecs: Vec<Option<String>> = renditions.iter().map(|r| r.vcodec.clone()).collect();
+            let (idx, _) = select_tier(&menu, &codecs, "best").expect("tier");
+            let chosen = &renditions[idx];
+            let mut line = format!("@{handle:<22} resolve {resolve_ms:>5} ms");
+            for (url, packaging) in delivery_order(chosen).into_iter().take(2) {
+                let sid = "timing";
+                let t = Instant::now();
+                let up = tiktok_relay::Upstream {
+                    url,
+                    packaging,
+                    tier: chosen.tier.clone(),
+                    width: chosen.width,
+                    height: chosen.height,
+                    fps: chosen.fps,
+                    bandwidth: chosen.vbitrate,
+                };
+                let master_url = match tiktok_relay::start(sid, &handle, up).await {
+                    Ok(u) => u,
+                    Err(e) => {
+                        line.push_str(&format!(" | {packaging:?} failed: {e}"));
+                        continue;
+                    }
+                };
+                let started_ms = t.elapsed().as_millis();
+                let origin = master_url.split("/s/").next().unwrap().to_string();
+                let master = client.get(&master_url).send().await.unwrap().text().await.unwrap();
+                let media_ref = master
+                    .lines()
+                    .map(str::trim)
+                    .find(|l| !l.is_empty() && !l.starts_with('#'))
+                    .expect("media ref")
+                    .to_string();
+                let media = client
+                    .get(format!("{origin}{media_ref}"))
+                    .send()
+                    .await
+                    .unwrap()
+                    .text()
+                    .await
+                    .unwrap();
+                let playlist_ms = t.elapsed().as_millis();
+                let listed = media.lines().filter(|l| l.starts_with("#EXTINF")).count();
+                let init = media
+                    .lines()
+                    .find(|l| l.starts_with("#EXT-X-MAP"))
+                    .and_then(|l| l.split("URI=\"").nth(1))
+                    .and_then(|r| r.split('"').next())
+                    .map(str::to_string);
+                let first = media
+                    .lines()
+                    .map(str::trim)
+                    .find(|l| !l.is_empty() && !l.starts_with('#'))
+                    .map(str::to_string);
+                for path in init.into_iter().chain(first) {
+                    let _ = client.get(format!("{origin}{path}")).send().await.unwrap().bytes().await;
+                }
+                let ready_ms = t.elapsed().as_millis();
+                tiktok_relay::stop(sid);
+                line.push_str(&format!(
+                    " | {packaging:?}: started {started_ms:>4}, playlist {playlist_ms:>5} ({listed} segs), ready {ready_ms:>5} ms"
+                ));
+            }
+            println!("{line}");
+        }
+    }
+
     #[tokio::test]
     #[ignore = "needs a live TikTok room; set SN_TIKTOK_HANDLE"]
     async fn resolves_a_real_live_room() {

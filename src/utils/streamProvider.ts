@@ -51,6 +51,9 @@ export function isTwitchStream(stream: Pick<TwitchStream, 'provider'> | null | u
  * The composite `<provider>:<channel>` key for a row. Twitch rows return a
  * BARE login (not `twitch:name`) so existing persisted keys — favorites,
  * resume snapshots, chat slices — stay byte-identical.
+ *
+ * Rust twin: `stream_key` in src-tauri/src/services/providers/key.rs, which
+ * dedupes the unified Discover list on the key its cards render under here.
  */
 export function streamKey(stream: Pick<TwitchStream, 'provider' | 'user_login'>): string {
   const provider = streamProvider(stream);
@@ -84,12 +87,16 @@ export function buildProviderUrl(provider: ProviderId, channel: string): string 
     case 'kick':
       return `https://kick.com/${encodeURIComponent(channel)}`;
     case 'youtube':
-      // @handles and UC ids address a channel's live page; a bare video id is a watch URL.
+      // @handles and channel ids address a channel's live page; anything else is
+      // a video id. A channel id is known by its SHAPE (24 characters, `UC`),
+      // case-insensitively for rows stored lowercased: an 11-character video id
+      // can start with `UC` too. Twin of Rust `watch_urls::watch_url`; both are
+      // held to providerTwins.fixtures.json.
       if (channel.startsWith('@')) return `https://www.youtube.com/${channel}/live`;
-      if (channel.startsWith('UC')) return `https://www.youtube.com/channel/${channel}/live`;
+      if (channel.length === 24 && /^uc/i.test(channel)) return `https://www.youtube.com/channel/${channel}/live`;
       return `https://www.youtube.com/watch?v=${encodeURIComponent(channel)}`;
     case 'tiktok':
-      return `https://www.tiktok.com/@${encodeURIComponent(channel)}/live`;
+      return `https://www.tiktok.com/@${encodeURIComponent(channel.replace(/^@/, ''))}/live`;
     default:
       return `https://twitch.tv/${encodeURIComponent(channel)}`;
   }

@@ -266,6 +266,13 @@ fn apply_sdk_params(r: &mut TikTokRendition, raw: Option<&Value>) {
         .map(|s| s.trim().to_ascii_lowercase());
 }
 
+/// The tiers of a room object on its own, as the live feed carries it: the same
+/// `stream_url` block room info returns, one level up (no `data` wrapper).
+pub fn stream_url_of_room(room: &Value) -> Option<StreamUrl> {
+    let stream_url = room.get("stream_url")?;
+    parse_stream_urls(&serde_json::json!({ "data": { "stream_url": stream_url } }))
+}
+
 /// Every tier a LIVE room publishes, best first, with the legacy FLV fields
 /// derived from the same pass so the two can never disagree.
 ///
@@ -463,6 +470,19 @@ mod stream_url_tests {
                 }
             }}}}
         })
+    }
+
+    #[test]
+    fn a_feed_room_reads_the_same_as_room_info() {
+        let info = modern_room();
+        // The feed carries the room object itself, with `stream_url` at its top.
+        let room = json!({ "id_str": "7", "stream_url": info["data"]["stream_url"].clone() });
+        let from_feed = stream_url_of_room(&room).expect("tiers from a feed room");
+        let from_info = parse_stream_urls(&info).expect("tiers from room info");
+        let tiers = |s: &StreamUrl| s.renditions.iter().map(|r| (r.tier.clone(), r.flv.clone(), r.cmaf.clone())).collect::<Vec<_>>();
+        assert_eq!(tiers(&from_feed), tiers(&from_info));
+        assert_eq!(from_feed.default_tier, from_info.default_tier);
+        assert!(stream_url_of_room(&json!({ "id_str": "7" })).is_none(), "no stream_url, nothing to read");
     }
 
     #[test]

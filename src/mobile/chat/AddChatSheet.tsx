@@ -8,7 +8,7 @@
 // `profile_image_url`, so offline results need no extra call.
 import React, { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Eye, MagnifyingGlass } from 'phosphor-react';
+import { MagnifyingGlass, UsersThree } from 'phosphor-react';
 import { MobileSheet } from '../ui/MobileSheet';
 import { useAppStore } from '../../stores/AppStore';
 import { useChatTabsStore } from './chatTabsStore';
@@ -216,7 +216,7 @@ export const AddChatSheet: React.FC<{ open: boolean; onClose: () => void }> = ({
                   live &&
                   stream.viewer_count > 0 && (
                     <span className="flex items-center gap-1 shrink-0 text-[12px] text-textMuted tabular-nums">
-                      <Eye size={13} />
+                      <UsersThree size={13} weight="fill" />
                       {stream.viewer_count.toLocaleString()}
                     </span>
                   )

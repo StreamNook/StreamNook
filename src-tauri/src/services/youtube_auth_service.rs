@@ -66,6 +66,23 @@ struct YouTubeSession {
     /// `probe_identity`.
     #[serde(default)]
     delegated_session_id: Option<String>,
+    /// The signed-in channel's own `UC…` id.
+    ///
+    /// This is what a YouTube live-chat message carries as `authorExternalChannelId`,
+    /// so it is the value that lets a member's StreamNook cosmetics find them in
+    /// YouTube chat. It is NOT `delegated_session_id`, which is an opaque page id
+    /// and never appears in a chat payload. Cleared whenever the active channel
+    /// changes, so a brand-account switch cannot keep publishing the old one.
+    #[serde(default)]
+    account_channel_id: Option<String>,
+    /// Whether the channel id has been LOOKED FOR yet, as distinct from found.
+    ///
+    /// An account with no channel legitimately has none, so "still None" cannot
+    /// mean "try again" or that account would re-request the menu forever.
+    /// Sessions stored before this existed default to false and get exactly one
+    /// look, which is how they backfill.
+    #[serde(default)]
+    channel_id_checked: bool,
 }
 
 static SESSION: OnceLock<Mutex<Option<YouTubeSession>>> = OnceLock::new();
@@ -142,6 +159,22 @@ pub fn youtube_profile_dir() -> PathBuf {
     let dir = base.join("platform_web_profiles").join("youtube");
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+/// The sign-in profile, for signing it out and for starting a fresh sign-in.
+#[cfg(desktop)]
+fn profile() -> crate::services::sign_in_profile::SignInProfile {
+    crate::services::sign_in_profile::SignInProfile {
+        dir: youtube_profile_dir(),
+        overlay_label: LOGIN_WINDOW_LABEL,
+        sign_out_label: "youtube-sign-out",
+        origin: ORIGIN,
+        // accounts.google.com is where the session is minted and handed on
+        // from, so a sign-out that left it would be undone by the next page.
+        sites: &["youtube.com", "google.com"],
+        session: session_id,
+        tag: "YouTube",
+    }
 }
 
 // --- Public surface ---------------------------------------------------------
@@ -236,6 +269,31 @@ fn sapisid(cookies: &HashMap<String, String>) -> Option<&String> {
         .get("SAPISID")
         .or_else(|| cookies.get("__Secure-3PAPISID"))
         .or_else(|| cookies.get("__Secure-1PAPISID"))
+}
+
+/// The value that tells one Google sign-in from another, None when signed out.
+fn session_id(cookies: &HashMap<String, String>) -> Option<&str> {
+    sapisid(cookies).map(String::as_str).filter(|v| !v.is_empty())
+}
+
+/// The full auth set, SAPISID and APISID. Anything less is a half-harvested
+/// session that 401s every request.
+fn has_auth_set(cookies: &HashMap<String, String>) -> bool {
+    session_id(cookies).is_some() && cookies.contains_key("APISID")
+}
+
+/// A full auth set whose session is not the one the profile kept from before
+/// this sign-in began.
+fn is_new_session(cookies: &HashMap<String, String>, stale: Option<&str>) -> bool {
+    has_auth_set(cookies)
+        && crate::services::sign_in_profile::is_new_session(session_id(cookies), stale)
+}
+
+/// Whether any session is stored, complete or not. None stored means signed out
+/// or never signed in, which is what separates a fresh sign-in from re-reading
+/// the account the profile already holds.
+fn has_stored_session() -> bool {
+    session_cell().lock().map(|s| s.is_some()).unwrap_or(false)
 }
 
 // --- Which identity this session acts as ------------------------------------
@@ -381,6 +439,12 @@ pub async fn refresh_identity() -> bool {
             if changed {
                 sess.account_name = None;
                 sess.account_avatar = None;
+                // The channel id belongs to the channel that was active, so it is
+                // stale for exactly the same reason. Left behind, the member would
+                // keep claiming the channel they just switched AWAY from, and
+                // their cosmetics would appear on someone else's chat rows.
+                sess.account_channel_id = None;
+                sess.channel_id_checked = false;
             }
             updated = Some(sess.clone());
         }
@@ -429,16 +493,21 @@ pub async fn resync_identity() -> bool {
     stored_identity().effective() != before.effective()
 }
 
-/// Sign out: drop the cached/persisted session and wipe the YouTube webview profile
-/// so the next connect is a fresh login.
-pub fn disconnect() {
+/// Sign out: drop the cached/persisted session and sign the YouTube web profile
+/// out, so the next connect is a fresh login. The profile is cleared through a
+/// live webview on it, since deleting its folder does not reliably sign it out
+/// (see `sign_in_profile`; on macOS only YouTube's and Google's cookies go);
+/// `reharvest` refuses to run with nothing stored, so nothing reads the old
+/// session back in the meantime.
+pub async fn disconnect() {
     if let Ok(mut s) = session_cell().lock() {
         *s = None;
     }
     clear_persisted();
-    let _ = std::fs::remove_dir_all(youtube_profile_dir());
     // Moderation answers were computed for the account that just signed out.
     crate::services::providers::youtube::clear_moderation_cache();
+    #[cfg(desktop)]
+    crate::services::sign_in_profile::sign_out(&profile()).await;
     crate::services::providers::emit_platform_account_changed(&["youtube"]);
 }
 
@@ -485,17 +554,26 @@ pub async fn recover_stale_session() -> bool {
 /// them (the same reason Kick reads its site session this way).
 #[cfg(desktop)]
 pub async fn connect() -> Result<()> {
+    use crate::services::sign_in_profile;
     use tauri::Manager;
 
     let app = crate::services::providers::app_handle()
         .ok_or_else(|| anyhow!("app handle not available for YouTube login"))?;
+
+    // With nothing stored this is a fresh sign-in, and a session the profile
+    // still holds belongs to an account that signed out: the loop below would
+    // take it on its first poll. So the overlay opens blank and shows the
+    // sign-in only once that session is gone (see `sign_in_profile`). A
+    // session stored but incomplete is the opposite case, the same account,
+    // whose full set is re-read from the still-signed-in profile.
+    let fresh = !has_stored_session();
 
     // Hand the overlay the sign-in page. React measures the app body and mounts
     // the webview at that rect; `youtube-account` selects YouTube's own cookie jar.
     crate::commands::twitch::emit_overlay_open_with(
         &app,
         LOGIN_WINDOW_LABEL,
-        LOGIN_URL,
+        sign_in_profile::opening_url(fresh, LOGIN_URL),
         "fullbody",
         Some("youtube-account"),
     )
@@ -516,6 +594,15 @@ pub async fn connect() -> Result<()> {
         return Err(anyhow!("YouTube sign-in overlay never mounted"));
     }
 
+    // Belt and braces: the session the profile held when this began is never
+    // mistaken for this sign-in, whatever the clear managed.
+    let mut stale: Option<String> = None;
+    if fresh {
+        if let Some(win) = app.get_webview_window(LOGIN_WINDOW_LABEL) {
+            stale = sign_in_profile::begin_fresh(&app, &win, &profile(), LOGIN_URL).await;
+        }
+    }
+
     // Poll the overlay's cookie jar until the user finishes signing in (SAPISID
     // lands on youtube.com after the redirect back). Cap at ~5 minutes.
     let mut harvested: Option<HashMap<String, String>> = None;
@@ -530,7 +617,7 @@ pub async fn connect() -> Result<()> {
         if let Ok(map) = fetch_cookies_from_window(&app, LOGIN_WINDOW_LABEL, &[]).await {
             // Wait for the full auth set (SAPISID + APISID), not just SAPISID, so we
             // never persist a half-harvested session that 401s every request.
-            if sapisid(&map).is_some() && map.contains_key("APISID") {
+            if is_new_session(&map, stale.as_deref()) {
                 harvested = Some(map);
                 break;
             }
@@ -554,6 +641,8 @@ pub async fn connect() -> Result<()> {
         complete: true,
         session_index: None,
         delegated_session_id: None,
+        account_channel_id: None,
+        channel_id_checked: false,
     };
     // Store first so auth_headers() (used by the account-name fetch) sees the session.
     if let Ok(mut s) = session_cell().lock() {
@@ -617,7 +706,7 @@ pub async fn validate_session() -> Option<bool> {
     let resp = req.json(&body).send().await.ok()?;
     if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
         log::info!("[youtube] stored session was rejected (401); signing out");
-        disconnect();
+        disconnect().await;
         crate::services::providers::emit_platform_session_expired("youtube");
         return Some(false);
     }
@@ -643,7 +732,7 @@ pub async fn validate_session() -> Option<bool> {
         return Some(true);
     }
     log::info!("[youtube] re-harvest could not restore the session; signing out");
-    disconnect();
+    disconnect().await;
     crate::services::providers::emit_platform_session_expired("youtube");
     Some(false)
 }
@@ -700,6 +789,50 @@ async fn fetch_account_name() -> Option<String> {
             }
         }
     }
+    // Same for the channel id, which rides in the same response and is what
+    // YouTube chat identifies this member by.
+    if !channel_id_checked() {
+        let found = find_account_channel_id(&v);
+        match &found {
+            Some((id, path)) => log::info!("[YouTube] account channel id {id} via {path}"),
+            None => {
+                // Not an error on its own: an account with no channel has none to
+                // find. It only matters that we can tell that case apart from a
+                // menu whose shape moved, so say which it looks like.
+                let handle = find_account_handle(&v);
+                log::warn!(
+                    "[YouTube] no channel id in the account menu (handle={handle:?}); \
+                     cosmetics on YouTube chat will stay off for this account"
+                );
+            }
+        }
+        let resolved = match found {
+            Some((id, _)) => Some(id),
+            // A handle is enough to ask YouTube directly, which costs one more
+            // request but only ever on the path where the menu gave us nothing.
+            None => match find_account_handle(&v) {
+                Some(h) => {
+                    let r = resolve_handle_to_channel_id(&h).await;
+                    if let Some(id) = &r {
+                        log::info!("[YouTube] account channel id {id} via handle {h}");
+                    }
+                    r
+                }
+                None => None,
+            },
+        };
+        let mut updated = None;
+        if let Ok(mut s) = session_cell().lock() {
+            if let Some(sess) = s.as_mut() {
+                sess.account_channel_id = resolved;
+                sess.channel_id_checked = true;
+                updated = Some(sess.clone());
+            }
+        }
+        if let Some(sess) = updated {
+            persist(&sess);
+        }
+    }
     find_account_name(&v)
 }
 
@@ -722,7 +855,11 @@ pub async fn account_identity() -> (Option<String>, Option<String>) {
     if !is_connected() {
         return (None, None);
     }
-    if let (Some(name), Some(avatar)) = (account_name(), account_avatar()) {
+    // The channel-id check rides along, so an account connected before that
+    // existed has to fall through once to pick it up. Same reasoning as the
+    // picture below: a cached NAME alone is not a complete identity.
+    if let (Some(name), Some(avatar), true) = (account_name(), account_avatar(), channel_id_checked())
+    {
         return (Some(name), Some(avatar));
     }
     // Populates the picture as a side effect and caches the name.
@@ -777,6 +914,177 @@ fn find_account_photo(v: &serde_json::Value) -> Option<String> {
     }
     // Last resort: the biggest thumbnail inside the account header itself.
     find_header(v).and_then(|h| largest_thumbnail_url(h))
+}
+
+/// The signed-in channel's own `UC…` id, and the name of the path it came from.
+///
+/// There is no single documented place for this. The desktop and music clients
+/// genuinely disagree: the desktop menu hangs it off the header's
+/// `manageAccountTitle`, while the music menu puts it on a "Your channel" row in
+/// the sections list. A third field, `channelEndpoint`, is declared in the
+/// renderer's own schema but has not been observed in a real response. So this
+/// tries each in turn and falls back to the first channel-shaped id anywhere in
+/// the tree.
+///
+/// **Every candidate must sit under a `browseEndpoint`.** A bare "starts with UC
+/// and is 24 characters" test over the whole document is not safe: the tracking
+/// blobs YouTube embeds are base64 and one of them matches that shape exactly.
+/// The parent key is what makes a match mean something.
+///
+/// The returned label is logged, because a menu captured from a signed-in
+/// desktop session is not something we can check ahead of time. The first real
+/// sign-in is the measurement, and the label is what makes it readable.
+fn find_account_channel_id(v: &serde_json::Value) -> Option<(String, &'static str)> {
+    if let Some(header) = find_header(v) {
+        if let Some(id) = header.get("manageAccountTitle").and_then(browse_channel_id) {
+            return Some((id, "header.manageAccountTitle"));
+        }
+        if let Some(id) = header.get("channelEndpoint").and_then(browse_channel_id) {
+            return Some((id, "header.channelEndpoint"));
+        }
+    }
+    if let Some(id) = channel_id_under_key(v, "compactLinkRenderer") {
+        return Some((id, "sections.compactLinkRenderer"));
+    }
+    first_browse_channel_id(v).map(|id| (id, "tree scan"))
+}
+
+/// A channel-shaped `browseId` reachable from this node, through the shapes a
+/// navigation target takes: the endpoint itself, a `navigationEndpoint`, or the
+/// first entry of a `runs` list (which is how `manageAccountTitle` carries one).
+fn browse_channel_id(node: &serde_json::Value) -> Option<String> {
+    for path in [
+        "/browseEndpoint/browseId",
+        "/navigationEndpoint/browseEndpoint/browseId",
+        "/runs/0/navigationEndpoint/browseEndpoint/browseId",
+    ] {
+        if let Some(id) = node.pointer(path).and_then(|x| x.as_str()) {
+            if is_channel_id(id) {
+                return Some(id.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// The first channel id reachable from any object stored at `key`.
+fn channel_id_under_key(v: &serde_json::Value, key: &str) -> Option<String> {
+    match v {
+        serde_json::Value::Object(map) => {
+            if let Some(node) = map.get(key) {
+                if let Some(id) = browse_channel_id(node) {
+                    return Some(id);
+                }
+            }
+            map.values().find_map(|c| channel_id_under_key(c, key))
+        }
+        serde_json::Value::Array(arr) => arr.iter().find_map(|c| channel_id_under_key(c, key)),
+        _ => None,
+    }
+}
+
+/// The first `browseEndpoint.browseId` anywhere in the tree that looks like a
+/// channel. The `browseEndpoint` parent is the guard; see the note above.
+fn first_browse_channel_id(v: &serde_json::Value) -> Option<String> {
+    match v {
+        serde_json::Value::Object(map) => {
+            if let Some(id) = map
+                .get("browseEndpoint")
+                .and_then(|b| b.get("browseId"))
+                .and_then(|x| x.as_str())
+            {
+                if is_channel_id(id) {
+                    return Some(id.to_string());
+                }
+            }
+            map.values().find_map(first_browse_channel_id)
+        }
+        serde_json::Value::Array(arr) => arr.iter().find_map(first_browse_channel_id),
+        _ => None,
+    }
+}
+
+/// `UC` plus 22 more characters. Same test the subscriptions reader uses, and it
+/// is only ever applied to a value already found under a `browseEndpoint`.
+fn is_channel_id(id: &str) -> bool {
+    id.len() == 24
+        && id.starts_with("UC")
+        && id[2..]
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// The account's `@handle`, across the two text shapes it arrives in.
+fn find_account_handle(v: &serde_json::Value) -> Option<String> {
+    let node = find_header(v)?.get("channelHandle")?;
+    let raw = node
+        .get("simpleText")
+        .and_then(|x| x.as_str())
+        .or_else(|| node.pointer("/runs/0/text").and_then(|x| x.as_str()))?
+        .trim();
+    (!raw.is_empty()).then(|| raw.to_string())
+}
+
+/// Resolve an `@handle` to its channel id.
+///
+/// The fallback for when the menu carries no channel id at all. Resolving a url
+/// can answer with a redirect rather than the channel, so a short hop chain is
+/// followed; it is bounded because a loop here would be a hang, not an error.
+async fn resolve_handle_to_channel_id(handle: &str) -> Option<String> {
+    let mut url = format!("https://www.youtube.com/{}", handle.trim_start_matches('@'));
+    if !handle.starts_with('@') {
+        url = format!("https://www.youtube.com/@{handle}");
+    }
+    for _ in 0..3 {
+        let headers = auth_headers()?;
+        let body = serde_json::json!({
+            "context": { "client": { "clientName": "WEB", "clientVersion": "2.20240101.00.00", "hl": "en", "gl": "US" } },
+            "url": url,
+        });
+        let mut req = reqwest::Client::new()
+            .post("https://www.youtube.com/youtubei/v1/navigation/resolve_url?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&prettyPrint=false")
+            .header("User-Agent", UA);
+        for (k, v) in headers {
+            req = req.header(k, v);
+        }
+        let v: serde_json::Value = req.json(&body).send().await.ok()?.json().await.ok()?;
+        if let Some(id) = v
+            .pointer("/endpoint/browseEndpoint/browseId")
+            .and_then(|x| x.as_str())
+        {
+            if is_channel_id(id) {
+                return Some(id.to_string());
+            }
+        }
+        // A handle can answer with a redirect to the channel's other address.
+        let next = v
+            .pointer("/endpoint/urlEndpoint/url")
+            .and_then(|x| x.as_str())?;
+        if next == url {
+            return None;
+        }
+        url = next.to_string();
+    }
+    None
+}
+
+/// Whether the channel-id walk has run for this session. A pure cache read.
+fn channel_id_checked() -> bool {
+    session_cell()
+        .lock()
+        .ok()
+        .and_then(|s| s.clone())
+        .map(|s| s.channel_id_checked)
+        .unwrap_or(false)
+}
+
+/// The signed-in channel's own id, if it has been read yet. A pure cache read.
+pub fn account_channel_id() -> Option<String> {
+    session_cell()
+        .lock()
+        .ok()
+        .and_then(|s| s.clone())
+        .and_then(|s| s.account_channel_id)
 }
 
 /// The largest thumbnail url under any object stored at `key`, anywhere in the tree.
@@ -904,6 +1212,12 @@ fn find_account_name(v: &serde_json::Value) -> Option<String> {
 pub async fn reharvest() -> bool {
     use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
+    // A re-harvest renews the session the app holds and never starts one. With
+    // none stored the user signed out, and whatever the profile still holds
+    // belongs to the account they signed out of.
+    if !has_stored_session() {
+        return false;
+    }
     let Some(app) = crate::services::providers::app_handle() else {
         return false;
     };
@@ -936,7 +1250,7 @@ pub async fn reharvest() -> bool {
     // giving up early costs a re-login the user did not need.
     for _ in 0..30 {
         if let Ok(map) = fetch_cookies_from_window(&app, HARVEST_WINDOW_LABEL, &[]).await {
-            if sapisid(&map).is_some() && map.contains_key("APISID") {
+            if has_auth_set(&map) {
                 let prev = stored_identity();
                 let sess = YouTubeSession {
                     cookies: map,
@@ -951,12 +1265,31 @@ pub async fn reharvest() -> bool {
                     complete: true,
                     session_index: prev.session_index,
                     delegated_session_id: prev.delegated_session_id,
+                    // Provisional for the same reason as the name and picture:
+                    // if the probe finds the active channel has changed, this is
+                    // dropped along with them rather than left pointing at the
+                    // channel the member just switched away from.
+                    account_channel_id: account_channel_id(),
+                    channel_id_checked: channel_id_checked(),
                 };
-                persist(&sess);
-                if let Ok(mut s) = session_cell().lock() {
-                    *s = Some(sess);
+                // Only over a session still stored: a sign-out while this ran is
+                // not undone by it.
+                let kept = match session_cell().lock() {
+                    Ok(mut s) if s.is_some() => {
+                        *s = Some(sess.clone());
+                        true
+                    }
+                    _ => false,
+                };
+                if kept {
+                    persist(&sess);
+                    // A sign-out landing between the two writes cleared the disk
+                    // copy before this one was made; take it back off.
+                    if !has_stored_session() {
+                        clear_persisted();
+                    }
                 }
-                found = true;
+                found = kept;
                 break;
             }
         }
@@ -1292,5 +1625,206 @@ mod identity_tests {
         let empty = r#"{"LOGGED_IN":true,"SESSION_INDEX":"0","DELEGATED_SESSION_ID":""}"#;
         let id = identity_from_html(empty).expect("signed in");
         assert_eq!(id.delegated_session_id, None);
+    }
+}
+
+#[cfg(test)]
+mod channel_id_tests {
+    use super::*;
+    use serde_json::json;
+
+    // The two shapes below mirror real account-menu captures: the desktop client
+    // hangs the channel off the header's `manageAccountTitle`, the music client
+    // puts it on a "Your channel" row in the sections list. The ids are
+    // placeholders of the right length and alphabet.
+    const CHANNEL: &str = "UCaaaaaaaaaaaaaaaaaaaaaa";
+    const OTHER: &str = "UCbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn wrap(header: serde_json::Value, sections: serde_json::Value) -> serde_json::Value {
+        json!({ "actions": [{ "openPopupAction": { "popup": { "multiPageMenuRenderer": {
+            "header": header, "sections": sections
+        }}}}]})
+    }
+
+    #[test]
+    fn desktop_menu_reads_the_header() {
+        let v = wrap(
+            json!({ "activeAccountHeaderRenderer": {
+                "accountName": { "simpleText": "Winters" },
+                "manageAccountTitle": { "runs": [{ "text": "Your channel",
+                    "navigationEndpoint": { "browseEndpoint": { "browseId": CHANNEL } } }] }
+            }}),
+            json!([]),
+        );
+        assert_eq!(
+            find_account_channel_id(&v),
+            Some((CHANNEL.to_string(), "header.manageAccountTitle"))
+        );
+    }
+
+    #[test]
+    fn music_menu_reads_the_sections() {
+        let v = wrap(
+            json!({ "activeAccountHeaderRenderer": { "accountName": { "runs": [{ "text": "x" }] } } }),
+            json!([{ "multiPageMenuSectionRenderer": { "items": [
+                { "compactLinkRenderer": {
+                    "title": { "runs": [{ "text": "Your channel" }] },
+                    "navigationEndpoint": { "browseEndpoint": { "browseId": CHANNEL } } } }
+            ]}}]),
+        );
+        assert_eq!(
+            find_account_channel_id(&v),
+            Some((CHANNEL.to_string(), "sections.compactLinkRenderer"))
+        );
+    }
+
+    #[test]
+    fn the_declared_channel_endpoint_is_honoured() {
+        let v = wrap(
+            json!({ "activeAccountHeaderRenderer": {
+                "channelEndpoint": { "browseEndpoint": { "browseId": CHANNEL } }
+            }}),
+            json!([]),
+        );
+        assert_eq!(
+            find_account_channel_id(&v),
+            Some((CHANNEL.to_string(), "header.channelEndpoint"))
+        );
+    }
+
+    #[test]
+    fn a_channel_shaped_string_in_tracking_data_is_not_a_channel() {
+        // The trap a loose regex falls into: a real capture carries a 24-char
+        // string starting "UC" inside base64 click-tracking data. It sits under no
+        // browseEndpoint, so it must never be taken for the account's channel.
+        let v = wrap(
+            json!({ "activeAccountHeaderRenderer": {
+                "trackingParams": "CCoQp0wYUCITCOjLk8rQgpcDFZF2TAgdAAAsug==",
+                "clickTrackingParams": "UCITCOjLk8rQgpcDFZF2TAgd",
+                "manageAccountTitle": { "runs": [{ "text": "Manage your Google Account",
+                    "navigationEndpoint": { "urlEndpoint": { "url": "https://myaccount.google.com" } } }] }
+            }}),
+            json!([]),
+        );
+        assert_eq!(find_account_channel_id(&v), None);
+    }
+
+    #[test]
+    fn the_settings_browse_id_is_not_a_channel() {
+        // The one browseId a signed-out menu carries. Wrong shape, so ignored.
+        let v = wrap(
+            json!({}),
+            json!([{ "multiPageMenuSectionRenderer": { "items": [
+                { "compactLinkRenderer": {
+                    "navigationEndpoint": { "browseEndpoint": { "browseId": "SPaccount_overview" } } } }
+            ]}}]),
+        );
+        assert_eq!(find_account_channel_id(&v), None);
+    }
+
+    #[test]
+    fn an_account_with_no_channel_has_none() {
+        // A Google account that never made a channel is offered one instead. That
+        // is a real, ordinary state and has to read as "none", not as an error.
+        let v = wrap(
+            json!({ "activeAccountHeaderRenderer": {
+                "manageAccountTitle": { "runs": [{ "text": "Create a channel",
+                    "navigationEndpoint": { "channelCreationFormEndpoint": {} } }] }
+            }}),
+            json!([]),
+        );
+        assert_eq!(find_account_channel_id(&v), None);
+    }
+
+    #[test]
+    fn the_header_wins_over_a_later_channel_in_the_sections() {
+        // Preference order is the whole point of the chain: when both exist the
+        // header is the active account's, so a stray id elsewhere cannot win.
+        let v = wrap(
+            json!({ "activeAccountHeaderRenderer": {
+                "manageAccountTitle": { "runs": [{
+                    "navigationEndpoint": { "browseEndpoint": { "browseId": CHANNEL } } }] }
+            }}),
+            json!([{ "multiPageMenuSectionRenderer": { "items": [
+                { "compactLinkRenderer": {
+                    "navigationEndpoint": { "browseEndpoint": { "browseId": OTHER } } } }
+            ]}}]),
+        );
+        assert_eq!(find_account_channel_id(&v).map(|(id, _)| id), Some(CHANNEL.to_string()));
+    }
+
+    #[test]
+    fn handle_reads_both_text_shapes() {
+        let simple = wrap(
+            json!({ "activeAccountHeaderRenderer": { "channelHandle": { "simpleText": "@winters" } } }),
+            json!([]),
+        );
+        let runs = wrap(
+            json!({ "activeAccountHeaderRenderer": { "channelHandle": { "runs": [{ "text": " @winters " }] } } }),
+            json!([]),
+        );
+        assert_eq!(find_account_handle(&simple).as_deref(), Some("@winters"));
+        assert_eq!(find_account_handle(&runs).as_deref(), Some("@winters"));
+    }
+
+    #[test]
+    fn channel_id_shape_is_strict() {
+        assert!(is_channel_id(CHANNEL));
+        assert!(is_channel_id("UC_-aZ09aaaaaaaaaaaaaaaa"));
+        assert!(!is_channel_id("UCaaaa")); // too short
+        assert!(!is_channel_id("XXaaaaaaaaaaaaaaaaaaaaaa")); // wrong prefix
+        assert!(!is_channel_id("UCaaaaaaaaaaaaaaaaaaaaa=")); // base64 padding
+        assert!(!is_channel_id("UCaaaaaaaaaaaaaaaaaaaa/a")); // base64 slash
+    }
+}
+
+#[cfg(test)]
+mod sign_in_tests {
+    use super::*;
+
+    fn jar(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_session_is_the_full_auth_set() {
+        assert!(
+            !has_auth_set(&jar(&[("VISITOR_INFO1_LIVE", "v"), ("YSC", "y")])),
+            "a signed-out browser has cookies too"
+        );
+        assert!(
+            !has_auth_set(&jar(&[("SAPISID", "s")])),
+            "APISID too, or every request 401s"
+        );
+        assert!(
+            !has_auth_set(&jar(&[("SAPISID", ""), ("APISID", "a")])),
+            "an empty value is no session"
+        );
+        assert!(has_auth_set(&jar(&[("SAPISID", "s"), ("APISID", "a")])));
+        assert!(
+            has_auth_set(&jar(&[("__Secure-3PAPISID", "s"), ("APISID", "a")])),
+            "the secure twin identifies a session as well"
+        );
+    }
+
+    #[test]
+    fn a_signed_out_accounts_session_is_never_taken_for_a_new_sign_in() {
+        let old = jar(&[("SAPISID", "old"), ("APISID", "a")]);
+        assert!(!is_new_session(&old, Some("old")), "the leftover session");
+        assert!(is_new_session(&old, None), "a clean profile takes any session");
+        let new = jar(&[("SAPISID", "new"), ("APISID", "b")]);
+        assert!(is_new_session(&new, Some("old")), "signing in replaced it");
+        assert!(
+            !is_new_session(&jar(&[("SAPISID", "new")]), Some("old")),
+            "not until the full set lands"
+        );
+        let twin = jar(&[("__Secure-3PAPISID", "old"), ("APISID", "a")]);
+        assert!(
+            !is_new_session(&twin, Some("old")),
+            "the leftover is known by its secure twin too"
+        );
     }
 }

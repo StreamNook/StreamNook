@@ -1,9 +1,12 @@
 import StreamTitleWithEmojis from './StreamTitleWithEmojis';
-import { Package } from 'phosphor-react';
+import { Package, UsersThree } from 'phosphor-react';
 import { formatStreamUptime } from '../utils/chatCommands';
-import type { TwitchStream } from '../types';
+import type { Collaboration, TwitchStream } from '../types';
 import { streamProvider } from '../utils/streamProvider';
 import { thumbFitFor } from '../utils/thumbFit';
+import { CardChip } from './ui/CardChip';
+import { CollabAvatarStack } from './SharedViewers';
+import { collabNames } from '../utils/sharedViewers';
 
 // Replaces the tooltip's default centered pill. Padding lives on the content
 // block instead, so the preview can run edge to edge under the rounded corners.
@@ -21,6 +24,8 @@ const thumbnailUrl = (url: string) =>
 interface StreamHoverCardProps {
     stream: TwitchStream;
     hasDrops?: boolean;
+    /** Twitch's Shared Viewership group, when the channel is in one. */
+    collab?: Collaboration;
 }
 
 /**
@@ -28,7 +33,7 @@ interface StreamHoverCardProps {
  * streaming right now" without clicking in and waiting for the player to load.
  *
  * Deliberately built from the same parts as a Home stream card (preview,
- * `live-dot`, `glass-badge`) so the two read as one family. The preview also
+ * `CardChip`) so the two read as one family. The preview also
  * does the layout work a wall of text could not: it gives the card a focal
  * point and takes the live numbers off the text block, which leaves a clean
  * who / what / where stack underneath.
@@ -37,7 +42,7 @@ interface StreamHoverCardProps {
  * computed here is already current as of the hover, and a card that lives for a
  * few seconds has no use for a ticking clock.
  */
-const StreamHoverCard = ({ stream, hasDrops }: StreamHoverCardProps) => {
+const StreamHoverCard = ({ stream, hasDrops, collab }: StreamHoverCardProps) => {
     const uptime = formatStreamUptime(stream.started_at);
 
     return (
@@ -75,22 +80,23 @@ const StreamHoverCard = ({ stream, hasDrops }: StreamHoverCardProps) => {
                 ) : null}
 
                 <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
-                    <div className="live-dot text-xs px-1.5 py-0.5">LIVE</div>
+                    <CardChip kind="live">LIVE</CardChip>
                     {hasDrops && (
-                        <div className="drops-badge-glass">
+                        <CardChip kind="drops">
                             <Package size={10} />
                             <span>DROPS</span>
-                        </div>
+                        </CardChip>
                     )}
                 </div>
 
-                <div className="absolute bottom-1.5 left-1.5 px-2 py-0.5 glass-badge rounded text-white text-[10px] font-medium tabular-nums">
-                    {stream.viewer_count.toLocaleString()} viewers
-                </div>
+                <CardChip kind="neutral" className="absolute bottom-1.5 left-1.5 tabular-nums">
+                    <UsersThree size={12} weight="bold" className="shrink-0 opacity-80" aria-label="viewers" />
+                    {stream.viewer_count.toLocaleString()}
+                </CardChip>
                 {uptime && (
-                    <div className="absolute bottom-1.5 right-1.5 px-2 py-0.5 glass-badge rounded text-white text-[10px] font-medium tabular-nums">
+                    <CardChip kind="neutral" className="absolute bottom-1.5 right-1.5 tabular-nums">
                         {uptime}
-                    </div>
+                    </CardChip>
                 )}
             </div>
 
@@ -118,6 +124,15 @@ const StreamHoverCard = ({ stream, hasDrops }: StreamHoverCardProps) => {
                 <div className="mt-1 text-[11px] text-textMuted truncate">
                     {stream.game_name || 'Just Chatting'}
                 </div>
+
+                {collab && (
+                    <div className="mt-2 flex items-center gap-2 min-w-0">
+                        <CollabAvatarStack collab={collab} size={16} ringClass="ring-black/85" />
+                        <span className="min-w-0 text-[11px] leading-snug text-white/75 line-clamp-2">
+                            Streaming together with {collabNames(collab)}
+                        </span>
+                    </div>
+                )}
             </div>
         </div>
     );

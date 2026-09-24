@@ -62,6 +62,12 @@ export interface LiveEdgeTracker {
   /** True when the playhead should read as behind rather than LIVE. Applies
    *  hysteresis, so it needs to be called on the same tracker each time. */
   isBehind(video: HTMLVideoElement): boolean;
+  /** The playhead jumped by `playheadDeltaSecs` (a seek; positive = forward).
+   *  Re-base the window so it describes where playback now is, instead of
+   *  holding the pre-seek distance for a full window: a small forward seek
+   *  falls under SEEK_DROP_SECS, so the peak alone would keep reporting the
+   *  old value for up to 6 s. */
+  shift(playheadDeltaSecs: number): void;
   /** Forget history: a new stream, a rewind, or a source swap. */
   reset(): void;
 }
@@ -108,6 +114,10 @@ export function createLiveEdgeTracker(): LiveEdgeTracker {
         behindState = true;
       }
       return behindState;
+    },
+    shift(playheadDeltaSecs) {
+      if (!Number.isFinite(playheadDeltaSecs) || playheadDeltaSecs === 0) return;
+      for (const s of samples) s.behind = Math.max(0, s.behind - playheadDeltaSecs);
     },
     reset() {
       samples = [];

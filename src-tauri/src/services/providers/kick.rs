@@ -777,6 +777,9 @@ async fn resolve_via_webview(slug: &str) -> Result<u64> {
 
     let win = match WebviewWindowBuilder::new(&app, label.clone(), WebviewUrl::External(parsed))
         .data_directory(profile)
+        // The folder is ignored on macOS; this keeps the resolver apart from the
+        // Kick sign-in there too (see `platform::webview_store`).
+        .data_store_identifier(crate::platform::webview_store::own_store("kick-resolver"))
         .initialization_script(&script)
         .visible(false)
         .skip_taskbar(true)
@@ -2230,6 +2233,112 @@ pub(crate) async fn browser_get(url: &str, slug: &str) -> Option<reqwest::Respon
         return None;
     }
     Some(resp)
+}
+
+/// What Kick's channel API says about one exact slug.
+enum SlugAnswer {
+    /// The channel exists, under this slug as Kick spells it.
+    Found(String),
+    /// Kick answered 404: no channel has this slug.
+    Missing,
+    /// No answer worth trusting (network, the edge's bot check, a bad body).
+    Unreachable,
+}
+
+async fn ask_kick_for_slug(slug: &str) -> SlugAnswer {
+    let url = format!("https://kick.com/api/v2/channels/{}", slug);
+    let resp = match HTTP_RESOLVE.get(&url).headers(browser_headers(slug)).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("[Kick] slug lookup for {} failed: {}", slug, e);
+            return SlugAnswer::Unreachable;
+        }
+    };
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return SlugAnswer::Missing;
+    }
+    if !resp.status().is_success() {
+        log::warn!("[Kick] slug lookup for {} returned {}", slug, resp.status());
+        return SlugAnswer::Unreachable;
+    }
+    match resp.json::<Value>().await {
+        Ok(v) => match v.get("slug").and_then(|s| s.as_str()).filter(|s| !s.is_empty()) {
+            Some(found) => SlugAnswer::Found(found.to_lowercase()),
+            None => SlugAnswer::Unreachable,
+        },
+        Err(_) => SlugAnswer::Unreachable,
+    }
+}
+
+/// Every spelling a Kick name could mean, as typed first.
+///
+/// Kick's API answers only the exact slug, and whether a username's
+/// underscores became hyphens in its slug depends on the account (one
+/// `Some_Name` is `some-name` on Kick, another keeps `other_name`). Usernames
+/// hold underscores, never hyphens, so a slug is all one or the other: the
+/// other spelling swaps every `_` for `-`, or every `-` for `_`.
+fn kick_slug_spellings(name: &str) -> Vec<String> {
+    let mut out = vec![name.to_string()];
+    for other in [name.replace('_', "-"), name.replace('-', "_")] {
+        if !out.contains(&other) {
+            out.push(other);
+        }
+    }
+    out
+}
+
+/// The slug Kick knows a typed channel name by.
+///
+/// `Ok` carries Kick's own spelling when it knows the channel. When Kick can't
+/// be asked, the name comes back unchanged, so an add still goes through the
+/// way it did before this lookup existed. `Err` means Kick answered and has no
+/// channel under any spelling of the name; it is worded for the add box.
+pub async fn resolve_slug(name: &str) -> Result<String, String> {
+    let name = name.trim().trim_start_matches('@').to_ascii_lowercase();
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err("That isn't a Kick channel name.".to_string());
+    }
+    let mut unreachable = false;
+    for spelling in kick_slug_spellings(&name) {
+        match ask_kick_for_slug(&spelling).await {
+            SlugAnswer::Found(slug) => return Ok(slug),
+            SlugAnswer::Missing => {}
+            SlugAnswer::Unreachable => unreachable = true,
+        }
+    }
+    if unreachable {
+        Ok(name)
+    } else {
+        Err(format!("No Kick channel called \"{}\". Check the spelling.", name))
+    }
+}
+
+#[cfg(test)]
+mod slug_spelling_tests {
+    use super::*;
+
+    #[test]
+    fn a_name_is_tried_as_typed_then_with_the_other_separator() {
+        assert_eq!(kick_slug_spellings("some_name"), vec!["some_name", "some-name"]);
+        assert_eq!(kick_slug_spellings("some-name"), vec!["some-name", "some_name"]);
+        assert_eq!(kick_slug_spellings("xqc"), vec!["xqc"]);
+    }
+
+    /// Hit Kick's API with two real accounts found on its live list, one whose
+    /// slug turned the underscore into a hyphen and one that kept it. Opt-in
+    /// because it needs the network (and those accounts could be renamed):
+    ///
+    /// ```text
+    /// cargo test --no-default-features resolves_both_kick_spellings -- --ignored
+    /// ```
+    #[tokio::test]
+    #[ignore = "needs the network"]
+    async fn resolves_both_kick_spellings() {
+        assert_eq!(resolve_slug("Sali_Vali97").await.unwrap(), "sali-vali97");
+        assert_eq!(resolve_slug("azizos-chafchaa").await.unwrap(), "azizos_chafchaa");
+        assert!(resolve_slug("no_such_channel_zz9").await.is_err());
+        assert!(resolve_slug("two words").await.is_err());
+    }
 }
 
 #[cfg(test)]

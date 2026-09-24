@@ -74,12 +74,15 @@ export function usePlatformAccountSync(): void {
       if (provider === 'youtube') {
         useFollowsStore.getState().clearProviderLive(provider);
       }
+      // The reconnect runs from the toast itself: the same `connect` the
+      // account rows in Settings use, so there is still one sign-in flow.
+      const reconnect =
+        provider === 'kick' || provider === 'youtube' || provider === 'tiktok'
+          ? { label: 'Reconnect', onClick: () => void usePlatformAccountStore.getState().connect(provider) }
+          : undefined;
       useAppStore
         .getState()
-        .addToast(
-          `Your ${providerLabel(provider)} session expired. Reconnect it in Settings, Accounts.`,
-          'warning',
-        );
+        .addToast(`Your ${providerLabel(provider)} session expired.`, 'warning', reconnect);
       refresh();
     }).then((fn) => {
       if (disposed) fn();

@@ -138,6 +138,16 @@ async fn live_video_id(identifier: &str) -> Result<String> {
     let html = youtube::fetch_youtube_html(&HTTP, &url, identifier).await?;
     // The live page embeds the current broadcast's id in its player response.
     if let Some(player) = youtube::extract_json(&html, "ytInitialPlayerResponse") {
+        // ...but "the current broadcast" includes one that has not started.
+        // /live serves a channel's SCHEDULED stream too, and that waiting room
+        // is a real watch page with a real video id, so returning it sent a
+        // dead id down the whole resolve path to fail as an opaque
+        // "couldn't resolve a YouTube stream for 'UC...': This live event will
+        // begin in a few moments". The page we just fetched already says so;
+        // read it here and answer in plain words instead.
+        if let Some(msg) = not_started_yet(&player, identifier) {
+            return Err(anyhow!("{}", msg));
+        }
         if let Some(id) = player.pointer("/videoDetails/videoId").and_then(|v| v.as_str()) {
             return Ok(id.to_string());
         }
@@ -145,6 +155,63 @@ async fn live_video_id(identifier: &str) -> Result<String> {
     // Channel pages without a live broadcast fall back to their first video,
     // which is NOT what "watch this channel" means — so treat it as offline.
     Err(anyhow!("{} isn't live right now", identifier))
+}
+
+/// The sentence to show the user when a player response describes a broadcast
+/// that is NOT running - a waiting room for a scheduled stream, or one YouTube
+/// has taken offline - or `None` when it says nothing of the sort.
+///
+/// Distinct from `playability_error`, which reports why a PARTICULAR CLIENT was
+/// refused and is worth retrying the table over. This is a property of the video:
+/// every client answers it identically, so there is nothing left to try.
+fn not_started_yet(player: &Value, channel: &str) -> Option<String> {
+    let status = player
+        .pointer("/playabilityStatus/status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let upcoming = player
+        .pointer("/videoDetails/isUpcoming")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if status != "LIVE_STREAM_OFFLINE" && !upcoming {
+        return None;
+    }
+    let name = player
+        .pointer("/videoDetails/author")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(channel);
+    match scheduled_in(player) {
+        Some(when) => Some(format!(
+            "{} isn't live yet. The stream is scheduled to start {}",
+            name, when
+        )),
+        None => Some(format!("{} isn't live right now", name)),
+    }
+}
+
+/// How long until a waiting room's scheduled start, worded for a toast, and only
+/// when that start is both AHEAD of us and close enough to be worth waiting for.
+///
+/// YouTube leaves abandoned waiting rooms up forever - the one that produced this
+/// bug was scheduled for 2017 and still fronts its channel's /live URL - so a
+/// timestamp printed unconditionally reads like a broken app where a plain
+/// "isn't live right now" is simply true.
+fn scheduled_in(player: &Value) -> Option<String> {
+    let at = player
+        .pointer("/playabilityStatus/liveStreamability/liveStreamabilityRenderer/offlineSlate/liveStreamOfflineSlateRenderer/scheduledStartTime")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<i64>().ok())
+        .and_then(|s| chrono::DateTime::from_timestamp(s, 0))?;
+    let mins = (at - chrono::Utc::now()).num_minutes();
+    match mins {
+        m if m < 1 => None,
+        1 => Some("in a minute".to_string()),
+        m if m < 60 => Some(format!("in {} minutes", m)),
+        m if m < 120 => Some("in about an hour".to_string()),
+        m if m < 60 * 24 => Some(format!("in about {} hours", m / 60)),
+        _ => None,
+    }
 }
 
 /// POST `youtubei/v1/player` as `client`, returning the parsed player response.
@@ -1096,6 +1163,15 @@ impl StreamSource for YouTubeSource {
                     continue;
                 }
             };
+            // The broadcast itself is not running. Unlike a client refusal this
+            // is the same answer from every client, so stop here rather than
+            // exhausting the table and wrapping YouTube's "will begin in a few
+            // moments" in a resolve failure. `live_video_id` catches this from
+            // the /live page, but an 11-char video id short-circuits that fetch
+            // entirely, so a MultiNook tile or a saved stream reaches it here.
+            if let Some(msg) = not_started_yet(&player, channel) {
+                return Err(anyhow!("{}", msg));
+            }
             // A refusal is NOT necessarily the same for every client — measured
             // on one live stream: ANDROID returned OK while VISIONOS returned
             // LOGIN_REQUIRED ("Sign in to confirm you're not a bot") and
@@ -1256,7 +1332,7 @@ impl StreamSource for YouTubeSource {
                                  re-harvesting; marking YouTube disconnected so the account \
                                  row prompts a reconnect"
                             );
-                            crate::services::youtube_auth_service::disconnect();
+                            crate::services::youtube_auth_service::disconnect().await;
                             return Err(anyhow!(
                                 "Your YouTube sign-in has expired — reconnect YouTube in Settings → Profile → Accounts"
                             ));
@@ -2156,6 +2232,86 @@ pub async fn sabr_session_for(video_id: &str) -> Result<SabrInputs> {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
+    /// The exact `playabilityStatus` that produced the bug report. Every client
+    /// answers it the same way, so the resolve must stop and say so in words a
+    /// viewer can act on - not exhaust the client table and hand the toast
+    /// "couldn't resolve a YouTube stream for 'UC...': This live event will
+    /// begin in a few moments".
+    #[test]
+    fn an_offline_broadcast_reads_as_plainly_not_live() {
+        let player = json!({
+            "playabilityStatus": {
+                "status": "LIVE_STREAM_OFFLINE",
+                "reason": "This live event will begin in a few moments.",
+                "liveStreamability": { "liveStreamabilityRenderer": {
+                    "videoId": "ABAZa19-3s8",
+                    "offlineSlate": { "liveStreamOfflineSlateRenderer": {
+                        // March 2017: long gone, so no time is worth quoting.
+                        "scheduledStartTime": "1488568548"
+                    }}
+                }}
+            },
+            "videoDetails": { "author": "Mastu", "isUpcoming": true }
+        });
+        let msg = super::not_started_yet(&player, "UCAhaFPP6v3WCfK5Tjao0B7A")
+            .expect("an offline broadcast must be recognised");
+        assert_eq!(msg, "Mastu isn't live right now");
+        assert!(
+            !msg.contains("UCAhaFPP6v3WCfK5Tjao0B7A"),
+            "the channel's NAME is known here; a raw id is not what to show"
+        );
+    }
+
+    /// A waiting room that really is about to open is worth a time. Bounded to
+    /// the next day so an abandoned slate can never produce one.
+    #[test]
+    fn an_imminent_broadcast_quotes_its_start() {
+        let soon = (chrono::Utc::now() + chrono::Duration::minutes(21)).timestamp();
+        let player = json!({
+            "playabilityStatus": {
+                "status": "LIVE_STREAM_OFFLINE",
+                "liveStreamability": { "liveStreamabilityRenderer": {
+                    "offlineSlate": { "liveStreamOfflineSlateRenderer": {
+                        "scheduledStartTime": soon.to_string()
+                    }}
+                }}
+            },
+            "videoDetails": { "author": "Mastu", "isUpcoming": true }
+        });
+        let msg = super::not_started_yet(&player, "mastu").unwrap();
+        assert!(
+            msg.contains("in 20 minutes") || msg.contains("in 21 minutes"),
+            "got {msg}"
+        );
+    }
+
+    /// A running stream must pass straight through: this check now sits in front
+    /// of every resolve, so a false positive here is a channel nobody can watch.
+    #[test]
+    fn a_running_broadcast_is_not_mistaken_for_a_waiting_room() {
+        let player = json!({
+            "playabilityStatus": { "status": "OK" },
+            "videoDetails": { "author": "Lofi Girl", "isLive": true, "isLiveContent": true }
+        });
+        assert!(super::not_started_yet(&player, "lofigirl").is_none());
+    }
+
+    /// A client refusal is NOT this. Those differ per client and the table must
+    /// keep going; only an offline/upcoming payload may end the resolve.
+    #[test]
+    fn a_client_refusal_is_left_to_the_client_table() {
+        let player = json!({
+            "playabilityStatus": {
+                "status": "LOGIN_REQUIRED",
+                "reason": "Sign in to confirm you're not a bot"
+            },
+            "videoDetails": { "author": "Ludwig", "isLiveContent": true }
+        });
+        assert!(super::not_started_yet(&player, "ludwig").is_none());
+    }
+
     #[test]
     fn age_gate_reasons_are_recognised() {
         // Both wordings YouTube uses, as measured 2026-09-03 on a gated broadcast.
@@ -2617,6 +2773,106 @@ pub async fn user_profile(channel_id: &str) -> Result<YouTubeUserProfile> {
             .and_then(|x| x.as_str())
             .map(str::to_string),
     })
+}
+
+/// The `UC…` id of the channel a legacy `c/NAME` or `user/NAME` link points at.
+///
+/// Those names predate handles and are NOT handles: `/user/MrBeast6000` is
+/// MrBeast, while `@MrBeast6000` does not exist. So the link is resolved the way
+/// youtube.com follows it (InnerTube `navigation/resolve_url`), never rewritten
+/// into a handle. The errors are worded for the add box that shows them.
+pub async fn resolve_legacy_channel(path: &str) -> Result<String> {
+    let path = legacy_channel_path(path).ok_or_else(|| anyhow!("That isn't a YouTube channel link."))?;
+    let body = json!({
+        "url": format!("https://www.youtube.com/{}", path),
+        "context": { "client": { "clientName": "WEB", "clientVersion": "2.20240101.00.00", "hl": "en", "gl": "US" } }
+    });
+    let unreachable = || anyhow!("Couldn't reach YouTube to look that link up. Please try again.");
+    let resp = HTTP
+        .post(format!("{}/navigation/resolve_url?key={}", INNERTUBE, INNERTUBE_KEY))
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|_| unreachable())?;
+    // An unknown name answers 404 ("Requested entity was not found").
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err(anyhow!("YouTube has no channel at that link."));
+    }
+    if !resp.status().is_success() {
+        return Err(unreachable());
+    }
+    let answer: Value = resp.json().await.map_err(|_| unreachable())?;
+    channel_id_from_resolve(&answer).ok_or_else(|| anyhow!("YouTube has no channel at that link."))
+}
+
+/// `c/NAME` or `user/NAME` (kind lowercased, any leading slash dropped), or None
+/// for anything else, so the command can't be aimed at an arbitrary YouTube URL.
+fn legacy_channel_path(path: &str) -> Option<String> {
+    let (kind, name) = path.trim().trim_start_matches('/').split_once('/')?;
+    let kind = kind.to_ascii_lowercase();
+    let name_ok = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| !c.is_whitespace() && !c.is_control() && !matches!(c, '/' | '?' | '#' | '&'));
+    ((kind == "c" || kind == "user") && name_ok).then(|| format!("{}/{}", kind, name))
+}
+
+/// The channel a `navigation/resolve_url` answer points at, when it points at
+/// one (a playlist or video link resolves to something else entirely).
+fn channel_id_from_resolve(answer: &Value) -> Option<String> {
+    answer
+        .pointer("/endpoint/browseEndpoint/browseId")
+        .and_then(|v| v.as_str())
+        .filter(|id| is_channel_id_str(id))
+        .map(str::to_string)
+}
+
+#[cfg(test)]
+mod legacy_channel_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_legacy_channel_path_is_resolved() {
+        assert_eq!(legacy_channel_path("c/LofiGirl").as_deref(), Some("c/LofiGirl"));
+        assert_eq!(legacy_channel_path("/user/MrBeast6000").as_deref(), Some("user/MrBeast6000"));
+        assert_eq!(legacy_channel_path("C/LofiGirl").as_deref(), Some("c/LofiGirl"));
+        for bad in [
+            "@LofiGirl",
+            "watch?v=jfKfPfyJRdk",
+            "c/",
+            "c/a/b",
+            "c/name?x=1",
+            "c/two words",
+            "channel/UCX6OQ3DkcsbYNE6H8uQQuVA",
+        ] {
+            assert_eq!(legacy_channel_path(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_resolve_answer_yields_only_a_channel_id() {
+        let channel = json!({ "endpoint": { "browseEndpoint": { "browseId": "UCX6OQ3DkcsbYNE6H8uQQuVA" } } });
+        assert_eq!(channel_id_from_resolve(&channel).as_deref(), Some("UCX6OQ3DkcsbYNE6H8uQQuVA"));
+        let playlist = json!({ "endpoint": { "browseEndpoint": { "browseId": "VLPLbpi6ZahtOH6Ar_3GPy3workDJHdpdbqh" } } });
+        assert_eq!(channel_id_from_resolve(&playlist), None);
+        assert_eq!(channel_id_from_resolve(&json!({ "error": { "code": 404 } })), None);
+    }
+
+    /// Hit the live endpoint. Opt-in because it needs the network:
+    ///
+    /// ```text
+    /// cargo test --no-default-features resolves_a_real_legacy_link -- --ignored
+    /// ```
+    #[tokio::test]
+    #[ignore = "needs the network"]
+    async fn resolves_a_real_legacy_link() {
+        assert_eq!(
+            resolve_legacy_channel("user/MrBeast6000").await.unwrap(),
+            "UCX6OQ3DkcsbYNE6H8uQQuVA"
+        );
+        assert!(resolve_legacy_channel("c/thischannelshouldnotexist12345xyz").await.is_err());
+    }
 }
 
 /// One channel's avatar via InnerTube `browse`.

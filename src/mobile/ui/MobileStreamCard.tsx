@@ -1,11 +1,12 @@
 // Touch-native stream card in StreamNook's own card language, matching the
 // desktop Home cards: padded glass panel, rounded thumbnail, the canonical
-// .live-dot, .drops-badge-glass, hype-train badge, watch-streak flame,
-// .glass-badge viewer chip, partner verified mark, and Apple-style emoji
-// titles. Only the sizing is phone-tuned.
+// CardChip (LIVE, DROPS, hype train, watch-streak flame),
+// .glass-badge viewer chip, a "+2" beside the name while the channel streams
+// with others, partner verified mark, and Apple-style emoji titles.
+// Only the sizing is phone-tuned.
 import React from 'react';
 import { Flame } from 'lucide-react';
-import { Package } from 'phosphor-react';
+import { Package, UsersThree } from 'phosphor-react';
 import StreamTitleWithEmojis from '../../components/StreamTitleWithEmojis';
 import { campaignEarnableOn } from '../dropsEligibility';
 import type { DropsByGame } from '../dropsCampaigns';
@@ -13,6 +14,10 @@ import type { TwitchStream } from '../../types';
 import { previewStamp } from '../followRefresh';
 import { ProviderMark } from '../../components/ProviderLogo';
 import { isTwitchStream, streamProvider } from '../../utils/streamProvider';
+import { CardChip } from '../../components/ui/CardChip';
+import { TogetherTag } from '../../components/SharedViewers';
+import { useAppStore } from '../../stores/AppStore';
+import { collabFor } from '../../utils/sharedViewers';
 
 // The stamp is what makes a refreshed list show refreshed previews: Twitch's
 // preview URL is fixed per channel and the WebView caches it, so without a
@@ -29,7 +34,7 @@ export interface HypeTrainBadgeInfo {
 }
 
 const HypeTrainBadge: React.FC<{ info: HypeTrainBadgeInfo }> = ({ info }) => (
-  <div className={info.isGolden ? 'hype-train-badge-glass-golden' : 'hype-train-badge-glass'}>
+  <CardChip kind={info.isGolden ? 'hype-golden' : 'hype'}>
     <svg className="w-2.5 h-2.5" viewBox="0 0 15 13" fill="none">
       <path
         fillRule="evenodd"
@@ -39,17 +44,17 @@ const HypeTrainBadge: React.FC<{ info: HypeTrainBadgeInfo }> = ({ info }) => (
       />
     </svg>
     <span>LVL {info.level}</span>
-  </div>
+  </CardChip>
 );
 
 const StreakBadge: React.FC<{ streak: number }> = ({ streak }) => (
-  // An opaque-enough fill rather than a backdrop blur: a blur here is a
-  // composited layer PER CARD on a device whose whole cost is compositing,
-  // and over a thumbnail the two read the same.
-  <div className="flex items-center gap-1 font-bold text-[10px] leading-tight px-1.5 py-0.5 rounded shadow-[0_0_10px_color-mix(in_srgb,var(--color-warning)_25%,transparent)] bg-[color-mix(in_srgb,var(--color-background)_82%,transparent)] text-amber-400 border border-amber-500/30">
+  // The shared card chip, flat: an opaque-enough fill rather than a backdrop
+  // blur, which would be a composited layer PER CARD on a device whose whole
+  // cost is compositing, and over a thumbnail the two read the same.
+  <CardChip kind="streak" flat>
     <Flame size={10} className="stroke-[2.5]" />
     <span>{streak}</span>
-  </div>
+  </CardChip>
 );
 
 export const MobileStreamCard: React.FC<{
@@ -73,6 +78,9 @@ export const MobileStreamCard: React.FC<{
   // channel": that is a promise the channel cannot keep, and a card is the
   // wrong place to explain someone else's campaign rules.
   const isTwitch = isTwitchStream(stream);
+  // Twitch's Shared Viewership, from the Rust home snapshot. Read here rather
+  // than passed in, so every screen's cards carry it.
+  const collab = useAppStore((s) => collabFor(s.collaborations, stream));
   // Drops are Twitch campaigns matched by category name; a Kick stream in the
   // same category earns nothing.
   const hasDrops = isTwitch && !!(
@@ -107,8 +115,8 @@ export const MobileStreamCard: React.FC<{
               no way to say so. Icon only: no space for the DROPS wordmark the
               card carries. */}
           {hasDrops && (
-            <div
-              className="drops-badge-glass"
+            <CardChip
+              kind="drops"
               style={{
                 position: 'absolute',
                 top: 4,
@@ -120,11 +128,11 @@ export const MobileStreamCard: React.FC<{
               aria-label="Drops enabled"
             >
               <Package size={10} />
-            </div>
+            </CardChip>
           )}
           {hypeTrain && (
-            <div
-              className={hypeTrain.isGolden ? 'hype-train-badge-glass-golden' : 'hype-train-badge-glass'}
+            <CardChip
+              kind={hypeTrain.isGolden ? 'hype-golden' : 'hype'}
               style={{
                 position: 'absolute',
                 bottom: 4,
@@ -143,7 +151,7 @@ export const MobileStreamCard: React.FC<{
                 />
               </svg>
               <span>{hypeTrain.level}</span>
-            </div>
+            </CardChip>
           )}
         </div>
         <div className="flex-1 min-w-0 flex flex-col justify-center gap-0.5">
@@ -152,6 +160,7 @@ export const MobileStreamCard: React.FC<{
           </h3>
           <div className="flex items-center gap-1 text-textSecondary text-[12px]">
             <span className="truncate">{stream.user_name}</span>
+            {collab && <TogetherTag collab={collab} />}
             {showPlatform && !isTwitch && <ProviderMark provider={streamProvider(stream)} size={12} />}
             {stream.broadcaster_type === 'partner' && (
               <svg className="w-2.5 h-2.5 flex-shrink-0" viewBox="0 0 16 16" fill="#9146FF">
@@ -195,18 +204,19 @@ export const MobileStreamCard: React.FC<{
           draggable={false}
         />
         <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
-          <div className="live-dot text-xs px-1.5 py-0.5">LIVE</div>
+          <CardChip kind="live">LIVE</CardChip>
           {hasDrops && (
-            <div className="drops-badge-glass">
+            <CardChip kind="drops">
               <Package size={10} />
               <span>DROPS</span>
-            </div>
+            </CardChip>
           )}
           {hypeTrain && <HypeTrainBadge info={hypeTrain} />}
         </div>
-        <div className="absolute bottom-1.5 left-1.5 px-2 py-0.5 glass-badge text-white text-xs font-medium rounded">
-          {stream.viewer_count.toLocaleString()} viewers
-        </div>
+        <CardChip kind="neutral" className="absolute bottom-1.5 left-1.5">
+          <UsersThree size={12} weight="bold" className="shrink-0 opacity-80" aria-label="viewers" />
+          {stream.viewer_count.toLocaleString()}
+        </CardChip>
         {!!watchStreak && watchStreak > 0 && (
           <div className="absolute bottom-1.5 right-1.5">
             <StreakBadge streak={watchStreak} />
@@ -229,6 +239,7 @@ export const MobileStreamCard: React.FC<{
             />
           )}
           <span className="truncate">{stream.user_name}</span>
+          {collab && <TogetherTag collab={collab} />}
           {showPlatform && !isTwitch && <ProviderMark provider={streamProvider(stream)} size={12} />}
           {stream.broadcaster_type === 'partner' && (
             <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 16 16" fill="#9146FF">

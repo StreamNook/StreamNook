@@ -14,7 +14,8 @@ import { DEFAULT_PROVIDER, isProviderId } from '../types/providers.ts';
 const CASE_SENSITIVE: ProviderId[] = ['youtube'];
 
 export function normalizeChannel(provider: ProviderId, channel: string): string {
-  return CASE_SENSITIVE.includes(provider) ? channel : channel.toLowerCase();
+  const c = channel.trim();
+  return CASE_SENSITIVE.includes(provider) ? c : c.toLowerCase();
 }
 
 export function makeKey(provider: ProviderId, channel: string): string {

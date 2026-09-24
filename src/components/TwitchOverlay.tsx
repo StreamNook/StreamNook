@@ -117,7 +117,9 @@ export default function TwitchOverlay() {
         }
         return { label: e.payload.label, url: e.payload.url, mode: e.payload.mode, profile: e.payload.profile };
       });
-      setDisplayUrl(e.payload.url);
+      // A fresh sign-in opens blank while Rust clears the old session, then
+      // navigates; like a browser, the bar shows no address for the blank page.
+      setDisplayUrl(e.payload.url === 'about:blank' ? '' : e.payload.url);
     }).then((u) => uns.push(u));
 
     listen<{ label: string; url: string }>('twitch-overlay-url', (e) => {

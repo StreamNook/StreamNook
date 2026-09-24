@@ -32,7 +32,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
 import { setActiveVideo } from '../../utils/activeVideo';
 import { startLatencyGovernor } from '../../utils/liveLatencyGovernor';
-import { LL_DISPLAY_CALIBRATION, LL_TARGET_DEFAULT } from '../../utils/latency';
+import { behindLiveFromEdge, edgeTargetForGap, resolveLiveEdgeGap } from '../../utils/latency';
 import { Logger } from '../../utils/logger';
 
 // The earning gate.
@@ -204,13 +204,13 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       if (cancelled || seq !== seqRef.current) return;
 
       const current = settingsRef.current;
-      // The viewer's chosen distance behind live. On the parts path the number
-      // the overlay shows is calibrated down by a fixed amount, so aim that
-      // much higher to land on what they actually asked for.
-      const llTargetDisplayed = current?.ll_target_latency ?? LL_TARGET_DEFAULT;
-      const llTargetRaw = isLowLatencyChannel
-        ? llTargetDisplayed + LL_DISPLAY_CALIBRATION
-        : llTargetDisplayed;
+      // The viewer's chosen distance behind live. On the parts path the edge
+      // trails the broadcaster by a measured delay, so the edge target sits
+      // that much lower to land on what they actually asked for.
+      // The phone has no prefetch probe yet, so a whole-segment ride is
+      // treated as a normal-latency broadcast (the safe side).
+      const llTargetDisplayed = resolveLiveEdgeGap(current?.ll_target_latency, isLowLatencyChannel ? 'll' : 'plain');
+      const llTargetRaw = isLowLatencyChannel ? edgeTargetForGap(llTargetDisplayed) : llTargetDisplayed;
 
       const hls = new Hls({
         enableWorker: true,
@@ -444,11 +444,10 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
             label: 'mobile-ll',
             // Read live rather than captured, so moving the gap slider applies
             // without rebuilding the player.
-            latencyTarget: () =>
-              (settingsRef.current?.ll_target_latency ?? LL_TARGET_DEFAULT) +
-              LL_DISPLAY_CALIBRATION,
+            // Both in seconds behind the broadcaster as heard, like the desktop.
+            latencyTarget: () => resolveLiveEdgeGap(settingsRef.current?.ll_target_latency, 'll'),
             getLatency: () =>
-              typeof hls.latency === 'number' && hls.latency > 0 ? hls.latency : null,
+              typeof hls.latency === 'number' && hls.latency > 0 ? behindLiveFromEdge(hls.latency) : null,
             gain: 0.12,
             // ceiling and engageSpan are inherited from the shared governor
             // defaults (1.05, buffer-aware engage). Phones hit the unbacked

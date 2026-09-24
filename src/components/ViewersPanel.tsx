@@ -132,7 +132,7 @@ function PanelRow({ index, style, data }: ListChildComponentProps<RowData>) {
 
   // A chatter row. Color comes from the chat-user store when the person has been
   // seen talking this session; silent lurkers render in the default text color.
-  const stored = useChatUserStore.getState().getUserByUsername(row.chatter.user_login);
+  const stored = useChatUserStore.getState().getUserByUsername(row.chatter.user_login, 'twitch');
   const color = stored?.color ? readableNameColor(stored.color) : undefined;
 
   return (
@@ -224,7 +224,7 @@ export default function ViewersPanel({ broadcasterId, channelLogin, onUsernameCl
 
   const onRow = useCallback(
     (chatter: Chatter, event: MouseEvent) => {
-      const stored = useChatUserStore.getState().getUserByUsername(chatter.user_login);
+      const stored = useChatUserStore.getState().getUserByUsername(chatter.user_login, 'twitch');
       const color = readableNameColor(stored?.color || '#9147FF');
       onUsernameClick(chatter.user_id, chatter.user_login, chatter.user_name, color, [], event);
     },

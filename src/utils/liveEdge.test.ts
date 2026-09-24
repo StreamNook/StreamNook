@@ -128,4 +128,16 @@ describe('live edge tracker', () => {
     const empty = { currentTime: 5, buffered: { length: 0, start: () => 0, end: () => 0 } } as unknown as HTMLVideoElement;
     expect(tracker.behind(empty)).toBe(0);
   });
+  it('re-bases the window on a small forward seek instead of holding the old distance', () => {
+    const tracker = createLiveEdgeTracker();
+    for (let i = 0; i < 24; i++) {
+      tracker.behind(fakeVideo(100 + i * 0.25, 88 + i * 0.25));
+      vi.advanceTimersByTime(250);
+    }
+    expect(tracker.behind(fakeVideo(106, 94))).toBeCloseTo(12, 0);
+    // 5 s forward: under SEEK_DROP_SECS, so the peak window alone would keep
+    // reporting 12 s for up to 6 s.
+    tracker.shift(5);
+    expect(tracker.behind(fakeVideo(106, 99))).toBeLessThanOrEqual(7.25);
+  });
 });

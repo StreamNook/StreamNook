@@ -1,0 +1,32 @@
+{
+  "_about": "Shared cases for the channel-key and watch-URL rules that exist in both languages (src/utils/providerKey.ts + streamProvider.ts, src-tauri/src/services/providers/key.rs + watch_urls.rs). Both test suites read this file, so the twins cannot drift apart silently.",
+  "normalize": [
+    ["twitch", " XQC ", "xqc"],
+    ["kick", "Adin_Ross", "adin_ross"],
+    ["youtube", " UCX6OQ3DkcsbYNE6H8uQQuVA ", "UCX6OQ3DkcsbYNE6H8uQQuVA"],
+    ["youtube", "AGr94tpNVkw", "AGr94tpNVkw"],
+    ["tiktok", "Ryback", "ryback"]
+  ],
+  "make_key": [
+    ["twitch", "XQC", "twitch:xqc"],
+    ["kick", " XQC", "kick:xqc"],
+    ["youtube", "AGr94tpNVkw", "youtube:AGr94tpNVkw"]
+  ],
+  "parse_key": [
+    ["kick:xqc", "kick", "xqc"],
+    ["youtube:AGr94tpNVkw", "youtube", "AGr94tpNVkw"],
+    ["XQC", "twitch", "xqc"],
+    ["foo:bar", "twitch", "foo:bar"]
+  ],
+  "watch_url": [
+    ["twitch", "xqc", "https://twitch.tv/xqc"],
+    ["kick", "xqc", "https://kick.com/xqc"],
+    ["youtube", "@jynxzi", "https://www.youtube.com/@jynxzi/live"],
+    ["youtube", "UCX6OQ3DkcsbYNE6H8uQQuVA", "https://www.youtube.com/channel/UCX6OQ3DkcsbYNE6H8uQQuVA/live"],
+    ["youtube", "ucx6oq3dkcsbyne6h8uqquva", "https://www.youtube.com/channel/ucx6oq3dkcsbyne6h8uqquva/live"],
+    ["youtube", "dQw4w9WgXcQ", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"],
+    ["youtube", "UCa1b2c3d4e", "https://www.youtube.com/watch?v=UCa1b2c3d4e"],
+    ["tiktok", "ryback", "https://www.tiktok.com/@ryback/live"],
+    ["tiktok", "@ryback", "https://www.tiktok.com/@ryback/live"]
+  ]
+}

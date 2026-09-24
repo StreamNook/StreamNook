@@ -9,14 +9,20 @@
 //! script never can) and keeps the whole tiktok.com cookie set in the keyring,
 //! with an obfuscated-file fallback, exactly as the YouTube session is kept.
 //!
-//! WHERE THE SESSION IS USED, AND WHERE IT IS NOT. Exactly one call carries it:
-//! the room-info request on the watch path, and only after TikTok has refused
-//! that same request anonymously as age restricted. Liveness sweeps, the Top
-//! live directory page and chat all stay anonymous on purpose. Those run in the
-//! background on a clock, and with the session attached they would be
-//! automated traffic attributable to the user's own TikTok account, on a
-//! platform where StreamNook already declines to send chat for the same reason.
-//! Keep it that way: do not thread the cookies into anything else.
+//! WHERE THE SESSION IS USED, AND WHERE IT IS NOT. Two requests carry it:
+//!   * room info on the watch path, only after TikTok has refused that same
+//!     request anonymously as age restricted;
+//!   * the account's Following LIVE list (`providers::tiktok_following`), on
+//!     the live poller's clock while signed in, so the Following tab, the
+//!     sidebar and go-live alerts work the way they do on every other platform.
+//!     That is background traffic attributable to the account, accepted
+//!     deliberately for parity: one request per poll, the same one TikTok's own
+//!     Following tab makes.
+//!
+//! Everything else stays anonymous: the per-creator liveness sweep of follows
+//! made in StreamNook, the Top live directory, profile reads and chat, which
+//! StreamNook already declines to send on TikTok. Do not thread the cookies
+//! into anything beyond these two.
 
 use crate::services::twitch_service::get_app_data_dir;
 use anyhow::{anyhow, Result};
@@ -51,6 +57,10 @@ struct TikTokSession {
     /// account's own messages.
     #[serde(default)]
     account_id: Option<String>,
+    /// The @handle. Absent on a session stored before it was recorded, which
+    /// is what tells `account_identity` to look the account up once more.
+    #[serde(default)]
+    account_handle: Option<String>,
 }
 
 static SESSION: OnceLock<Mutex<Option<TikTokSession>>> = OnceLock::new();
@@ -117,8 +127,33 @@ pub fn tiktok_profile_dir() -> PathBuf {
     dir
 }
 
+/// The session cookie's value, or None when signed out.
+fn session_id(cookies: &HashMap<String, String>) -> Option<&str> {
+    cookies.get("sessionid").map(String::as_str).filter(|v| !v.is_empty())
+}
+
 fn signed_in(cookies: &HashMap<String, String>) -> bool {
-    cookies.get("sessionid").is_some_and(|v| !v.is_empty())
+    session_id(cookies).is_some()
+}
+
+/// A signed-in jar whose session is not the one left in the profile from
+/// before this sign-in began.
+fn is_new_session(cookies: &HashMap<String, String>, stale: Option<&str>) -> bool {
+    crate::services::sign_in_profile::is_new_session(session_id(cookies), stale)
+}
+
+/// The sign-in profile, for signing it out and for starting a fresh sign-in.
+#[cfg(desktop)]
+fn profile() -> crate::services::sign_in_profile::SignInProfile {
+    crate::services::sign_in_profile::SignInProfile {
+        dir: tiktok_profile_dir(),
+        overlay_label: LOGIN_WINDOW_LABEL,
+        sign_out_label: "tiktok-sign-out",
+        origin: ORIGIN,
+        sites: &["tiktok.com"],
+        session: session_id,
+        tag: "tiktok",
+    }
 }
 
 // --- Public surface ---------------------------------------------------------
@@ -153,13 +188,14 @@ pub fn account_id() -> Option<String> {
 }
 
 /// Name and picture for the Accounts row, asking TikTok once if a session has
-/// neither yet.
+/// neither yet, or was stored before its @handle was recorded (and so may be
+/// wearing the login system's name rather than the profile's).
 pub async fn account_identity() -> (Option<String>, Option<String>) {
     let Some(s) = snapshot() else {
         return (None, None);
     };
-    if s.account_name.is_none() && signed_in(&s.cookies) {
-        if let Verdict::SignedIn(id) = probe().await {
+    if (s.account_name.is_none() || s.account_handle.is_none()) && signed_in(&s.cookies) {
+        if let Verdict::SignedIn(id) = identify().await {
             remember(&id);
             return (id.name, id.avatar);
         }
@@ -167,14 +203,32 @@ pub async fn account_identity() -> (Option<String>, Option<String>) {
     (s.account_name, s.account_avatar)
 }
 
-/// Sign out: forget the session and wipe the sign-in profile, so the next
-/// connect is a fresh login rather than a silent re-harvest.
-pub fn disconnect() {
+/// The signed-in account's @handle, or None.
+pub fn account_handle() -> Option<String> {
+    snapshot().and_then(|s| s.account_handle)
+}
+
+/// Sign out, leaving nothing of the account behind: not in memory, not in the
+/// keyring or on disk, and not in the sign-in profile. That last one matters
+/// beyond tidiness. A profile still signed in makes TikTok's page treat the
+/// next "Continue with Apple" as LINKING Apple to the account already there, so
+/// signing out and back in with Apple would bind the user's Apple ID to the
+/// account they had just signed out of.
+pub async fn disconnect() {
     if let Ok(mut s) = session_cell().lock() {
         *s = None;
     }
     clear_persisted();
-    let _ = std::fs::remove_dir_all(tiktok_profile_dir());
+    // The Following request was signed with this account's session and device.
+    crate::services::providers::tiktok_following::forget();
+    crate::services::providers::tiktok_send::forget();
+    crate::services::provider_live_service::forget_provider("tiktok").await;
+    // Through a live webview on the profile: deleting its folder does not
+    // reliably sign it out. On macOS only TikTok's cookies go, since the
+    // sign-in shares its store with the rest of the app there (see
+    // `sign_in_profile`).
+    #[cfg(desktop)]
+    crate::services::sign_in_profile::sign_out(&profile()).await;
     crate::services::providers::emit_platform_account_changed(&["tiktok"]);
 }
 
@@ -190,12 +244,18 @@ pub async fn validate_session() -> Option<bool> {
     }
     match probe().await {
         Verdict::SignedIn(id) => {
-            remember(&id);
+            // The account id only. Name, picture and handle come from
+            // `identify`, and this answer's own name and picture would put the
+            // login system's record back over the profile's on every check.
+            remember(&Identity {
+                id: id.id,
+                ..Default::default()
+            });
             Some(true)
         }
         Verdict::SignedOut => {
             log::info!("[tiktok] stored session was rejected; signing out");
-            disconnect();
+            disconnect().await;
             crate::services::providers::emit_platform_session_expired("tiktok");
             Some(false)
         }
@@ -210,6 +270,7 @@ struct Identity {
     name: Option<String>,
     avatar: Option<String>,
     id: Option<String>,
+    handle: Option<String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -275,7 +336,46 @@ fn read_account_info(body: &str) -> Verdict {
         avatar: text(&["avatar_url", "avatar_large_url", "avatar_thumb_url"])
             .filter(|u| u.starts_with("https://")),
         id,
+        handle: text(&["username", "unique_id"]).filter(|h| is_handle(h)),
     })
+}
+
+fn is_handle(h: &str) -> bool {
+    !h.is_empty() && h.len() <= 64 && h.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+}
+
+/// Who the session is, as people see them. The account-info answer is the
+/// authority on WHICH account it is (its id and @handle), but its
+/// `screen_name` and picture are the login system's own record, which can
+/// differ from the profile entirely (a name generated when a sign-in method
+/// was linked, say). The public profile supplies the nickname and picture
+/// everyone else sees. That lookup is anonymous, like every other profile read.
+async fn identify() -> Verdict {
+    match probe().await {
+        Verdict::SignedIn(mut id) => {
+            if let Some(handle) = id.handle.clone() {
+                match crate::services::providers::tiktok_media::public_identity(&handle).await {
+                    Ok((name, avatar)) => {
+                        let name = name.trim();
+                        if !name.is_empty() {
+                            id.name = Some(name.to_string());
+                        }
+                        if avatar.starts_with("https://") {
+                            id.avatar = Some(avatar);
+                        }
+                    }
+                    Err(e) => {
+                        log::debug!("[tiktok] profile for @{} unavailable: {}", handle, e);
+                        // Left unrecorded, so the next read looks again rather
+                        // than keeping the login system's name for good.
+                        id.handle = None;
+                    }
+                }
+            }
+            Verdict::SignedIn(id)
+        }
+        other => other,
+    }
 }
 
 fn remember(id: &Identity) {
@@ -285,6 +385,7 @@ fn remember(id: &Identity) {
             sess.account_name = id.name.clone().or(sess.account_name.take());
             sess.account_avatar = id.avatar.clone().or(sess.account_avatar.take());
             sess.account_id = id.id.clone().or(sess.account_id.take());
+            sess.account_handle = id.handle.clone().or(sess.account_handle.take());
             updated = Some(sess.clone());
         }
     }
@@ -299,15 +400,22 @@ fn remember(id: &Identity) {
 /// Twitch, Kick and YouTube use, then read the session off its profile.
 #[cfg(desktop)]
 pub async fn connect() -> Result<()> {
+    use crate::services::sign_in_profile;
     use tauri::Manager;
 
     let app = crate::services::providers::app_handle()
         .ok_or_else(|| anyhow!("app handle not available for TikTok sign-in"))?;
 
+    // Signing in while disconnected is a fresh sign-in, so whatever session the
+    // profile still holds belongs to an account that was disconnected. The
+    // overlay opens blank and shows the login page only once that session is
+    // gone; otherwise the page opens signed in as the old account and the loop
+    // below takes it (see `sign_in_profile`).
+    let fresh = !is_connected();
     crate::commands::twitch::emit_overlay_open_with(
         &app,
         LOGIN_WINDOW_LABEL,
-        LOGIN_URL,
+        sign_in_profile::opening_url(fresh, LOGIN_URL),
         "fullbody",
         Some("tiktok-account"),
     )
@@ -327,8 +435,26 @@ pub async fn connect() -> Result<()> {
         return Err(anyhow!("the TikTok sign-in never opened"));
     }
 
+    let cookies_now = || {
+        crate::services::youtube_auth_service::fetch_cookies_for_origin(
+            &app,
+            LOGIN_WINDOW_LABEL,
+            &[],
+            ORIGIN,
+        )
+    };
+
+    // Belt and braces: the session the profile held when this began is never
+    // mistaken for this sign-in, whatever the clear managed.
+    let mut stale: Option<String> = None;
+    if fresh {
+        if let Some(win) = app.get_webview_window(LOGIN_WINDOW_LABEL) {
+            stale = sign_in_profile::begin_fresh(&app, &win, &profile(), LOGIN_URL).await;
+        }
+    }
+
     // `sessionid` lands on tiktok.com the moment sign-in completes, whichever
-    // way the user signed in (QR code, password, or another account).
+    // way the user signed in (QR code, password, Apple or Google).
     let mut harvested: Option<HashMap<String, String>> = None;
     let mut dismissed = false;
     for _ in 0..200 {
@@ -336,15 +462,8 @@ pub async fn connect() -> Result<()> {
             dismissed = true;
             break;
         }
-        if let Ok(map) = crate::services::youtube_auth_service::fetch_cookies_for_origin(
-            &app,
-            LOGIN_WINDOW_LABEL,
-            &[],
-            ORIGIN,
-        )
-        .await
-        {
-            if signed_in(&map) {
+        if let Ok(map) = cookies_now().await {
+            if is_new_session(&map, stale.as_deref()) {
                 harvested = Some(map);
                 break;
             }
@@ -370,7 +489,7 @@ pub async fn connect() -> Result<()> {
     }
     // Who signed in, for the Accounts row. Best effort: a session TikTok
     // accepts but whose account answer we cannot read still plays.
-    if let Verdict::SignedIn(id) = probe().await {
+    if let Verdict::SignedIn(id) = identify().await {
         remember(&id);
     }
     crate::services::providers::emit_platform_account_changed(&["tiktok"]);
@@ -417,6 +536,15 @@ mod tests {
         assert_eq!(id.id.as_deref(), Some("7207281585031922730"));
         assert_eq!(id.name.as_deref(), Some("Someone"));
         assert!(id.avatar.is_some());
+        // The handle is what names the account unambiguously; the screen name is
+        // the login system's and may not be what the profile shows.
+        assert_eq!(id.handle.as_deref(), Some("someone"));
+
+        let odd = r#"{"message":"success","data":{"user_id_str":"1","screen_name":"X","username":"not a handle"}}"#;
+        let Verdict::SignedIn(id) = read_account_info(odd) else {
+            panic!("a named account")
+        };
+        assert_eq!(id.handle, None, "only a real handle is kept");
 
         let plain = r#"{"message":"success","data":{"user_id":42,"username":"handle","avatar_url":"http://x/a.jpeg"}}"#;
         let Verdict::SignedIn(id) = read_account_info(plain) else {
@@ -437,5 +565,17 @@ mod tests {
         assert!(!signed_in(&jar));
         jar.insert("sessionid".to_string(), "deadbeef".to_string());
         assert!(signed_in(&jar));
+    }
+
+    #[test]
+    fn a_disconnected_accounts_session_is_never_taken_for_a_new_sign_in() {
+        let mut jar = HashMap::new();
+        jar.insert("sessionid".to_string(), "old-account".to_string());
+        assert!(!is_new_session(&jar, Some("old-account")), "the leftover session");
+        assert!(is_new_session(&jar, None), "a clean profile takes any session");
+        jar.insert("sessionid".to_string(), "real-account".to_string());
+        assert!(is_new_session(&jar, Some("old-account")), "signing in replaced it");
+        jar.insert("sessionid".to_string(), String::new());
+        assert!(!is_new_session(&jar, Some("old-account")), "signed out is not new");
     }
 }

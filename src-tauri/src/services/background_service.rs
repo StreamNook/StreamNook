@@ -1,7 +1,7 @@
 use log::{debug, error};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Listener};
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
@@ -18,6 +18,22 @@ use crate::services::drops_service::DropsService;
 /// minutes, so a 3-minute cadence catches every grab with tolerable latency
 /// while keeping GQL/integrity load low (this walks the full followed list).
 const AUTOMATION_POLL_INTERVAL: Duration = Duration::from_secs(180);
+
+/// After a channel-points-earned event reports a channel, the poll leaves that
+/// channel alone for this long. A GQL read this close can trail the ledger
+/// (measured 0.4 s behind a claim the socket had already pushed), and taking
+/// that lower figure as the baseline would re-announce the rise next cycle.
+/// Well under the poll interval, so the fallback still fires when the socket
+/// is silent.
+const POLL_REPORT_GUARD: Duration = Duration::from_secs(60);
+
+/// A channel's last known balance and when an event last reported it. `None`
+/// means only the poll's own GQL reads have.
+#[derive(Clone, Copy, Debug)]
+struct PollBaseline {
+    balance: i32,
+    reported_at: Option<Instant>,
+}
 
 /// Realtime support for the channel the user is actually watching, plus the
 /// channel-points notification path. Owns the single-channel PubSub socket
@@ -38,6 +54,11 @@ pub struct BackgroundService {
     /// the Autopilot master toggle (auto_claim_channel_points): `set_automation_active`
     /// spawns it on, aborts it off. `None` means no poll is running.
     points_poll: Arc<Mutex<Option<JoinHandle<()>>>>,
+    /// The automation poll's baseline per channel. Every channel-points-earned
+    /// event advances it too (the realtime socket's user topic is account-wide,
+    /// so it reports background earns as well), which is what stops the poll
+    /// from announcing the same rise a second time as `automation`.
+    poll_baseline: Arc<RwLock<HashMap<String, PollBaseline>>>,
 }
 
 impl BackgroundService {
@@ -49,6 +70,7 @@ impl BackgroundService {
             app_handle,
             watched: Arc::new(RwLock::new(None)),
             points_poll: Arc::new(Mutex::new(None)),
+            poll_baseline: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -69,14 +91,29 @@ impl BackgroundService {
         // channels via the balance poll). The single source for the lifetime
         // stats the Drops center shows.
         let drops_service_for_stats = self.drops_service.clone();
+        let poll_baseline_for_stats = self.poll_baseline.clone();
         self.app_handle.listen("channel-points-earned", move |event| {
             let drops_service = drops_service_for_stats.clone();
+            let poll_baseline = poll_baseline_for_stats.clone();
             tokio::spawn(async move {
                 if let Ok(payload) = serde_json::from_str::<serde_json::Value>(event.payload()) {
                     let channel_id = payload["channel_id"].as_str().map(|s| s.to_string());
                     let points = payload["points"].as_i64().unwrap_or(0) as i32;
                     let reason = payload["reason"].as_str().unwrap_or("watch");
                     let balance = payload["balance"].as_i64().unwrap_or(0) as i32;
+                    // Whatever reported this rise, the poll's baseline moves with
+                    // it so the next read has no delta to announce again.
+                    if balance > 0 {
+                        if let Some(cid) = channel_id.as_deref() {
+                            poll_baseline.write().await.insert(
+                                cid.to_string(),
+                                PollBaseline {
+                                    balance,
+                                    reported_at: Some(Instant::now()),
+                                },
+                            );
+                        }
+                    }
                     // Prefer the login (helix lookups + leaderboard key on it),
                     // fall back to the display name.
                     let channel_name = payload["channel_login"]
@@ -178,18 +215,68 @@ impl BackgroundService {
         }
     }
 
+    /// One poll cycle's diff. Moves `baseline` to `balances` and returns
+    /// (channel_id, login, display_name, balance, delta) for every channel whose
+    /// balance rose above its baseline, skipping the seeding pass and the
+    /// watched channel. A channel an event reported within
+    /// `POLL_REPORT_GUARD` is left untouched: that report owns the number, and
+    /// a GQL read this close may trail it.
+    fn rises_since(
+        baseline: &mut HashMap<String, PollBaseline>,
+        balances: &[(String, String, String, i32)],
+        first: bool,
+        watched_id: Option<&String>,
+        now: Instant,
+    ) -> Vec<(String, String, String, i32, i32)> {
+        balances
+            .iter()
+            .filter_map(|(channel_id, login, display_name, balance)| {
+                let prev = baseline.get(channel_id).copied();
+                let recently_reported = prev
+                    .and_then(|p| p.reported_at)
+                    .is_some_and(|at| now.duration_since(at) < POLL_REPORT_GUARD);
+                if recently_reported {
+                    return None;
+                }
+                baseline.insert(
+                    channel_id.clone(),
+                    PollBaseline {
+                        balance: *balance,
+                        reported_at: None,
+                    },
+                );
+                if first || watched_id == Some(channel_id) {
+                    return None;
+                }
+                let prev = prev?;
+                if *balance <= prev.balance {
+                    return None;
+                }
+                Some((
+                    channel_id.clone(),
+                    login.clone(),
+                    display_name.clone(),
+                    *balance,
+                    *balance - prev.balance,
+                ))
+            })
+            .collect()
+    }
+
     /// Spawn the automation balance poll: every `AUTOMATION_POLL_INTERVAL`, read every
     /// followed channel's balance via GQL and emit channel-points-earned for any
     /// channel whose balance rose since the last cycle (excluding the watched
     /// channel, which `claim_channel_points` already notifies). The first cycle
     /// only seeds the baseline so existing holdings aren't reported as earns.
+    /// Rises the realtime socket already announced are not reported again: its
+    /// events advance the same baseline (see `start` and `rises_since`).
     fn spawn_points_poll(&self) -> JoinHandle<()> {
         let app_handle = self.app_handle.clone();
         let drops_service = self.drops_service.clone();
         let watched = self.watched.clone();
+        let baseline = self.poll_baseline.clone();
 
         tokio::spawn(async move {
-            let mut baseline: HashMap<String, i32> = HashMap::new();
             let mut first = true;
             let mut ticker = tokio::time::interval(AUTOMATION_POLL_INTERVAL);
 
@@ -206,24 +293,18 @@ impl BackgroundService {
                     .as_ref()
                     .map(|(id, _)| id.clone());
 
-                for (channel_id, login, display_name, balance) in &balances {
-                    let prev = baseline.insert(channel_id.clone(), *balance);
+                let rises = Self::rises_since(
+                    &mut *baseline.write().await,
+                    &balances,
+                    first,
+                    watched_id.as_ref(),
+                    Instant::now(),
+                );
 
-                    // Skip the on-screen channel (claim_channel_points covers it)
-                    // and the seeding pass.
-                    if first || watched_id.as_ref() == Some(channel_id) {
-                        continue;
-                    }
-
-                    let Some(prev) = prev else { continue };
-                    if *balance <= prev {
-                        continue;
-                    }
-                    let delta = *balance - prev;
-
+                for (channel_id, login, display_name, balance, delta) in rises {
                     {
                         let ds = drops_service.lock().await;
-                        ds.update_channel_points_balance(channel_id, login, *balance)
+                        ds.update_channel_points_balance(&channel_id, &login, balance)
                             .await;
                     }
 
@@ -413,5 +494,123 @@ impl BackgroundService {
             .ok()?;
         let json: serde_json::Value = resp.json().await.ok()?;
         json["user_id"].as_str().map(|s| s.to_string())
+    }
+}
+
+#[cfg(test)]
+mod poll_dedupe_tests {
+    use super::*;
+
+    fn row(id: &str, balance: i32) -> (String, String, String, i32) {
+        (id.to_string(), format!("{id}_login"), id.to_string(), balance)
+    }
+
+    fn polled(balance: i32) -> PollBaseline {
+        PollBaseline {
+            balance,
+            reported_at: None,
+        }
+    }
+
+    fn reported(balance: i32, at: Instant) -> PollBaseline {
+        PollBaseline {
+            balance,
+            reported_at: Some(at),
+        }
+    }
+
+    #[test]
+    fn seeding_pass_reports_nothing_but_fills_the_baseline() {
+        let now = Instant::now();
+        let mut baseline = HashMap::new();
+        let rises = BackgroundService::rises_since(&mut baseline, &[row("a", 100)], true, None, now);
+        assert!(rises.is_empty());
+        assert_eq!(baseline["a"].balance, 100);
+    }
+
+    #[test]
+    fn a_rise_since_the_last_read_is_reported_once() {
+        let now = Instant::now();
+        let mut baseline = HashMap::from([("a".to_string(), polled(100))]);
+        let rises = BackgroundService::rises_since(&mut baseline, &[row("a", 130)], false, None, now);
+        assert_eq!(rises.len(), 1);
+        assert_eq!((rises[0].3, rises[0].4), (130, 30));
+        let again = BackgroundService::rises_since(&mut baseline, &[row("a", 130)], false, None, now);
+        assert!(again.is_empty());
+    }
+
+    #[test]
+    fn a_rise_the_socket_already_reported_is_not_repeated() {
+        // The socket's event moved the baseline to 130 before the read, so the
+        // read is a zero delta. Well past the guard, so the poll does look.
+        let now = Instant::now();
+        let mut baseline = HashMap::from([(
+            "a".to_string(),
+            reported(130, now - POLL_REPORT_GUARD * 2),
+        )]);
+        let rises = BackgroundService::rises_since(&mut baseline, &[row("a", 130)], false, None, now);
+        assert!(rises.is_empty());
+    }
+
+    #[test]
+    fn a_stale_read_right_after_a_report_cannot_lower_the_baseline() {
+        // Measured live: the socket pushed a +50 claim (36160) and a GQL read
+        // 0.35 s later still returned 36110. Taking 36110 as the baseline would
+        // announce the claim again next cycle as an automation earn.
+        let claimed_at = Instant::now();
+        let mut baseline = HashMap::from([("z".to_string(), reported(36160, claimed_at))]);
+        let stale = BackgroundService::rises_since(
+            &mut baseline,
+            &[row("z", 36110)],
+            false,
+            None,
+            claimed_at + Duration::from_millis(350),
+        );
+        assert!(stale.is_empty());
+        assert_eq!(baseline["z"].balance, 36160, "the report's figure stays");
+
+        // Next cycle the ledger has caught up: nothing to announce.
+        let next = BackgroundService::rises_since(
+            &mut baseline,
+            &[row("z", 36160)],
+            false,
+            None,
+            claimed_at + AUTOMATION_POLL_INTERVAL,
+        );
+        assert!(next.is_empty());
+        assert_eq!(baseline["z"].balance, 36160);
+    }
+
+    #[test]
+    fn the_poll_still_reports_a_rise_the_socket_missed() {
+        // Reported long ago, then +20 arrived with no event for it (socket down
+        // or a lost push): the fallback announces it once the guard has passed.
+        let now = Instant::now();
+        let mut baseline = HashMap::from([(
+            "a".to_string(),
+            reported(100, now - POLL_REPORT_GUARD * 3),
+        )]);
+        let rises = BackgroundService::rises_since(&mut baseline, &[row("a", 120)], false, None, now);
+        assert_eq!(rises.len(), 1);
+        assert_eq!(rises[0].4, 20);
+    }
+
+    #[test]
+    fn watched_channel_and_decreases_are_skipped() {
+        let now = Instant::now();
+        let mut baseline = HashMap::from([
+            ("w".to_string(), polled(100)),
+            ("d".to_string(), polled(100)),
+        ]);
+        let watched = "w".to_string();
+        let rises = BackgroundService::rises_since(
+            &mut baseline,
+            &[row("w", 150), row("d", 90)],
+            false,
+            Some(&watched),
+            now,
+        );
+        assert!(rises.is_empty());
+        assert_eq!(baseline["d"].balance, 90, "a spend lowers the baseline once the guard is clear");
     }
 }

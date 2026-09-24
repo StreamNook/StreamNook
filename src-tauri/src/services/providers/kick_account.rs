@@ -431,17 +431,25 @@ fn import_script(label: &str, interactive: bool) -> String {
 /// the consent leg below is usually a single click.
 #[cfg(desktop)]
 pub async fn sign_in() -> Result<KickImportReport> {
+    use crate::services::sign_in_profile;
     use tauri::Manager;
 
-    const LABEL: &str = "kick-login";
     let app = app_handle().ok_or_else(|| anyhow!("app handle not available for Kick sign-in"))?;
+
+    // With no Kick connection this is a fresh sign-in, and the profile may still
+    // hold the kick.com and id.kick.com sessions of an account that signed out.
+    // Taken, they would hand that account straight back: its follow list on
+    // leg 1's first poll and its consent one click later. So the overlay opens
+    // blank and shows the login page only once they are gone (see
+    // `sign_in_profile`).
+    let fresh = !crate::services::kick_auth_service::is_connected();
 
     // Hand the overlay the login page. React measures the app body and mounts the
     // webview at that rect; `kick-account` selects Kick's own cookie jar.
     crate::commands::twitch::emit_overlay_open_with(
         &app,
-        LABEL,
-        "https://kick.com/login",
+        LOGIN_LABEL,
+        sign_in_profile::opening_url(fresh, LOGIN_URL),
         "fullbody",
         Some("kick-account"),
     )
@@ -454,34 +462,42 @@ pub async fn sign_in() -> Result<KickImportReport> {
     // so wait for the window to exist before addressing it.
     let mut win = None;
     for _ in 0..60 {
-        if let Some(w) = app.get_webview_window(LABEL) {
+        if let Some(w) = app.get_webview_window(LOGIN_LABEL) {
             win = Some(w);
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let win = win.ok_or_else(|| {
-        crate::commands::twitch::dismiss_login_overlay(&app, LABEL);
+        crate::commands::twitch::dismiss_login_overlay(&app, LOGIN_LABEL);
         log::warn!("[Kick] the sign-in overlay never mounted");
         anyhow!("The Kick sign-in window could not open.")
     })?;
+
+    // Belt and braces: the session the profile held when this began is never
+    // mistaken for this sign-in, whatever the clear managed.
+    let stale = if fresh {
+        sign_in_profile::begin_fresh(&app, &win, &profile(&app), LOGIN_URL).await
+    } else {
+        None
+    };
 
     // Leg 1: wait for the site session by polling the webview's cookie jar. That
     // jar sees HttpOnly cookies, which page script cannot, so it is the only
     // reliable signal that the user is actually signed in.
     let mut report: Option<KickImportReport> = None;
     for _ in 0..150 {
-        if app.get_webview_window(LABEL).is_none() {
+        if app.get_webview_window(LOGIN_LABEL).is_none() {
             log::info!("[Kick] sign-in overlay dismissed by the user");
             // The child webview is gone, but the React overlay frame and the
             // ui_hang_watchdog's active-overlay tag are not — they are cleared by
             // this call, which every other exit from this function already makes.
             // Skipping it here left the app wearing a login overlay with nothing
             // behind it.
-            crate::commands::twitch::dismiss_login_overlay(&app, LABEL);
+            crate::commands::twitch::dismiss_login_overlay(&app, LOGIN_LABEL);
             return Err(anyhow!("Sign-in was cancelled"));
         }
-        if let Some(channels) = follows_via_cookies(&app, LABEL).await {
+        if let Some(channels) = follows_via_cookies(&app, LOGIN_LABEL, stale.as_deref()).await {
             report = Some(KickImportReport {
                 status: "ok".to_string(),
                 channels,
@@ -492,6 +508,18 @@ pub async fn sign_in() -> Result<KickImportReport> {
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
     if report.is_none() {
+        // Consent authorizes whoever id.kick.com has signed in, and cannot be
+        // held to a new session the way leg 1 is. With the signed-out account's
+        // session still in the profile and no new one seen, that is the account
+        // the user just left, so the sign-in stops here.
+        if let Some(old) = stale.as_deref() {
+            if still_holds(&app, old).await {
+                crate::commands::twitch::dismiss_login_overlay(&app, LOGIN_LABEL);
+                return Err(anyhow!(
+                    "The Kick sign-in window kept the account you signed out of. Try connecting again."
+                ));
+            }
+        }
         log::warn!("[Kick] no kick.com session appeared; continuing to authorization");
     }
 
@@ -518,7 +546,7 @@ pub async fn sign_in() -> Result<KickImportReport> {
 
     // Closing goes through the overlay's own dismissal so React tears down its
     // chrome too; destroying the window alone would leave the frame on screen.
-    crate::commands::twitch::dismiss_login_overlay(&app, LABEL);
+    crate::commands::twitch::dismiss_login_overlay(&app, LOGIN_LABEL);
 
     match report {
         Some(report) => {
@@ -643,8 +671,15 @@ pub async fn sign_in() -> Result<KickImportReport> {
     Err(anyhow!("Kick sign-in is not available on this platform"))
 }
 
+/// The follow list, read with the site session in the sign-in overlay's jar.
+/// Never with `stale`, the session the profile kept from before the sign-in
+/// began.
 #[cfg(desktop)]
-async fn follows_via_cookies(app: &tauri::AppHandle, label: &str) -> Option<Vec<KickFollowedChannel>> {
+async fn follows_via_cookies(
+    app: &tauri::AppHandle,
+    label: &str,
+    stale: Option<&str>,
+) -> Option<Vec<KickFollowedChannel>> {
     let jar = crate::services::youtube_auth_service::fetch_cookies_for_origin(
         app,
         label,
@@ -654,7 +689,66 @@ async fn follows_via_cookies(app: &tauri::AppHandle, label: &str) -> Option<Vec<
     )
     .await
     .ok()?;
+    if !is_new_site_session(&jar, stale) {
+        return None;
+    }
     follows_from_jar(&jar).await
+}
+
+/// Whether the sign-in overlay's jar still holds the kick.com session `old`.
+#[cfg(desktop)]
+async fn still_holds(app: &tauri::AppHandle, old: &str) -> bool {
+    crate::services::youtube_auth_service::fetch_cookies_for_origin(
+        app,
+        LOGIN_LABEL,
+        &[],
+        "https://kick.com",
+    )
+    .await
+    .is_ok_and(|jar| site_session(&jar) == Some(old))
+}
+
+/// The kick.com site session's cookie, None when signed out.
+fn site_session(jar: &HashMap<String, String>) -> Option<&str> {
+    jar.get("session_token").map(String::as_str).filter(|v| !v.is_empty())
+}
+
+/// A site session a sign-in may take: one exists, and it is not the one the
+/// profile kept from before the sign-in began.
+fn is_new_site_session(jar: &HashMap<String, String>, stale: Option<&str>) -> bool {
+    crate::services::sign_in_profile::is_new_session(site_session(jar), stale)
+}
+
+/// The sign-in overlay's window label, which `mount_twitch_overlay` also knows
+/// it by: it takes the consent redirect off that window's navigation.
+#[cfg(desktop)]
+const LOGIN_LABEL: &str = "kick-login";
+#[cfg(desktop)]
+const LOGIN_URL: &str = "https://kick.com/login";
+
+/// The Kick sign-in profile, for signing it out and for starting a fresh
+/// sign-in. Clearing it clears both halves at once: kick.com's session and
+/// id.kick.com's, the one consent runs on.
+#[cfg(desktop)]
+fn profile(app: &tauri::AppHandle) -> crate::services::sign_in_profile::SignInProfile {
+    crate::services::sign_in_profile::SignInProfile {
+        dir: crate::services::providers::kick::account_profile_dir(app),
+        overlay_label: LOGIN_LABEL,
+        sign_out_label: "kick-sign-out",
+        origin: "https://kick.com",
+        // id.kick.com, where consent runs, included.
+        sites: &["kick.com"],
+        session: site_session,
+        tag: "Kick",
+    }
+}
+
+/// Sign the Kick sign-in profile out, through a live webview on it: the site
+/// half of a Kick sign-out, which `kick_auth_service::disconnect` (the OAuth
+/// token) does not cover.
+#[cfg(desktop)]
+pub async fn clear_site_session(app: &tauri::AppHandle) {
+    crate::services::sign_in_profile::sign_out(&profile(app)).await;
 }
 
 /// Parse a `Cookie`-style header (`a=b; c=d`) into a jar. Values stay encoded,
@@ -795,5 +889,25 @@ mod tests {
         let mut keys: Vec<_> = jar.keys().map(String::as_str).collect();
         keys.sort();
         assert_eq!(keys, ["XSRF-TOKEN", "session_token"]);
+    }
+
+    #[test]
+    fn a_site_session_is_session_token_and_nothing_less() {
+        let guest = jar_from_header("XSRF-TOKEN=x; kick_session=k; cf_clearance=c");
+        assert_eq!(site_session(&guest), None, "a signed-out browser has cookies too");
+        assert_eq!(site_session(&jar_from_header("session_token=")), None);
+        let signed_in = jar_from_header("session_token=12%7Cabc; XSRF-TOKEN=x");
+        assert_eq!(site_session(&signed_in), Some("12%7Cabc"));
+    }
+
+    #[test]
+    fn a_signed_out_accounts_site_session_is_never_taken_for_a_new_sign_in() {
+        let old = jar_from_header("session_token=12%7Cold");
+        assert!(!is_new_site_session(&old, Some("12%7Cold")), "the leftover session");
+        assert!(is_new_site_session(&old, None), "a clean profile takes any session");
+        let new = jar_from_header("session_token=34%7Cnew");
+        assert!(is_new_site_session(&new, Some("12%7Cold")), "signing in replaced it");
+        let out = jar_from_header("XSRF-TOKEN=x");
+        assert!(!is_new_site_session(&out, Some("12%7Cold")), "signed out is not new");
     }
 }

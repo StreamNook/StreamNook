@@ -5,11 +5,10 @@
 // section read it directly; folding favorites in would relabel a channel you
 // merely favorited as one you follow.
 //
-// The backend `favorite_live_service` owns the liveness itself. It sweeps
-// Twitch by user id, Kick and YouTube through their `live_check` adapters, and
-// skips anything already covered by the follow poller so no channel is polled
-// twice. TikTok registers no live check at all, so TikTok favorites never
-// appear here; they live in the offline roster instead.
+// The backend `favorite_live_service` owns the liveness itself: Twitch by user
+// id, and Kick, YouTube and TikTok through their `live_check` adapters, each
+// platform on its own clock. A favorite you also follow is checked there too,
+// but only the follow poller announces it going live.
 //
 // Two ways in, exactly like the follows store: the `favorites-live-update`
 // event, and a `get_favorite_live` pull at startup so the first sweep interval

@@ -522,7 +522,7 @@ impl AccountStore {
         // the two live under DIFFERENT roots — Kick's under app-local data,
         // YouTube's under config — so this delegates rather than deleting paths.
         crate::services::kick_auth_service::disconnect();
-        crate::services::youtube_auth_service::disconnect();
+        crate::services::youtube_auth_service::disconnect().await;
 
         debug!(
             "[accounts] reset_all: cleared {} account(s) + platform sessions for forced re-auth",

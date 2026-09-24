@@ -19,6 +19,12 @@
 //! - hype trains: every 30 s while any window exists, for the channels on
 //!   screen (followed live + recommended + whatever a Home reports through
 //!   `set_extra_channels`: category and search results).
+//! - collaborations (Shared Viewership): no timer of their own. They are
+//!   fetched right behind every list's viewer counts (followed, recommended,
+//!   the next recommended page, a Home's category and search results) and
+//!   sent AHEAD of that list, so a card paints with its group instead of
+//!   gaining it a poll later. Skipped while no window is on screen; a Home
+//!   mount catches up. See `services::collaboration`.
 //! - watch streaks: hourly, for the followed-live channels.
 //! - drops: active campaigns plus the inventory's active game names, hourly
 //!   while any window exists and on mount when stale.
@@ -32,6 +38,19 @@
 //!   while it was still recording).
 //! - recommended paging: `load_more_recommended` appends the next page to
 //!   the same section, so the list stays canonical here.
+//! - Discover lists (`unified_discover`): Home's Discover grid on the unified
+//!   view, and the Sidebar's second section for whatever scope it shows, both
+//!   finished here from one cache of the other platforms' directories. Each
+//!   directory is fetched on its own task and the lists are emitted as each one
+//!   lands, and rebuilt when anything they leave out (follows, live favourites,
+//!   the favourite list) changes. A unified Home refetches directories on a
+//!   60 s check once 5 min old, never while the main window is hidden or
+//!   minimized; the Sidebar alone never polls, it refetches when it is shown a
+//!   scope, when it closes, and when the window comes back to the front.
+//!
+//! What is on screen is claimed per window and per page (`WindowClaims`), not
+//! counted: a page that dies without its React cleanup (a destroyed window, a
+//! reload) must not leave the polls that follow Home running in the tray.
 //!
 //! Each section carries its fetch time. A section is emitted to the windows
 //! (`home-snapshot`, tagged by section) only when its content changed, so a
@@ -40,7 +59,7 @@
 //! manual pull (sidebar close, palette command) with a 15 s floor per section.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -52,10 +71,18 @@ use tokio::sync::{Mutex, RwLock};
 use crate::commands::hype_train::{get_bulk_hype_train_status, HypeTrainBulkStatus};
 use crate::commands::watch_streak::get_watch_streaks_batch;
 use crate::models::drops::{CampaignStatus, DropCampaign};
-use crate::models::settings::AppState;
+use crate::models::provider_stream::ProviderCategory;
+use crate::models::settings::{AppState, FavoriteChannel, ProviderFollow};
 use crate::models::stream::TwitchStream;
+use crate::services::collaboration::{self, Collaboration};
 use crate::services::live_notification_service::LiveNotificationService;
+use crate::services::providers::key::PROVIDER_IDS;
+use crate::services::providers::registry;
+use crate::services::providers::source::StreamSource;
 use crate::services::twitch_service::TwitchService;
+use crate::services::unified_discover::{self, DiscoverRow, Surface, UnifiedDiscover, View};
+use crate::services::unified_following::{self, Following};
+use crate::services::{favorite_live_service, provider_categories, provider_live_service};
 
 /// Event name for section updates. Payload: `HomeUpdate`.
 pub const EVENT: &str = "home-snapshot";
@@ -64,6 +91,11 @@ const FOLLOWED_PERIOD: Duration = Duration::from_secs(60);
 const OFFLINE_PERIOD: Duration = Duration::from_secs(600);
 const RECOMMENDED_PERIOD: Duration = Duration::from_secs(300);
 const HYPE_PERIOD: Duration = Duration::from_secs(30);
+/// A Home mount refetches collaborations older than this.
+const COLLAB_MOUNT_STALE: Duration = Duration::from_secs(60);
+/// The longest a list waits for its collaborations before it is sent without
+/// them. The next pass fills them in.
+const COLLAB_WAIT: Duration = Duration::from_secs(3);
 const STREAKS_PERIOD: Duration = Duration::from_secs(3600);
 const DROPS_PERIOD: Duration = Duration::from_secs(3600);
 /// Floor between two manual refreshes of the same section.
@@ -85,6 +117,15 @@ const CONTINUE_HYDRATE_RETRY: Duration = Duration::from_secs(60);
 const CONTINUE_COALESCE: Duration = Duration::from_secs(10);
 /// A mount rebuilds the row if it is older than this.
 const CONTINUE_MOUNT_STALE: Duration = Duration::from_secs(30);
+/// How often the unified Discover directories are checked while a unified
+/// Home is on screen. Each is refetched once `unified_discover::PERIOD_SECS`
+/// old, so this bounds how late that runs.
+const DISCOVER_TICK: Duration = Duration::from_secs(60);
+/// A directory fetch that has not answered by now is abandoned, so a platform
+/// that hangs cannot hold its claim (and block every later fetch) forever.
+const DIRECTORY_TIMEOUT: Duration = Duration::from_secs(30);
+/// Categories each other platform contributes to the unified Categories tab.
+const OTHER_CATEGORIES_PER_PROVIDER: u32 = 20;
 
 #[derive(Serialize, Clone, Default)]
 pub struct HomeSnapshot {
@@ -98,6 +139,10 @@ pub struct HomeSnapshot {
     pub recommended_at: Option<u64>,
     pub hype_trains: Vec<HypeTrainBulkStatus>,
     pub hype_at: Option<u64>,
+    /// Twitch channel id -> its Shared Viewership group, only for channels
+    /// that are in one.
+    pub collaborations: HashMap<String, Collaboration>,
+    pub collab_at: Option<u64>,
     /// channel_id -> current watch streak (only channels with a streak > 0).
     pub watch_streaks: HashMap<String, u32>,
     pub streaks_at: Option<u64>,
@@ -109,6 +154,21 @@ pub struct HomeSnapshot {
     /// Unfinished VODs the viewer opened on purpose, newest watch first.
     pub continue_watching: Vec<ContinueWatchingItem>,
     pub continue_watching_at: Option<u64>,
+    /// Home's Discover tab on the unified view, finished: Twitch's picks and
+    /// every other platform's directory as one ranked list, without what the
+    /// Following tab or the Favourites section already shows. Built when the
+    /// snapshot is read (see `snapshot`), never stored here.
+    pub unified_discover: Vec<DiscoverRow>,
+    pub unified_discover_at: Option<u64>,
+    /// Your channels across every platform, finished: live favourites, the
+    /// other live follows and the offline roster (see `unified_following`).
+    /// Built when the snapshot is read, like `unified_discover`.
+    pub following: Following,
+    pub following_at: Option<u64>,
+    /// The unified Categories tab's "On other platforms" row: every other
+    /// platform's own categories, from `provider_categories`' cache.
+    pub other_categories: Vec<ProviderCategory>,
+    pub other_categories_at: Option<u64>,
 }
 
 /// One card in Home's Continue Watching row. Built entirely from the local
@@ -155,6 +215,10 @@ pub enum HomeUpdate {
         statuses: Vec<HypeTrainBulkStatus>,
         at: u64,
     },
+    Collaborations {
+        collabs: HashMap<String, Collaboration>,
+        at: u64,
+    },
     WatchStreaks {
         streaks: HashMap<String, u32>,
         at: u64,
@@ -168,15 +232,121 @@ pub enum HomeUpdate {
         items: Vec<ContinueWatchingItem>,
         at: u64,
     },
+    UnifiedDiscover {
+        streams: Vec<DiscoverRow>,
+        at: u64,
+    },
+    /// The Sidebar's second section, built for `scope` (`"all"`, or one
+    /// provider id). The page shows it only under that scope.
+    SidebarDiscover {
+        scope: String,
+        streams: Vec<DiscoverRow>,
+        at: u64,
+    },
+    /// Your channels across every platform: see `HomeSnapshot::following`.
+    Following {
+        favorites: Vec<DiscoverRow>,
+        live: Vec<DiscoverRow>,
+        offline: Vec<DiscoverRow>,
+        at: u64,
+    },
+    /// The unified Categories tab's "On other platforms" row.
+    OtherCategories {
+        categories: Vec<ProviderCategory>,
+        at: u64,
+    },
+}
+
+/// What one window's surfaces have claimed, as one JS context (page load) of
+/// it.
+#[derive(Default, Debug, PartialEq)]
+struct WindowClaims {
+    /// The page these claims belong to. A reload runs no React cleanup, so the
+    /// page before never says its surfaces left: a claim from a new context
+    /// replaces that page's claims instead.
+    context: String,
+    /// Mounted Homes.
+    mounted: usize,
+    /// How many of `mounted` show every platform at once.
+    unified: usize,
+    /// The scope the window's Sidebar shows its second section for, while it
+    /// shows one.
+    sidebar: Option<String>,
+}
+
+impl WindowClaims {
+    /// `window`'s claims for the page `context`, replacing a dead page's. `None`
+    /// for a release from a page that has since been replaced, which must
+    /// change nothing, so the order two in-flight calls land in cannot matter.
+    fn for_page<'a>(
+        claims: &'a mut HashMap<String, WindowClaims>,
+        window: &str,
+        context: &str,
+        releasing: bool,
+    ) -> Option<&'a mut WindowClaims> {
+        let entry = claims.entry(window.to_string()).or_default();
+        if entry.context != context {
+            if releasing {
+                return None;
+            }
+            *entry = WindowClaims {
+                context: context.to_string(),
+                ..WindowClaims::default()
+            };
+        }
+        Some(entry)
+    }
+}
+
+/// Record a Home arriving (`mounted`) or leaving in `window`, under the page
+/// `context`.
+fn claim_home(
+    claims: &mut HashMap<String, WindowClaims>,
+    window: &str,
+    context: &str,
+    mounted: bool,
+    unified: bool,
+) {
+    let Some(entry) = WindowClaims::for_page(claims, window, context, !mounted) else {
+        return;
+    };
+    if mounted {
+        entry.mounted += 1;
+        entry.unified += usize::from(unified);
+    } else {
+        entry.mounted = entry.mounted.saturating_sub(1);
+        entry.unified = entry.unified.saturating_sub(usize::from(unified));
+    }
+}
+
+/// Record the scope the Sidebar in `window` shows its second section for, or
+/// that it shows none (`None`: disabled, or the section switched off).
+fn claim_sidebar(
+    claims: &mut HashMap<String, WindowClaims>,
+    window: &str,
+    context: &str,
+    scope: Option<&str>,
+) {
+    let Some(entry) = WindowClaims::for_page(claims, window, context, scope.is_none()) else {
+        return;
+    };
+    entry.sidebar = scope.map(str::to_string);
 }
 
 struct Inner {
     app: AppHandle,
     notifications: Arc<LiveNotificationService>,
     snap: RwLock<HomeSnapshot>,
-    /// Mounted Home components across all windows. Recommended polling and
-    /// the on-mount stale refresh key off this.
-    home_mounted: AtomicUsize,
+    /// What each window's Home and Sidebar have claimed. Recommended polling,
+    /// the on-mount stale refresh and the Discover lists key off these.
+    ///
+    /// Per window and per page rather than counters, because a page that goes
+    /// away without its React cleanup never says it left. Go Live, and closing
+    /// to the tray under "Always", DESTROY the main window with its Home still
+    /// mounted (`release_window` drops those claims), and a reload abandons
+    /// them (`WindowClaims::for_page` drops those). A bare counter stayed above
+    /// zero after either and kept the recommended poll running in the tray.
+    claims: std::sync::Mutex<HashMap<String, WindowClaims>>,
     last_manual: Mutex<HashMap<&'static str, Instant>>,
     /// Channel ids a Home has on screen beyond followed + recommended
     /// (category and search results), included in the hype poll.
@@ -185,12 +355,59 @@ struct Inner {
     /// Internal timing, deliberately not on the React-facing snapshot, and
     /// stamped only on success so a failed hydrate retries.
     continue_hydrated: Mutex<Option<Instant>>,
+    /// The Discover lists: each platform's directory and each surface's list as
+    /// last emitted. Held for a whole rebuild, which is what keeps two rebuilds
+    /// from emitting out of order. Deliberately outside `snap`, so the
+    /// signed-out reset of that struct leaves the other platforms' anonymous
+    /// directories alone.
+    discover: Mutex<UnifiedDiscover>,
+    /// The Following lists and the "On other platforms" row as last emitted.
+    /// Each is held for a whole rebuild, like `discover`, so two rebuilds
+    /// cannot emit out of order.
+    following: Mutex<Option<Following>>,
+    other_categories: Mutex<Option<Vec<ProviderCategory>>>,
+}
+
+impl Inner {
+    fn claims(&self) -> std::sync::MutexGuard<'_, HashMap<String, WindowClaims>> {
+        self.claims.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// A Home is mounted in some window.
+    fn home_mounted(&self) -> bool {
+        self.claims().values().any(|w| w.mounted > 0)
+    }
+
+    /// A mounted Home shows every platform at once, so Home's Discover list is
+    /// wanted, and with it the periodic directory refresh.
+    fn unified_mounted(&self) -> bool {
+        self.claims().values().any(|w| w.unified > 0)
+    }
+
+    /// The scope a Sidebar shows its second section for. There is one Sidebar,
+    /// in the main window; were there more, the first window by label wins.
+    fn sidebar_scope(&self) -> Option<String> {
+        self.claims()
+            .iter()
+            .filter_map(|(window, c)| c.sidebar.as_ref().map(|scope| (window, scope)))
+            .min_by_key(|(window, _)| *window)
+            .map(|(_, scope)| scope.clone())
+    }
+
+    /// Some surface shows one of the Discover lists.
+    fn discover_wanted(&self) -> bool {
+        self.unified_mounted() || self.sidebar_scope().is_some()
+    }
 }
 
 static SERVICE: OnceLock<Arc<Inner>> = OnceLock::new();
 /// A Continue Watching rebuild is already scheduled. Trailing edge, so the
 /// final position report of a session always lands.
 static CONTINUE_PENDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// A unified Discover rebuild is already scheduled, and will see any change
+/// that lands before it starts.
+static DISCOVER_PENDING: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 fn now_secs() -> u64 {
@@ -232,10 +449,13 @@ pub fn start(app: AppHandle, notifications: Arc<LiveNotificationService>) {
         app,
         notifications,
         snap: RwLock::new(HomeSnapshot::default()),
-        home_mounted: AtomicUsize::new(0),
+        claims: std::sync::Mutex::new(HashMap::new()),
         last_manual: Mutex::new(HashMap::new()),
         extra_hype_ids: RwLock::new(Vec::new()),
         continue_hydrated: Mutex::new(None),
+        discover: Mutex::new(UnifiedDiscover::default()),
+        following: Mutex::new(None),
+        other_categories: Mutex::new(None),
     });
     if SERVICE.set(inner.clone()).is_err() {
         return;
@@ -277,7 +497,7 @@ pub fn start(app: AppHandle, notifications: Arc<LiveNotificationService>) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(10)).await;
         loop {
-            if recommended.home_mounted.load(Ordering::Relaxed) > 0 {
+            if recommended.home_mounted() {
                 refresh_recommended(&recommended).await;
             }
             tokio::time::sleep(RECOMMENDED_PERIOD).await;
@@ -293,6 +513,20 @@ pub fn start(app: AppHandle, notifications: Arc<LiveNotificationService>) {
                 refresh_hype(&hype).await;
             }
             tokio::time::sleep(HYPE_PERIOD).await;
+        }
+    });
+
+    // Unified Discover directories: only while a Home shows every platform and
+    // its window is actually up. The first fetch comes from the mount itself,
+    // and bringing the window back refetches through `note_main_window_focused`.
+    let discover = inner.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(DISCOVER_TICK).await;
+            if discover.unified_mounted() && main_window_shown(&discover.app) {
+                refresh_other_categories(&discover).await;
+                refresh_directories(&discover, unified_discover::PERIOD_SECS).await;
+            }
         }
     });
 
@@ -315,8 +549,9 @@ pub fn start(app: AppHandle, notifications: Arc<LiveNotificationService>) {
 }
 
 /// Channel ids a Home has on screen beyond the followed and recommended
-/// lists (category grid, search results). Refreshes hype right away when the
-/// set gained ids the last poll did not cover.
+/// lists (category grid, search results). Refreshes hype trains and
+/// collaborations right away when the set gained ids the last poll did not
+/// cover.
 pub async fn set_extra_channels(ids: Vec<String>) {
     let Some(inner) = SERVICE.get() else { return };
     let gained = {
@@ -327,6 +562,7 @@ pub async fn set_extra_channels(ids: Vec<String>) {
     };
     if gained {
         let _ = refresh("hype_trains", None, None).await;
+        refresh_collaborations(inner).await;
     }
 }
 
@@ -360,8 +596,277 @@ pub async fn load_more_recommended() -> Result<(), String> {
         s.recommended_at = Some(at);
         (s.recommended.clone(), next)
     };
+    collaborations_before_list(inner).await;
     emit(&inner.app, HomeUpdate::Recommended { streams: merged, cursor: next, at });
+    // The next page ranks into the unified list too.
+    rebuild_discover(inner).await;
     Ok(())
+}
+
+/// A window was destroyed. Its page ran no React cleanup, so drop whatever its
+/// Home and Sidebar still claim: Go Live, and closing to the tray under
+/// "Always", destroy the main window with both mounted.
+pub fn release_window(window: &str) {
+    let Some(inner) = SERVICE.get() else { return };
+    let released = inner.claims().remove(window).is_some();
+    if released {
+        debug!("[HomeSnapshot] released the claims of destroyed window {window}");
+    }
+}
+
+/// The Sidebar in `window` shows its second section for `scope` (`"all"`, or
+/// one provider id), or shows none (`None`). A scope is always sent its list,
+/// even when its rows match the last one sent, since this may be a page that
+/// has none yet; then the directories it reads are fetched if due.
+pub async fn set_sidebar(window: &str, context: &str, scope: Option<&str>) {
+    let Some(inner) = SERVICE.get() else { return };
+    claim_sidebar(&mut inner.claims(), window, context, scope);
+    if scope.is_none() {
+        return;
+    }
+    inner.discover.lock().await.forget(Surface::Sidebar);
+    let inner = inner.clone();
+    tauri::async_runtime::spawn(async move {
+        rebuild_discover(&inner).await;
+        refresh_directories(&inner, unified_discover::MOUNT_STALE_SECS).await;
+    });
+}
+
+/// The main window came to the front. Nothing is fetched while it is minimized
+/// or in the tray, so the directories the Discover lists read that went stale
+/// in the meantime are refetched now, not on the next tick.
+pub fn note_main_window_focused() {
+    let Some(inner) = SERVICE.get() else { return };
+    if !inner.discover_wanted() {
+        return;
+    }
+    let inner = inner.clone();
+    tauri::async_runtime::spawn(async move {
+        refresh_other_categories(&inner).await;
+        refresh_directories(&inner, unified_discover::MOUNT_STALE_SECS).await;
+    });
+}
+
+/// Something the Following lists read, or the Discover lists leave out,
+/// changed outside this module: a platform's live follows, the live
+/// favourites, the favourite list or the follow list. The Following lists are
+/// rebuilt every time, since the Sidebar shows them whenever it is up and a
+/// build is a few hundred rows in memory. The Discover lists only while some
+/// surface shows one, since the next one to arrive rebuilds anyway.
+pub fn note_discover_inputs_changed() {
+    let Some(inner) = SERVICE.get() else { return };
+    // Already scheduled: that rebuild will see this change too.
+    if DISCOVER_PENDING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let inner = inner.clone();
+    tauri::async_runtime::spawn(async move {
+        // Cleared BEFORE the rebuild, so a change arriving during it schedules
+        // the next one instead of being swallowed.
+        DISCOVER_PENDING.store(false, Ordering::Release);
+        rebuild_following(&inner).await;
+        if inner.discover_wanted() {
+            rebuild_discover(&inner).await;
+        }
+    });
+}
+
+/// The main window, the only one with a Home, is up: neither hidden to the
+/// tray nor minimized, with its Home still mounted and nobody looking at it.
+/// A destroyed main window is not up either.
+fn main_window_shown(app: &AppHandle) -> bool {
+    app.get_webview_window("main").is_some_and(|window| {
+        window.is_visible().unwrap_or(true) && !window.is_minimized().unwrap_or(false)
+    })
+}
+
+/// `Settings.favorite_streamers`, copied out from under the lock.
+fn favorite_ids(app: &AppHandle) -> Vec<String> {
+    let Some(state) = app_state(app) else { return Vec::new() };
+    let ids = state
+        .settings
+        .lock()
+        .map(|s| s.favorite_streamers.clone())
+        .unwrap_or_default();
+    ids
+}
+
+/// `Settings.provider_follows` and the favourite identities, copied out from
+/// under the lock.
+fn follow_settings(app: &AppHandle) -> (Vec<ProviderFollow>, Vec<FavoriteChannel>) {
+    let Some(state) = app_state(app) else { return (Vec::new(), Vec::new()) };
+    let lists = state
+        .settings
+        .lock()
+        .map(|s| (s.provider_follows.clone(), s.favorite_channels.clone()))
+        .unwrap_or_default();
+    lists
+}
+
+/// Rebuild the Following lists and emit them if they changed. Every input is
+/// read from its owner on every call, the same ones the Discover lists
+/// subtract, so the two never disagree about a channel.
+async fn rebuild_following(inner: &Inner) {
+    let mut last = inner.following.lock().await;
+    let provider_followed_live = provider_live_service::snapshot().await;
+    let favorites_live = favorite_live_service::snapshot().await;
+    let favorite_ids = favorite_ids(&inner.app);
+    let (provider_follows, favorite_channels) = follow_settings(&inner.app);
+    let following = {
+        let s = inner.snap.read().await;
+        unified_following::build(&unified_following::Inputs {
+            followed_live: &s.followed_live,
+            followed_offline: &s.offline_follows,
+            provider_followed_live: &provider_followed_live,
+            favorites_live: &favorites_live,
+            provider_follows: &provider_follows,
+            favorite_ids: &favorite_ids,
+            favorite_channels: &favorite_channels,
+        })
+    };
+    if last.as_ref() == Some(&following) {
+        return;
+    }
+    *last = Some(following.clone());
+    let Following { favorites, live, offline } = following;
+    emit(&inner.app, HomeUpdate::Following { favorites, live, offline, at: now_secs() });
+}
+
+/// The "On other platforms" row as it stands: every other platform's cached
+/// categories, in platform order.
+fn other_categories_now() -> Vec<ProviderCategory> {
+    PROVIDER_IDS
+        .iter()
+        .filter(|provider| **provider != "twitch")
+        .flat_map(|provider| provider_categories::cached(provider, OTHER_CATEGORIES_PER_PROVIDER))
+        .collect()
+}
+
+/// Emit the "On other platforms" row if it changed.
+async fn rebuild_other_categories(inner: &Inner) {
+    let mut last = inner.other_categories.lock().await;
+    let row = other_categories_now();
+    if last.as_ref().is_some_and(|sent| same(sent, &row)) {
+        return;
+    }
+    *last = Some(row.clone());
+    emit(&inner.app, HomeUpdate::OtherCategories { categories: row, at: now_secs() });
+}
+
+/// Fetch every platform's categories that are due, each on its own task, and
+/// emit the row as each lands. Only while a Home shows every platform.
+async fn refresh_other_categories(inner: &Arc<Inner>) {
+    if !inner.unified_mounted() {
+        return;
+    }
+    for (provider, _) in registry().await.sources() {
+        if !provider_categories::is_stale(provider) {
+            continue;
+        }
+        let inner = inner.clone();
+        tauri::async_runtime::spawn(async move {
+            match provider_categories::get(provider, OTHER_CATEGORIES_PER_PROVIDER).await {
+                Ok(_) => rebuild_other_categories(&inner).await,
+                // A platform with no category taxonomy answers with an error at once.
+                Err(e) => debug!("[HomeSnapshot] {provider} categories: {e}"),
+            }
+        });
+    }
+}
+
+/// Rebuild the Discover list of every surface showing one, and emit each that
+/// changed. Every input is read from its owner on every call, so nothing here
+/// holds a copy that could drift from what the Following tab and the
+/// Favourites section show.
+async fn rebuild_discover(inner: &Inner) {
+    let home = inner.unified_mounted();
+    let sidebar = inner.sidebar_scope();
+    if !home && sidebar.is_none() {
+        return;
+    }
+    let mut discover = inner.discover.lock().await;
+    let provider_followed_live = provider_live_service::snapshot().await;
+    let favorites_live = favorite_live_service::snapshot().await;
+    let favorite_ids = favorite_ids(&inner.app);
+    let (home_list, sidebar_list) = {
+        let s = inner.snap.read().await;
+        let inputs = unified_discover::Inputs {
+            recommended: &s.recommended,
+            followed_live: &s.followed_live,
+            provider_followed_live: &provider_followed_live,
+            favorites_live: &favorites_live,
+            favorite_ids: &favorite_ids,
+        };
+        let home_list = if home {
+            discover.rebuild(Surface::Home, View::home(), &inputs)
+        } else {
+            None
+        };
+        let sidebar_list = sidebar.as_deref().and_then(|scope| {
+            discover
+                .rebuild(Surface::Sidebar, View::sidebar(scope), &inputs)
+                .map(|streams| (scope.to_string(), streams))
+        });
+        (home_list, sidebar_list)
+    };
+    let at = now_secs();
+    if let Some(streams) = home_list {
+        emit(&inner.app, HomeUpdate::UnifiedDiscover { streams, at });
+    }
+    if let Some((scope, streams)) = sidebar_list {
+        emit(&inner.app, HomeUpdate::SidebarDiscover { scope, streams, at });
+    }
+}
+
+/// Fetch every directory a surface on screen reads that is due, each on its
+/// own task, so each lands (and is emitted) as soon as its platform answers
+/// and none waits for the slowest. `max_age` is how old a directory may be
+/// before it is due.
+async fn refresh_directories(inner: &Arc<Inner>, max_age: u64) {
+    let home = inner.unified_mounted();
+    let sidebar = inner.sidebar_scope();
+    let wanted = |provider: &str| {
+        (home && View::home().reads(provider))
+            || sidebar
+                .as_deref()
+                .is_some_and(|scope| View::sidebar(scope).reads(provider))
+    };
+    let now = now_secs();
+    let due: Vec<(&'static str, Arc<dyn StreamSource>)> = {
+        let mut discover = inner.discover.lock().await;
+        registry()
+            .await
+            .sources()
+            .filter(|(provider, source)| source.caps().directory && wanted(provider))
+            .filter(|(provider, _)| discover.begin_fetch(provider, now, max_age))
+            .collect()
+    };
+    for (provider, source) in due {
+        let inner = inner.clone();
+        tauri::async_runtime::spawn(async move {
+            let page = tokio::time::timeout(
+                DIRECTORY_TIMEOUT,
+                source.directory(None, None, unified_discover::PER_PROVIDER),
+            )
+            .await;
+            let rows = match page {
+                Ok(Ok(page)) => Some(page.streams),
+                Ok(Err(e)) => {
+                    warn!("[HomeSnapshot] {provider} directory for Discover failed: {e}");
+                    None
+                }
+                Err(_) => {
+                    warn!(
+                        "[HomeSnapshot] {provider} directory for Discover gave no answer in {} s",
+                        DIRECTORY_TIMEOUT.as_secs()
+                    );
+                    None
+                }
+            };
+            inner.discover.lock().await.finish_fetch(provider, rows, now_secs());
+            rebuild_discover(&inner).await;
+        });
+    }
 }
 
 fn discovery_prefs(state: &AppState) -> (Vec<String>, bool) {
@@ -525,7 +1030,7 @@ async fn hydrate_continue_watching(inner: &Inner) {
 /// playback Home is usually unmounted and this returns immediately.
 pub fn note_progress_changed() {
     let Some(inner) = SERVICE.get() else { return };
-    if inner.home_mounted.load(Ordering::Relaxed) == 0 {
+    if !inner.home_mounted() {
         return;
     }
     // Already scheduled: that rebuild will see this change too.
@@ -595,27 +1100,73 @@ async fn refresh_drops(inner: &Inner) {
 }
 
 /// The whole snapshot, for a mounting Home.
+///
+/// The unified Discover list is built here rather than read back: a window
+/// hydrates once, possibly before its event listener is registered, so it must
+/// start from the list as it stands now, not from the last one emitted.
+/// Building records nothing, so the next rebuild still emits any change.
 pub async fn snapshot() -> HomeSnapshot {
-    match SERVICE.get() {
-        Some(inner) => inner.snap.read().await.clone(),
-        None => HomeSnapshot::default(),
-    }
+    let Some(inner) = SERVICE.get() else { return HomeSnapshot::default() };
+    let provider_followed_live = provider_live_service::snapshot().await;
+    let favorites_live = favorite_live_service::snapshot().await;
+    let favorite_ids = favorite_ids(&inner.app);
+    let discover = inner.discover.lock().await;
+    let mut snap = inner.snap.read().await.clone();
+    let unified = discover.build(
+        &unified_discover::Inputs {
+            recommended: &snap.recommended,
+            followed_live: &snap.followed_live,
+            provider_followed_live: &provider_followed_live,
+            favorites_live: &favorites_live,
+            favorite_ids: &favorite_ids,
+        },
+        View::home(),
+    );
+    snap.unified_discover = unified;
+    snap.unified_discover_at = Some(now_secs());
+    drop(discover);
+    let (provider_follows, favorite_channels) = follow_settings(&inner.app);
+    snap.following = unified_following::build(&unified_following::Inputs {
+        followed_live: &snap.followed_live,
+        followed_offline: &snap.offline_follows,
+        provider_followed_live: &provider_followed_live,
+        favorites_live: &favorites_live,
+        provider_follows: &provider_follows,
+        favorite_ids: &favorite_ids,
+        favorite_channels: &favorite_channels,
+    });
+    snap.following_at = Some(now_secs());
+    snap.other_categories = other_categories_now();
+    snap.other_categories_at = Some(now_secs());
+    snap
 }
 
-/// A Home mounted (`true`) or unmounted (`false`). On mount, sections that
-/// are stale or empty refresh right away so the grid is current within a
-/// round trip instead of waiting for their next tick.
-pub async fn set_home_mounted(mounted: bool) {
+/// A Home in `window` mounted (`true`) or unmounted (`false`), from the page
+/// `context`, and whether it shows every platform (`unified`). On mount,
+/// sections that are stale or empty refresh right away so the grid is current
+/// within a round trip instead of waiting for their next tick. A unified mount
+/// also rebuilds the Discover list from what Rust already holds, which needs no
+/// network, then fetches the directories that are due, each landing on its own.
+pub async fn set_home_mounted(window: &str, context: &str, mounted: bool, unified: bool) {
     let Some(inner) = SERVICE.get() else { return };
+    claim_home(&mut inner.claims(), window, context, mounted, unified);
     if mounted {
-        inner.home_mounted.fetch_add(1, Ordering::Relaxed);
-        let (offline_stale, recommended_stale, drops_stale, continue_stale) = {
+        if unified {
+            let inner = inner.clone();
+            tauri::async_runtime::spawn(async move {
+                rebuild_discover(&inner).await;
+                refresh_other_categories(&inner).await;
+                refresh_directories(&inner, unified_discover::MOUNT_STALE_SECS).await;
+            });
+        }
+        let (offline_stale, recommended_stale, drops_stale, continue_stale, collab_stale) = {
             let s = inner.snap.read().await;
             (
                 is_stale(s.offline_at, OFFLINE_PERIOD),
                 is_stale(s.recommended_at, RECOMMENDED_PERIOD),
                 is_stale(s.drops_at, DROPS_PERIOD),
                 is_stale(s.continue_watching_at, CONTINUE_MOUNT_STALE),
+                is_stale(s.collab_at, COLLAB_MOUNT_STALE),
             )
         };
         let inner = inner.clone();
@@ -624,8 +1175,11 @@ pub async fn set_home_mounted(mounted: bool) {
             if continue_stale {
                 refresh_continue_watching(&inner).await;
             }
+            // A stale recommended refresh brings collaborations with it.
             if recommended_stale {
                 refresh_recommended(&inner).await;
+            } else if collab_stale {
+                refresh_collaborations(&inner).await;
             }
             let signed = inner.snap.read().await.followed_live_at.is_some();
             if offline_stale && signed {
@@ -638,10 +1192,6 @@ pub async fn set_home_mounted(mounted: bool) {
             // work here, and it needs the rebuild above to have run.
             hydrate_continue_watching(&inner).await;
         });
-    } else {
-        let _ = inner
-            .home_mounted
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_sub(1)));
     }
 }
 
@@ -657,9 +1207,11 @@ pub async fn refresh(
         "offline" => "offline",
         "recommended" => "recommended",
         "hype_trains" => "hype_trains",
+        "collaborations" => "collaborations",
         "watch_streaks" => "watch_streaks",
         "drops" => "drops",
         "continue_watching" => "continue_watching",
+        "discover" => "discover",
         other => return Err(format!("unknown home section: {other}")),
     };
     {
@@ -675,12 +1227,16 @@ pub async fn refresh(
         "recommended" => refresh_recommended_with(inner, languages, personalized).await,
         "watch_streaks" => refresh_streaks(inner).await,
         "drops" => refresh_drops(inner).await,
+        "collaborations" => refresh_collaborations(inner).await,
         // Explicit arm required: the catch-all below silently refreshes hype
         // trains instead, with no error, for any key added above but not here.
         "continue_watching" => {
             refresh_continue_watching(inner).await;
             hydrate_continue_watching(inner).await;
         }
+        // The directories the Discover lists on screen read, where due. The
+        // lists follow as each one lands.
+        "discover" => refresh_directories(inner, unified_discover::MOUNT_STALE_SECS).await,
         _ => refresh_hype(inner).await,
     }
     Ok(())
@@ -708,6 +1264,9 @@ async fn refresh_followed(inner: &Inner) {
                     at,
                 },
             );
+            // The last account's picks and follows just went with it.
+            rebuild_discover(inner).await;
+            rebuild_following(inner).await;
         }
         // The reset above zeroed every field, including Continue Watching.
         // That row is per-account INCLUDING the signed-out `anon` store, so a
@@ -728,6 +1287,7 @@ async fn refresh_followed(inner: &Inner) {
                 s.followed_live_at = Some(at);
                 changed
             };
+            collaborations_before_list(inner).await;
             if changed {
                 emit(
                     &inner.app,
@@ -736,6 +1296,9 @@ async fn refresh_followed(inner: &Inner) {
                         at,
                     },
                 );
+                // The unified list leaves out whoever the Following tab shows.
+                rebuild_discover(inner).await;
+                rebuild_following(inner).await;
             }
             inner
                 .notifications
@@ -817,6 +1380,7 @@ async fn refresh_offline(inner: &Inner) {
                 at,
             },
         );
+        rebuild_following(inner).await;
     }
 }
 
@@ -874,24 +1438,77 @@ async fn refresh_recommended_with(
         s.recommended_at = Some(at);
         changed
     };
+    collaborations_before_list(inner).await;
     if changed {
         emit(&inner.app, HomeUpdate::Recommended { streams, cursor, at });
+        rebuild_discover(inner).await;
+    }
+}
+
+/// Twitch channel ids with a card on screen: followed live, recommended and
+/// whatever a Home reported through `set_extra_channels`.
+async fn card_channel_ids(inner: &Inner) -> Vec<String> {
+    let s = inner.snap.read().await;
+    let extra = inner.extra_hype_ids.read().await;
+    let mut seen = HashSet::new();
+    s.followed_live
+        .iter()
+        .chain(s.recommended.iter())
+        .map(|st| st.user_id.clone())
+        .chain(extra.iter().cloned())
+        .filter(|id| !id.is_empty() && seen.insert(id.clone()))
+        .collect()
+}
+
+/// Collaborations for the cards, right behind a list's viewer counts and ahead
+/// of the list itself, so the windows hold a card's group before they draw the
+/// card. Bounded by `COLLAB_WAIT`: a slow answer must never hold back the list
+/// (or the live notifications behind the followed one); it is dropped and the
+/// next pass fills in.
+async fn collaborations_before_list(inner: &Inner) {
+    if tokio::time::timeout(COLLAB_WAIT, refresh_collaborations(inner)).await.is_err() {
+        debug!("[HomeSnapshot] collaborations: no answer in {COLLAB_WAIT:?}, sending the list without");
+    }
+}
+
+/// Shared Viewership for every card on screen. Skipped while no window is on
+/// screen; a Home mount catches up. A channel whose batch failed keeps the
+/// group it had.
+async fn refresh_collaborations(inner: &Inner) {
+    if inner.app.webview_windows().is_empty() || crate::services::window_visibility::all_hidden() {
+        return;
+    }
+    let ids = card_channel_ids(inner).await;
+    let found = collaboration::fetch(&ids).await;
+    let at = now_secs();
+    let (changed, collabs) = {
+        let mut s = inner.snap.write().await;
+        let mut next: HashMap<String, Collaboration> = HashMap::new();
+        for id in &ids {
+            match found.get(id) {
+                Some(Some(c)) => {
+                    next.insert(id.clone(), c.clone());
+                }
+                Some(None) => {}
+                None => {
+                    if let Some(c) = s.collaborations.get(id) {
+                        next.insert(id.clone(), c.clone());
+                    }
+                }
+            }
+        }
+        let changed = next != s.collaborations;
+        s.collaborations = next.clone();
+        s.collab_at = Some(at);
+        (changed, next)
+    };
+    if changed {
+        emit(&inner.app, HomeUpdate::Collaborations { collabs, at });
     }
 }
 
 async fn refresh_hype(inner: &Inner) {
-    let ids: Vec<String> = {
-        let s = inner.snap.read().await;
-        let extra = inner.extra_hype_ids.read().await;
-        let mut seen = HashSet::new();
-        s.followed_live
-            .iter()
-            .chain(s.recommended.iter())
-            .map(|st| st.user_id.clone())
-            .chain(extra.iter().cloned())
-            .filter(|id| seen.insert(id.clone()))
-            .collect()
-    };
+    let ids = card_channel_ids(inner).await;
     if ids.is_empty() {
         return;
     }
@@ -912,5 +1529,81 @@ async fn refresh_hype(inner: &Inner) {
     };
     if changed {
         emit(&inner.app, HomeUpdate::HypeTrains { statuses, at });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// (a Home is mounted, a unified Home is mounted)
+    fn up(homes: &HashMap<String, WindowClaims>) -> (bool, bool) {
+        (
+            homes.values().any(|w| w.mounted > 0),
+            homes.values().any(|w| w.unified > 0),
+        )
+    }
+
+    #[test]
+    fn a_view_switch_lands_the_same_in_either_order() {
+        // Switching view re-runs the effect: unmount as the old view, mount as
+        // the new one. Two async commands, so they can land either way round.
+        for unmount_first in [true, false] {
+            let mut homes = HashMap::new();
+            claim_home(&mut homes, "main", "page", true, true);
+            let mut calls = vec![(false, true), (true, false)];
+            if !unmount_first {
+                calls.reverse();
+            }
+            for (mounted, unified) in calls {
+                claim_home(&mut homes, "main", "page", mounted, unified);
+            }
+            assert_eq!(up(&homes), (true, false), "unmount first: {unmount_first}");
+        }
+    }
+
+    #[test]
+    fn a_reload_replaces_the_claims_its_old_page_never_released() {
+        let mut homes = HashMap::new();
+        claim_home(&mut homes, "main", "page-1", true, true);
+        // Reloaded, now on the Twitch view. Page 1's Home never unmounted.
+        claim_home(&mut homes, "main", "page-2", true, false);
+        assert_eq!(up(&homes), (true, false));
+        // A late unmount from the dead page changes nothing.
+        claim_home(&mut homes, "main", "page-1", false, true);
+        assert_eq!(up(&homes), (true, false));
+        claim_home(&mut homes, "main", "page-2", false, false);
+        assert_eq!(up(&homes), (false, false));
+    }
+
+    #[test]
+    fn a_reload_drops_the_old_page_s_sidebar_claim_too() {
+        let mut claims = HashMap::new();
+        claim_home(&mut claims, "main", "page-1", true, true);
+        claim_sidebar(&mut claims, "main", "page-1", Some("all"));
+        // Reloaded: the new page's Sidebar arrives first, scoped to Kick, and
+        // the old page's Home and Sidebar go with it.
+        claim_sidebar(&mut claims, "main", "page-2", Some("kick"));
+        assert_eq!(up(&claims), (false, false));
+        assert_eq!(claims["main"].sidebar.as_deref(), Some("kick"));
+        // The dead page's Sidebar letting go changes nothing.
+        claim_sidebar(&mut claims, "main", "page-1", None);
+        assert_eq!(claims["main"].sidebar.as_deref(), Some("kick"));
+        // The live page's does.
+        claim_sidebar(&mut claims, "main", "page-2", None);
+        assert_eq!(claims["main"].sidebar, None);
+    }
+
+    #[test]
+    fn go_live_and_back_leaves_no_claim_behind() {
+        let mut homes = HashMap::new();
+        claim_home(&mut homes, "main", "page-1", true, true);
+        // Go Live destroys the main window; `release_window` drops its entry.
+        homes.remove("main");
+        assert_eq!(up(&homes), (false, false));
+        // The window is recreated, and its Home leaves again normally.
+        claim_home(&mut homes, "main", "page-2", true, true);
+        claim_home(&mut homes, "main", "page-2", false, true);
+        assert_eq!(up(&homes), (false, false));
     }
 }

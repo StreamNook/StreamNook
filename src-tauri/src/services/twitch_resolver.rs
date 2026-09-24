@@ -12,6 +12,8 @@
 use crate::services::auth_proxy::{self, PlaybackStatus};
 use crate::services::muted_segments::MutedRange;
 use crate::services::quality::{pick_closest_quality, sort_qualities_descending};
+use crate::services::vod_chapters::{self, Chapter, ChapterNode};
+use crate::services::vod_storyboard::{self, Storyboard};
 use anyhow::{anyhow, Context, Result};
 use log::debug;
 use serde::Serialize;
@@ -1462,6 +1464,11 @@ pub struct VodInfo {
     /// which is not the same as "no mutes" (the GQL connection comes back
     /// `null` in both cases; probed 2026-09-12).
     pub muted_segments: Vec<MutedRange>,
+    /// Category changes over the broadcast, sorted and clamped. Empty when
+    /// Twitch reports none (one category, highlight, upload).
+    pub chapters: Vec<Chapter>,
+    /// Seek-preview sprite sheets. Only a finished VOD has them.
+    pub storyboard: Option<Storyboard>,
 }
 
 impl VodInfo {
@@ -1563,17 +1570,28 @@ pub async fn fetch_vod_info(vod_id: &str) -> VodInfo {
         title: None,
         thumbnail_url: None,
         muted_segments: Vec::new(),
+        chapters: Vec::new(),
+        storyboard: None,
     };
     // `muteInfo` is free here: it rides the call this function already makes.
     // Verified 2026-09-12 that it resolves under the WEB client id this
     // transport uses, and on ARCHIVE / HIGHLIGHT / UPLOAD alike, so adding it
     // cannot turn a non-archive video into the `unknown` sentinel below.
+    // `moments` and `seekPreviewsURL` were verified the same way 2026-09-21
+    // under the same client id on ARCHIVE / HIGHLIGHT / UPLOAD.
     let query = r#"query StreamNookVodInfo($id: ID!) {
         video(id: $id) {
             id status lengthSeconds recordedAt title
             owner { login }
             previewThumbnailURL(width: 440, height: 248)
             muteInfo { mutedSegmentConnection { nodes { offset duration } } }
+            seekPreviewsURL
+            moments(momentRequestType: VIDEO_CHAPTER_MARKERS) {
+                edges { node {
+                    positionMilliseconds durationMilliseconds description
+                    details { ... on GameChangeMomentDetails { game { id boxArtURL } } }
+                } }
+            }
         }
     }"#;
     let resp = match gql_web_query(query, json!({ "id": vod_id })).await {
@@ -1604,11 +1622,41 @@ pub async fn fetch_vod_info(vod_id: &str) -> VodInfo {
                 .collect()
         })
         .unwrap_or_default();
+    let status = str_field(video, "status")
+        .map(|s| s.to_lowercase())
+        .unwrap_or_else(|| "unknown".to_string());
+    let chapter_nodes: Vec<ChapterNode> = video
+        .pointer("/moments/edges")
+        .and_then(|e| e.as_array())
+        .map(|edges| {
+            edges
+                .iter()
+                .filter_map(|e| {
+                    let n = e.get("node")?;
+                    let game = n.pointer("/details/game");
+                    Some(ChapterNode {
+                        position_ms: n.get("positionMilliseconds")?.as_i64()?,
+                        duration_ms: n
+                            .get("durationMilliseconds")
+                            .and_then(|d| d.as_i64())
+                            .unwrap_or(0),
+                        title: str_field(n, "description").unwrap_or_default(),
+                        game_id: game.and_then(|g| str_field(g, "id")),
+                        box_art_url: game.and_then(|g| str_field(g, "boxArtURL")),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // Sheets exist only once the broadcast has ended; a recording's manifest
+    // URL is advertised but answers 403 (probed 2026-09-21), so do not ask.
+    let storyboard = match (status.as_str(), str_field(video, "seekPreviewsURL")) {
+        ("recorded", Some(url)) => vod_storyboard::fetch(&url).await,
+        _ => None,
+    };
     VodInfo {
         video_id: vod_id.to_string(),
-        status: str_field(video, "status")
-            .map(|s| s.to_lowercase())
-            .unwrap_or_else(|| "unknown".to_string()),
+        status,
         length_seconds,
         recorded_at: str_field(video, "recordedAt"),
         owner_login: video
@@ -1618,6 +1666,8 @@ pub async fn fetch_vod_info(vod_id: &str) -> VodInfo {
         title: str_field(video, "title"),
         thumbnail_url: str_field(video, "previewThumbnailURL"),
         muted_segments: crate::services::muted_segments::normalize(&mute_nodes, length_seconds),
+        chapters: vod_chapters::normalize(&chapter_nodes, length_seconds),
+        storyboard,
     }
 }
 
