@@ -230,6 +230,7 @@ const SupportSettings = () => {
             </div>
 
             <DiagnosticLoggingSection />
+            <DataRecordedSection />
         </div>
     );
 };
@@ -326,5 +327,36 @@ const DiagnosticLoggingSection = () => {
         </SettingsSection>
     );
 };
+
+/**
+ * What the signed-in account records, stated plainly.
+ *
+ * Informational rows, no controls: this describes what already happens rather
+ * than offering a switch, and a toggle that does not exist server-side would be
+ * worse than saying nothing. The wording is deliberately specific about the
+ * behavioural half, because "we collect some diagnostics" would be true of the
+ * version line and misleading about the watch and emote counts.
+ */
+const DataRecordedSection = () => (
+    <SettingsSection
+        label="What your account records"
+        description="Signed in, StreamNook keeps a few counts against your account. Chat messages and anything you type are not among them."
+    >
+        <SettingsRow
+            title="Channels and emotes"
+            description="Counts which channels you watch and which emotes you use, which is what fills in your profile stats and unlocks accolades."
+            help="Stored as running totals per channel and per emote, not as a history of when you watched. Signed out, nothing is counted."
+        />
+        <SettingsRow
+            title="Version and platform"
+            description="Records which build you are on, your operating system, and whether your updater is working."
+            help="This is how a broken update path becomes visible. Without it a client that quietly stopped updating looks identical to one that is already current."
+        />
+        <SettingsRow
+            title="Linked accounts"
+            description="Records which other platforms you have connected, so they survive a reinstall."
+        />
+    </SettingsSection>
+);
 
 export default SupportSettings;

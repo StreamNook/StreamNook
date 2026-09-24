@@ -33,6 +33,16 @@ const ALLOWED_PATHS: &[&str] = &[
     "/api/v1/user/sync",
     "/api/cosmetics/theme",
     "/api/cosmetics/equip",
+    // Claiming (or releasing) the Kick / YouTube account whose chat messages
+    // carry this member's cosmetics. Authenticated because the claim decides
+    // whose badge renders on someone else's platform, so the owning Twitch id
+    // has to come from a token rather than from the request body.
+    //
+    // Only the WRITE belongs here. The matching read is a public lookup with no
+    // bearer: routing it through this poster would attach the member's Twitch
+    // token to a request that does not need one, and would make cosmetics fail
+    // outright for a member who is signed into Kick or YouTube but not Twitch.
+    "/api/v1/accounts/link",
 ];
 
 #[derive(Debug, Serialize)]
@@ -111,16 +121,23 @@ pub async fn streamnook_api_request(
 /// POST to an allowlisted StreamNook API path, authenticated as the current
 /// account (or a named linked account).
 ///
+/// The whole implementation, callable from Rust. Split out from the command
+/// below so in-process reporters (`services::version_report`) can use the
+/// same allowlist and the same bearer plumbing WITHOUT a second Tauri command.
+/// That is not a style preference: a command here is three edits (the `fn`,
+/// `generate_handler!`, and the ACL manifest), and one that reaches the handler
+/// but not the allowlist is silently DENIED at invoke for every window. A
+/// service that needs no command cannot fall into that trap at all.
+///
 /// Returns Err only for conditions the caller can act on differently from an
 /// HTTP error: no token, a disallowed path, or the request never completing. A
 /// 4xx/5xx comes back as Ok with `ok: false` so callers can inspect the body.
-#[tauri::command]
-pub async fn streamnook_api_post(
-    path: String,
-    body: serde_json::Value,
-    account_id: Option<String>,
+pub(crate) async fn post_json(
+    path: &str,
+    body: &serde_json::Value,
+    account_id: Option<&str>,
 ) -> Result<ApiResponse, String> {
-    if !ALLOWED_PATHS.contains(&path.as_str()) {
+    if !ALLOWED_PATHS.contains(&path) {
         return Err(format!("path_not_allowed: {}", path));
     }
 
@@ -128,7 +145,7 @@ pub async fn streamnook_api_post(
     // else the primary. The server upserts whichever account the bearer resolves
     // to, so each account can only ever write its own row.
     let token = match account_id {
-        Some(id) => AccountStore::get_token_for(&id)
+        Some(id) => AccountStore::get_token_for(id)
             .await
             .map_err(|e| format!("no_token_for_account:{}: {}", id, e))?,
         None => TwitchService::get_token()
@@ -140,7 +157,7 @@ pub async fn streamnook_api_post(
     let resp = client
         .post(format!("{}{}", API_BASE, path))
         .bearer_auth(&token)
-        .json(&body)
+        .json(body)
         .send()
         .await
         .map_err(|e| format!("network: {}", e))?;
@@ -152,6 +169,16 @@ pub async fn streamnook_api_post(
         ok: status.is_success(),
         body: text,
     })
+}
+
+/// The frontend's entry point to `post_json`. Behaviour is unchanged.
+#[tauri::command]
+pub async fn streamnook_api_post(
+    path: String,
+    body: serde_json::Value,
+    account_id: Option<String>,
+) -> Result<ApiResponse, String> {
+    post_json(&path, &body, account_id.as_deref()).await
 }
 
 #[cfg(test)]
@@ -192,4 +219,12 @@ mod tests {
             assert!(!ALLOWED_PATHS.contains(&bad), "{bad} must not be allowed");
         }
     }
+}
+
+/// Server-controlled switches from the update manifest (see
+/// services/client_config.rs). Never fails: an unreachable manifest answers
+/// with the legacy behaviour.
+#[tauri::command]
+pub async fn get_client_config() -> crate::services::client_config::ClientConfig {
+    crate::services::client_config::get().await
 }

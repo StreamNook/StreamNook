@@ -1,11 +1,11 @@
 import { createClient, RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
 import { invoke } from '@tauri-apps/api/core';
+import { emit } from '@tauri-apps/api/event';
 import type { TwitchUser } from '../types';
 import { getClientConfig } from './clientConfig';
+import { classifyLinkResponse, type LinkWriteResult } from './linkResponse';
 
 import { Logger } from '../utils/logger';
-// Shared service reached by both shells, so a platform branch here is legitimate.
-import { IS_MOBILE } from '../utils/platform';
 import type { Atmosphere } from './atmospheres';
 import { DEV_ATMOSPHERES } from './devAtmospheres';
 import { DEV_COSMETICS, isDevCosmetic, readDevActiveCosmetic, writeDevActiveCosmetic } from './devCosmetics';
@@ -156,7 +156,14 @@ const buildPayload = (userId?: string, displayName?: string, appVersion?: string
     ...(appVersion && { app_version: appVersion }),
     // Derived here rather than threaded through every caller: it is a property
     // of the running client, not of the call site.
-    platform: IS_MOBILE ? 'android' : 'desktop',
+    //
+    // `clientPlatform()` rather than `IS_MOBILE ? 'android' : 'desktop'`: that
+    // expression labelled an iPhone 'android' while `clientPlatform()` (which
+    // feeds `record_client` and `/api/v1/user/sync`) called the same client
+    // 'ios', so presence and the persisted row disagreed by construction. One
+    // answer now. Same three values as before on every other client, so nothing
+    // downstream re-buckets.
+    platform: clientPlatform(),
 });
 
 const attachPresenceListeners = (channel: RealtimeChannel) => {
@@ -181,11 +188,19 @@ const attachPresenceListeners = (channel: RealtimeChannel) => {
  *
  * @returns Unsubscribe function to clean up presence on unmount
  */
+/** The signed-in user, captured so `loadCosmetics` can pick our own row out
+ *  of a registry-wide load. Null until presence starts. */
+let selfUserId: string | null = null;
+
+/** The badge a complimentary or gifted membership grants. */
+const SUBSCRIBER_COSMETIC = 'streamnook-subscriber';
+
 export const trackPresence = async (
     userId?: string,
     displayName?: string,
     appVersion?: string
 ): Promise<(() => void) | null> => {
+    if (userId) selfUserId = userId;
     if (!supabase) {
         Logger.debug('[Supabase] Skipping presence tracking - not configured');
         return null;
@@ -328,7 +343,7 @@ export const upsertUser = async (user: TwitchUser, appVersion?: string): Promise
             Logger.debug('[Supabase] User upserted:', user.display_name || user.username);
         }
 
-        // Which client they signed in from. Not awaited: it is telemetry, and
+        // Which client they signed in from. Not awaited: it is reporting, and
         // presence is what the user actually notices.
         void recordClient(user.user_id);
 
@@ -359,7 +374,7 @@ const clientPlatform = (): string =>
  * Android". Without a persisted row an offline Android user looks like a
  * desktop one.
  *
- * Fire-and-forget: telemetry must never be able to fail a sign-in.
+ * Fire-and-forget: reporting must never be able to fail a sign-in.
  */
 const recordClient = async (twitchUserId: string): Promise<void> => {
     if (!supabase || !twitchUserId) return;
@@ -374,6 +389,43 @@ const recordClient = async (twitchUserId: string): Promise<void> => {
     }
 };
 
+export type { LinkWriteResult } from './linkResponse';
+
+const LINK_PATH = '/api/v1/accounts/link';
+
+/**
+ * Post to the link endpoint and classify the answer.
+ *
+ * Deliberately stricter than `postToApi`: a response only counts as the
+ * endpoint's own if it is JSON carrying its `ok` field. An undeployed POST route
+ * answers 405, and an unknown GET is served the website's HTML with a 200 by the
+ * SPA fallback — neither is a claim being accepted, and treating either as one
+ * would have a new build silently record nothing if it ever shipped ahead of the
+ * server.
+ */
+const postLink = async (body: Record<string, unknown>): Promise<LinkWriteResult> => {
+    let res: { status: number; ok: boolean; body: string };
+    try {
+        res = await invoke<{ status: number; ok: boolean; body: string }>('streamnook_api_post', {
+            path: LINK_PATH,
+            body,
+        });
+    } catch (e) {
+        // No token, offline, or the command refused. Not the member's doing.
+        Logger.debug('[StreamNookAPI] link endpoint unreachable:', e);
+        return { kind: 'unavailable' };
+    }
+    const result = classifyLinkResponse(res.status, res.ok, res.body);
+    if (result.kind !== 'failed') return result;
+    Logger.warn(`[StreamNookAPI] ${LINK_PATH} -> ${res.status} ${res.body.slice(0, 200)}`);
+    reportWriteIssue({
+        kind: res.status === 403 ? 'rls_denied' : 'other',
+        lastSeen: new Date().toISOString(),
+        detail: `${LINK_PATH} ${res.status}: ${res.body.slice(0, 200)}`,
+    });
+    return result;
+};
+
 /**
  * Record that a member has a non-Twitch platform account connected.
  *
@@ -384,15 +436,34 @@ const recordClient = async (twitchUserId: string): Promise<void> => {
  * Twitch user signed in there is no member to attach the link to, so this is a
  * no-op and the caller retries on its next read.
  *
- * Fire-and-forget: telemetry must never be able to fail a sign-in.
+ * Fire-and-forget: reporting must never be able to fail a sign-in.
  */
 export const recordLinkedAccount = async (
     twitchUserId: string,
     provider: string,
     name: string | null,
     avatarUrl: string | null,
-): Promise<void> => {
-    if (!supabase || !twitchUserId) return;
+    platformUserId: string | null = null,
+): Promise<LinkWriteResult> => {
+    if (!twitchUserId) return { kind: 'unavailable' };
+    // The authenticated endpoint first, because it is the only one that can
+    // record `platformUserId`. That value decides whose cosmetics render on a
+    // Kick or YouTube message, so it must come from a caller the server has
+    // authenticated, never from an anon write anyone holding the shipped key
+    // could forge. The legacy RPC cannot carry it at all: its signature is four
+    // text arguments, which is why it is safe to keep as the fallback.
+    const result = await postLink({
+        provider,
+        platform_user_id: platformUserId,
+        account_name: name,
+        avatar_url: avatarUrl,
+        connected: true,
+    });
+    if (result.kind !== 'unavailable') return result;
+    // The endpoint is not there. Keep the dashboard's record going through the
+    // old RPC while it still answers; once the anon grant is revoked this fails
+    // quietly, which is the intended end state.
+    if (!supabase) return result;
     try {
         const { error } = await supabase.rpc('record_linked_account', {
             p_user_id: twitchUserId,
@@ -404,6 +475,7 @@ export const recordLinkedAccount = async (
     } catch (e) {
         Logger.debug(`[Supabase] Could not record ${provider} link:`, e);
     }
+    return result;
 };
 
 /**
@@ -413,8 +485,14 @@ export const recordLinkedAccount = async (
 export const clearLinkedAccount = async (
     twitchUserId: string,
     provider: string,
-): Promise<void> => {
-    if (!supabase || !twitchUserId) return;
+): Promise<LinkWriteResult> => {
+    if (!twitchUserId) return { kind: 'unavailable' };
+    // Through the endpoint for the same reason as the record above, and with one
+    // more: a disconnect RELEASES the platform id, so an unauthenticated caller
+    // able to do this could free any member's claim and then take it themselves.
+    const result = await postLink({ provider, connected: false });
+    if (result.kind !== 'unavailable') return result;
+    if (!supabase) return result;
     try {
         const { error } = await supabase.rpc('clear_linked_account', {
             p_user_id: twitchUserId,
@@ -424,6 +502,7 @@ export const clearLinkedAccount = async (
     } catch (e) {
         Logger.debug(`[Supabase] Could not clear ${provider} link:`, e);
     }
+    return result;
 };
 
 /**
@@ -1263,9 +1342,17 @@ interface ApiWriteResult {
     error?: string;
 }
 
-const writeViaApi = async (path: string, body: Record<string, unknown>): Promise<ApiWriteResult> => {
-    const { writeViaApi: enabled } = await getClientConfig();
-    if (!enabled) return { handled: false, ok: false };
+/**
+ * Post to the StreamNook API, unconditionally.
+ *
+ * `writeViaApi` below adds the server-controlled kill switch on top of this. A
+ * write that MIGRATED from direct-Supabase wants that switch, because it has a
+ * legacy path to fall back to. A write with no legacy equivalent must not be
+ * gated on it: the flag defaults to false and the manifest does not currently
+ * carry it, so gating a brand-new endpoint behind it means the endpoint is never
+ * called at all.
+ */
+const postToApi = async (path: string, body: Record<string, unknown>): Promise<ApiWriteResult> => {
     try {
         const res = await invoke<{ status: number; ok: boolean; body: string }>(
             'streamnook_api_post',
@@ -1290,6 +1377,20 @@ const writeViaApi = async (path: string, body: Record<string, unknown>): Promise
         Logger.warn(`[StreamNookAPI] ${path} unavailable, falling back:`, e);
         return { handled: false, ok: false };
     }
+};
+
+/**
+ * The same post, behind the server-controlled kill switch.
+ *
+ * For writes that used to go straight to Supabase and can still do so: if the
+ * new endpoint misbehaves, one field in the update manifest sends every build
+ * back to the legacy path without a release. Fails OPEN to the legacy path, so a
+ * Cloudflare blip cannot take writes down with it.
+ */
+const writeViaApi = async (path: string, body: Record<string, unknown>): Promise<ApiWriteResult> => {
+    const { write_via_api: enabled } = await getClientConfig();
+    if (!enabled) return { handled: false, ok: false };
+    return postToApi(path, body);
 };
 
 export const setProfileTheme = async (userId: string, theme: string): Promise<void> => {
@@ -1447,14 +1548,47 @@ const bumpStreamNookRegistryVersion = () => {
     }
 };
 
+/**
+ * Tell everything that reads "is this person a member" to look again.
+ *
+ * Exported for the cross-platform alias resolver, which answers the same
+ * question for a Kick or YouTube chatter and lands asynchronously. Chat resolves
+ * each chatter ONCE, so a member who spoke before their claim was known would be
+ * classified as a non-member for the whole session; the re-resolve bridge in
+ * `chatUserStore` already listens to this counter, so bumping it is the entire
+ * fix rather than a second mechanism.
+ */
+export const notifyMemberIdentityChanged = (): void => {
+    bumpStreamNookRegistryVersion();
+};
+
+/** PostgREST answers an unranged select with at most the project's max rows
+ *  (1000 by default) and says nothing about the rest, so a whole-table
+ *  registry read silently loses everyone past it once the table grows. */
+const PAGE_SIZE = 1000;
+
+/** Every row of a whole-table read, a page at a time until a short page.
+ *  `page` must sort on a stable key so pages neither overlap nor skip. */
+async function selectAll<T>(
+    page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
+): Promise<{ data: T[]; error: unknown }> {
+    const rows: T[] = [];
+    for (let from = 0; ; from += PAGE_SIZE) {
+        const { data, error } = await page(from, from + PAGE_SIZE - 1);
+        if (error) return { data: rows, error };
+        rows.push(...(data ?? []));
+        if (!data || data.length < PAGE_SIZE) return { data: rows, error: null };
+    }
+}
+
 const loadStreamNookRegistry = async (): Promise<void> => {
     if (!supabase) return;
     if (snRegistryLoading) return snRegistryLoading;
     snRegistryLoading = (async () => {
         try {
-            const { data, error } = await supabase!
-                .from('user_numbers')
-                .select('id, user_number');
+            const { data, error } = await selectAll<{ id: string; user_number: number }>((from, to) =>
+                supabase!.from('user_numbers').select('id, user_number').order('id').range(from, to),
+            );
             if (error) {
                 Logger.error('[Supabase] Failed to load streamnook registry:', error);
                 return;
@@ -1590,6 +1724,50 @@ const bumpCosmeticsVersion = () => {
     }
 };
 
+/**
+ * Tell the member that somebody gave them a membership.
+ *
+ * `gift_comp_membership` grants the subscriber badge as part of the same
+ * transaction that writes the comp, and the cosmetics channel already
+ * subscribes to every `user_cosmetics` change, so the signal arrives with no
+ * backend work. `comp_memberships` itself is unreadable here (RLS is on with
+ * no policies, deliberately), which is why the badge row is the seam.
+ *
+ * Requires `source === 'admin'`, the value both the paid-gift webhooks and the
+ * admin tool write. A member who bought their own membership gets a different
+ * source and is NOT told they were given one. A Discord boost cannot reach
+ * here at all: it grants only the boost badge, never the subscriber one.
+ *
+ * The gifter is deliberately not named. `granted_by` lives on the row we
+ * cannot read, so the copy must not promise one.
+ */
+const announceMembershipGift = async (userId: string): Promise<void> => {
+    if (!supabase) return;
+    try {
+        const { data, error } = await supabase
+            .from('user_cosmetics')
+            .select('source, payment_id, created_at')
+            .eq('twitch_user_id', userId)
+            .eq('slug', SUBSCRIBER_COSMETIC)
+            .maybeSingle();
+        if (error) {
+            Logger.warn('[Supabase] membership gift source read failed:', error.message);
+            return;
+        }
+        const row = data as { source?: string; payment_id?: string; created_at?: string } | null;
+        // Unconfirmed means silent. Announcing a self-purchase as a gift is a
+        // worse failure than saying nothing.
+        if (!row || row.source !== 'admin') return;
+
+        await emit('membership-gift-received', {
+            grantedAt: row.created_at ?? new Date().toISOString(),
+            permanent: !row.payment_id?.includes(':grant:'),
+        });
+    } catch (e) {
+        Logger.warn('[Supabase] announceMembershipGift failed:', e);
+    }
+};
+
 const loadCosmetics = async (): Promise<void> => {
     if (!supabase) return;
     if (cosmeticsLoading) return cosmeticsLoading;
@@ -1597,8 +1775,21 @@ const loadCosmetics = async (): Promise<void> => {
         try {
             const [catalogRes, entRes, activeRes] = await Promise.all([
                 supabase!.from('cosmetics').select('*').eq('is_active', true).order('sort_order'),
-                supabase!.from('user_cosmetics').select('twitch_user_id, slug'),
-                supabase!.from('user_cosmetic_active').select('twitch_user_id, active_slug'),
+                selectAll<{ twitch_user_id: string; slug: string }>((from, to) =>
+                    supabase!
+                        .from('user_cosmetics')
+                        .select('twitch_user_id, slug')
+                        .order('twitch_user_id')
+                        .order('slug')
+                        .range(from, to),
+                ),
+                selectAll<{ twitch_user_id: string; active_slug: string | null }>((from, to) =>
+                    supabase!
+                        .from('user_cosmetic_active')
+                        .select('twitch_user_id, active_slug')
+                        .order('twitch_user_id')
+                        .range(from, to),
+                ),
             ]);
             if (catalogRes.error) Logger.error('[Supabase] cosmetics catalog load failed:', catalogRes.error);
             if (entRes.error) Logger.error('[Supabase] user_cosmetics load failed:', entRes.error);
@@ -1630,6 +1821,17 @@ const loadCosmetics = async (): Promise<void> => {
             const devActive = readDevActiveCosmetic();
             if (devActive) nextActive.set(devActive.userId, devActive.slug);
 
+            // Did WE just gain the subscriber badge? Compared before the
+            // swap, while the previous map is still the old one. Skipped on the
+            // very first load: every launch would otherwise re-announce a
+            // membership granted months ago, the same seeding rule the Twitch
+            // notification poll uses.
+            const newlySubscriber =
+                cosmeticsLoaded &&
+                !!selfUserId &&
+                !cosmeticsEntitlements.get(selfUserId)?.has(SUBSCRIBER_COSMETIC) &&
+                !!nextEnt.get(selfUserId)?.has(SUBSCRIBER_COSMETIC);
+
             cosmeticsCatalog = nextCatalog;
             cosmeticsEntitlements = nextEnt;
             cosmeticsActive = nextActive;
@@ -1640,6 +1842,7 @@ const loadCosmetics = async (): Promise<void> => {
                 userActive: nextActive.size,
             });
             bumpCosmeticsVersion();
+            if (newlySubscriber && selfUserId) void announceMembershipGift(selfUserId);
         } catch (e) {
             Logger.error('[Supabase] loadCosmetics exception:', e);
         } finally {

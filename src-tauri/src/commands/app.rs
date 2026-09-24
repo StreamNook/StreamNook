@@ -27,6 +27,21 @@ pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// Which client this is: version, OS, arch, target key, build channel.
+///
+/// The ONE version the frontend should report anywhere. `get_app_version` and
+/// `get_current_app_version` both return `env!("CARGO_PKG_VERSION")`, which is
+/// the DESKTOP number even inside an Android build (the
+/// `tauri.android.conf.json` override feeds Gradle and never reaches Cargo), so
+/// anything that reports a version to the backend must use this instead. See
+/// `services::client_identity` for the full history.
+#[command]
+pub fn get_client_identity(
+    app: tauri::AppHandle,
+) -> crate::services::client_identity::ClientIdentity {
+    crate::services::client_identity::current(&app)
+}
+
 #[command]
 pub fn get_app_name() -> String {
     env!("CARGO_PKG_NAME").to_string()
@@ -447,10 +462,21 @@ pub fn get_system_info() -> String {
     format!("{} {} ({})", os, arch, family)
 }
 
+/// A lone regional-indicator letter (U+1F1E6..U+1F1FF) is half of a flag and
+/// has no image of its own; a flag is only drawable as the pair
+/// (`1f1e7-1f1f7`). Asking the CDN for one letter is two guaranteed 404s.
+fn is_lone_regional_indicator(codepoint: &str) -> bool {
+    u32::from_str_radix(codepoint, 16).is_ok_and(|c| (0x1F1E6..=0x1F1FF).contains(&c))
+}
+
 /// Fetch an emoji image from CDN and return as base64 data URL
 /// This bypasses the browser's tracking prevention by using Tauri's HTTP client
 #[command]
 pub async fn get_emoji_image(codepoint: String) -> Result<String, String> {
+    if is_lone_regional_indicator(&codepoint) {
+        return Err(format!("{codepoint} is half of a flag; request the pair"));
+    }
+
     // Check cache first. `LruCache::get` takes &mut self because it bumps the
     // entry to most-recently-used — so the lock has to be a mutable borrow.
     {
@@ -505,4 +531,24 @@ pub async fn get_emoji_image(codepoint: String) -> Result<String, String> {
     }
 
     Err(last_err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_lone_regional_indicator;
+
+    #[test]
+    fn a_flag_letter_alone_is_refused_but_the_flag_is_not() {
+        // Brazil is B (1f1e7) + R (1f1f7): each letter alone has no image.
+        assert!(is_lone_regional_indicator("1f1e7"));
+        assert!(is_lone_regional_indicator("1f1f7"));
+        assert!(is_lone_regional_indicator("1f1e6"));
+        assert!(is_lone_regional_indicator("1f1ff"));
+        // The full flag sequence and ordinary emoji go to the CDN.
+        assert!(!is_lone_regional_indicator("1f1e7-1f1f7"));
+        assert!(!is_lone_regional_indicator("1f600"));
+        assert!(!is_lone_regional_indicator("1f1e5"));
+        assert!(!is_lone_regional_indicator("1f200"));
+        assert!(!is_lone_regional_indicator(""));
+    }
 }
