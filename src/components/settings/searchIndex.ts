@@ -320,6 +320,34 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   // === Chat ===
   {
     tab: 'Chat',
+    section: 'Combined Chat',
+    sectionId: 'settings-section-combined-chat',
+    title: 'Combine chat across platforms',
+    description: 'Merge the Twitch, YouTube and Kick chat of one streamer into a single feed. Combined chat, multi platform chat, multistream chat, see youtube chat in twitch chat, kick chat together, unified chat, cross platform chat, merged chat.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Combined Chat',
+    sectionId: 'settings-section-combined-chat',
+    title: 'Suggest links',
+    description: 'Offer to link a Kick or YouTube channel of the same name when you open a stream. Link channels, same streamer on another platform, connect kick to twitch channel, find youtube channel, auto detect, multistreamer.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Combined Chat',
+    sectionId: 'settings-section-combined-chat',
+    title: 'Mark where a message came from',
+    description: 'Show a small platform logo on messages from another platform. Platform badge, source icon, which platform, provider logo in chat.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Combined Chat',
+    sectionId: 'settings-section-combined-chat',
+    title: 'Platforms to include',
+    description: 'Choose which platforms may join a combined feed. Twitch, YouTube, Kick, TikTok, turn off a platform, exclude platform.'
+  },
+  {
+    tab: 'Chat',
     section: 'Chat Placement',
     title: 'Chat Placement',
     description: 'Choose where to display the chat window (right, bottom) or hide it completely.'
@@ -1224,6 +1252,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Overlay',
+    section: 'Chatters',
+    sectionId: 'settings-section-chatters',
+    title: 'Readable name colors',
+    description: 'Brighten chatter name colors that are too dark to read on the overlay. Dark names, navy, maroon, contrast, legibility, lighten.'
+  },
+  {
+    tab: 'Overlay',
     section: 'Messages',
     sectionId: 'settings-section-messages',
     title: 'Replies',
@@ -1256,6 +1291,20 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     sectionId: 'settings-section-messages',
     title: 'Restore chat on reload',
     description: 'Bring back the last on-screen messages after an OBS browser source reload instead of clearing. Off by default: clear on reload, OBS refresh, restart, stream start, keep buffer, persistence, blank overlay.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Messages',
+    sectionId: 'settings-section-messages',
+    title: 'Recent chat on start',
+    description: 'Fill the overlay with the Twitch channel’s recent messages when it starts, instead of an empty overlay. Chat history, backlog, previous messages, load history.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Messages',
+    sectionId: 'settings-section-messages',
+    title: 'Mod commands',
+    description: 'Let the broadcaster and moderators type !refreshoverlay or !clearoverlay in chat to reload or clear the overlay without opening OBS. Chat command, refresh overlay, reload chat, clear overlay.'
   },
   {
     tab: 'Overlay',
@@ -1740,6 +1789,25 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Diagnostics',
     title: 'Find the log file',
     description: 'Opens the folder that holds streamnook.log so you can attach it to a bug report.'
+  },
+
+  {
+    tab: 'Support',
+    section: 'What your account records',
+    title: 'Channels and emotes',
+    description: 'Counts which channels you watch and which emotes you use to fill in your profile stats and unlock accolades. Privacy: running totals only, nothing is counted while signed out.'
+  },
+  {
+    tab: 'Support',
+    section: 'What your account records',
+    title: 'Version and platform',
+    description: 'Records which build you are on, your operating system, and whether your updater is working, so a client that quietly stopped updating is visible.'
+  },
+  {
+    tab: 'Support',
+    section: 'What your account records',
+    title: 'Linked accounts',
+    description: 'Records which other platforms you have connected so they survive a reinstall.'
   },
 
   // === Backup ===

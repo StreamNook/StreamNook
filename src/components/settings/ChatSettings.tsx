@@ -41,7 +41,13 @@ import type {
 } from '../../types';
 import { withHiddenUser } from '../../utils/chatFilters';
 import { parseKey } from '../../utils/providerKey';
-import type { ProviderId } from '../../types/providers';
+import { CHAT_PROVIDERS, PROVIDERS, type ProviderId } from '../../types/providers';
+
+/** Platforms that can join a combined feed. Derived from the chat-capability
+ *  flags rather than hand-listed, so a newly chat-enabled platform appears here
+ *  without a second place to remember. Twitch is excluded only as a *companion*
+ *  choice when Twitch is what you are watching; the filter is per-row, not here. */
+const BLEND_PLATFORMS: ProviderId[] = CHAT_PROVIDERS;
 
 // Muted grey, so the counter reads as chrome rather than competing with the
 // message. Matches --color-text-secondary in the default theme.
@@ -414,7 +420,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     ffz_emote_effects: stored?.ffz_emote_effects ?? true,
     bttv_emote_modifiers: stored?.bttv_emote_modifiers ?? true,
     giant_emotes: stored?.giant_emotes ?? true,
-    user_card_opens_messages: stored?.user_card_opens_messages ?? true,
+    user_card_opens_messages: stored?.user_card_opens_messages ?? false,
     seventv_emote_notices: stored?.seventv_emote_notices ?? true,
     link_previews: stored?.link_previews ?? true,
     link_preview_keep_link: stored?.link_preview_keep_link ?? false,
@@ -494,6 +500,12 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     updateSettings({
       ...settings,
       chat_input: { ...settings.chat_input, ...patch },
+    });
+
+  const setBlend = (patch: Partial<NonNullable<typeof settings.chat_blend>>) =>
+    updateSettings({
+      ...settings,
+      chat_blend: { ...settings.chat_blend, ...patch },
     });
 
   const setRender = (patch: Partial<NonNullable<typeof settings.chat_render>>) =>
@@ -809,6 +821,79 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
           }
         />
+      </SettingsSection>
+
+      <SettingsSection
+        id="settings-section-combined-chat"
+        label="Combined Chat"
+        description="Show a streamer's chat from their other platforms alongside the one you are watching."
+      >
+        <SettingsRow
+          title="Combine chat across platforms"
+          description="When a streamer you are watching also streams elsewhere, their other chats can join this one in a single feed. Each message is marked with where it came from."
+          help="Off by default, and completely inactive while off: no extra connections and nothing extra fetched. Turn it on and the chat header shows which platforms a linked channel is drawing from. You can still only chat on the platform you are watching, but replying to someone from another platform sends your reply back there. One thing saved filters cannot do across platforms: a rule about sub length or bits reads Twitch chat tags that Kick and YouTube do not send, so it never matches their messages."
+          control={
+            <Toggle
+              enabled={settings.chat_blend?.enabled === true}
+              onChange={() => setBlend({ enabled: !(settings.chat_blend?.enabled === true) })}
+            />
+          }
+        />
+        <SettingsRow
+          title="Suggest links"
+          description="Offer to link a Kick or YouTube channel of the same name when you open a stream."
+          help="Each platform is checked once per channel and the answer remembered, so reopening a stream asks nothing. Kick is found whether or not it is live; YouTube is found through its search, which only sees channels that are streaming right now, so an offline YouTube channel has to be added by hand. Nothing is ever linked without you saying so, and refusing a suggestion stops it being offered again."
+          disabled={settings.chat_blend?.enabled !== true}
+          control={
+            <Toggle
+              enabled={settings.chat_blend?.suggest_links !== false}
+              disabled={settings.chat_blend?.enabled !== true}
+              onChange={() => setBlend({ suggest_links: !(settings.chat_blend?.suggest_links !== false) })}
+            />
+          }
+        />
+        <SettingsRow
+          title="Mark where a message came from"
+          description="Put a small platform logo on messages that came from somewhere other than the channel you are watching."
+          help="Messages from the channel you are watching are left unmarked, since that is most of them. Turning this off makes a combined feed harder to read, but it is there if you prefer the plainer look."
+          disabled={settings.chat_blend?.enabled !== true}
+          control={
+            <Toggle
+              enabled={settings.chat_blend?.show_platform_badge !== false}
+              disabled={settings.chat_blend?.enabled !== true}
+              onChange={() =>
+                setBlend({ show_platform_badge: !(settings.chat_blend?.show_platform_badge !== false) })
+              }
+            />
+          }
+        />
+        <SettingsRow
+          title="Platforms to include"
+          description="Leave a platform off here and it never joins a combined feed, even where you have linked it."
+          help="This is the default for every channel. The platform marks in the chat header also drop one out of the feed for just the channel you are watching, without changing this."
+          disabled={settings.chat_blend?.enabled !== true}
+        >
+          <div className="mt-3 flex flex-wrap gap-4">
+            {BLEND_PLATFORMS.map((p) => (
+              <label key={p} className="flex items-center gap-2 text-sm text-textSecondary">
+                <Toggle
+                  enabled={settings.chat_blend?.platforms?.[p] !== false}
+                  disabled={settings.chat_blend?.enabled !== true}
+                  ariaLabel={`Include ${PROVIDERS[p].label} in combined chat`}
+                  onChange={() =>
+                    setBlend({
+                      platforms: {
+                        ...settings.chat_blend?.platforms,
+                        [p]: !(settings.chat_blend?.platforms?.[p] !== false),
+                      },
+                    })
+                  }
+                />
+                {PROVIDERS[p].label}
+              </label>
+            ))}
+          </div>
+        </SettingsRow>
       </SettingsSection>
 
       <SettingsSection

@@ -877,7 +877,7 @@ impl ChatRules {
         }
     }
 
-    fn own_identity() -> Option<(String, String)> {
+    pub(crate) fn own_identity() -> Option<(String, String)> {
         own_cell().read().ok().and_then(|g| g.clone())
     }
 

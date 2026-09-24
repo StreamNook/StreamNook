@@ -6,7 +6,7 @@ import { parseMessage } from '../services/twitchChat';
 import { queueEmoteForDisplayCaching, getCachedEmoteUrl, getEmoteLookup, inlineEmoteTier, sevenTvTierUrl, EmoteSet } from '../services/emoteService';
 import { getCachedEmojiUrl, parseEmojisSync } from '../services/emojiService';
 import { calculateHalfPadding } from '../utils/chatLayoutUtils';
-import { computePaintStyle, getBadgeImageUrl, getBadgeFallbackUrls, queueCosmeticForCaching } from '../services/seventvService';
+import { computePaintStyle, getBadgeImageUrl, getBadgeFallbackUrls, pickPaintLayerImage, queueCosmeticForCaching } from '../services/seventvService';
 import { StyledChatName } from './chat/StyledChatName';
 import { useDragModerationStore } from '../stores/dragModerationStore';
 import { usePinStore } from '../stores/pinStore';
@@ -24,7 +24,9 @@ import { useMessageRepeat } from '../stores/messageRepeatStore';
 import { ChannelPointsIcon } from './ChannelPointsIcon';
 import { useUserColor } from '../services/userColorCache';
 import { queueBadgeForCaching, getCachedBadgeUrl } from '../services/badgeImageCacheService';
+import { memberIdFor } from '../utils/memberIdentity';
 import { isStreamNookUser, getStreamNookUserNumber, subscribeStreamNookRegistryVersion, getStreamNookRegistryVersion } from '../services/supabaseService';
+import { MemberReveal, MEMBER_REVEAL_CARD_CLASS } from './StreamNookBadge';
 import { StreamNookBadge } from './StreamNookBadge';
 import { AtmosphereBackground } from './AtmosphereBackground';
 import { MajorCologneChrome } from './MajorCologneChrome';
@@ -38,6 +40,8 @@ import { flashTitle } from '../utils/titleFlasher';
 import { playSoundThrottled } from '../utils/notificationSound';
 import { chatterId, chatterProvider } from '../utils/chatterIdentity';
 import type { ProviderId } from '../types/providers';
+import { isHomeRow, rowProvider } from '../utils/chatAuthority';
+import { ProviderLogo } from './ProviderLogo';
 import { getDisplayedName, getColorOverride } from '../utils/userChatOverrides';
 import { useNameColorAdjust } from '../hooks/useNameColor';
 import { vendorEmojiUrl } from '../services/emojiService';
@@ -367,8 +371,15 @@ interface ChatMessageProps {
   onUsernameRightClick?: (messageId: string, username: string) => void;
   onBadgeClick?: (badgeKey: string, badgeInfo: { url?: string; image_url_4x?: string }) => void;
   emotes?: EmoteSet | null;
+  /** Whether the viewer moderates the channel being WATCHED. Never read
+   *  directly for an action — go through `canModerateThisRow`, which also
+   *  requires the row to be from that channel. */
   isModerator?: boolean;
   broadcasterId?: string;
+  /** The platform being watched. A merged feed also carries rows from the
+   *  streamer's other platforms, and `isModerator` / `broadcasterId` describe
+   *  this one only. */
+  homeProvider?: ProviderId;
 }
 
 /**
@@ -411,10 +422,14 @@ function resolveMentionUser(username: string): Promise<MentionUser> {
 
 const MentionSpan: React.FC<{
   username: string;
+  /** The platform the message containing this mention came from. `@bob` in
+   *  Twitch chat means the Twitch bob, and a Kick chatter of the same name is a
+   *  different person with different cosmetics. */
+  provider?: ProviderId;
   onUsernameClick?: ChatMessageProps['onUsernameClick'];
-}> = ({ username, onUsernameClick }) => {
+}> = ({ username, provider, onUsernameClick }) => {
   // Subscribe to the specific user from the store (reactive updates)
-  const cachedUser = useChatUserStore((state) => state.getUserByUsername(username));
+  const cachedUser = useChatUserStore((state) => state.getUserByUsername(username, provider));
   
   // Local state for users not in chat store (fallback API lookup)
   const [apiUserPaint, setApiUserPaint] = useState<SevenTVPaintWithSelection | null>(null);
@@ -677,7 +692,7 @@ function presetsFromSetting(raw: number[] | undefined): Array<{ label: string; v
   return (list.length > 0 ? list : DEFAULT_TIMEOUT_PRESETS).map((val) => ({ label: formatTimeoutLabel(val), val }));
 }
 
-const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, onReplyClick, isHighlighted = false, moderationContext = null, onEmoteRightClick, onMessageCopy, onUsernameRightClick, onBadgeClick, emotes, isModerator = false, broadcasterId }: ChatMessageProps) {
+const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, onReplyClick, isHighlighted = false, moderationContext = null, onEmoteRightClick, onMessageCopy, onUsernameRightClick, onBadgeClick, emotes, isModerator = false, broadcasterId, homeProvider = 'twitch' }: ChatMessageProps) {
   // Field selectors, NOT a whole-store subscription. This component is mounted
   // once per chat row, so subscribing to the entire store made every row
   // re-render on every unrelated store tick (hours-watched, viewer count, etc.).
@@ -689,6 +704,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // previously re-rendered every mounted row - memo does not gate a
   // component's own hook-driven updates).
   const chatDesign = useAppStore((s) => s.settings.chat_design);
+  const chatBlend = useAppStore((s) => s.settings.chat_blend);
   const chatCustomization = useAppStore((s) => s.settings.chat_customization);
   const chatHighlights = useAppStore((s) => s.settings.chat_highlights);
   const chatEvents = useAppStore((s) => s.settings.chat_events);
@@ -903,6 +919,13 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         ? `${parsed.provider}:${providerUserId}`
         : undefined
       : userId;
+
+  // Which StreamNook member, if any, sent this. Derived ONCE here rather than
+  // re-read per branch below: the five message variants used to each pull
+  // `tags.get('user-id')`, which Kick and YouTube do not stamp at all, so every
+  // non-Twitch row was classified as a non-member no matter who sent it.
+  const senderMemberId = memberIdFor(cosmeticsKey);
+  const isSNSender = isStreamNookUser(senderMemberId);
 
   // Provider-aware ban/timeout. Twitch -> Helix `ban_user` (duration in SECONDS,
   // null = permanent ban). Kick -> `kick_ban_user` (duration in MINUTES, null =
@@ -1245,8 +1268,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     if (seventvPaint?.data?.layers) {
       seventvPaint.data.layers.forEach((layer: any) => {
         if (layer.ty.__typename === 'PaintLayerTypeImage' && layer.ty.images) {
-          // Find the best image (scale 1 if available)
-          const img = layer.ty.images.find((i: any) => i.scale === 1 && (layer.ty.images.some((x: any) => x.frameCount > 1) ? i.frameCount > 1 : true)) || layer.ty.images[0];
+          // The image the renderer draws, and no other.
+          const img = pickPaintLayerImage(layer.ty.images);
 
           if (img && !img.localUrl) {
             // Paints are cached by their layer ID
@@ -1289,12 +1312,23 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // pickup gesture (and the text-selection sacrifice it requires) on the current
   // user's mod status, so non-mods always keep normal chat: select text, copy,
   // click links. The classic mod buttons are likewise already mod-gated below.
-  const bodyDragEnabled = isModerator && (modActionStyle === 'drag' || modActionStyle === 'both');
+  // Authority is home-only. `isModerator` and `broadcasterId` both describe the
+  // channel being watched, so offering a mod action on a row from one of the
+  // streamer's OTHER platforms would aim this channel's credentials at another
+  // platform's user id — which Helix accepts, because both are numeric strings.
+  const canModerateThisRow = isModerator && isHomeRow(message, homeProvider);
+  // Mark only what did NOT come from the platform being watched. In a merged
+  // feed most rows are the home platform's, so marking every row is noise that
+  // says nothing; marking the exceptions is the whole signal.
+  const rowSourceProvider = rowProvider(message, homeProvider);
+  const showPlatformMark =
+    rowSourceProvider !== homeProvider && chatBlend?.show_platform_badge !== false;
+  const bodyDragEnabled = canModerateThisRow && (modActionStyle === 'drag' || modActionStyle === 'both');
   const showModButtons = modActionStyle === 'buttons' || modActionStyle === 'both';
   // The inline Pin button is ALWAYS available to moderators so a pin can never go
   // missing. The Pin Action setting only controls whether a Pin tile ALSO shows
   // in the drag-to-moderate gesture (handled in ModerationDragLayer).
-  const showInlinePin = isModerator;
+  const showInlinePin = canModerateThisRow;
   // Is THIS message the one currently pinned? If so the inline control flips from
   // Pin to Unpin (and the same message can't show a redundant "pin" affordance).
   const thisMessageId = parsed.tags.get('id');
@@ -1331,7 +1365,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           broadcasterId,
           provider: parsed.provider,
           channel: parsed.channel?.replace(/^youtube:/, ''),
-          isModerator,
+          isModerator: canModerateThisRow,
           moderationState:
             moderationContext?.type === 'ban'
               ? 'ban'
@@ -2022,6 +2056,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           <MentionSpan
             key={index}
             username={mentionedUsername}
+            provider={parsed.provider}
             onUsernameClick={onUsernameClick}
           />
         );
@@ -2344,8 +2379,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
 
     // Helper function to render badges
     const renderBadges = () => {
-      const senderUserId = parsed.tags.get('user-id');
-      const isSN = isStreamNookUser(senderUserId);
+      const senderUserId = senderMemberId;
+      const isSN = isSNSender;
 
       if (visibleBadges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
 
@@ -2397,7 +2432,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               />
             </Tooltip>
           ))}
-          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} userNumber={getStreamNookUserNumber(senderUserId)} />}
+          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} />}
         </span>
       );
     };
@@ -2534,8 +2569,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
 
     // Helper function to render badges
     const renderBadges = () => {
-      const senderUserId = parsed.tags.get('user-id');
-      const isSN = isStreamNookUser(senderUserId);
+      const senderUserId = senderMemberId;
+      const isSN = isSNSender;
 
       if (visibleBadges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
 
@@ -2586,7 +2621,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               />
             </Tooltip>
           ))}
-          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} userNumber={getStreamNookUserNumber(senderUserId)} />}
+          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} />}
         </span>
       );
     };
@@ -2717,8 +2752,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
 
     // Helper function to render badges
     const renderBadges = () => {
-      const senderUserId = parsed.tags.get('user-id');
-      const isSN = isStreamNookUser(senderUserId);
+      const senderUserId = senderMemberId;
+      const isSN = isSNSender;
 
       if (visibleBadges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
 
@@ -2769,7 +2804,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               />
             </Tooltip>
           ))}
-          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} userNumber={getStreamNookUserNumber(senderUserId)} />}
+          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} />}
         </span>
       );
     };
@@ -2835,8 +2870,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
 
     // Helper function to render badges
     const renderBadges = () => {
-      const senderUserId = parsed.tags.get('user-id');
-      const isSN = isStreamNookUser(senderUserId);
+      const senderUserId = senderMemberId;
+      const isSN = isSNSender;
 
       if (visibleBadges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
 
@@ -2887,7 +2922,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               />
             </Tooltip>
           ))}
-          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} userNumber={getStreamNookUserNumber(senderUserId)} />}
+          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} />}
         </span>
       );
     };
@@ -3183,8 +3218,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // Bits, donation, watchstreak, and subscription messages each have their own
   // renderBadges() helper above; everything else (regular text, replies, actions,
   // mentions, and the user's own outgoing messages) flows through the JSX below.
-  const senderUserId = parsed.tags.get('user-id');
-  const isSN = isStreamNookUser(senderUserId);
+  const senderUserId = senderMemberId;
+  const isSN = isSNSender;
+  const senderMemberNumber = isSN ? getStreamNookUserNumber(senderMemberId) : null;
 
   // Global highlight appearance — applies to BOTH built-in event highlights
   // and the phrase/user/badge match (phraseMatch). Defaults preserve prior
@@ -3391,6 +3427,19 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             own separate frost above), so the text/badges stay readable over a
             busy wash. */}
         <div className={atmosphereFrost ? 'inline-block max-w-full rounded-md bg-[rgba(5,6,13,0.22)] px-1.5 py-0.5 backdrop-blur-[4px]' : 'min-w-0'}>
+          {/* Where this row came from, when it is not the platform being watched.
+              FIRST, ahead of the avatar and every badge, because it answers
+              "which community is this" before anything about who they are in
+              it — and because a mark that has to be hunted for between badges
+              is not doing its one job. Small on purpose: it is a marker, not a
+              badge, and most rows in a merged feed do not carry one at all. */}
+          {showPlatformMark && (
+            <ProviderLogo
+              provider={rowSourceProvider}
+              size={Math.round((chatDesign?.font_size ?? 14) * 0.85)}
+              className="mr-1 inline-block align-middle"
+            />
+          )}
           {/* YouTube / TikTok native inline avatar — leads the row (before badges)
               so it shows even for chatters with no badges. The picture rides every
               message (those adapters stamp it onto the `avatar` tag). */}
@@ -3487,7 +3536,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                 </Tooltip>
               ))}
               {/* StreamNook identity badge sits rightmost, next to the name (see utils/badgeOrder). */}
-              {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} userNumber={getStreamNookUserNumber(senderUserId)} />}
+              {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} />}
             </span>
           ) : null}
 
@@ -3586,6 +3635,12 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                       <path fillRule="evenodd" d="M12.5 3.5 8 2 3.5 3.5 2 8l1.5 4.5L8 14l4.5-1.5L14 8l-1.5-4.5ZM7 11l4.5-4.5L10 5 7 8 5.5 6.5 4 8l3 3Z" clipRule="evenodd"></path>
                     </svg>
                   ) : undefined}
+                  tooltip={
+                    senderMemberNumber !== null ? (
+                      <MemberReveal userId={senderMemberId} chatKey={cosmeticsKey} userNumber={senderMemberNumber} />
+                    ) : undefined
+                  }
+                  tooltipClassName={MEMBER_REVEAL_CARD_CLASS}
                 />
                 <span style={{ fontWeight: 'var(--chat-body-weight, 300)' }} className="text-textPrimary break-words">
                   <span
@@ -3716,7 +3771,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       {/* Moderation menu: floats ABOVE the message (7TV-style), mod-only. The
           punitive actions live here, away from the message text; Copy + Pin are
           inline above. */}
-      {hoverArmed && isModerator && showModButtons && broadcasterId && (
+      {hoverArmed && canModerateThisRow && showModButtons && broadcasterId && (
         <div
           data-no-drag="true"
           className="absolute bottom-full right-2 mb-0.5 opacity-0 group-hover:opacity-100 transition-[opacity,transform] duration-200 flex items-center gap-0.5 p-0.5 backdrop-blur-md border border-white/10 shadow-[0_8px_24px_rgba(0,0,0,0.55)] rounded-xl overflow-visible z-[50] translate-y-1 group-hover:translate-y-0"

@@ -13,14 +13,22 @@ const state = {
   loaded: true,
   owned: new Map<string, Set<string>>(),
   atmospheres: new Map<string, Atmosphere>(),
+  /** Every id the ownership gate was asked about, in order. */
+  ownershipAskedFor: [] as string[],
+  /** What the member's stored profile theme resolves to. */
+  profileTheme: 'tier' as string | null,
 };
 
 vi.mock('../services/supabaseService', () => ({
   isCosmeticsRegistryLoaded: () => state.loaded,
-  getOwnedCosmeticSlugs: (id: string) => state.owned.get(id) ?? new Set<string>(),
+  getOwnedCosmeticSlugs: (id: string) => {
+    state.ownershipAskedFor.push(id);
+    return state.owned.get(id) ?? new Set<string>();
+  },
+  notifyMemberIdentityChanged: () => {},
   // Unused by the gate, but imported by the module under test.
   isStreamNookUser: () => true,
-  getProfilePrefs: async () => ({ profileTheme: 'tier', hiddenSections: [] }),
+  getProfilePrefs: async () => ({ profileTheme: state.profileTheme, hiddenSections: [] }),
   whenAtmospheresReady: async () => undefined,
   subscribeAtmospheresVersion: () => () => {},
   subscribeStreamNookRegistryVersion: () => () => {},
@@ -62,7 +70,9 @@ vi.mock('../services/bttvProBadge', () => ({
 vi.mock('../services/cologneEvent', () => ({ parseCologneTheme: () => null }));
 vi.mock('../utils/userChatOverrides', () => ({ snapshotOverrides: () => ({}) }));
 
-const { mayWearAtmosphere, registerOwnAtmospheres } = await import('./chatUserStore');
+const { mayWearAtmosphere, registerOwnAtmospheres, ensureAtmosphereResolved, useChatUserStore } =
+  await import('./chatUserStore');
+const { setMemberAliases, __resetMemberAliases } = await import('../utils/memberIdentity');
 
 const SUBSCRIBER_ATM = 'aurora';
 const ACCOLADE_ATM = 'midnight';
@@ -71,6 +81,10 @@ const SUBSCRIBER_BADGE = 'streamnook-subscriber';
 beforeEach(() => {
   state.loaded = true;
   state.owned = new Map();
+  state.ownershipAskedFor = [];
+  state.profileTheme = 'tier';
+  __resetMemberAliases();
+  useChatUserStore.getState().clearUsers();
   state.atmospheres = new Map<string, Atmosphere>([
     [SUBSCRIBER_ATM, { id: SUBSCRIBER_ATM, name: 'Aurora' } as Atmosphere],
     [
@@ -124,5 +138,70 @@ describe('mayWearAtmosphere', () => {
 
   it('allows an atmosphere the catalog does not know, since nothing paints anyway', () => {
     expect(mayWearAtmosphere('stranger', 'not-a-real-atmosphere')).toBe(true);
+  });
+});
+
+// ── The cross-platform seam ──────────────────────────────────────────────────
+//
+// Everything the gate reads is filed under a TWITCH user id. Chat identifies a
+// Kick or YouTube chatter by that platform's own id. If the chat key reaches the
+// gate instead of the member id, `getOwnedCosmeticSlugs` looks up a key that
+// cannot exist, finds nothing, and a paying member is silently blanked on their
+// own row — on the exact platforms this feature exists to cover.
+//
+// So these assert WHICH id the gate was asked about, not merely the outcome: the
+// outcome is identical on Twitch either way, which is what would have let this
+// ship unnoticed.
+describe('ownership across platforms', () => {
+  const MEMBER = '249031143';
+  const KICK_ROW = 'kick:12345';
+
+  const settle = async () => {
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+  };
+
+  it('asks about the MEMBER, not the chat row, for a linked Kick chatter', async () => {
+    setMemberAliases(new Map([[KICK_ROW, MEMBER]]));
+    state.owned.set(MEMBER, new Set([SUBSCRIBER_BADGE]));
+    state.profileTheme = SUBSCRIBER_ATM;
+
+    ensureAtmosphereResolved(KICK_ROW);
+    await settle();
+
+    expect(state.ownershipAskedFor).toContain(MEMBER);
+    expect(state.ownershipAskedFor).not.toContain(KICK_ROW);
+  });
+
+  it('paints a subscriber’s atmosphere onto their Kick row', async () => {
+    // The user-visible half of the same thing: handed the chat key, the gate
+    // would see no owned slugs and store null here instead.
+    setMemberAliases(new Map([[KICK_ROW, MEMBER]]));
+    state.owned.set(MEMBER, new Set([SUBSCRIBER_BADGE]));
+    state.profileTheme = SUBSCRIBER_ATM;
+
+    useChatUserStore.getState().addUser({
+      userId: KICK_ROW,
+      username: 'someone',
+      displayName: 'Someone',
+      color: '#fff',
+    });
+    ensureAtmosphereResolved(KICK_ROW);
+    await settle();
+
+    expect(useChatUserStore.getState().users.get(KICK_ROW)?.atmosphereId).toBe(SUBSCRIBER_ATM);
+  });
+
+  it('does nothing for an unclaimed chatter rather than guessing', async () => {
+    // No alias: the id is a Kick id and must never be read as a Twitch one, even
+    // though both platforms number their users the same way.
+    state.owned.set(MEMBER, new Set([SUBSCRIBER_BADGE]));
+    state.profileTheme = SUBSCRIBER_ATM;
+
+    ensureAtmosphereResolved(KICK_ROW);
+    await settle();
+
+    expect(state.ownershipAskedFor).toEqual([]);
   });
 });

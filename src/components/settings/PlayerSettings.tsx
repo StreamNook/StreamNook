@@ -15,7 +15,7 @@ import {
 } from '../../utils/audioBoost';
 import { reportCodecPreference } from '../../utils/codecPreference';
 import { invoke } from '@tauri-apps/api/core';
-import { LL_TARGET_DEFAULT } from '../../utils/latency';
+import { AUTO_GAP } from '../../utils/latency';
 
 const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
   <button
@@ -446,8 +446,8 @@ const PlayerSettings = () => {
 
         <SettingsRow
           title="How close to live to stay"
-          description="How far behind the live edge the player rides; lower is closer to live (reopen the stream to apply)."
-          help="The lowest gaps need Low Latency turned on, and a solid connection, to stay smooth."
+          description="How far behind the live edge the player rides; lower is closer to live. Auto picks a gap that suits each channel (reopen the stream to apply)."
+          help={`Auto rides ${AUTO_GAP.ll.toFixed(1)}s behind on channels the low-latency engine serves, ${AUTO_GAP.promotion.toFixed(1)}s on other low-latency broadcasts and ${AUTO_GAP.plain.toFixed(1)}s on normal-latency ones. Set your own number to override all three; the lowest gaps need a solid connection to stay smooth.`}
         >
           <div className="flex items-center gap-3">
             <input
@@ -455,7 +455,7 @@ const PlayerSettings = () => {
               min="2"
               max="10"
               step="0.1"
-              value={videoPlayer?.ll_target_latency ?? LL_TARGET_DEFAULT}
+              value={videoPlayer?.ll_target_latency ?? AUTO_GAP.ll}
               onChange={(e) =>
                 updateSettings({
                   ...settings,
@@ -465,20 +465,34 @@ const PlayerSettings = () => {
               className="w-full accent-accent cursor-pointer"
             />
             <span className="text-[12px] font-medium text-textPrimary tabular-nums flex-shrink-0">
-              {(videoPlayer?.ll_target_latency ?? LL_TARGET_DEFAULT).toFixed(1)}s
+              {videoPlayer?.ll_target_latency == null ? 'Auto' : `${videoPlayer.ll_target_latency.toFixed(1)}s`}
             </span>
+            {videoPlayer?.ll_target_latency != null && (
+              <button
+                type="button"
+                onClick={() =>
+                  updateSettings({
+                    ...settings,
+                    video_player: { ...videoPlayer, ll_target_latency: null },
+                  })
+                }
+                className="glass-button flex-shrink-0 rounded px-2 py-0.5 text-[11px] font-medium text-textSecondary hover:text-textPrimary"
+              >
+                Auto
+              </button>
+            )}
           </div>
         </SettingsRow>
 
         <SettingsRow
           title="Low Latency"
-          description="Uses the low-latency engine to hold a tight live edge gap smoothly on channels that support it."
-          help="Off keeps the stable path. If a stream stutters or refuses to play, turn this off first."
+          description="Rides as close to live as the Twitch site on channels that support it. On by default."
+          help="Off falls back to the wider whole-segment path. If a stream stutters or refuses to play, turn this off first."
           control={
             <Toggle
-              enabled={videoPlayer?.experimental_low_latency ?? false}
+              enabled={videoPlayer?.experimental_low_latency ?? true}
               onChange={() => {
-                const next = !(videoPlayer?.experimental_low_latency ?? false);
+                const next = !(videoPlayer?.experimental_low_latency ?? true);
                 updateSettings({
                   ...settings,
                   video_player: { ...videoPlayer, experimental_low_latency: next },

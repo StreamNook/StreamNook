@@ -80,6 +80,17 @@ pub async fn provider_chat_connect(
     }
 }
 
+/// The shared local-WS bridge's port, with no platform connect in the way.
+/// A window whose first channel's own connect can fail (a YouTube or TikTok
+/// channel that is not live, or a Twitch start that did not come up) still gets
+/// its socket, so every other channel in it keeps chatting.
+#[tauri::command]
+pub async fn chat_bridge_port() -> Result<u16, String> {
+    IrcService::ensure_local_ws_bridge()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Drop this window's claim on a non-Twitch source; the adapter disconnects when
 /// the last consumer leaves.
 #[tauri::command]
@@ -188,6 +199,24 @@ pub async fn get_youtube_channel_meta(
     crate::services::providers::youtube_media::channel_meta_refreshed(&slug).await
 }
 
+/// The `UC…` channel id behind a legacy `/c/NAME` or `/user/NAME` YouTube link.
+/// `path` is `c/NAME` or `user/NAME`, as the frontend's link parser returns it;
+/// the error is a line fit for the add box that asked.
+#[tauri::command]
+pub async fn resolve_youtube_legacy_channel(path: String) -> Result<String, String> {
+    crate::services::providers::youtube_media::resolve_legacy_channel(&path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The slug Kick knows a typed channel name by, trying both spellings a name
+/// with `_` or `-` can have. When Kick can't be reached the name comes back as
+/// given; the error is a line fit for the add box that asked.
+#[tauri::command]
+pub async fn resolve_kick_slug(name: String) -> Result<String, String> {
+    crate::services::providers::kick::resolve_slug(&name).await
+}
+
 /// Live TikTok creator metadata (name / title / viewers / avatar) resolved from the
 /// profile page + webcast room info, for the MultiChat chrome. `slug` is the TikTok
 /// handle. Returns null until the LIVE has been resolved.
@@ -199,19 +228,29 @@ pub fn get_tiktok_channel_meta(
 }
 
 /// Sign in to TikTok in the login overlay. The session plays age-restricted
-/// LIVEs and nothing else; see `tiktok_auth_service` for why it stops there.
+/// LIVEs and reads who the account follows is live; see `tiktok_auth_service`
+/// for where it stops.
 #[tauri::command]
-pub async fn tiktok_connect() -> Result<(), String> {
+pub async fn tiktok_connect(state: tauri::State<'_, crate::models::settings::AppState>) -> Result<(), String> {
     crate::services::tiktok_auth_service::connect()
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Look NOW rather than at the poller's next 90 s tick, so the Following tab
+    // fills as the sign-in window closes.
+    if let Some(app) = crate::services::providers::app_handle() {
+        let state_for_refresh = (*state).clone();
+        tauri::async_runtime::spawn(async move {
+            crate::services::provider_live_service::refresh_provider(app, state_for_refresh, "tiktok").await;
+        });
+    }
+    Ok(())
 }
 
-/// Sign out of TikTok. There are no imported follows to clear: TikTok's follow
-/// list is never read, and in-app follows are the user's own and stay.
+/// Sign out of TikTok, clearing the session, the sign-in profile and what was
+/// read with it. Follows made in StreamNook itself are the user's own and stay.
 #[tauri::command]
 pub async fn tiktok_disconnect() -> Result<(), String> {
-    crate::services::tiktok_auth_service::disconnect();
+    crate::services::tiktok_auth_service::disconnect().await;
     Ok(())
 }
 
@@ -230,16 +269,16 @@ pub async fn youtube_connect() -> Result<(), String> {
 }
 
 /// Sign out of YouTube. Same policy as Kick: credentials and imported channels
-/// go, an open player and read-only chat stay. The auth service already wipes the
-/// webview profile and the moderation cache.
+/// go, an open player and read-only chat stay. The auth service already signs the
+/// web profile out and clears the moderation cache.
 // `async` on purpose, here and on the Kick twins below: a non-async command
 // runs on the UI thread, and these touch the OS keychain (which can block on
-// a SecurityAgent prompt), delete a whole webview profile and write settings.
+// a SecurityAgent prompt), clear a whole webview profile and write settings.
 // On macOS that froze the window for as long as the keychain took to answer.
 // Async commands that borrow `State` must return a `Result`.
 #[tauri::command]
 pub async fn youtube_disconnect(state: State<'_, AppState>) -> Result<(), String> {
-    crate::services::youtube_auth_service::disconnect();
+    crate::services::youtube_auth_service::disconnect().await;
     if let Err(e) = crate::commands::provider_browse::clear_imported_follows("youtube", &state) {
         log::warn!("[youtube] could not clear imported follows: {}", e);
     }
@@ -332,13 +371,13 @@ pub async fn kick_disconnect(app: tauri::AppHandle, state: State<'_, AppState>) 
     crate::services::kick_auth_service::disconnect();
     // The OAuth token and the site session are two different credentials in two
     // different places. Clearing only the first left kick.com still logged in, so
-    // "Disconnect" then "Connect" silently reused the old session.
-    let profile = crate::services::providers::kick::account_profile_dir(&app);
-    if let Err(e) = std::fs::remove_dir_all(&profile) {
-        // Non-fatal: Windows refuses while any window still holds the profile, and
-        // the credentials are already gone either way. The next sign-in recreates it.
-        log::debug!("[Kick] could not remove {}: {}", profile.display(), e);
-    }
+    // "Disconnect" then "Connect" silently reused the old session. Deleting the
+    // profile's folder did not reliably clear the second either: the browser
+    // behind the profile can outlive its window and keep the session. So the
+    // clear goes through a live webview on it (on macOS, Kick's cookies only;
+    // see `sign_in_profile`).
+    #[cfg(desktop)]
+    crate::services::providers::kick_account::clear_site_session(&app).await;
     // The phone keeps the kick.com session in the overlay's app-global jar, not
     // a profile directory. Expire only Kick's cookies so Twitch stays signed in.
     #[cfg(target_os = "android")]
@@ -461,14 +500,26 @@ pub async fn stop_chat() -> Result<(), String> {
     ChatService::stop().await.map_err(|e| e.to_string())
 }
 
-/// Who is signed in on a platform: display name and profile picture.
+/// Who is signed in on a platform: display name, profile picture, and the id
+/// that platform's chat identifies them by.
 ///
 /// One call rather than a `*_account_name` plus a separate avatar lookup, because
-/// both come out of the same upstream response. Empty when not connected.
+/// all three come out of the same upstream response. Empty when not connected.
+///
+/// `id` is Kick's numeric account id or YouTube's `UC…` channel id — the same
+/// value those platforms stamp on a chat message, which is what lets a member's
+/// StreamNook cosmetics find them there. `None` is normal and not an error: a
+/// YouTube account can have no channel at all.
 #[derive(serde::Serialize, Default)]
 pub struct PlatformAccountInfo {
     pub name: Option<String>,
     pub avatar_url: Option<String>,
+    pub id: Option<String>,
+    /// The @handle, where the platform has one distinct from the display name.
+    /// TikTok's: nicknames there are often stylized past recognition, and the
+    /// handle is what says which account it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle: Option<String>,
 }
 
 #[tauri::command]
@@ -476,19 +527,67 @@ pub async fn platform_account_info(provider: String) -> PlatformAccountInfo {
     match provider.as_str() {
         "kick" => {
             let (name, avatar_url) = crate::services::kick_auth_service::account_identity().await;
-            PlatformAccountInfo { name, avatar_url }
+            // Read AFTER account_identity, which is what fills it from the same
+            // response it took the name and picture out of.
+            let id = crate::services::kick_auth_service::account_id();
+            PlatformAccountInfo {
+                name,
+                avatar_url,
+                id,
+                handle: None,
+            }
         }
         "youtube" => {
             let (name, avatar_url) =
                 crate::services::youtube_auth_service::account_identity().await;
-            PlatformAccountInfo { name, avatar_url }
+            let id = crate::services::youtube_auth_service::account_channel_id();
+            PlatformAccountInfo {
+                name,
+                avatar_url,
+                id,
+                handle: None,
+            }
         }
         "tiktok" => {
             let (name, avatar_url) = crate::services::tiktok_auth_service::account_identity().await;
-            PlatformAccountInfo { name, avatar_url }
+            PlatformAccountInfo {
+                name,
+                avatar_url,
+                // Read after account_identity, which is what records both.
+                id: crate::services::tiktok_auth_service::account_id(),
+                handle: crate::services::tiktok_auth_service::account_handle(),
+            }
         }
         _ => PlatformAccountInfo::default(),
     }
+}
+
+/// Which StreamNook member, if any, is behind each of these chat identities.
+///
+/// The frontend collects the non-Twitch chatters it has seen and asks in waves;
+/// this answers from a process-wide cache and looks up only what is genuinely
+/// unknown. Keys with no claim are absent from the result, which is the ordinary
+/// case rather than an error: most chatters are not members.
+///
+/// Rust owns this rather than each webview doing its own, so a MultiChat popout
+/// costs nothing extra and the phone gets it for free.
+///
+/// Keys it could not answer (a failed request, an open circuit breaker, or more
+/// than one request's worth) come back in `unresolved`, separately from keys that
+/// simply have no claim, so the caller knows to ask about them again.
+#[tauri::command]
+pub async fn resolve_member_ids(keys: Vec<String>) -> crate::services::member_alias::ResolveOutcome {
+    crate::services::member_alias::resolve(keys).await
+}
+
+/// Forget every cached claim, so the next sighting of each chatter re-asks.
+///
+/// Called after the local user links or unlinks a platform account: their own
+/// claim just changed, and a "nobody" cached a moment earlier would otherwise
+/// keep their badge off their own messages until the app restarted.
+#[tauri::command]
+pub fn invalidate_member_aliases() {
+    crate::services::member_alias::invalidate();
 }
 
 /// Check whether the connected platform sessions are still accepted, and sign out
@@ -505,23 +604,27 @@ pub async fn platform_account_info(provider: String) -> PlatformAccountInfo {
 #[tauri::command]
 pub async fn validate_platform_sessions(app: tauri::AppHandle) -> Vec<String> {
     use tauri::Emitter;
-    let mut signed_out: Vec<String> = Vec::new();
-
-    if crate::services::kick_auth_service::is_connected()
-        && crate::services::kick_auth_service::validate_session().await == Some(false)
-    {
-        signed_out.push("kick".to_string());
-    }
-    if crate::services::youtube_auth_service::is_connected()
-        && crate::services::youtube_auth_service::validate_session().await == Some(false)
-    {
-        signed_out.push("youtube".to_string());
-    }
-    if crate::services::tiktok_auth_service::is_connected()
-        && crate::services::tiktok_auth_service::validate_session().await == Some(false)
-    {
-        signed_out.push("tiktok".to_string());
-    }
+    // All three at once. Each is a real round trip, and YouTube's can re-read
+    // its cookies through a hidden page, which must not hold up the other two.
+    let (kick, youtube, tiktok) = tokio::join!(
+        async {
+            crate::services::kick_auth_service::is_connected()
+                && crate::services::kick_auth_service::validate_session().await == Some(false)
+        },
+        async {
+            crate::services::youtube_auth_service::is_connected()
+                && crate::services::youtube_auth_service::validate_session().await == Some(false)
+        },
+        async {
+            crate::services::tiktok_auth_service::is_connected()
+                && crate::services::tiktok_auth_service::validate_session().await == Some(false)
+        },
+    );
+    let signed_out: Vec<String> = [("kick", kick), ("youtube", youtube), ("tiktok", tiktok)]
+        .into_iter()
+        .filter(|(_, out)| *out)
+        .map(|(provider, _)| provider.to_string())
+        .collect();
 
     // Tell every window, so a popout's composer goes read-only without needing a
     // poll of its own.
@@ -870,4 +973,14 @@ pub fn get_youtube_channel_emojis(
     channel: String,
 ) -> Vec<crate::services::providers::youtube::YouTubeEmoji> {
     crate::services::providers::youtube::channel_emojis(&channel)
+}
+
+/// The row for a message the user is about to send, built by the same parser
+/// as received messages (see `IrcService::build_own_message`). The composer
+/// shows it at once; the echo upgrades it in place by id.
+#[tauri::command]
+pub async fn build_own_chat_message(
+    message: crate::services::irc_service::OwnMessage,
+) -> Option<ChatMessage> {
+    IrcService::build_own_message(message).await
 }

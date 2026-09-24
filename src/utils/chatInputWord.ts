@@ -204,26 +204,3 @@ export function replaceInputRange(
   const caret = start + text.length;
   el.setSelectionRange(caret, caret);
 }
-
-/**
- * Every version of `word` with one adjacent pair of letters swapped.
- *
- *   "teh" -> ["eth", "the"]
- *
- * Hunspell-style suggestion (and nspell's implementation of it) builds its
- * candidates from the replacement table, keyboard-adjacent substitutions and
- * doubled letters. None of those produce a transposition, so the single most
- * common English typo class — "teh", "adn", "taht", "waht", "liek" — comes back
- * with no useful suggestion at all. Measured over 22 common typos, folding these
- * in took the top-5 hit rate from 15 to 21; generating the rest of the
- * edit-distance-1 neighbourhood on top added nothing.
- *
- * Case is carried along by the slicing, so "Teh" yields "The".
- */
-export function adjacentTranspositions(word: string): string[] {
-  const out: string[] = [];
-  for (let i = 0; i < word.length - 1; i++) {
-    out.push(word.slice(0, i) + word[i + 1] + word[i] + word.slice(i + 2));
-  }
-  return out;
-}

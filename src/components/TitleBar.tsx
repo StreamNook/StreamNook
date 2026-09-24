@@ -25,7 +25,9 @@ import { deriveDropProgressDisplay } from '../utils/dropProgressDisplay';
 import { Logger } from '../utils/logger';
 import { useVisibleInterval } from '../utils/useVisibleInterval';
 import { handleTitleBarMouseDown } from '../utils/titleBarDrag';
+import { START_UPDATE_EVENT } from '../utils/updateEvents';
 import { Tooltip } from './ui/Tooltip';
+import { AutomationPulse, type AutomationTone } from './ui/AutomationPulse';
 import PluginTitleBarButtons from '../plugins-ui/PluginTitleBarButtons';
 import { usePluginUpdates } from '../stores/pluginUpdatesStore';
 
@@ -514,6 +516,26 @@ const TitleBar = () => {
     setUpdateError(null);
   }, []);
 
+  // Let other surfaces start the install without duplicating this flow: the
+  // changelog popup, where the update notification sends people, has an Install
+  // button next to the notes for the new version.
+  useEffect(() => {
+    const onRequest = () => {
+      void handleStartUpdate();
+    };
+    window.addEventListener(START_UPDATE_EVENT, onRequest);
+    return () => window.removeEventListener(START_UPDATE_EVENT, onRequest);
+  }, [handleStartUpdate]);
+
+  // How many releases behind, for the pill's label.
+  //
+  // A pill that reads the same at one patch behind and at twelve is why people
+  // sit still: it carries no urgency to escalate. Only shown from two behind, so
+  // the common "a patch landed today" case stays as quiet as it should be. Rust
+  // counts it with the update check; null when its release cache is cold, in
+  // which case the pill says "Update" rather than inventing a number.
+  const releasesBehindCount = updateInfo?.releases_behind ?? null;
+
   // Replaces data-tauri-drag-region: a borderless window doesn't get Windows'
   // restore-on-drag, so dragging while maximized has to unmaximize first.
   const onTitleBarMouseDown = useCallback(
@@ -632,23 +654,23 @@ const TitleBar = () => {
               // after a full sign-out, not only while the main account is in.
               const needsDropsAuth = dropsAuthed === false;
 
-              // Determine the drops-button shimmer class
+              // The drops button pulses while automation runs.
               // Silver = channel points only, Gold = drops only, Iridescent = both
-              let automationShimmerClass = '';
+              let automationTone: AutomationTone | null = null;
               let title = 'Drops & Points';
 
               if (needsDropsAuth) {
                 title = 'Sign in to enable drops & channel points';
               } else if (isBothActive) {
-                automationShimmerClass = 'automation-shimmer-iridescent';
+                automationTone = 'iridescent';
                 title = 'Drops & Points (Both Active)';
               } else if (dropProgressActive) {
-                automationShimmerClass = 'automation-shimmer-gold';
+                automationTone = 'gold';
                 title = `Drops progress: ${progressPercent}%`;
               } else if (showCompleteBadge) {
                 title = 'Drops complete — all rewards earned for this game';
               } else if (channelPointsActive) {
-                automationShimmerClass = 'automation-shimmer-silver';
+                automationTone = 'silver';
                 title = 'Drops & Points (Channel Points Active)';
               }
 
@@ -692,7 +714,13 @@ const TitleBar = () => {
                       // wrapping. Phosphor to match the badge and puzzle glyphs
                       // beside it — a heavier stroke in one slot of a cluster
                       // reads as a mistake once the others agree.
-                      <Package size={17} className={isAnyAutomationActive ? automationShimmerClass : ''} />
+                      isAnyAutomationActive && automationTone ? (
+                        <AutomationPulse tone={automationTone}>
+                          <Package size={17} />
+                        </AutomationPulse>
+                      ) : (
+                        <Package size={17} />
+                      )
                     )}
                   </button>
                 </Tooltip>
@@ -873,7 +901,11 @@ const TitleBar = () => {
                 transition={{ type: 'spring', stiffness: 520, damping: 17 }}
               >
                 <Tooltip
-                  content={`Update v${updateInfo.current_version} → v${updateInfo.latest_version}`}
+                  content={
+                    releasesBehindCount && releasesBehindCount > 1
+                      ? `Update v${updateInfo.current_version} → v${updateInfo.latest_version} · at least ${releasesBehindCount} releases behind`
+                      : `Update v${updateInfo.current_version} → v${updateInfo.latest_version}`
+                  }
                   delay={200}
                 >
                   <button
@@ -881,7 +913,11 @@ const TitleBar = () => {
                     className="update-pill flex items-center gap-1.5 h-[26px] pl-2.5 pr-3 rounded-full whitespace-nowrap"
                   >
                     <Download size={13} strokeWidth={2.5} />
-                    <span className="text-xs font-semibold tracking-wide">Update</span>
+                    <span className="text-xs font-semibold tracking-wide">
+                      {releasesBehindCount && releasesBehindCount > 1
+                        ? `${releasesBehindCount} updates`
+                        : 'Update'}
+                    </span>
                   </button>
                 </Tooltip>
               </motion.div>

@@ -42,3 +42,20 @@ export function chatterProvider(parsed: ParsedChatterSource): ProviderId {
 export function historyKey(userId: string, provider: ProviderId = 'twitch'): string {
   return provider === 'twitch' ? userId : `${provider}:${userId}`;
 }
+
+/**
+ * The key a chatter's name is indexed under.
+ *
+ * `userId` is already namespaced (`kick:676`; Twitch stays bare), so the
+ * platform is read back off it rather than tracked a second time. The name index
+ * has to carry it too: keyed by the bare name, a Kick "bob" and a Twitch "bob"
+ * overwrite each other on every message, and whoever spoke last decides which
+ * one a mention renders the cosmetics of.
+ */
+export function usernameKey(userId: string, username: string): string {
+  const name = username.toLowerCase();
+  const sep = userId.indexOf(':');
+  // A bare id is Twitch, which keeps the bare name — the same two-space
+  // convention the rest of the app uses for persisted keys.
+  return sep === -1 ? name : `${userId.slice(0, sep)}:${name}`;
+}

@@ -10,6 +10,10 @@
 //! section on its own cadence and emits `channel-state` only when the
 //! content changed; the viewer poll is one Helix call for every watched
 //! channel at once. Nothing polls for a channel nobody is looking at.
+//!
+//! The same tick reads Shared Viewership (`collab`, see `services::collaboration`):
+//! who a live channel is streaming with and the combined count, batched for
+//! every watched live channel. It sleeps while no window is on screen.
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -21,6 +25,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::RwLock;
 
 use crate::models::settings::AppState;
+use crate::services::collaboration::{self, Collaboration};
 use crate::services::twitch_service::TwitchService;
 
 pub const EVENT: &str = "channel-state";
@@ -50,6 +55,8 @@ pub struct ChannelState {
     pub points_at: Option<u64>,
     pub pinned: Vec<serde_json::Value>,
     pub pinned_at: Option<u64>,
+    pub collab: Option<Collaboration>,
+    pub collab_at: Option<u64>,
 }
 
 #[derive(Serialize, Clone)]
@@ -68,6 +75,11 @@ pub enum ChannelUpdate {
     Pinned {
         login: String,
         pinned: Vec<serde_json::Value>,
+        at: u64,
+    },
+    Collab {
+        login: String,
+        collab: Option<Collaboration>,
         at: u64,
     },
 }
@@ -264,6 +276,51 @@ async fn refresh_viewers(inner: &Inner) {
     }
     for (login, viewer_count) in changed {
         emit(&inner.app, ChannelUpdate::Viewers { login, viewer_count, at });
+    }
+    let live_logins: Vec<String> = by_login
+        .iter()
+        .filter(|(_, id)| live.contains_key(*id))
+        .map(|(login, _)| login.clone())
+        .collect();
+    refresh_collab(inner, &by_login, &live_logins).await;
+}
+
+/// Shared Viewership for every watched live channel, in batched requests.
+/// Skipped while no window is on screen, since only the UI reads it; the first
+/// tick after a window returns catches up. A channel that went offline drops
+/// its group; a failed batch keeps what its channels last had.
+async fn refresh_collab(inner: &Inner, watched: &HashMap<String, String>, live_logins: &[String]) {
+    if crate::services::window_visibility::all_hidden() {
+        return;
+    }
+    let mut fresh: HashMap<String, Option<Collaboration>> = watched
+        .keys()
+        .filter(|login| !live_logins.contains(login))
+        .map(|login| (login.clone(), None))
+        .collect();
+    let ids: Vec<String> = live_logins.iter().filter_map(|l| watched.get(l).cloned()).collect();
+    let mut found = collaboration::fetch(&ids).await;
+    for login in live_logins {
+        if let Some(collab) = watched.get(login).and_then(|id| found.remove(id)) {
+            fresh.insert(login.clone(), collab);
+        }
+    }
+    let at = now_secs();
+    let mut changed: Vec<(String, Option<Collaboration>)> = Vec::new();
+    {
+        let mut state = inner.state.write().await;
+        for (login, collab) in fresh {
+            if let Some(s) = state.get_mut(&login) {
+                if s.collab != collab {
+                    changed.push((login.clone(), collab.clone()));
+                }
+                s.collab = collab;
+                s.collab_at = Some(at);
+            }
+        }
+    }
+    for (login, collab) in changed {
+        emit(&inner.app, ChannelUpdate::Collab { login, collab, at });
     }
 }
 

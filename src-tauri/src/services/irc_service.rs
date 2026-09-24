@@ -1763,6 +1763,7 @@ impl IrcService {
                     if let Ok(json_msg) = serde_json::to_string(&chat_msg) {
                         send_to_bridge(json_msg, true).await;
                     }
+                    crate::services::reminder_service::on_message(&chat_msg);
                 }
                 enqueue_side_effect(MessageSideEffects {
                     history_key: history_key_for(&chat_msg),
@@ -4556,6 +4557,206 @@ pub fn cache_counts() -> Vec<(&'static str, Option<usize>)> {
         ("user_colors", tm(get_user_color_cache())),
         ("channel_consumers", get_channel_consumers().try_lock().ok().map(|g| g.len())),
     ]
+}
+
+/// A message the user is sending, as the composer knows it at send time.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct OwnMessage {
+    pub channel: String,
+    pub text: String,
+    /// The provisional id the row carries until Helix returns the real one.
+    pub local_id: String,
+    pub sender_id: String,
+    pub sender_login: String,
+    pub sender_display_name: String,
+    #[serde(default)]
+    pub color: String,
+    /// `name/version,...`, as USERSTATE reported them for this channel.
+    #[serde(default)]
+    pub badges: String,
+    #[serde(default)]
+    pub room_id: String,
+    #[serde(default)]
+    pub reply_to: Option<OwnReplyParent>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct OwnReplyParent {
+    pub id: String,
+    #[serde(default)]
+    pub user_id: String,
+    #[serde(default)]
+    pub login: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub body: String,
+}
+
+/// IRCv3 tag-value escaping.
+fn escape_tag_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            ';' => out.push_str("\\:"),
+            ' ' => out.push_str("\\s"),
+            '\r' => out.push_str("\\r"),
+            '\n' => out.push_str("\\n"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// The `emotes` tag Twitch would attach to `text`: each word that names one of
+/// the channel's Twitch emotes, by inclusive codepoint range, grouped by emote
+/// id in first-seen order. Twitch emotes resolve from this tag, never by name,
+/// so a row built without it would show them as text until the echo arrives.
+fn own_emotes_tag(text: &str, twitch: &[Emote]) -> String {
+    let by_name: HashMap<&str, &str> = twitch.iter().map(|e| (e.name.as_str(), e.id.as_str())).collect();
+    let mut order: Vec<&str> = Vec::new();
+    let mut ranges: HashMap<&str, Vec<String>> = HashMap::new();
+    let mut pos = 0usize;
+    for word in text.split(' ') {
+        let len = word.chars().count();
+        if let Some(id) = by_name.get(word).copied() {
+            if len > 0 {
+                if !ranges.contains_key(id) {
+                    order.push(id);
+                }
+                ranges.entry(id).or_default().push(format!("{}-{}", pos, pos + len - 1));
+            }
+        }
+        pos += len + 1;
+    }
+    order
+        .iter()
+        .map(|id| format!("{}:{}", id, ranges[id].join(",")))
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn own_message_line(m: &OwnMessage, emotes_tag: &str, timestamp_ms: i64) -> String {
+    let channel = m.channel.trim_start_matches('#').to_lowercase();
+    let reply = match &m.reply_to {
+        Some(r) if !r.user_id.is_empty() || !r.login.is_empty() => format!(
+            "reply-parent-msg-id={};reply-parent-user-id={};reply-parent-user-login={};reply-parent-display-name={};reply-parent-msg-body={};",
+            escape_tag_value(&r.id),
+            escape_tag_value(&r.user_id),
+            escape_tag_value(&r.login),
+            escape_tag_value(&r.display_name),
+            escape_tag_value(&r.body),
+        ),
+        Some(r) => format!("reply-parent-msg-id={};", escape_tag_value(&r.id)),
+        None => String::new(),
+    };
+    let login = m.sender_login.to_lowercase();
+    format!(
+        "@badge-info=;badges={};color={};display-name={};emotes={};first-msg=0;flags=;id={};mod=0;{}returning-chatter=0;room-id={};subscriber=0;tmi-sent-ts={};turbo=0;user-id={};user-type= :{login}!{login}@{login}.tmi.twitch.tv PRIVMSG #{channel} :{}",
+        escape_tag_value(&m.badges),
+        escape_tag_value(&m.color),
+        escape_tag_value(&m.sender_display_name),
+        emotes_tag,
+        escape_tag_value(&m.local_id),
+        reply,
+        escape_tag_value(&m.room_id),
+        timestamp_ms,
+        escape_tag_value(&m.sender_id),
+        m.text,
+    )
+}
+
+impl IrcService {
+    /// Whether this Twitch channel is joined (or being joined) on the IRC
+    /// connection.
+    pub async fn is_joined(login: &str) -> bool {
+        get_current_channels().lock().await.contains(&login.to_lowercase())
+    }
+
+    /// The row for a message the user is sending, built exactly as a received
+    /// one is (segments, emotes, reply info, rule stamps), so the composer
+    /// shows it at once and the echo later upgrades it in place by id. Nothing
+    /// is recorded: the echo is what goes into history.
+    pub async fn build_own_message(m: OwnMessage) -> Option<ChatMessage> {
+        let key = m.channel.trim_start_matches('#').to_lowercase();
+        let emotes_tag = {
+            let map = get_channel_emotes().lock().await;
+            map.get(&key).map(|set| own_emotes_tag(&m.text, &set.twitch)).unwrap_or_default()
+        };
+        let line = own_message_line(&m, &emotes_tag, chrono::Utc::now().timestamp_millis());
+        let mut msg = Self::parse_privmsg(&line)?;
+        msg.layout = LayoutResult {
+            height: 60.0,
+            width: 0.0,
+            has_reply: msg.metadata.reply_info.is_some(),
+            is_first_message: false,
+        };
+        // Stamps only (mentions, highlights); your own message is never dropped.
+        let rules = ChatRules::snapshot();
+        let _ = ChatRules::evaluate(&mut msg, &rules);
+        Some(msg)
+    }
+}
+
+#[cfg(test)]
+mod own_message_tests {
+    use super::*;
+
+    fn twitch_emote(id: &str, name: &str) -> Emote {
+        serde_json::from_value(json!({ "id": id, "name": name, "url": "", "provider": "twitch" }))
+            .expect("minimal emote")
+    }
+
+    fn own(text: &str, reply_to: Option<OwnReplyParent>) -> OwnMessage {
+        OwnMessage {
+            channel: "#Chan".into(),
+            text: text.into(),
+            local_id: "local-1".into(),
+            sender_id: "42".into(),
+            sender_login: "Me".into(),
+            sender_display_name: "Me Me".into(),
+            color: "#ff0000".into(),
+            badges: "subscriber/12".into(),
+            room_id: "7".into(),
+            reply_to,
+        }
+    }
+
+    #[test]
+    fn emote_tags_match_what_twitch_would_send() {
+        let set = vec![twitch_emote("25", "Kappa"), twitch_emote("88", "PogChamp")];
+        assert_eq!(own_emotes_tag("Kappa hi Kappa PogChamp", &set), "25:0-4,9-13/88:15-22");
+        assert_eq!(own_emotes_tag("héllo Kappa", &set), "25:6-10");
+        assert_eq!(own_emotes_tag("no emotes here", &set), "");
+    }
+
+    #[test]
+    fn an_own_reply_carries_the_senders_id_not_the_parents() {
+        let parent = OwnReplyParent {
+            id: "p1".into(),
+            user_id: "99".into(),
+            login: "them".into(),
+            display_name: "Them".into(),
+            body: "hello there; friend".into(),
+        };
+        let line = own_message_line(&own("@them hi", Some(parent)), "", 1000);
+        let msg = IrcService::parse_privmsg(&line).expect("parses");
+        assert_eq!(msg.user_id, "42");
+        assert_eq!(msg.id, "local-1");
+        // The redundant leading @mention is stripped, as on the echo.
+        assert_eq!(msg.content, "hi");
+        let reply = msg.metadata.reply_info.expect("reply info");
+        assert_eq!(reply.parent_user_id, "99");
+    }
+
+    #[test]
+    fn tag_values_are_escaped() {
+        assert_eq!(escape_tag_value("a b;c\\d"), "a\\sb\\:c\\\\d");
+        let line = own_message_line(&own("hi", None), "", 1000);
+        assert!(line.contains("display-name=Me\\sMe;"));
+        assert!(line.ends_with("PRIVMSG #chan :hi"));
+    }
 }
 
 #[cfg(test)]

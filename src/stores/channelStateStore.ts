@@ -1,6 +1,7 @@
 // Per-channel chat state owned by Rust (src-tauri/src/services/channel_state.rs):
-// viewer count, channel points (balance, custom name/icon, an available bonus
-// claim) and pinned messages for every Twitch channel some window has chat
+// viewer count, Shared Viewership (who the channel is streaming with and the
+// combined count), channel points (balance, custom name/icon, an available
+// bonus claim) and pinned messages for every Twitch channel some window has chat
 // open on. A window registers a watch per channel; Rust polls each section on
 // its own cadence (viewers as one Helix batch for every watched channel) and
 // emits `channel-state` only when the content changed. This store is the
@@ -38,6 +39,10 @@ export const useChannelStateStore = create<ChannelStateStore>((set, get) => ({
         next.pinned = update.pinned;
         next.pinned_at = update.at;
         break;
+      case 'collab':
+        next.collab = update.collab;
+        next.collab_at = update.at;
+        break;
     }
     const channels = new Map(get().channels);
     channels.set(login, next);
@@ -55,6 +60,12 @@ export const useChannelStateStore = create<ChannelStateStore>((set, get) => ({
   },
 }));
 
+// How many watchers in THIS window hold each channel. Rust counts watches
+// across windows, but this window's copy of the state must outlive every one
+// of its own watchers, not just the first to leave: a chat pane and the
+// MultiChat viewer total can watch the same channel.
+const localWatchers = new Map<string, number>();
+
 let listening = false;
 function ensureListener() {
   if (listening) return;
@@ -69,9 +80,11 @@ function ensureListener() {
 export async function watchChannel(login: string, channelId: string): Promise<void> {
   ensureListener();
   const key = login.toLowerCase();
+  localWatchers.set(key, (localWatchers.get(key) ?? 0) + 1);
   try {
     const state = await invoke<ChannelState>('watch_channel_state', { login: key, channelId });
-    useChannelStateStore.getState().set(state);
+    // Unwatched again while this was in flight: nothing here wants it now.
+    if (localWatchers.has(key)) useChannelStateStore.getState().set(state);
   } catch (e) {
     Logger.warn('[ChannelState] watch failed:', e);
   }
@@ -79,7 +92,13 @@ export async function watchChannel(login: string, channelId: string): Promise<vo
 
 export async function unwatchChannel(login: string): Promise<void> {
   const key = login.toLowerCase();
-  useChannelStateStore.getState().remove(key);
+  const left = (localWatchers.get(key) ?? 1) - 1;
+  if (left > 0) {
+    localWatchers.set(key, left);
+  } else {
+    localWatchers.delete(key);
+    useChannelStateStore.getState().remove(key);
+  }
   try {
     await invoke('unwatch_channel_state', { login: key });
   } catch {

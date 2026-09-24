@@ -1,12 +1,14 @@
-// Tauri cross-window settings sync.
+// Cross-window settings sync.
 //
-// Each WebviewWindow loads settings into its own zustand store at mount, then
-// only writes to disk on `updateSettings`. Without a broadcast step, a save in
-// the main app never reaches an open MultiChat window (and vice versa). This
-// module bridges that gap with a single Tauri event that every window
-// subscribes to and refreshes its store on.
+// Rust holds the canonical settings. A window writes only the top-level keys it
+// changed (`patchSettings`), and Rust announces every write with one event that
+// every window listens for and refreshes its store on. A window never sends its
+// whole settings object: one holding an older copy would revert whatever another
+// window had saved in the meantime.
 
-import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import type { Settings } from '../types';
 import { Logger } from './logger';
 
 export const SETTINGS_UPDATED_EVENT = 'streamnook-settings-updated';
@@ -20,17 +22,31 @@ export const SENDER_ID =
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 export interface SettingsUpdatedPayload {
-  source: string;
+  source: string | null;
+  keys: string[];
 }
 
-// Fire-and-forget broadcast. Never throws — emit may legitimately fail in
-// non-Tauri contexts (e.g. unit tests).
-export async function emitSettingsUpdated(): Promise<void> {
-  try {
-    await emit(SETTINGS_UPDATED_EVENT, { source: SENDER_ID } satisfies SettingsUpdatedPayload);
-  } catch (err) {
-    Logger.warn('[SettingsBroadcast] emit failed (non-fatal):', err);
+/** The top-level settings keys to write, each with its new value. `null`
+ *  clears a key back to its default (an `undefined` would not survive JSON). */
+export type SettingsPatch = { [K in keyof Settings]?: Settings[K] | null };
+
+/** Write these keys, and only these, to the canonical settings. */
+export function patchSettings(patch: SettingsPatch): Promise<void> {
+  if (Object.keys(patch).length === 0) return Promise.resolve();
+  return invoke('patch_settings', { patch, source: SENDER_ID });
+}
+
+/** The keys whose values differ between two settings objects, as a patch. */
+export function settingsDiff(before: Settings, after: Settings): SettingsPatch {
+  const patch: Record<string, unknown> = {};
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  for (const key of keys) {
+    const was = (before as unknown as Record<string, unknown>)[key];
+    const now = (after as unknown as Record<string, unknown>)[key];
+    if (was === now) continue;
+    if (JSON.stringify(was) !== JSON.stringify(now)) patch[key] = now ?? null;
   }
+  return patch as SettingsPatch;
 }
 
 // Subscribe a callback to settings-updated events from OTHER windows. Returns

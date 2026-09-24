@@ -28,6 +28,7 @@ import { useSnippetStore } from '../stores/snippetStore';
 import { WATCHABLE_PROVIDERS, providerLabel, type ProviderId } from '../types/providers';
 import { usePluginUiRegistry } from '../plugins-ui/registry';
 import { Logger } from './logger';
+import { requestChangelog } from './changelogEvents';
 import { getBuiltInSnippets, type Snippet } from './commandPaletteCopypastas';
 import type { TwitchStream, TwitchVideo, TwitchClip } from '../types';
 import type { ChannelAboutData, SocialMediaLink } from '../types/panels';
@@ -313,10 +314,10 @@ function buildQuickActions(): PaletteItem[] {
     {
       id: 'qa.openWhatsNew',
       section: 'Quick Actions',
-      title: "What's New",
-      subtitle: 'Release log + component bumps',
-      keywords: 'whatsnew updates changelog release notes',
-      run: () => useAppStore.getState().openSettings("What's New"),
+      title: 'Changelog',
+      subtitle: 'Release notes for every version, and updates',
+      keywords: 'changelog whats new whatsnew updates update release notes version',
+      run: () => requestChangelog(),
     },
     {
       id: 'qa.openPaletteWiki',
@@ -845,6 +846,7 @@ const SETTINGS_CATALOG: SettingsEntry[] = [
   { tab: 'Chat', section: 'Emote Tab Completion', sectionId: 'settings-section-emote-tab-completion', keywords: 'emote tab completion autocomplete carousel kappa cycle shift starts contains match include chat users' },
   { tab: 'Chat', section: 'Render Style', keywords: 'render style deleted messages strikethrough dimmed hidden shared chat paint mentions inline compact emote tooltips 7tv update notices smooth scroll resume message buffer scrollback ffz emote effects modifier wide flip rainbow shake frankerfacez bttv betterttv emote modifiers cursed party rotate zero space giant emotes gigantify gigantified power-up powerup big huge large' },
   { tab: 'Chat', section: 'Chat Events', sectionId: 'settings-section-chat-events', label: 'Start a poll or prediction', keywords: 'poll prediction create start new make run builder composer outcomes choices duration channel points vote bet broadcaster streamer' },
+  { tab: 'Chat', section: 'Combined Chat', sectionId: 'settings-section-combined-chat', keywords: 'combined combine chat across platforms multi platform multiplatform cross platform merged unified blend blended youtube kick twitch tiktok together one feed multistream multistreamer same streamer link linked channels platform badge source mark suggest links' },
   { tab: 'Chat', section: 'Hidden Users & Bots', sectionId: 'settings-section-chat-filters', keywords: 'hide hidden users bots filter block blocklist mute ignore streamelements nightbot moobot fossabot bot spam gamble flood chat filters per channel everywhere global unhide' },
   { tab: 'Chat', section: 'Repeated Messages', sectionId: 'settings-section-repeated-messages', keywords: 'repeated messages repeat counter duplicate copypasta spam wave combo collapse fold group x2 x3 x12 count same message emote flood dedupe condense' },
   { tab: 'Chat', section: 'Repeated Messages', sectionId: 'settings-section-repeated-messages', label: 'Repeat counter colour and threshold', keywords: 'repeat counter colour color threshold window seconds sensitivity match exact nearly identical mods vips streamer exempt moderator' },
@@ -881,6 +883,7 @@ const SETTINGS_CATALOG: SettingsEntry[] = [
   { tab: 'Overlay', section: 'Appearance', keywords: 'overlay appearance text color shadow legibility timestamps transparent solid background opacity scene size blur spread strength outline stroke drop shadow contrast readable' },
   { tab: 'Overlay', section: 'Chatters', label: 'Profile pictures', keywords: 'overlay profile pictures avatars pfp youtube tiktok chatter photo show hide toggle' },
   { tab: 'Overlay', section: 'Chatters', label: '@ before usernames', keywords: 'overlay at sign @ username handle youtube strip remove show hide toggle' },
+  { tab: 'Overlay', section: 'Chatters', label: 'Readable name colors', keywords: 'overlay name color readable dark names brighten lighten contrast legibility navy maroon username color adjust' },
   { tab: 'Overlay', section: 'Messages', label: 'Replies', keywords: 'overlay replying to reply context line thread mention at username old twitch style show hide toggle remove off' },
   { tab: 'Overlay', section: 'Messages', label: 'Links', keywords: 'overlay link url hyperlink blue accent color underline plain body text no underline style' },
   { tab: 'Overlay', section: 'Emotes & Badges', label: '7TV personal emotes', keywords: 'overlay 7tv personal emotes subscriber own set every channel unknown random emote not added show hide toggle' },
@@ -897,6 +900,8 @@ const SETTINGS_CATALOG: SettingsEntry[] = [
   { tab: 'Overlay', section: 'Messages', label: 'Max lines per message', keywords: 'overlay max lines truncate clamp long message copypasta ellipsis wall of text limit' },
   { tab: 'Overlay', section: 'Messages', label: 'Remove messages after', keywords: 'overlay remove expire auto clear stale old messages seconds lifetime hide after inactivity' },
   { tab: 'Overlay', section: 'Messages', label: 'Restore chat on reload', keywords: 'overlay restore keep clear chat on reload obs refresh restart stream start buffer persist blank empty last messages' },
+  { tab: 'Overlay', section: 'Messages', label: 'Recent chat on start', keywords: 'overlay recent chat history backlog previous messages load history start fill empty twitch' },
+  { tab: 'Overlay', section: 'Messages', label: 'Mod commands', keywords: 'overlay mod commands chat command refreshoverlay clearoverlay reload refresh clear moderator broadcaster obs' },
   { tab: 'Overlay', section: 'Filters', label: 'Hide messages containing', keywords: 'overlay hide messages containing words phrases profanity filter banned blocklist spoiler swear' },
   { tab: 'Overlay', section: 'Events', label: 'Outline color', keywords: 'overlay event outline color fixed ring custom platform default recolor' },
   { tab: 'Overlay', section: 'Events', label: 'Event outline animation', keywords: 'overlay event outline animate animation sheen pulse chase sweep shimmer border flash spark ring one shot repeat loop every 5 seconds' },
@@ -955,9 +960,7 @@ const SETTINGS_CATALOG: SettingsEntry[] = [
   { tab: 'Support', keywords: 'support help community discord join invite feature request updates' },
   { tab: 'Support', section: 'Community Discord', keywords: 'community discord join invite server help feature request' },
   { tab: 'Support', section: 'Diagnostics', keywords: 'diagnostics diagnostic log logs logging verbose debug error reporting bug report troubleshoot' },
-
-  // What's New
-  { tab: "What's New", keywords: 'whats new changelog release notes updates' },
+  { tab: 'Support', section: 'What your account records', keywords: 'privacy data tracking telemetry analytics collect collected what do you collect records recorded stats watch time channels emotes version platform linked accounts profile accolades' },
 
   // Analytics (admin)
   { tab: 'Analytics', keywords: 'analytics dashboard users online stats supabase' },

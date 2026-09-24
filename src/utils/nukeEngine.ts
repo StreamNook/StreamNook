@@ -69,7 +69,11 @@ function parsePattern(patternStr: string): { regex: RegExp; source: string } | {
   const m = patternStr.match(/^\/(.+)\/([gimuy]*)$/);
   if (m) {
     try {
-      return { regex: new RegExp(m[1], m[2] || 'i'), source: patternStr };
+      // `g` and `y` make `.test()` resume from the last match (lastIndex), so a
+      // pattern reused across messages would skip real matches. Matching is
+      // per message; neither flag means anything here.
+      const flags = m[2].replace(/[gy]/g, '');
+      return { regex: new RegExp(m[1], flags || 'i'), source: patternStr };
     } catch (err: unknown) {
       return { error: `invalid regex: ${err instanceof Error ? err.message : String(err)}` };
     }

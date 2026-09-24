@@ -1,11 +1,15 @@
 import { create } from 'zustand';
+import { CHAT_PROVIDERS, type ProviderId } from '../types/providers';
+import { usernameKey } from '../utils/chatterIdentity';
+import { addMemberAliases, chatKeysForMember, memberIdFor } from '../utils/memberIdentity';
+import { resolveMemberIds } from '../services/memberAliasService';
 import {
   getCosmeticsFromMemoryCache,
   getCosmeticsWithFallback,
   isUserCosmeticsHardFailed,
   subscribeToCosmetics,
 } from '../services/cosmeticsCache';
-import { isStreamNookUser, getProfilePrefs, whenAtmospheresReady, subscribeAtmospheresVersion, subscribeStreamNookRegistryVersion, subscribeToProfileThemeChanges, getOwnedCosmeticSlugs, isCosmeticsRegistryLoaded } from '../services/supabaseService';
+import { notifyMemberIdentityChanged, isStreamNookUser, getProfilePrefs, whenAtmospheresReady, subscribeAtmospheresVersion, subscribeStreamNookRegistryVersion, subscribeToProfileThemeChanges, getOwnedCosmeticSlugs, isCosmeticsRegistryLoaded } from '../services/supabaseService';
 import { resolveEntitlement } from '../services/cosmetics/ownership';
 import { getAtmosphere } from '../services/atmospheres';
 import { parseCologneTheme, type CologneCosmetics } from '../services/cologneEvent';
@@ -69,6 +73,8 @@ interface ChatUserStore {
   /** Map of userId -> ChatUser for O(1) lookups */
   users: Map<string, ChatUser>;
   /** Map of lowercase username -> userId for fast username lookups */
+  /** Keyed by `usernameKey`, NOT by the bare name: two platforms can both have
+   *  a chatter called "bob" and they are different people. */
   usernameToId: Map<string, string>;
   
   /**
@@ -82,7 +88,7 @@ interface ChatUserStore {
   ) => void;
   
   /** Get a user by username (case-insensitive) */
-  getUserByUsername: (username: string) => ChatUser | undefined;
+  getUserByUsername: (username: string, provider?: ProviderId) => ChatUser | undefined;
   
   /** Get users matching a search query (prefix match on username/displayName) */
   getMatchingUsers: (query: string, limit?: number) => ChatUser[];
@@ -158,7 +164,11 @@ function scheduleIdentityFlush() {
         const current = newUsers.get(uid);
         if (!current) continue;
         newUsers.set(uid, { ...current, ...identity, lastSeen: Date.now() });
-        newUsernameToId.set(identity.username.toLowerCase(), uid);
+        // Through `usernameKey`, like every other writer of this index. A bare
+        // lowercase name here would point a Twitch lookup at a Kick chatter on
+        // the first rename or /color they send, and `evictStaleUsers` compares
+        // the namespaced key, so the bad entry would also outlive its user.
+        newUsernameToId.set(usernameKey(uid, identity.username), uid);
       }
       return { users: newUsers, usernameToId: newUsernameToId };
     });
@@ -235,6 +245,12 @@ function mapResolvedBadges(badges: ResolvedBadge[]): ThirdPartyBadge[] {
 // per-chatter network cost, so it stays an opt-in member identity badge.
 function ensureThirdPartyResolved(userId: string | undefined) {
   if (!userId) return;
+  // Every provider behind this is keyed on a Twitch user id: FFZ, BTTV,
+  // Chatterino, Homies, Moltorino, Chatsen, Chatty and DankChat all publish
+  // Twitch ids and nothing else, and the Rust index is built from them. A
+  // namespaced key can therefore only ever miss, so a Kick or YouTube chatter
+  // used to cost one IPC round trip per session to be told nothing.
+  if (userId.includes(':')) return;
 
   if (isStreamNookUser(userId)) {
     const cached = getResolvedIdentityFromCache(userId);
@@ -331,6 +347,86 @@ const atmosphereInFlight = new Set<string>();
 const lastResolvedAt = new Map<string, number>();
 const RESOLVE_TTL_MS = 120_000;
 
+/**
+ * TWO key spaces meet in this block, and mixing them is silent.
+ *
+ *   - Everything that dedupes a FETCH (`atmosphereCache`, `atmosphereInFlight`,
+ *     `lastResolvedAt`, `cologneCache`, `ownAtmosphereAccounts`) is keyed by the
+ *     MEMBER id, because what it caches is a property of the person. One member
+ *     seen on Twitch and on Kick is one lookup, not two.
+ *   - Everything that feeds a store flush (`pending*Updates`) is keyed by the
+ *     CHAT key, because that is what the row is filed under. A member on screen
+ *     as `kick:12345` has no row under their Twitch id.
+ *
+ * So the push helpers take both. For a Twitch chatter the two are the same
+ * string, which is what keeps every Twitch path byte-identical to before.
+ */
+
+// ── Cross-platform identity ──────────────────────────────────────────────────
+// A Kick or YouTube chatter is only known to be a StreamNook member by way of
+// the claim they made on their own account, and that lookup is a network call.
+// It is batched on the same principle as the 7TV cosmetics above: chatters
+// arrive in bursts, so one request per wave rather than one per person.
+//
+// Asked ONCE per chatter. A "nobody" answer is cached in Rust rather than here,
+// because it has to outlive this store's own eviction — most chatters are not
+// members, and re-asking for each of them on every sighting is the one thing
+// that would make this expensive.
+const aliasQueue = new Set<string>();
+const aliasAsked = new Set<string>();
+let aliasFlushScheduled = false;
+/** Long enough to collect a join burst, short enough that a badge appearing is
+ *  not something the reader notices arriving late. */
+const ALIAS_BATCH_MS = 200;
+
+function queueAliasLookup(chatKey: string) {
+  // Bare = Twitch, which needs no translation at all.
+  if (!chatKey.includes(':')) return;
+  if (aliasAsked.has(chatKey)) return;
+  aliasAsked.add(chatKey);
+  aliasQueue.add(chatKey);
+  if (aliasFlushScheduled) return;
+  aliasFlushScheduled = true;
+  setTimeout(() => {
+    aliasFlushScheduled = false;
+    const keys = [...aliasQueue];
+    aliasQueue.clear();
+    if (keys.length === 0) return;
+    void resolveMemberIds(keys).then(({ resolved, unresolved }) => {
+      // Not answered is not the same as "no claim". These go back into the pool
+      // so the chatter's next message asks again; without this, one failed
+      // request would leave a member looking like a stranger for the session.
+      for (const k of unresolved) aliasAsked.delete(k);
+      const entries = Object.entries(resolved);
+      if (entries.length === 0) return;
+      addMemberAliases(entries);
+      // Everything that already decided these chatters were non-members has to
+      // look again. The registry-version bridge at the bottom of this file
+      // re-resolves every tracked user, which is exactly the recovery this
+      // needs, so it is reused rather than duplicated.
+      notifyMemberIdentityChanged();
+    });
+  }, ALIAS_BATCH_MS);
+}
+
+/**
+ * Ask which member, if any, is behind this chat identity.
+ *
+ * For surfaces that need an answer about somebody who may not have been seen in
+ * chat through `addUser` — a profile card opened from a mention, say. Shares the
+ * same batch and the same once-per-chatter guard, so calling it for someone
+ * already asked about costs nothing.
+ */
+export function requestMemberAlias(chatKey: string): void {
+  queueAliasLookup(chatKey);
+}
+
+/** Every chat key a member's cosmetics should paint. Their bare Twitch id is a
+ *  chat key in its own right; the alias map holds only the other platforms. */
+function chatTargetsFor(memberId: string): string[] {
+  return [memberId, ...chatKeysForMember(memberId)];
+}
+
 function scheduleAtmosphereFlush() {
   if (pendingAtmosphereFlushScheduled) return;
   pendingAtmosphereFlushScheduled = true;
@@ -371,7 +467,11 @@ function scheduleAtmosphereFlush() {
  * atmospheres into `user_cosmetics`: that converts a forgeable accolade into a
  * permanent ownership row and defeats this gate entirely.
  */
-export function mayWearAtmosphere(userId: string, id: string | null): boolean {
+/** `memberId` is a TWITCH user id, never a chat key: every ownership record this
+ *  reads is filed under one, so a `kick:` key here reads as "owns nothing" and
+ *  blanks a paying member's atmosphere on their own row. */
+export function mayWearAtmosphere(memberId: string, id: string | null): boolean {
+  const userId = memberId;
   if (!id) return true; // clearing is always allowed
   // Our own accounts paint immediately. The server already gated the write, and
   // gating here would make a member's own pick stop previewing.
@@ -392,12 +492,12 @@ export function mayWearAtmosphere(userId: string, id: string | null): boolean {
   return owned.has(baseId) || everSubscribed;
 }
 
-function pushAtmosphere(userId: string, id: string | null) {
-  const effective = mayWearAtmosphere(userId, id) ? id : null;
-  atmosphereCache.set(userId, effective);
-  pendingAtmosphereUpdates.set(userId, effective);
+function pushAtmosphere(memberId: string, chatKey: string, id: string | null) {
+  const effective = mayWearAtmosphere(memberId, id) ? id : null;
+  atmosphereCache.set(memberId, effective);
+  pendingAtmosphereUpdates.set(chatKey, effective);
   scheduleAtmosphereFlush();
-  if (ownAtmosphereAccounts.has(userId)) persistOwnAtmosphere(userId);
+  if (ownAtmosphereAccounts.has(memberId)) persistOwnAtmosphere(memberId);
 }
 
 // Disk persistence of OUR OWN accounts' resolved Atmosphere id (primary + every
@@ -440,7 +540,11 @@ export function registerOwnAtmospheres(userIds: string[]): void {
   for (const userId of userIds) {
     if (!userId || ownAtmosphereAccounts.has(userId)) continue; // already registered/seeded
     ownAtmosphereAccounts.add(userId);
-    if (userId in store) pushAtmosphere(userId, store[userId]);
+    // Seeded under our own Twitch key, which is both the member id and the chat
+    // key for a Twitch row. Our rows on other platforms have no alias yet at
+    // cold launch; the cache this fills is per member, so the first Kick message
+    // we send paints from it immediately rather than waiting on a fetch.
+    if (userId in store) pushAtmosphere(userId, userId, store[userId]);
   }
 }
 
@@ -449,29 +553,48 @@ export function registerOwnAtmospheres(userIds: string[]): void {
 // live cross-user theme bridge, so all three stay consistent. Cologne is its own
 // custom chrome (its add-ons are read from the theme id), not a gradient
 // Atmosphere, so it clears atmosphereId and vice-versa.
-function applyResolvedTheme(userId: string, profileTheme: string | null | undefined) {
+function applyResolvedTheme(
+  memberId: string,
+  chatKey: string,
+  profileTheme: string | null | undefined,
+) {
   const cologne = parseCologneTheme(profileTheme);
   if (cologne) {
-    pushAtmosphere(userId, null);
-    pushCologne(userId, cologne);
+    pushAtmosphere(memberId, chatKey, null);
+    pushCologne(memberId, chatKey, cologne);
   } else {
     const atm = getAtmosphere(profileTheme);
-    pushAtmosphere(userId, atm ? atm.id : null);
-    pushCologne(userId, null);
+    pushAtmosphere(memberId, chatKey, atm ? atm.id : null);
+    pushCologne(memberId, chatKey, null);
   }
-  lastResolvedAt.set(userId, Date.now());
+  lastResolvedAt.set(memberId, Date.now());
 }
 
-export function ensureAtmosphereResolved(userId: string) {
+/** Paint a member's theme onto every platform they are currently on screen as.
+ *  Live theme changes arrive keyed by Twitch id, so without this they would look
+ *  for a row under that id and miss a member visible only as `kick:12345`. */
+function applyResolvedThemeForMember(memberId: string, profileTheme: string | null | undefined) {
+  for (const chatKey of chatTargetsFor(memberId)) {
+    applyResolvedTheme(memberId, chatKey, profileTheme);
+  }
+}
+
+export function ensureAtmosphereResolved(chatKey: string) {
+  if (!chatKey) return;
+  // Which member, if any, is behind this chat identity. Null for a Kick or
+  // YouTube chatter nobody has claimed, which is most of them.
+  const userId = memberIdFor(chatKey);
   if (!userId || !isStreamNookUser(userId)) return;
   // Cached/known value (incl. one set by an explicit change before the user was
   // in the store): push it to the store for this (re)sighting. The Cologne add-ons
   // are cached alongside the atmosphere (both come from the same selected theme).
   if (atmosphereCache.has(userId)) {
-    // Serve the cached value now for an instant, flicker-free paint.
-    pendingAtmosphereUpdates.set(userId, atmosphereCache.get(userId)!);
+    // Serve the cached value now for an instant, flicker-free paint. The cache is
+    // per MEMBER and the row is per CHAT IDENTITY, so a member already resolved
+    // on Twitch paints instantly the first time they speak on Kick.
+    pendingAtmosphereUpdates.set(chatKey, atmosphereCache.get(userId)!);
     scheduleAtmosphereFlush();
-    pendingCologneUpdates.set(userId, cologneCache.get(userId) ?? null);
+    pendingCologneUpdates.set(chatKey, cologneCache.get(userId) ?? null);
     scheduleCologneFlush();
     // Within the TTL, trust the cache (the live bridge keeps it fresh). Past it,
     // fall through to a background re-fetch as a backstop for a missed live event.
@@ -487,7 +610,7 @@ export function ensureAtmosphereResolved(userId: string) {
       // Wait for the atmosphere catalog so we never resolve a real theme to null
       // just because the catalog had not loaded yet.
       await whenAtmospheresReady();
-      applyResolvedTheme(userId, prefs.profileTheme);
+      applyResolvedTheme(userId, chatKey, prefs.profileTheme);
     } catch {
       /* leave cached so a later sighting retries */
     } finally {
@@ -499,8 +622,11 @@ export function ensureAtmosphereResolved(userId: string) {
 // Set a member's theme to a KNOWN value now (they just changed it), so their
 // messages update in real time with no Supabase read. Used for our own accounts
 // on an explicit pick (the value is already resolved by the caller).
-export function refreshAtmosphere(userId: string, atmosphereId: string | null) {
-  applyResolvedTheme(userId, atmosphereId);
+export function refreshAtmosphere(memberId: string, atmosphereId: string | null) {
+  // Fanned out, because our own rows exist under a chat key per platform: on
+  // Kick that is `kick:<id>`, so painting only the Twitch id would leave our own
+  // Kick messages showing the atmosphere we just changed away from.
+  applyResolvedThemeForMember(memberId, atmosphereId);
 }
 
 // ── CS2 Major Cologne event chrome ───────────────────────────────────────────
@@ -532,9 +658,9 @@ function scheduleCologneFlush() {
   });
 }
 
-function pushCologne(userId: string, cosmetics: CologneCosmetics | null) {
-  cologneCache.set(userId, cosmetics);
-  pendingCologneUpdates.set(userId, cosmetics);
+function pushCologne(memberId: string, chatKey: string, cosmetics: CologneCosmetics | null) {
+  cologneCache.set(memberId, cosmetics);
+  pendingCologneUpdates.set(chatKey, cosmetics);
   scheduleCologneFlush();
 }
 
@@ -582,7 +708,7 @@ function evictStaleUsers(
     const victim = sorted[i];
     users.delete(victim.userId);
     thirdPartyNonMemberResolved.delete(victim.userId);
-    const unameKey = victim.username.toLowerCase();
+    const unameKey = usernameKey(victim.userId, victim.username);
     if (usernameToId.get(unameKey) === victim.userId) {
       usernameToId.delete(unameKey);
     }
@@ -596,15 +722,22 @@ function evictStaleUsers(
     // that ensureAtmosphereResolved adds and removes in a finally, and deleting
     // it from outside lets a concurrent sighting kick a duplicate lookup.
     if (IS_MOBILE) {
-      atmosphereCache.delete(victim.userId);
-      lastResolvedAt.delete(victim.userId);
-      cologneCache.delete(victim.userId);
+      // By MEMBER id, which is what these three are keyed by. Deleting by the
+      // chat key would be a no-op for every Kick and YouTube chatter, and these
+      // maps are exactly the unbounded ones this block exists to bound.
+      const victimMember = memberIdFor(victim.userId);
+      if (victimMember) {
+        atmosphereCache.delete(victimMember);
+        lastResolvedAt.delete(victimMember);
+        cologneCache.delete(victimMember);
+      }
     }
   }
 }
 
 export const useChatUserStore = create<ChatUserStore>((set, get) => ({
   users: new Map(),
+
   usernameToId: new Map(),
   
   addUser: (user, _channelContext) => {
@@ -651,7 +784,7 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
         atmosphereId: existingUser?.atmosphereId,
         cologne: existingUser?.cologne,
       });
-      newUsernameToId.set(user.username.toLowerCase(), user.userId);
+      newUsernameToId.set(usernameKey(user.userId, user.username), user.userId);
       // First-sight is the only path that grows the map, so cap it here.
       evictStaleUsers(newUsers, newUsernameToId);
       return { users: newUsers, usernameToId: newUsernameToId };
@@ -675,11 +808,15 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
       enqueueCosmeticUpdate(user.userId, selectedPaint, selectedBadge);
     };
 
-    if (user.userId.startsWith('youtube:') || user.userId.startsWith('tiktok:')) {
-      // YouTube + TikTok chatters don't resolve 7TV cosmetics — we decorate them
-      // with their own native data (profile picture + platform badges) instead, so
-      // there's nothing to fetch. Mark them resolved-with-none so the fast path
-      // skips re-attempting on every message.
+    if (user.userId.startsWith('tiktok:')) {
+      // 7TV has no TikTok platform: its enum is TWITCH, DISCORD, GOOGLE and KICK.
+      // A `tiktok:` id would fall through to the TWITCH arm of cosmeticPlatform
+      // and be sent as a Twitch user id, which can never match. Mark them
+      // resolved-with-none so the fast path skips re-attempting on every message;
+      // they are decorated with their own native data instead.
+      //
+      // YouTube is NOT in this branch: 7TV knows it as GOOGLE and resolves a raw
+      // UC channel id, so those chatters wear their real paints and badges.
       enqueueCosmeticUpdate(user.userId, null, null);
     } else {
       const cachedCosmetics = getCosmeticsFromMemoryCache(user.userId);
@@ -699,17 +836,34 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
       }
     }
 
+    // Which member, if any, is behind a non-Twitch chat identity. Batched, and
+    // asked before the two resolvers below so the answer is usually in hand by
+    // the time they are re-run on the registry bump.
+    queueAliasLookup(user.userId);
     // Resolve this member's curated third-party badges once (no-op for non-members).
     ensureThirdPartyResolved(user.userId);
     // Resolve this member's selected Atmosphere / Cologne chrome once (no-op for non-members).
     ensureAtmosphereResolved(user.userId);
   },
   
-  getUserByUsername: (username: string) => {
+  getUserByUsername: (username: string, provider?: ProviderId) => {
     const { usernameToId, users } = get();
-    const userId = usernameToId.get(username.toLowerCase());
-    if (userId) {
-      return users.get(userId);
+    const name = username.toLowerCase();
+    // Given the platform, this is one exact lookup — which is what a mention
+    // inside a message wants, since `@bob` in Twitch chat means the Twitch bob.
+    if (provider) {
+      const id = usernameToId.get(provider === 'twitch' ? name : `${provider}:${name}`);
+      return id ? users.get(id) : undefined;
+    }
+    // Without one the caller is asking "is anyone here called this" (the
+    // spellchecker). Twitch first, then the other chat platforms: a handful of
+    // map lookups, never a scan of the user map.
+    const id = usernameToId.get(name);
+    if (id) return users.get(id);
+    for (const p of CHAT_PROVIDERS) {
+      if (p === 'twitch') continue;
+      const other = usernameToId.get(`${p}:${name}`);
+      if (other) return users.get(other);
     }
     return undefined;
   },
@@ -746,6 +900,10 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
   },
   
   clearUsers: () => {
+    // Sized against the user map it shadows. The ANSWERS live in Rust and
+    // deliberately survive this, so a channel switch costs no repeat lookups.
+    aliasAsked.clear();
+    aliasQueue.clear();
     // The third-party badge data lives inside the user records being wiped here,
     // so drop the resolved-guard too: a chatter reappearing in the next channel
     // re-resolves cleanly instead of being skipped with no badges.
@@ -766,9 +924,11 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
 subscribeAtmospheresVersion(() => {
   const users = useChatUserStore.getState().users;
   for (const uid of users.keys()) {
-    if (atmosphereCache.get(uid) === null) {
-      atmosphereCache.delete(uid);
-      atmosphereInFlight.delete(uid);
+    // `uid` is a chat key; the cache is keyed by member.
+    const memberId = memberIdFor(uid);
+    if (memberId && atmosphereCache.get(memberId) === null) {
+      atmosphereCache.delete(memberId);
+      atmosphereInFlight.delete(memberId);
       ensureAtmosphereResolved(uid);
     }
   }
@@ -783,8 +943,12 @@ subscribeAtmospheresVersion(() => {
 subscribeToProfileThemeChanges((userId, profileTheme) => {
   if (!userId || !isStreamNookUser(userId)) return;
   const state = useChatUserStore.getState();
-  if (!state.users.has(userId) && !atmosphereCache.has(userId)) return;
-  void whenAtmospheresReady().then(() => applyResolvedTheme(userId, profileTheme));
+  // `userId` here is a TWITCH id, but the member may be on screen only under a
+  // `kick:` or `youtube:` key, so ask which rows they actually occupy rather
+  // than looking for one filed under their Twitch id.
+  const onScreen = chatTargetsFor(userId).some((k) => state.users.has(k));
+  if (!onScreen && !atmosphereCache.has(userId)) return;
+  void whenAtmospheresReady().then(() => applyResolvedThemeForMember(userId, profileTheme));
 });
 
 // Reactive bridge from the shared cosmetics cache into the per-user chat
@@ -834,7 +998,10 @@ subscribeResolvedIdentity((userId) => {
 subscribeStreamNookRegistryVersion(() => {
   const users = useChatUserStore.getState().users;
   for (const uid of users.keys()) {
-    if (isStreamNookUser(uid)) {
+    // Through the resolver: a Kick chatter is only ever known to be a member by
+    // way of their claim, so testing the raw key here would keep every
+    // cross-platform member classified as a non-member forever.
+    if (isStreamNookUser(memberIdFor(uid))) {
       ensureThirdPartyResolved(uid);
       ensureAtmosphereResolved(uid);
     }

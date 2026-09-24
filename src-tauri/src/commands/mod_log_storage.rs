@@ -10,14 +10,16 @@ pub async fn load_mod_logs(
     Ok(ModLogStorageService::load_channel(&app_handle, &channel))
 }
 
-/// Append (or upgrade, by id) one mod-log entry for a channel.
+/// Record one moderation action and return the entry to show: the same action
+/// already reported (by the other feed, or by another window) resolves to one
+/// entry, so every window shows and stores it once.
 #[tauri::command]
-pub async fn append_mod_log(
+pub async fn record_mod_log(
     app_handle: AppHandle,
     channel: String,
     entry: serde_json::Value,
-) -> Result<(), String> {
-    ModLogStorageService::append(&app_handle, &channel, entry)
+) -> Result<serde_json::Value, String> {
+    ModLogStorageService::record(&app_handle, &channel, entry)
 }
 
 /// Clear a channel's persisted mod-log entries.

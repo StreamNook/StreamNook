@@ -10,7 +10,6 @@ import assert from 'node:assert/strict';
 import {
   tokenizeForSpellcheck,
   getSpellcheckTarget,
-  adjacentTranspositions,
 } from './chatInputWord.ts';
 
 const words = (text: string): string[] =>
@@ -76,16 +75,4 @@ test('a single-word selection wins over the caret', () => {
   });
   // A selection spanning several words has no single target.
   assert.equal(getSpellcheckTarget('i recieve teh', 2, 13), null);
-});
-
-test('generates every adjacent transposition', () => {
-  // The dictionary never proposes these itself, so "the" only reaches the menu
-  // if this produces it.
-  assert.deepEqual(adjacentTranspositions('teh'), ['eth', 'the']);
-  assert.deepEqual(adjacentTranspositions('adn'), ['dan', 'and']);
-  // Case rides along, so a capitalised typo yields a capitalised fix.
-  assert.ok(adjacentTranspositions('Teh').includes('The'));
-  // Nothing to swap.
-  assert.deepEqual(adjacentTranspositions('a'), []);
-  assert.deepEqual(adjacentTranspositions(''), []);
 });

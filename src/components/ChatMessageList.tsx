@@ -38,6 +38,9 @@ interface MessageRowProps {
   emotes: EmoteSet | null;
   isModerator?: boolean;
   broadcasterId?: string;
+  /** The platform being watched, so a row from one of the streamer's OTHER
+   *  platforms can be told apart from this channel's own. */
+  homeProvider?: ProviderId;
   onUsernameClick: ChatMessageListProps['onUsernameClick'];
   onReplyClick: ChatMessageListProps['onReplyClick'];
   onMessageCopy?: ChatMessageListProps['onMessageCopy'];
@@ -71,6 +74,7 @@ const messageRowAreEqual = (prev: MessageRowProps, next: MessageRowProps): boole
   if (prev.emotes !== next.emotes) return false;
   if (prev.isModerator !== next.isModerator) return false;
   if (prev.broadcasterId !== next.broadcasterId) return false;
+  if (prev.homeProvider !== next.homeProvider) return false;
   return true;
 };
 
@@ -87,6 +91,7 @@ const MessageRow = memo(function MessageRow({
   emotes,
   isModerator,
   broadcasterId,
+  homeProvider,
   onUsernameClick,
   onReplyClick,
   onMessageCopy,
@@ -126,6 +131,7 @@ const MessageRow = memo(function MessageRow({
       emotes={emotes}
       isModerator={isModerator}
       broadcasterId={broadcasterId}
+      homeProvider={homeProvider}
     />
   );
   return (
@@ -195,10 +201,16 @@ interface ChatMessageListProps {
   getMessageId: (message: string | BackendChatMessage) => string | null;
   isModerator?: boolean;
   broadcasterId?: string;
+  /** The platform being watched, so a row from one of the streamer's OTHER
+   *  platforms can be told apart from this channel's own. */
+  homeProvider?: ProviderId;
   /** Blended view: mark each row with its source platform (a provider-colored
    *  left stripe), so a merged multi-source feed shows where each message is from.
    *  Off everywhere else, so normal single-source chat is untouched. */
   showSource?: boolean;
+  /** Something above this list already cleared the floating header, so it must
+   *  not reserve that space a second time. */
+  headerSpaceReserved?: boolean;
 }
 
 /**
@@ -232,7 +244,9 @@ const ChatMessageList = memo(function ChatMessageList({
   getMessageId,
   isModerator,
   broadcasterId,
+  homeProvider,
   showSource,
+  headerSpaceReserved,
 }: ChatMessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   // Inner messages-wrapper div. We observe its size with a ResizeObserver so
@@ -598,12 +612,18 @@ const ChatMessageList = memo(function ChatMessageList({
         '--sn-badge-scale': Math.max(0.5, Math.min(2.5, chatDesign?.badge_scale ?? 1)),
       } as React.CSSProperties}
     >
-      {/* Messages container with native virtualization - pt-10 for header.
+      {/* Messages container with native virtualization. The top padding clears
+          the chat header, which floats OVER this column rather than sitting
+          above it, so the space has to be reserved here — inside the scroll
+          content — or the oldest message hides behind it at the top of
+          scrollback. When something above already reserved it (the
+          combined-chat bar sits below the header and pushes this list down),
+          reserving it twice leaves a dead gap instead.
           data-entrance drives a CSS-only arrival animation on live rows
           (history rows carry .is-backfill and are excluded by the selector). */}
       <div
         ref={contentRef}
-        className={`flex flex-col min-h-full justify-end pt-10${chatDesign?.alternating_backgrounds ? ' chat-striped' : ''}`}
+        className={`flex flex-col min-h-full justify-end ${headerSpaceReserved ? '' : 'pt-10'}${chatDesign?.alternating_backgrounds ? ' chat-striped' : ''}`}
         data-entrance={chatDesign?.message_entrance && chatDesign.message_entrance !== 'none' ? chatDesign.message_entrance : undefined}
       >
         {messages.map((message, index) => {
@@ -631,7 +651,7 @@ const ChatMessageList = memo(function ChatMessageList({
           // for the per-row Atmosphere lookup in MessageRow below.
           const userId = typeof message !== 'string'
             ? message.user_id
-            : message.match(/user-id=([^;]+)/)?.[1];
+            : message.match(/(?:^@|;)user-id=([^;]+)/)?.[1];
 
           // Check if message is deleted/moderated
           let moderationContext: ModerationContext | null = null;
@@ -697,6 +717,7 @@ const ChatMessageList = memo(function ChatMessageList({
               emotes={emotes}
               isModerator={isModerator}
               broadcasterId={broadcasterId}
+              homeProvider={homeProvider}
               onUsernameClick={onUsernameClick}
               onReplyClick={onReplyClick}
               onMessageCopy={onMessageCopy}

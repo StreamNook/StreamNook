@@ -112,36 +112,87 @@ pub fn flush_settings_now() -> Result<(), String> {
     }
 }
 
+/// Every window listens for this and re-reads the keys it names. Emitted by
+/// Rust after each write, so a save reaches every window whichever one made it.
+pub const SETTINGS_UPDATED_EVENT: &str = "streamnook-settings-updated";
+
+#[derive(Clone, serde::Serialize)]
+struct SettingsUpdated {
+    /// The writing window's id, so it can skip re-reading what it just wrote.
+    source: Option<String>,
+    keys: Vec<String>,
+}
+
+/// The settings a window changed, applied onto the canonical copy.
+///
+/// Only the top-level keys named in `patch` are replaced; everything else is
+/// what Rust already holds. Windows used to send their whole settings object,
+/// so a window holding an older copy (a MultiChat popout, the MultiNook store)
+/// silently reverted keys another window had just saved. A `null` value clears
+/// the key back to its default.
 #[tauri::command]
-pub async fn save_settings(
-    mut settings: Settings,
+pub async fn patch_settings(
+    app: AppHandle,
+    patch: serde_json::Map<String, serde_json::Value>,
+    source: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    {
-        let mut state_settings = state.settings.lock().unwrap();
-        // `provider_follows` is backend-owned for the same reason `drops` is
-        // (below): it is written by the follow commands and read by the
-        // who's-live poller, so the frontend's copy can be stale. Worse, it is
-        // `#[serde(default)]`, so a frontend save that omits the key would
-        // silently deserialize to an empty list and wipe every follow.
-        settings.provider_follows = state_settings.provider_follows.clone();
-        // `drops` is owned by the drops service: it's written only through
-        // update_drops_settings (the plugin's Autopilot panel writes through that
-        // path too), which keeps state.settings.drops authoritative. A frontend
-        // settings save carries the AppStore's copy of drops, which is loaded once
-        // at startup and never refreshed when the plugin panel changes it, so it
-        // goes stale. Letting it through here clobbers automation on/off and the
-        // priority targets the moment any unrelated setting is saved (e.g. a
-        // notifications toggle). Keep the backend's copy instead.
-        settings.drops = state_settings.drops.clone();
-        *state_settings = settings.clone();
+    if patch.is_empty() {
+        return Ok(());
     }
-    // Recompile chat rules if their groups changed (hash-gated, cheap).
-    crate::services::chat_rules::ChatRules::refresh(&settings);
-    crate::services::streamer_mode::StreamerMode::refresh(&settings);
+    let keys: Vec<String> = patch.keys().cloned().collect();
+    let (settings, favorites_changed) = {
+        let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
+        let next = apply_settings_patch(&state_settings, patch)?;
+        let favorites_changed = state_settings.favorite_streamers != next.favorite_streamers;
+        *state_settings = next.clone();
+        (next, favorites_changed)
+    };
+    after_settings_change(&settings, favorites_changed);
+    write_settings_to_disk(&settings)?;
+    let _ = app.emit(SETTINGS_UPDATED_EVENT, SettingsUpdated { source, keys });
+    Ok(())
+}
 
-    // Save to our custom location in the same directory as cache
-    write_settings_to_disk(&settings)
+fn apply_settings_patch(
+    current: &Settings,
+    patch: serde_json::Map<String, serde_json::Value>,
+) -> Result<Settings, String> {
+    let mut value = serde_json::to_value(current).map_err(|e| e.to_string())?;
+    let fields = value
+        .as_object_mut()
+        .ok_or_else(|| "settings did not serialize to an object".to_string())?;
+    for (key, v) in patch {
+        if v.is_null() {
+            fields.remove(&key);
+        } else {
+            fields.insert(key, v);
+        }
+    }
+    let mut next: Settings =
+        serde_json::from_value(value).map_err(|e| format!("Invalid settings change: {e}"))?;
+    // A window's copy of a backend-owned field is stale at best: `provider_follows`
+    // is written by the follow commands, `drops` by the drops service, and
+    // `channel_links` by the link service. A patch never overrides them.
+    next.adopt_backend_owned(current);
+    Ok(next)
+}
+
+/// What every settings change has to refresh, whichever path wrote it.
+fn after_settings_change(settings: &Settings, favorites_changed: bool) {
+    // Recompile chat rules if their groups changed (hash-gated, cheap).
+    crate::services::chat_rules::ChatRules::refresh(settings);
+    crate::services::streamer_mode::StreamerMode::refresh(settings);
+    // Spawns or aborts the gift-sub poll, so the toggle takes effect without a
+    // restart and "off" costs no task at all.
+    crate::services::onsite_notifications::refresh(settings);
+    crate::services::reminder_service::refresh(settings);
+    // Home's unified Discover list leaves out live favourites, so a heart
+    // toggled anywhere changes it. Unhearting in particular is announced by
+    // nothing else: the favourites sweep only notices on its next pass.
+    if favorites_changed {
+        crate::services::home_snapshot::note_discover_inputs_changed();
+    }
 }
 
 /// Top-level keys tied to *this machine's* session, never written into a backup
@@ -250,7 +301,25 @@ pub async fn import_settings(path: String, state: State<'_, AppState>) -> Result
 pub async fn send_test_notification(
     app_handle: AppHandle,
     _state: State<'_, AppState>,
+    kind: Option<String>,
 ) -> Result<(), String> {
+    // Dev builds can preview a specific notification type instead of the
+    // go-live mock. Gift subs are the reason this exists: they arrive days
+    // apart, so there is otherwise no way to look at the row on demand.
+    // Release builds ignore `kind` entirely and always send the go-live mock.
+    #[cfg(debug_assertions)]
+    if kind.as_deref() == Some("twitch_reward") {
+        return crate::services::onsite_notifications::emit_reward_preview(&app_handle)
+            .await
+            .map_err(|e| e.to_string());
+    }
+    #[cfg(debug_assertions)]
+    if kind.as_deref() == Some("gift_sub") {
+        return crate::services::onsite_notifications::emit_preview(&app_handle)
+            .await
+            .map_err(|e| e.to_string());
+    }
+    let _ = &kind;
     // Mock data for the test notification
     let mock_streamer_name = "xQc";
     let mock_streamer_login = "xqc";
@@ -367,9 +436,7 @@ pub async fn send_test_notification(
     };
 
     // Emit the notification event to the frontend (for in-app notification)
-    app_handle
-        .emit("streamer-went-live", &notification)
-        .map_err(|e| format!("Failed to emit test notification: {}", e))?;
+    crate::services::live_announce::announce(&app_handle, notification);
 
     debug!("[Test Notification] Sent in-app notification");
 
@@ -418,7 +485,25 @@ pub struct ReleaseNotes {
     pub published_at: String,
 }
 
+/// Every recent release's notes, parsed and ready to draw. `version` is only
+/// used when GitHub cannot be reached and nothing is cached.
 #[tauri::command]
+pub async fn get_changelog(
+    version: Option<String>,
+) -> Result<crate::services::changelog::Changelog, String> {
+    crate::services::changelog::load(version).await
+}
+
+/// The Android build's release notes, parsed. None while nothing is published.
+#[tauri::command]
+pub async fn get_android_changelog(
+) -> Result<Option<crate::services::changelog::AndroidRelease>, String> {
+    crate::services::changelog::load_android().await
+}
+
+/// One version's section of CHANGELOG.md. The changelog's last resort when
+/// GitHub's release list cannot be reached and nothing is cached; called from
+/// `services::changelog`, not from the webview.
 pub async fn get_release_notes(version: Option<String>) -> Result<ReleaseNotes, String> {
     let client = crate::services::http::client().clone();
 
@@ -613,4 +698,48 @@ start "" "{}"
     });
 
     Ok(version.to_string())
+}
+
+#[cfg(test)]
+mod patch_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn patch(v: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+        v.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn a_patch_changes_only_the_keys_it_names() {
+        let mut current = Settings::default();
+        current.extra.insert("multi_nook_presets".into(), json!([{ "id": "a" }]));
+        let next = apply_settings_patch(&current, patch(json!({ "multi_nook_chat_hidden": true }))).unwrap();
+        assert_eq!(next.extra.get("multi_nook_presets"), Some(&json!([{ "id": "a" }])));
+        assert!(next.multi_nook_chat_hidden);
+    }
+
+    #[test]
+    fn null_clears_a_key() {
+        let mut current = Settings::default();
+        current.extra.insert("multi_nook_active_preset_id".into(), json!("p1"));
+        let next =
+            apply_settings_patch(&current, patch(json!({ "multi_nook_active_preset_id": null }))).unwrap();
+        assert!(!next.extra.contains_key("multi_nook_active_preset_id"));
+    }
+
+    #[test]
+    fn a_patch_cannot_override_backend_owned_fields() {
+        let mut current = Settings::default();
+        current.provider_follows =
+            serde_json::from_value(json!([{ "provider": "kick", "channel": "xqc" }])).unwrap();
+        let next = apply_settings_patch(&current, patch(json!({ "provider_follows": [] }))).unwrap();
+        assert_eq!(next.provider_follows.len(), 1);
+        assert_eq!(next.provider_follows[0].channel, "xqc");
+    }
+
+    #[test]
+    fn a_malformed_value_is_refused_not_half_applied() {
+        let current = Settings::default();
+        assert!(apply_settings_patch(&current, patch(json!({ "favorite_streamers": "nope" }))).is_err());
+    }
 }

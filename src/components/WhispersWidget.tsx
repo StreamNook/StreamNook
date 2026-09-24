@@ -10,41 +10,10 @@ import { Tooltip } from './ui/Tooltip';
 import SpellcheckUnderlay from './chat/SpellcheckUnderlay';
 import { useSpellcheck } from '../hooks/useSpellcheck';
 import { warmSpellcheck } from '../utils/spellcheck';
-import type { WhisperConversation, Whisper, UserInfo } from '../types';
+import type { WhisperConversation, Whisper, WhisperUpdate, UserInfo } from '../types';
 
 import { Logger } from '../utils/logger';
-interface WhisperFromBackend {
-    from_user_id: string;
-    from_user_login: string;
-    from_user_name: string;
-    to_user_id: string;
-    to_user_login: string;
-    to_user_name: string;
-    whisper_id: string;
-    text: string;
-}
-
-interface ExportedMessage {
-    id: string;
-    fromUserId?: string;
-    fromUserLogin?: string;
-    fromUserName?: string;
-    content: string;
-    sentAt: string;
-    isSent?: boolean;
-}
-
-interface ExportedConversation {
-    user: {
-        id?: string;
-        login: string;
-        displayName: string;
-        profileImageURL?: string;
-    };
-    messages: ExportedMessage[];
-    lastMessageAt?: string;
-}
-
+import { playNotificationSound as playGatedNotificationSound } from '../utils/notificationSound';
 interface WhispersWidgetProps {
     isOpen: boolean;
     onClose: () => void;
@@ -54,35 +23,6 @@ type SortOption = 'recent' | 'name' | 'unread';
 
 const WHISPERS_LOCALSTORAGE_KEY = 'streamnook-whisper-conversations';
 const WHISPERS_MIGRATED_KEY = 'streamnook-whispers-migrated-to-disk';
-
-// Parse various date formats from imported whispers
-const parseWhisperDate = (dateStr: string): number => {
-    if (!dateStr) return Date.now();
-
-    // Try standard Date parsing first
-    let timestamp = new Date(dateStr).getTime();
-    if (!isNaN(timestamp)) return timestamp;
-
-    // Try parsing locale format like "5/31/2021, 8:30:39 PM PDT"
-    // Remove timezone abbreviation and try again
-    const withoutTz = dateStr.replace(/\s+[A-Z]{2,4}$/, '');
-    timestamp = new Date(withoutTz).getTime();
-    if (!isNaN(timestamp)) return timestamp;
-
-    // Fallback: try to extract date components manually
-    const match = dateStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s*(\d{1,2}):(\d{2}):?(\d{2})?\s*(AM|PM)?/i);
-    if (match) {
-        const [, month, day, year, hours, minutes, seconds, ampm] = match;
-        let h = parseInt(hours);
-        if (ampm) {
-            if (ampm.toUpperCase() === 'PM' && h < 12) h += 12;
-            if (ampm.toUpperCase() === 'AM' && h === 12) h = 0;
-        }
-        return new Date(parseInt(year), parseInt(month) - 1, parseInt(day), h, parseInt(minutes), parseInt(seconds || '0')).getTime();
-    }
-
-    return Date.now();
-};
 
 // Emoji categories for the picker
 const emojiCategories: Record<string, string[]> = {
@@ -112,17 +52,6 @@ const objectToMap = (obj: Record<string, WhisperConversation>): Map<string, Whis
         map.set(key, value);
     });
     return map;
-};
-
-// Save conversations to disk via Tauri backend (scoped to the owning account)
-const saveConversationsToDisk = async (conversations: Map<string, WhisperConversation>, ownerId: string) => {
-    try {
-        const conversationsObj = mapToObject(conversations);
-        await invoke('save_whisper_storage', { ownerId, conversations: conversationsObj });
-        Logger.debug('[Whispers] Saved to disk:', conversations.size, 'conversations');
-    } catch (error) {
-        Logger.warn('[Whispers] Failed to save to disk:', error);
-    }
 };
 
 // Load conversations from disk via Tauri backend (scoped to the owning account)
@@ -200,9 +129,33 @@ const migrateFromLocalStorage = async (ownerId: string): Promise<Map<string, Whi
     return loadConversationsFromDisk(ownerId);
 };
 
+/** Fold one Rust-side change into the panel's map. A conversation that moved
+ *  from a login key to an id carries its messages over; Rust keeps messages in
+ *  time order, and so does this. */
+const applyWhisperUpdate = (
+    prev: Map<string, WhisperConversation>,
+    update: WhisperUpdate,
+): Map<string, WhisperConversation> => {
+    const next = new Map(prev);
+    const moved = update.replaced_key ? next.get(update.replaced_key) : undefined;
+    if (update.replaced_key) next.delete(update.replaced_key);
+    const current = next.get(update.key);
+
+    const byId = new Map<string, Whisper>();
+    for (const m of [...(current?.messages ?? []), ...(moved?.messages ?? [])]) byId.set(m.id, m);
+    if (update.message) byId.set(update.message.id, update.message);
+    const messages = [...byId.values()].sort((a, b) => a.timestamp - b.timestamp);
+
+    next.set(update.key, {
+        ...update.meta,
+        profile_image_url: update.meta.profile_image_url ?? undefined,
+        messages,
+    });
+    return next;
+};
+
 const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
     const [conversations, setConversations] = useState<Map<string, WhisperConversation>>(new Map());
-    const [isLoading, setIsLoading] = useState(true);
     const [activeConversation, setActiveConversation] = useState<string | null>(null);
     const { whisperTargetUser, clearWhisperTargetUser, whisperImportState } = useAppStore();
     const previousActiveConversationRef = useRef<string | null>(null);
@@ -238,142 +191,35 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
     const spellUnderlayRef = useRef<HTMLDivElement>(null);
     const spellRanges = useSpellcheck(message, { enabled: spellcheckEnabled, emoteKey: null });
 
-    // Listen for auto-import whisper data event
+    // Many conversations changed at once in Rust (an import or a refresh):
+    // reload the archive, keeping any draft conversation that has no messages
+    // yet (those exist only here until their first send).
+    const reloadConversations = useCallback(async () => {
+        const ownerId = currentUser?.user_id;
+        if (!ownerId) return;
+        const loaded = await loadConversationsFromDisk(ownerId);
+        setConversations((prev) => {
+            for (const [key, conv] of prev) {
+                if (conv.messages.length === 0 && !loaded.has(key)) loaded.set(key, conv);
+            }
+            return loaded;
+        });
+    }, [currentUser?.user_id]);
+
     useEffect(() => {
         let unlisten: (() => void) | undefined;
         let isMounted = true;
-
-        const setupListener = async () => {
-            // Listen for the actual data object (emitted directly from backend)
-            const unlistenFn = await listen<{ version: number; exportedAt: string; myUserId: string | null; myUsername: string | null; conversations: ExportedConversation[] }>('whisper-data-ready', async (event) => {
-                const data = event.payload;
-                Logger.debug('[Whispers] Auto-import data received directly:', data.conversations?.length, 'conversations');
-
-                try {
-                    if (!data.version || !data.conversations || !Array.isArray(data.conversations)) {
-                        throw new Error('Invalid data format.');
-                    }
-
-                    Logger.debug(`[Whispers] Auto-importing ${data.conversations.length} conversations...`);
-
-                    const myUsername = currentUser?.login || currentUser?.username || data.myUsername || '';
-                    const myUserId = currentUser?.user_id || data.myUserId || '';
-                    const myDisplayName = currentUser?.display_name || currentUser?.username || data.myUsername || '';
-
-                    const newConversations = new Map(conversations);
-
-                    for (const conv of data.conversations) {
-                        const userId = conv.user.id || conv.user.login.toLowerCase();
-                        const existing = newConversations.get(userId);
-                        const importedMessages: Whisper[] = conv.messages.map((msg: ExportedMessage) => {
-                            const isSent = msg.isSent === true || (msg.fromUserName && myUsername && msg.fromUserName.toLowerCase() === myUsername.toLowerCase());
-                            return {
-                                id: msg.id,
-                                from_user_id: msg.fromUserId || (isSent ? myUserId : userId),
-                                from_user_login: msg.fromUserLogin || (isSent ? myUsername : conv.user.login),
-                                from_user_name: msg.fromUserName || (isSent ? myDisplayName : conv.user.displayName),
-                                to_user_id: isSent ? userId : myUserId,
-                                to_user_login: isSent ? conv.user.login : myUsername,
-                                to_user_name: isSent ? conv.user.displayName : myDisplayName,
-                                message: msg.content,
-                                timestamp: parseWhisperDate(msg.sentAt),
-                                is_sent: Boolean(isSent),
-                            };
-                        });
-
-                        if (existing) {
-                            const existingIds = new Set(existing.messages.map(m => m.id));
-                            const uniqueNewMessages = importedMessages.filter(m => !existingIds.has(m.id));
-                            existing.messages = [...existing.messages, ...uniqueNewMessages].sort((a, b) => a.timestamp - b.timestamp);
-                            if (!existing.profile_image_url && conv.user.profileImageURL) {
-                                existing.profile_image_url = conv.user.profileImageURL;
-                            }
-                            if (existing.messages.length > 0) {
-                                existing.last_message_timestamp = existing.messages[existing.messages.length - 1].timestamp;
-                            }
-                        } else {
-                            newConversations.set(userId, {
-                                user_id: userId,
-                                user_login: conv.user.login,
-                                user_name: conv.user.displayName,
-                                profile_image_url: conv.user.profileImageURL || undefined,
-                                messages: importedMessages.sort((a, b) => a.timestamp - b.timestamp),
-                                last_message_timestamp: conv.lastMessageAt ? parseWhisperDate(conv.lastMessageAt) : Date.now(),
-                                unread_count: 0,
-                            });
-                        }
-                    }
-
-                    setConversations(newConversations);
-                    const totalMessages = data.conversations.reduce((sum: number, conv: ExportedConversation) => sum + conv.messages.length, 0);
-                    Logger.debug(`[Whispers] Auto-imported ${totalMessages} messages from ${data.conversations.length} conversations`);
-                    setImportProgress(`✓ Auto-imported ${totalMessages} messages`);
-
-                    // Resolve user IDs and fetch profile pictures for all imported users
-                    // This ensures conversations use numeric Twitch user IDs as keys (not usernames)
-                    const usersToResolve = Array.from(newConversations.entries()).filter(([key, c]) => {
-                        // Need to resolve if: key is not numeric OR missing profile image
-                        const needsIdResolution = !/^\d+$/.test(key);
-                        return needsIdResolution || !c.profile_image_url;
-                    });
-
-                    if (usersToResolve.length > 0) {
-                        Logger.debug(`[Whispers] Resolving ${usersToResolve.length} user IDs and profile pictures...`);
-                        setImportProgress(`Resolving ${usersToResolve.length} user IDs...`);
-
-                        const resolvedConversations = new Map(newConversations);
-
-                        for (const [mapKey, conv] of usersToResolve) {
-                            try {
-                                // Use search_whisper_user to look up by login (username)
-                                const result = await invoke<[string, string, string, string | null] | null>('search_whisper_user', { username: conv.user_login });
-                                if (result && result[0]) {
-                                    const [realUserId, , , profileUrl] = result;
-                                    Logger.debug(`[Whispers] Resolved ${conv.user_login}: ${mapKey} -> ${realUserId}`);
-
-                                    // Update the conversation with resolved data
-                                    conv.user_id = realUserId;
-                                    if (profileUrl) {
-                                        conv.profile_image_url = profileUrl;
-                                    }
-
-                                    // If the key was a username (not numeric), migrate to numeric ID
-                                    if (!/^\d+$/.test(mapKey)) {
-                                        resolvedConversations.delete(mapKey);
-                                        resolvedConversations.set(realUserId, conv);
-                                        Logger.debug(`[Whispers] Migrated key from "${mapKey}" to "${realUserId}"`);
-                                    }
-                                }
-                            } catch (err) {
-                                Logger.warn(`[Whispers] Failed to resolve user ${conv.user_login}:`, err);
-                            }
-                        }
-
-                        // Update state with resolved conversations
-                        setConversations(resolvedConversations);
-                        Logger.debug('[Whispers] User ID resolution complete');
-                    }
-
-                    setImportProgress(`✓ Auto-imported ${totalMessages} messages`);
-                    setTimeout(() => setImportProgress(''), 3000);
-                } catch (err) {
-                    Logger.error('[Whispers] Failed to process auto-import data:', err);
-                }
-            });
-
-            if (isMounted) unlisten = unlistenFn;
-            else unlistenFn();
-        };
-
-        setupListener();
-
+        void listen<string>('whisper-archive-changed', (event) => {
+            if (event.payload === currentUser?.user_id) void reloadConversations();
+        }).then((fn) => {
+            if (isMounted) unlisten = fn;
+            else fn();
+        });
         return () => {
             isMounted = false;
-            if (unlisten) {
-                unlisten();
-            }
+            unlisten?.();
         };
-    }, [currentUser, conversations]);
+    }, [currentUser?.user_id, reloadConversations]);
 
     // Handle initial target user from profile card whisper button
     useEffect(() => {
@@ -416,45 +262,29 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
         setActiveConversation(null);
         if (!ownerId) {
             setConversations(new Map());
-            setIsLoading(false);
             return;
         }
         let cancelled = false;
         const loadConversations = async () => {
-            setIsLoading(true);
             try {
                 const loaded = await migrateFromLocalStorage(ownerId);
                 if (!cancelled) setConversations(loaded);
             } catch (error) {
                 Logger.error('[Whispers] Failed to load conversations:', error);
-            } finally {
-                if (!cancelled) setIsLoading(false);
             }
         };
         loadConversations();
         return () => { cancelled = true; };
     }, [currentUser?.user_id]);
 
-    // Save conversations to disk whenever they change (debounced), under the
-    // signed-in account. Never writes while signed out.
-    useEffect(() => {
-        if (isLoading) return; // Don't save during initial load
-        const ownerId = currentUser?.user_id;
-        if (!ownerId) return;
-        if (conversations.size > 0) {
-            saveConversationsToDisk(conversations, ownerId);
-        }
-    }, [conversations, isLoading, currentUser?.user_id]);
-
     // Pull the latest messages for existing conversations straight from Twitch
     // (web session token + whisper GQL) and merge anything new into history by
     // timestamp — e.g. replies you sent from the Twitch site or your phone that
     // StreamNook never saw. Cheap: one recent page per conversation.
     const handleRefresh = async () => {
-        const myUserId = currentUser?.user_id;
-        if (!myUserId || isRefreshing) return;
-        const userIds = Array.from(conversations.keys()).filter((id) => /^\d+$/.test(id));
-        if (userIds.length === 0) {
+        const ownerId = currentUser?.user_id;
+        if (!ownerId || isRefreshing) return;
+        if (conversations.size === 0) {
             setImportProgress('No conversations to refresh');
             setTimeout(() => setImportProgress(''), 2500);
             return;
@@ -462,45 +292,7 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
         setIsRefreshing(true);
         setImportProgress('Refreshing messages…');
         try {
-            const byUser = await invoke<Record<string, Array<{ id: string; from_user_id: string; from_user_name: string; content: string; sent_at: string }>>>(
-                'refresh_whisper_history',
-                { userIds }
-            );
-            const myLogin = currentUser?.login || currentUser?.username || '';
-            const myName = currentUser?.display_name || currentUser?.username || '';
-            const merged = new Map(conversations);
-            let added = 0;
-            for (const [otherId, msgs] of Object.entries(byUser)) {
-                const conv = merged.get(otherId);
-                if (!conv) continue;
-                const existingIds = new Set(conv.messages.map((m) => m.id));
-                const fresh: Whisper[] = [];
-                for (const m of msgs) {
-                    if (existingIds.has(m.id)) continue;
-                    const isSent = m.from_user_id === myUserId;
-                    fresh.push({
-                        id: m.id,
-                        from_user_id: m.from_user_id,
-                        from_user_login: isSent ? myLogin : conv.user_login,
-                        from_user_name: m.from_user_name || (isSent ? myName : conv.user_name),
-                        to_user_id: isSent ? otherId : myUserId,
-                        to_user_login: isSent ? conv.user_login : myLogin,
-                        to_user_name: isSent ? conv.user_name : myName,
-                        message: m.content,
-                        timestamp: parseWhisperDate(m.sent_at),
-                        is_sent: isSent,
-                    });
-                }
-                if (fresh.length === 0) continue;
-                const newMessages = [...conv.messages, ...fresh].sort((a, b) => a.timestamp - b.timestamp);
-                merged.set(otherId, {
-                    ...conv,
-                    messages: newMessages,
-                    last_message_timestamp: newMessages[newMessages.length - 1].timestamp,
-                });
-                added += fresh.length;
-            }
-            if (added > 0) setConversations(merged); // scoped save effect persists it
+            const added = await invoke<number>('whisper_refresh', { ownerId });
             setImportProgress(added > 0 ? `✓ Added ${added} new message${added === 1 ? '' : 's'}` : '✓ Up to date');
             setTimeout(() => setImportProgress(''), 3000);
         } catch (e) {
@@ -526,141 +318,43 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
-    // Play notification sound
+    // Play notification sound. Shared gate, so a whisper that also raises a
+    // notification-center entry pings once rather than twice.
     const playNotificationSound = useCallback(() => {
-        try {
-            const audioContext = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
-            const oscillator = audioContext.createOscillator();
-            const gainNode = audioContext.createGain();
-            oscillator.connect(gainNode);
-            gainNode.connect(audioContext.destination);
-            oscillator.type = 'sine';
-            oscillator.frequency.setValueAtTime(520, audioContext.currentTime);
-            oscillator.frequency.exponentialRampToValueAtTime(380, audioContext.currentTime + 0.12);
-            gainNode.gain.setValueAtTime(0, audioContext.currentTime);
-            gainNode.gain.linearRampToValueAtTime(0.07, audioContext.currentTime + 0.02);
-            gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.25);
-            oscillator.start(audioContext.currentTime);
-            oscillator.stop(audioContext.currentTime + 0.25);
-        } catch (err) {
-            Logger.warn('Could not play notification sound:', err);
-        }
+        playGatedNotificationSound('whisper');
     }, []);
 
-    // Listen for incoming whispers
+    // Whispers are recorded by Rust as they arrive (sent ones too); each change
+    // lands here as the one conversation it touched.
     useEffect(() => {
         let isMounted = true;
         let unlistenFn: (() => void) | undefined;
-
-        const setupListener = async () => {
-            const unlisten = await listen<WhisperFromBackend>('whisper-received', async (event) => {
-                const data = event.payload;
-                if (settings.live_notifications?.play_sound) {
+        void listen<WhisperUpdate>('whisper-conversation-updated', (event) => {
+            const update = event.payload;
+            if (update.owner_id !== currentUser?.user_id) return;
+            if (update.message && !update.message.is_sent && settings.live_notifications?.play_sound) {
                 playNotificationSound();
             }
-            let profileImageUrl: string | undefined;
-            try {
-                const userInfo = await invoke<UserInfo>('get_user_by_id', { userId: data.from_user_id });
-                profileImageUrl = userInfo.profile_image_url;
-            } catch {
-                // Ignore
+            setConversations((prev) => applyWhisperUpdate(prev, update));
+            if (update.replaced_key) {
+                setActiveConversation((active) => (active === update.replaced_key ? update.key : active));
             }
-            const whisperMessage: Whisper = {
-                id: data.whisper_id,
-                from_user_id: data.from_user_id,
-                from_user_login: data.from_user_login,
-                from_user_name: data.from_user_name,
-                to_user_id: data.to_user_id,
-                to_user_login: data.to_user_login,
-                to_user_name: data.to_user_name,
-                message: data.text,
-                timestamp: Date.now(),
-                is_sent: false,
-            };
-            setConversations(prev => {
-                const newConversations = new Map(prev);
-
-                // First try to find by numeric user ID
-                let existing = newConversations.get(data.from_user_id);
-                let existingKey = data.from_user_id;
-
-                // If not found, check if there's a conversation keyed by username (from imported data)
-                // This handles the case where imported conversations use username as key
-                if (!existing) {
-                    const loginLower = data.from_user_login.toLowerCase();
-                    // Check for conversation keyed by login
-                    if (newConversations.has(loginLower)) {
-                        existing = newConversations.get(loginLower);
-                        existingKey = loginLower;
-                    } else {
-                        // Also check all conversations by user_login match
-                        for (const [key, conv] of newConversations.entries()) {
-                            if (conv.user_login.toLowerCase() === loginLower) {
-                                existing = conv;
-                                existingKey = key;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if (existing) {
-                    // Conversations live in React state: build a new object and a
-                    // new message array rather than pushing into the old ones, so
-                    // memoized consumers (and the compiler) see the change.
-                    const messageExists = existing.messages.some(m => m.id === whisperMessage.id);
-                    const updated: WhisperConversation = messageExists
-                        ? { ...existing }
-                        : {
-                            ...existing,
-                            messages: [...existing.messages, whisperMessage],
-                            last_message_timestamp: Date.now(),
-                            unread_count:
-                                activeConversation !== existingKey && activeConversation !== data.from_user_id
-                                    ? existing.unread_count + 1
-                                    : existing.unread_count,
-                        };
-
-                    // If the conversation was found by username key, migrate it to use numeric ID
-                    if (existingKey !== data.from_user_id) {
-                        updated.user_id = data.from_user_id;
-                        // Update profile image if we have it and they don't
-                        if (profileImageUrl && !updated.profile_image_url) {
-                            updated.profile_image_url = profileImageUrl;
-                        }
-                        // Remove old key and add with new numeric ID key
-                        newConversations.delete(existingKey);
-                        newConversations.set(data.from_user_id, updated);
-                        Logger.debug(`[Whispers] Migrated conversation key from "${existingKey}" to "${data.from_user_id}"`);
-                    } else {
-                        newConversations.set(existingKey, updated);
-                    }
-                } else {
-                    newConversations.set(data.from_user_id, {
-                        user_id: data.from_user_id,
-                        user_login: data.from_user_login,
-                        user_name: data.from_user_name,
-                        profile_image_url: profileImageUrl,
-                        messages: [whisperMessage],
-                        last_message_timestamp: Date.now(),
-                        unread_count: activeConversation === data.from_user_id ? 0 : 1,
-                    });
-                }
-                return newConversations;
-            });
+        }).then((fn) => {
+            if (isMounted) unlistenFn = fn;
+            else fn();
         });
-        
-            if (isMounted) unlistenFn = unlisten;
-            else unlisten();
-        };
-
-        setupListener();
-
         return () => {
             isMounted = false;
-            if (unlistenFn) unlistenFn();
+            unlistenFn?.();
         };
-    }, [activeConversation, playNotificationSound, settings.live_notifications?.play_sound]);
+    }, [currentUser?.user_id, playNotificationSound, settings.live_notifications?.play_sound]);
+
+    // Tell Rust which conversation is open, so a whisper arriving in it is not
+    // counted as unread.
+    useEffect(() => {
+        void invoke('whisper_set_active', { key: activeConversation });
+    }, [activeConversation]);
+    useEffect(() => () => void invoke('whisper_set_active', { key: null }), []);
 
     // Scroll to bottom when new messages arrive
     useEffect(() => {
@@ -700,14 +394,20 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
         // Update the ref to current
         previousActiveConversationRef.current = activeConversation;
 
-        // Mark current conversation as read
+        // Mark current conversation as read. Rust only writes when the count
+        // actually changes, so opening an already-read thread costs nothing.
         if (activeConversation) {
+            const ownerId = useAppStore.getState().currentUser?.user_id;
+            if (ownerId) {
+                invoke('whisper_mark_read', { ownerId, key: activeConversation }).catch((err) =>
+                    Logger.warn('[Whispers] Failed to mark read:', err),
+                );
+            }
             setConversations(prev => {
+                const existing = prev.get(activeConversation);
+                if (!existing || existing.unread_count === 0) return prev;
                 const newConversations = new Map(prev);
-                const existing = newConversations.get(activeConversation);
-                if (existing && existing.unread_count > 0) {
-                    existing.unread_count = 0;
-                }
+                newConversations.set(activeConversation, { ...existing, unread_count: 0 });
                 return newConversations;
             });
         }
@@ -735,118 +435,21 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
     // Import whispers from exported JSON file
     const handleFileImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
-        if (!file) return;
+        const ownerId = currentUser?.user_id;
+        if (!file || !ownerId) return;
         setIsImportingAll(true);
         setImportProgress('Reading file...');
         try {
-            const text = await file.text();
-            const data = JSON.parse(text);
+            const data = JSON.parse(await file.text());
             if (!data.version || !data.conversations || !Array.isArray(data.conversations)) {
                 throw new Error('Invalid file format.');
             }
             setImportProgress(`Importing ${data.conversations.length} conversations...`);
-            const myUsername = currentUser?.login || currentUser?.username || data.myUsername || '';
-            const myUserId = currentUser?.user_id || data.myUserId || '';
-            const myDisplayName = currentUser?.display_name || currentUser?.username || data.myUsername || '';
-
-            // First pass: import all conversations
-            const newConversations = new Map(conversations);
-            const usersNeedingProfilePics: string[] = [];
-
-            for (const conv of data.conversations) {
-                const userId = conv.user.id || conv.user.login.toLowerCase();
-                const existing = newConversations.get(userId);
-                const importedMessages: Whisper[] = conv.messages.map((msg: ExportedMessage) => {
-                    const isSent = msg.isSent === true || (msg.fromUserName && myUsername && msg.fromUserName.toLowerCase() === myUsername.toLowerCase());
-                    return {
-                        id: msg.id,
-                        from_user_id: msg.fromUserId || (isSent ? myUserId : userId),
-                        from_user_login: msg.fromUserLogin || (isSent ? myUsername : conv.user.login),
-                        from_user_name: msg.fromUserName || (isSent ? myDisplayName : conv.user.displayName),
-                        to_user_id: isSent ? userId : myUserId,
-                        to_user_login: isSent ? conv.user.login : myUsername,
-                        to_user_name: isSent ? conv.user.displayName : myDisplayName,
-                        message: msg.content,
-                        timestamp: parseWhisperDate(msg.sentAt),
-                        is_sent: Boolean(isSent),
-                    };
-                });
-                if (existing) {
-                    const existingIds = new Set(existing.messages.map(m => m.id));
-                    const uniqueNewMessages = importedMessages.filter(m => !existingIds.has(m.id));
-                    existing.messages = [...existing.messages, ...uniqueNewMessages].sort((a, b) => a.timestamp - b.timestamp);
-                    if (!existing.profile_image_url && conv.user.profileImageURL) {
-                        existing.profile_image_url = conv.user.profileImageURL;
-                    }
-                    if (!existing.profile_image_url) {
-                        usersNeedingProfilePics.push(userId);
-                    }
-                    if (existing.messages.length > 0) {
-                        existing.last_message_timestamp = existing.messages[existing.messages.length - 1].timestamp;
-                    }
-                } else {
-                    newConversations.set(userId, {
-                        user_id: userId,
-                        user_login: conv.user.login,
-                        user_name: conv.user.displayName,
-                        profile_image_url: conv.user.profileImageURL || null,
-                        messages: importedMessages.sort((a, b) => a.timestamp - b.timestamp),
-                        last_message_timestamp: conv.lastMessageAt ? parseWhisperDate(conv.lastMessageAt) : Date.now(),
-                        unread_count: 0,
-                    });
-                    if (!conv.user.profileImageURL) {
-                        usersNeedingProfilePics.push(userId);
-                    }
-                }
-            }
-
-            setConversations(newConversations);
-            const totalMessages = data.conversations.reduce((sum: number, conv: ExportedConversation) => sum + conv.messages.length, 0);
-            setImportProgress(`✓ Imported ${totalMessages} messages`);
-
-            // Second pass: Resolve user IDs and fetch profile pictures
-            // This ensures all imported conversations have valid numeric Twitch user IDs
-            setImportProgress(`Resolving ${newConversations.size} user IDs...`);
-            const resolvedConversations = new Map<string, WhisperConversation>();
-
-            for (const [originalKey, conv] of newConversations.entries()) {
-                try {
-                    // Check if user_id needs to be resolved (non-numeric)
-                    const needsIdResolution = !conv.user_id || !/^\d+$/.test(conv.user_id);
-
-                    if (needsIdResolution || !conv.profile_image_url) {
-                        // Look up user by login to get numeric ID and profile picture
-                        const result = await invoke<[string, string, string, string | null] | null>('search_whisper_user', { username: conv.user_login });
-                        if (result && result[0]) {
-                            const [realUserId, , , profileUrl] = result;
-                            // Update the conversation with resolved data
-                            conv.user_id = realUserId;
-                            if (profileUrl) {
-                                conv.profile_image_url = profileUrl;
-                            }
-                            // Store with the real user ID as key
-                            resolvedConversations.set(realUserId, conv);
-                            Logger.debug(`[Whispers] Resolved ${conv.user_login}: ${originalKey} -> ${realUserId}`);
-                        } else {
-                            // Couldn't resolve, keep original (might not be able to send to this user)
-                            resolvedConversations.set(originalKey, conv);
-                            Logger.warn(`[Whispers] Could not resolve user: ${conv.user_login}`);
-                        }
-                    } else {
-                        // Already has valid user_id, just copy over
-                        resolvedConversations.set(conv.user_id, conv);
-                    }
-                } catch (err) {
-                    // Keep original on error
-                    resolvedConversations.set(originalKey, conv);
-                    Logger.warn(`[Whispers] Error resolving ${conv.user_login}:`, err);
-                }
-            }
-
-            // Update state with resolved conversations
-            setConversations(resolvedConversations);
-            setImportProgress(`✓ Imported ${totalMessages} messages from ${resolvedConversations.size} users`);
-
+            const summary = await invoke<{ conversations: number; messages: number }>('whisper_import', {
+                ownerId,
+                export: data,
+            });
+            setImportProgress(`✓ Imported ${summary.messages} messages from ${summary.conversations} users`);
             if (fileInputRef.current) fileInputRef.current.value = '';
             setTimeout(() => setImportProgress(''), 3000);
         } catch (err) {
@@ -892,82 +495,33 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
         setSearchResults([]);
     };
 
-    const generateMessageId = () => `sent-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
-
     const handleSend = async () => {
         if (!message.trim() || isSending || !activeConversation || sendingRef.current) return;
         const conversation = conversations.get(activeConversation);
         if (!conversation) return;
 
-        // Use the stored user_id from the conversation, not the map key
-        // This handles imported conversations where the key might be the username
-        let targetUserId = conversation.user_id;
-
-        // If user_id is not numeric, try to look it up by username
-        if (!targetUserId || !/^\d+$/.test(targetUserId)) {
-            Logger.debug('[Whispers] User ID not numeric, looking up by login:', conversation.user_login);
-            try {
-                const result = await invoke<[string, string, string, string | null] | null>('search_whisper_user', { username: conversation.user_login });
-                if (result && result[0]) {
-                    targetUserId = result[0];
-                    // Update the conversation with the correct user_id
-                    setConversations(prev => {
-                        const updated = new Map(prev);
-                        const conv = updated.get(activeConversation);
-                        if (conv) {
-                            conv.user_id = targetUserId;
-                            if (result[3]) {
-                                conv.profile_image_url = result[3];
-                            }
-                        }
-                        return updated;
-                    });
-                    Logger.debug('[Whispers] Found user ID:', targetUserId);
-                } else {
-                    setError('Cannot send: User not found on Twitch.');
-                    return;
-                }
-            } catch (err) {
-                Logger.error('[Whispers] Failed to look up user:', err);
-                setError('Cannot send: Failed to look up user.');
-                return;
-            }
-        }
+        const ownerId = currentUser?.user_id;
+        if (!ownerId) return;
 
         const messageToSend = message.trim();
-        const messageId = generateMessageId();
         sendingRef.current = true;
         setMessage('');
         setIsSending(true);
         setError(null);
         setShowEmojiPicker(false);
         try {
-            await invoke('send_whisper', { toUserId: targetUserId, message: messageToSend });
-            const sentMessage: Whisper = {
-                id: messageId,
-                from_user_id: currentUser?.user_id || '',
-                from_user_login: currentUser?.login || currentUser?.username || '',
-                from_user_name: currentUser?.display_name || currentUser?.username || '',
-                to_user_id: activeConversation,
-                to_user_login: conversation.user_login,
-                to_user_name: conversation.user_name,
-                message: messageToSend,
-                timestamp: Date.now(),
-                is_sent: true,
-            };
-            setConversations(prev => {
-                const n = new Map(prev);
-                const existing = n.get(activeConversation);
-                if (existing && !existing.messages.some(m => m.id === messageId)) {
-                    // New object + array: state is never mutated in place.
-                    n.set(activeConversation, {
-                        ...existing,
-                        messages: [...existing.messages, sentMessage],
-                        last_message_timestamp: Date.now(),
-                    });
-                }
-                return n;
+            const update = await invoke<WhisperUpdate>('whisper_send', {
+                ownerId,
+                target: {
+                    key: activeConversation,
+                    user_id: conversation.user_id,
+                    user_login: conversation.user_login,
+                    user_name: conversation.user_name,
+                    profile_image_url: conversation.profile_image_url ?? null,
+                },
+                text: messageToSend,
             });
+            setConversations((prev) => applyWhisperUpdate(prev, update));
         } catch (err) {
             Logger.error('Failed to send whisper:', err);
 
@@ -1254,6 +808,12 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                                             onClick={(e) => {
                                                 e.stopPropagation();
                                                 // Delete the conversation using the Map key
+                                                const ownerId = currentUser?.user_id;
+                                                if (ownerId) {
+                                                    invoke('delete_whisper_conversation', { ownerId, userId: conv.key }).catch((err) =>
+                                                        Logger.warn('[Whispers] Failed to delete conversation:', err),
+                                                    );
+                                                }
                                                 setConversations(prev => {
                                                     const newConversations = new Map(prev);
                                                     newConversations.delete(conv.key);

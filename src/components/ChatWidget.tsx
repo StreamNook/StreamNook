@@ -22,15 +22,24 @@ const ChannelPointsIcon = ({ className = "", size = 14 }: { className?: string; 
   </svg>
 );
 import { useTwitchChat, type ModerationContext } from '../hooks/useTwitchChat';
-import { useChannelEmotes, ensureChannelEmotes, getChannelEmotes, emoteCacheKey, refreshChannelEmotes, useChannelChat, useChannelChatMeta, useChatConnectionStore, setChannelPaused, injectRedemptionMessage, injectSystemMessage, systemSourceFor } from '../stores/chatConnectionStore';
+import { useChannelEmotes, ensureChannelEmotes, getChannelEmotes, emoteCacheKey, refreshChannelEmotes, useChannelChat, useChannelChatMeta, useChatConnectionStore, setChannelPaused, sliceLookupKey, injectRedemptionMessage, injectSystemMessage, systemSourceFor } from '../stores/chatConnectionStore';
 import { useSpellcheck } from '../hooks/useSpellcheck';
 import { warmSpellcheck } from '../utils/spellcheck';
 import SpellcheckUnderlay from './chat/SpellcheckUnderlay';
-import { makeKey } from '../utils/providerKey';
+import { makeKey, parseKey } from '../utils/providerKey';
+import { isHomeRow, rowProvider } from '../utils/chatAuthority';
+import { useBlendedChatSource } from '../hooks/useBlendedChatSource';
+import { useBlendCompanions, type BlendCompanion } from '../hooks/useBlendCompanions';
+import { sendToSource } from '../utils/sendToSource';
+import { ProviderMark } from './ProviderLogo';
+import BlendBar from './chat/BlendBar';
+import { historyKey as chatterHistoryKey } from '../utils/chatterIdentity';
 import { streamProvider } from '../utils/streamProvider';
 import { PROVIDERS, type ProviderId } from '../types/providers';
+import { Plus, Timer, UsersThree } from 'phosphor-react';
 import { PlatformAccountChip } from './PlatformAccountChip';
 import { ProviderLogo } from './ProviderLogo';
+import { TogetherChip } from './SharedViewers';
 import { useAppStore } from '../stores/AppStore';
 import { useChannelState, watchChannel, unwatchChannel, refreshChannelState } from '../stores/channelStateStore';
 import { useProviderEmoteStore } from '../stores/providerEmoteStore';
@@ -304,6 +313,11 @@ interface ChatMessagesPanelSource {
 
 const USER_HISTORY_MAX_USERS = 300;
 
+/** Stable empty source list. The merge memoizes on this array's identity, so a
+ *  fresh `[]` while blend is off would re-run a walk of every open chat slice on
+ *  every render of the widget. */
+const NO_BLEND_SOURCES: BlendCompanion[] = [];
+
 interface ChatMessagesPanelProps {
   /** Live slice key (bare Twitch login / composite provider key); ignored when
    *  an override snapshot is supplied. */
@@ -339,6 +353,8 @@ interface ChatMessagesPanelProps {
   hoveringRef: React.RefObject<boolean>;
   /** Saved filter id: show only rows the Rust rule engine stamped with it. */
   filterId?: string | null;
+  /** The combined-chat bar above this panel already cleared the floating header. */
+  headerSpaceReserved?: boolean;
 }
 
 /** How many consecutive untagged messages end the shared-chat indicator. */
@@ -375,6 +391,7 @@ const ChatMessagesPanel = ({
   broadcasterId,
   hoveringRef,
   filterId,
+  headerSpaceReserved,
 }: ChatMessagesPanelProps) => {
   const live = useChannelChat(override ? null : channelKey);
   const src: ChatMessagesPanelSource = override ?? live;
@@ -449,10 +466,24 @@ const ChatMessagesPanel = ({
           userColor = message.color || parsed.color;
         }
 
+        // The platform THIS row came from, which is not the panel's `provider`
+        // once a merged feed is showing the streamer's other platforms too.
+        // Everything below that identifies a person, or asks "am I a mod here",
+        // has to use this: raw platform user ids collide across platforms (Kick
+        // user 676 and Twitch user 676 are different people), and the panel-level
+        // provider would file one under the other's namespace.
+        const msgProvider = rowProvider(message, provider);
+        const msgIsHome = msgProvider === provider;
+
         // YouTube ships each custom emoji inline with the message that uses it and
         // offers no set to fetch, so the picker learns them here. Segments come off
         // the BACKEND message (Rust pre-parses them); `parsed` doesn't carry them.
-        if (provider === 'youtube' && providerKey && typeof message !== 'string') {
+        // Home rows only, and deliberately so: the picker exists to SEND, and the
+        // composer always sends to the channel being watched. Learning a blended
+        // YouTube companion's emoji would file them under a channel you cannot
+        // send them to, under a key space (case-preserving) that the lowercased
+        // routing channel on the row cannot reconstruct.
+        if (msgIsHome && msgProvider === 'youtube' && providerKey && typeof message !== 'string') {
           const segments = message.segments;
           if (segments?.length) {
             useProviderEmoteStore.getState().harvest(providerKey, segments);
@@ -462,7 +493,11 @@ const ChatMessagesPanel = ({
         // Shared-chat detection, incremental: a cross-room message flips the
         // sticky flag and prefetches the source room's badge metadata ONCE
         // (subscriber/bits/founder badges render blank without that prefetch).
-        if (provider === 'twitch') {
+        // Home rows only. The quiet streak below reads "no source-room-id" as
+        // "the shared-chat session ended", and companion rows never carry that
+        // tag — ten of them in a row would silently drop the indicator and its
+        // badge prefetch in the middle of a live shared-chat session.
+        if (msgIsHome && msgProvider === 'twitch') {
           const srcRoom =
             typeof message === 'string'
               ? parsed.tags.get('source-room-id')
@@ -496,8 +531,13 @@ const ChatMessagesPanel = ({
           }
         }
 
+        // Home rows only. `badges` has the same shape on every provider, so this
+        // shape test does not discriminate: watching Kick with the linked Twitch
+        // blended in, your own Twitch broadcaster badge would flip this and light
+        // up Kick mod tools for a channel you do not moderate.
         if (
-          provider !== 'twitch' &&
+          msgIsHome &&
+          msgProvider !== 'twitch' &&
           kickAccountName &&
           typeof message !== 'string' &&
           ((message.username as string) || '').toLowerCase() === kickAccountName
@@ -512,14 +552,24 @@ const ChatMessagesPanel = ({
           // Namespaced for non-Twitch. `message.user_id` is a RAW platform id, so
           // Kick user 676 and Twitch user 676 are different people who would
           // otherwise share one history bucket and show each other's messages.
-          const historyKey = provider === 'twitch' ? userId : `${provider}:${userId}`;
-          const history = userMessageHistoryRef.current.get(historyKey) || [];
-          history.push(parsed);
-          if (history.length > 50) history.shift();
+          // The canonical derivation, shared with the profile card, the mobile
+          // sheet and `irc_service::history_key_for` on the write side. Inlining
+          // it here is how the two sides drift.
+          const userHistoryKey = chatterHistoryKey(userId, msgProvider);
+          const history = userMessageHistoryRef.current.get(userHistoryKey) || [];
+          // Keyed by message id rather than trusting `processedIdsRef` alone.
+          // That set is pruned to whatever is currently in the array, so anything
+          // that changes which messages are shown — leaving and re-entering a
+          // merged feed, for one — makes old ids look new again and pushes a
+          // second copy of every one of this chatter's messages into their card.
+          if (!msgId || !history.some((h) => h.tags.get('id') === msgId)) {
+            history.push(parsed);
+            if (history.length > 50) history.shift();
+          }
           // Delete-then-set keeps Map insertion order as a recency order, so
           // the eviction below always drops the longest-silent chatter.
-          userMessageHistoryRef.current.delete(historyKey);
-          userMessageHistoryRef.current.set(historyKey, history);
+          userMessageHistoryRef.current.delete(userHistoryKey);
+          userMessageHistoryRef.current.set(userHistoryKey, history);
           if (userMessageHistoryRef.current.size > USER_HISTORY_MAX_USERS) {
             const oldest = userMessageHistoryRef.current.keys().next().value;
             if (oldest !== undefined) userMessageHistoryRef.current.delete(oldest);
@@ -528,23 +578,28 @@ const ChatMessagesPanel = ({
           // Add user to mention autocomplete store. Channel context drives
           // third-party badge resolution inside the store.
           if (username && displayName) {
-            const channelId =
-              parsed.tags.get('source-room-id') ||
-              parsed.tags.get('room-id') ||
-              stream?.user_id ||
-              '';
-            const channelName =
-              stream?.user_login ||
-              stream?.user_name ||
-              parsed.tags.get('room') ||
-              '';
+            // The `stream` fallbacks describe the channel being WATCHED, so they
+            // are only right for a row from it. A companion row in a merged feed
+            // carries neither IRC room tag, and falling through would resolve its
+            // chatter's third-party badges against the watched broadcaster's room
+            // — the wrong channel's badges, or none. No context is the honest
+            // answer there; the store already accepts being given none.
+            const channelId = msgIsHome
+              ? parsed.tags.get('source-room-id') ||
+                parsed.tags.get('room-id') ||
+                stream?.user_id ||
+                ''
+              : parsed.tags.get('source-room-id') || parsed.tags.get('room-id') || '';
+            const channelName = msgIsHome
+              ? stream?.user_login || stream?.user_name || parsed.tags.get('room') || ''
+              : parsed.tags.get('room') || '';
             addUser(
               {
                 // Namespace non-Twitch chatters so their 7TV cosmetics resolve
                 // under the right platform and never collide with a Twitch id of
                 // the same number. Twitch stays the bare id (byte-identical). This
                 // matches ChatMessage's `cosmeticsKey`.
-                userId: provider === 'twitch' ? userId : `${provider}:${userId}`,
+                userId: msgProvider === 'twitch' ? userId : `${msgProvider}:${userId}`,
                 username,
                 displayName,
                 color: userColor || '#9147FF',
@@ -605,6 +660,8 @@ const ChatMessagesPanel = ({
             getMessageId={getMessageId}
             isModerator={isModerator}
             broadcasterId={broadcasterId}
+            homeProvider={provider}
+            headerSpaceReserved={headerSpaceReserved}
           />
         </ErrorBoundary>
       )}
@@ -616,23 +673,31 @@ const ChatMessagesPanel = ({
 // counter at the instant pause begins (accurate under buffer trimming, unlike
 // a messages.length diff). Isolated here so its per-flush subscription
 // re-renders only this span, never the widget.
-const PausedNewCount = ({ channelKey, isPaused }: { channelKey: string | null; isPaused: boolean }) => {
-  const key = channelKey ? channelKey.toLowerCase() : null;
-  useChatConnectionStore((state) => (key && isPaused ? state.revisionByChannel[key] ?? 0 : 0));
+// Takes the slice keys it should count rather than one channel: a merged feed's
+// "N new" is the total across every source, and reading only the watched channel
+// would under-count it by however much the companions said while you were away.
+// Joined into a string so the identity is stable without the caller memoizing.
+const PausedNewCount = ({ sliceKeys, isPaused }: { sliceKeys: string; isPaused: boolean }) => {
+  const keys = sliceKeys ? sliceKeys.split('|') : [];
+  const sumLive = () => {
+    const st = useChatConnectionStore.getState();
+    return keys.reduce((n, k) => n + (st.channels.get(k)?.liveMessageCount ?? 0), 0);
+  };
+  useChatConnectionStore((state) =>
+    isPaused ? keys.reduce((n, k) => n + (state.revisionByChannel[k] ?? 0), 0) : 0,
+  );
   // Anchor captured once per pause via effect (never a render-time ref write).
   const [anchor, setAnchor] = useState<number | null>(null);
   useEffect(() => {
-    if (!isPaused || !key) {
+    if (!isPaused || !sliceKeys) {
       setAnchor(null);
       return;
     }
-    setAnchor(
-      (a) => a ?? useChatConnectionStore.getState().channels.get(key)?.liveMessageCount ?? 0,
-    );
-  }, [isPaused, key]);
-  if (!isPaused || !key || anchor === null) return null;
-  const liveCount = useChatConnectionStore.getState().channels.get(key)?.liveMessageCount ?? 0;
-  const delta = Math.max(0, liveCount - anchor);
+    setAnchor((a) => a ?? sumLive());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPaused, sliceKeys]);
+  if (!isPaused || !sliceKeys || anchor === null) return null;
+  const delta = Math.max(0, sumLive() - anchor);
   return delta > 0 ? <> ({delta} new)</> : null;
 };
 
@@ -670,10 +735,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       if (!channelOverride) return;
       let text = messageText;
       let replyTo = replyParentMsgId ?? null;
-      // YouTube live chat has no reply threads, so a reply becomes the @mention
-      // YouTube's own client would send. Resolved here because the backend keeps
-      // no parent-message cache to look the display name up in.
-      if (provider === 'youtube' && replyParentMsgId) {
+      // YouTube and TikTok live chat have no reply threads, so a reply becomes
+      // the @mention their own clients send. Resolved here because the backend
+      // keeps no parent-message cache to look the display name up in.
+      if ((provider === 'youtube' || provider === 'tiktok') && replyParentMsgId) {
         const sliceMsgs = providerKey
           ? useChatConnectionStore.getState().channels.get(providerKey)?.messages ?? []
           : [];
@@ -782,6 +847,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // the composer enables right after connecting.
   const youtubeConnected = usePlatformAccountStore(
     (s) => provider === 'youtube' && s.youtube.connected,
+  );
+  // TikTok sends through the signed-in TikTok page (Rust `tiktok_send`).
+  const tiktokConnected = usePlatformAccountStore(
+    (s) => provider === 'tiktok' && s.tiktok.connected,
   );
   const connectPlatformAccount = usePlatformAccountStore((s) => s.connect);
   // YouTube exposes no "are you a mod" flag, so the backend probes a message's
@@ -1240,6 +1309,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   //     Resume button).
   const isPausedRef = useRef(isPaused);
   const lastPauseToggleRef = useRef(0);
+  // Filled by an effect further down, where the blend is wired. A ref because
+  // `setChatPaused` is declared above that point and must not be re-created when
+  // the source list changes — its identity feeds the message list's handlers.
+  const pausedSourcesRef = useRef<BlendCompanion[]>(NO_BLEND_SOURCES);
+  // Points at the merge's own id -> source map once the blend is wired below.
+  const blendSourceRef = useRef<Map<string, BlendCompanion>>(new Map());
   const setChatPaused = useCallback(
     (next: boolean, opts?: { force?: boolean; scrollToBottom?: boolean }) => {
       if (isPausedRef.current === next) return;
@@ -1249,6 +1324,14 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       isPausedRef.current = next;
       setIsPaused(next);
       setBufferPaused(next);
+      // Every source in a merged feed, not just the one being watched.
+      // `setBufferPaused` only ever knew about the home channel, so a companion
+      // kept trimming to its cap while you sat scrolled up reading: its rows
+      // disappeared out of the MIDDLE of a frozen viewport and took the scroll
+      // position with them.
+      for (const c of pausedSourcesRef.current) {
+        setChannelPaused(sliceLookupKey(c.provider, c.channel), next);
+      }
       if (!next && opts?.scrollToBottom) {
         lastResumeTimeRef.current = now;
         (window as Window & typeof globalThis & { __chatScrollToBottom?: () => void })
@@ -1286,6 +1369,22 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // We keep the chat container element so the banner can portal its level-up
   // confetti to cover the full chat height.
   const [chatContainerEl, setChatContainerEl] = useState<HTMLElement | null>(null);
+  // How tall the floating chat header currently is. It is absolutely positioned
+  // OVER this column, and its height moves: a hype train, an expanded pinned
+  // message. The combined-chat bar has to sit flush under it to read as one
+  // stack of chrome rather than a second surface, and the two hardcoded
+  // reservations the other panes use (pt-10 / pt-24) miss it by ~15px in the
+  // hype-train case. Measured instead of guessed.
+  const [chromeEl, setChromeEl] = useState<HTMLElement | null>(null);
+  const [chromeHeight, setChromeHeight] = useState(40);
+  useEffect(() => {
+    if (!chromeEl) return;
+    const sync = () => setChromeHeight(Math.round(chromeEl.getBoundingClientRect().height));
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(chromeEl);
+    return () => ro.disconnect();
+  }, [chromeEl]);
 
 
   const settings = useAppStore((s) => s.settings);
@@ -1313,6 +1412,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       reward_cost: number;
       is_input_required: boolean;
       redemption_id: string;
+      image_url: string;
+      background_color: string;
     }>('channel-points-community-redemption', (event) => {
       const p = event.payload;
       if (p.channel_id !== channelId || p.is_input_required) return;
@@ -1326,6 +1427,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         cost: p.reward_cost,
         redemptionId: p.redemption_id,
         pointsIconUrl: customPointsIconRef.current,
+        rewardImageUrl: p.image_url || undefined,
+        rewardBackground: p.background_color || undefined,
       });
     });
     return () => {
@@ -1380,7 +1483,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const isModeratorRef = useRef(isModerator);
   const broadcasterIdRef = useRef<string | undefined>(undefined);
   const [isSharedChat, setIsSharedChat] = useState<boolean>(false);
-  const [replyingTo, setReplyingTo] = useState<{ messageId: string; username: string } | null>(null);
+  // `source` is set only when replying to a row from ANOTHER platform in a
+  // merged feed. Absent means the channel being watched, which is every reply
+  // outside combined chat.
+  const [replyingTo, setReplyingTo] = useState<
+    { messageId: string; username: string; source?: BlendCompanion } | null
+  >(null);
 
   // @ mention autocomplete state
   const [showMentionAutocomplete, setShowMentionAutocomplete] = useState(false);
@@ -1600,15 +1708,18 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const isSubOnly = roomState?.subsOnly || false;
   const isBroadcaster = currentUser?.login && currentStream?.user_login && currentUser.login.toLowerCase() === currentStream.user_login.toLowerCase();
   const canBypassSubOnly = isBroadcaster || (userBadges ? /(broadcaster|moderator|subscriber|founder|vip)/i.test(userBadges) : false);
-  // Twitch always sends; Kick sends once a Kick account is connected (OAuth);
-  // other providers stay read-only. Disable + label the composer accordingly
-  // rather than letting a no-op send swallow input.
+  // Twitch always sends; Kick, YouTube and TikTok once their account is
+  // connected. Disable + label the composer accordingly rather than letting a
+  // no-op send swallow input.
   // VOD chat replay is historical — you can't post into the past, so the
   // composer is read-only until the viewer toggles to live chat.
   const isReplayReadOnly = isVodReplay && chatMode === 'replay';
   const canSendHere =
     !isReplayReadOnly &&
-    (isTwitch || (provider === 'kick' && kickConnected) || (provider === 'youtube' && youtubeConnected));
+    (isTwitch ||
+      (provider === 'kick' && kickConnected) ||
+      (provider === 'youtube' && youtubeConnected) ||
+      (provider === 'tiktok' && tiktokConnected));
   // Sub-only gating is Twitch-only. On a provider we know the room mode but not
   // reliably whether YOU are exempt (the subscription list is an imported
   // snapshot that goes stale), and locking out a real subscriber is worse than
@@ -1661,6 +1772,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       ? 'Connect your Kick account to send'
       : provider === 'youtube'
       ? 'Connect your YouTube account to send'
+      : provider === 'tiktok'
+      ? 'Connect your TikTok account to send'
       : "Read-only — sending isn't available yet"
     : isWatchStreakMode
     ? "Add a message (optional)..."
@@ -1761,6 +1874,129 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const panelChannelKey = isTwitch
     ? currentStream?.user_login?.toLowerCase() ?? null
     : providerKey;
+
+  // --- Combined chat -------------------------------------------------------
+  //
+  // The streamer's other platforms merged into this one panel. Off by default
+  // and inert when off: `useBlendCompanions` invokes nothing, `blendSources` is
+  // a module-level constant so the merge's memo never re-runs, and
+  // `panelOverride` stays null, which leaves the single-channel path exactly as
+  // it was.
+  //
+  // MultiChat is excluded on purpose — it already has its own blended view, and
+  // running a second one inside each of its panes would attach the same sources
+  // several times over.
+  const homeChannel = isTwitch
+    ? currentStream?.user_login ?? null
+    : channelOverride?.user_login ?? null;
+  const {
+    linked: blendLinked,
+    attached: blendAttached,
+    refresh: refreshBlendLinks,
+    enabled: blendEnabled,
+    suggestion: blendSuggestion,
+    dismissSuggestion: hideBlendSuggestion,
+  } = useBlendCompanions(provider, isMainSurface ? homeChannel : null);
+  // Default ON, because linking is already the deliberate act: a viewer who
+  // told the app "these are the same streamer" has opted in, and making them
+  // re-confirm it on every launch is friction for nothing. Still gated by
+  // `blendActive` below, so a channel with no links combines nothing, and the
+  // bar's toggle remains a quick way back to one platform.
+  const [blendOn, setBlendOn] = useState(true);
+  // Opened by the plus in the chat header. Managing links is rare enough that it
+  // gets no permanent chrome; the header carries the state, this carries the
+  // editing, and only while it is asked for.
+  const [blendManageOpen, setBlendManageOpen] = useState(false);
+  const blendActive = blendEnabled && blendOn && blendAttached.length > 0 && !!homeChannel;
+  const blendSources = useMemo<BlendCompanion[]>(
+    () =>
+      blendActive && homeChannel
+        ? [
+            {
+              provider,
+              channel: homeChannel,
+              channelName: currentStream?.user_name || homeChannel,
+            },
+            ...blendAttached,
+          ]
+        : NO_BLEND_SOURCES,
+    [blendActive, homeChannel, provider, currentStream?.user_name, blendAttached],
+  );
+  const blendSource = useBlendedChatSource(blendSources);
+  // Linking and unlinking go through Rust, which owns the link table and
+  // persists it; `refreshBlendLinks` then re-reads so the bar updates without a
+  // round trip through settings.
+  const editBlendLink = useCallback(
+    async (
+      member: { provider: ProviderId; channel: string; display_name?: string },
+      action: 'link' | 'unlink' | 'dismiss',
+    ) => {
+      if (!homeChannel) return;
+      try {
+        await invoke('update_channel_link', {
+          provider,
+          channel: homeChannel,
+          member: { display_name: null, avatar: null, ...member },
+          action,
+        });
+        refreshBlendLinks();
+      } catch (err) {
+        Logger.error('[Blend] could not update the link:', err);
+      }
+    },
+    [homeChannel, provider, refreshBlendLinks],
+  );
+
+  const handleTogglePlatform = useCallback(
+    (p: ProviderId, next: boolean) => {
+      const { settings: current, updateSettings } = useAppStore.getState();
+      void updateSettings({
+        ...current,
+        chat_blend: {
+          ...current.chat_blend,
+          platforms: { ...current.chat_blend?.platforms, [p]: next },
+        },
+      });
+    },
+    [],
+  );
+  // Whatever a companion's slice is reporting, so a platform that could not
+  // connect says so on its chip instead of being quietly absent from the feed.
+  const blendErrors = useChatConnectionStore((st): string => {
+    if (!blendActive) return '';
+    // Serialized rather than returned as an object: zustand compares the
+    // selector's RESULT, and a fresh object each tick would re-render the widget
+    // on every chat flush.
+    const parts: string[] = [];
+    for (const c of blendAttached) {
+      const err = st.channels.get(sliceLookupKey(c.provider, c.channel))?.error;
+      if (err) parts.push(`${c.provider} ${err}`);
+    }
+    return parts.join('');
+  });
+  const blendErrorMap = useMemo(() => {
+    if (!blendErrors) return undefined;
+    const out: Partial<Record<ProviderId, string>> = {};
+    for (const part of blendErrors.split('')) {
+      const [p, msg] = part.split(' ');
+      out[p as ProviderId] = msg;
+    }
+    return out;
+  }, [blendErrors]);
+  // What the paused counter totals: every blended source, or just the channel
+  // being watched. Replay has no live slice to count, so it counts nothing.
+  const pausedCountKeys = useMemo(() => {
+    if (isVodReplay && chatMode === 'replay') return '';
+    if (blendActive) {
+      return blendSources.map((c) => sliceLookupKey(c.provider, c.channel)).join('|');
+    }
+    return panelChannelKey ? panelChannelKey.toLowerCase() : '';
+  }, [isVodReplay, chatMode, blendActive, blendSources, panelChannelKey]);
+  useEffect(() => {
+    // Only the companions: the home channel is already covered by setBufferPaused.
+    pausedSourcesRef.current = blendActive ? blendAttached : NO_BLEND_SOURCES;
+    blendSourceRef.current = blendActive ? blendSource.sourceRef.current : new Map();
+  }, [blendActive, blendAttached, blendSource.sourceRef]);
   useEffect(() => {
     const key = panelChannelKey;
     const prev = draftKeyRef.current;
@@ -1788,6 +2024,27 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     }, 250);
     return () => window.clearInterval(id);
   }, [slowSeconds, lastSentAt, isModerator]);
+  // Replay still wins: it is a different feed entirely, not a merge of live ones.
+  const blendOverride = useMemo(
+    () =>
+      blendActive
+        ? {
+            messages: blendSource.messages,
+            renderToken: blendSource.renderToken,
+            deletedMessageIds: blendSource.deletedMessageIds,
+            clearedUserContexts: blendSource.clearedUserContexts,
+          }
+        : null,
+    // The merge hands back the SAME references on a tick that changed nothing,
+    // so this object's identity is stable too and the memoized panel bails.
+    [
+      blendActive,
+      blendSource.messages,
+      blendSource.renderToken,
+      blendSource.deletedMessageIds,
+      blendSource.clearedUserContexts,
+    ],
+  );
   const panelOverride =
     isVodReplay && chatMode === 'replay'
       ? {
@@ -1796,7 +2053,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
           deletedMessageIds: replayChat.deletedMessageIds,
           clearedUserContexts: replayChat.clearedUserContexts,
         }
-      : null;
+      : blendOverride;
   useEffect(() => {
     setKickModDetected(false);
   }, [panelChannelKey]);
@@ -1886,6 +2143,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     }
     setViewerCount(channelState?.viewer_count ?? null);
   }, [isTwitch, currentStream?.viewer_count, channelState?.viewer_count]);
+  // Shared Viewership: while the channel streams with others, the header shows
+  // a Together chip beside the channel's own count.
+  const collab = isTwitch ? (channelState?.collab ?? null) : null;
 
   // Auto-heal a set whose 7TV rows are not this channel's real dictionary. Rust
   // says so with `seven_tv_ok`: false when the channel document fetch failed and
@@ -2479,16 +2739,24 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<{ channel?: string; command?: string }>).detail;
       if (!detail?.command) return;
-      // Ignore prefills meant for another surface's channel.
-      const mine = currentStream?.user_login?.toLowerCase();
-      const theirs = detail.channel?.toLowerCase().replace(/^twitch:/, '');
+      // Ignore prefills meant for another surface's channel. Compare through
+      // the key codec rather than by stripping a `twitch:` prefix: the row's
+      // channel is a composite for every non-Twitch provider, so the old string
+      // compare made a Kick or YouTube stream's own prefill look foreign and
+      // drop it with no feedback. parseKey reads a bare login as Twitch, so the
+      // ordinary case is unchanged.
+      const mine = currentStream?.user_login
+        ? makeKey(provider, currentStream.user_login).toLowerCase()
+        : null;
+      const from = detail.channel ? parseKey(detail.channel) : null;
+      const theirs = from ? makeKey(from.provider, from.channel).toLowerCase() : null;
       if (mine && theirs && mine !== theirs) return;
       setMessageInput(detail.command);
       inputRef.current?.focus({ preventScroll: true });
     };
     window.addEventListener('streamnook-prefill-command', handler);
     return () => window.removeEventListener('streamnook-prefill-command', handler);
-  }, [currentStream?.user_login]);
+  }, [currentStream?.user_login, provider]);
 
   // /usercard — open the profile card from a slash command via a synthetic
   // mouse-event stub (handleUsernameClick only reads clientX/Y in its fallback
@@ -2669,6 +2937,13 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         if (typeof m === 'string') continue;
         const bm = m as BackendChatMessage;
         if (!bm.id || !bm.user_id) continue;
+        // Only the platform being watched. The actions below take their target
+        // from `provider` and `broadcasterIdRef`, which both mean "the channel
+        // being watched", while a merged feed can hold rows from two others.
+        // Kick and Twitch user ids are both numeric strings, so a focused Kick
+        // row would send a Kick user id to Helix as a Twitch one, and Helix
+        // would accept it and ban a real unrelated account.
+        if (!isHomeRow(bm, provider)) continue;
         out.push({
           id: bm.id,
           deleteId: (bm.tags && bm.tags['id']) || bm.id,
@@ -3083,6 +3358,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       setHistoryIndex(-1);
 
       const replyParentMsgId = replyingTo?.messageId;
+      const replyTarget = replyParentMsgId ? replyingTo?.source : undefined;
+      const replyTargetUser = replyingTo?.username ?? '';
       if (!keepInput) {
         setMessageInput('');
         setReplyingTo(null);
@@ -3235,13 +3512,25 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             ? { userId: chosen.user_id, login: chosen.login, displayName: chosen.display_name }
             : undefined;
 
-        await sendMessage(messageToSend, currentUser ? {
-          username: currentUser.login || currentUser.username,
-          displayName: currentUser.display_name || currentUser.username,
-          userId: currentUser.user_id,
-          color: undefined,
-          badges: ''
-        } : undefined, replyParentMsgId, senderAccount);
+        if (replyTarget) {
+          // Replying to a row from one of the streamer's other platforms. It
+          // goes back THERE — the parent message id means nothing on the
+          // channel being watched, and the person being answered is reading a
+          // different room. Routed through the shared per-provider sender, the
+          // same one the MultiChat composer uses.
+          await sendToSource(replyTarget, messageToSend, {
+            parentId: replyParentMsgId!,
+            parentUser: replyTargetUser,
+          });
+        } else {
+          await sendMessage(messageToSend, currentUser ? {
+            username: currentUser.login || currentUser.username,
+            displayName: currentUser.display_name || currentUser.username,
+            userId: currentUser.user_id,
+            color: undefined,
+            badges: ''
+          } : undefined, replyParentMsgId, senderAccount);
+        }
 
         // Stats and emote tallies are keyed by the Twitch user id, so they only
         // apply when a Twitch account is linked.
@@ -3950,9 +4239,21 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   }, []);
 
   const handleUsernameRightClick = useCallback((messageId: string, username: string) => {
-    setReplyingTo({ messageId, username });
+    // Which source this row came from. A raw Twitch IRC line carries no slug of
+    // its own, so the merge's id -> source map is the only way to know, and it
+    // is read through a ref so this callback keeps a fixed identity (an unstable
+    // one here re-renders every visible message on every keystroke).
+    const from = blendSourceRef.current.get(messageId);
+    setReplyingTo({
+      messageId,
+      username,
+      source: from && from.provider !== provider ? from : undefined,
+    });
     inputRef.current?.focus({ preventScroll: true });
-  }, []);
+    // `provider` changes only when the channel does, which already re-renders the
+    // whole list, so this stays stable across the traffic that matters — an
+    // identity that churned per message would re-render every visible row.
+  }, [provider]);
 
   const handleMessageCopy = useCallback((content: string) => {
     setMessageInput(content + ' ');
@@ -3961,7 +4262,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
   // Declared here, above the early returns below, so it can be a useCallback
   // (hooks can't live after a conditional return).
-  const handleUsernameClick = useCallback(async (userId: string, username: string, displayName: string, color: string, badges: Array<{ key: string; info: any }>, event: React.MouseEvent, provider: ProviderId = 'twitch') => {
+  const handleUsernameClick = useCallback(async (userId: string, username: string, displayName: string, color: string, badges: Array<{ key: string; info: any }>, event: React.MouseEvent, fromProvider: ProviderId = 'twitch') => {
     // Placement lives in openProfilePopup, which is the single implementation. This
     // used to hand-roll its own copy that added the main window's PHYSICAL position
     // to the click's LOGICAL clientX and passed the result as a logical window
@@ -3975,17 +4276,23 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       displayName,
       color,
       badges,
-      channelId: currentStream?.user_id || '',
-      channelName: currentStream?.user_login || '',
-      isModerator,
-      provider,
+      // `currentStream` and `isModerator` describe the channel being WATCHED. A
+      // merged feed also carries the streamer's other platforms, and the card's
+      // Moderator Actions zone takes its broadcaster target from `channelId` —
+      // so passing this channel's id alongside another platform's chatter would
+      // aim a real mod action at an unrelated account. No channel and no mod
+      // rights is the honest answer for a row from somewhere else.
+      channelId: fromProvider === provider ? currentStream?.user_id || '' : '',
+      channelName: fromProvider === provider ? currentStream?.user_login || '' : '',
+      isModerator: isModerator && fromProvider === provider,
+      provider: fromProvider,
       clientX: event.clientX,
       clientY: event.clientY,
     });
     if (!opened) {
       setSelectedUser({ userId, username, displayName, color, badges, position: { x: event.clientX, y: event.clientY } });
     }
-  }, [currentStream?.user_id, currentStream?.user_login, isModerator]);
+  }, [currentStream?.user_id, currentStream?.user_login, isModerator, provider]);
   // Refresh the latest-handler ref each render so window-event callers (e.g. the
   // /usercard and /user commands) invoke the current closure.
   handleUsernameClickRef.current = handleUsernameClick;
@@ -4043,8 +4350,13 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
   // isConnected (meta) drives the exit from this screen; the length read is a
   // one-shot getState peek, which is enough because connect always re-renders.
+  // A merged feed can have plenty to show while the channel you are watching is
+  // still connecting, or is not live at all — a Twitch-offline, Kick-live
+  // streamer is precisely the case combined chat exists for. Reading only the
+  // home slice there covered a full feed with "Connecting to chat...".
   const showLoadingScreen =
     !isConnected &&
+    blendSource.messages.length === 0 &&
     (panelChannelKey
       ? useChatConnectionStore.getState().channels.get(panelChannelKey)?.messages.length ?? 0
       : 0) === 0;
@@ -4095,7 +4407,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         {/* Chat header - transforms when Hype Train active */}
         {/* flex-col-reverse keeps the stream-info row on top while the hype bar
             (declared first below) renders underneath it */}
-        <div className={`absolute top-0 left-0 right-0 px-3 py-2 border-b backdrop-blur-ultra z-10 pointer-events-none shadow-lg overflow-hidden flex flex-col-reverse ${
+        <div ref={setChromeEl} className={`absolute top-0 left-0 right-0 px-3 py-2 border-b backdrop-blur-ultra z-10 pointer-events-none shadow-lg overflow-hidden flex flex-col-reverse ${
           isSharedChat && !currentHypeTrain ? 'iridescent-border' : 'border-borderSubtle'
         }`} style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 90%, transparent)' }}>
           {currentHypeTrain && (
@@ -4195,10 +4507,72 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                             ? 'SHARED STREAM CHAT'
                             : currentMediaType === 'offline_chat'
                               ? 'OFFLINE CHAT'
-                              : 'STREAM CHAT'}
+                              : blendActive
+                                ? 'COMBINED CHAT'
+                                : 'STREAM CHAT'}
                     </motion.p>
                   )}
                 </AnimatePresence>
+                {/* Which platforms this feed is drawing from, in the header rather
+                    than on a line of their own: the label already says the chat is
+                    combined, so the marks are the only thing left to say and they
+                    fit beside it. Clicking one drops that platform out of the feed,
+                    which is the only thing anyone does here often. Managing the
+                    links themselves is rare and lives in Settings. */}
+                {blendEnabled && blendLinked.length > 0 && (
+                  <span className="pointer-events-auto flex shrink-0 items-center gap-1.5">
+                    {blendLinked.map((c) => {
+                      const included =
+                        blendOn && settings.chat_blend?.platforms?.[c.provider] !== false;
+                      const meta = PROVIDERS[c.provider];
+                      const err = blendErrorMap?.[c.provider];
+                      return (
+                        <Tooltip
+                          key={`${c.provider}:${c.channel}`}
+                          content={
+                            err ??
+                            `${included ? 'Hide' : 'Show'} ${meta.label} messages (${c.channelName})`
+                          }
+                          side="bottom"
+                        >
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!blendOn) setBlendOn(true);
+                              handleTogglePlatform(c.provider, !included);
+                            }}
+                            // The mark is drawn with an empty alt (it is
+                            // decorative inside the button), so the button has to
+                            // carry the name itself or it reads as nothing.
+                            aria-label={`${included ? 'Hide' : 'Show'} ${meta.label} messages`}
+                            aria-pressed={included}
+                            className="transition-opacity hover:opacity-100"
+                          >
+                            <ProviderMark
+                              provider={c.provider}
+                              size={12}
+                              className={included ? '' : 'opacity-40 grayscale'}
+                            />
+                          </button>
+                        </Tooltip>
+                      );
+                    })}
+                    <Tooltip content="Link another of this streamer's channels" side="bottom">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setBlendManageOpen(true);
+                        }}
+                        aria-label="Link another platform"
+                        className="text-textMuted transition-colors hover:text-textSecondary"
+                      >
+                        <Plus size={11} weight="bold" />
+                      </button>
+                    </Tooltip>
+                  </span>
+                )}
                 {/* MultiChat panes have no player, so surface the live title/game
                     here. The MAIN window does have one — showing them again in the
                     chat header just repeats what is already on screen, which is why
@@ -4408,15 +4782,27 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       </button>
                     </Tooltip>
                   )}
+                  {viewerCount !== null && !streamerModeActive && collab && (
+                    <TogetherChip
+                      variant="header"
+                      collab={collab}
+                      // A popout or MultiChat pane has no player of its own to
+                      // switch and no grid of its own to fill.
+                      onOpenChannel={
+                        channelOverride ? undefined : (login) => void useAppStore.getState().startStream(login)
+                      }
+                      allowMultiNook={!channelOverride}
+                    />
+                  )}
                   {viewerCount !== null && !streamerModeActive && (
                     <div className="flex items-center gap-1">
-                      <svg className="w-3 h-3 text-textSecondary" fill="currentColor" viewBox="0 0 20 20"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z" /><path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" /></svg>
+                      <UsersThree size={13} weight="fill" className="text-textSecondary" />
                       <span className="text-xs text-textSecondary">{viewerCount.toLocaleString()}</span>
                     </div>
                   )}
                   {currentStream?.started_at && (
                     <div className="flex items-center gap-1">
-                      <svg className="w-3 h-3 text-textSecondary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                      <Timer size={13} weight="bold" className="text-textSecondary" />
                       <span id="stream-uptime-display" className="text-xs text-textSecondary">{streamUptimeRef.current}</span>
                     </div>
                   )}
@@ -4715,6 +5101,43 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             onClose={() => setSearchOpen(false)}
           />
         )}
+        {/* Combined chat. Renders nothing at all unless this streamer has another
+            platform linked, so single-platform chat gains no chrome. */}
+        {activeView === 'chat' && blendEnabled && (
+          <div style={{ paddingTop: chromeHeight }}>
+          <BlendBar
+            linked={blendLinked}
+            onAdd={(p, ch) => void editBlendLink({ provider: p, channel: ch }, 'link')}
+            onRemove={(c) => void editBlendLink({ provider: c.provider, channel: c.channel }, 'unlink')}
+            // A line only when there is nothing linked yet. Once there is, the
+            // header carries the state and this disappears entirely.
+            invite={blendLinked.length === 0 || blendManageOpen}
+            onInviteClose={() => setBlendManageOpen(false)}
+            suggestion={blendSuggestion}
+            onAcceptSuggestion={(sug) => {
+              hideBlendSuggestion();
+              void editBlendLink(
+                {
+                  provider: sug.candidate.provider,
+                  channel: sug.candidate.channel,
+                  display_name: sug.candidate.display_name ?? undefined,
+                },
+                'link',
+              );
+              // Accepting is also the moment to start showing it.
+              setBlendOn(true);
+            }}
+            onRefuseSuggestion={(sug) => {
+              hideBlendSuggestion();
+              // Persisted, so the same wrong answer is never offered again.
+              void editBlendLink(
+                { provider: sug.candidate.provider, channel: sug.candidate.channel },
+                'dismiss',
+              );
+            }}
+          />
+          </div>
+        )}
         {/* Chat messages area - flex-1 to take remaining space */}
         {activeView === 'chat' && (
           <ChatMessagesPanel
@@ -4748,6 +5171,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             isModerator={isModerator}
             broadcasterId={currentStream?.user_id}
             hoveringRef={isHoveringChatRef}
+            headerSpaceReserved={blendEnabled}
           />
         )}
         {/* AutoMod held-message queue (moderators, Twitch). Rust owns the
@@ -4761,7 +5185,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
           <div className="absolute bottom-[60px] left-1/2 transform -translate-x-1/2 z-50 pointer-events-auto">
             <button onClick={handleResume} className="flex items-center gap-2 px-4 py-2 glass-button text-white text-sm font-medium rounded-full shadow-lg">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
-              <span>Chat Paused<PausedNewCount channelKey={panelOverride ? null : panelChannelKey} isPaused={isPaused} /></span>
+              <span>Chat Paused<PausedNewCount sliceKeys={pausedCountKeys} isPaused={isPaused} /></span>
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
             </button>
           </div>
@@ -4937,7 +5361,19 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               {replyingTo && !isResubMode && !isWatchStreakMode && (
                 <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-glass rounded-lg border border-borderSubtle">
                   <svg className="w-4 h-4 text-accent flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
-                  <span className="text-xs text-textSecondary flex-1">Replying to <span className="text-accent font-semibold">{replyingTo.username}</span></span>
+                  <span className="text-xs text-textSecondary flex-1 inline-flex items-center gap-1">
+                    Replying to <span className="text-accent font-semibold">{replyingTo.username}</span>
+                    {/* Say where it is going the moment the reply is aimed
+                        somewhere other than the channel on screen, rather than
+                        letting it be a surprise after sending. */}
+                    {replyingTo.source && (
+                      <span className="inline-flex items-center gap-1">
+                        on
+                        <ProviderMark provider={replyingTo.source.provider} size={12} />
+                        <span className="text-textPrimary">{replyingTo.source.channelName}</span>
+                      </span>
+                    )}
+                  </span>
                   <Tooltip content="Cancel reply" side="top">
                   <button onClick={() => setReplyingTo(null)} className="text-textSecondary hover:text-textPrimary transition-colors">
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
@@ -5335,6 +5771,15 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   provider="youtube"
                   connected={youtubeConnected}
                   onConnect={() => void connectPlatformAccount('youtube')}
+                />
+              </div>
+            )}
+            {isMainSurface && provider === 'tiktok' && !tiktokConnected && (
+              <div className="mt-2 flex justify-end">
+                <PlatformAccountChip
+                  provider="tiktok"
+                  connected={tiktokConnected}
+                  onConnect={() => void connectPlatformAccount('tiktok')}
                 />
               </div>
             )}

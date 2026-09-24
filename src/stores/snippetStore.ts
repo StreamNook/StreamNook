@@ -1,40 +1,31 @@
-// snippetStore — user-owned snippet data for the Ctrl+K palette.
+// snippetStore: the command palette's snippets, as this window presents them.
 //
-// Three pieces of state, all persisted to localStorage and synced across
-// windows (main + every MultiChat popout) via a Tauri event:
+//   customSnippets  user-authored entries layered on top of the built-in
+//                   library. Same shape as built-in; their ids are prefixed
+//                   `custom.` so they can't collide.
+//   favoriteIds     snippet ids (built-in OR custom) the user has starred.
+//                   Favorites float to the top of the Snippets section.
+//   aliases         snippet id -> user-typed shortcut. Typing the alias in the
+//                   palette boosts that snippet above normal title matches.
+//                   Case-insensitive.
 //
-//   customSnippets  — user-authored entries layered on top of the built-in
-//                     library. Same shape as built-in; their ids are
-//                     prefixed `custom.` so they can't collide.
-//   favoriteIds     — Set of snippet ids (built-in OR custom) the user has
-//                     starred. Favorites float to the top of the Snippets
-//                     section and get a small star icon.
-//   aliases         — Map of snippet id → user-typed shortcut. Typing the
-//                     alias in the palette boosts that snippet above normal
-//                     title matches. Aliases are case-insensitive.
-//
-// Cross-window sync uses the same emit/listen idiom as
-// `utils/settingsBroadcast.ts` — one event, every window re-reads
-// localStorage on receipt. The originating window stamps a sender id so it
-// can ignore its own broadcast.
+// The data lives in settings (`settings.snippets`, models/settings.rs), so a
+// backup carries it and every window reads one copy. A write patches that one
+// key; Rust announces it, and other windows re-read it. This window never sends
+// the rest of settings, so it cannot revert what another window saved. The
+// three localStorage keys it used to live in are imported once, then removed.
 
 import { create } from 'zustand';
-import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { Logger } from '../utils/logger';
+import { patchSettings, SENDER_ID, SETTINGS_UPDATED_EVENT, type SettingsUpdatedPayload } from '../utils/settingsBroadcast';
 import { BUILTIN_SNIPPET_IDS, type Snippet } from '../utils/commandPaletteCopypastas';
+import type { Settings, SnippetSettings } from '../types';
 
-const STORAGE_CUSTOM = 'streamnook.snippets.custom.v1';
-const STORAGE_FAVORITES = 'streamnook.snippets.favorites.v1';
-const STORAGE_ALIASES = 'streamnook.snippets.aliases.v1';
-
-const SNIPPETS_UPDATED_EVENT = 'streamnook-snippets-updated';
-
-// Per-window-load random id, same pattern as settingsBroadcast SENDER_ID.
-// Used to ignore broadcasts originating from this window.
-const SENDER_ID =
-  typeof crypto !== 'undefined' && 'randomUUID' in crypto
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+const LEGACY_CUSTOM = 'streamnook.snippets.custom.v1';
+const LEGACY_FAVORITES = 'streamnook.snippets.favorites.v1';
+const LEGACY_ALIASES = 'streamnook.snippets.aliases.v1';
 
 export type CustomSnippet = Snippet & { custom: true };
 
@@ -55,77 +46,77 @@ interface SnippetStoreState {
   getAlias: (id: string) => string | undefined;
 }
 
-// ---------- localStorage helpers --------------------------------------------
+type SnippetView = Pick<SnippetStoreState, 'customSnippets' | 'favoriteIds' | 'aliases'>;
 
-function readJSON<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw) as T;
-  } catch (err) {
-    Logger.warn(`[snippetStore] read ${key} failed:`, err);
-    return fallback;
-  }
-}
+// ---------- Settings <-> view ------------------------------------------------
 
-function writeJSON(key: string, value: unknown): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch (err) {
-    Logger.warn(`[snippetStore] write ${key} failed:`, err);
-  }
-}
-
-function loadCustom(): CustomSnippet[] {
-  const raw = readJSON<unknown>(STORAGE_CUSTOM, []);
-  if (!Array.isArray(raw)) return [];
-  return raw.filter(
-    (s): s is CustomSnippet =>
-      !!s &&
-      typeof s === 'object' &&
-      typeof (s as CustomSnippet).id === 'string' &&
-      typeof (s as CustomSnippet).title === 'string' &&
-      typeof (s as CustomSnippet).content === 'string',
+function isStored(s: unknown): s is SnippetSettings['custom'][number] {
+  return (
+    !!s &&
+    typeof s === 'object' &&
+    typeof (s as { id?: unknown }).id === 'string' &&
+    typeof (s as { title?: unknown }).title === 'string' &&
+    typeof (s as { content?: unknown }).content === 'string'
   );
 }
 
-function loadFavorites(): Set<string> {
-  const raw = readJSON<unknown>(STORAGE_FAVORITES, []);
-  if (!Array.isArray(raw)) return new Set();
-  return new Set(raw.filter((x): x is string => typeof x === 'string'));
-}
-
-function loadAliases(): Map<string, string> {
-  const raw = readJSON<unknown>(STORAGE_ALIASES, {});
-  if (!raw || typeof raw !== 'object') return new Map();
-  const out = new Map<string, string>();
-  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (typeof v === 'string' && v.trim()) out.set(k, v.trim().toLowerCase());
+/** The store's view of the stored section. Tolerant: a hand-edited or partial
+ *  section yields what is readable, never a throw. */
+export function viewOf(stored: Partial<SnippetSettings> | null | undefined): SnippetView {
+  const custom = Array.isArray(stored?.custom) ? stored.custom.filter(isStored) : [];
+  const favorites = Array.isArray(stored?.favorites) ? stored.favorites.filter((x) => typeof x === 'string') : [];
+  const aliases = new Map<string, string>();
+  const rawAliases = stored?.aliases && typeof stored.aliases === 'object' ? stored.aliases : {};
+  for (const [id, alias] of Object.entries(rawAliases)) {
+    if (typeof alias === 'string' && alias.trim()) aliases.set(id, alias.trim().toLowerCase());
   }
-  return out;
+  return {
+    customSnippets: custom.map((s) => ({
+      id: s.id,
+      title: s.title,
+      category: s.category as Snippet['category'],
+      content: s.content,
+      keywords: s.keywords || undefined,
+      custom: true as const,
+    })),
+    favoriteIds: new Set(favorites),
+    aliases,
+  };
 }
 
-function persistAll(state: Pick<SnippetStoreState, 'customSnippets' | 'favoriteIds' | 'aliases'>) {
-  writeJSON(STORAGE_CUSTOM, state.customSnippets);
-  writeJSON(STORAGE_FAVORITES, Array.from(state.favoriteIds));
-  writeJSON(STORAGE_ALIASES, Object.fromEntries(state.aliases));
-  void broadcastUpdate();
+/** The stored section for a view. */
+export function storedOf(view: SnippetView): SnippetSettings {
+  return {
+    custom: view.customSnippets.map(({ id, title, category, content, keywords }) =>
+      keywords ? { id, title, category, content, keywords } : { id, title, category, content },
+    ),
+    favorites: Array.from(view.favoriteIds),
+    aliases: Object.fromEntries(view.aliases),
+  };
 }
 
-async function broadcastUpdate(): Promise<void> {
-  try {
-    await emit(SNIPPETS_UPDATED_EVENT, { source: SENDER_ID });
-  } catch (err) {
-    Logger.warn('[snippetStore] broadcast failed (non-fatal):', err);
-  }
+function isEmpty(s: SnippetSettings): boolean {
+  return s.custom.length === 0 && s.favorites.length === 0 && Object.keys(s.aliases).length === 0;
+}
+
+function viewOfState(state: SnippetView): SnippetView {
+  return { customSnippets: state.customSnippets, favoriteIds: state.favoriteIds, aliases: state.aliases };
+}
+
+/** Show `view` now and save it. */
+function commit(view: SnippetView): SnippetView {
+  patchSettings({ snippets: storedOf(view) }).catch((err) => {
+    Logger.warn('[snippetStore] save failed:', err);
+  });
+  return view;
 }
 
 // ---------- Zustand store ---------------------------------------------------
 
 export const useSnippetStore = create<SnippetStoreState>((set, get) => ({
-  customSnippets: loadCustom(),
-  favoriteIds: loadFavorites(),
-  aliases: loadAliases(),
+  customSnippets: [],
+  favoriteIds: new Set(),
+  aliases: new Map(),
 
   addCustomSnippet: (input) => {
     // Custom ids are namespaced + random-suffixed so two snippets with the
@@ -140,11 +131,7 @@ export const useSnippetStore = create<SnippetStoreState>((set, get) => ({
       keywords: input.keywords?.trim() || undefined,
       custom: true,
     };
-    set((state) => {
-      const next = { ...state, customSnippets: [...state.customSnippets, snippet] };
-      persistAll(next);
-      return { customSnippets: next.customSnippets };
-    });
+    set((state) => commit({ ...viewOfState(state), customSnippets: [...state.customSnippets, snippet] }));
     return id;
   },
 
@@ -161,8 +148,7 @@ export const useSnippetStore = create<SnippetStoreState>((set, get) => ({
             }
           : s,
       );
-      persistAll({ ...state, customSnippets: next });
-      return { customSnippets: next };
+      return commit({ ...viewOfState(state), customSnippets: next });
     });
   },
 
@@ -175,8 +161,7 @@ export const useSnippetStore = create<SnippetStoreState>((set, get) => ({
       favoriteIds.delete(id);
       const aliases = new Map(state.aliases);
       aliases.delete(id);
-      persistAll({ customSnippets, favoriteIds, aliases });
-      return { customSnippets, favoriteIds, aliases };
+      return commit({ customSnippets, favoriteIds, aliases });
     });
   },
 
@@ -185,8 +170,7 @@ export const useSnippetStore = create<SnippetStoreState>((set, get) => ({
       const favoriteIds = new Set(state.favoriteIds);
       if (favoriteIds.has(id)) favoriteIds.delete(id);
       else favoriteIds.add(id);
-      persistAll({ ...state, favoriteIds });
-      return { favoriteIds };
+      return commit({ ...viewOfState(state), favoriteIds });
     });
   },
 
@@ -198,8 +182,7 @@ export const useSnippetStore = create<SnippetStoreState>((set, get) => ({
       const aliases = new Map(state.aliases);
       if (!normalized) aliases.delete(id);
       else aliases.set(id, normalized);
-      persistAll({ ...state, aliases });
-      return { aliases };
+      return commit({ ...viewOfState(state), aliases });
     });
   },
 
@@ -207,41 +190,68 @@ export const useSnippetStore = create<SnippetStoreState>((set, get) => ({
     set((state) => {
       const aliases = new Map(state.aliases);
       aliases.delete(id);
-      persistAll({ ...state, aliases });
-      return { aliases };
+      return commit({ ...viewOfState(state), aliases });
     });
   },
 
   getAlias: (id) => get().aliases.get(id),
 }));
 
-// ---------- Cross-window sync ----------------------------------------------
+// ---------- Loading and cross-window sync ----------------------------------
 
-/** Reload the store from localStorage. Used by the cross-window listener and
- *  exposed for any code that explicitly needs to refresh (e.g. settings
- *  import/export). */
-export function reloadSnippetStore(): void {
-  useSnippetStore.setState({
-    customSnippets: loadCustom(),
-    favoriteIds: loadFavorites(),
-    aliases: loadAliases(),
-  });
+function readLegacy(): SnippetSettings | null {
+  try {
+    const custom = JSON.parse(localStorage.getItem(LEGACY_CUSTOM) || '[]');
+    const favorites = JSON.parse(localStorage.getItem(LEGACY_FAVORITES) || '[]');
+    const aliases = JSON.parse(localStorage.getItem(LEGACY_ALIASES) || '{}');
+    const stored = storedOf(viewOf({ custom, favorites, aliases }));
+    return isEmpty(stored) ? null : stored;
+  } catch (err) {
+    Logger.warn('[snippetStore] legacy snippets unreadable:', err);
+    return null;
+  }
 }
 
-/** Mount once per window — subscribes this window's store to updates emitted
- *  by other windows. Mirrors the settingsBroadcast pattern. Returns an
- *  unlisten function for cleanup; in practice we mount it in App.tsx and
- *  MultiChatWindow.tsx and never unmount. */
-export async function startSnippetSync(): Promise<UnlistenFn | undefined> {
+function dropLegacy(): void {
   try {
-    return await listen<{ source: string }>(SNIPPETS_UPDATED_EVENT, (event) => {
-      if (event.payload?.source === SENDER_ID) return;
-      reloadSnippetStore();
-    });
-  } catch (err) {
-    Logger.warn('[snippetStore] startSnippetSync failed:', err);
-    return undefined;
+    localStorage.removeItem(LEGACY_CUSTOM);
+    localStorage.removeItem(LEGACY_FAVORITES);
+    localStorage.removeItem(LEGACY_ALIASES);
+  } catch {
+    /* storage unavailable: nothing to drop */
   }
+}
+
+/** Read the stored snippets into this window's store. On the first run after
+ *  the move to settings, snippets still in localStorage are saved there first
+ *  (only when settings hold none, so a second window cannot double them). */
+export async function reloadSnippetStore(): Promise<void> {
+  try {
+    const settings = await invoke<Settings>('load_settings');
+    let stored = storedOf(viewOf(settings.snippets));
+    const legacy = readLegacy();
+    if (legacy && isEmpty(stored)) {
+      await patchSettings({ snippets: legacy });
+      stored = legacy;
+    }
+    if (legacy) dropLegacy();
+    useSnippetStore.setState(viewOf(stored));
+  } catch (err) {
+    Logger.warn('[snippetStore] load failed:', err);
+  }
+}
+
+let started = false;
+
+/** Load once per window and follow saves made in other windows. */
+export function startSnippetSync(): void {
+  if (started) return;
+  started = true;
+  void reloadSnippetStore();
+  listen<SettingsUpdatedPayload>(SETTINGS_UPDATED_EVENT, (event) => {
+    if (event.payload?.source === SENDER_ID) return;
+    if (event.payload?.keys?.includes('snippets')) void reloadSnippetStore();
+  }).catch((err) => Logger.warn('[snippetStore] sync listener failed:', err));
 }
 
 // ---------- Helpers --------------------------------------------------------

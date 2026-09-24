@@ -95,7 +95,12 @@ export function getCachedEmojiUrl(emoji: string, cdnUrl: string): string {
 // - ZWJ sequences (family, profession emojis)
 // - Regional indicators (flags)
 // - Keycap emojis
-const EMOJI_REGEX = /(?:\p{Emoji_Presentation}|\p{Emoji}\uFE0F)(?:\p{Emoji_Modifier})?(?:\u200D(?:\p{Emoji_Presentation}|\p{Emoji}\uFE0F)(?:\p{Emoji_Modifier})?)*|\p{Regional_Indicator}{2}/gu;
+//
+// A flag is two regional-indicator letters, and each letter on its own has
+// Emoji_Presentation, so the pair has to be tried first and a lone letter kept
+// out of the general alternative. Otherwise a flag splits into its two
+// letters (1f1e7 and 1f1f7 for Brazil), neither of which has an image.
+const EMOJI_REGEX = /\p{Regional_Indicator}{2}|(?:(?!\p{Regional_Indicator})\p{Emoji_Presentation}|\p{Emoji}\uFE0F)(?:\p{Emoji_Modifier})?(?:\u200D(?:\p{Emoji_Presentation}|\p{Emoji}\uFE0F)(?:\p{Emoji_Modifier})?)*/gu;
 
 // CDN URL for Apple emoji images
 // Using jsDelivr CDN with emoji-datasource-apple package

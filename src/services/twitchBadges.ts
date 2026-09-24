@@ -18,6 +18,9 @@ type BadgeVersionInfo = Record<string, unknown>;
 type BadgeIndex = Map<string, Map<string, BadgeVersionInfo>>;
 let globalBadgeIndex: BadgeIndex | null = null;
 const channelBadgeIndexes = new Map<string, BadgeIndex>();
+/** Channels whose badge art stays indexed; the least recently loaded goes
+ *  first, so a long session hopping between channels does not keep them all. */
+const MAX_CHANNEL_INDEXES = 32;
 
 function buildBadgeIndex(payload: any): BadgeIndex {
   const index: BadgeIndex = new Map();
@@ -79,7 +82,13 @@ export async function initializeBadgeCache(channelId?: string): Promise<void> {
         // Rust attaches the credentials itself.
         const channelBadges = await invoke<any>('fetch_channel_badges', { channelId });
 
+        channelBadgeIndexes.delete(channelId);
         channelBadgeIndexes.set(channelId, buildBadgeIndex(channelBadges));
+        while (channelBadgeIndexes.size > MAX_CHANNEL_INDEXES) {
+          const oldest = channelBadgeIndexes.keys().next().value;
+          if (oldest === undefined) break;
+          channelBadgeIndexes.delete(oldest);
+        }
         Logger.debug('[BadgeCache] Loaded channel badges into memory cache for:', channelId);
       } catch (e) {
         Logger.warn('[BadgeCache] Failed to fetch channel badges:', e);

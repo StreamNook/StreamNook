@@ -84,6 +84,11 @@ export interface BuiltInStamp {
 
 export interface BackendChatMessage {
   id: string;
+  /** Set on a row this window built for a message the user sent (Rust's
+   *  `build_own_chat_message`). Twitch never echoes the primary account's own
+   *  message back, so this row is the lasting one: USERSTATE repaints its badges
+   *  and colour, and the Helix id replaces its provisional `local-` id. */
+  own_optimistic?: boolean;
   username: string;
   display_name: string;
   color?: string;

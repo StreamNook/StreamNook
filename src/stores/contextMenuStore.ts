@@ -18,7 +18,11 @@ interface ContextMenuState {
     stream: TwitchStream | null;
     inputElement: HTMLElement | null;
     selectionText: string | null;
-    menuType: 'stream' | 'input' | 'selection' | null;
+    menuType: 'stream' | 'input' | 'selection' | 'multinook-tile' | null;
+    /** The MultiNook slot the 'multinook-tile' menu was opened on. Null for
+     *  every other menu type. Kept beside `stream` rather than inside it
+     *  because a slot id is view state, not channel identity. */
+    slotId: string | null;
     /** 'checking' while suggestions are being fetched; 'idle' when the clicked
      *  word is spelled fine, isn't checkable, or checking is off. */
     spellStatus: 'idle' | 'checking' | 'ready';
@@ -28,6 +32,9 @@ interface ContextMenuState {
     
     // Actions
     openMenu: (e: React.MouseEvent | MouseEvent, stream: TwitchStream) => void;
+    /** Right-click on a grid tile. Same channel actions as the stream menu plus
+     *  the tile ones, so `stream` carries the channel and `slotId` the tile. */
+    openTileMenu: (e: React.MouseEvent | MouseEvent, stream: TwitchStream, slotId: string) => void;
     openInputMenu: (e: React.MouseEvent | MouseEvent, element: HTMLElement) => void;
     openSelectionMenu: (e: React.MouseEvent | MouseEvent) => void;
     closeMenu: () => void;
@@ -100,6 +107,37 @@ function spellTargetFor(element: HTMLElement, x: number, y: number): SpellToken 
     return isKnownChatToken(target.word, { emoteKey }) ? null : target;
 }
 
+/**
+ * Settle the menu's follow row for `stream`.
+ *
+ * The followed cache answers instantly for a channel already in it, which is
+ * most of them; anything else costs one Helix check. A channel with no user id
+ * cannot be checked at all, so it settles to "not following" rather than
+ * leaving the row spinning forever.
+ */
+async function resolveFollowing(
+    stream: TwitchStream,
+    set: (partial: Partial<ContextMenuState>) => void,
+): Promise<void> {
+    if (!stream.user_id) {
+        set({ isFollowing: false, isCheckingFollow: false });
+        return;
+    }
+    if (useAppStore.getState().followedStreams.some((s) => s.user_id === stream.user_id)) {
+        set({ isFollowing: true, isCheckingFollow: false });
+        return;
+    }
+    try {
+        const following = await invoke<boolean>('check_following_status', {
+            targetUserId: stream.user_id,
+        });
+        set({ isFollowing: following, isCheckingFollow: false });
+    } catch (error) {
+        Logger.warn('[ContextMenu] Failed to check follow status:', error);
+        set({ isFollowing: false, isCheckingFollow: false });
+    }
+}
+
 export const useContextMenuStore = create<ContextMenuState>((set, get) => ({
     isOpen: false,
     x: 0,
@@ -108,12 +146,39 @@ export const useContextMenuStore = create<ContextMenuState>((set, get) => ({
     inputElement: null,
     selectionText: null,
     menuType: null,
+    slotId: null,
     spellStatus: 'idle',
     spell: null,
     isFollowing: null,
     isCheckingFollow: false,
 
-    openMenu: async (e: React.MouseEvent | MouseEvent, stream: TwitchStream) => {
+    openTileMenu: (e: React.MouseEvent | MouseEvent, stream: TwitchStream, slotId: string) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openGeneration++;
+
+        set({
+            isOpen: true,
+            x: e.clientX,
+            y: e.clientY,
+            menuType: 'multinook-tile',
+            stream,
+            slotId,
+            inputElement: null,
+            selectionText: null,
+            spellStatus: 'idle',
+            spell: null,
+            isFollowing: null,
+            isCheckingFollow: true,
+        });
+
+        // Same follow resolution as the stream menu. A tile with no channel id
+        // (a provider tile whose metadata lookup came up empty) cannot be asked
+        // about, so the row settles to "not following" rather than spinning.
+        void resolveFollowing(stream, set);
+    },
+
+    openMenu: (e: React.MouseEvent | MouseEvent, stream: TwitchStream) => {
         // Prevent default window context menu and bubbling
         e.preventDefault();
         e.stopPropagation();
@@ -128,6 +193,7 @@ export const useContextMenuStore = create<ContextMenuState>((set, get) => ({
             x, 
             y, 
             menuType: 'stream',
+            slotId: null,
             stream, 
             inputElement: null,
             selectionText: null,
@@ -137,25 +203,7 @@ export const useContextMenuStore = create<ContextMenuState>((set, get) => ({
             isCheckingFollow: true 
         });
 
-        // Optimization: If the stream is already in our followedStreams cache,
-        // we instantly know they are followed. No need to hit the API payload.
-        const appStore = useAppStore.getState();
-        const isAlreadyFollowed = appStore.followedStreams.some(s => s.user_id === stream.user_id);
-
-        if (isAlreadyFollowed) {
-            set({ isFollowing: true, isCheckingFollow: false });
-            return;
-        }
-
-        // Otherwise, verify against the API (e.g. for streams from Discover or Search)
-        try {
-            const isFollowingApi = await invoke<boolean>('check_following_status', { targetUserId: stream.user_id });
-            set({ isFollowing: isFollowingApi, isCheckingFollow: false });
-        } catch (error) {
-            Logger.warn('[ContextMenu] Failed to check follow status:', error);
-            // Default to null / false on error
-            set({ isFollowing: false, isCheckingFollow: false });
-        }
+        void resolveFollowing(stream, set);
     },
 
     openInputMenu: (e: React.MouseEvent | MouseEvent, element: HTMLElement) => {
@@ -178,6 +226,7 @@ export const useContextMenuStore = create<ContextMenuState>((set, get) => ({
                 x,
                 y,
                 menuType: 'input',
+                slotId: null,
                 stream: null,
                 inputElement: element,
                 selectionText: null,
@@ -231,6 +280,7 @@ export const useContextMenuStore = create<ContextMenuState>((set, get) => ({
             x,
             y,
             menuType: 'selection',
+            slotId: null,
             stream: null,
             inputElement: null,
             selectionText: selectionText || null,
@@ -243,7 +293,7 @@ export const useContextMenuStore = create<ContextMenuState>((set, get) => ({
 
     closeMenu: () => {
         openGeneration++;
-        set({ isOpen: false, stream: null, inputElement: null, selectionText: null, menuType: null, spellStatus: 'idle', spell: null });
+        set({ isOpen: false, stream: null, slotId: null, inputElement: null, selectionText: null, menuType: null, spellStatus: 'idle', spell: null });
     },
 
     toggleFollow: async () => {
