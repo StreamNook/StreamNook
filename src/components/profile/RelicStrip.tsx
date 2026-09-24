@@ -4,7 +4,9 @@
 // collection). Reads owned relics from the cosmetics registry and the featured one
 // from the equipment model. Renders nothing for members with no relics.
 
-import { useEffect, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
+import { Gem } from 'lucide-react';
+import { ProfileAccentContext } from '../settings/profileAccentContext';
 import {
   getActiveEquipment,
   getAllCosmetics,
@@ -36,7 +38,21 @@ export function RelicStrip({ userId }: { userId: string | null | undefined }) {
   }, [userId]);
 
   if (!userId) return null;
+  return <RelicStripBody userId={userId} equipment={equipment} showAll={showAll} setShowAll={setShowAll} />;
+}
 
+function RelicStripBody({
+  userId,
+  equipment,
+  showAll,
+  setShowAll,
+}: {
+  userId: string;
+  equipment: ActiveEquipment;
+  showAll: boolean;
+  setShowAll: (v: boolean) => void;
+}) {
+  const accentRgb = useContext(ProfileAccentContext);
   const owned = getOwnedCosmeticSlugs(userId);
   const relics = getAllCosmetics().filter((c) => c.kind === 'relic' && owned.has(c.slug));
   if (relics.length === 0) return null;
@@ -54,9 +70,12 @@ export function RelicStrip({ userId }: { userId: string | null | undefined }) {
   const overflow = others.length - shownOthers.length;
 
   return (
-    <div className="glass-panel mb-3 rounded-xl p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <h4 className="text-sm font-semibold uppercase tracking-wide text-textPrimary">Relics</h4>
+    <div className="settings-card mb-3 p-3.5" style={accentRgb ? { borderColor: `rgba(${accentRgb}, 0.3)` } : undefined}>
+      <div className="mb-2.5 flex items-center justify-between">
+        <h4 className="flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-[0.14em] text-textPrimary">
+          <Gem size={14} className="text-textMuted" />
+          Relics
+        </h4>
         {relics.length > 1 && (
           <button
             onClick={() => setShowAll(true)}
@@ -67,7 +86,7 @@ export function RelicStrip({ userId }: { userId: string | null | undefined }) {
         )}
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="glass-tile flex items-center gap-3 p-3">
         {featuredAsset && (
           <img
             src={featuredAsset}

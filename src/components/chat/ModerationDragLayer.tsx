@@ -4,6 +4,7 @@ import { motion, useMotionValue } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { Trash2, Clock, Ban, RotateCcw, Pin, PinOff } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
+import type { ProviderId } from '../../types/providers';
 import { useChatUserStore } from '../../stores/chatUserStore';
 import { computePaintStyle } from '../../services/seventvService';
 import { useDragModerationStore } from '../../stores/dragModerationStore';
@@ -213,7 +214,10 @@ export default function ModerationDragLayer() {
       };
       switch (kind) {
         case 'profile':
-          app.openProfileViewer(userId);
+          // The same card a click on their name opens.
+          void import('../../utils/openProfilePopup').then(({ openProfilePopup }) =>
+            openProfilePopup({ userId, username: login, displayName, provider: dragged.provider as ProviderId | undefined }),
+          );
           break;
         case 'whisper':
           app.openWhisperWithUser({ id: userId, login, display_name: displayName });

@@ -1,14 +1,23 @@
+use crate::services::ivr;
 use crate::services::twitch_service::TwitchService;
 use log::debug;
 use serde::{Deserialize, Serialize};
+use lru::LruCache;
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::RwLock;
 
 // Cache structures
+/// Profile cards opened recently, newest kept. Keyed by user, name and channel,
+/// so a busy chat's worth of clicked names cannot grow it without limit.
+const PROFILE_CACHE_CAPACITY: usize = 128;
+
 lazy_static::lazy_static! {
-    static ref PROFILE_CACHE: Arc<RwLock<HashMap<String, CachedProfile>>> = Arc::new(RwLock::new(HashMap::new()));
+    static ref PROFILE_CACHE: Arc<RwLock<LruCache<String, CachedProfile>>> = Arc::new(RwLock::new(
+        LruCache::new(NonZeroUsize::new(PROFILE_CACHE_CAPACITY).expect("non-zero capacity")),
+    ));
 }
 
 const CACHE_DURATION: Duration = Duration::from_secs(300); // 5 minutes
@@ -227,19 +236,34 @@ pub struct IVRData {
     pub error: Option<String>,
 }
 
-/// Fetch complete user profile with all data sources aggregated in parallel
+/// A piece of the profile sent ahead of the whole, so a card can paint what has
+/// landed (avatar, bio, 7TV name paint) while IVR and the badge lookups finish.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "part", rename_all = "snake_case")]
+pub enum ProfilePart {
+    Twitch { profile: TwitchUserProfile },
+    Seventv { cosmetics: SevenTVCosmetics },
+}
+
+/// Fetch complete user profile with all data sources aggregated in parallel.
+/// `on_part` receives each early piece as it lands; the return value is still
+/// the whole profile.
 #[tauri::command]
 pub async fn get_user_profile_complete(
     user_id: String,
     username: String,
     channel_id: String,
     channel_name: String,
+    on_part: tauri::ipc::Channel<ProfilePart>,
 ) -> Result<UserProfileComplete, String> {
+    let send = |part: ProfilePart| {
+        let _ = on_part.send(part);
+    };
     // Check cache first
     let cache_key = format!("{}:{}:{}", user_id, username, channel_id);
     {
         let cache = PROFILE_CACHE.read().await;
-        if let Some(cached) = cache.get(&cache_key) {
+        if let Some(cached) = cache.peek(&cache_key) {
             if cached.timestamp.elapsed().unwrap_or(CACHE_DURATION) < CACHE_DURATION {
                 debug!("[UserProfile] Cache hit for: {}", username);
                 return Ok(cached.profile.clone());
@@ -252,17 +276,44 @@ pub async fn get_user_profile_complete(
         username, channel_name
     );
 
-    // Phase 1: the lookups that key off the Twitch user-id (always authoritative).
-    let (twitch_result, badges_result, seventv_result) = tokio::join!(
-        fetch_twitch_profile(&user_id),
-        fetch_badge_data(&user_id, &username, &channel_id, &channel_name),
-        fetch_seventv_cosmetics(&user_id)
+    // The banner + IVR endpoints are keyed by LOGIN, but the `username` passed in
+    // can be a display name (localized names aren't valid logins), which made
+    // those queries come back empty. What chat passes is almost always the login
+    // already, so when it has a login's shape they start NOW, alongside the
+    // id-keyed lookups, instead of waiting a round trip for Helix to confirm it.
+    // Only when Helix names a different login are they asked again with it.
+    let guess = username.to_lowercase();
+    let speculative = async {
+        if is_login_shaped(&guess) {
+            Some(tokio::join!(fetch_twitch_banner(&guess), fetch_ivr_data(&guess, &channel_name)))
+        } else {
+            None
+        }
+    };
+    let ((twitch_result, badges_result, seventv_result), speculative) = tokio::join!(
+        async {
+            tokio::join!(
+                async {
+                    let result = fetch_twitch_profile(&user_id).await;
+                    if let Ok(profile) = &result {
+                        send(ProfilePart::Twitch { profile: profile.clone() });
+                    }
+                    result
+                },
+                fetch_badge_data(&user_id, &username, &channel_id, &channel_name),
+                async {
+                    let result = fetch_seventv_cosmetics(&user_id).await;
+                    if let Ok(cosmetics) = &result {
+                        send(ProfilePart::Seventv { cosmetics: cosmetics.clone() });
+                    }
+                    result
+                }
+            )
+        },
+        speculative
     );
 
-    // The banner + IVR endpoints are keyed by LOGIN, but the `username` passed in
-    // from chat can be a display name (localized names aren't valid logins), which
-    // is exactly what made those queries come back empty. Use the canonical login
-    // from Helix; fall back to the passed username only if the Helix fetch failed.
+    // The canonical login from Helix; the passed username only if Helix failed.
     let lookup_login = twitch_result
         .as_ref()
         .ok()
@@ -270,11 +321,13 @@ pub async fn get_user_profile_complete(
         .filter(|l| !l.is_empty())
         .unwrap_or_else(|| username.clone());
 
-    // Phase 2: login-keyed lookups, now driven by the canonical login.
-    let (banner_result, ivr_result) = tokio::join!(
-        fetch_twitch_banner(&lookup_login),
-        fetch_ivr_data(&lookup_login, &channel_name)
-    );
+    let (banner_result, ivr_result) = match speculative {
+        Some(answers) if lookup_login.eq_ignore_ascii_case(&guess) => answers,
+        _ => tokio::join!(
+            fetch_twitch_banner(&lookup_login),
+            fetch_ivr_data(&lookup_login, &channel_name)
+        ),
+    };
 
     let twitch_profile = twitch_result.ok().map(|mut p| {
         if p.banner_image_url.is_none() {
@@ -319,7 +372,7 @@ pub async fn get_user_profile_complete(
     // Cache the result
     {
         let mut cache = PROFILE_CACHE.write().await;
-        cache.insert(
+        cache.put(
             cache_key,
             CachedProfile {
                 profile: profile.clone(),
@@ -349,7 +402,7 @@ pub async fn clear_user_profile_cache_for_user(
 ) -> Result<(), String> {
     let cache_key = format!("{}:{}:{}", user_id, username, channel_id);
     let mut cache = PROFILE_CACHE.write().await;
-    cache.remove(&cache_key);
+    cache.pop(&cache_key);
     debug!("[UserProfile] Cache cleared for: {}", username);
     Ok(())
 }
@@ -521,282 +574,78 @@ async fn fetch_badge_data(
     })
 }
 
+/// Could this be a Twitch login as typed: 1 to 25 of `a-z`, `0-9`, `_`.
+/// A localized display name never is.
+fn is_login_shaped(name: &str) -> bool {
+    (1..=25).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
+/// The card's 7TV section, read from the resolver's inventory so the card's two
+/// asks for it (this profile and the cosmetics panel) share one request.
 async fn fetch_seventv_cosmetics(user_id: &str) -> Result<SevenTVCosmetics, String> {
-    let client = crate::services::http::client().clone();
-
-    // Use the v4 GraphQL API with userByConnection query
-    let query = format!(
-        r#"{{ 
-            users {{
-                userByConnection(platform: TWITCH, platformId: "{}") {{
-                    id
-                    style {{
-                        activePaint {{ id }}
-                        activeBadge {{ id }}
-                        activeProfilePicture {{
-                            images {{
-                                url
-                                mime
-                                scale
-                                frameCount
-                            }}
-                        }}
-                    }}
-                    inventory {{
-                        paints {{
-                            to {{
-                                paint {{
-                                    id
-                                    name
-                                    description
-                                    data {{
-                                        layers {{
-                                            id
-                                            ty {{
-                                                ... on PaintLayerTypeImage {{
-                                                    __typename
-                                                    images {{
-                                                        url
-                                                        mime
-                                                        size
-                                                        scale
-                                                        width
-                                                        height
-                                                        frameCount
-                                                    }}
-                                                }}
-                                                ... on PaintLayerTypeRadialGradient {{
-                                                    __typename
-                                                    repeating
-                                                    shape
-                                                    stops {{
-                                                        at
-                                                        color {{
-                                                            hex
-                                                            r
-                                                            g
-                                                            b
-                                                            a
-                                                        }}
-                                                    }}
-                                                }}
-                                                ... on PaintLayerTypeLinearGradient {{
-                                                    __typename
-                                                    angle
-                                                    repeating
-                                                    stops {{
-                                                        at
-                                                        color {{
-                                                            hex
-                                                            r
-                                                            g
-                                                            b
-                                                            a
-                                                        }}
-                                                    }}
-                                                }}
-                                                ... on PaintLayerTypeSingleColor {{
-                                                    __typename
-                                                    color {{
-                                                        hex
-                                                        r
-                                                        g
-                                                        b
-                                                        a
-                                                    }}
-                                                }}
-                                            }}
-                                            opacity
-                                        }}
-                                        shadows {{
-                                            offsetX
-                                            offsetY
-                                            blur
-                                            color {{
-                                                hex
-                                                r
-                                                g
-                                                b
-                                                a
-                                            }}
-                                        }}
-                                    }}
-                                }}
-                            }}
-                        }}
-                        badges {{
-                            to {{
-                                badge {{
-                                    id
-                                    name
-                                    description
-                                }}
-                            }}
-                        }}
-                    }}
-                }}
-            }}
-        }}"#,
-        user_id
-    );
-
-    // Remove newlines and extra spaces for cleaner query
-    let clean_query: String = query
-        .replace('\n', "")
-        .split_whitespace()
-        .collect::<Vec<&str>>()
-        .join(" ");
-
-    let response = client
-        .post("https://7tv.io/v4/gql")
-        .header("Content-Type", "application/json")
-        .json(&serde_json::json!({ "query": clean_query }))
-        .send()
+    let owned = crate::services::seventv_cosmetics_resolver::owned(user_id)
         .await
-        .map_err(|e| format!("7TV API request failed: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("7TV API error: {}", response.status()));
-    }
-
-    let json: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse 7TV response: {}", e))?;
-
-    // Check for errors
-    if let Some(errors) = json.get("errors") {
-        if let Some(arr) = errors.as_array() {
-            if !arr.is_empty() {
-                return Err(format!("7TV API error: {:?}", errors));
-            }
-        }
-    }
-
-    // Parse the v4 response structure
-    let user_data = json
-        .get("data")
-        .and_then(|d| d.get("users"))
-        .and_then(|u| u.get("userByConnection"))
         .ok_or_else(|| "7TV user not found".to_string())?;
+    Ok(cosmetics_from_inventory(&owned))
+}
 
-    // Get selected paint and badge IDs from style
-    let selected_paint_id = user_data
-        .get("style")
-        .and_then(|s| s.get("activePaint"))
-        .and_then(|p| p.get("id"))
-        .and_then(|id| id.as_str())
-        .unwrap_or("");
+fn cosmetics_from_inventory(owned: &crate::services::seventv_cosmetics_resolver::Inventory) -> SevenTVCosmetics {
+    SevenTVCosmetics {
+        paints: owned.cosmetics.paints.iter().filter_map(paint_from_definition).collect(),
+        badges: owned.cosmetics.badges.iter().filter_map(badge_from_definition).collect(),
+        // 7TV animated avatar (only present if the user set one). None lets the
+        // card fall back to the Twitch pfp.
+        avatar_url: pick_best_seventv_image(&owned.avatar_images),
+    }
+}
 
-    let selected_badge_id = user_data
-        .get("style")
-        .and_then(|s| s.get("activeBadge"))
-        .and_then(|b| b.get("id"))
-        .and_then(|id| id.as_str())
-        .unwrap_or("");
+fn is_selected(definition: &serde_json::Value) -> bool {
+    definition.get("selected").and_then(|s| s.as_bool()).unwrap_or(false)
+}
 
-    // Parse paints from inventory
-    let paints: Vec<SevenTVPaint> = user_data
-        .get("inventory")
-        .and_then(|inv| inv.get("paints"))
-        .and_then(|p| p.as_array())
+fn text_of(definition: &serde_json::Value, key: &str) -> Option<String> {
+    definition.get(key).and_then(|v| v.as_str()).map(String::from)
+}
+
+fn paint_from_definition(paint: &serde_json::Value) -> Option<SevenTVPaint> {
+    let id = paint.get("id")?.as_str()?;
+    let data = paint.get("data");
+    let layers: Vec<SevenTVPaintLayer> = data
+        .and_then(|d| d.get("layers"))
+        .and_then(|l| l.as_array())
+        .map(|arr| arr.iter().filter_map(parse_paint_layer).collect())
+        .unwrap_or_default();
+    let shadows: Vec<SevenTVPaintShadow> = data
+        .and_then(|d| d.get("shadows"))
+        .and_then(|s| s.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|paint_wrapper| {
-                    let paint = paint_wrapper.get("to")?.get("paint")?;
-                    let id = paint.get("id")?.as_str()?;
-
-                    // Parse layers
-                    let layers: Vec<SevenTVPaintLayer> = paint
-                        .get("data")
-                        .and_then(|d| d.get("layers"))
-                        .and_then(|l| l.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|layer| parse_paint_layer(layer))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
-                    // Parse shadows
-                    let shadows: Vec<SevenTVPaintShadow> = paint
-                        .get("data")
-                        .and_then(|d| d.get("shadows"))
-                        .and_then(|s| s.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|shadow| {
-                                    Some(SevenTVPaintShadow {
-                                        offset_x: shadow.get("offsetX")?.as_f64()?,
-                                        offset_y: shadow.get("offsetY")?.as_f64()?,
-                                        blur: shadow.get("blur")?.as_f64()?,
-                                        color: parse_color(shadow.get("color")?)?,
-                                    })
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
-                    Some(SevenTVPaint {
-                        id: id.to_string(),
-                        name: paint
-                            .get("name")
-                            .and_then(|n| n.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        description: paint
-                            .get("description")
-                            .and_then(|d| d.as_str())
-                            .map(String::from),
-                        selected: id == selected_paint_id,
-                        data: SevenTVPaintData { layers, shadows },
+                .filter_map(|shadow| {
+                    Some(SevenTVPaintShadow {
+                        offset_x: shadow.get("offsetX")?.as_f64()?,
+                        offset_y: shadow.get("offsetY")?.as_f64()?,
+                        blur: shadow.get("blur")?.as_f64()?,
+                        color: parse_color(shadow.get("color")?)?,
                     })
                 })
                 .collect()
         })
         .unwrap_or_default();
+    Some(SevenTVPaint {
+        id: id.to_string(),
+        name: text_of(paint, "name").unwrap_or_default(),
+        description: text_of(paint, "description"),
+        selected: is_selected(paint),
+        data: SevenTVPaintData { layers, shadows },
+    })
+}
 
-    // Parse badges from inventory
-    let badges: Vec<SevenTVBadge> = user_data
-        .get("inventory")
-        .and_then(|inv| inv.get("badges"))
-        .and_then(|b| b.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|badge_wrapper| {
-                    let badge = badge_wrapper.get("to")?.get("badge")?;
-                    let id = badge.get("id")?.as_str()?;
-                    Some(SevenTVBadge {
-                        id: id.to_string(),
-                        name: badge
-                            .get("name")
-                            .and_then(|n| n.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        description: badge
-                            .get("description")
-                            .and_then(|d| d.as_str())
-                            .map(String::from),
-                        selected: id == selected_badge_id,
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    // 7TV animated avatar (only present if the user set one). Pick the
-    // best-quality image; falls back to None so the card uses the Twitch pfp.
-    let avatar_url = user_data
-        .get("style")
-        .and_then(|s| s.get("activeProfilePicture"))
-        .and_then(|pp| pp.get("images"))
-        .and_then(|imgs| imgs.as_array())
-        .and_then(|arr| pick_best_seventv_image(arr));
-
-    Ok(SevenTVCosmetics {
-        paints,
-        badges,
-        avatar_url,
+fn badge_from_definition(badge: &serde_json::Value) -> Option<SevenTVBadge> {
+    Some(SevenTVBadge {
+        id: badge.get("id")?.as_str()?.to_string(),
+        name: text_of(badge, "name").unwrap_or_default(),
+        description: text_of(badge, "description"),
+        selected: is_selected(badge),
     })
 }
 
@@ -906,13 +755,11 @@ fn parse_paint_layer(layer: &serde_json::Value) -> Option<SevenTVPaintLayer> {
 }
 
 async fn fetch_ivr_data(username: &str, channel_name: &str) -> Result<IVRData, String> {
-    let client = crate::services::http::client().clone();
-
     // Fetch all three IVR endpoints in parallel
     let (user_result, subage_result, modvip_result) = tokio::join!(
-        fetch_ivr_user(&client, username),
-        fetch_ivr_subage(&client, username, channel_name),
-        fetch_ivr_modvip(&client, username, channel_name)
+        ivr::user(username),
+        ivr::subage(username, channel_name),
+        ivr::modvip(username, channel_name)
     );
 
     let mut ivr_data = IVRData {
@@ -1053,104 +900,62 @@ async fn fetch_ivr_data(username: &str, channel_name: &str) -> Result<IVRData, S
     Ok(ivr_data)
 }
 
-async fn fetch_ivr_user(
-    client: &reqwest::Client,
-    username: &str,
-) -> Result<serde_json::Value, String> {
-    let response = client
-        .get(format!(
-            "https://api.ivr.fi/v2/twitch/user?login={}",
-            username
-        ))
-        .send()
-        .await
-        .map_err(|e| format!("IVR user request failed: {}", e))?;
 
-    if !response.status().is_success() {
-        return Err(format!("IVR user API error: {}", response.status()));
-    }
-
-    let data: Vec<serde_json::Value> = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse IVR user response: {}", e))?;
-
-    data.into_iter()
-        .next()
-        .ok_or_else(|| "No user data found".to_string())
+/// Account facts IVR knows and Helix does not (followers, creation date, roles).
+#[tauri::command]
+pub async fn get_ivr_user_summary(login: String) -> Result<Option<ivr::IvrUserSummary>, String> {
+    ivr::user_summary(&login).await
 }
 
-async fn fetch_ivr_subage(
-    client: &reqwest::Client,
-    username: &str,
-    channel_name: &str,
-) -> Result<serde_json::Value, String> {
-    let response = client
-        .get(format!(
-            "https://api.ivr.fi/v2/twitch/subage/{}/{}",
-            username, channel_name
-        ))
-        .send()
-        .await
-        .map_err(|e| format!("IVR subage request failed: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("IVR subage API error: {}", response.status()));
-    }
-
-    response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse IVR subage response: {}", e))
+/// A user's subscription standing in a channel, from IVR.
+#[tauri::command]
+pub async fn get_ivr_subage_summary(
+    login: String,
+    channel: String,
+) -> Result<Option<ivr::IvrSubageSummary>, String> {
+    ivr::subage_summary(&login, &channel).await
 }
 
-async fn fetch_ivr_modvip(
-    client: &reqwest::Client,
-    username: &str,
-    channel_name: &str,
-) -> Result<serde_json::Value, String> {
-    let response = client
-        .get(format!(
-            "https://api.ivr.fi/v2/twitch/modvip/{}?login={}",
-            channel_name, username
-        ))
-        .send()
-        .await
-        .map_err(|e| format!("IVR modvip request failed: {}", e))?;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::seventv_cosmetics_resolver::{Inventory, UserCosmetics};
+    use serde_json::json;
 
-    // 404 is normal if user is not a mod/vip
-    if response.status() == 404 {
-        return Ok(serde_json::json!({
-            "isMod": false,
-            "isVip": false,
-            "modGrantedAt": null,
-            "vipGrantedAt": null
-        }));
+    #[test]
+    fn only_login_shaped_names_start_the_login_lookups_early() {
+        assert!(is_login_shaped("xqc"));
+        assert!(is_login_shaped("br_winters"));
+        assert!(!is_login_shaped(""));
+        assert!(!is_login_shaped("\u{d55c}\u{ad6d}\u{c5b4}"));
+        assert!(!is_login_shaped("has space"));
+        assert!(!is_login_shaped(&"a".repeat(26)));
     }
 
-    if !response.status().is_success() {
-        return Err(format!("IVR modvip API error: {}", response.status()));
+    #[test]
+    fn the_card_reads_its_typed_cosmetics_from_the_shared_inventory() {
+        let owned = Inventory {
+            cosmetics: UserCosmetics {
+                paints: vec![json!({
+                    "id": "p1", "name": "Sunset", "selected": true,
+                    "data": {
+                        "layers": [{ "id": "l1", "opacity": 1.0, "ty": { "__typename": "PaintLayerTypeSingleColor", "color": { "hex": "#ff0000", "r": 255, "g": 0, "b": 0, "a": 255 } } }],
+                        "shadows": [{ "offsetX": 1.0, "offsetY": 2.0, "blur": 3.0, "color": { "hex": "#000000", "r": 0, "g": 0, "b": 0, "a": 255 } }]
+                    }
+                })],
+                badges: vec![json!({ "id": "b1", "name": "Sub", "description": "desc" })],
+                seventv_user_id: Some("7tv".into()),
+            },
+            avatar_images: vec![json!({ "url": "//cdn.7tv.app/a/4x.webp", "mime": "image/webp", "scale": 4 })],
+        };
+        let c = cosmetics_from_inventory(&owned);
+        assert_eq!(c.paints.len(), 1);
+        assert!(c.paints[0].selected);
+        assert_eq!(c.paints[0].name, "Sunset");
+        assert_eq!(c.paints[0].data.shadows.len(), 1);
+        assert_eq!(c.badges.len(), 1);
+        assert!(!c.badges[0].selected);
+        assert_eq!(c.badges[0].description.as_deref(), Some("desc"));
+        assert!(c.avatar_url.is_some());
     }
-
-    let data: Vec<serde_json::Value> = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse IVR modvip response: {}", e))?;
-
-    // Find the user in the list
-    for item in data {
-        if let Some(login) = item.get("login").and_then(|v| v.as_str()) {
-            if login.eq_ignore_ascii_case(username) {
-                return Ok(item);
-            }
-        }
-    }
-
-    // User not in list means not a mod/vip
-    Ok(serde_json::json!({
-        "isMod": false,
-        "isVip": false,
-        "modGrantedAt": null,
-        "vipGrantedAt": null
-    }))
 }

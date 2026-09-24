@@ -1,30 +1,47 @@
 import { useState, useEffect, useMemo, useRef, useCallback, useSyncExternalStore } from 'react';
-import { MessageCircle, UserPlus, UserMinus, Loader2, ChevronDown, ChevronUp, Pencil, X, Gift, Share2, Check, EyeOff } from 'lucide-react';
+import { MessageCircle, UserPlus, UserMinus, Loader2, ChevronDown, ChevronUp, Pencil, X, Gift, Share2, Check, EyeOff, History } from 'lucide-react';
 import { isHiddenInScope, withHiddenUser } from '../utils/chatFilters';
 import { buildShareUrl } from '../utils/shareLink';
 import { providerLabel, type ProviderId } from '../types/providers';
 import { motion, AnimatePresence, useScroll, useTransform, useReducedMotion, useMotionValue, animate } from 'framer-motion';
 import { setUserNickname, setUserColor } from '../utils/userChatOverrides';
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../stores/AppStore';
 import { streamProvider } from '../utils/streamProvider';
-import { openBadgesWithPaintInMain, openBadgesOnStreamNookInMain, openBadgesWithBadgeInMain, openBadgesWithTargetInMain, openProfileViewerInMain } from '../utils/openBadgesInMain';
-import { computePaintStyle, getBadgeImageUrls, getBadgeFallbackUrls, queueCosmeticForCaching } from '../services/seventvService';
+import { openBadgesOnStreamNookInMain, openBadgesWithBadgeInMain, openBadgesWithTargetInMain } from '../utils/openBadgesInMain';
+import { computePaintStyle, getBadgeImageUrls, getBadgeFallbackUrls, pickPaintLayerImage, queueCosmeticForCaching } from '../services/seventvService';
 import { useNameColorAdjust } from '../hooks/useNameColor';
 import { FallbackImage } from './FallbackImage';
-import { formatIVRDate, formatSubTenure } from '../services/ivrService';
+import { formatIVRDate, formatSubTenure } from '../utils/ivrFormat';
 import { Logger } from '../utils/logger';
 import {
   getProfileFromMemoryCache,
   getFullProfileWithFallback,
-  refreshProfileInBackground,
   getCosmeticsWithFallback,
+  getCosmeticsFromMemoryCache,
   CachedProfile
 } from '../services/cosmeticsCache';
 import { Tooltip } from './ui/Tooltip';
-import { getStreamNookUserNumber, subscribeStreamNookRegistryVersion, getStreamNookRegistryVersion, getOwnedCosmeticSlugs, getActiveCosmeticSlug, getCosmeticBySlug, getCosmeticsVersion, subscribeCosmeticsVersion } from '../services/supabaseService';
-import { COSMETIC_ASSET_BY_SLUG, COSMETIC_ASSET_CHAT_BY_SLUG } from './cosmeticAssets';
+import { memberIdFor } from '../utils/memberIdentity';
+import { requestMemberAlias } from '../stores/chatUserStore';
+import {
+  getStreamNookUserNumber,
+  subscribeStreamNookRegistryVersion,
+  getStreamNookRegistryVersion,
+  getOwnedCosmeticSlugs,
+  getActiveCosmeticSlug,
+  getCosmeticBySlug,
+  getCosmeticsVersion,
+  subscribeCosmeticsVersion,
+} from '../services/supabaseService';
+import { resolveCosmeticAsset } from './cosmeticAssets';
+import { SLOT_FOR_TYPE, type CosmeticType } from '../services/cosmetics/types';
+import { useMemberProfile, type MemberProfilePreview } from './profile/memberProfile';
+import { MemberProfileBackdrop } from './profile/MemberProfileBackdrop';
+import { MemberProfileHero } from './profile/MemberProfileHero';
+import { MemberProfileSections } from './profile/MemberProfileSections';
+import { PaintChip, SevenTvProfileButton } from './profile/IdentityChips';
 import { StreamNookBadge } from './StreamNookBadge';
 import {
   getIdentityWithCache,
@@ -32,10 +49,10 @@ import {
   subscribeIdentityVersion,
   getIdentityVersion,
 } from '../services/identityService';
-import streamNookLogo from '../assets/streamnook-logo-128.webp';
 import { EmoteText, buildEmoteNameMap } from '../utils/emoteText';
 import { useChannelEmotes } from '../stores/chatConnectionStore';
 import { historyKey } from '../utils/chatterIdentity';
+import { isChannelScopedTwitchBadge } from '../utils/badgeOrder';
 import { usePlatformAccountStore } from '../stores/platformAccountStore';
 
 // messageHistory arrives from two sources:
@@ -103,6 +120,9 @@ interface UserProfileCardProps {
   /** Which platform this chatter is on. Absent means Twitch, so every existing
    *  caller keeps its exact behaviour. */
   provider?: ProviderId;
+  /** Your own card as a live preview while you edit your profile in Settings
+   *  (OwnProfilePreview): these edits override what is saved. */
+  profilePreview?: MemberProfilePreview | null;
 }
 
 /** A Kick chatter's card data, from `kick_user_profile`. */
@@ -136,6 +156,11 @@ interface YouTubeProfile {
   banner_url?: string | null;
   subscriber_count?: string | null;
 }
+
+/** An early piece of get_user_profile_complete (ProfilePart in user_profile.rs). */
+type ProfilePart =
+  | { part: 'twitch'; profile: TwitchUserProfile }
+  | { part: 'seventv'; cosmetics: SevenTVCosmetics };
 
 interface UserProfileComplete {
   twitch_profile: TwitchUserProfile | null;
@@ -364,6 +389,12 @@ interface NicknameEditorProps {
 // explicitly equipped, so the inactive-thumbnail list must exclude it to avoid
 // rendering the same Member badge twice.
 const DEFAULT_COSMETIC_SLUG = 'streamnook-default';
+
+/** The in-app card's width, and a StreamNook member's wider card. Must match
+ *  the `w-[440px]` / `w-[760px]` on the card root and the popout window sizes
+ *  in utils/openProfilePopup.ts. */
+const PROFILE_CARD_WIDTH = 440;
+const MEMBER_CARD_WIDTH = 760;
 
 const TWITCH_DEFAULT_COLOR = '#9147FF';
 function normalizeHex(input: string | null | undefined): string {
@@ -645,27 +676,46 @@ const UserProfileCard = ({
   broadcasterId,
   onPreFillCommand,
   provider = 'twitch',
+  profilePreview = null,
 }: UserProfileCardProps) => {
   const [profileData, setProfileData] = useState<UserProfileComplete | null>(null);
   // Per-platform card data. Only one is ever populated; the shell is shared.
   const [kickProfile, setKickProfile] = useState<KickProfile | null>(null);
   const [youtubeProfile, setYoutubeProfile] = useState<YouTubeProfile | null>(null);
   const [cachedProfile, setCachedProfile] = useState<CachedProfile | null>(null);
+  // Pieces Rust sends ahead of the whole profile (see ProfilePart in
+  // user_profile.rs): Helix answers in ~200 ms, well before IVR and the badge
+  // lookups, so the avatar and bio paint first instead of a blank card.
+  // Keyed by the chatter they describe, so switching chatters needs no reset:
+  // a stale entry simply stops matching.
+  const [early, setEarly] = useState<{ userId: string; twitch?: TwitchUserProfile; seventv?: SevenTVCosmetics }>({ userId: '' });
+  const earlyTwitch = early.userId === userId ? early.twitch ?? null : null;
+  const earlySeventv = early.userId === userId ? early.seventv ?? null : null;
+  // Which chatter's Twitch profile has fully settled (both halves answered).
+  const [settledFor, setSettledFor] = useState<string | null>(null);
+  // What chat already resolved for this chatter (the worn paint and 7TV
+  // badge), so the name is painted on the first frame.
+  const wornCosmetics = useMemo(
+    () => (provider === 'twitch' ? getCosmeticsFromMemoryCache(userId) : null),
+    [userId, provider],
+  );
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
+  // Twitch chatters load through the two-half fetch below, settled per chatter;
+  // the other platforms keep their own flag.
+  const profileLoading = provider === 'twitch' ? settledFor !== userId : isLoadingProfile;
   // BetterTTV Pro loyalty badge. Resolved separately from the main profile
   // fetch because BTTV only serves Pro badges over a WebSocket and non-Pro
   // users never reply (so the lookup can take up to its timeout). Keeping it
   // off the critical path lets the card render immediately and the badge pop in
   // when/if it resolves. See bttv_pro_service.rs.
   const [bttvProBadge, setBttvProBadge] = useState<{ url: string; started_at: string | null; glow: boolean } | null>(null);
-  // Which half opens first, per the Chat setting. On (the default) lands on the
-  // chat history in one click, since clicking a user is usually the intent to
-  // read their messages; off keeps the profile body first for people who open
-  // cards to look at badges and stats. Either way the header switches between
-  // the two. The history fetch is keyed on this, so opening on messages also
-  // starts fetching on mount instead of waiting for a second click.
+  // Which half opens first, per the Chat setting. Off (the default) opens the
+  // profile body, with badges and stats; on lands on the chat history in one
+  // click. Either way the header switches between the two. The history fetch is
+  // keyed on this, so opening on messages also starts fetching on mount instead
+  // of waiting for a second click.
   const [showMessages, setShowMessages] = useState(
-    () => useAppStore.getState().settings.chat_design?.user_card_opens_messages !== false,
+    () => useAppStore.getState().settings.chat_design?.user_card_opens_messages === true,
   );
   // Which rows this card shows. Subscribed (not a one-shot read) so toggling a
   // row in Settings updates an open card.
@@ -797,7 +847,20 @@ const UserProfileCard = ({
   // StreamNook badges appear / refresh as ownership changes (e.g. a grant from a
   // streamnook.app purchase lands while the popup is open).
   useSyncExternalStore(subscribeCosmeticsVersion, getCosmeticsVersion, getCosmeticsVersion);
-  const streamNookUserNumber = getStreamNookUserNumber(userId);
+  // `userId` is the id ON THE CHATTER'S PLATFORM, and `provider` says which. For
+  // a Kick chatter that is a bare Kick number, from the same range Twitch ids
+  // come from, so passing it straight to a membership lookup shows an unrelated
+  // Twitch member's number and badges on a stranger's card. Every StreamNook
+  // lookup on this card goes through `cardMemberId` instead: the member's Twitch
+  // id when this chat identity has been claimed, null when it has not.
+  const cardChatKey = provider === 'twitch' ? userId : `${provider}:${userId}`;
+  const cardMemberId = memberIdFor(cardChatKey);
+  // A card can be the first place this chatter's claim is wanted. Asking is
+  // idempotent and batched, and the answer repaints the card when it lands.
+  useEffect(() => {
+    requestMemberAlias(cardChatKey);
+  }, [cardChatKey]);
+  const streamNookUserNumber = getStreamNookUserNumber(cardMemberId);
   // Only enumerate owned StreamNook cosmetics for users who are actually in the
   // registry. `getOwnedCosmeticSlugs` includes every `is_default` cosmetic for
   // ANY userId by design (so the picker can preview defaults), which means
@@ -806,28 +869,41 @@ const UserProfileCard = ({
   // who aren't members. Gate at the source: empty list when not registered.
   const isStreamNookMember = streamNookUserNumber !== null;
   const ownedStreamNookSlugs = useMemo(
-    () => (isStreamNookMember ? Array.from(getOwnedCosmeticSlugs(userId)) : []),
-    [userId, isStreamNookMember, getCosmeticsVersion()],
+    () => (isStreamNookMember && cardMemberId ? Array.from(getOwnedCosmeticSlugs(cardMemberId)) : []),
+    [cardMemberId, isStreamNookMember, getCosmeticsVersion()],
   );
-  const activeStreamNookSlug = isStreamNookMember && userId ? getActiveCosmeticSlug(userId) : null;
+  const activeStreamNookSlug = isStreamNookMember && cardMemberId ? getActiveCosmeticSlug(cardMemberId) : null;
+  // A StreamNook member's card IS their StreamNook profile, the only one: their
+  // hero, atmosphere, relics and overview, with this card's Twitch sections,
+  // actions and mod tools added. Hovering their name in chat decodes their
+  // number (MemberReveal); clicking it opens this.
+  const isMemberCard = isStreamNookMember && !!cardMemberId;
+  const memberView = useMemberProfile(isMemberCard ? cardMemberId : null, profilePreview, !!profilePreview);
   // The <StreamNookBadge> slot below always renders the member's PRIMARY mark:
-  // their active cosmetic when it has a bundled asset, otherwise the default
-  // "StreamNook Member" badge as a fallback (StreamNookBadge falls back to the
-  // same streamnook-logo asset that the 'streamnook-default' slug uses). Whatever
-  // that slot shows must be excluded from the inactive thumbnails, or it renders
-  // twice — the double-Member-badge bug for members who never explicitly equipped
-  // a cosmetic (active slug null -> primary shows the default, and the default was
-  // ALSO being listed here as an "inactive owned" thumbnail).
+  // their active cosmetic when it has art (bundled or cloud-served, the same
+  // resolution StreamNookBadge uses), otherwise the default "StreamNook Member"
+  // badge. Whatever that slot shows must be excluded from the other thumbnails,
+  // or it renders twice (the double-Member-badge bug for members who never
+  // equipped one).
   const shownPrimarySlug =
-    activeStreamNookSlug && COSMETIC_ASSET_BY_SLUG[activeStreamNookSlug]
+    activeStreamNookSlug && resolveCosmeticAsset(getCosmeticBySlug(activeStreamNookSlug), { chatSize: true })
       ? activeStreamNookSlug
       : DEFAULT_COSMETIC_SLUG;
-  // Non-active owned badges, sorted by catalog sort_order so the UI order stays stable.
+  // Every other StreamNook BADGE the member owns (bought, earned from events and
+  // milestones, or granted), cloud-served ones included, in catalog order. The
+  // other kinds show in their own places: the frame on the banner, the
+  // atmosphere as the backdrop, relics in their strip.
   const inactiveOwnedSlugs = useMemo(() => {
     return ownedStreamNookSlugs
-      .filter((s) => s !== shownPrimarySlug && COSMETIC_ASSET_BY_SLUG[s])
+      .filter((s) => s !== shownPrimarySlug)
       .map((s) => ({ slug: s, cosmetic: getCosmeticBySlug(s) }))
-      .filter((entry): entry is { slug: string; cosmetic: NonNullable<ReturnType<typeof getCosmeticBySlug>> } => entry.cosmetic !== null)
+      .filter((entry): entry is { slug: string; cosmetic: NonNullable<ReturnType<typeof getCosmeticBySlug>> } => {
+        if (!entry.cosmetic) return false;
+        const slot = SLOT_FOR_TYPE[entry.cosmetic.kind as CosmeticType];
+        return slot === undefined || slot === 'badge';
+      })
+      .map((entry) => ({ ...entry, asset: resolveCosmeticAsset(entry.cosmetic, { chatSize: true }) }))
+      .filter((entry): entry is typeof entry & { asset: string } => !!entry.asset)
       .sort((a, b) => a.cosmetic.sort_order - b.cosmetic.sort_order);
   }, [ownedStreamNookSlugs, shownPrimarySlug]);
   const streamNookBadgeCount = isStreamNookMember ? 1 + inactiveOwnedSlugs.length : 0;
@@ -950,12 +1026,16 @@ const UserProfileCard = ({
         // rendered painted in chat and flat on their own card. Started HERE rather
         // than awaited after the profile so the card does not get slower.
         //
-        // Kick only, deliberately: `chatUserStore.addUser` short-circuits YouTube
-        // and TikTok to native decoration instead of 7TV, so resolving them here
-        // would make the card disagree with the chat row next to it.
+        // Kick and YouTube, matching the chat row: 7TV knows YouTube as GOOGLE and
+        // resolves a raw channel id, so `chatUserStore.addUser` resolves both, and
+        // the card has to as well or a painted name in chat opens a flat card.
+        // TikTok stays out for the same reason chat leaves it out: 7TV has no
+        // TikTok platform at all.
         const cosmeticsId = `${provider}:${userId}`;
         const cosmeticsPromise =
-          provider === 'kick' ? getCosmeticsWithFallback(cosmeticsId).catch(() => null) : null;
+          provider === 'kick' || provider === 'youtube'
+            ? getCosmeticsWithFallback(cosmeticsId).catch(() => null)
+            : null;
         try {
           if (provider === 'kick') {
             const p = await invoke<KickProfile>('kick_user_profile', {
@@ -996,37 +1076,40 @@ const UserProfileCard = ({
       return () => controller.abort();
     }
 
-    // 2. Fetch full profile from Rust (includes Twitch profile, IVR, etc.)
-    const fetchFullProfile = async () => {
-      setIsLoadingProfile(true);
-      try {
-        Logger.debug('[UserProfileCard] Fetching complete profile via Rust:', { userId, username, channelId, channelName });
-
-        // Fetch Rust profile (Twitch info, IVR data) and fresh cosmetics in parallel
-        const [rustProfile, freshCachedProfile] = await Promise.all([
-          invoke<UserProfileComplete>('get_user_profile_complete', {
-            userId,
-            username,
-            channelId,
-            channelName,
-          }),
-          getFullProfileWithFallback(userId, username, channelId, channelName)
-        ]);
-
-        Logger.debug('[UserProfileCard] Profile data received:', rustProfile);
-        setProfileData(rustProfile);
-        setCachedProfile(freshCachedProfile);
-
-        // Refresh in background for next time
-        refreshProfileInBackground(userId, username, channelId, channelName);
-      } catch (error) {
-        Logger.error('Failed to fetch user profile:', error);
-      } finally {
-        setIsLoadingProfile(false);
-      }
+    // 2. The Rust profile (Helix, IVR, badges, 7TV) and the cosmetics profile,
+    // each rendered the moment it lands rather than both waiting on the slower.
+    // Rust also streams its Helix and 7TV answers ahead of the rest.
+    let alive = true;
+    const onPart = new Channel<ProfilePart>();
+    onPart.onmessage = (part) => {
+      if (!alive) return;
+      setEarly((prev) => {
+        const base = prev.userId === userId ? prev : { userId };
+        return part.part === 'twitch' ? { ...base, twitch: part.profile } : { ...base, seventv: part.cosmetics };
+      });
     };
-
-    fetchFullProfile();
+    const rustHalf = invoke<UserProfileComplete>('get_user_profile_complete', {
+      userId,
+      username,
+      channelId,
+      channelName,
+      onPart,
+    })
+      .then((profile) => {
+        if (alive) setProfileData(profile);
+      })
+      .catch((error) => Logger.error('Failed to fetch user profile:', error));
+    const cosmeticsHalf = getFullProfileWithFallback(userId, username, channelId, channelName)
+      .then((profile) => {
+        if (alive) setCachedProfile(profile);
+      })
+      .catch((error) => Logger.warn('[UserProfileCard] cosmetics profile failed:', error));
+    void Promise.allSettled([rustHalf, cosmeticsHalf]).then(() => {
+      if (alive) setSettledFor(userId);
+    });
+    return () => {
+      alive = false;
+    };
   }, [userId, username, getChannelContext]);
 
   // Resolve the BetterTTV Pro loyalty badge in parallel (non-blocking). Pops
@@ -1170,9 +1253,18 @@ const UserProfileCard = ({
   // Compute selected paint from cached cosmetics (for instant display)
   const selectedPaint = useMemo(() => {
     // Prefer cached cosmetics for instant paint display
-    const paints = cachedProfile?.seventvCosmetics?.paints || profileData?.seventv_cosmetics?.paints || [];
-    return paints.find((p: any) => p.selected) || null;
-  }, [cachedProfile?.seventvCosmetics, profileData?.seventv_cosmetics]);
+    const sources = [
+      cachedProfile?.seventvCosmetics?.paints,
+      profileData?.seventv_cosmetics?.paints,
+      earlySeventv?.paints,
+      wornCosmetics?.paints,
+    ];
+    for (const paints of sources) {
+      const worn = (paints as any[] | undefined)?.find((p: any) => p.selected);
+      if (worn) return worn;
+    }
+    return null;
+  }, [cachedProfile?.seventvCosmetics, profileData?.seventv_cosmetics, earlySeventv, wornCosmetics]);
 
   const adjustNameColor = useNameColorAdjust();
   const shownColor = adjustNameColor(color) ?? color;
@@ -1196,7 +1288,7 @@ const UserProfileCard = ({
     if (selectedPaint?.data?.layers) {
       selectedPaint.data.layers.forEach((layer: any) => {
         if (layer.ty?.__typename === 'PaintLayerTypeImage' && layer.ty.images) {
-          const img = layer.ty.images.find((i: any) => i.scale === 1) || layer.ty.images[0];
+          const img = pickPaintLayerImage(layer.ty.images);
           if (img && !img.localUrl) {
             queueCosmeticForCaching(layer.id, img.url);
           }
@@ -1214,14 +1306,14 @@ const UserProfileCard = ({
     // too-small overhangs the cursor on the right. Tailwind JIT requires the
     // literal in the class string so we can't extract a shared constant — keep
     // both in lockstep manually.
-    const cardWidth = 402, padding = 10, gap = 10;
-    const estimatedHeight = showMessages ? 700 : 400;
+    const cardWidth = isMemberCard ? MEMBER_CARD_WIDTH : PROFILE_CARD_WIDTH, padding = 10, gap = 10;
+    const estimatedHeight = showMessages || isMemberCard ? 700 : 400;
     let x = position.x - cardWidth - gap, y = position.y;
     if (x < padding) x = position.x + gap;
     if (y + estimatedHeight > window.innerHeight - padding) y = window.innerHeight - estimatedHeight - padding;
     y = Math.max(padding, y);
     setCardPosition({ x, y });
-  }, [position, showMessages]);
+  }, [position, showMessages, isMemberCard]);
 
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!(e.target as HTMLElement).closest('.profile-card-header')) return;
@@ -1232,7 +1324,7 @@ const UserProfileCard = ({
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isDragging) return;
-      const cardWidth = cardRef.current?.offsetWidth || 402;
+      const cardWidth = cardRef.current?.offsetWidth || PROFILE_CARD_WIDTH;
       const cardHeight = cardRef.current?.offsetHeight || 400;
       const padding = 10;
       setCardPosition({
@@ -1299,14 +1391,35 @@ const UserProfileCard = ({
     const twitchFromRust = profileData?.badges?.display_badges || [];
     const earnedFromRust = profileData?.badges?.earned_badges || [];
     
+    // Until a profile answers, show what the chat message itself carried:
+    // the badges worn in this room, already resolved to images.
+    const fromMessage =
+      twitchFromCache.length + twitchFromRust.length + earnedFromRust.length === 0
+        ? (messageBadges ?? [])
+            .filter((b) => b.info)
+            .map((b) => ({
+              id: String(b.key).split('/')[0],
+              image1x: b.info.image_url_1x,
+              image2x: b.info.image_url_2x,
+              image4x: b.info.image_url_4x,
+              title: b.info.title,
+              description: b.info.description,
+            }))
+        : [];
+
     // Merge display and earned badges for Twitch (deduped)
     const twitchMap = new Map<string, any>();
-    [...twitchFromCache, ...twitchFromRust, ...earnedFromRust].forEach((b: any) => {
+    [...twitchFromCache, ...twitchFromRust, ...earnedFromRust, ...fromMessage].forEach((b: any) => {
       if (!twitchMap.has(b.id || b.setID)) {
         twitchMap.set(b.id || b.setID, b);
       }
     });
-    const twitchBadges = Array.from(twitchMap.values()).map((b: any) => ({
+    // Being this channel's broadcaster, mod, VIP or sub says nothing about who
+    // someone is (everyone who goes live has the broadcaster badge), so the
+    // card shows only badges that belong to the person.
+    const twitchBadges = Array.from(twitchMap.values())
+      .filter((b: any) => !isChannelScopedTwitchBadge(b.setID ?? String(b.id ?? '').split('/')[0]))
+      .map((b: any) => ({
       id: b.id || `${b.setID}-${b.version}`,
       src: b.image4x || b.image_4x || b.image1x || b.image_1x,
       srcSet: `${b.image1x || b.image_1x} 1x, ${b.image2x || b.image_2x} 2x, ${b.image4x || b.image_4x} 4x`,
@@ -1316,9 +1429,11 @@ const UserProfileCard = ({
 
     // 7TV badges - prefer cached
     const seventvFromCache = cachedProfile?.seventvCosmetics?.badges || [];
-    const seventvFromRust = profileData?.seventv_cosmetics?.badges || [];
+    const seventvFromRust = profileData?.seventv_cosmetics?.badges || earlySeventv?.badges || [];
+    const seventvFromChat =
+      seventvFromCache.length + seventvFromRust.length === 0 ? wornCosmetics?.badges ?? [] : [];
     const seventvMap = new Map<string, any>();
-    [...seventvFromCache, ...seventvFromRust].forEach((b: any) => {
+    [...seventvFromCache, ...seventvFromRust, ...seventvFromChat].forEach((b: any) => {
       if (!seventvMap.has(b.id)) {
         seventvMap.set(b.id, b);
       }
@@ -1373,7 +1488,7 @@ const UserProfileCard = ({
       thirdPartyBadges,
       totalBadgeCount: twitchBadges.length + seventvBadges.length + thirdPartyBadges.length
     };
-  }, [cachedProfile, profileData, bttvProBadge]);
+  }, [cachedProfile, profileData, bttvProBadge, earlySeventv, wornCosmetics, messageBadges]);
 
   // StreamNook identity loadout for the viewed user. Drives which third-party
   // badges other members see: once a member curates (customized), only the
@@ -1404,7 +1519,7 @@ const UserProfileCard = ({
   const visibleTotalBadgeCount =
     totalBadgeCount - thirdPartyBadges.length + visibleThirdPartyBadges.length;
 
-  const twitchProfile = profileData?.twitch_profile;
+  const twitchProfile = profileData?.twitch_profile ?? earlyTwitch ?? undefined;
   const ivrData = profileData?.ivr_data;
 
   // The @handle must be the real LOGIN, not the display name. The login/display
@@ -1472,6 +1587,14 @@ const UserProfileCard = ({
     onClose();
   }, [userId, login, displayName, avatarUrl, onStartWhisper, isStandaloneWindow, onClose]);
 
+  // On a member card each provider group is its own glass tile inside the
+  // badges section, the same two-tier finish as the overview's sections.
+  // Tiles flow side by side, so a client with one badge doesn't claim a whole
+  // row; a big group simply fills its own.
+  const badgeGroupTile = isMemberCard ? 'glass-tile p-2.5 flex-auto min-w-[120px]' : '';
+  const memberSectionStyle =
+    isMemberCard && memberView.themeRgb ? { borderColor: `rgba(${memberView.themeRgb}, 0.3)` } : undefined;
+
   const renderBadgeGroup = (
     label: string,
     badges: any[],
@@ -1480,7 +1603,7 @@ const UserProfileCard = ({
   ) => {
     if (badges.length === 0) return null;
     return (
-      <div key={groupKey}>
+      <div key={groupKey} className={badgeGroupTile}>
         <p className="text-[10px] text-textSecondary uppercase tracking-wider font-medium mb-2">
           {label} <span className="text-textSecondary/50 tabular-nums">{badges.length}</span>
         </p>
@@ -1505,69 +1628,294 @@ const UserProfileCard = ({
           </span>
         </Tooltip>
       )}
-      {selectedPaint && (
-        <Tooltip content={`Paint: ${selectedPaint.name}`} side="top">
-          <button
-            onClick={() => openBadgesWithPaintInMain(selectedPaint.id)}
-            className="px-2 py-0.5 rounded-md text-[11px] font-bold inline-block relative overflow-hidden cursor-pointer hover:ring-1 hover:ring-accent/50 transition-all border border-transparent shadow-[inset_1px_1px_0_0_rgba(255,255,255,0.10),inset_-1px_-1px_0_0_rgba(0,0,0,0.18)]"
-            style={{
-              ...computePaintStyle(selectedPaint as any, color),
-              WebkitBackgroundClip: 'padding-box',
-              backgroundClip: 'padding-box',
-            }}
-          >
-            <span
-              style={{
-                ...computePaintStyle(selectedPaint as any, color),
-                filter: 'invert(1) contrast(1.5)',
-                WebkitBackgroundClip: 'text',
-                backgroundClip: 'text',
-              }}
+      {selectedPaint && <PaintChip paint={selectedPaint as never} color={color} />}
+      {seventvUserId && cardPrefs?.show_seventv_link !== false && <SevenTvProfileButton seventvUserId={seventvUserId} />}
+    </>
+  );
+
+  // A member card's actions: one compact row right under the hero, so the
+  // StreamNook profile below it stays the first thing you read.
+  const memberActionBtn =
+    'glass-button flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-2 text-xs text-white transition-colors hover:bg-accent/20';
+  const memberActionBar = (
+    <div className="flex items-stretch gap-1.5">
+      <Tooltip content={isFollowing ? `Unfollow ${displayName}` : `Follow ${displayName}`} side="top">
+        <button
+          onClick={handleFollowAction}
+          disabled={followLoading}
+          className={`${memberActionBtn} ${followLoading ? 'cursor-wait opacity-50' : ''}`}
+        >
+          {followLoading ? (
+            <Loader2 size={14} className="animate-spin text-accent" />
+          ) : isFollowing ? (
+            <UserMinus size={14} className="text-error" />
+          ) : (
+            <UserPlus size={14} className="text-success" />
+          )}
+          {isFollowing ? 'Unfollow' : 'Follow'}
+        </button>
+      </Tooltip>
+      <button onClick={handleWhisper} className={memberActionBtn}>
+        <MessageCircle size={14} className="text-accent" />
+        Whisper
+      </button>
+      <button onClick={() => setShowMessages(true)} className={memberActionBtn}>
+        <History size={14} className="text-accent" />
+        Messages
+      </button>
+      <button
+        onClick={() => {
+          useAppStore.getState().startOfflineChat(login);
+          onClose();
+        }}
+        className={memberActionBtn}
+      >
+        Join chat
+      </button>
+      <a href={`https://www.twitch.tv/${login}`} target="_blank" rel="noopener noreferrer" className={memberActionBtn}>
+        Twitch
+      </a>
+      <button
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(buildShareUrl(login));
+            setShareCopied(true);
+            window.setTimeout(() => setShareCopied(false), 1400);
+          } catch (err) {
+            Logger.error('[UserProfileCard] Failed to copy share link:', err);
+          }
+        }}
+        className={`${memberActionBtn} ${shareCopied ? 'text-success' : ''}`}
+      >
+        {shareCopied ? <Check size={14} className="text-success" /> : <Share2 size={14} className="text-accent" />}
+        {shareCopied ? 'Copied' : 'Share'}
+      </button>
+    </div>
+  );
+  // Section headings on a member card, matching the overview's own.
+  const memberHeading = (label: string, count?: number) => (
+    <h4 className="mb-2.5 flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-[0.14em] text-textPrimary">
+      {label}
+      {count !== undefined && <span className="font-medium tabular-nums text-textSecondary/60">{count}</span>}
+    </h4>
+  );
+
+  // Every badge the person has, grouped by provider. A member card shows it
+  // near the top, under their relics; the plain card further down.
+  const badgesPanel = (
+    <>
+            {/* Badges, provider-grouped inside one panel, no inner scroll.
+                Section also renders when the user has the StreamNook badge but
+                no chat badges, so the StreamNook identity always surfaces.
+                Order matches chat and the member hero (utils/badgeOrder):
+                Twitch, 7TV, third-party, then StreamNook. */}
+            {visibleTotalBadgeCount === 0 && streamNookBadgeCount === 0 && profileLoading && provider === 'twitch' && (
+              <div aria-hidden="true">
+                <p className="text-[11px] text-textSecondary uppercase tracking-wider font-semibold mb-2">Badges</p>
+                <div className="glass-panel rounded-md px-3 py-3 flex items-center gap-1.5">
+                  {[0, 1, 2, 3, 4].map((i) => (
+                    <span key={i} className="w-5 h-5 rounded bg-white/[0.06] animate-pulse" />
+                  ))}
+                </div>
+              </div>
+            )}
+            {(visibleTotalBadgeCount > 0 || streamNookBadgeCount > 0) && (
+              <div className={isMemberCard ? 'settings-card p-3.5' : ''} style={memberSectionStyle}>
+                {isMemberCard ? (
+                  memberHeading('Badges', visibleTotalBadgeCount + streamNookBadgeCount)
+                ) : (
+                  <p className="text-[11px] text-textSecondary uppercase tracking-wider font-semibold mb-2">
+                    Badges <span className="text-textSecondary/60 tabular-nums">{visibleTotalBadgeCount + streamNookBadgeCount}</span>
+                  </p>
+                )}
+                <div className={isMemberCard ? 'flex flex-wrap gap-2' : 'glass-panel rounded-md px-3 py-3 space-y-3'}>
+                {renderBadgeGroup('Twitch', twitchBadges, (b, i) => (
+                  <Tooltip key={`twitch-${b.id}-${i}`} content={b.description ? `${b.title}\n${b.description}` : b.title} side="top">
+                    <img
+                      src={b.src}
+                      alt={b.title}
+                      className="w-5 h-5 cursor-pointer hover:scale-110 transition-transform"
+                      onClick={() => openBadgesWithTargetInMain({ tab: 'twitch-badges', query: b.title })}
+                      onError={e => { e.currentTarget.style.display = 'none'; }}
+                    />
+                  </Tooltip>
+                ))}
+                {renderBadgeGroup('7TV', seventvBadges, (b, i) => (
+                  <Tooltip key={`7tv-${b.id}-${i}`} content={b.title} side="top">
+                    <FallbackImage
+                      src={b.src}
+                      fallbackUrls={b.fallbackUrls}
+                      alt={b.title}
+                      className="w-5 h-5 cursor-pointer hover:scale-110 transition-transform"
+                      onClick={() => openBadgesWithBadgeInMain(b.id)}
+                    />
+                  </Tooltip>
+                ))}
+                {(() => {
+                  // Third-party chat-client badges, grouped per provider so each
+                  // badge shows its source (FrankerFaceZ / BetterTTV / Chatterino
+                  // / …) instead of a single undifferentiated "Other" row.
+                  const renderThirdPartyItem = (b: any, i: number) => (
+                    <Tooltip key={`3p-${b.id}-${i}`} content={b.title} side="top">
+                      <img
+                        src={b.src}
+                        alt={b.title}
+                        className="w-5 h-5 cursor-pointer hover:scale-110 transition-transform"
+                        onClick={() => openBadgesWithTargetInMain(
+                          // Case-insensitive for the same reason the groups are:
+                          // contributor badges come from Rust as 'bttv', while the
+                          // Pro badge is tagged 'BTTV' to match its loadout key.
+                          providerGroupKey(b.provider) === 'bttv'
+                            ? { tab: 'bttv', query: b.title }
+                            : { tab: 'chat-clients', query: b.title },
+                        )}
+                        onError={e => { e.currentTarget.style.display = 'none'; }}
+                      />
+                    </Tooltip>
+                  );
+                  const known = new Set(THIRD_PARTY_PROVIDER_GROUPS.map(g => g.key));
+                  const ungrouped = visibleThirdPartyBadges.filter(b => !known.has(providerGroupKey(b.provider)));
+                  return (
+                    <>
+                      {THIRD_PARTY_PROVIDER_GROUPS.map(({ key, label }) =>
+                        renderBadgeGroup(
+                          label,
+                          visibleThirdPartyBadges.filter(b => providerGroupKey(b.provider) === key),
+                          renderThirdPartyItem,
+                          `3p-${key}`,
+                        ),
+                      )}
+                      {renderBadgeGroup('Other', ungrouped, renderThirdPartyItem, '3p-other')}
+                    </>
+                  );
+                })()}
+                {/* StreamNook badges. The active selection renders with the full
+                    tier-card tooltip (user identity surface). Other owned-but-
+                    inactive badges render as simple thumbnails alongside it,
+                    matching how 7TV / Third-party expose multiple owned items. */}
+                {streamNookBadgeCount > 0 && (
+                  <div className={badgeGroupTile}>
+                    <p className="text-[10px] text-textSecondary uppercase tracking-wider font-medium mb-2">
+                      StreamNook <span className="text-textSecondary/50 tabular-nums">{streamNookBadgeCount}</span>
+                    </p>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {streamNookUserNumber !== null && (
+                        <StreamNookBadge userId={cardMemberId} />
+                      )}
+                      {inactiveOwnedSlugs.map(({ slug, cosmetic, asset }) => (
+                        <Tooltip key={`sn-${slug}`} content={cosmetic.name} side="top">
+                          <img
+                            src={asset}
+                            alt={cosmetic.name}
+                            className="w-6 h-6 inline-block object-contain cursor-pointer hover:scale-110 transition-transform"
+                            draggable={false}
+                            onClick={openBadgesOnStreamNookInMain}
+                          />
+                        </Tooltip>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+    </>
+  );
+
+  // Follow, whisper, share, and the recent-messages toggle.
+  const actionsBlock = (
+    <>
+            {/* Actions: 2x2 grid + messages toggle */}
+            <div className="space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <Tooltip content={followLoading ? 'Processing...' : isFollowing ? `Unfollow ${displayName}` : `Follow ${displayName}`} side="top">
+                <button
+                  onClick={handleFollowAction}
+                  disabled={followLoading}
+                  className={`glass-button text-white text-xs py-2.5 px-3 rounded-md text-center transition-colors flex items-center justify-center gap-1.5 w-full ${followLoading
+                    ? 'opacity-50 cursor-wait'
+                    : isFollowing
+                      ? 'hover:bg-error/20 border-red-500/30'
+                      : 'hover:bg-success/20 border-green-500/30'
+                    }`}
+                >
+                  {followLoading ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin text-accent" />
+                      <span>Working...</span>
+                    </>
+                  ) : isFollowing ? (
+                    <>
+                      <UserMinus size={14} className="text-error" />
+                      <span>Unfollow</span>
+                    </>
+                  ) : (
+                    <>
+                      <UserPlus size={14} className="text-success" />
+                      <span>Follow</span>
+                    </>
+                  )}
+                </button>
+              </Tooltip>
+              <button
+                onClick={handleWhisper}
+                className="glass-button text-white text-xs py-2.5 px-3 rounded-md text-center hover:bg-accent/20 transition-colors flex items-center justify-center gap-1.5 w-full"
+              >
+                <MessageCircle size={14} className="text-accent" />
+                Whisper
+              </button>
+              <button
+                onClick={() => {
+                  useAppStore.getState().startOfflineChat(login);
+                  onClose();
+                }}
+                className="glass-button text-white text-xs py-2.5 px-3 rounded-md text-center hover:bg-accent/20 transition-colors w-full"
+              >
+                Join Chat
+              </button>
+              <a
+                href={`https://www.twitch.tv/${login}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="glass-button text-white text-xs py-2.5 px-3 rounded-md text-center hover:bg-accent/20 transition-colors flex items-center justify-center w-full"
+              >
+                Open on Twitch
+              </a>
+              {/* Share. Copies the streamnook.app/w/<channel> link; icon and label
+                  pop to a check on copy. Full width under the action grid. */}
+              <button
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(buildShareUrl(login));
+                    setShareCopied(true);
+                    window.setTimeout(() => setShareCopied(false), 1400);
+                  } catch (err) {
+                    Logger.error('[UserProfileCard] Failed to copy share link:', err);
+                  }
+                }}
+                className={`col-span-2 glass-button text-xs py-2.5 px-3 rounded-md text-center transition-colors flex items-center justify-center gap-1.5 w-full ${shareCopied ? 'text-success' : 'text-white hover:bg-accent/20'}`}
+              >
+                <span key={shareCopied ? 'copied' : 'share'} className="inline-flex animate-in zoom-in-50 duration-200">
+                  {shareCopied ? <Check size={14} className="text-success" /> : <Share2 size={14} className="text-accent" />}
+                </span>
+                {shareCopied ? 'Link copied!' : 'Share'}
+              </button>
+            </div>
+
+            {/* Trigger for the messages takeover. Chevron points UP because
+                clicking expands the messages region upward into the body
+                above. No count badge — the local in-session buffer is just
+                one of three sources we pull from, so showing its count would
+                be misleading (often 0 even when Justlog / robotty have
+                plenty of history). */}
+            <button
+              onClick={() => setShowMessages(true)}
+              className="w-full glass-button text-white text-xs py-2 px-3 rounded-md text-center transition-colors flex items-center justify-center gap-1.5 hover:bg-accent/15"
             >
-              {selectedPaint.name}
-            </span>
-          </button>
-        </Tooltip>
-      )}
-      {streamNookUserNumber !== null && (
-        <Tooltip content="View StreamNook profile" side="top">
-          <button
-            onClick={(e) => {
-              // Open this member's public StreamNook profile in the viewer
-              // overlay, mirroring the StreamNook chat badge. Routed to main
-              // because this card is usually an alwaysOnTop popout window whose
-              // own store doesn't mount the viewer. stopPropagation so the
-              // card's own drag/close handlers don't also fire.
-              e.stopPropagation();
-              if (userId) openProfileViewerInMain(userId);
-            }}
-            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-white/5 border border-transparent shadow-[inset_1px_1px_0_0_rgba(255,255,255,0.10),inset_-1px_-1px_0_0_rgba(0,0,0,0.18)] cursor-pointer hover:ring-1 hover:ring-accent/50 transition-all"
-          >
-            <img src={streamNookLogo} alt="StreamNook" className="w-3.5 h-3.5 object-contain" draggable={false} />
-            <span className="text-[11px] font-semibold text-textPrimary tabular-nums">#{streamNookUserNumber}</span>
-          </button>
-        </Tooltip>
-      )}
-      {seventvUserId && cardPrefs?.show_seventv_link !== false && (
-        <Tooltip content="Open 7TV profile" side="top">
-          <button
-            onClick={async (e) => {
-              e.stopPropagation();
-              try {
-                const { open } = await import('@tauri-apps/plugin-shell');
-                await open(`https://7tv.app/users/${seventvUserId}`);
-              } catch (err) {
-                Logger.error('Failed to open 7TV profile:', err);
-              }
-            }}
-            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-white/5 border border-transparent shadow-[inset_1px_1px_0_0_rgba(255,255,255,0.10),inset_-1px_-1px_0_0_rgba(0,0,0,0.18)] cursor-pointer hover:ring-1 hover:ring-accent/50 transition-all"
-          >
-            {/* 7TV brand blue is deliberately not tokenized — brand marks stay
-                the same in every theme. */}
-            <span className="text-[11px] font-bold tracking-wide" style={{ color: '#29b6f6' }}>7TV</span>
-          </button>
-        </Tooltip>
-      )}
+              <ChevronUp size={14} />
+              Show recent messages
+            </button>
+          </div>
     </>
   );
 
@@ -1580,10 +1928,17 @@ const UserProfileCard = ({
       )}
       <div
         ref={cardRef}
-        className={`${isStandaloneWindow ? 'w-full h-full' : 'fixed z-50 w-[402px] max-h-[88vh]'} sn-light-off user-profile-card backdrop-blur-xl shadow-2xl border border-borderSubtle rounded-lg overflow-hidden flex flex-col`}
+        className={`${isStandaloneWindow ? 'w-full h-full' : `fixed z-50 ${isMemberCard ? 'w-[760px]' : 'w-[440px]'} max-h-[88vh]`} sn-light-off user-profile-card backdrop-blur-xl shadow-2xl border border-borderSubtle rounded-lg overflow-hidden flex flex-col`}
         style={isStandaloneWindow ? { backgroundColor: 'rgba(0, 0, 0, 0.75)' } : cardStyle}
         onMouseDown={isStandaloneWindow ? undefined : handleMouseDown}
       >
+        {isMemberCard && <MemberProfileBackdrop view={memberView} />}
+        {isMemberCard && cardMemberId ? (
+          <div className="relative z-10 profile-card-header cursor-grab active:cursor-grabbing flex-shrink-0">
+            <MemberProfileHero userId={cardMemberId} view={memberView} preview={false} close={onClose} />
+          </div>
+        ) : (
+        <>
         {/* Sticky header: banner + floating avatar (absolute, so it can overflow the banner without getting clipped by the scroll body below). */}
         <div className="relative z-10 profile-card-header cursor-grab active:cursor-grabbing flex-shrink-0">
           <motion.div className="relative overflow-hidden" style={{ height: prefersReducedMotion ? 96 : bannerHeight }}>
@@ -1605,6 +1960,8 @@ const UserProfileCard = ({
                 alt={displayName}
                 className={`w-full h-full object-cover ${isBanned ? 'grayscale' : ''}`}
               />
+            ) : profileLoading ? (
+              <div className="w-full h-full bg-white/[0.06] animate-pulse" />
             ) : (
               <div className="w-full h-full flex items-center justify-center bg-accent/20">
                 <span className="text-2xl font-bold text-textPrimary">{displayName[0].toUpperCase()}</span>
@@ -1647,10 +2004,14 @@ const UserProfileCard = ({
           </button>
         </div>
 
+        </>
+        )}
+
         {/* Single scroll body. One padded container, vertical rhythm via space-y, no section dividers. */}
         <div
           ref={scrollBodyRef}
-          className="flex-1 overflow-y-auto min-h-0 scrollbar-thin"
+          className={`relative z-[1] flex-1 overflow-y-auto min-h-0 scrollbar-thin ${isMemberCard && memberView.hasAtmosphere ? 'bg-[rgba(10,10,14,0.58)] backdrop-blur-[44px]' : ''}`}
+          style={isMemberCard && memberView.hasAtmosphere ? ({ '--glass-strength': '0.45' } as React.CSSProperties) : undefined}
           onScroll={(e) => {
             const el = e.currentTarget;
             // Re-pin only when parked within a line or two of the bottom, so
@@ -1658,7 +2019,7 @@ const UserProfileCard = ({
             stickBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
           }}
         >
-          <motion.div className="px-4 pb-4 space-y-4" style={{ paddingTop: prefersReducedMotion ? 48 : bodyPadTop }}>
+          <motion.div className="px-4 pb-4 space-y-4" style={{ paddingTop: isMemberCard ? 14 : prefersReducedMotion ? 48 : bodyPadTop }}>
             {/* Takeover animation. When showMessages flips true, the profile
                 body (identity + stats + badges + actions) slides UP and out and
                 the messages view slides in — a "curtain reveal" feel.
@@ -1877,17 +2238,28 @@ const UserProfileCard = ({
                     transition={{ type: 'tween', duration: 0.22, ease: 'easeOut' }}
                     className="space-y-4"
                   >
+                    {isMemberCard && cardMemberId && (
+                      <>
+                        {memberActionBar}
+                        <MemberProfileSections userId={cardMemberId} view={memberView} afterRelics={badgesPanel} />
+                        {memberHeading('On Twitch')}
+                      </>
+                    )}
                     {/* Identity leads the profile body so it animates in/out as
                         one unit with the rest; in the messages view the collapsed
                         header's compact name carries the identity instead. */}
             <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="text-xl font-bold leading-tight" style={usernameStyle}>{displayName}</h3>
-                {identityChips}
-              </div>
-              <p className="text-sm text-textSecondary mt-0.5">
-                {provider === 'youtube' ? (youtubeProfile?.handle ?? `@${login}`) : `@${login}`}
-              </p>
+              {!isMemberCard && (
+                <>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-xl font-bold leading-tight" style={usernameStyle}>{displayName}</h3>
+                    {identityChips}
+                  </div>
+                  <p className="text-sm text-textSecondary mt-0.5">
+                    {provider === 'youtube' ? (youtubeProfile?.handle ?? `@${login}`) : `@${login}`}
+                  </p>
+                </>
+              )}
               {twitchProfile?.description && (
                 <p className="text-sm text-textPrimary/85 mt-2.5 leading-relaxed">{twitchProfile.description}</p>
               )}
@@ -1993,7 +2365,7 @@ const UserProfileCard = ({
                   joinDate: cardPrefs?.show_join_date !== false && !!twitchProfile,
                   followage: cardPrefs?.show_followage !== false
                     && !!ivrData
-                    && (!!ivrData.following_since || ivrData.status_hidden || !isLoadingProfile),
+                    && (!!ivrData.following_since || ivrData.status_hidden || !profileLoading),
                   followsCount: cardPrefs?.show_follows_count !== false && (ivrData?.follows_count ?? 0) > 0,
                   chatterCount: cardPrefs?.show_chatter_count !== false && (ivrData?.chatter_count ?? 0) > 0,
                   pastSub: cardPrefs?.show_past_subscriber !== false
@@ -2003,6 +2375,16 @@ const UserProfileCard = ({
                 const hasAnyStat = Object.values(rows).some(Boolean);
                 return (
                   <>
+                    {!ivrData && profileLoading && provider === 'twitch' && (
+                      <div className="glass-panel rounded-md px-3 py-2.5 space-y-2" aria-hidden="true">
+                        {[64, 52, 58].map((w) => (
+                          <div key={w} className="flex items-center justify-between gap-3">
+                            <span className="h-2.5 rounded bg-white/[0.06] animate-pulse" style={{ width: `${w - 24}%` }} />
+                            <span className="h-2.5 w-1/4 rounded bg-white/[0.06] animate-pulse" />
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     {hasAnyStat && (
                       <div className="glass-panel rounded-md px-3 py-2 space-y-1">
                         {rows.joinDate && (
@@ -2026,7 +2408,7 @@ const UserProfileCard = ({
                               </span>
                             )}
                           </div>
-                        ) : rows.followage && !isLoadingProfile && (
+                        ) : rows.followage && !profileLoading && (
                           <div className="flex items-baseline justify-between gap-3 text-[11px]">
                             <span className="text-textSecondary">Following</span>
                             <span className="text-textSecondary italic">Not following</span>
@@ -2146,111 +2528,7 @@ const UserProfileCard = ({
               })()}
             </div>
 
-            {/* Badges, provider-grouped inside one panel, no inner scroll.
-                Section also renders when the user has the StreamNook badge but
-                no chat badges, so the StreamNook identity always surfaces.
-                Order: StreamNook → Twitch → 7TV → Third-party. StreamNook leads
-                because it's the strongest community signal in our app; Twitch
-                is the platform tier; 7TV/other are cosmetic providers. */}
-            {(visibleTotalBadgeCount > 0 || streamNookBadgeCount > 0) && (
-              <div>
-                <p className="text-[11px] text-textSecondary uppercase tracking-wider font-semibold mb-2">
-                  Badges <span className="text-textSecondary/60 tabular-nums">{visibleTotalBadgeCount + streamNookBadgeCount}</span>
-                </p>
-                <div className="glass-panel rounded-md px-3 py-3 space-y-3">
-                {/* StreamNook badges. The active selection renders with the full
-                    tier-card tooltip (user identity surface). Other owned-but-
-                    inactive badges render as simple thumbnails alongside it,
-                    matching how 7TV / Third-party expose multiple owned items. */}
-                {streamNookBadgeCount > 0 && (
-                  <div>
-                    <p className="text-[10px] text-textSecondary uppercase tracking-wider font-medium mb-2">
-                      StreamNook <span className="text-textSecondary/50 tabular-nums">{streamNookBadgeCount}</span>
-                    </p>
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      {streamNookUserNumber !== null && (
-                        <StreamNookBadge userId={userId} userNumber={streamNookUserNumber} />
-                      )}
-                      {inactiveOwnedSlugs.map(({ slug, cosmetic }) => {
-                        const asset = COSMETIC_ASSET_CHAT_BY_SLUG[slug];
-                        return (
-                          <Tooltip key={`sn-${slug}`} content={cosmetic.name} side="top">
-                            <img
-                              src={asset}
-                              alt={cosmetic.name}
-                              className="w-6 h-6 inline-block object-contain cursor-pointer hover:scale-110 transition-transform"
-                              draggable={false}
-                              onClick={openBadgesOnStreamNookInMain}
-                            />
-                          </Tooltip>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-                {renderBadgeGroup('Twitch', twitchBadges, (b, i) => (
-                  <Tooltip key={`twitch-${b.id}-${i}`} content={b.description ? `${b.title}\n${b.description}` : b.title} side="top">
-                    <img
-                      src={b.src}
-                      alt={b.title}
-                      className="w-5 h-5 cursor-pointer hover:scale-110 transition-transform"
-                      onClick={() => openBadgesWithTargetInMain({ tab: 'twitch-badges', query: b.title })}
-                      onError={e => { e.currentTarget.style.display = 'none'; }}
-                    />
-                  </Tooltip>
-                ))}
-                {renderBadgeGroup('7TV', seventvBadges, (b, i) => (
-                  <Tooltip key={`7tv-${b.id}-${i}`} content={b.title} side="top">
-                    <FallbackImage
-                      src={b.src}
-                      fallbackUrls={b.fallbackUrls}
-                      alt={b.title}
-                      className="w-5 h-5 cursor-pointer hover:scale-110 transition-transform"
-                      onClick={() => openBadgesWithBadgeInMain(b.id)}
-                    />
-                  </Tooltip>
-                ))}
-                {(() => {
-                  // Third-party chat-client badges, grouped per provider so each
-                  // badge shows its source (FrankerFaceZ / BetterTTV / Chatterino
-                  // / …) instead of a single undifferentiated "Other" row.
-                  const renderThirdPartyItem = (b: any, i: number) => (
-                    <Tooltip key={`3p-${b.id}-${i}`} content={b.title} side="top">
-                      <img
-                        src={b.src}
-                        alt={b.title}
-                        className="w-5 h-5 cursor-pointer hover:scale-110 transition-transform"
-                        onClick={() => openBadgesWithTargetInMain(
-                          // Case-insensitive for the same reason the groups are:
-                          // contributor badges come from Rust as 'bttv', while the
-                          // Pro badge is tagged 'BTTV' to match its loadout key.
-                          providerGroupKey(b.provider) === 'bttv'
-                            ? { tab: 'bttv', query: b.title }
-                            : { tab: 'chat-clients', query: b.title },
-                        )}
-                        onError={e => { e.currentTarget.style.display = 'none'; }}
-                      />
-                    </Tooltip>
-                  );
-                  const known = new Set(THIRD_PARTY_PROVIDER_GROUPS.map(g => g.key));
-                  const ungrouped = visibleThirdPartyBadges.filter(b => !known.has(providerGroupKey(b.provider)));
-                  return (
-                    <>
-                      {THIRD_PARTY_PROVIDER_GROUPS.map(({ key, label }) =>
-                        renderBadgeGroup(
-                          label,
-                          visibleThirdPartyBadges.filter(b => providerGroupKey(b.provider) === key),
-                          renderThirdPartyItem,
-                          `3p-${key}`,
-                        ),
-                      )}
-                      {renderBadgeGroup('Other', ungrouped, renderThirdPartyItem, '3p-other')}
-                    </>
-                  );
-                })()}
-              </div>
-            </div>
-          )}
+            {!isMemberCard && badgesPanel}
 
             {/* Personal nickname + chat color (only visible to this user).
                 Doesn't change @mention behavior — Twitch IRC still resolves
@@ -2266,97 +2544,7 @@ const UserProfileCard = ({
               twitchColor={color}
             />
 
-            {/* Actions: 2x2 grid + messages toggle */}
-            <div className="space-y-2">
-            <div className="grid grid-cols-2 gap-2">
-              <Tooltip content={followLoading ? 'Processing...' : isFollowing ? `Unfollow ${displayName}` : `Follow ${displayName}`} side="top">
-                <button
-                  onClick={handleFollowAction}
-                  disabled={followLoading}
-                  className={`glass-button text-white text-xs py-2.5 px-3 rounded-md text-center transition-colors flex items-center justify-center gap-1.5 w-full ${followLoading
-                    ? 'opacity-50 cursor-wait'
-                    : isFollowing
-                      ? 'hover:bg-error/20 border-red-500/30'
-                      : 'hover:bg-success/20 border-green-500/30'
-                    }`}
-                >
-                  {followLoading ? (
-                    <>
-                      <Loader2 size={14} className="animate-spin text-accent" />
-                      <span>Working...</span>
-                    </>
-                  ) : isFollowing ? (
-                    <>
-                      <UserMinus size={14} className="text-error" />
-                      <span>Unfollow</span>
-                    </>
-                  ) : (
-                    <>
-                      <UserPlus size={14} className="text-success" />
-                      <span>Follow</span>
-                    </>
-                  )}
-                </button>
-              </Tooltip>
-              <button
-                onClick={handleWhisper}
-                className="glass-button text-white text-xs py-2.5 px-3 rounded-md text-center hover:bg-accent/20 transition-colors flex items-center justify-center gap-1.5 w-full"
-              >
-                <MessageCircle size={14} className="text-accent" />
-                Whisper
-              </button>
-              <button
-                onClick={() => {
-                  useAppStore.getState().startOfflineChat(login);
-                  onClose();
-                }}
-                className="glass-button text-white text-xs py-2.5 px-3 rounded-md text-center hover:bg-accent/20 transition-colors w-full"
-              >
-                Join Chat
-              </button>
-              <a
-                href={`https://www.twitch.tv/${login}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="glass-button text-white text-xs py-2.5 px-3 rounded-md text-center hover:bg-accent/20 transition-colors flex items-center justify-center w-full"
-              >
-                Open on Twitch
-              </a>
-              {/* Share. Copies the streamnook.app/w/<channel> link; icon and label
-                  pop to a check on copy. Full width under the action grid. */}
-              <button
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(buildShareUrl(login));
-                    setShareCopied(true);
-                    window.setTimeout(() => setShareCopied(false), 1400);
-                  } catch (err) {
-                    Logger.error('[UserProfileCard] Failed to copy share link:', err);
-                  }
-                }}
-                className={`col-span-2 glass-button text-xs py-2.5 px-3 rounded-md text-center transition-colors flex items-center justify-center gap-1.5 w-full ${shareCopied ? 'text-success' : 'text-white hover:bg-accent/20'}`}
-              >
-                <span key={shareCopied ? 'copied' : 'share'} className="inline-flex animate-in zoom-in-50 duration-200">
-                  {shareCopied ? <Check size={14} className="text-success" /> : <Share2 size={14} className="text-accent" />}
-                </span>
-                {shareCopied ? 'Link copied!' : 'Share'}
-              </button>
-            </div>
-
-            {/* Trigger for the messages takeover. Chevron points UP because
-                clicking expands the messages region upward into the body
-                above. No count badge — the local in-session buffer is just
-                one of three sources we pull from, so showing its count would
-                be misleading (often 0 even when Justlog / robotty have
-                plenty of history). */}
-            <button
-              onClick={() => setShowMessages(true)}
-              className="w-full glass-button text-white text-xs py-2 px-3 rounded-md text-center transition-colors flex items-center justify-center gap-1.5 hover:bg-accent/15"
-            >
-              <ChevronUp size={14} />
-              Show recent messages
-            </button>
-          </div>
+            {!isMemberCard && actionsBlock}
 
             {/* Chat filters: hide this user's messages locally, in this channel
                 or everywhere. Available to every viewer (not a mod action, and

@@ -3,6 +3,12 @@
 // before the username, so "last" = rightmost = adjacent to the name; YouTube rows
 // put badges AFTER the name, where "last" is still the rightmost slot):
 //
+//   0. Source platform mark          - only on a row from a platform OTHER than
+//      (chat only, merged feeds)       the one being watched, so the tier is
+//                                      absent on every ordinary row. Leftmost
+//                                      because it answers "which community is
+//                                      this person in" before anything about
+//                                      their standing in it.
 //   1. Channel-contextual Twitch     - your standing in THIS channel: subscriber,
 //      badges (chat only)              predictions/poll, bits, founder, etc. Dynamic.
 //   2. Global Twitch badges          - your portable Twitch identity: partner,
@@ -13,8 +19,8 @@
 //   5. StreamNook member badge       - who you are on StreamNook. Rightmost, next
 //                                       to the name, where readers look first.
 //
-// The profile card is exempt: it groups badges by PROVIDER in labeled sections
-// and deliberately leads with StreamNook (see UserProfileCard's badges panel).
+// Profiles follow the same order: a member card's worn-badge row, and the user
+// card's badge panel, which groups badges by provider in that sequence.
 // Chat surfaces order the tiers by laying their JSX blocks out in this sequence;
 // this module owns the only piece that needs real logic: the split of a
 // chatter's Twitch badges into the channel-contextual vs global tiers.
@@ -32,6 +38,35 @@ export const CHANNEL_SPECIFIC_TWITCH_BADGES = new Set([
   'hype-train',
   'predictions',
 ]);
+
+/**
+ * Twitch badge SETS that describe a standing in ONE channel (being its
+ * broadcaster, mod or VIP there, subbed, cheered), never who someone is. They
+ * are left out wherever a profile shows off a person's badges: everyone who
+ * goes live has the broadcaster badge, and a sub badge is one channel's art.
+ * A superset of CHANNEL_SPECIFIC_TWITCH_BADGES, which only drives ordering.
+ */
+export const CHANNEL_SCOPED_TWITCH_BADGE_SETS = new Set([
+  'broadcaster',
+  'moderator',
+  'lead_moderator',
+  'vip',
+  'subscriber',
+  'founder',
+  'bits',
+  'bits-leader',
+  'sub-gifter',
+  'sub-gift-leader',
+  'artist-badge',
+  'predictions',
+  'hype-train',
+  'clip-champ',
+]);
+
+/** True for a badge set that belongs to one channel, not to the person. */
+export function isChannelScopedTwitchBadge(setId: string | null | undefined): boolean {
+  return !!setId && CHANNEL_SCOPED_TWITCH_BADGE_SETS.has(setId);
+}
 
 /** True for a Twitch badge set scoped to the current channel (subscriber, poll, …). */
 export function isChannelSpecificTwitchBadge(setId: string): boolean {

@@ -25,6 +25,10 @@ interface StyledChatNameProps {
   accentColor: string;
   /** Extra node rendered inside the name span (e.g. the partner verified badge). */
   badge?: ReactNode;
+  /** Replaces the name's "Right-click to reply" tooltip: a StreamNook member's
+   *  decode card (MemberReveal), with its chassis class. */
+  tooltip?: ReactNode;
+  tooltipClassName?: string;
   /** Chat mode wraps the name in the reply tooltip + makes it clickable. The
    *  settings preview passes this falsey so the name is inert. */
   interactive?: boolean;
@@ -46,6 +50,8 @@ export function StyledChatName({
   separator,
   accentColor,
   badge,
+  tooltip,
+  tooltipClassName,
   interactive = false,
   onClick,
   onContextMenu,
@@ -108,7 +114,12 @@ export function StyledChatName({
         />
       )}
       {interactive ? (
-        <Tooltip content="Right-click to reply" side="top">
+        <Tooltip
+          content={tooltip ?? 'Right-click to reply'}
+          side="top"
+          delay={tooltip ? 120 : undefined}
+          containerClassName={tooltip ? tooltipClassName : undefined}
+        >
           {nameSpan}
         </Tooltip>
       ) : (

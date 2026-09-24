@@ -14,6 +14,7 @@ import {
   computePaintStyle,
   getBadgeImageUrls,
   getBadgeFallbackUrls,
+  pickPaintLayerImage,
   queueCosmeticForCaching,
   clearUserCache as clear7TVCache,
 } from '../../services/seventvService';
@@ -619,7 +620,7 @@ const ProfileSettings = () => {
     if ((seventvPaint as any)?.data?.layers) {
       ((seventvPaint as any).data.layers as any[]).forEach((layer: any) => {
         if (layer.ty?.__typename === 'PaintLayerTypeImage' && layer.ty.images) {
-          const img = layer.ty.images.find((i: any) => i.scale === 1) || layer.ty.images[0];
+          const img = pickPaintLayerImage(layer.ty.images);
           if (img && !img.localUrl) {
             queueCosmeticForCaching(layer.id, img.url);
           }
@@ -1165,7 +1166,7 @@ const ProfileSettings = () => {
                 Twitch global, then 7TV, then third-party. The card has no channel
                 context, so the channel-contextual tier (sub/poll) never shows here. */}
             {streamNookUserNumber !== null && currentUser?.user_id && (
-              <StreamNookBadge userId={currentUser.user_id} userNumber={streamNookUserNumber} side="bottom" />
+              <StreamNookBadge userId={currentUser.user_id} side="bottom" />
             )}
             {selectedGlobalBadge && (
               <Tooltip content={`Twitch: ${selectedGlobalBadge.title}`} side="top">
@@ -1532,7 +1533,7 @@ const ProfileSettings = () => {
             <span className="mr-1.5 align-middle text-[11px] text-textMuted">3:45</span>
             {streamNookUserNumber !== null && currentUser?.user_id && (
               <span className="mr-1 inline-flex align-middle">
-                <StreamNookBadge userId={currentUser.user_id} userNumber={streamNookUserNumber} side="top" />
+                <StreamNookBadge userId={currentUser.user_id} side="top" />
               </span>
             )}
             <span

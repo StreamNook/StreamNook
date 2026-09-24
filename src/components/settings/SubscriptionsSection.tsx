@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { motion } from 'framer-motion';
 import { DollarSign, Gift, Crown, Star, ChevronRight } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
@@ -9,7 +10,7 @@ import {
   type MySubscription,
   type PastSubscription,
 } from '../../services/twitchService';
-import { fetchIVRSubage } from '../../services/ivrService';
+import type { IvrSubageSummary } from '../../types';
 
 // USD list price per tier per month. The spend figure is an estimate only:
 // regional pricing varies, active Prime / gifted subs cost nothing (and are
@@ -66,11 +67,12 @@ const SubscriptionsSection = ({ login }: { login: string }) => {
           active
             .filter((s) => s.channelLogin.toLowerCase() !== self)
             .map(async (s) => {
-              const data = await fetchIVRSubage(login, s.channelLogin).catch(() => null);
-              // Lifetime months subscribed, not the current streak. meta.subMonths
-              // is the same figure; streak is only a last-resort fallback.
-              const m = data?.cumulative?.months ?? data?.meta?.subMonths ?? data?.streak?.months ?? 0;
-              return [s.channelLogin.toLowerCase(), m] as const;
+              const data = await invoke<IvrSubageSummary | null>('get_ivr_subage_summary', {
+                login,
+                channel: s.channelLogin,
+              }).catch(() => null);
+              // Lifetime months subscribed, not the current streak.
+              return [s.channelLogin.toLowerCase(), data?.lifetime_months ?? 0] as const;
             }),
         );
         if (alive) {

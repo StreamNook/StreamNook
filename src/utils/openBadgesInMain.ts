@@ -82,32 +82,6 @@ export function openBadgesWithTargetInMain(target: { tab: string; query?: string
   useAppStore.getState().openBadgesWithTarget(target);
 }
 
-// Open a member's public StreamNook profile in the draggable viewer overlay.
-// PublicProfileOverlay is mounted ONLY in the full App, not in the profile-card
-// popout window (`#/profile` renders ProfileCardPage alone) — so calling the
-// store directly from a popout flips state nothing renders. From a popout we
-// emit to main instead, then close THIS profile card: it's alwaysOnTop, so
-// leaving it open would occlude the viewer that just opened in main. MultiChat
-// popouts are persistent surfaces, so those stay open.
-export function openProfileViewerInMain(userId: string): void {
-  const popout = isPopoutWindow();
-  Logger.debug(`[openBadgesInMain] openProfileViewer popout=${popout} userId=${userId}`);
-  if (popout) {
-    void (async () => {
-      await emitToMain('open-profile-viewer', { userId });
-      if (window.location.hash.startsWith('#/profile')) {
-        try {
-          const { getCurrentWindow } = await import('@tauri-apps/api/window');
-          await getCurrentWindow().close();
-        } catch (err) {
-          Logger.warn('[openBadgesInMain] close profile popout failed:', err);
-        }
-      }
-    })();
-    return;
-  }
-  useAppStore.getState().openProfileViewer(userId);
-}
 
 // Open a specific badge's detail in the badges overlay — clicked on a chat MESSAGE
 // (Twitch/BTTV/etc.). The overlay lives ONLY in main, so from a popout we ensure

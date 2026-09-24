@@ -1,5 +1,4 @@
 import { useEffect, useState, useRef, useSyncExternalStore, memo } from 'react';
-import type { ReactNode, MouseEvent } from 'react';
 // Fraunces italic backs the tier-badge rank number below; importing it here
 // (not main.tsx) keeps the axis out of every window's boot path.
 import '@fontsource-variable/fraunces/wght-italic.css';
@@ -14,7 +13,6 @@ import {
   subscribeAtmospheresVersion,
 } from '../services/supabaseService';
 import { resolveCosmeticAsset } from './cosmeticAssets';
-import { openProfileViewerInMain } from '../utils/openBadgesInMain';
 import { useChatUserStore } from '../stores/chatUserStore';
 import { AtmosphereBackground } from './AtmosphereBackground';
 import { MajorCologneChrome } from './MajorCologneChrome';
@@ -22,15 +20,12 @@ import { getAtmosphere } from '../services/atmospheres';
 import { MAJOR_COLOGNE_THEME_ID } from '../services/cologneEvent';
 
 interface StreamNookBadgeProps {
-  userId: string | undefined;
-  userNumber: number | null;
-  /** Which side of the trigger the hover popover renders on. Defaults to
-   *  'top' (chat convention — popover sits above the chat row). Surfaces
-   *  near the top of the viewport (e.g. ProfileSettings header) should pass
-   *  'bottom' so the popover grows downward and doesn't clip the title bar.
-   *  TooltipManager has a flip-on-overflow guard but it measures the
-   *  popover ONCE at mount, before the cypher-reveal animation expands it,
-   *  so the auto-flip can miss this. */
+  /** The MEMBER: a Twitch user id. Everything this badge shows about who they
+   *  are (their equipped cosmetic, their profile) is filed under it. */
+  userId: string | null | undefined;
+  /** Which side of the trigger the name tooltip renders on. Defaults to
+   *  'top' (chat convention); surfaces near the top of the viewport pass
+   *  'bottom'. */
   side?: 'top' | 'bottom' | 'left' | 'right';
 }
 
@@ -374,7 +369,7 @@ export const StreamNookTierCard = memo(function StreamNookTierCard({
  * so it re-renders when the user's selection changes (locally or via the
  * realtime subscription).
  */
-const useActiveCosmeticAsset = (userId: string | undefined): string | null => {
+const useActiveCosmeticAsset = (userId: string | null | undefined): string | null => {
   useSyncExternalStore(subscribeCosmeticsVersion, getCosmeticsVersion, getCosmeticsVersion);
   if (!userId) return null;
   const slug = getActiveCosmeticSlug(userId);
@@ -389,95 +384,96 @@ const useActiveCosmeticAsset = (userId: string | undefined): string | null => {
   );
 };
 
-export const StreamNookBadge = memo(function StreamNookBadge({
+/**
+ * A member's decode card: their number resolving out of the cipher, tinted by
+ * rank tier and themed by their atmosphere (or Cologne chrome). Shown when you
+ * hover a member's NAME in chat, the one place it lives; clicking the name
+ * opens their profile. Mounted only while the tooltip is open.
+ */
+export function MemberReveal({
   userId,
+  chatKey,
   userNumber,
-  side = 'top',
-}: StreamNookBadgeProps) {
-  // Click opens this member's public StreamNook profile in the draggable viewer
-  // overlay. Routed via openProfileViewerInMain so it also works from the
-  // profile-card / MultiChat popout windows (their own store doesn't mount the
-  // viewer). stopPropagation so the chat row's own click handler (which opens
-  // the Twitch UserProfileCard) doesn't also fire.
-  const handleClick = (e: MouseEvent) => {
-    e.stopPropagation();
-    if (userId) openProfileViewerInMain(userId);
-  };
-
-  const cosmeticAsset = useActiveCosmeticAsset(userId);
+}: {
+  userId: string | null | undefined;
+  chatKey?: string;
+  userNumber: number;
+}) {
   const cosmeticSlug = getActiveCosmeticSlug(userId);
-  const cosmetic = cosmeticSlug ? getCosmeticBySlug(cosmeticSlug) : null;
-  const cosmeticName = cosmetic?.name ?? null;
+  const cosmeticName = cosmeticSlug ? getCosmeticBySlug(cosmeticSlug)?.name ?? null : null;
 
   // The member's StreamNook Atmosphere, if chat has resolved it for this user, so
-  // the cypher card adopts their profile theme. Reads the already-resolved value
-  // (no per-badge fetch); a primitive selector means this only re-renders when
-  // THIS user's atmosphere changes.
-  // Re-render once the atmosphere catalog has loaded (or changes) so the
-  // getAtmosphere lookup below resolves to the real definition.
+  // the card adopts their profile theme. Reads the already-resolved value (no
+  // fetch); a primitive selector means this only re-renders when THIS user's
+  // atmosphere changes. Re-renders once the atmosphere catalog has loaded (or
+  // changes) so the getAtmosphere lookup resolves to the real definition.
   useSyncExternalStore(subscribeAtmospheresVersion, getAtmospheresVersion, getAtmospheresVersion);
-  const atmosphereId = useChatUserStore((s) => (userId ? s.users.get(userId)?.atmosphereId ?? null : null));
+  const storeKey = chatKey ?? userId;
+  const atmosphereId = useChatUserStore((s) => (storeKey ? s.users.get(storeKey)?.atmosphereId ?? null : null));
   const atmosphere = atmosphereId ? getAtmosphere(atmosphereId) : null;
-  // CS2 Major Cologne cosmetics this member applied (themes the hover card too).
+  // CS2 Major Cologne cosmetics this member applied (themes the card too).
   // The chrome asset URLs come from the Cologne atmosphere row (R2).
-  const cologne = useChatUserStore((s) => (userId ? s.users.get(userId)?.cologne ?? null : null));
+  const cologne = useChatUserStore((s) => (storeKey ? s.users.get(storeKey)?.cologne ?? null : null));
   const cologneAtm = cologne ? getAtmosphere(MAJOR_COLOGNE_THEME_ID) : null;
 
-  // If the registry lookup somehow missed (shouldn't happen given isSN was true),
-  // fall back to the plain label so we never render a broken animation.
-  let tooltipContent: ReactNode;
-  let containerClassName: string | undefined;
-  if (userNumber != null) {
-    const tier = getTier(userNumber);
-    tooltipContent = (
-      <>
-        {cologne && cologneAtm ? (
-          <div className="absolute inset-0 overflow-hidden rounded-2xl">
-            {/* Cologne theme: the background wash (+ coin if they enabled it). The
-                gold frame is a chat-row border and is omitted here so it doesn't
-                fight the card's own rounded chassis. */}
-            <MajorCologneChrome
-              textureUrl={cologneAtm.chromeTexture ?? ''}
-              coinUrl={cologneAtm.chromeCoin}
-              coin={cologne.coin}
-            />
-          </div>
-        ) : atmosphere ? (
-          <div className="absolute inset-0 overflow-hidden rounded-2xl">
-            {/* Frosted so the badge card's number + label stay readable over a
-                busy image atmosphere (the big profile stays sharp). */}
-            <AtmosphereBackground atm={atmosphere} variant="profile" blur />
-          </div>
-        ) : null}
-        {tier.auraClassName && <div className={tier.auraClassName} />}
-        <MatrixDecode numberText={String(userNumber)} tier={tier} cosmeticName={cosmeticName} />
-        <div className="relative mt-3 text-[8px] font-medium uppercase tracking-[0.3em] text-white/35">
-          Click to open profile
+  const tier = getTier(userNumber);
+  return (
+    <>
+      {cologne && cologneAtm ? (
+        <div className="absolute inset-0 overflow-hidden rounded-2xl">
+          {/* Cologne theme: the background wash (+ coin if they enabled it). The
+              gold frame is a chat-row border and is omitted here so it doesn't
+              fight the card's own rounded chassis. */}
+          <MajorCologneChrome
+            textureUrl={cologneAtm.chromeTexture ?? ''}
+            coinUrl={cologneAtm.chromeCoin}
+            coin={cologne.coin}
+          />
         </div>
-      </>
-    );
-    containerClassName = CARD_CLASS;
-  } else {
-    tooltipContent = 'StreamNook user';
-  }
+      ) : atmosphere ? (
+        <div className="absolute inset-0 overflow-hidden rounded-2xl">
+          {/* Frosted so the number + label stay readable over a busy image
+              atmosphere. */}
+          <AtmosphereBackground atm={atmosphere} variant="profile" blur />
+        </div>
+      ) : null}
+      {tier.auraClassName && <div className={tier.auraClassName} />}
+      <MatrixDecode numberText={String(userNumber)} tier={tier} cosmeticName={cosmeticName} />
+      <div className="relative mt-3 text-[8px] font-medium uppercase tracking-[0.3em] text-white/35">
+        Click to open profile
+      </div>
+    </>
+  );
+}
+
+/** The tooltip chassis MemberReveal renders in (pass as containerClassName). */
+export const MEMBER_REVEAL_CARD_CLASS = CARD_CLASS;
+
+/**
+ * The StreamNook badge: the member's equipped badge art (or the default mark).
+ * A plain badge like every other provider's, named on hover. Who the member is
+ * lives on their name: hovering it decodes their number (MemberReveal), and
+ * clicking it opens their profile.
+ */
+export const StreamNookBadge = memo(function StreamNookBadge({
+  userId,
+  side = 'top',
+}: StreamNookBadgeProps) {
+  const cosmeticAsset = useActiveCosmeticAsset(userId);
+  const cosmeticSlug = getActiveCosmeticSlug(userId);
+  const cosmeticName = cosmeticSlug ? getCosmeticBySlug(cosmeticSlug)?.name ?? null : null;
 
   const src = cosmeticAsset ?? streamNookLogo;
-  const alt = cosmeticName ? `StreamNook ${cosmeticName}` : 'StreamNook';
+  const label = cosmeticName ? `StreamNook ${cosmeticName}` : 'StreamNook';
 
   return (
-    <Tooltip
-      content={tooltipContent}
-      side={side}
-      delay={120}
-      containerClassName={containerClassName}
-    >
+    <Tooltip content={label} side={side} delay={120}>
       <img
         src={src}
-        alt={alt}
+        alt={label}
         loading="lazy"
-        className="w-6 h-6 inline-block object-contain cursor-pointer hover:scale-110 transition-transform"
+        className="w-6 h-6 inline-block object-contain"
         draggable={false}
-        onClick={handleClick}
       />
     </Tooltip>
   );

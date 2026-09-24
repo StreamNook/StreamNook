@@ -24,6 +24,7 @@ import { normalizeProfileBadges, type NormalizedBadge } from '../../utils/profil
 import { FallbackImage } from '../../components/FallbackImage';
 import { StreamNookBadge } from '../../components/StreamNookBadge';
 import { Logger } from '../../utils/logger';
+import { isChannelScopedTwitchBadge } from '../../utils/badgeOrder';
 
 // The avatar stays with YouScreen: it is the one piece that needs no cosmetics
 // lookup, and keeping it there lets the layout own its own alignment.
@@ -50,23 +51,6 @@ function nameSizeClass(name: string): string {
   return 'text-[18.5px]';
 }
 
-/** Twitch badge sets that only mean something inside one channel. */
-const CHANNEL_SCOPED_SETS = new Set([
-  'broadcaster',
-  'moderator',
-  'lead_moderator',
-  'vip',
-  'subscriber',
-  'founder',
-  'bits',
-  'bits-leader',
-  'sub-gifter',
-  'sub-gift-leader',
-  'artist-badge',
-  'predictions',
-  'hype-train',
-  'clip-champ',
-]);
 
 export const OwnIdentityHeader: React.FC<Props> = ({ userId, displayName, login }) => {
   // Chat already holds paint and badge for anyone who has spoken, including
@@ -140,7 +124,7 @@ export const OwnIdentityHeader: React.FC<Props> = ({ userId, displayName, login 
   const displayed = new Set<string>(profile?.displayBadgeIds ?? []);
   const twitchWornIds = new Set<string>(
     ((profile?.twitchBadges ?? []) as { id?: string; setID?: string }[])
-      .filter((b) => b.id && displayed.has(b.id) && !CHANNEL_SCOPED_SETS.has(b.setID ?? ''))
+      .filter((b) => b.id && displayed.has(b.id) && !isChannelScopedTwitchBadge(b.setID))
       .map((b) => b.id as string),
   );
   const twitchWorn = grouped.twitch.filter((b) => twitchWornIds.has(b.id));
@@ -239,7 +223,7 @@ export const OwnIdentityHeader: React.FC<Props> = ({ userId, displayName, login 
             // a badge to everyone who is not one.
             // `side="bottom"` because this sits at the top of the viewport and
             // a popover growing upward clips off screen.
-            <StreamNookBadge userId={userId} userNumber={userNumber} side="bottom" />
+            <StreamNookBadge userId={userId} side="bottom" />
           )}
           {badges.map((b, i) => (
             <FallbackImage

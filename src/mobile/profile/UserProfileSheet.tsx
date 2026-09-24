@@ -18,6 +18,7 @@ import { historyKey } from '../../utils/chatterIdentity';
 import { useChatUserStore } from '../../stores/chatUserStore';
 import { computePaintStyle } from '../../services/seventvService';
 import { getFullProfileWithFallback, getProfileFromMemoryCache } from '../../services/cosmeticsCache';
+import { memberIdFor } from '../../utils/memberIdentity';
 import { getStreamNookUserNumber } from '../../services/supabaseService';
 import { normalizeProfileBadges, type NormalizedBadge } from '../../utils/profileBadges';
 import { FallbackImage } from '../../components/FallbackImage';
@@ -216,7 +217,11 @@ const ProfileBody: React.FC<{
   const nameStyle = paint ? computePaintStyle(paint, shownColor, 'all') : { color: shownColor };
 
   const badges = normalizeProfileBadges({ cachedProfile: profile });
-  const userNumber = getStreamNookUserNumber(user.userId);
+  // `user.userId` is a CHAT key, the same string the store row above is read by.
+  // Membership is filed under a Twitch id, so it goes through the resolver: a
+  // bare Twitch id passes straight through, and a Kick or YouTube key resolves
+  // only if that account has been claimed, never by coincidence of number.
+  const userNumber = getStreamNookUserNumber(memberIdFor(user.userId));
 
   return (
     <MobileSheet open={!!user} onClose={onClose} maxHeightFraction={0.8}>
@@ -274,7 +279,7 @@ const ProfileBody: React.FC<{
             <div className="text-[11px] font-semibold uppercase tracking-wide text-textMuted mb-1.5">
               StreamNook
             </div>
-            <StreamNookBadge userId={user.userId} userNumber={userNumber} side="bottom" />
+            <StreamNookBadge userId={user.userId} side="bottom" />
           </div>
         )}
 

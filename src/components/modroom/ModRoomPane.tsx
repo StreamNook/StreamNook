@@ -19,7 +19,7 @@ import {
   mentionsMe,
 } from '../../services/modRoomManager';
 import { useModRoomStore, type ResolvedPayload } from '../../stores/modRoomStore';
-import { StreamNookBadge } from '../StreamNookBadge';
+import { StreamNookBadge, MemberReveal, MEMBER_REVEAL_CARD_CLASS } from '../StreamNookBadge';
 import { Tooltip } from '../ui/Tooltip';
 import SpellcheckUnderlay from '../chat/SpellcheckUnderlay';
 import { useSpellcheck } from '../../hooks/useSpellcheck';
@@ -327,17 +327,24 @@ const ModRoomMessageRow = ({
           <span className="mr-1.5 align-middle text-[10px] tabular-nums text-textSecondary">{time}</span>
           {isSN && (
             <span className="mr-1 inline-flex align-middle">
-              <StreamNookBadge userId={m.userId} userNumber={userNumber} />
+              <StreamNookBadge userId={m.userId} />
             </span>
           )}
           {onUsernameClick ? (
-            <button
-              onClick={(e) => onUsernameClick(m.login, m.userId, e)}
-              style={nameStyle}
-              className={`mr-1.5 align-middle font-semibold hover:underline ${nameStyle ? '' : roleColorClass(m.role)}`}
+            <Tooltip
+              content={isSN && userNumber !== null ? <MemberReveal userId={m.userId} userNumber={userNumber} /> : m.login}
+              containerClassName={isSN && userNumber !== null ? MEMBER_REVEAL_CARD_CLASS : undefined}
+              delay={isSN ? 120 : undefined}
+              disabled={!(isSN && userNumber !== null)}
             >
-              {m.login}
-            </button>
+              <button
+                onClick={(e) => onUsernameClick(m.login, m.userId, e)}
+                style={nameStyle}
+                className={`mr-1.5 align-middle font-semibold hover:underline ${nameStyle ? '' : roleColorClass(m.role)}`}
+              >
+                {m.login}
+              </button>
+            </Tooltip>
           ) : (
             <span style={nameStyle} className={`mr-1.5 align-middle font-semibold ${nameStyle ? '' : roleColorClass(m.role)}`}>
               {m.login}

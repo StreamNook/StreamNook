@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import type { IvrSubageSummary } from '../types';
 import { useAppStore } from '../stores/AppStore';
 import { Logger } from '../utils/logger';
 import { streamProvider, followIdentifier } from '../utils/streamProvider';
@@ -260,13 +261,14 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
 
     const checkSubscriptionStatus = async () => {
       try {
-        const { fetchIVRSubage } = await import('../services/ivrService');
-        const subageData = await fetchIVRSubage(loginOfUser, channelLogin);
+        const subage = await invoke<IvrSubageSummary | null>('get_ivr_subage_summary', {
+          login: loginOfUser,
+          channel: channelLogin,
+        }).catch(() => null);
 
-        // IVR API uses meta.type to indicate an active sub ("paid", "gift", "prime", etc.)
-        const metaData = (subageData as unknown as Record<string, unknown>)?.meta as Record<string, unknown> | undefined;
-        const isSub = metaData?.type != null;
-        const cumMonths = subageData?.cumulative?.months ?? 0;
+        // An active sub has a type ("paid", "gift", "prime", ...).
+        const isSub = subage?.active_sub_type != null;
+        const cumMonths = subage?.cumulative_months ?? 0;
 
         setIsSubscribed(isSub);
         setHasSubHistory(cumMonths > 0 && !isSub);

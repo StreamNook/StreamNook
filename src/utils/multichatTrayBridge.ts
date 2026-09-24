@@ -193,17 +193,6 @@ if (!isPopout && typeof window !== 'undefined') {
         useAppStore.getState().openBadgesWithTarget(event.payload);
       });
 
-      // Public StreamNook profile viewer, routed from a profile-card popout (or
-      // a MultiChat popout): PublicProfileOverlay lives only in main, so the
-      // popout emits this and main shows + opens it. The popout closes itself
-      // (see openProfileViewerInMain) so its alwaysOnTop window can't cover it.
-      await listen<{ userId: string }>('open-profile-viewer', async (event) => {
-        Logger.debug('[TrayBridge] open-profile-viewer received', event.payload);
-        const { userId } = event.payload;
-        await showAndFocusMain();
-        const { useAppStore } = await import('../stores/AppStore');
-        useAppStore.getState().openProfileViewer(userId);
-      });
 
       // Restore-to-main flow: popout asks main to show itself + start watching
       // a channel. Used by:

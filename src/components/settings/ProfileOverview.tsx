@@ -65,9 +65,8 @@ import {
   type UserStats,
   type ChannelWatch,
 } from '../../services/supabaseService';
-import { fetchIVRUserData } from '../../services/ivrService';
 import { getTier } from '../StreamNookBadge';
-import type { InventoryResponse, ChannelPointsBalance } from '../../types';
+import type { InventoryResponse, ChannelPointsBalance, IvrUserSummary } from '../../types';
 import { pickHoursRoast, type PickedRoast } from '../../utils/hoursWatchedRoasts';
 import { SEASONAL_ACCOLADES, getActiveSeasonalAccoladeIds, isCakeDay, CAKE_DAY_ID } from '../../utils/seasonalAccolades';
 import { RESTLESS_ACCOLADE_ID } from '../../utils/notifAchievement';
@@ -402,18 +401,16 @@ const ProfileOverview = ({
       })
       .catch(() => {});
 
-    fetchIVRUserData(login)
+    invoke<IvrUserSummary | null>('get_ivr_user_summary', { login })
       .then((u) => {
         if (!alive || !u) return;
-        setFollowers(typeof u.followers === 'number' ? u.followers : null);
-        setCreatedAt(u.createdAt || null);
-        if (u.roles) {
-          setRoles({
-            isAffiliate: !!u.roles.isAffiliate,
-            isPartner: !!u.roles.isPartner,
-            isStaff: !!u.roles.isStaff,
-          });
-        }
+        setFollowers(u.followers);
+        setCreatedAt(u.created_at);
+        setRoles({
+          isAffiliate: u.is_affiliate,
+          isPartner: u.is_partner,
+          isStaff: u.is_staff,
+        });
       })
       .catch((e) => Logger.error('[ProfileOverview] ivr:', e));
 
