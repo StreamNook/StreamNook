@@ -1,4 +1,5 @@
 pub mod accounts;
+pub mod activity_history;
 pub mod announcements;
 pub mod app;
 pub mod automation;
@@ -7,6 +8,7 @@ pub mod badge_service;
 pub mod badges;
 
 pub mod cache;
+pub mod channel_links;
 pub mod channel_panels;
 pub mod channel_state;
 pub mod chat;
@@ -21,6 +23,8 @@ pub mod diagnostic_logging;
 pub mod discord;
 pub mod drops;
 pub mod emoji;
+pub mod spellcheck;
+pub mod watch_session;
 pub mod emote_prefetch;
 pub mod emotes;
 pub mod eventsub;

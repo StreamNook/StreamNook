@@ -7,7 +7,7 @@ import { IS_MOBILE } from './utils/platform';
 export const features = Object.freeze({
   /** Popout windows, tray, window sizing/fullscreen orchestration. */
   multiWindow: !IS_MOBILE,
-  /** convertFileSrc + download_and_cache_file local asset cache.
+  /** convertFileSrc + the local asset cache (services/asset_cache_queue.rs).
    *
    *  ON for mobile as of 2026-07-31. It was off with a note saying the Android
    *  asset protocol and cache dir were unwired; both turned out to be done

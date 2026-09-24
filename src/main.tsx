@@ -78,6 +78,10 @@ Logger.debug('[App] StreamNook starting...');
 // Plyr has built-in localStorage persistence that conflicts with our settings management
 localStorage.removeItem('plyr');
 
+// The old release-list cache. Rust keeps that list on disk now, so this copy
+// is read by nothing.
+localStorage.removeItem('streamnook_whatsnew_cache_v2');
+
 // Route based on URL hash. Profile-card windows, the StreamNook MultiChat
 // popout, and ui-plugin popout windows share the same bundle as the main App;
 // main.tsx picks the root component to render.

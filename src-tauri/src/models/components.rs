@@ -58,6 +58,10 @@ pub struct BundleUpdateStatus {
     /// signature cannot be forged by anyone who merely controls the host.
     #[serde(default)]
     pub signature: Option<String>,
+    /// Published releases between the running version and `latest_version`,
+    /// counted from the cached release list. None when that list is cold.
+    #[serde(default)]
+    pub releases_behind: Option<u32>,
 }
 
 /// Details about which components changed
@@ -162,6 +166,7 @@ impl ComponentManifest {
             release_notes: None,
             sha256: None,
             signature: None,
+            releases_behind: None,
         }
     }
 }

@@ -58,7 +58,8 @@ import { getLogicalInnerSize, clampToWorkArea } from './utils/windowSizing';
 import { isTitlebarDragActive } from './utils/titleBarDrag';
 import { getSelectedCompactViewPreset } from './constants/compactViewPresets';
 import { afterBoot, type BootTier } from './utils/startupScheduler';
-import { getAppVersion } from './utils/appVersion';
+import { getAppVersion, primeClientIdentity } from './utils/appVersion';
+import { OPEN_CHANGELOG_EVENT, requestChangelog, type OpenChangelogDetail } from './utils/changelogEvents';
 
 import { Logger } from './utils/logger';
 
@@ -67,7 +68,7 @@ import { Logger } from './utils/logger';
 // body; overlays App already mounts conditionally just gain a Suspense wrapper.
 const VideoPlayer = lazy(() => import('./components/VideoPlayer'));
 const SettingsDialog = lazy(() => import('./components/SettingsDialog'));
-const PublicProfileOverlay = lazy(() => import('./components/PublicProfileOverlay'));
+const OwnProfilePreview = lazy(() => import('./components/profile/OwnProfilePreview'));
 const CommandPalette = lazy(() => import('./components/CommandPalette'));
 const MultiNookView = lazy(() =>
   import('./components/multi-nook/MultiNookView').then((m) => ({ default: m.MultiNookView })),
@@ -292,22 +293,9 @@ function App() {
       unlistenFavorites?.();
     };
   }, []);
+  // Snippets live in settings; load them and follow saves from other windows.
   useEffect(() => {
-    // Subscribe to snippet-store updates from MultiChat popouts so changes
-    // made over there propagate here without reload.
-    let unlistenSnippets: (() => void) | undefined;
-    let cancelled = false;
-    void startSnippetSync().then((u) => {
-      if (cancelled) {
-        u?.();
-        return;
-      }
-      unlistenSnippets = u;
-    });
-    return () => {
-      cancelled = true;
-      unlistenSnippets?.();
-    };
+    startSnippetSync();
   }, []);
   useEffect(() => {
     // One-shot drops-token validation: the device-code token cannot be
@@ -440,9 +428,11 @@ function App() {
   
   const [showChangelog, setShowChangelog] = useState(false);
   const [changelogVersion, setChangelogVersion] = useState<string | null>(null);
-  // Dev-only: a changelog opened by the simulated-update reload, so its close
-  // doesn't persist last_seen_version (the version isn't really installed).
-  const devForcedChangelogRef = useRef(false);
+  // Only the automatic post-update open records last_seen_version on close.
+  // Every other open (Settings, the command palette, the update notification,
+  // the dev simulated update) may be showing a version that is not installed,
+  // and recording that would re-open the popup on every launch.
+  const changelogRecordsSeenRef = useRef(false);
   const [showSetupWizard, setShowSetupWizard] = useState(false);
 
   // Narrow gate subscriptions for the lazy overlays below — never the whole store.
@@ -700,6 +690,12 @@ function App() {
     const unlistenPromise = listen<{ tab?: SettingsTab; section?: string }>(
       'streamnook:open-settings',
       (event) => {
+        // The changelog used to be a settings tab; a plugin still asking for it
+        // gets the popup that replaced it.
+        if ((event.payload.tab as string | undefined) === "What's New") {
+          requestChangelog();
+          return;
+        }
         useAppStore.getState().openSettings(event.payload.tab ?? undefined, event.payload.section);
       }
     );
@@ -793,7 +789,7 @@ function App() {
       }
     };
 
-    // Presence is telemetry, not boot-critical: stagger it clear of startup.
+    // Presence is reporting, not boot-critical: stagger it clear of startup.
     const cancel = afterBoot(5000, () => {
       void initPresence();
     });
@@ -878,6 +874,11 @@ function App() {
     };
 
     const initializeApp = async () => {
+      // Before auth, because checkAuthStatus writes the user row and the
+      // version/platform it reports comes from here. Not awaited: a failure
+      // must not hold up boot, and every reader retries.
+      primeClientIdentity();
+
       try {
         await Promise.allSettled([loadSettings(), checkAuthStatus()]);
       } finally {
@@ -1203,24 +1204,35 @@ function App() {
     setShowSetupWizard(true);
   }, [settings.quality, settings.setup_complete]);
 
-  // Ctrl+Shift+C → force-open the changelog overlay against the current
-  // app version (fetches real release notes from GitHub). Useful for
-  // re-reading what's new without juggling last_seen_version in settings.
+  // Open the changelog on request: Settings, the command palette and the update
+  // notification ask through OPEN_CHANGELOG_EVENT, Ctrl+Shift+C directly. With
+  // no version given it opens on the installed one.
   useEffect(() => {
-    const onKey = async (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.shiftKey && (e.key === 'C' || e.key === 'c')) {
-        e.preventDefault();
-        try {
-          const currentVersion = await getAppVersion();
-          setChangelogVersion(currentVersion);
-          setShowChangelog(true);
-        } catch (err) {
-          Logger.error('[App] Failed to force-open changelog:', err);
-        }
+    const open = async (version?: string) => {
+      try {
+        const target = version || (await getAppVersion());
+        changelogRecordsSeenRef.current = false;
+        setChangelogVersion(target);
+        setShowChangelog(true);
+      } catch (err) {
+        Logger.error('[App] Failed to open changelog:', err);
       }
     };
+    const onRequest = (e: Event) => {
+      void open((e as CustomEvent<OpenChangelogDetail>).detail?.version);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && (e.key === 'C' || e.key === 'c')) {
+        e.preventDefault();
+        void open();
+      }
+    };
+    window.addEventListener(OPEN_CHANGELOG_EVENT, onRequest);
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener(OPEN_CHANGELOG_EVENT, onRequest);
+      window.removeEventListener('keydown', onKey);
+    };
   }, []);
 
   // Check if we need to show the changelog after an update (and force relogin if needed)
@@ -1319,6 +1331,7 @@ function App() {
         // If there's no last seen version (first run) or the version has changed
         if (lastSeenVersion && lastSeenVersion !== currentVersion) {
           Logger.debug('[App] Version changed, showing changelog');
+          changelogRecordsSeenRef.current = true;
           setChangelogVersion(currentVersion);
           setShowChangelog(true);
         } else if (!lastSeenVersion) {
@@ -1345,7 +1358,7 @@ function App() {
     const v = sessionStorage.getItem('streamnook-dev-changelog');
     if (v) {
       sessionStorage.removeItem('streamnook-dev-changelog');
-      devForcedChangelogRef.current = true;
+      changelogRecordsSeenRef.current = false;
       setChangelogVersion(v);
       setShowChangelog(true);
     }
@@ -1355,12 +1368,8 @@ function App() {
   const handleChangelogClose = async () => {
     setShowChangelog(false);
 
-    // A dev-forced preview never really installed that version, so don't record
-    // it as seen (that would suppress the real changelog or mis-trigger it later).
-    if (devForcedChangelogRef.current) {
-      devForcedChangelogRef.current = false;
-      return;
-    }
+    if (!changelogRecordsSeenRef.current) return;
+    changelogRecordsSeenRef.current = false;
 
     if (changelogVersion) {
       try {
@@ -1834,34 +1843,33 @@ function App() {
     };
   }, []); // Empty deps - set up once and use refs for current values
 
-  // Check for bundle updates on startup
+  // The title-bar update indicator follows Rust's periodic check
+  // (services/update_watch.rs): shortly after start, then every half hour.
   useEffect(() => {
-    const checkUpdates = async () => {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-
-        interface BundleUpdateStatus {
-          update_available: boolean;
-          current_version: string;
-          latest_version: string;
-        }
-
-        const bundleStatus = await invoke('check_for_bundle_update') as BundleUpdateStatus;
-
-        const { setUpdateInfo } = useAppStore.getState();
-        setUpdateInfo(
-          bundleStatus.update_available
-            ? { current_version: bundleStatus.current_version, latest_version: bundleStatus.latest_version }
-            : null
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void listen<{ status: { update_available: boolean; current_version: string; latest_version: string; releases_behind?: number | null } }>(
+      'update://status',
+      (event) => {
+        const { status } = event.payload;
+        useAppStore.getState().setUpdateInfo(
+          status.update_available
+            ? {
+                current_version: status.current_version,
+                latest_version: status.latest_version,
+                releases_behind: status.releases_behind ?? null,
+              }
+            : null,
         );
-      } catch (error) {
-        Logger.error('Failed to check for bundle updates:', error);
-      }
-    };
-    // Update checking can wait out the boot stagger; nothing on screen needs it.
-    return afterBoot(5000, () => {
-      void checkUpdates();
+      },
+    ).then((fn) => {
+      if (active) unlisten = fn;
+      else fn();
     });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
   }, []);
 
   // Warm the lazy VideoPlayer chunk once boot has settled, so the first stream
@@ -2392,7 +2400,7 @@ function App() {
         )}
       </AnimatePresence>
       {settingsEverOpened && <Suspense fallback={null}><SettingsDialog /></Suspense>}
-      {profileViewerEverOpened && <Suspense fallback={null}><PublicProfileOverlay /></Suspense>}
+      {profileViewerEverOpened && <Suspense fallback={null}><OwnProfilePreview /></Suspense>}
       {dropsEverOpened && <Suspense fallback={null}><DropsOverlay /></Suspense>}
       {marketplaceEverOpened && <Suspense fallback={null}><MarketplaceOverlay /></Suspense>}
       <DropProgressController />

@@ -31,17 +31,17 @@ use commands::moderation_tools::{
     resolve_automod_message, set_user_note, update_channel_info, upload_image,
 };
 use commands::{
-    accounts::*, announcements::*, app::*, automation::*, badge_metadata::*, badge_service::*,
-    badges::*, cache::*, channel_panels::*, channel_state::*, chat::*, chat_identity::*, components::*,
+    accounts::*, activity_history::*, announcements::*, app::*, automation::*, badge_metadata::*, badge_service::*,
+    badges::*, cache::*, channel_links::*, channel_panels::*, channel_state::*, chat::*, chat_identity::*, components::*,
     cosmetics_cache::*, diagnostic_logging::*, drops::*, emoji::*, emote_prefetch::*,
     emotes::*, eventsub::*, ffz::*, gifs::*, helix::*, home_snapshot::*, hype_train::*, identity::*, justlog::*, layout::*,
     link_preview::*, logs::*, media_glow::*, mod_log_storage::*, modroom::*, plugins::*,
     profile_cache::*, provider_browse::*,
     resub::*, session::*, settings::*, seventv::*, seventv_cosmetics::*,
-    seventv_cosmetics_fetch::*, song_id::*, streamnook_api::*, streaming::*, subscriptions::*,
+    seventv_cosmetics_fetch::*, song_id::*, spellcheck::*, streamnook_api::*, streaming::*, subscriptions::*,
     twitch::*,
     universal_cache::*,
-    user_profile::*, vod_progress::*, watch_streak::*, whisper_storage::*,
+    user_profile::*, vod_progress::*, watch_session::*, watch_streak::*, whisper_storage::*,
 };
 // Desktop-only feature modules, excluded from the phone app (watch/earn/chat
 // only): MultiNook tiling, Discord RPC, and profile-card screen capture.
@@ -355,6 +355,8 @@ fn load_settings_from_file() -> Result<Settings, Box<dyn std::error::Error>> {
     let json = std::fs::read_to_string(&settings_path)?;
     let mut settings: Settings = serde_json::from_str(&json)?;
     repair_protocol_relative_avatars(&mut settings);
+    settings.retire_legacy_live_edge_gap();
+    settings.enable_low_latency_engine_once();
     Ok(settings)
 }
 
@@ -568,6 +570,19 @@ pub fn run() {
         }
     }
 
+    // One-time purge of cached 7TV paint images that hold a still frame, so
+    // animated paints re-download as animations.
+    match services::universal_cache_service::migrate_paint_animated_cache() {
+        Ok(purged) => {
+            if purged {
+                debug!("[Main] 7TV paint cache purged for animated re-fetch");
+            }
+        }
+        Err(e) => {
+            error!("[Main] Failed to purge 7TV paint cache: {}", e);
+        }
+    }
+
     // One-time purge of OLD non-7TV emote files (bare-id keys + URL-derived
     // `.0`/`.bin` extensions) so they re-cache under provider-namespaced keys with
     // content-typed extensions. 7TV files (already correct) are kept.
@@ -761,7 +776,7 @@ pub fn run() {
             // whole-process) and records them to the capture file. Started here,
             // inside the tokio runtime Tauri set up.
             services::runtime_watchdog::start();
-            // Process-tree memory telemetry: one [Resource] line a minute in the
+            // Process-tree memory logging: one [Resource] line a minute in the
             // file log (rust, WebView2 browser/GPU/renderers/utilities, plugin
             // children), so a "StreamNook is at 800 MB" report can be read off
             // the log without attaching anything to the user's machine.
@@ -833,6 +848,22 @@ pub fn run() {
             services::eventsub_moderation::init(app_handle.clone());
             // Streamer mode detector (sleeps unless the setting is "auto").
             services::streamer_mode::StreamerMode::init(app_handle.clone());
+
+            // Gift subs you receive. Polls Twitch's own notification feed for
+            // the one category the app has no other source for. Settings are
+            // re-read here rather than reusing the pre-setup load because
+            // mobile only resolves app-data paths inside setup.
+            services::onsite_notifications::init(app_handle.clone());
+            // Channel-points earns, announced once per burst.
+            services::channel_points_summary::init(&app_handle);
+            // The periodic update check (the phone has its own update path).
+            #[cfg(desktop)]
+            services::update_watch::start(app_handle.clone());
+            if let Ok(startup_settings) = load_settings_from_file() {
+                services::onsite_notifications::refresh(&startup_settings);
+                // When reminders fire (timed triggers and chat keywords).
+                services::reminder_service::init(app_handle.clone(), &startup_settings);
+            }
 
             // Register deep link scheme on Windows
             #[cfg(windows)]
@@ -963,6 +994,14 @@ pub fn run() {
                 app_handle.clone(),
                 app_state_for_favorite_live,
             );
+
+            // "This client is alive, and this is what it is": version, OS, arch,
+            // and what the last update check did. Rust-owned because the page's
+            // one login-time write meant a client left running reported its last
+            // cold boot forever, and because this must survive the main window
+            // being destroyed on close-to-tray. Both shells run it: the phone has
+            // the same staleness problem and no devtools to notice it with.
+            services::version_report::start(app_handle.clone());
 
             // Keep the Kick OAuth pair perpetually fresh (single-flight refresh
             // on a clock), and the YouTube cookie harvest young. Both are what
@@ -1191,6 +1230,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // App commands
             get_app_version,
+            get_client_identity,
             get_app_name,
             get_app_description,
             get_app_authors,
@@ -1327,6 +1367,7 @@ pub fn run() {
             stop_stream,
             get_ad_detection,
             get_stream_low_latency,
+            get_stream_prefetch_present,
             set_experimental_low_latency,
             set_codec_preference,
             // Allowed only by mobile-commands.toml (a phone caps its rendition
@@ -1356,6 +1397,8 @@ pub fn run() {
             stop_all_multi_nooks,
             #[cfg(desktop)]
             get_active_multi_nooks,
+            #[cfg(desktop)]
+            promote_multi_nook_tile,
             register_active_channel,
             unregister_active_channel,
             // Chat commands
@@ -1364,6 +1407,8 @@ pub fn run() {
             restart_chat_bridge,
             validate_platform_sessions,
             platform_account_info,
+            resolve_member_ids,
+            invalidate_member_aliases,
             get_youtube_channel_emojis,
             commands::streaming::youtube_sabr_probe,
             get_chat_lifecycle_log,
@@ -1388,12 +1433,14 @@ pub fn run() {
             upload_image,
             start_multi_chat,
             provider_chat_connect,
+            chat_bridge_port,
             provider_chat_disconnect,
             provider_send_message,
             provider_send_capability,
             provider_source_caps,
             provider_directory,
             provider_search,
+            search_platforms,
             provider_categories,
             provider_channel_meta,
             provider_live_check,
@@ -1402,7 +1449,7 @@ pub fn run() {
             refresh_favorites,
             kick_account_sync,
             youtube_account_sync,
-            provider_channel_avatars,
+            request_channel_avatars,
             kick_user_profile,
             youtube_user_profile,
             provider_membership,
@@ -1417,6 +1464,8 @@ pub fn run() {
             report_kick_emotes,
             get_kick_channel_meta,
             get_youtube_channel_meta,
+            resolve_youtube_legacy_channel,
+            resolve_kick_slug,
             get_tiktok_channel_meta,
             tiktok_connect,
             tiktok_disconnect,
@@ -1443,7 +1492,7 @@ pub fn run() {
             get_kick_channel_emotes,
             get_youtube_channel_emotes,
             load_mod_logs,
-            append_mod_log,
+            record_mod_log,
             clear_mod_logs,
             parse_historical_messages,
             load_channel_history,
@@ -1496,7 +1545,7 @@ pub fn run() {
             clear_discord_presence,
             // Settings commands
             load_settings,
-            save_settings,
+            patch_settings,
             get_settings_dir,
             open_settings_folder,
             export_settings,
@@ -1504,7 +1553,8 @@ pub fn run() {
             get_current_app_version,
             get_latest_app_version,
             download_and_install_app_update,
-            get_release_notes,
+            get_changelog,
+            get_android_changelog,
             send_test_notification,
             // Badge commands
             fetch_global_badges,
@@ -1565,7 +1615,8 @@ pub fn run() {
             open_universal_cache_folder,
             assign_badge_positions,
             export_manifest,
-            download_and_cache_file,
+            asset_cache_enqueue,
+            asset_cache_set_burst,
             get_cached_file,
             get_cached_files,
             get_all_universal_cached_items,
@@ -1655,6 +1706,42 @@ pub fn run() {
             get_user_history_count,
             // Emoji commands
             convert_emoji_shortcodes,
+            // Spellcheck commands
+            spell_warm,
+            spell_check,
+            spell_suggest,
+            // MultiChat Activity feed history
+            activity_load,
+            activity_append,
+            activity_import,
+            activity_purge,
+            activity_clear,
+            // Whisper inbox
+            whisper_set_active,
+            whisper_mark_read,
+            whisper_send,
+            whisper_import,
+            whisper_refresh,
+            // IVR account facts
+            get_ivr_user_summary,
+            get_ivr_subage_summary,
+            // Server-controlled client switches
+            get_client_config,
+            // Drops page model
+            get_drops_overview,
+            // 7TV cosmetics, resolved once for every window
+            seventv_user_cosmetics,
+            seventv_user_inventory,
+            seventv_invalidate_cosmetics,
+            seventv_clear_cosmetics,
+            // Main-window watch session
+            watch_session_start,
+            watch_session_stop,
+            watch_session_resolve_offline,
+            watch_session_refresh_presence,
+            hype_train_watch,
+            hype_train_unwatch,
+            build_own_chat_message,
             // Emote commands
             fetch_channel_emotes,
             get_emote_by_name,
@@ -1705,9 +1792,6 @@ pub fn run() {
             emit_whisper_progress,
             // Whisper Storage commands
             load_whisper_storage,
-            save_whisper_storage,
-            save_whisper_conversation,
-            append_whisper_message,
             delete_whisper_conversation,
             get_whisper_storage_path,
             migrate_whispers_from_localstorage,
@@ -1753,13 +1837,13 @@ pub fn run() {
             // Authenticated writes to StreamNook's own API. One command, path-allowlisted.
             streamnook_api_post,
             // Hype Train commands
-            get_hype_train_status,
             get_bulk_hype_train_status,
             // Home snapshot (Rust-owned Home/Sidebar data)
             get_home_snapshot,
             set_home_mounted,
             refresh_home_section,
             set_home_extra_channels,
+            set_home_sidebar,
             load_more_home_recommended,
             // Per-channel chat state + user history watches (Rust-owned polls)
             watch_channel_state,
@@ -1769,6 +1853,11 @@ pub fn run() {
             refresh_channel_state,
             watch_user_history,
             unwatch_user_history,
+
+            // Cross-platform channel links (one streamer, several platforms)
+            get_channel_links,
+            update_channel_link,
+            probe_channel_links,
 
             // Resub notification commands
             get_resub_notification,
@@ -1854,6 +1943,10 @@ pub fn run() {
                     // its BRIDGE_USERS count incremented for the whole session.
                     services::providers::release_window_claims(&gone).await;
                 });
+                // Its Home and Sidebar claims too. Left in place, they kept the
+                // recommended poll and the Discover lists running after Go Live,
+                // or a close to the tray, destroyed the main window.
+                services::home_snapshot::release_window(&label);
                 // Tell popouts the main window is gone so their Go Live control
                 // flips to "Live Chat" (standalone). Mirrors `main-ready`, which
                 // the main window emits when it boots.
@@ -1864,6 +1957,11 @@ pub fn run() {
             }
 
             if label == "main" {
+                // Back from the tray or a minimize, where nothing was fetched:
+                // the Discover lists refetch what went stale.
+                if let WindowEvent::Focused(true) = event {
+                    services::home_snapshot::note_main_window_focused();
+                }
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     let popouts_open = app_handle
                         .webview_windows()
@@ -1980,6 +2078,7 @@ pub fn run() {
                 let _ = services::mod_log_storage_service::ModLogStorageService::flush_now();
                 let _ = services::whisper_storage_service::WhisperStorageService::flush_now();
                 let _ = services::vod_progress_service::flush_now();
+                let _ = services::activity_history_service::flush_now();
             let _ = services::chat_logger_service::ChatLoggerService::flush_all();
                 // Ask running plugin processes to shut down before the app
                 // process dies, waiting briefly so well-behaved plugins exit

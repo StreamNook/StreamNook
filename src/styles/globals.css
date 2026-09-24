@@ -1534,6 +1534,91 @@ html[data-platform="mac"] * {
    elements, because the per-surface overrides further down this file (the
    Dynamic Island, the chat overlay, mobile) still hang off them. */
 
+/* A scroller with NO bar at all: a short horizontal strip of chips that is
+   scrolled by dragging or by the wheel, where a rail across it would be the
+   loudest thing in a 44px row.
+
+   `.scrollbar-none` and `.mask-edges` below were both being written on elements
+   for a long time without ever being defined, here or in the Tailwind config.
+   MultiNook's docked-stream strip and the channel-about panel's row both carry
+   the pair; both have been showing a platform scrollbar and hard-clipping their
+   last chip the whole time. It was easy to miss while the strip had an opaque
+   bar behind it, and impossible to miss once it did not.
+
+   Note what is NOT here: `scrollbar-width: none`. It is the standard property
+   and it looks like the harmless cross-browser companion, but per the long note
+   above, in Chromium the standard properties are mutually exclusive with
+   `::-webkit-scrollbar` and WIN — so adding it would hand these strips the
+   platform bar and silently disable this rule. The app is Chromium on every
+   platform it ships to. */
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* The companion to the above: content fades out at both ends instead of being
+   cut off mid-chip, so a strip that continues past its edge says so. The fade
+   is only applied on the axis that scrolls, and it is a no-op when everything
+   fits (there is nothing under the fade to hide). */
+.mask-edges {
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    transparent 0,
+    #000 12px,
+    #000 calc(100% - 12px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    90deg,
+    transparent 0,
+    #000 12px,
+    #000 calc(100% - 12px),
+    transparent 100%
+  );
+}
+
+/* A pinned card inside a settings pane: the overlay tab's profile switcher.
+   It has to hide the rows scrolling under it, and it must not look like a
+   plate laid on the dialog.
+
+   Two earlier attempts are recorded in the component and both failed the same
+   way. A flat `--color-background-tertiary` fill read as a grey plate, because
+   tertiary at 100% is LIGHTER than the dialog, whose surface is tertiary at 78%
+   over a blur. Swinging the other way to a `--color-background` gradient that
+   dissolved downward was worse: base is DARKER than the dialog, so it was a
+   dark smear, and a gradient has no edge, so rows did not disappear under it,
+   they half-faded inside it.
+
+   The answer is not to guess a colour at all, it is to wear the DIALOG'S OWN
+   material: the same tint, the same blur. Stack `.glass-modal`'s 78% tint on
+   the surface it is already sitting on and the pair composites to
+   1 - 0.22^2 = 95%, which is why the tint is stated at 95% here. The colour is
+   therefore identical to what the header already resolved to; the only thing
+   that changes is that the last few percent of text bleeding through is gone.
+
+   Scales with the Glassiness slider through `--glass-strength`, exactly like
+   every other surface in the app, and goes fully opaque at 0%. */
+.settings-pinned-card {
+  isolation: isolate;
+  border-radius: 12px;
+  background-color: color-mix(
+    in srgb,
+    var(--color-background-tertiary) calc((1 - var(--glass-strength)) * 100%),
+    transparent
+  );
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--color-background-tertiary) 95%, transparent),
+    color-mix(in srgb, var(--color-background-tertiary) 95%, transparent)
+  );
+  -webkit-backdrop-filter: blur(calc(28px * var(--glass-strength)));
+  backdrop-filter: blur(calc(28px * var(--glass-strength)));
+  /* One hairline rim, no drop shadow. The card is 10px from the rows beneath
+     it and needs an edge, not elevation; a shadow here would be the only cast
+     shadow in the dialog. */
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--color-border-subtle) 80%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
 /* Animated gradient border for gift-bomb activity cards. A bright shine travels
    continuously around a colored ring so a bomb reads as a big deal, while the
    card itself stays glassy (the mask paints only the border, not the fill).
@@ -3025,7 +3110,7 @@ html[data-motion="reduced"] .animate-shimmer {
  * tab that translates to 28 concurrent per-frame repaints and ~50% CPU at
  * idle. transform-only animation is composited entirely on the GPU at
  * effectively zero CPU cost. The "glow" feel is preserved via the static
- * box-shadow on the `.live-dot::before` rule below (no animation on it). */
+ * box-shadow on `.card-chip-dot` (no animation on it). */
 @keyframes pulse-dot {
   0%,
   100% {
@@ -3036,74 +3121,7 @@ html[data-motion="reduced"] .animate-shimmer {
   }
 }
 
-/* Glass-red LIVE badge — mirrors the `.drops-badge-glass` recipe but uses
- * --color-error (red) and intentionally omits the metal-shine sweep that
- * drops-badge-glass has. That `::after` infinite animation is acceptable on
- * drops-badge-glass because at most a handful of stream cards have drops,
- * but the LIVE badge appears on EVERY visible card (~28 on the Following
- * grid). Stacking that many concurrent shimmer animations would put us
- * right back in the Layerize/Recalculate-style trap we just dug out of. */
-.live-dot {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--color-live) 45%, transparent) 0%,
-    color-mix(in srgb, var(--color-live) 30%, transparent) 50%,
-    color-mix(in srgb, var(--color-live) 45%, transparent) 100%
-  );
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid color-mix(in srgb, var(--color-live) 60%, transparent);
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--color-text-primary);
-  letter-spacing: 0.5px;
-  /* Sharp 1px drop with no blur — a blurred text-shadow at 10px font size
-   * dominates the glyph itself and reads as fuzzy text rather than a shadow. */
-  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.6);
-  /* Force crisp antialiasing. Without these, backdrop-filter's compositor
-   * layer can render text via a less-sharp pipeline on Chromium. */
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  /* New stacking context so the LIVE text is unambiguously above the
-   * blurred background layer and the red dot pseudo-element, never below
-   * or sandwiched between them. */
-  isolation: isolate;
-  box-shadow:
-    0 2px 10px color-mix(in srgb, var(--color-live) 35%, transparent),
-    inset 0 1px 0 rgba(255, 255, 255, 0.25),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.15);
-  overflow: hidden;
-}
-
-.live-dot::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  background-color: var(--color-live);
-  border-radius: 50%;
-  /* Static red dot + static glow. The pulse animation only runs when the
-   * containing card is hovered (see below) — see the flame-graph analysis
-   * dated 2026-05-25: 28 concurrent always-on transform animations on the
-   * Following grid were burning ~95% renderer CPU in Layerize / Recalculate
-   * style / Commit, with effectively zero JS work. Pre-rendered + static
-   * glow gives the "live" feel; pulse activates on the card the user is
-   * actually interacting with. */
-  box-shadow: 0 0 3px 1px color-mix(in srgb, var(--color-live) 60%, transparent);
-}
-
-/* Animate the pulse only on the hovered card. The stream-card grid uses
- * Tailwind's `group` pattern, so `.group:hover .live-dot::before` targets
- * the dot of whichever card is being hovered. At most one animation runs
- * at a time instead of 28 concurrent ones. */
-.group:hover .live-dot::before {
-  animation: pulse-dot 2s ease-in-out infinite;
-}
+/* The LIVE dot is `.card-chip-dot` now (see the card chip block). */
 
 /* Penrose triangle rotation animation */
 @keyframes penrose-rotate {
@@ -3558,31 +3576,38 @@ body[data-player-covered="true"] .video-player-container[data-immersive="true"] 
   font-size: 13px;
 }
 
-/* Live indicator in Plyr */
-/* Live indicator in Plyr */
-.plyr__time--live {
-  color: var(--color-live) !important;
-  font-weight: 800;
-  letter-spacing: 0.5px;
-  animation: plyr-live-pulse 2s ease-in-out infinite;
-  text-shadow: 0 0 14px color-mix(in srgb, var(--color-live) 65%, transparent);
+/* LIVE button (VideoPlayer injects it after the time readout). Red = at the
+   edge, grey = behind / buffering / rewound / catching up. No animation: the
+   state is a colour, and one more pulse on the control bar is one more
+   compositor layer while a stream plays. */
+.video-player-container .plyr__control.sn-live-btn {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  padding: 0 4px;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: var(--color-text-secondary);
 }
-
-/* Opacity only. Animating text-shadow here re-layerized the whole player tree on
-   every frame of playback; the glow is now a static value on the rule above, so
-   this runs entirely on the compositor. Visually identical. */
-@keyframes plyr-live-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.8;
-  }
+.sn-live-btn__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  transition: box-shadow 0.2s ease;
+}
+.video-player-container .plyr__control.sn-live-btn[data-state="live"],
+.video-player-container .plyr__control.sn-live-btn[data-state="live"]:hover {
+  color: var(--color-live);
+  text-shadow: 0 0 14px color-mix(in srgb, var(--color-live) 65%, transparent);
+}
+.video-player-container .plyr__control.sn-live-btn[data-state="live"] .sn-live-btn__dot {
+  box-shadow: 0 0 6px var(--color-live);
+}
+.video-player-container .plyr__control.sn-live-btn[data-state="catching-up"] .sn-live-btn__dot {
+  opacity: 0.5;
 }
 
 /* ===== Watching gate =====
@@ -3626,26 +3651,12 @@ html[data-sn-hidden] video {
   display: none !important;
 }
 
-html[data-watching] .plyr__time--live {
+
+html[data-watching] .automation-pulse {
   animation: none;
 }
-
-html[data-watching] .automation-shimmer-silver {
-  animation: none;
-  color: #d4d4d4;
-  filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.45));
-}
-
-html[data-watching] .automation-shimmer-gold {
-  animation: none;
-  color: #e6bf3f;
-  filter: drop-shadow(0 0 5px rgba(255, 215, 0, 0.5));
-}
-
-html[data-watching] .automation-shimmer-iridescent {
-  animation: none;
-  color: #7bd9de;
-  filter: drop-shadow(0 0 5px rgba(121, 157, 241, 0.55));
+html[data-watching] .automation-pulse-shift {
+  display: none;
 }
 
 html[data-watching] .update-pill {
@@ -4154,63 +4165,61 @@ html[data-watching] .drops-progress-inline {
    Drops-automation shimmer (title bar drops button, Home claim flight)
    ============================================ */
 
-/* Silver pulse - Channel Points only */
-@keyframes automation-pulse-silver {
+/* The drops button while automation runs (components/ui/AutomationPulse.tsx).
+   Colour and glow are static; only opacity animates, on an HTML wrapper, so
+   the compositor runs it. Animating `color` or `filter: drop-shadow` repaints
+   every frame, and in a window this size each repaint re-layers the whole page:
+   one such icon held the main thread near 100%. */
+@keyframes automation-pulse {
   0%,
   100% {
-    color: #a8a8a8;
-    filter: drop-shadow(0 0 2px rgba(192, 192, 192, 0.3));
+    opacity: 0.62;
   }
   50% {
-    color: #e8e8e8;
-    filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.6));
+    opacity: 1;
   }
 }
-
-.automation-shimmer-silver {
-  animation: automation-pulse-silver 2s ease-in-out infinite;
-}
-
-/* Gold pulse - Drops Mining only */
-@keyframes automation-pulse-gold {
+@keyframes automation-pulse-shift {
   0%,
   100% {
-    color: #c9a227;
-    filter: drop-shadow(0 0 2px rgba(201, 162, 39, 0.3));
+    opacity: 0;
   }
   50% {
-    color: #ffd700;
-    filter: drop-shadow(0 0 8px rgba(255, 215, 0, 0.7));
+    opacity: 1;
   }
 }
-
-.automation-shimmer-gold {
-  animation: automation-pulse-gold 2s ease-in-out infinite;
+.automation-pulse {
+  position: relative;
+  display: inline-flex;
+  animation: automation-pulse 2s ease-in-out infinite;
+  will-change: opacity;
 }
-
-/* Iridescent pulse - Both active (rainbow color cycling) */
-@keyframes automation-pulse-iridescent {
-  0%,
-  100% {
-    color: #799df1;
-    filter: drop-shadow(0 0 4px rgba(121, 157, 241, 0.5));
-  }
-  25% {
-    color: #60c1ec;
-    filter: drop-shadow(0 0 6px rgba(96, 193, 236, 0.6));
-  }
-  50% {
-    color: #7bd9de;
-    filter: drop-shadow(0 0 6px rgba(123, 217, 222, 0.6));
-  }
-  75% {
-    color: #cfb0d2;
-    filter: drop-shadow(0 0 4px rgba(207, 176, 210, 0.5));
-  }
+.automation-pulse--silver > svg {
+  color: #e8e8e8;
+  filter: drop-shadow(0 0 5px rgba(255, 255, 255, 0.5));
 }
-
-.automation-shimmer-iridescent {
-  animation: automation-pulse-iridescent 4s ease-in-out infinite;
+.automation-pulse--gold > svg {
+  color: #ffd700;
+  filter: drop-shadow(0 0 6px rgba(255, 215, 0, 0.6));
+}
+/* Both active: blue and pink copies crossfade over a slower breath. */
+.automation-pulse--iridescent {
+  animation-duration: 4s;
+}
+.automation-pulse--iridescent > svg {
+  color: #799df1;
+  filter: drop-shadow(0 0 5px rgba(121, 157, 241, 0.55));
+}
+.automation-pulse-shift {
+  position: absolute;
+  inset: 0;
+  display: inline-flex;
+  animation: automation-pulse-shift 6s ease-in-out infinite;
+  will-change: opacity;
+}
+.automation-pulse-shift > svg {
+  color: #cfb0d2;
+  filter: drop-shadow(0 0 5px rgba(207, 176, 210, 0.55));
 }
 
 /* Settings gear icon — smooth roll on hover, reverse on unhover */
@@ -4438,10 +4447,19 @@ html[data-watching] .drops-progress-inline {
 }
 
 /* ============================================
-   Glass Drops Badge with Metal Shine Sweep
-   ============================================ */
+   Stream and game card status chips: LIVE, DROPS, hype train, viewers, streak
+   ============================================
 
-/* Metal shine sweep keyframes */
+   The title bar's material (`.chrome-glaze` + `--frosted`, a capsule with the
+   accent-lit rim, inner glow, bounce light and masked specular), rendered by
+   `ui/CardChip.tsx`. Each kind lights the glaze in its own colour by setting
+   `--color-accent` locally, so the rim, glow and specular follow the kind the
+   way the title bar follows the theme; the fill carries the kind's tinted
+   glass gradient over the frosted floor, which is what keeps text legible on
+   a bright thumbnail. Frost from `--frosted` (a control over media needs a
+   film behind it). The shine sweep and the LIVE dot are children, because the
+   glaze owns both pseudo-elements. */
+
 @keyframes metal-shine-sweep {
   0% {
     transform: translateX(-100%) skewX(-15deg);
@@ -4451,36 +4469,141 @@ html[data-watching] .drops-progress-inline {
   }
 }
 
-/* Glass drops badge - glass morphism effect with metallic shine (theme-aware) */
-.drops-badge-glass {
-  position: relative;
+.card-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 8px;
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--color-accent) 45%, transparent) 0%,
-    color-mix(in srgb, var(--color-accent) 30%, transparent) 50%,
-    color-mix(in srgb, var(--color-accent) 45%, transparent) 100%
-  );
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid color-mix(in srgb, var(--color-accent) 60%, transparent);
-  border-radius: 4px;
+  height: 22px;
+  padding: 0 8px;
+  /* A rounded rectangle, not the chrome's capsule. Not a true squircle
+     (`corner-shape`): these chips carry the glaze's backdrop filter, and
+     squircle on a backdrop-filtered surface is what stopped WebView2
+     painting (see the note above `.glaze-chip`). At this size a small radius
+     reads the same. */
+  border-radius: 8px;
+  /* Diffused, not grey. The chrome's frosted floor paints the theme's dark
+     tertiary at 55%+, which put the same flat grey behind every chip whatever
+     was under it. Here the floor is a thin dark veil and the backdrop does the
+     work: blurred, a little more saturated, a little dimmer, so the chip takes
+     on the colour of the thumbnail behind it, softly, the way frosted glass
+     does, while white text still holds on a bright frame. */
+  background-color: rgba(16, 16, 22, 0.22);
+  -webkit-backdrop-filter: blur(10px) saturate(175%) brightness(0.82);
+  backdrop-filter: blur(10px) saturate(175%) brightness(0.82);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
   color: var(--color-text-primary);
-  font-size: 10px;
-  font-weight: 700;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
-  box-shadow: 0 2px 10px
-      color-mix(in srgb, var(--color-accent) 35%, transparent),
-    inset 0 1px 0 rgba(255, 255, 255, 0.25), inset 0 -1px 0 rgba(0, 0, 0, 0.15);
-  overflow: hidden;
+  /* No text-shadow. The frosted floor already holds the text off the image,
+     and a hard 1px shadow on a composited, backdrop-filtered surface renders
+     as a jagged dark fringe on every glyph: the "scraggly" text. */
+}
+.card-chip--lg {
+  gap: 6px;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 10px;
+  font-size: 12px;
 }
 
-/* Metal shine sweep overlay */
-.drops-badge-glass::after {
-  content: "";
+/* Viewers and uptime: no colour to carry them, so a denser frost and brighter
+   text keep them readable over a busy thumbnail. */
+.card-chip--neutral {
+  /* A little more veil than the coloured kinds: no colour of its own to
+     separate it, and the number has to read on anything. */
+  background-color: rgba(16, 16, 22, 0.34);
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The kind's colour, as the glaze's accent. */
+.card-chip--live {
+  --color-accent: var(--color-live);
+}
+.card-chip--hype {
+  --color-accent: var(--color-highlight-purple);
+}
+.card-chip--hype-golden {
+  --color-accent: #ffc83d;
+}
+.card-chip--streak {
+  --color-accent: var(--color-warning);
+  color: #fcd34d;
+}
+/* A drop ready to claim, and a game whose drops are all earned. */
+.card-chip--ready,
+.card-chip--done {
+  --color-accent: var(--color-success);
+}
+.card-chip--done {
+  color: var(--color-success);
+}
+
+/* Tinted glass for the kinds that are about something; viewers (`--neutral`)
+   keep the plain chrome fill. The colour lives mostly in the LIGHT, not the
+   fill: a strong rim, inner glow and specular in the kind's colour over a
+   mostly clear frosted body, with only a faint wash in the fill. A saturated
+   fill reads as a painted button; coloured edge light over clear glass reads
+   as tinted glass, which is what the title bar's material does. */
+.card-chip--live,
+.card-chip--drops,
+.card-chip--hype,
+.card-chip--hype-golden,
+.card-chip--streak,
+.card-chip--ready,
+.card-chip--done {
+  --glaze-ring: 55%;
+  --glaze-inner: 22%;
+  --glaze-spec: 60%;
+  --glaze-spec-soft: 26%;
+  background-image: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--color-accent) 16%, transparent) 0%,
+    color-mix(in srgb, var(--chip-tint-2, var(--color-accent)) 8%, transparent) 55%,
+    color-mix(in srgb, var(--color-accent) 14%, transparent) 100%
+  );
+}
+/* The saturated colour sits on the content instead: the dot, the icons. */
+.card-chip--drops > svg,
+.card-chip--hype > svg,
+.card-chip--hype-golden > svg,
+.card-chip--ready > svg {
+  color: color-mix(in srgb, var(--color-accent) 75%, white);
+}
+.card-chip--hype {
+  --chip-tint-2: var(--color-highlight-blue);
+}
+.card-chip--hype-golden {
+  --chip-tint-2: #ffa500;
+}
+
+.card-chip-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background-color: var(--color-live);
+  box-shadow: 0 0 3px 1px color-mix(in srgb, var(--color-live) 60%, transparent);
+}
+/* The pulse runs only on the hovered card: an always-on animation on every
+   card of a grid is what the 2026-05-25 flame graph caught burning ~95% of
+   the renderer. */
+.group:hover .card-chip-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* The shine sweep, clipped to the capsule and kept under the text. */
+.card-chip-shine {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+}
+.card-chip-shine > span {
   position: absolute;
   top: 0;
   left: 0;
@@ -4490,157 +4613,129 @@ html[data-watching] .drops-progress-inline {
     90deg,
     transparent 0%,
     rgba(255, 255, 255, 0.1) 20%,
-    rgba(255, 255, 255, 0.5) 50%,
+    rgba(255, 255, 255, 0.45) 50%,
     rgba(255, 255, 255, 0.1) 80%,
     transparent 100%
   );
   animation: metal-shine-sweep 3s ease-in-out infinite;
-  pointer-events: none;
 }
-
-/* Larger variant for category cards (theme-aware) */
-.drops-badge-glass-lg {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--color-accent) 50%, transparent) 0%,
-    color-mix(in srgb, var(--color-accent) 35%, transparent) 50%,
-    color-mix(in srgb, var(--color-accent) 50%, transparent) 100%
-  );
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid color-mix(in srgb, var(--color-accent) 70%, transparent);
-  border-radius: 6px;
-  color: var(--color-text-primary);
-  font-size: 12px;
-  font-weight: 700;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
-  box-shadow: 0 4px 15px
-      color-mix(in srgb, var(--color-accent) 40%, transparent),
-    inset 0 1px 0 rgba(255, 255, 255, 0.3), inset 0 -1px 0 rgba(0, 0, 0, 0.2);
-  overflow: hidden;
+.card-chip--hype .card-chip-shine > span {
+  animation-duration: 2.5s;
 }
-
-/* Metal shine sweep overlay for large variant */
-.drops-badge-glass-lg::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 50%;
-  height: 100%;
+.card-chip--hype-golden .card-chip-shine > span,
+.card-chip--lg .card-chip-shine > span {
   background: linear-gradient(
     90deg,
     transparent 0%,
     rgba(255, 255, 255, 0.15) 20%,
-    rgba(255, 255, 255, 0.6) 50%,
+    rgba(255, 255, 255, 0.55) 50%,
     rgba(255, 255, 255, 0.15) 80%,
     transparent 100%
   );
-  animation: metal-shine-sweep 3s ease-in-out infinite;
-  pointer-events: none;
+}
+.card-chip--hype-golden .card-chip-shine > span {
+  animation-duration: 2s;
+}
+
+/* No frost, an opaque-enough fill instead: for a chip repeated per card on
+   the phone, where a backdrop filter is a composited layer per card on a
+   device whose whole cost is compositing. */
+.card-chip--flat {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background-color: color-mix(in srgb, var(--color-background) 82%, transparent);
 }
 
 /* ============================================
-   Glass Hype Train Badge with Rainbow Shine
+   Missing, earnable now: section header
    ============================================ */
 
-/* Glass hype train badge - iridescent/rainbow effect (theme-aware) */
-.hype-train-badge-glass {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--color-highlight-purple) 45%, transparent) 0%,
-    color-mix(in srgb, var(--color-highlight-blue) 30%, transparent) 50%,
-    color-mix(in srgb, var(--color-highlight-purple) 45%, transparent) 100%
-  );
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid color-mix(in srgb, var(--color-highlight-purple) 60%, transparent);
-  border-radius: 4px;
+/* The focus comes from size and weight alone; the count chip and the totals
+   carry the colour. */
+.missing-now-title {
+  font-size: 16px;
+  line-height: 1.25;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  white-space: nowrap;
   color: var(--color-text-primary);
-  font-size: 10px;
-  font-weight: 700;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
-  box-shadow: 0 2px 10px
-      color-mix(in srgb, var(--color-highlight-purple) 35%, transparent),
-    inset 0 1px 0 rgba(255, 255, 255, 0.25), inset 0 -1px 0 rgba(0, 0, 0, 0.15);
-  overflow: hidden;
 }
 
-/* Rainbow shine sweep overlay */
-.hype-train-badge-glass::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 50%;
-  height: 100%;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(255, 255, 255, 0.1) 20%,
-    rgba(255, 255, 255, 0.5) 50%,
-    rgba(255, 255, 255, 0.1) 80%,
-    transparent 100%
-  );
-  animation: metal-shine-sweep 2.5s ease-in-out infinite;
-  pointer-events: none;
+/* Breathes only while a refresh is in flight, so it costs nothing at rest. */
+.missing-now-pulse {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  border-radius: 50%;
+  background-color: var(--color-success);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--color-success) 70%, transparent);
+  animation: pulse-dot 1.4s ease-in-out infinite;
 }
 
-/* Golden Kappa variant for special Hype Trains */
-.hype-train-badge-glass-golden {
-  position: relative;
-  display: inline-flex;
+/* What catching up costs: money and watch time, read at a glance. */
+.missing-now-catchup {
+  display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, #FFD700 45%, transparent) 0%,
-    color-mix(in srgb, #FFA500 30%, transparent) 50%,
-    color-mix(in srgb, #FFD700 45%, transparent) 100%
-  );
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid color-mix(in srgb, #FFD700 60%, transparent);
-  border-radius: 4px;
+  gap: 16px;
+  padding: 7px 16px 7px 14px;
+  border-radius: 12px;
+}
+.missing-now-catchup-label {
+  max-width: 84px;
+  font-size: 9.5px;
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.missing-now-stats {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+/* The phone: label on top, stats spread evenly underneath. */
+.missing-now-catchup--stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 8px 12px 9px;
+}
+.missing-now-catchup--stacked .missing-now-catchup-label {
+  max-width: none;
+}
+.missing-now-catchup--stacked .missing-now-stats {
+  justify-content: space-between;
+}
+.missing-now-catchup--stacked .missing-now-stat:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+.missing-now-stat {
+  display: flex;
+  flex-direction: column;
+  padding-left: 16px;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+}
+.missing-now-stat-value {
+  font-size: 16px;
+  line-height: 1.2;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
   color: var(--color-text-primary);
-  font-size: 10px;
-  font-weight: 700;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
-  box-shadow: 0 2px 10px
-      color-mix(in srgb, #FFD700 35%, transparent),
-    inset 0 1px 0 rgba(255, 255, 255, 0.25), inset 0 -1px 0 rgba(0, 0, 0, 0.15);
-  overflow: hidden;
+}
+.missing-now-stat-label {
+  font-size: 10.5px;
+  line-height: 1.3;
+  color: var(--color-text-muted);
+  white-space: nowrap;
 }
 
-/* Golden shine sweep overlay */
-.hype-train-badge-glass-golden::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 50%;
-  height: 100%;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(255, 255, 255, 0.15) 20%,
-    rgba(255, 255, 255, 0.6) 50%,
-    rgba(255, 255, 255, 0.15) 80%,
-    transparent 100%
-  );
-  animation: metal-shine-sweep 2s ease-in-out infinite;
-  pointer-events: none;
+.missing-now-rule {
+  height: 1px;
+  margin: 12px 0 14px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.08) 60%, transparent);
 }
 
 /* ============================================
@@ -5624,27 +5719,31 @@ html[data-motion="reduced"] .sn-ffz-anim-leave {
 .sn-timeline__tick {
   position: absolute;
   top: 50%;
-  width: 2px;
-  height: 14px;
+  width: 1px;
+  height: var(--plyr-range-track-height);
   transform: translate(-50%, -50%);
-  border-radius: 1px;
-  background: rgba(255, 255, 255, 0.85);
-  box-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
+  background: rgba(255, 255, 255, 0.35);
   pointer-events: none;
+  transition: height 0.15s ease, background-color 0.15s ease;
+}
+.sn-timeline:hover .sn-timeline__tick,
+.sn-timeline--dragging .sn-timeline__tick {
+  height: calc(var(--plyr-range-track-height) + 4px);
+  background: rgba(255, 255, 255, 0.6);
 }
 .sn-timeline__tick-label {
   position: absolute;
   top: 100%;
   left: 50%;
   transform: translateX(-50%);
-  margin-top: 1px;
+  margin-top: 3px;
   font-size: 10px;
   line-height: 1;
   white-space: nowrap;
-  color: rgba(255, 255, 255, 0.85);
+  color: rgba(255, 255, 255, 0.7);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
   font-variant-numeric: tabular-nums;
-  opacity: 0.75;
+  opacity: 0;
   transition: opacity 0.15s ease;
 }
 .sn-timeline:hover .sn-timeline__tick-label,
@@ -5860,6 +5959,131 @@ html[data-motion="reduced"] .sn-ffz-anim-leave {
     rgba(255, 255, 255, 0.55) 0 2px,
     rgba(0, 0, 0, 0.6) 2px 4px
   );
+}
+
+/* Storyboard seek preview (Plyr previewThumbnails; finished VODs). Sized
+   here so Plyr keeps the sheet's frame height instead of a quarter of the
+   player; skinned like .plyr__tooltip. */
+.video-player-container .plyr__preview-thumb {
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--color-border-light);
+  border-radius: 8px;
+  padding: 3px;
+  z-index: 3;
+}
+.video-player-container .plyr__preview-thumb::before {
+  border-top-color: rgba(0, 0, 0, 0.85);
+}
+.video-player-container .plyr__preview-thumb__image-container {
+  width: 220px;
+  height: 124px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+}
+/* Chapter name above the time: later children come first. */
+.video-player-container .plyr__preview-thumb__time-container {
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  gap: 2px;
+  padding: 18px 6px 5px;
+}
+.video-player-container .plyr__preview-thumb__time-container span {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.video-player-container .sn-chapter-tip--thumb {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.85);
+}
+/* Plyr's full-frame scrub preview is a player-sized layer under
+   `filter: blur(1px)` for the whole of a mouse-down drag, showing a sheet
+   scaled to the player while the video is already seeking underneath. The
+   video is the scrub preview; keep only the small thumb. Plyr's cleanup of
+   the images it loads into this container is timer-based, so hiding it is
+   safe. */
+.video-player-container .plyr__preview-scrubbing {
+  display: none;
+}
+
+/* Chapter boundaries on a VOD's Plyr bar (VodChapterMarks.tsx): a gap in
+   the track at every category change. Same layer rules as .sn-muted-marks. */
+.sn-chapter-marks {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: var(--plyr-range-track-height);
+  transform: translateY(-50%);
+  border-radius: 999px;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 3;
+}
+.sn-chapter-gap {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.6);
+}
+/* No storyboard: the chapter marks own the hover tooltip (time + chapter)
+   and Plyr's, which it rewrites wholesale on every move, is hidden. */
+.plyr__progress.sn-chapter-host > .plyr__tooltip {
+  display: none;
+}
+.sn-chapter-tip {
+  position: absolute;
+  bottom: 100%;
+  margin-bottom: 10px;
+  transform: translateX(-50%);
+  padding: 4px 8px;
+  white-space: nowrap;
+  text-align: center;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--color-border-light);
+  border-radius: 4px;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+  z-index: 3;
+}
+.sn-chapter-tip__title {
+  display: block;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+/* Chapters control (VideoPlayer injects it after the time readouts). */
+.video-player-container .plyr__control.sn-chapters-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+}
+.sn-chapters-btn__label {
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Continue Watching rail (ContinueWatchingRow.tsx). `.scrollbar-thin` sets

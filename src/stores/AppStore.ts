@@ -1,22 +1,24 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, emit } from '@tauri-apps/api/event';
-import type { Settings, TwitchUser, TwitchStream, UserInfo, TwitchCategory, HypeTrainData, TwitchVideo, ModLogEvent, DropProgressStatus, FavoriteChannel, VodStartInfo, LiveRewindInfo, HomeSnapshot, HomeSnapshotUpdate, HypeTrainBulkStatus, ContinueWatchingItem } from '../types';
+import type { Settings, TwitchUser, TwitchStream, UserInfo, TwitchCategory, HypeTrainData, TwitchVideo, ModLogEvent, DropProgressStatus, FavoriteChannel, VodStartInfo, LiveRewindInfo, HomeSnapshot, HomeSnapshotUpdate, HypeTrainBulkStatus, ContinueWatchingItem, FollowingLists, Collaboration } from '../types';
 import { trackActivity } from '../services/logService';
 import { Logger, setDiagnosticsEnabled } from '../utils/logger';
+import { getAppVersion } from '../utils/appVersion';
 // Direct import (not via the keybindings index) to avoid a storecommands cycle.
 import { getPlayerControls } from '../keybindings/playerControls';
 import { qualitiesEquivalent } from '../utils/quality';
 import { reportCodecPreference } from '../utils/codecPreference';
 import { setInlineEmoteScale } from '../services/emoteService';
 import { upsertUser, claimLoginAccolades, grantAtmosphereOwnership } from '../services/supabaseService';
-import { emitSettingsUpdated } from '../utils/settingsBroadcast';
+import { patchSettings, settingsDiff } from '../utils/settingsBroadcast';
 import { IS_MAC, IS_MOBILE } from '../utils/platform';
 import { makeKey, parseKey } from '../utils/providerKey';
 import { isStrayYouTubeFavoriteId } from '../utils/favorites';
 import { buildProviderUrl, streamProvider } from '../utils/streamProvider';
+import { signInRequiredFrom } from '../utils/signInRequired';
 import { transientSwapVerdict } from '../utils/transientSwap';
-import { providerLabel, WATCHABLE_PROVIDERS, type ProviderId } from '../types/providers';
+import { providerLabel, WATCHABLE_PROVIDERS, type ProviderId, type ProviderCategory } from '../types/providers';
 import { takePreloadedSettings } from '../bootPreload';
 
 export type StreamStartResult = {
@@ -87,7 +89,7 @@ export interface Toast {
   createdAt: number;
 }
 
-export type SettingsTab = 'Profile' | 'Interface' | 'Player' | 'Chat' | 'Moderation' | 'Overlay' | 'Theme' | 'Integrations' | 'Plugins' | 'Notifications' | 'Cache' | 'Command Palette' | 'Keybindings' | 'Backup' | 'Support' | "What's New" | 'Analytics';
+export type SettingsTab = 'Profile' | 'Interface' | 'Player' | 'Chat' | 'Moderation' | 'Overlay' | 'Theme' | 'Integrations' | 'Plugins' | 'Notifications' | 'Cache' | 'Command Palette' | 'Keybindings' | 'Backup' | 'Support' | 'Analytics';
 
 export type HomeTab = 'following' | 'recommended' | 'browse' | 'search' | 'category';
 
@@ -216,6 +218,20 @@ interface AppState {
   recommendedCursor: string | null;
   hasMoreRecommended: boolean;
   isLoadingMore: boolean;
+  /** Home's Discover list on the unified view, finished in Rust (the
+   *  `unified_discover` snapshot section): ranked, one card per channel, follows
+   *  and live favourites already out. Rendered as-is. */
+  unifiedDiscover: TwitchStream[];
+  /** The Sidebar's second section, finished in Rust for the platform `scope`
+   *  it was built for (the `sidebar_discover` snapshot section). Shown only
+   *  under that scope, so a list from before a platform switch never is. */
+  sidebarDiscover: { scope: string; streams: TwitchStream[] } | null;
+  /** Your channels across every platform, finished in Rust (the `following`
+   *  snapshot section): live favourites, the other live follows and the
+   *  offline roster. Home and the Sidebar only filter to their platform. */
+  following: FollowingLists;
+  /** The unified Categories tab's "On other platforms" row, built in Rust. */
+  otherCategories: ProviderCategory[];
   streamUrl: string | null;
   // The quality the resolver is actually serving right now (canonical name from
   // the playlist). May differ from `settings.quality` if the saved preference
@@ -327,7 +343,7 @@ interface AppState {
     badgeRevision: number;
   } | null;
   isCommandPaletteOpen: boolean;
-  updateInfo: { current_version: string; latest_version: string } | null;
+  updateInfo: { current_version: string; latest_version: string; releases_behind?: number | null } | null;
   showLiveStreamsOverlay: boolean;
   showMarketplaceOverlay: boolean;
   setShowMarketplaceOverlay: (show: boolean) => void;
@@ -406,7 +422,6 @@ interface AppState {
   toasts: Toast[];
   isAutoSwitching: boolean;
   // Track when raid redirect occurred to prevent auto-switch from overriding
-  lastRaidRedirectTime: number;
   profileModalUser: TwitchStream | null;
   setProfileModalUser: (user: TwitchStream | null) => void;
   /** Which tab the streamer profile modal opens on (About by default; the
@@ -468,6 +483,10 @@ interface AppState {
   loadSettings: () => Promise<void>;
   updateSettings: (newSettings: Settings) => Promise<void>;
   watchStreaks: Record<string, number>;
+  /** Twitch channel id -> its Shared Viewership group, for the stream cards.
+   *  Owned by Rust's home snapshot; only channels in a group are present, and
+   *  keys are Twitch ids, so read it for Twitch streams only. */
+  collaborations: Record<string, Collaboration>;
   /** Home's Continue Watching row, owned by Rust's home snapshot. Derived from
    *  the local VOD watch-position store, so it is present on the first paint
    *  after a cold start. */
@@ -480,7 +499,12 @@ interface AppState {
   loadFollowedStreams: () => Promise<void>;
   loadRecommendedStreams: () => Promise<void>;
   loadMoreRecommendedStreams: () => Promise<void>;
-  startStream: (channel: string, streamInfo?: TwitchStream, skipChatRefresh?: boolean) => Promise<void>;
+  /** `preResolved` is for a stream whose relay is ALREADY serving, which today
+   *  means a MultiNook tile promoted to the solo player: the resolve happened
+   *  when the tile started and `promote_multi_nook_tile` reuses it, so the only
+   *  thing left to run is the session setup below. Passing it skips the resolve
+   *  invoke and nothing else. */
+  startStream: (channel: string, streamInfo?: TwitchStream, skipChatRefresh?: boolean, preResolved?: StreamStartResult) => Promise<void>;
   // `chatOnly` skips the VOD lookup and replay: used when the channel is LIVE
   // but playback failed, where loading a past broadcast would contradict what
   // the user was told and swap chat to historical replay.
@@ -499,7 +523,6 @@ interface AppState {
   applyAdPivot: (url: string, region?: string) => void;
   openSettings: (initialTab?: SettingsTab, initialSection?: string) => void;
   closeSettings: () => void;
-  openProfileViewer: (userId: string) => void;
   closeProfileViewer: () => void;
   // Open the viewer in LIVE-PREVIEW mode for the current user's own profile,
   // seeding it with the values currently being edited in Settings.
@@ -515,7 +538,7 @@ interface AppState {
   openCommandPalette: () => void;
   closeCommandPalette: () => void;
   toggleCommandPalette: () => void;
-  setUpdateInfo: (info: { current_version: string; latest_version: string } | null) => void;
+  setUpdateInfo: (info: { current_version: string; latest_version: string; releases_behind?: number | null } | null) => void;
   setShowLiveStreamsOverlay: (show: boolean) => void;
   setShowDropsOverlay: (show: boolean) => void;
   setShowBadgesOverlay: (show: boolean) => void;
@@ -597,33 +620,232 @@ interface AppState {
 
 // Flags to ensure we only show session toasts once per app session
 
-// Mod-log dedup metadata, memoized per entry object. The dedup scan runs per
-// moderation event over up to MOD_LOG_CAP entries; without this it rebuilt the
-// key strings and re-parsed every entry's timestamp on each event (a ban wave
-// is many events per second). Entries are replaced, never mutated, so keying
-// by object identity is safe.
-const modLogNormAction = (a?: string) => {
-  const s = (a || '').toLowerCase();
-  return s === 'clear_chat' ? 'clear' : s;
-};
-const modLogKeyOf = (l: ModLogEvent) =>
-  `${(l.channel || '').toLowerCase()}|${modLogNormAction(l.action)}|${(l.target_user_name || '').toLowerCase()}`;
-const modLogMeta = new WeakMap<ModLogEvent, { key: string; ts: number }>();
-const modLogMetaOf = (l: ModLogEvent): { key: string; ts: number } => {
-  let m = modLogMeta.get(l);
-  if (!m) {
-    m = { key: modLogKeyOf(l), ts: new Date(l.timestamp).getTime() };
-    modLogMeta.set(l, m);
-  }
-  return m;
+/** Newest-first, in-memory ceiling across channels. */
+const MOD_LOG_CAP = 300;
+
+/** Replace the entry with the same id in place, or put it on top. */
+const upsertModLog = (logs: ModLogEvent[], entry: ModLogEvent): ModLogEvent[] => {
+  const index = logs.findIndex((l) => l.id === entry.id);
+  if (index === -1) return [entry, ...logs].slice(0, MOD_LOG_CAP);
+  const next = logs.slice();
+  next[index] = entry;
+  return next;
 };
 
 // Shown once per app session, desktop only (the phone keeps boot quiet).
 let hasShownWelcomeBackToast = false;
 
-// Store EventSub listener cleanup functions at module level
-let eventSubListenerCleanup: (() => void)[] = [];
-let eventSubConnectionId = 0;
+// The boot veil's fade-out (App.tsx), so a greeting waits for it to finish.
+const BOOT_VEIL_FADE_MS = 450;
+
+/** Run `task` once boot has visibly finished: the boot veil gone and the main
+ *  thread idle. The welcome greeting springs the island open from JavaScript,
+ *  frame by frame, and started in the same frame the veil began fading and Home
+ *  mounted its grid, so it lost frames to both and visibly stuttered. */
+function whenBootSettled(task: () => void): void {
+  const settle = () => {
+    window.setTimeout(() => {
+      if (typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(() => task(), { timeout: 1200 });
+      } else {
+        task();
+      }
+    }, BOOT_VEIL_FADE_MS);
+  };
+  if (!useAppStore.getState().isBooting) {
+    settle();
+    return;
+  }
+  const unsubscribe = useAppStore.subscribe((state) => {
+    if (state.isBooting) return;
+    unsubscribe();
+    settle();
+  });
+}
+
+// --- Watch session ------------------------------------------------------
+//
+// What the main window watches is a session Rust owns (services/watch_session.rs):
+// the watched channel's EventSub subscription, the hype-train poll, Discord
+// presence, raid redirects, the offline confirmation and the auto-switch pick,
+// and the live check standing in for `stream.offline` on other platforms. This
+// store tells it what is playing and acts on what it decides; the player and
+// the chat panes stay here.
+
+type StoreSet = (partial: Partial<AppState>) => void;
+type StoreGet = () => AppState;
+
+interface OfflineNotice {
+  message: string;
+  error: boolean;
+}
+
+/** What Rust decided about a stream that looked offline. */
+type OfflineDecision =
+  | { action: 'nothing'; why: string }
+  | { action: 'still_live' }
+  | { action: 'offline_chat' }
+  | { action: 'notify'; notice: OfflineNotice }
+  | { action: 'stop'; notice: OfflineNotice | null }
+  | { action: 'switch_to'; stream: TwitchStream; notice: OfflineNotice | null };
+
+function watchTargetOf(info: TwitchStream, provider: ProviderId, login: string, authenticated: boolean) {
+  return {
+    provider,
+    login,
+    user_id: info.user_id || '',
+    user_name: info.user_name || login,
+    title: info.title || '',
+    game_id: info.game_id || null,
+    game_name: info.game_name || '',
+    started_at: info.started_at || '',
+    authenticated,
+  };
+}
+
+let watchSessionListening = false;
+
+/** Subscribe once to the session's events, in the window that plays streams. */
+function ensureWatchSessionListeners(set: StoreSet, get: StoreGet): void {
+  if (watchSessionListening) return;
+  watchSessionListening = true;
+
+  // A raid to follow. The target row is a floor (ids and the raiding party's
+  // size): startStream backfills the rest from the target's live row.
+  void listen<{ reason: 'raid'; target: TwitchStream }>('watch-session://redirect', async (event) => {
+    const { target } = event.payload;
+    Logger.debug(`[WatchSession] Raid detected, joining ${target.user_login}`);
+    get().addToast(`Raid starting! Joining ${target.user_login}...`, 'info');
+    // Long enough to read the notice before the stream changes under it.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await get().startStream(target.user_login, target);
+  });
+
+  void listen('watch-session://offline', () => {
+    void get().handleStreamOffline();
+  });
+
+  // Parked in this channel's offline chat when it goes live: switch to it.
+  void listen<{ broadcaster_user_login: string; broadcaster_user_name: string; id: string; started_at: string }>(
+    'watch-session://went-live',
+    (event) => {
+      const online = event.payload;
+      const state = get();
+      if (state.currentStream?.user_login !== online.broadcaster_user_login) return;
+      if (state.currentMediaType !== 'offline_chat') return;
+      Logger.info(`[WatchSession] Switching from offline chat to newly live stream: ${online.broadcaster_user_login}`);
+      state.addToast(`${online.broadcaster_user_name} just went live! Seamlessly connecting...`, 'success');
+      const live: TwitchStream = {
+        ...state.currentStream,
+        id: online.id || state.currentStream.id,
+        is_live: true,
+        started_at: online.started_at || new Date().toISOString(),
+      };
+      void state.startStream(live.user_login, live, true);
+    },
+  );
+
+  // Fresh title / category (Twitch channel.update) or viewers (other platforms'
+  // live check). The live check falls back field by field: a poll that simply
+  // did not carry a category must not blank the chrome.
+  void listen<Partial<TwitchStream>>('watch-session://stream-update', (event) => {
+    const current = get().currentStream;
+    if (!current) return;
+    const update = event.payload;
+    if (streamProvider(current) === 'twitch') {
+      set({
+        currentStream: {
+          ...current,
+          title: update.title ?? current.title,
+          game_name: update.game_name ?? current.game_name,
+          game_id: update.game_id || current.game_id,
+        },
+      });
+    } else {
+      get().patchCurrentStream({
+        viewer_count: update.viewer_count ?? current.viewer_count,
+        title: update.title || current.title,
+        game_name: update.game_name || current.game_name,
+      });
+    }
+  });
+
+  // The watched channel's hype train (the session asks Rust to watch it).
+  void listen<{ login: string; train: HypeTrainData | null }>('hype-train://update', (event) => {
+    const current = get().currentStream;
+    if (!current || streamProvider(current) !== 'twitch') return;
+    if (event.payload.login !== current.user_login.toLowerCase()) return;
+    set({ currentHypeTrain: event.payload.train });
+  });
+
+  void listen<boolean>('watch-session://resolving', (event) => {
+    set({ isAutoSwitching: event.payload });
+  });
+
+  // Surface EventSub subscription failures (e.g. channel.moderate dying on a
+  // missing scope) instead of letting the mod-log pane sit silently empty.
+  void listen<{ type: string; status: number; error: string }>('eventsub://subscription-failed', (event) => {
+    const { type, status, error } = event.payload;
+    Logger.error(`[EventSub] Subscription failed: ${type} (HTTP ${status}): ${error}`);
+    if (type === 'channel.moderate') {
+      get().addToast(`Mod logs unavailable: ${error || 'subscription failed'} (HTTP ${status})`, 'warning');
+    }
+  });
+}
+
+/** Carry out what Rust decided about a stream that looked offline. */
+async function applyOfflineDecision(
+  decision: OfflineDecision,
+  ended: TwitchStream,
+  set: StoreSet,
+  get: StoreGet,
+): Promise<void> {
+  const say = (notice: OfflineNotice | null) => {
+    if (notice) get().addToast(notice.message, notice.error ? 'error' : 'info');
+  };
+  switch (decision.action) {
+    case 'nothing':
+      Logger.debug('[AutoSwitch] Nothing to do:', decision.why);
+      return;
+    case 'still_live':
+      Logger.debug('[AutoSwitch] Helix kept reporting the stream online; treating as a blip');
+      return;
+    case 'notify':
+      say(decision.notice);
+      return;
+    case 'offline_chat':
+      // Stop the video but not the chat, then settle into offline chat.
+      await invoke('stop_stream').catch((e) => Logger.warn('[AutoSwitch] Error stopping stream video:', e));
+      setTimeout(() => {
+        void get().startOfflineChat(ended.user_login, ended);
+      }, 100);
+      return;
+    case 'stop':
+    case 'switch_to':
+      set({ isAutoSwitching: true });
+      try {
+        await invoke('stop_stream').catch((e) => Logger.warn('[AutoSwitch] Error stopping stream:', e));
+        await invoke('stop_chat').catch((e) => Logger.warn('[AutoSwitch] Error stopping chat:', e));
+        await invoke('stop_drops_monitoring').catch((e) => Logger.warn('[AutoSwitch] Error stopping drops monitoring:', e));
+        set({ streamUrl: null, activeQuality: null, availableQualities: [], adSource: null, currentStream: null, currentMediaType: null });
+        say(decision.notice);
+        if (decision.action === 'stop') {
+          await invoke('watch_session_stop', { preserveBackend: false }).catch(() => {});
+          return;
+        }
+        // A beat between the old stream closing and the new one opening.
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        await get().startStream(decision.stream.user_login, decision.stream);
+        Logger.debug(`[AutoSwitch] Switched to ${decision.stream.user_name}`);
+      } catch (e) {
+        Logger.error('[AutoSwitch] Error during auto-switch:', e);
+        get().addToast('Auto-switch failed. Please select a new stream manually.', 'error');
+      } finally {
+        set({ isAutoSwitching: false });
+      }
+      return;
+  }
+}
 
 // --- Non-Twitch stream session -------------------------------------------
 //
@@ -634,13 +856,7 @@ let eventSubConnectionId = 0;
 /** The composite key the MAIN window acquired for provider chat, so teardown
  *  releases exactly what it took (and never a Twitch channel). */
 let mainProviderChatKey: string | null = null;
-let providerOfflineTimer: ReturnType<typeof setInterval> | null = null;
-/** Consecutive "not live" readings. Two are required before we act, so one
- *  flaky API response can't eject the viewer mid-stream. */
-let providerOfflineStrikes = 0;
 
-const PROVIDER_OFFLINE_POLL_MS = 60_000;
-const PROVIDER_OFFLINE_STRIKES = 2;
 /** Monotonic start counter. `startProviderStream` clears the module-level timer
  *  and chat key up front, but its own assignments happen AFTER three awaits, so
  *  two rapid starts could interleave and let the older call overwrite the newer
@@ -684,6 +900,8 @@ async function startProviderStream(
   seed: TwitchStream | undefined,
   set: (partial: Partial<AppState>) => void,
   get: () => AppState,
+  /** Same escape hatch as `startStream`: a relay that is already serving. */
+  preResolved?: StreamStartResult,
 ): Promise<void> {
   const key = makeKey(provider, channel);
   // Claim the ticket BEFORE the teardown, so a start that begins while this one
@@ -697,21 +915,20 @@ async function startProviderStream(
   // teardown lives in stopStream; here we only need its session bits gone so a
   // Twitch EventSub subscription doesn't keep firing over a Kick stream.
   await teardownProviderSession();
+  // The session start below drops the Twitch EventSub subscription.
   const previous = get().currentStream;
   if (previous && streamProvider(previous) === 'twitch') {
-    for (const cleanup of eventSubListenerCleanup) cleanup();
-    eventSubListenerCleanup = [];
-    invoke('disconnect_eventsub').catch(() => {});
     invoke('stop_drops_monitoring').catch(() => {});
   }
 
   try {
     const requestedQuality = get().settings.quality;
-    const result = await invoke<StreamStartResult>('start_stream', {
-      url: buildProviderUrl(provider, channel),
-      quality: requestedQuality,
-    });
-    logQualityFallback(requestedQuality, result.quality);
+    const result = preResolved
+      ?? await invoke<StreamStartResult>('start_stream', {
+        url: buildProviderUrl(provider, channel),
+        quality: requestedQuality,
+      });
+    if (!preResolved) logQualityFallback(requestedQuality, result.quality);
 
     // Seed from the row the user clicked, then enrich from the platform. The
     // metadata call is best-effort: a resolved stream must never fail to play
@@ -785,64 +1002,39 @@ async function startProviderStream(
       Logger.warn(`[${provider}] Could not connect chat for ${channel}:`, e);
     }
 
-    if (get().settings.discord_rpc_enabled) {
-      invoke('update_discord_presence', {
-        details: `Watching ${info.user_name}`,
-        activityState: info.title || `Live on ${providerLabel(provider)}`,
-        largeImage: 'icon_256x256',
-        // Platform logos need uploading to the Discord app before these
-        // resolve; an unknown asset key just renders no small image.
-        smallImage: `${provider}_logo`,
-        startTime: Date.now(),
-        gameName: info.game_name || '',
-        streamUrl: buildProviderUrl(provider, channel),
-      }).catch((e) => Logger.warn('[Discord] Could not update presence:', e));
-    }
-
-    // Stands in for Twitch's `stream.offline` EventSub notification.
-    // Guarded: creating this interval after a newer start has already installed
-    // its own would orphan that one with no handle left to clear it.
+    // Presence, and the live check standing in for Twitch's `stream.offline`,
+    // are the watch session's. Guarded: a newer start already owns the session.
     if (superseded()) return;
-    providerOfflineStrikes = 0;
-    providerOfflineTimer = setInterval(() => {
-      void (async () => {
-        const watching = get().currentStream;
-        if (!watching || streamProvider(watching) !== provider || watching.user_login !== channel) {
-          return; // the user moved on; teardown will clear this timer
-        }
-        try {
-          const rows = await invoke<TwitchStream[]>('provider_live_check', {
-            provider,
-            channels: [channel],
-          });
-          const row = rows?.[0];
-          if (row?.is_live) {
-            providerOfflineStrikes = 0;
-            // The live check already carries fresh viewers/title/category, so the
-            // player chrome stays current without a second request. Each field
-            // falls back to what we already had: a streamer who clears their
-            // category mid-stream should not blank the chrome on a poll that
-            // simply didn't carry one.
-            get().patchCurrentStream({
-              viewer_count: row.viewer_count,
-              title: row.title || watching.title,
-              game_name: row.game_name || watching.game_name,
-            });
-            return;
-          }
-          providerOfflineStrikes += 1;
-          if (providerOfflineStrikes >= PROVIDER_OFFLINE_STRIKES) {
-            await get().handleStreamOffline();
-          }
-        } catch (e) {
-          // A failed check is not evidence the stream ended.
-          Logger.debug(`[${provider}] live check failed:`, e);
-        }
-      })();
-    }, PROVIDER_OFFLINE_POLL_MS);
+    ensureWatchSessionListeners(set, get);
+    await invoke('watch_session_start', {
+      target: watchTargetOf(info, provider, channel, false),
+    }).catch((e) => Logger.warn(`[${provider}] Could not start the watch session:`, e));
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
     if (superseded()) return;
+    // A stream the platform serves only to a signed-in account (an 18+ TikTok
+    // LIVE). The sign-in is offered right here, and the stream plays once it
+    // takes, instead of a message naming a settings page to go and find.
+    const signIn = signInRequiredFrom(e);
+    if (signIn) {
+      Logger.info(`[${provider}] ${channel} needs a ${signIn.provider} sign-in`);
+      const watching = get().currentStream;
+      get().addToast(signIn.message, 'warning', {
+        label: 'Sign in',
+        onClick: () => {
+          void (async () => {
+            const { usePlatformAccountStore } = await import('./platformAccountStore');
+            await usePlatformAccountStore.getState().connect(signIn.provider);
+            // Replay the click only if the sign-in took and nothing else was
+            // started while the sign-in window was open.
+            if (!usePlatformAccountStore.getState()[signIn.provider].connected) return;
+            if (seq !== providerStartSeq || get().currentStream !== watching) return;
+            await get().startStream(makeKey(provider, channel), seed);
+          })();
+        },
+      });
+      return;
+    }
+    const message = e instanceof Error ? e.message : String(e);
     Logger.error(`Failed to start ${provider} stream:`, message);
     get().addToast(`Failed to start stream: ${message}`, 'error');
   } finally {
@@ -855,11 +1047,6 @@ async function startProviderStream(
 /** Stop the provider offline poll and release the main window's provider chat
  *  slice. Safe to call when no provider stream is active. */
 async function teardownProviderSession(): Promise<void> {
-  if (providerOfflineTimer) {
-    clearInterval(providerOfflineTimer);
-    providerOfflineTimer = null;
-  }
-  providerOfflineStrikes = 0;
   if (mainProviderChatKey) {
     const key = mainProviderChatKey;
     mainProviderChatKey = null;
@@ -896,22 +1083,68 @@ const STREAMS_GUARD_TTL_MS = 10_000;
 //
 // Rust polls followed live (60 s, shared with live notifications), the offline
 // roster (10 min), recommended (5 min while a Home is mounted) and hype trains
-// (30 s) and emits `home-snapshot` with a section only when it changed. Each
-// window registers the listener once and pulls the whole snapshot once; from
-// then on the store is a render model, not a fetcher. The load* actions below
-// are manual refresh requests to Rust (15 s floor per section over there).
-let homeSnapshotListening = false;
+// (30 s), builds the Discover lists (Home's unified grid, the Sidebar's second
+// section) while a surface shows them, and emits `home-snapshot` with a section
+// only when it changed. Each window registers the listener once and pulls the
+// whole snapshot once; from then on the store is a render model, not a fetcher.
+// The load* actions below are manual refresh requests to Rust (15 s floor per
+// section over there).
+let homeSnapshotListener: Promise<unknown> | null = null;
 let homeSnapshotHydration: Promise<void> | null = null;
+/** Names this page (JS context) in Rust's claims. A reload runs no React
+ *  cleanup, so the surfaces of the page before it never say they left; Rust
+ *  drops their claims when a claim arrives from a new page. */
+const homePageContext = crypto.randomUUID();
+/** Claims go out one at a time, in the order they were made, and only once
+ *  this window is listening: a claim can make Rust emit a list straight away,
+ *  and an emit that beats the listener is lost. */
+let homeClaims: Promise<unknown> = Promise.resolve();
+
+function sendHomeClaim(command: string, args: Record<string, unknown>): void {
+  homeClaims = homeClaims
+    .then(() => ensureHomeSnapshotListener())
+    .then(() => invoke(command, { ...args, context: homePageContext }))
+    // Said out loud: a claim that never lands leaves a surface with no list
+    // and nothing else to show why (a command missing from the ACL fails
+    // exactly this quietly).
+    .catch((e) => Logger.warn(`[HomeSnapshot] ${command} failed:`, e));
+}
+
+/** Tell Rust a Home mounted or unmounted in this window, and whether it shows
+ *  every platform at once (`set_home_mounted` in services/home_snapshot.rs). */
+export function announceHome(mounted: boolean, unified: boolean): void {
+  sendHomeClaim('set_home_mounted', { mounted, unified });
+}
+
+/** Tell Rust which platform scope the Sidebar shows its second section for, or
+ *  `null` when it shows none. Rust builds that list and sends it back as a
+ *  `sidebar_discover` update (`set_home_sidebar`). */
+export function announceSidebar(scope: string | null): void {
+  sendHomeClaim('set_home_sidebar', { scope });
+}
+
+/** Ask Rust to refetch the directories behind the Discover lists on screen,
+ *  where due (15 s floor over there). The lists follow as each lands. */
+export function refreshDiscover(): void {
+  void invoke('refresh_home_section', { section: 'discover' }).catch(() => {});
+}
+
+function ensureHomeSnapshotListener(): Promise<unknown> {
+  if (!homeSnapshotListener) {
+    homeSnapshotListener = listen<HomeSnapshotUpdate>('home-snapshot', (event) => {
+      useAppStore.getState().applyHomeUpdate(event.payload);
+    }).catch((e) => {
+      homeSnapshotListener = null;
+      Logger.warn('[HomeSnapshot] listen failed:', e);
+    });
+  }
+  return homeSnapshotListener;
+}
 
 /** Register the `home-snapshot` listener once per window and hydrate the
  *  store from the current snapshot. Idempotent; safe from any window. */
 export function ensureHomeSnapshotSync(): Promise<void> {
-  if (!homeSnapshotListening) {
-    homeSnapshotListening = true;
-    void listen<HomeSnapshotUpdate>('home-snapshot', (event) => {
-      useAppStore.getState().applyHomeUpdate(event.payload);
-    });
-  }
+  void ensureHomeSnapshotListener();
   if (!homeSnapshotHydration) {
     homeSnapshotHydration = invoke<HomeSnapshot>('get_home_snapshot')
       .then((snapshot) => useAppStore.getState().applyHomeSnapshot(snapshot))
@@ -958,12 +1191,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   homeOpenCount: 0,
   homeScrollTop: 0,
   watchStreaks: {},
+  collaborations: {},
   continueWatching: [],
   continueWatchingAt: null,
   recommendedStreams: [],
   recommendedCursor: null,
   hasMoreRecommended: true,
   isLoadingMore: false,
+  unifiedDiscover: [],
+  sidebarDiscover: null,
+  following: { favorites: [], live: [], offline: [] },
+  otherCategories: [],
   streamUrl: null,
   isRestartingStream: false,
   activeQuality: null,
@@ -1031,7 +1269,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   toasts: [],
   isAutoSwitching: false,
   // Track when raid redirect occurred to prevent auto-switch from overriding
-  lastRaidRedirectTime: 0,
   profileModalUser: null,
   profileModalInitialTab: 'about',
   setProfileModalUser: (user) => set({ profileModalUser: user, profileModalInitialTab: 'about' }),
@@ -1063,56 +1300,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   modLogs: [],
   loadedModLogChannels: new Set<string>(),
   addModLog: (log) => {
-    const MOD_LOG_CAP = 300; // newest-first, in-memory ceiling across channels
-    // Decide the dedup outcome, then persist the FINAL entry so the on-disk
-    // per-channel history matches what's shown.
-    let toPersist: ModLogEvent | null = null;
-    set((state) => {
-      const currentLogs = state.modLogs || [];
-
-      // IRC (CLEARCHAT/CLEARMSG/NOTICE) and EventSub channel.moderate both report
-      // the same actions. IRC is universal but anonymized; EventSub carries the
-      // moderator identity. De-dupe so the feeds don't double-log, and let a
-      // richer EventSub entry upgrade a matching IRC one (or drop the IRC dup).
-      const DEDUP_MS = 5000;
-      const newKey = modLogKeyOf(log);
-      const now = Date.now();
-      const dupIdx = currentLogs.findIndex((l) => {
-        const m = modLogMetaOf(l);
-        return m.key === newKey && now - m.ts < DEDUP_MS;
-      });
-
-      if (dupIdx !== -1) {
-        if (log.source === 'eventsub' && currentLogs[dupIdx].source !== 'eventsub') {
-          // Upgrade the anonymized IRC entry with EventSub detail, keeping its slot + id.
-          // Preserve the message/reason the IRC entry captured (e.g. the timed-out
-          // user's last message, which channel.moderate doesn't carry) when the
-          // EventSub upgrade doesn't supply its own.
-          const merged = currentLogs.slice();
-          merged[dupIdx] = {
-            ...log,
-            id: currentLogs[dupIdx].id,
-            message: log.message ?? currentLogs[dupIdx].message,
-            reason: log.reason ?? currentLogs[dupIdx].reason,
-          };
-          toPersist = merged[dupIdx];
-          return { modLogs: merged };
-        }
-        // Existing entry is as-good-or-better — drop the duplicate, persist nothing.
-        return { modLogs: currentLogs };
-      }
-
-      toPersist = log;
-      return { modLogs: [log, ...currentLogs].slice(0, MOD_LOG_CAP) };
-    });
-
-    // Durably store for this channel (slim copy, no raw `details`). Fire and
-    // forget; the disk store dedups/replaces by id and caps per channel.
-    if (toPersist && (toPersist as ModLogEvent).channel) {
-      const slim: ModLogEvent = { ...(toPersist as ModLogEvent) };
-      delete slim.details; // raw payload isn't rendered; keep the stored copy lean
-      invoke('append_mod_log', { channel: slim.channel, entry: slim }).catch(() => {});
+    // Rust decides whether this is a new action or one already reported (by
+    // the other feed, or by another window showing the same channel) and hands
+    // back the entry to show, which this window upserts by id.
+    const show = (entry: ModLogEvent) => set((state) => ({ modLogs: upsertModLog(state.modLogs, entry) }));
+    if (!log.channel) {
+      show(log);
+      return;
     }
+    invoke<ModLogEvent>('record_mod_log', { channel: log.channel, entry: log })
+      .then(show)
+      .catch((e) => {
+        Logger.warn('[ModLogs] Failed to record entry:', e);
+        show(log);
+      });
   },
   loadModLogsForChannel: async (channel) => {
     const key = (channel || '').toLowerCase();
@@ -1129,7 +1330,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (fresh.length === 0) return { modLogs: state.modLogs };
         const merged = [...state.modLogs, ...fresh]
           .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-          .slice(0, 300);
+          .slice(0, MOD_LOG_CAP);
         return { modLogs: merged };
       });
     } catch (e) {
@@ -1188,12 +1389,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
     }
     if (snapshot.hype_at !== null) applyHypeStatuses(snapshot.hype_trains);
+    // `!= null`: a snapshot from a build without this section leaves it undefined.
+    if (snapshot.collab_at != null && snapshot.collaborations) set({ collaborations: snapshot.collaborations });
     if (snapshot.streaks_at !== null) set({ watchStreaks: snapshot.watch_streaks });
     if (snapshot.drops_at !== null) {
       set({ dropsCampaigns: snapshot.drops_campaigns, dropsActiveGameNames: snapshot.drops_active_game_names });
     }
     if (snapshot.continue_watching_at !== null) {
       set({ continueWatching: snapshot.continue_watching, continueWatchingAt: snapshot.continue_watching_at });
+    }
+    if (snapshot.unified_discover_at !== null) set({ unifiedDiscover: snapshot.unified_discover });
+    // `!= null`: a snapshot from a build without these sections leaves them undefined.
+    if (snapshot.following_at != null && snapshot.following) set({ following: snapshot.following });
+    if (snapshot.other_categories_at != null && snapshot.other_categories) {
+      set({ otherCategories: snapshot.other_categories });
     }
   },
   applyHomeUpdate: (update) => {
@@ -1218,6 +1427,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       case 'hype_trains':
         applyHypeStatuses(update.statuses);
         break;
+      case 'collaborations':
+        set({ collaborations: update.collabs });
+        break;
       case 'watch_streaks':
         set({ watchStreaks: update.streaks });
         break;
@@ -1226,6 +1438,18 @@ export const useAppStore = create<AppState>((set, get) => ({
         break;
       case 'continue_watching':
         set({ continueWatching: update.items, continueWatchingAt: update.at });
+        break;
+      case 'unified_discover':
+        set({ unifiedDiscover: update.streams });
+        break;
+      case 'sidebar_discover':
+        set({ sidebarDiscover: { scope: update.scope, streams: update.streams } });
+        break;
+      case 'following':
+        set({ following: { favorites: update.favorites, live: update.live, offline: update.offline } });
+        break;
+      case 'other_categories':
+        set({ otherCategories: update.categories });
         break;
     }
   },
@@ -1260,7 +1484,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   handleStreamOffline: async () => {
     const state = get();
-    const { currentStream, settings, isAutoSwitching, lastRaidRedirectTime } = state;
+    const { currentStream } = state;
 
     // A provider stream has no Helix verification loop and no same-category
     // auto-switch (both are Twitch-only), so it takes the simple exit: stop,
@@ -1275,232 +1499,24 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
-    // Prevent multiple auto-switch attempts
-    if (isAutoSwitching) {
-      Logger.debug('[AutoSwitch] Already in progress, skipping');
-      return;
-    }
-
-    // Check if a raid redirect recently happened (within last 15 seconds)
-    // This prevents auto-switch from overriding a raid redirect
-    const timeSinceRaidRedirect = Date.now() - lastRaidRedirectTime;
-    const RAID_COOLDOWN_MS = 15000; // 15 seconds
-    if (lastRaidRedirectTime > 0 && timeSinceRaidRedirect < RAID_COOLDOWN_MS) {
-      Logger.debug(`[AutoSwitch] Skipping - raid redirect occurred ${Math.round(timeSinceRaidRedirect / 1000)}s ago`);
-      return;
-    }
-
-    // Check if auto-switch is enabled
-    const autoSwitchEnabled = settings.auto_switch?.enabled ?? true;
-    if (!autoSwitchEnabled) {
-      Logger.debug('[AutoSwitch] Disabled in settings');
-      return;
-    }
-
     if (!currentStream) {
       Logger.debug('[AutoSwitch] No current stream to switch from');
       return;
     }
 
-    const gameName = currentStream.game_name;
-    const gameId = currentStream.game_id;
-    const currentUserLogin = currentStream.user_login;
-
-    Logger.debug(`[AutoSwitch] Stream ${currentUserLogin} appears offline, verifying...`);
-    set({ isAutoSwitching: true });
-
-    try {
-      // Step 1: Verify the stream is actually offline via Twitch API.
-      // The triggers (EventSub stream.offline, player errors) run seconds AHEAD
-      // of the Helix streams endpoint, which keeps listing a dead stream for a
-      // while after it ends. A fast double-check therefore reads "still online"
-      // for a genuinely-ended stream and wastes the one-shot trigger. Poll for
-      // up to ~35s instead: proceed once Helix reports offline twice in a row,
-      // give up only if the window closes with Helix still reporting the stream
-      // live (a brief encoder blip the streamer recovered from).
-      const VERIFY_ATTEMPTS = 8;
-      const VERIFY_INTERVAL_MS = 5000;
-      let consecutiveOffline = 0;
-
-      for (let attempt = 0; attempt < VERIFY_ATTEMPTS; attempt++) {
-        if (attempt > 0) {
-          await new Promise(resolve => setTimeout(resolve, VERIFY_INTERVAL_MS));
-        }
-
-        const streamData = await invoke('check_stream_online', { userLogin: currentUserLogin }) as TwitchStream | null;
-
-        if (streamData) {
-          consecutiveOffline = 0;
-          Logger.debug(`[AutoSwitch] Helix still reports ${currentUserLogin} online (attempt ${attempt + 1}/${VERIFY_ATTEMPTS})`);
-        } else {
-          consecutiveOffline++;
-          Logger.debug(`[AutoSwitch] Stream reported offline (${consecutiveOffline}/2, attempt ${attempt + 1}/${VERIFY_ATTEMPTS})`);
-          if (consecutiveOffline >= 2) break;
-        }
-      }
-
-      if (consecutiveOffline < 2) {
-        Logger.debug('[AutoSwitch] Helix kept reporting the stream online; treating as a blip and aborting');
-        set({ isAutoSwitching: false });
-        return;
-      }
-
-      Logger.debug(`[AutoSwitch] Stream ${currentUserLogin} confirmed offline`);
-
-      // Check if user prefers to stay in offline chat
-      if (settings.auto_switch?.stay_in_offline_chat) {
-        Logger.debug('[AutoSwitch] User prefers to stay in offline chat. Transitioning to offline chat mode...');
-        set({ isAutoSwitching: false });
-        
-        // Stop the stream (video player) but DO NOT stop chat
-        try {
-          await invoke('stop_stream');
-          Logger.debug('[AutoSwitch] Stream video stopped for offline mode');
-        } catch (e) {
-          Logger.warn('[AutoSwitch] Error stopping stream video:', e);
-        }
-
-        // We also want to trigger startOfflineChat to ensure we load the VOD and set the correct state
-        if (currentStream) {
-          // We can't await this directly without causing a loop if it fails, so we run it async
-          setTimeout(() => {
-            get().startOfflineChat(currentUserLogin, currentStream);
-          }, 100);
-        }
-        return;
-      }
-
-      // Step 2: Clean up current stream connections thoroughly
-      Logger.debug('[AutoSwitch] Cleaning up current stream connections...');
-
-      try {
-        await invoke('stop_stream');
-        Logger.debug('[AutoSwitch] Stream stopped');
-      } catch (e) {
-        Logger.warn('[AutoSwitch] Error stopping stream:', e);
-      }
-
-      try {
-        await invoke('stop_chat');
-        Logger.debug('[AutoSwitch] Chat stopped');
-      } catch (e) {
-        Logger.warn('[AutoSwitch] Error stopping chat:', e);
-      }
-
-      try {
-        await invoke('stop_drops_monitoring');
-        Logger.debug('[AutoSwitch] Drops monitoring stopped');
-      } catch (e) {
-        Logger.warn('[AutoSwitch] Error stopping drops monitoring:', e);
-      }
-
-      // Clear current stream state
-      set({ streamUrl: null, activeQuality: null, availableQualities: [], adSource: null, currentStream: null, currentMediaType: null });
-
-      // Step 3: Find the next best stream based on mode
-      const switchMode = settings.auto_switch?.mode ?? 'same_category';
-      let streams: TwitchStream[] = [];
-
-      if (switchMode === 'same_category') {
-        // Switch to same category - find streams in the same game.
-        // Prefer the category id carried on the current stream (kept fresh by the
-        // channel-update listener); only fall back to a name→id lookup if it's absent.
-        if (!gameId && !gameName) {
-          Logger.debug('[AutoSwitch] No game category for current stream');
-          if (settings.auto_switch?.show_notification ?? true) {
-            state.addToast(`${currentUserLogin} went offline. Unable to find similar streams.`, 'info');
-          }
-          set({ isAutoSwitching: false });
-          return;
-        }
-
-        let streamsResponse: [TwitchStream[], string | null];
-        if (gameId) {
-          Logger.debug(`[AutoSwitch] Looking for streams in category id: ${gameId} (${gameName})`);
-          streamsResponse = await invoke('get_streams_by_game_id', {
-            gameId: gameId,
-            excludeUserLogin: currentUserLogin,
-            limit: 10
-          }) as [TwitchStream[], string | null];
-        } else {
-          Logger.debug(`[AutoSwitch] Looking for streams in category: ${gameName}`);
-          streamsResponse = await invoke('get_streams_by_game_name', {
-            gameName: gameName,
-            excludeUserLogin: currentUserLogin,
-            limit: 10
-          }) as [TwitchStream[], string | null];
-        }
-
-        streams = streamsResponse[0] || [];
-
-        if (!streams || streams.length === 0) {
-          Logger.debug('[AutoSwitch] No other streams found in this category');
-          if (settings.auto_switch?.show_notification ?? true) {
-            state.addToast(`${currentUserLogin} went offline. No other ${gameName} streams available.`, 'info');
-          }
-          set({ isAutoSwitching: false });
-          return;
-        }
-      } else if (switchMode === 'followed_streams') {
-        // Switch to followed streams - get live followed streamers
-        Logger.debug('[AutoSwitch] Looking for live followed streams');
-
-        try {
-          // Load fresh followed streams data
-          const followedStreams = await invoke('get_followed_streams') as TwitchStream[];
-
-          // Filter out the current (now offline) streamer
-          streams = followedStreams.filter(s => s.user_login.toLowerCase() !== currentUserLogin.toLowerCase());
-
-          if (!streams || streams.length === 0) {
-            Logger.debug('[AutoSwitch] No other followed streams are live');
-            if (settings.auto_switch?.show_notification ?? true) {
-              state.addToast(`${currentUserLogin} went offline. No other followed streams are live.`, 'info');
-            }
-            set({ isAutoSwitching: false });
-            return;
-          }
-
-          // Sort by viewer count (highest first) to pick the most popular one
-          streams.sort((a, b) => (b.viewer_count || 0) - (a.viewer_count || 0));
-
-        } catch (e) {
-          Logger.error('[AutoSwitch] Error fetching followed streams:', e);
-          if (settings.auto_switch?.show_notification ?? true) {
-            state.addToast(`${currentUserLogin} went offline. Unable to load followed streams.`, 'error');
-          }
-          set({ isAutoSwitching: false });
-          return;
-        }
-      }
-
-      // The first stream is the highest viewer count (already sorted by API)
-      const nextStream = streams[0];
-
-      Logger.debug(`[AutoSwitch] Found next stream: ${nextStream.user_name} (${nextStream.viewer_count} viewers)`);
-
-      // Step 4: Show notification if enabled
-      if (settings.auto_switch?.show_notification ?? true) {
-        state.addToast(
-          `${currentUserLogin} went offline. Switching to ${nextStream.user_name}...`,
-          'info'
-        );
-      }
-
-      // Step 5: Start the new stream
-      // Small delay to ensure clean transition
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      await state.startStream(nextStream.user_login, nextStream);
-
-      Logger.debug(`[AutoSwitch] Successfully switched to ${nextStream.user_name}`);
-
-    } catch (e) {
-      Logger.error('[AutoSwitch] Error during auto-switch:', e);
+    // Rust confirms the stream is really offline (Helix lags EventSub by a
+    // while) and picks what to switch to; every trigger lands on one decision,
+    // and a confirmation already running answers the rest with "nothing".
+    ensureWatchSessionListeners(set, get);
+    const decision = await invoke<OfflineDecision>('watch_session_resolve_offline').catch((e) => {
+      Logger.error('[AutoSwitch] Could not resolve the offline stream:', e);
+      return null;
+    });
+    if (!decision) {
       state.addToast('Auto-switch failed. Please select a new stream manually.', 'error');
-    } finally {
-      set({ isAutoSwitching: false });
+      return;
     }
+    await applyOfflineDecision(decision, currentStream, set, get);
   },
 
   addToast: (message, type, action, options) => {
@@ -1637,10 +1653,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     // The favorites re-key above has to reach DISK, not just this store: the
     // backend's who's-live sweep reads `favorite_streamers` from its own copy of
     // settings, so an in-memory-only repair would leave it handing a YouTube UC
-    // id to Helix as a Twitch user id forever. `save_settings` writes through to
-    // that copy. One-time and idempotent: it stops matching once repaired.
+    // id to Helix as a Twitch user id forever. The patch writes through to that
+    // copy. One-time and idempotent: it stops matching once repaired.
     if (strayYouTubeIds.length > 0) {
-      invoke('save_settings', { settings }).catch((e) => {
+      patchSettings({ favorite_streamers: settings.favorite_streamers }).catch((e) => {
         Logger.warn('[favorites] could not persist the YouTube favorite re-key:', e);
       });
     }
@@ -1662,11 +1678,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     // this. Must run before chat renders, or the first frame picks the default.
     setInlineEmoteScale(settings.chat_design?.emote_scale ?? 1);
 
-    // Sync the experimental parts-based low-latency switch to the backend runtime
-    // kill switch. Off by default = the stable whole-segment path. Must run before a
-    // stream resolves so the origin probe honors it at the next start.
+    // Sync the low-latency engine switch to the backend runtime kill switch. On by
+    // default (the parts origin, level with twitch.tv). Must run before a stream
+    // resolves so the origin probe honors it at the next start.
     invoke('set_experimental_low_latency', {
-      enabled: settings.video_player?.experimental_low_latency ?? false,
+      enabled: settings.video_player?.experimental_low_latency ?? true,
     }).catch((e) => {
       Logger.warn('[Playback] Failed to sync experimental low latency:', e);
     });
@@ -1684,17 +1700,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   updateSettings: async (newSettings) => {
     const oldSettings = get().settings;
 
-    // Only save if settings actually changed to prevent unnecessary saves
-    const settingsChanged = JSON.stringify(oldSettings) !== JSON.stringify(newSettings);
-    if (!settingsChanged) {
+    // Write only the keys this change touched; Rust announces the write to the
+    // other windows. Nothing changed means nothing to write.
+    const patch = settingsDiff(oldSettings, newSettings);
+    if (Object.keys(patch).length === 0) {
       return;
     }
 
-    await invoke('save_settings', { settings: newSettings });
-    // Broadcast so any other open windows (main + MultiChats) refresh their
-    // in-memory settings without needing to be reopened. Fire-and-forget; the
-    // helper swallows errors in non-Tauri contexts.
-    void emitSettingsUpdated();
+    await patchSettings(patch);
 
     const state = get();
     if (state.isTheaterMode) {
@@ -1725,19 +1738,9 @@ export const useAppStore = create<AppState>((set, get) => ({
           
           if (multiNookState && multiNookState.isMultiNookActive && multiNookState.slots.length > 0) {
             multiNookModule?.broadcastMultiNookPresence(multiNookState.slots);
-          } else if (get().currentStream) {
-            const currentStream = get().currentStream!;
-            invoke('update_discord_presence', {
-              details: `Watching ${currentStream.user_name}`,
-              activityState: currentStream.title || 'Live on Twitch',
-              largeImage: '',
-              smallImage: '',
-              startTime: Date.now(),
-              gameName: currentStream.game_name || '',
-              streamUrl: `https://twitch.tv/${currentStream.user_login}`,
-            }).catch(() => {});
           } else {
-             invoke('set_idle_discord_presence').catch(() => {});
+            // The watch session knows what is playing (or that nothing is).
+            invoke('watch_session_refresh_presence').catch(() => {});
           }
         } catch (e) {
           Logger.warn('Could not connect to Discord:', e);
@@ -2142,6 +2145,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }
 
+      // Ends the watch session: its polls always, its EventSub subscription and
+      // presence unless MultiNook is taking the channel over.
+      await invoke('watch_session_stop', { preserveBackend }).catch((e) =>
+        Logger.warn('Could not stop the watch session:', e),
+      );
+
       if (!preserveBackend) {
         await invoke('stop_chat');
 
@@ -2158,20 +2167,6 @@ export const useAppStore = create<AppState>((set, get) => ({
            invoke('unregister_active_channel', { channelId: currentStream.user_id }).catch(() => {});
         }
 
-        // Clean up EventSub listeners
-        Logger.debug('[EventSub] Cleaning up listeners on stop...');
-        for (const cleanup of eventSubListenerCleanup) {
-          cleanup();
-        }
-        eventSubListenerCleanup = [];
-
-        // Disconnect EventSub
-        try {
-          await invoke('disconnect_eventsub');
-          Logger.debug('Disconnected EventSub');
-        } catch (e) {
-          Logger.warn('Could not disconnect EventSub:', e);
-        }
 
         // Drop the per-chatter store (mention list + each talker's paint/badge
         // data). It is otherwise only cleared on a channel SWITCH, so a plain
@@ -2187,15 +2182,6 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       set({ streamUrl: null, activeQuality: null, availableQualities: [], adSource: null, playbackKind: null, currentStream: null, currentMediaType: null, currentHypeTrain: null, streamOriginCategory: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null });
 
-      // Set idle Discord presence when not watching (skip during a MultiNook
-      // handoff — MultiNook publishes its own presence for the grid).
-      if (!preserveBackend && get().settings.discord_rpc_enabled) {
-        try {
-          await invoke('set_idle_discord_presence');
-        } catch (e) {
-          Logger.warn('Could not set idle Discord presence:', e);
-        }
-      }
 
     } catch (e) {
       Logger.error('Failed to stop stream:', e);
@@ -2534,8 +2520,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // quality — next stream might offer the requested one even if this one
       // didn't.
       const newSettings = { ...get().settings, quality: quality };
-      await invoke('save_settings', { settings: newSettings });
-      void emitSettingsUpdated();
+      await patchSettings({ quality });
 
       set({ streamUrl: result.url, activeQuality: result.quality, adSource: adSourceFrom(result), availableQualities: result.available ?? [], playbackKind: (result.kind as 'hls' | 'flv' | 'mp4') ?? 'hls', settings: newSettings, isLoading: false, isRestartingStream: false });
       if (qualitiesEquivalent(quality, result.quality)) {
@@ -2552,7 +2537,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ isLoading: false, isRestartingStream: false });
     }
   },
-  startStream: async (channel, providedStreamInfo?, skipChatRefresh = false) => {
+  startStream: async (channel, providedStreamInfo?, skipChatRefresh = false, preResolved?: StreamStartResult) => {
     // A live start ends any VOD/clip chat replay, on every provider. This is the
     // one entry that never went through stopStream (playMedia does), so a VOD
     // or offline-chat session followed by a sidebar click, or the "just went
@@ -2572,7 +2557,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // assumption it is a Twitch login. That destroys a case-sensitive YouTube
       // video id, so use the caller's string as given.
       const target = channel.includes(':') ? parsed.channel : channel;
-      return startProviderStream(provider, target, providedStreamInfo, set, get);
+      return startProviderStream(provider, target, providedStreamInfo, set, get, preResolved);
     }
     channel = parsed.channel;
 
@@ -2612,11 +2597,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       // frontend loop on top multiplied a transient failure into minutes of
       // spinner and delayed the chat-only fallback below. A hiccup is retried
       // by the backend; when this rejects, the failure is real.
+      // A promoted tile arrives already playing. Its quality was chosen by the
+      // TILE's resolve, so no fallback notice is owed here: the viewer picked
+      // that quality on the tile and is not being moved off it.
       // An audio-only swap still resolving would otherwise land AFTER this
       // start and re-point the relay at the channel we just left.
       await settleTransientSwap();
-      const result = await invoke<StreamStartResult>('start_stream', { url: `https://twitch.tv/${channel}`, quality: requestedQuality });
-      logQualityFallback(requestedQuality, result.quality);
+      const result = preResolved
+        ?? await invoke<StreamStartResult>('start_stream', { url: `https://twitch.tv/${channel}`, quality: requestedQuality });
+      if (!preResolved) logQualityFallback(requestedQuality, result.quality);
 
       // Use the provided stream info, or find it from followed streams, or fetch it
       let info: TwitchStream;
@@ -2720,308 +2709,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         // Non-critical, stream can still work
       }
 
-      // Update Discord with game matching (don't await - let it run in background)
-      if (get().settings.discord_rpc_enabled) {
-        const presenceArgs = {
-          details: `Watching ${info.user_name}`,
-          activityState: info.title || 'Live on Twitch',
-          largeImage: 'icon_256x256',
-          smallImage: 'twitch_logo',
-          startTime: Date.now(),
-          gameName: info.game_name || '',
-          streamUrl: `https://twitch.tv/${channel}`,
-        };
-
-        Logger.debug('[Discord] Updating presence for stream:', {
-          user: info.user_name,
-          title: info.title,
-          game: info.game_name,
-          channel: channel
-        });
-
-        invoke('update_discord_presence', presenceArgs).then(() => {
-          Logger.debug('[Discord] Presence updated successfully');
-        }).catch((e) => {
-          Logger.warn('[Discord] Could not update presence (Discord may not be running):', e);
-        });
-      }
-
-      // Connect to EventSub for real-time events (only if authenticated)
-      const channelId = info.user_id;
-      const autoRedirectOnRaid = get().settings.auto_switch?.auto_redirect_on_raid ?? true;
-
-      if (channelId && get().isAuthenticated) {
-        try {
-          const currentConnectionId = ++eventSubConnectionId;
-
-          // Clean up any existing event listeners first
-          Logger.debug('[EventSub] Cleaning up existing listeners...');
-          for (const cleanup of eventSubListenerCleanup) {
-            cleanup();
-          }
-          eventSubListenerCleanup = [];
-
-          // Disconnect any existing connection first
-          await invoke('disconnect_eventsub');
-
-          // Connect to Rust EventSub service
-          await invoke('connect_eventsub', { broadcasterId: channelId });
-
-          // Set up event listeners for Rust-emitted events
-          // Listen for raid events
-          const unlistenRaid = await listen<{
-            from_broadcaster_user_id: string;
-            from_broadcaster_user_login: string;
-            from_broadcaster_user_name: string;
-            to_broadcaster_user_id: string;
-            to_broadcaster_user_login: string;
-            to_broadcaster_user_name: string;
-            viewers: number;
-          }>('eventsub://raid', async (event) => {
-            if (!autoRedirectOnRaid) return;
-
-            const raidData = event.payload;
-            Logger.debug(`[EventSub] Raid detected! Redirecting to ${raidData.to_broadcaster_user_login} (${raidData.viewers} viewers)`);
-
-            // Mark that a raid redirect is happening - this prevents auto-switch from overriding
-            set({ lastRaidRedirectTime: Date.now() });
-
-            // Show notification toast
-            get().addToast(`Raid starting! Joining ${raidData.to_broadcaster_user_login}...`, 'info');
-
-            // Small delay to let user see the notification
-            await new Promise(resolve => setTimeout(resolve, 1500));
-
-            // Seed startStream with the user_id Twitch already gave us on the raid
-            // event. Without this, startStream falls back to get_channel_info; if
-            // that one Helix call hiccups, currentStream.user_id ends up empty and
-            // the Follow button no-ops until the user closes the stream and
-            // re-opens it via search.
-            //
-            // Everything else here is a FLOOR, not an answer. The raid event knows
-            // only ids and the size of the raiding party, so the blank fields are
-            // left blank on purpose: startStream backfills them from the target's
-            // live row, and a blank reads as "not known yet" while a wrong value
-            // would be rendered as fact.
-            const raidedStreamInfo: TwitchStream = {
-              id: '',
-              user_id: raidData.to_broadcaster_user_id,
-              user_login: raidData.to_broadcaster_user_login,
-              user_name: raidData.to_broadcaster_user_name || raidData.to_broadcaster_user_login,
-              title: '',
-              // The raid's count is the incoming party, not the channel's own
-              // audience, and it is superseded by the live row.
-              viewer_count: raidData.viewers,
-              game_name: '',
-              thumbnail_url: '',
-              profile_image_url: '',
-              // Deliberately NOT `new Date()`: a fabricated start time makes uptime
-              // count from zero on a stream that has been live for hours.
-              started_at: '',
-            };
-
-            // Start the new stream (this will also set up new EventSub subscription)
-            await get().startStream(raidData.to_broadcaster_user_login, raidedStreamInfo);
-          });
-          
-          if (currentConnectionId === eventSubConnectionId) {
-            eventSubListenerCleanup.push(unlistenRaid);
-          } else {
-            unlistenRaid();
-          }
-
-          // Listen for stream offline events
-          const unlistenOffline = await listen('eventsub://offline', () => {
-            Logger.debug('[EventSub] Stream went offline via EventSub notification');
-            // Use the existing handleStreamOffline which has all the auto-switch logic
-            get().handleStreamOffline();
-          });
-          
-          if (currentConnectionId === eventSubConnectionId) {
-            eventSubListenerCleanup.push(unlistenOffline);
-          } else {
-            unlistenOffline();
-          }
-
-          // Listen for stream online events
-          const unlistenOnline = await listen<{ broadcaster_user_login: string; broadcaster_user_name: string; id: string; started_at: string }>('eventsub://online', (event) => {
-            const onlineData = event.payload;
-            Logger.debug(`[EventSub] Stream went online for ${onlineData.broadcaster_user_login}`);
-            
-            const state = get();
-            
-            // Auto-Switch Logic: If the user is currently parked in this channel's offline chat room
-            if (state.currentStream && state.currentStream.user_login === onlineData.broadcaster_user_login) {
-                if (state.currentMediaType === 'offline_chat') {
-                    Logger.info(`[EventSub] Auto-switching from offline chat to newly live stream: ${onlineData.broadcaster_user_login}`);
-                    state.addToast(`${onlineData.broadcaster_user_name} just went live! Seamlessly connecting...`, 'success');
-                    
-                    const liveStreamObject: TwitchStream = {
-                        ...state.currentStream,
-                        id: onlineData.id || state.currentStream.id,
-                        is_live: true,
-                        started_at: onlineData.started_at || new Date().toISOString(),
-                    };
-                    
-                    state.startStream(liveStreamObject.user_login, liveStreamObject, true);
-                }
-            }
-          });
-
-          if (currentConnectionId === eventSubConnectionId) {
-            eventSubListenerCleanup.push(unlistenOnline);
-          } else {
-            unlistenOnline();
-          }
-
-          // Listen for channel update events
-          const unlistenUpdate = await listen<{ title: string; category_name: string; category_id: string }>('eventsub://channel-update', (event) => {
-            const updateData = event.payload;
-            const currentStream = get().currentStream;
-            if (currentStream) {
-              Logger.debug(`[EventSub] Channel updated: "${updateData.title}" - ${updateData.category_name}`);
-              const updatedStream = {
-                ...currentStream,
-                title: updateData.title,
-                game_name: updateData.category_name,
-                game_id: updateData.category_id,
-              };
-              set({ currentStream: updatedStream });
-
-              // Re-broadcast rich presence with updated metadata
-              const presenceArgs = {
-                details: `Watching ${updatedStream.user_name}`,
-                activityState: updatedStream.title || 'Live on Twitch',
-                largeImage: '',
-                smallImage: '',
-                startTime: Date.now(),
-                gameName: updatedStream.game_name || '',
-                streamUrl: `https://twitch.tv/${updatedStream.user_login}`,
-              };
-
-              if (get().settings.discord_rpc_enabled) {
-                invoke('update_discord_presence', presenceArgs).catch((e) => {
-                  Logger.warn('[Discord] Could not update presence on channel change:', e);
-                });
-              }
-            }
-          });
-          eventSubListenerCleanup.push(unlistenUpdate);
-
-          // NOTE: the `eventsub://channel-moderate` listener is NOT here anymore.
-          // The mod view is now driven by the dedicated, chat-tied moderation
-          // socket, so its listener is mounted persistently (App.tsx for the main
-          // window, MultiChatWindow.tsx for popouts) rather than per-stream. See
-          // utils/applyModerateEvent.ts.
-
-          // Surface EventSub subscription failures (e.g. channel.moderate dying
-          // on a missing scope) instead of letting the mod-log pane sit silently
-          // empty. Only channel.moderate is user-facing here; the rest just log.
-          const unlistenSubFailed = await listen<{ type: string; status: number; error: string }>('eventsub://subscription-failed', (event) => {
-            const { type, status, error } = event.payload;
-            Logger.error(`[EventSub] Subscription failed: ${type} (HTTP ${status}): ${error}`);
-            if (type === 'channel.moderate') {
-              get().addToast(
-                `Mod logs unavailable: ${error || 'subscription failed'} (HTTP ${status})`,
-                'warning'
-              );
-            }
-          });
-          eventSubListenerCleanup.push(unlistenSubFailed);
-
-          // Start Hype Train GQL polling (works for any channel, no moderator access needed)
-          // Adaptive polling: 15s when idle, 5s when train active
-          let hypeTrainPollingActive = true;
-          let hypeTrainPreviousLevel = 0;
-          let hypeTrainTimeoutId: ReturnType<typeof setTimeout> | null = null;
-          const IDLE_POLL_INTERVAL = 15000;  // 15 seconds when no train
-          const ACTIVE_POLL_INTERVAL = 3000; // 3 seconds when train active
-          
-          const pollHypeTrain = async () => {
-            if (!hypeTrainPollingActive) return;
-            
-            let isActive = false;
-            let imminentLevelUp = false;
-            try {
-              const status = await invoke('get_hype_train_status', { channelId, channelLogin: channel }) as {
-                is_active: boolean;
-                id?: string;
-                level: number;
-                progress: number;
-                goal: number;
-                total: number;
-                started_at?: string;
-                expires_at?: string;
-                is_level_up: boolean;
-                is_golden_kappa: boolean;
-              };
-              
-              isActive = status.is_active;
-              // Poll fast (1s) when a level-up is imminent (progress near goal) so
-              // the celebration fires as soon as the level switches, not up to 3s later.
-              imminentLevelUp = status.is_active && status.goal > 0 && status.progress / status.goal > 0.85;
-
-              if (status.is_active) {
-                // Check for level up
-                if (status.level > hypeTrainPreviousLevel && hypeTrainPreviousLevel > 0) {
-                  Logger.debug(`[HypeTrain GQL] Level UP! ${hypeTrainPreviousLevel} → ${status.level}`);
-                }
-                hypeTrainPreviousLevel = status.level;
-                
-                // Map GQL status to HypeTrainData format
-                const hypeTrainData = {
-                  id: status.id || '',
-                  broadcaster_user_id: channelId,
-                  broadcaster_user_login: channel,
-                  broadcaster_user_name: info.user_name,
-                  level: status.level,
-                  total: status.total,
-                  progress: status.progress,
-                  goal: status.goal,
-                  top_contributions: [],
-                  started_at: status.started_at || '',
-                  expires_at: status.expires_at || '',
-                  is_golden_kappa: status.is_golden_kappa,
-                };
-                set({ currentHypeTrain: hypeTrainData });
-              } else {
-                // Only clear if we previously had a hype train
-                if (get().currentHypeTrain !== null) {
-                  Logger.debug('[HypeTrain GQL] Hype Train ended');
-                  hypeTrainPreviousLevel = 0;
-                  set({ currentHypeTrain: null });
-                }
-              }
-            } catch {
-              // Silently fail - GQL polling is non-critical
-            }
-            
-            // Schedule next poll with adaptive interval
-            if (hypeTrainPollingActive) {
-              const nextInterval = isActive
-                ? (imminentLevelUp ? 1000 : ACTIVE_POLL_INTERVAL)
-                : IDLE_POLL_INTERVAL;
-              hypeTrainTimeoutId = setTimeout(pollHypeTrain, nextInterval);
-            }
-          };
-          
-          // Initial poll
-          pollHypeTrain();
-          
-          // Add cleanup for polling
-          eventSubListenerCleanup.push(() => {
-            hypeTrainPollingActive = false;
-            if (hypeTrainTimeoutId) {
-              clearTimeout(hypeTrainTimeoutId);
-            }
-          });
-
-          Logger.debug(`Connected to EventSub (channel: ${info.user_name})`);
-        } catch (e) {
-          Logger.warn('[EventSub] Could not connect:', e);
-          // Non-critical, stream can still work
-        }
-      }
+      // EventSub for this channel, the hype-train poll, Discord presence, raid
+      // redirects and the offline decision are the watch session's (Rust).
+      ensureWatchSessionListeners(set, get);
+      await invoke('watch_session_start', {
+        target: watchTargetOf(info, 'twitch', channel, get().isAuthenticated),
+      }).catch((e) => Logger.warn('[WatchSession] Could not start:', e));
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : String(e);
       Logger.error('Failed to start stream:', errorMessage);
@@ -3215,11 +2908,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   closeSettings: () => {
     trackActivity('Closed Settings');
     set({ isSettingsOpen: false, settingsInitialTab: null, settingsInitialSection: null });
-  },
-  openProfileViewer: (userId: string) => {
-    // A normal view (another member, or self from chat) is never a preview:
-    // drop any stale override so it can't leak onto this profile.
-    set({ profileViewerUserId: userId, profileViewerPreview: null });
   },
   closeProfileViewer: () => {
     set({ profileViewerUserId: null, profileViewerPreview: null });
@@ -3657,13 +3345,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Track user in Supabase for analytics (only on initial login, not periodic checks)
       if (!wasAuthenticated) {
         try {
-          // getVersion(), NOT the get_current_app_version command: that returns
-          // env!("CARGO_PKG_VERSION"), which is the DESKTOP number even inside
-          // an Android build, because the tauri.android.conf.json version
-          // override feeds Gradle and never reaches Cargo. Android had been
-          // reporting 8.3.9 to Supabase.
-          const { getVersion } = await import('@tauri-apps/api/app');
-          const appVersion = await getVersion();
+          // getAppVersion(), which reads the merged Tauri config through
+          // `get_client_identity`. NOT get_current_app_version / get_app_version:
+          // both return env!("CARGO_PKG_VERSION"), the DESKTOP number even inside
+          // an Android build, because the tauri.android.conf.json override feeds
+          // Gradle and never reaches Cargo. Android had been reporting 8.3.9.
+          // This used to import getVersion() directly, which was correct but was
+          // a SECOND source: the presence payload read the Cargo one, so the same
+          // user could publish two different versions at once and whichever
+          // landed last won. One source now, and tests/version_parity.rs keeps
+          // Cargo.toml and tauri.conf.json from drifting apart on desktop.
+          const appVersion = await getAppVersion();
           upsertUser(user, appVersion).catch((e) => {
             Logger.warn('[Auth] Failed to upsert user to Supabase:', e);
           });
@@ -3709,9 +3401,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       // phone skips it: a toast over the UI on every launch was too much there.
       if (!IS_MOBILE && hasCredentials && !wasAuthenticated && !hasShownWelcomeBackToast) {
         hasShownWelcomeBackToast = true;
-        get().addToast(`Welcome back, ${userInfo.display_name}!`, 'success', undefined, {
-          avatarUrl: userInfo.profile_image_url,
-        });
+        whenBootSettled(() =>
+          get().addToast(`Welcome back, ${userInfo.display_name}!`, 'success', undefined, {
+            avatarUrl: userInfo.profile_image_url,
+          }),
+        );
       }
 
       // Start whisper listener after successful authentication
@@ -3781,7 +3475,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   toggleFavoriteStreamer: (id: string, meta?: FavoriteChannel) => {
     // SERIALIZED, and that is the whole point of the chain. `updateSettings`
-    // awaits `save_settings` BEFORE it calls `set`, so two toggles in flight
+    // awaits `patch_settings` BEFORE it calls `set`, so two toggles in flight
     // both read the pre-write settings and the second one silently drops the
     // first. That was survivable when the heart lived on one tab; now that it
     // is on every card, favoriting several in a row is the expected use.
@@ -3808,11 +3502,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       await get().updateSettings(newSettings);
 
-      // Sweep now rather than at the next cadence tick, so a channel that is
-      // live right now appears in the sidebar immediately. Fire and forget:
-      // failing to refresh early costs a minute, never correctness.
+      // Check this one channel now rather than at the next cadence tick, so a
+      // channel that is live right now appears in the sidebar immediately. Fire
+      // and forget: failing to refresh early costs a minute, never correctness.
       if (!isFavorite) {
-        invoke('refresh_favorites').catch(() => {});
+        invoke('refresh_favorites', { key: id }).catch(() => {});
       }
     }).catch(err => {
       // One failed write must not poison every later toggle: an unhandled
