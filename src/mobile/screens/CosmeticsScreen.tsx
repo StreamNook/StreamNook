@@ -301,7 +301,13 @@ export const CosmeticsScreen: React.FC = () => {
           uid = status.user_id;
           setSevenTvUserId(status.user_id);
         }
-        if (!status.is_authenticated) return;
+        if (!status.is_authenticated) {
+          // A token was captured and stored but does not count as a session
+          // (expired, or rejected). Say so: returning quietly here is what made
+          // the Sign in button look dead.
+          addToast('7TV did not finish signing you in. Try again.', 'error');
+          return;
+        }
       } catch (err) {
         Logger.error('[Cosmetics] 7TV sign-in failed:', err);
         addToast('Could not sign in to 7TV.', 'error');

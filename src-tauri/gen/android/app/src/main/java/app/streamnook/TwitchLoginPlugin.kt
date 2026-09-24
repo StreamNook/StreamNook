@@ -167,8 +167,12 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
                 return@runOnUiThread
             }
             if (overlay != null && hiddenMode) {
+                // No cancel event here. The page listens for one to end a
+                // sign-in, and the visible sign-in taking over has ALREADY
+                // registered its listener, so a cancel ended it before it
+                // began. The re-mint being replaced hears the new sign-in's
+                // token (same key) or runs out its own short deadline.
                 dismiss()
-                (activity as? MainActivity)?.notifyLoginCancelled()
             }
             hiddenMode = args.hidden
             // A redirect left from an abandoned attempt carries a stale state
@@ -673,7 +677,16 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
                 // that owns the key, so a null here is the ordinary case for
                 // most of the sign-in rather than a failure.
                 val value = decodeJsString(raw)
-                if (value != null && value.length > MIN_TOKEN_LEN) {
+                if (value != null && value.length > MIN_TOKEN_LEN && isExpiredJwt(value)) {
+                    // The key's origin keeps its storage between sessions, so the
+                    // token from last month is sitting there when the flow lands
+                    // back on it, until the page writes the new one. Taking it
+                    // closed the sign-in in under a second and handed the app an
+                    // expired session: the Sign in button looked like it did
+                    // nothing, and the silent monthly re-mint never re-minted.
+                    android.util.Log.i("SNLogin", "ignoring an expired $key; waiting for the new one")
+                    storageWatchHandler.postDelayed(tick, STORAGE_POLL_MS)
+                } else if (value != null && value.length > MIN_TOKEN_LEN) {
                     android.util.Log.i("SNLogin", "captured $key (${value.length} chars)")
                     stopStorageWatch()
                     (activity as? MainActivity)?.notifyLoginStorage(key, value)
@@ -686,6 +699,26 @@ class TwitchLoginPlugin(private val activity: Activity) : Plugin(activity) {
         storageWatchKey = key
         storageWatchTick = tick
         storageWatchHandler.postDelayed(tick, STORAGE_POLL_MS)
+    }
+
+    /** True for a JWT whose `exp` is past (or within a minute of it). Anything
+     *  that is not a readable JWT is not judged here. */
+    private fun isExpiredJwt(value: String): Boolean {
+        val parts = value.split('.')
+        if (parts.size != 3) return false
+        return try {
+            val payload = String(
+                android.util.Base64.decode(
+                    parts[1],
+                    android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP,
+                ),
+                Charsets.UTF_8,
+            )
+            val exp = JSONObject(payload).optLong("exp", 0L)
+            exp > 0L && exp * 1000L <= System.currentTimeMillis() + 60_000L
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun stopStorageWatch() {
