@@ -21,9 +21,11 @@ const REACT_COMPILER_EXCLUDES = [
   '/src/components/settings/ProfileSettings.tsx',
   '/src/components/settings/ProfileOverview.tsx',
   '/src/components/settings/PluginsSettings.tsx',
-  // Incremental multi-channel merge kept in refs and mutated during render:
-  // a deliberate cache the compiler's rules forbid; moving it into the store
-  // is design work, not mechanics.
+  // The incremental multi-channel merge now lives in hooks/useBlendedChatSource
+  // (shared with the main chat panel), which is outside the compiled paths above.
+  // This exclusion still has to stay: the pane keeps its own refs mutated during
+  // render (messagesRef, the pause anchors) — a deliberate cache the compiler's
+  // rules forbid, and moving those into the store is design work, not mechanics.
   '/src/components/multichat/BlendedChatPane.tsx',
 ];
 
@@ -79,18 +81,6 @@ export default defineConfig({
     watch: {
       ignored: ['**/src-tauri/**'],
     },
-  },
-  // The spell-check worker is bundled as an ES module so its `import` of the
-  // vendored dictionary resolves the same way it does on the main thread.
-  worker: {
-    format: 'es',
-  },
-  optimizeDeps: {
-    // Vite's dependency scanner walks the HTML entry and the modules it reaches
-    // — it does NOT crawl worker files. nspell is only imported from the worker,
-    // so without this it gets discovered mid-session and forces a re-optimize
-    // (which shows up in dev as a 504 on the worker chunk).
-    include: ['nspell'],
   },
   build: {
     // The only runtime is Tauri's bundled WebView2, so target its engine
