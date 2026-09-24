@@ -271,53 +271,6 @@ impl WhisperStorageService {
         Ok(())
     }
 
-    /// Save a single conversation (incremental update).
-    pub fn save_conversation(
-        app_handle: &AppHandle,
-        owner_id: &str,
-        user_id: &str,
-        conversation: &StoredConversation,
-    ) -> Result<(), String> {
-        if owner_id.trim().is_empty() {
-            return Ok(());
-        }
-        Self::with_owner(app_handle, owner_id, |o| {
-            o.storage
-                .conversations
-                .insert(user_id.to_string(), conversation.clone());
-            o.dirty = true;
-        })?;
-        mark_dirty();
-        Ok(())
-    }
-
-    /// Append a single message to a conversation, de-duped by message id.
-    pub fn append_message(
-        app_handle: &AppHandle,
-        owner_id: &str,
-        user_id: &str,
-        message: StoredWhisper,
-    ) -> Result<(), String> {
-        if owner_id.trim().is_empty() {
-            return Err(format!("Conversation with user {} does not exist", user_id));
-        }
-        Self::with_owner(app_handle, owner_id, |o| {
-            match o.storage.conversations.get_mut(user_id) {
-                Some(conversation) => {
-                    if !conversation.messages.iter().any(|m| m.id == message.id) {
-                        conversation.last_message_timestamp = message.timestamp;
-                        conversation.messages.push(message);
-                    }
-                    o.dirty = true;
-                    Ok(())
-                }
-                None => Err(format!("Conversation with user {} does not exist", user_id)),
-            }
-        })??;
-        mark_dirty();
-        Ok(())
-    }
-
     /// Delete a conversation.
     pub fn delete_conversation(
         app_handle: &AppHandle,
@@ -333,6 +286,30 @@ impl WhisperStorageService {
         })?;
         mark_dirty();
         Ok(())
+    }
+
+    /// Run one mutation over an account's conversations, marking them for the
+    /// debounced flush when it reports a change. The owner-scoped building
+    /// block for whisper_inbox's domain operations.
+    pub fn update_conversations<R>(
+        app_handle: &AppHandle,
+        owner_id: &str,
+        f: impl FnOnce(&mut HashMap<String, StoredConversation>) -> (R, bool),
+    ) -> Result<R, String> {
+        if owner_id.trim().is_empty() {
+            return Err("Not signed in".to_string());
+        }
+        let (result, changed) = Self::with_owner(app_handle, owner_id, |o| {
+            let (result, changed) = f(&mut o.storage.conversations);
+            if changed {
+                o.dirty = true;
+            }
+            (result, changed)
+        })?;
+        if changed {
+            mark_dirty();
+        }
+        Ok(result)
     }
 
     /// Storage file path for one account (debugging/export).

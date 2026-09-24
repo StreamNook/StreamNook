@@ -1,9 +1,13 @@
+use crate::models::settings::AppState;
+use crate::services::whisper_inbox::{
+    self, ImportSummary, SendTarget, WhisperExport, WhisperUpdate,
+};
 use crate::services::whisper_storage_service::{
-    StoredConversation, StoredWhisper, WhisperStorage, WhisperStorageService,
+    StoredConversation, WhisperStorage, WhisperStorageService,
 };
 use log::debug;
 use std::collections::HashMap;
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
 
 /// Load the active account's whisper conversations from disk. `owner_id` is the
 /// signed-in user's id; an empty value (signed out) returns nothing.
@@ -13,42 +17,6 @@ pub async fn load_whisper_storage(
     owner_id: String,
 ) -> Result<WhisperStorage, String> {
     WhisperStorageService::load_whispers(&app_handle, &owner_id)
-}
-
-/// Save the active account's whisper conversations to disk.
-#[tauri::command]
-pub async fn save_whisper_storage(
-    app_handle: AppHandle,
-    owner_id: String,
-    conversations: HashMap<String, StoredConversation>,
-) -> Result<(), String> {
-    let storage = WhisperStorage {
-        conversations,
-        version: 1,
-    };
-    WhisperStorageService::save_whispers(&app_handle, &owner_id, &storage)
-}
-
-/// Save a single conversation to disk (incremental update).
-#[tauri::command]
-pub async fn save_whisper_conversation(
-    app_handle: AppHandle,
-    owner_id: String,
-    user_id: String,
-    conversation: StoredConversation,
-) -> Result<(), String> {
-    WhisperStorageService::save_conversation(&app_handle, &owner_id, &user_id, &conversation)
-}
-
-/// Append a single message to an existing conversation.
-#[tauri::command]
-pub async fn append_whisper_message(
-    app_handle: AppHandle,
-    owner_id: String,
-    user_id: String,
-    message: StoredWhisper,
-) -> Result<(), String> {
-    WhisperStorageService::append_message(&app_handle, &owner_id, &user_id, message)
 }
 
 /// Delete a conversation from disk.
@@ -132,4 +100,59 @@ pub async fn migrate_whispers_from_localstorage(
     }
 
     Ok(())
+}
+
+// ---- Whisper inbox: the domain operations the Whispers panel sends ----------
+
+/// Which conversation the Whispers panel has open, so a whisper arriving in it
+/// is not counted as unread. None when the panel closes.
+#[tauri::command]
+pub async fn whisper_set_active(key: Option<String>) -> Result<(), String> {
+    whisper_inbox::set_active(key);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn whisper_mark_read(
+    app_handle: AppHandle,
+    owner_id: String,
+    key: String,
+) -> Result<(), String> {
+    whisper_inbox::mark_read(&app_handle, &owner_id, &key)
+}
+
+/// Send a whisper and record it in the conversation.
+#[tauri::command]
+pub async fn whisper_send(
+    app_handle: AppHandle,
+    owner_id: String,
+    target: SendTarget,
+    text: String,
+) -> Result<WhisperUpdate, String> {
+    whisper_inbox::send(&app_handle, &owner_id, target, text).await
+}
+
+/// Import a whisper export file's contents into the active account's archive.
+#[tauri::command]
+pub async fn whisper_import(
+    app_handle: AppHandle,
+    owner_id: String,
+    export: WhisperExport,
+) -> Result<ImportSummary, String> {
+    whisper_inbox::import_export(&app_handle, &owner_id, export).await
+}
+
+/// Merge each conversation's latest page from Twitch; returns messages added.
+#[tauri::command]
+pub async fn whisper_refresh(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    owner_id: String,
+) -> Result<usize, String> {
+    let token = state
+        .twitch_auth
+        .get_token()
+        .await
+        .map_err(|_| "You must be logged in to Twitch to refresh whispers.".to_string())?;
+    whisper_inbox::refresh(&app_handle, &owner_id, &token).await
 }

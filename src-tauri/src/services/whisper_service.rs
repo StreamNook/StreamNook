@@ -34,7 +34,7 @@ struct Session {
     keepalive_timeout_seconds: Option<u64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct WhisperEvent {
     pub from_user_id: String,
     pub from_user_login: String,
@@ -176,6 +176,16 @@ impl WhisperService {
                                                             e
                                                         );
                                                     }
+                                                    // Persist it here, whether or not a window
+                                                    // is open to see it.
+                                                    tauri::async_runtime::spawn(
+                                                        crate::services::whisper_inbox::record_incoming(
+                                                            app_handle.clone(),
+                                                            user_id.clone(),
+                                                            whisper_event,
+                                                            chrono::Utc::now().timestamp_millis(),
+                                                        ),
+                                                    );
                                                 }
                                             }
                                         }

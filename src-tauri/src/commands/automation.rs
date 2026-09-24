@@ -188,8 +188,27 @@ pub async fn receive_whisper_export(
 
     let _ = app.emit("whisper-import-complete", &result);
 
-    // Also emit the actual data for the frontend to process
-    let _ = app.emit("whisper-data-ready", &data);
+    // Merge the scraped conversations into the signed-in account's archive.
+    // Resolving logins to ids takes a few Helix lookups, so it runs after this
+    // command returns; the Whispers panel reloads on `whisper-archive-changed`.
+    let import_app = app.clone();
+    let export = crate::services::whisper_inbox::WhisperExport {
+        version: Some(data.version as i64),
+        my_user_id: data.my_user_id.clone(),
+        my_username: data.my_username.clone(),
+        conversations: data.conversations.clone(),
+    };
+    tauri::async_runtime::spawn(async move {
+        let owner_id = match crate::services::twitch_service::TwitchService::get_user_info().await {
+            Ok(user) => user.id,
+            Err(_) => export.my_user_id.clone().unwrap_or_default(),
+        };
+        if let Err(e) =
+            crate::services::whisper_inbox::import_export(&import_app, &owner_id, export).await
+        {
+            log::warn!("[Whisper Scraper] import into the archive failed: {}", e);
+        }
+    });
 
     // Focus the main window
     if let Some(main_window) = app.get_webview_window("main") {
