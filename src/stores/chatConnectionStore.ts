@@ -604,6 +604,11 @@ function bumpRevisionFor(channelKeys: string[]) {
   });
 }
 
+/** Every open channel's counter, for a change that touched every slice. */
+function bumpAllChannels() {
+  bumpRevisionFor([...useChatConnectionStore.getState().channels.keys()]);
+}
+
 /**
  * Lazily-loaded per-message engines, resolved once and then called synchronously.
  *
@@ -1129,14 +1134,17 @@ function setAllChannelsConnected(connected: boolean) {
   for (const slice of useChatConnectionStore.getState().channels.values()) {
     slice.isConnected = connected;
   }
-  bumpRevision();
+  // Every slice changed, and a pane subscribes to its own channel's counter,
+  // so a global-only bump left the connection state stale until the next
+  // message in each room.
+  bumpAllChannels();
 }
 
 function setAllChannelsError(error: string | null) {
   for (const slice of useChatConnectionStore.getState().channels.values()) {
     slice.error = error;
   }
-  bumpRevision();
+  bumpAllChannels();
 }
 
 // Extract the lowercase channel from an IRC line by locating the ` #` segment.
@@ -2310,7 +2318,7 @@ function handleNotice(parsed: any) {
       });
       slice.seenMessageIds.add(sysMsgId);
       slice.error = parsed.message;
-      bumpRevision();
+      bumpRevisionFor([slice.channel]);
       // Auto-clear the surfaced error after 3s
       setTimeout(() => {
         withSlice(slice.channel, (s) => {
@@ -2402,7 +2410,7 @@ function appendStructuredMessage(slice: ChannelSlice, parsed: any) {
       }
       const n = parseInt(t['msg-param-mass-gift-count'] ?? '', 10);
       useGiftBombStore.getState().noteAnnouncement(origin, Number.isFinite(n) ? n : undefined);
-      if (foldBufferedGiftChildren(slice, origin) > 0) bumpRevision();
+      if (foldBufferedGiftChildren(slice, origin) > 0) bumpRevisionFor([slice.channel]);
     } else if (origin && isGiftBombChild(mt) && announcedGiftBombOrigins.has(origin)) {
       const rid = t['msg-param-recipient-id'] || '';
       if (rid) {
@@ -3048,7 +3056,10 @@ export async function sendChannelMessage(
 
   slice.seenMessageIds.add(tempId);
   pushMessage(slice, optimistic);
-  bumpRevision();
+  // The CHANNEL's counter, not just the global one: a pane re-renders on its
+  // own channel's revision, and Twitch never echoes your own message back, so
+  // a global-only bump left your message invisible until someone else spoke.
+  bumpRevisionFor([key]);
 
   try {
     const result = await invoke<{
@@ -3072,7 +3083,7 @@ export async function sendChannelMessage(
         return (m as any)?.id !== tempId;
       });
       slice.seenMessageIds.delete(tempId);
-      bumpRevision();
+      bumpRevisionFor([key]);
       if (result.drop_reason) {
         injectSystemMessage(key, `Your message was not sent: ${result.drop_reason}`);
       }
@@ -3099,7 +3110,7 @@ export async function sendChannelMessage(
           const oldest = slice.pendingUpgradeIds.values().next().value;
           if (oldest !== undefined) slice.pendingUpgradeIds.delete(oldest);
         }
-        bumpRevision();
+        bumpRevisionFor([key]);
       }
     }
   } catch (err) {
@@ -3109,7 +3120,7 @@ export async function sendChannelMessage(
       return (m as any)?.id !== tempId;
     });
     slice.seenMessageIds.delete(tempId);
-    bumpRevision();
+    bumpRevisionFor([key]);
     throw err;
   }
 }
