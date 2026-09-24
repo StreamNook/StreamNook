@@ -1,15 +1,19 @@
 // The menu behind the composer's trailing button when there is nothing to send.
 // Send and this share one slot, so the composer never carries a dead button.
 import React from 'react';
-import { ArrowsClockwise, ChatsCircle, Heart, HeartBreak, Lock, ShieldCheck, Terminal, X } from 'phosphor-react';
+import { ArrowsClockwise, ChatsCircle, Heart, HeartBreak, Lock, ShieldCheck, Star, Terminal, X } from 'phosphor-react';
 import { MobileSheet } from '../ui/MobileSheet';
 import { useChannelSocial } from '../../hooks/useChannelSocial';
+import { platformTerms } from '../../utils/platformTerms';
+import type { ProviderId } from '../../types/providers';
 
 interface Props {
   open: boolean;
   onClose: () => void;
-  /** Null when no chat is open. */
+  /** Null when no chat is open. The bare login / slug the platform uses. */
   activeChannel: string | null;
+  /** Platform the open chat is on. */
+  provider: ProviderId;
   activeLabel: string | null;
   /** Broadcaster id, for follow/unfollow. Null when no chat is open. */
   channelId: string | null;
@@ -30,6 +34,7 @@ export const ComposerMenuSheet: React.FC<Props> = ({
   open,
   onClose,
   activeChannel,
+  provider,
   activeLabel,
   channelId,
   isModerator,
@@ -53,15 +58,26 @@ export const ComposerMenuSheet: React.FC<Props> = ({
   // fire those lookups for every chat all the time. That flag exists for exactly
   // this (MultiNook runs it only for the focused tile).
   //
-  // The hook's SUBSCRIBE half is deliberately unused here: `handleSubscribeClick`
-  // opens a webview window and is `#[cfg(desktop)]`, so there is no subscribe
-  // control on mobile.
-  const { isFollowing, followLoading, handleFollowClick } = useChannelSocial({
+  // Its subscribe half opens the platform's own checkout in the login overlay.
+  // Follow stays Twitch-only here (it needs the Twitch channel id); subscribe
+  // works for Kick rooms too, whose state comes from the Kick account sync.
+  const {
+    isFollowing,
+    followLoading,
+    handleFollowClick,
+    isSubscribed,
+    hasSubHistory,
+    subscriberBadgeUrl,
+    handleSubscribeClick,
+  } = useChannelSocial({
+    provider,
     userId: channelId,
     userLogin: activeChannel,
     userName: activeLabel,
-    enabled: open && !!channelId,
+    enabled: open && !!activeChannel,
   });
+  const terms = platformTerms(provider);
+  const canSubscribe = !!activeChannel && (provider === 'twitch' || provider === 'kick');
 
   return (
     <MobileSheet open={open} onClose={onClose} title={activeLabel ?? 'Chat'} maxHeightFraction={0.5}>
@@ -99,6 +115,30 @@ export const ComposerMenuSheet: React.FC<Props> = ({
               {isFollowing ? 'Unfollow' : 'Follow'}
               {activeLabel ? ` ${activeLabel}` : ''}
             </span>
+          </button>
+        )}
+
+        {/* Subscribe, or resubscribe, or gift once subscribed: the same three
+            states the desktop control shows, in the platform's own words. The
+            sheet closes because the checkout opens over it. */}
+        {canSubscribe && (
+          <button
+            onClick={() => {
+              onClose();
+              void handleSubscribeClick();
+            }}
+            className={row}
+          >
+            {subscriberBadgeUrl ? (
+              <img src={subscriberBadgeUrl} alt="" draggable={false} className="w-[19px] h-[19px] shrink-0" />
+            ) : (
+              <Star size={19} weight="fill" className="text-accent shrink-0" />
+            )}
+            <span className="flex-1 text-left">
+              {isSubscribed ? terms.paidGift : hasSubHistory ? terms.paidAgain : terms.paid}
+              {!isSubscribed && activeLabel ? ` to ${activeLabel}` : ''}
+            </span>
+            {isSubscribed && <span className="text-[12.5px] text-textMuted">Subscribed</span>}
           </button>
         )}
 

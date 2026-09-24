@@ -1246,7 +1246,8 @@ pub fn run() {
             open_twitch_login_window,
             #[cfg(desktop)]
             open_drops_login_window,
-            #[cfg(desktop)]
+            // Two bodies: a desktop panel, and the Android login overlay.
+            #[cfg(any(desktop, target_os = "android"))]
             open_subscribe_window,
             #[cfg(desktop)]
             open_youtube_channel_switcher,

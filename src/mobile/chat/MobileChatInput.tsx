@@ -649,6 +649,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
         open={menuOpen}
         onClose={() => setMenuOpen(false)}
         activeChannel={channel}
+        provider={provider}
         activeLabel={channelLabel}
         channelId={channelId}
         isModerator={isModerator}

@@ -7,6 +7,7 @@ import { useFollowsStore } from '../stores/followsStore';
 import { useChatConnectionStore } from '../stores/chatConnectionStore';
 import { makeKey } from '../utils/providerKey';
 import type { ProviderId } from '../types/providers';
+import { IS_MOBILE } from '../utils/platform';
 
 interface ChannelSocialTarget {
   /** Which platform this channel is on. Pass it whenever the channel is NOT the
@@ -386,7 +387,9 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
         );
 
         try {
-          await invoke('close_login_overlay', { label: subscribeWindowLabelRef.current });
+          // The phone has one login overlay rather than labelled panels.
+          if (IS_MOBILE) await invoke('close_mobile_login');
+          else await invoke('close_login_overlay', { label: subscribeWindowLabelRef.current });
         } catch (e) {
           Logger.warn('[useChannelSocial] Failed to close subscribe overlay:', e);
         }
@@ -412,15 +415,16 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
         channelLogin: userLogin,
         title: `Subscribe to ${userName || userLogin}`,
         // Each platform has its own subscribe page; the backend picks the URL
-        // and the signed-in web profile to open it in.
-        provider: streamProvider(useAppStore.getState().currentStream),
+        // and the signed-in web profile to open it in. The caller's platform
+        // wins, so a hand-added chat on another platform subscribes there.
+        provider,
       });
       subscribeWindowLabelRef.current = label;
     } catch (e) {
       Logger.error('[useChannelSocial] Error opening subscribe window:', e);
       subscribeWindowLabelRef.current = null;
     }
-  }, [userLogin, userName]);
+  }, [userLogin, userName, provider]);
 
   return {
     // Follow

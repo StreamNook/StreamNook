@@ -1120,10 +1120,39 @@ pub fn open_subscribe_window(
         channel_login,
         chrono::Utc::now().timestamp_millis()
     );
-    // Each platform has its own subscribe page, and its own signed-in web
-    // profile to open it in — subscribing has to happen as the account the user
-    // is actually signed in as on that platform.
-    let (url, profile) = match provider.as_deref() {
+    let (url, profile) = subscribe_target(provider.as_deref(), &channel_login)?;
+    emit_overlay_open_with(&app, &label, &url, "panel", profile)?;
+    Ok(label)
+}
+
+/// The phone's Subscribe: the platform's own checkout in the login overlay.
+/// The overlay shares the app's one cookie jar, which already holds the Twitch
+/// session from the activation page and the Kick session from Kick sign-in, so
+/// the checkout opens as the signed-in account. Async so the plugin call stays
+/// off the main thread. Returns a label for parity with desktop; the phone
+/// closes the overlay with `close_mobile_login`.
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn open_subscribe_window(
+    app: AppHandle,
+    channel_login: String,
+    title: Option<String>,
+    provider: Option<String>,
+) -> Result<String, String> {
+    let (url, _) = subscribe_target(provider.as_deref(), &channel_login)?;
+    let title = title.unwrap_or_else(|| format!("Subscribe to {}", channel_login));
+    crate::twitch_login_plugin::open_overlay(&app, &url, &title)?;
+    Ok(format!("subscribe-{}", channel_login))
+}
+
+/// Each platform's subscribe page, and the signed-in web profile the desktop
+/// opens it in: subscribing has to happen as the account the user is actually
+/// signed in as on that platform.
+fn subscribe_target(
+    provider: Option<&str>,
+    channel_login: &str,
+) -> Result<(String, Option<&'static str>), String> {
+    Ok(match provider {
         Some("kick") => (
             format!("https://kick.com/{}/subscribe", channel_login),
             Some("kick-account"),
@@ -1132,18 +1161,13 @@ pub fn open_subscribe_window(
         // matches what Subscribe means on Twitch and Kick (its own free "subscribe"
         // button costs nothing and is not what this control is for).
         Some("youtube") => (
-            youtube_join_url(&channel_login).ok_or_else(|| {
+            youtube_join_url(channel_login).ok_or_else(|| {
                 "Couldn't work out which YouTube channel to open memberships for".to_string()
             })?,
             Some("youtube-account"),
         ),
-        _ => (
-            format!("https://www.twitch.tv/subs/{}", channel_login),
-            None,
-        ),
-    };
-    emit_overlay_open_with(&app, &label, &url, "panel", profile)?;
-    Ok(label)
+        _ => (format!("https://www.twitch.tv/subs/{}", channel_login), None),
+    })
 }
 
 /// Open YouTube's own channel switcher as an in-app panel, in the app's YouTube

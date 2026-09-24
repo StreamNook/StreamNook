@@ -1,7 +1,7 @@
 // Touch-first player surface: the video element plus a tap-driven glass control
 // overlay. No Plyr; hls.js runs via useMobileHlsEngine.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowClockwise, Bell, BellSlash, ChatTeardropText, Columns, Eye, Gear, Pause, PictureInPicture, Play, Rows, ShareNetwork, SpeakerHigh, SpeakerSlash } from 'phosphor-react';
+import { ArrowClockwise, Bell, BellSlash, ChatTeardropText, Columns, Eye, Gear, Pause, PictureInPicture, Play, Rows, ShareNetwork, SpeakerHigh, SpeakerSlash, Star } from 'phosphor-react';
 import { setPipMuted, shareText } from '../nativeBridge';
 import { toggleChannelMuted } from '../notifyChannels';
 import { useVisibleInterval } from '../../utils/useVisibleInterval';
@@ -9,6 +9,8 @@ import { buildShareUrl } from '../../utils/shareLink';
 import { buildProviderUrl, isTwitchStream, streamProvider } from '../../utils/streamProvider';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
+import { useChannelSocial } from '../../hooks/useChannelSocial';
+import { platformTerms } from '../../utils/platformTerms';
 import { unwatchChannel, useChannelState, watchChannel } from '../../stores/channelStateStore';
 import { useMobileHlsEngine } from './useMobileHlsEngine';
 import { setLiveVideo } from './liveVideo';
@@ -64,6 +66,19 @@ export const MobilePlayer: React.FC<{
   // login or numeric id; a Kick slug or id would address an unrelated Twitch
   // channel of the same name.
   const streamIsTwitch = isTwitchStream(currentStream);
+  const streamProv = streamProvider(currentStream);
+  // Subscribe sits beside who it is, like the live-alert bell. The shared hook
+  // opens the platform's own checkout in the login overlay and reports whether
+  // you already subscribe, so the pill can offer a gift instead.
+  const canSubscribe = !!currentStream && (streamProv === 'twitch' || streamProv === 'kick');
+  const sub = useChannelSocial({
+    provider: streamProv,
+    userId: streamIsTwitch ? (currentStream?.user_id ?? null) : null,
+    userLogin: currentStream?.user_login ?? null,
+    userName: currentStream?.user_name ?? null,
+    enabled: canSubscribe,
+  });
+  const subTerms = platformTerms(streamProv);
 
   // Live viewer count from the Rust channel_state service (one Helix batch
   // for every watched channel, emitted only on change), the same source the
@@ -394,6 +409,19 @@ export const MobilePlayer: React.FC<{
                   }`}
                 >
                   {alertsOff ? <BellSlash size={15} /> : <Bell size={15} weight="fill" />}
+                </button>
+              )}
+              {canSubscribe && (
+                <button
+                  onClick={() => void sub.handleSubscribeClick()}
+                  className="shrink-0 flex items-center gap-1 pl-1.5 pr-2 py-[3px] rounded-full bg-white/15 text-[11.5px] font-semibold text-white leading-none active:scale-95 transition-transform"
+                >
+                  {sub.subscriberBadgeUrl ? (
+                    <img src={sub.subscriberBadgeUrl} alt="" draggable={false} className="w-3.5 h-3.5" />
+                  ) : (
+                    <Star size={12} weight="fill" />
+                  )}
+                  {sub.isSubscribed ? subTerms.paidGift : sub.hasSubHistory ? subTerms.paidAgain : subTerms.paid}
                 </button>
               )}
               <span className="ml-auto flex items-center gap-2 shrink-0 pl-2">
