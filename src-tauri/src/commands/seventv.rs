@@ -76,3 +76,32 @@ pub async fn seventv_graphql(query: String) -> Result<GraphQLResponse, String> {
 
     Ok(json)
 }
+
+/// What one chatter is wearing on 7TV, resolved for every window at once (see
+/// services/seventv_cosmetics_resolver.rs).
+#[command]
+pub async fn seventv_user_cosmetics(
+    id: String,
+) -> crate::services::seventv_cosmetics_resolver::CosmeticsLookup {
+    crate::services::seventv_cosmetics_resolver::resolve(id).await
+}
+
+/// Everything one account owns on 7TV (the cosmetics picker, attainables).
+#[command]
+pub async fn seventv_user_inventory(
+    id: String,
+) -> Option<crate::services::seventv_cosmetics_resolver::UserCosmetics> {
+    crate::services::seventv_cosmetics_resolver::inventory(&id).await
+}
+
+/// Forget one chatter's cosmetics so the next lookup asks 7TV again.
+#[command]
+pub async fn seventv_invalidate_cosmetics(id: String) {
+    crate::services::seventv_cosmetics_resolver::invalidate(&id);
+}
+
+/// Forget every chatter's cosmetics.
+#[command]
+pub async fn seventv_clear_cosmetics() {
+    crate::services::seventv_cosmetics_resolver::clear();
+}

@@ -1,5 +1,5 @@
 use crate::services::universal_cache_service::{
-    assign_badge_metadata_positions, auto_sync_if_stale, cache_file, cache_item,
+    assign_badge_metadata_positions, auto_sync_if_stale, cache_item,
     cleanup_expired_entries, clear_universal_cache, export_manifest_for_github,
     get_all_cached_items_by_type, get_cached_file_path, get_cached_files_list, get_cached_item,
     get_cached_items_batch, get_universal_cache_dir, get_universal_cache_stats,
@@ -93,8 +93,10 @@ pub async fn cleanup_universal_cache() -> Result<usize, String> {
 }
 
 #[command]
-pub async fn clear_all_universal_cache() -> Result<(), String> {
-    clear_universal_cache().map_err(|e| e.to_string())
+pub async fn clear_all_universal_cache(app: tauri::AppHandle) -> Result<(), String> {
+    clear_universal_cache().map_err(|e| e.to_string())?;
+    crate::services::asset_cache_queue::announce_cleared(&app);
+    Ok(())
 }
 
 #[command]
@@ -113,26 +115,6 @@ pub async fn assign_badge_positions() -> Result<usize, String> {
 pub async fn export_manifest(output_path: String) -> Result<(), String> {
     let path = PathBuf::from(output_path);
     export_manifest_for_github(path).map_err(|e| e.to_string())
-}
-
-#[command]
-pub async fn download_and_cache_file(
-    cache_type: String,
-    id: String,
-    url: String,
-    expiry_days: u32,
-) -> Result<String, String> {
-    let cache_type_enum = match cache_type.as_str() {
-        "badge" => CacheType::Badge,
-        "emote" => CacheType::Emote,
-        "third-party-badge" => CacheType::ThirdPartyBadge,
-        "cosmetic" => CacheType::Cosmetic,
-        _ => return Err(format!("Invalid cache type: {}", cache_type)),
-    };
-
-    cache_file(cache_type_enum, id, url, expiry_days)
-        .await
-        .map_err(|e| e.to_string())
 }
 
 #[command]
@@ -203,4 +185,22 @@ pub fn get_universal_cached_items_batch(
 #[command]
 pub async fn auto_sync_universal_cache_if_stale() -> Result<bool, String> {
     auto_sync_if_stale().await.map_err(|e| e.to_string())
+}
+
+/// Queue files for the shared disk-cache fill (services/asset_cache_queue.rs).
+/// Results arrive as `asset-cache://cached`.
+#[command]
+pub fn asset_cache_enqueue(
+    app: tauri::AppHandle,
+    kind: crate::services::asset_cache_queue::AssetKind,
+    items: Vec<crate::services::asset_cache_queue::AssetRequest>,
+    priority: Option<bool>,
+) {
+    crate::services::asset_cache_queue::enqueue(&app, kind, items, priority.unwrap_or(false));
+}
+
+/// An emote picker opened or closed in the calling window.
+#[command]
+pub fn asset_cache_set_burst(app: tauri::AppHandle, window: tauri::WebviewWindow, active: bool) {
+    crate::services::asset_cache_queue::set_burst(&app, window.label(), active);
 }

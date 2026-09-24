@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { convertFileSrc } from '@tauri-apps/api/core';
 
 import { Logger } from '../utils/logger';
-import { features } from '../features';
+import { onAssetsCached, requestAssetCaching, setAssetCacheBurst, forgetAssetRequests } from './assetCacheQueue';
 import { IS_MOBILE } from '../utils/platform';
 export interface Emote {
   id: string;
@@ -204,177 +204,33 @@ function emoteCacheKey(id: string, provider?: string, tier: EmoteTier = inlineEm
   return provider ? `${provider}-${id}` : id;
 }
 
-// Pending downloads to prevent duplicate requests
-const pendingDownloads: Map<string, Promise<string | null>> = new Map();
-
-// Queue system for downloads. Deliberately STREAM-POLITE: caching is a
-// background optimization that must NEVER compete with the live video for
-// bandwidth or main-thread time. We keep it to a single serial download with a
-// real gap between each, so the stream always wins. Reusing one pooled HTTP/2
-// client (DOWNLOAD_CLIENT in universal_cache_service.rs) keeps even this serial
-// trickle cheap per request, so going from 3 concurrent to 1 costs almost
-// nothing in fill time while removing the bandwidth contention that made the
-// stream stutter.
-// Two fill rates. POLITE is the original stream-safe trickle: one serial
-// download with a real gap, idle-scheduled, so background caching never competes
-// with the live video. BURST kicks in only while an emote picker is open (the
-// one moment the user is actively waiting on emotes). The burst is safe because:
-// the chat-ingestion rAF coalescing landed after this trickle was written, so
-// chat renders no longer starve the video's main-thread buffer appends; the
-// downloads themselves run in Rust/tokio OFF the JS main thread on tiny files;
-// and the sibling badge cache (badgeImageCacheService) already runs 5 concurrent
-// with no playback impact. When no picker is open we fall back to POLITE so we
-// are not needlessly hammering the free provider CDNs for the whole session.
-const POLITE_CONCURRENT = 1;
-const POLITE_DELAY_MS = 250; // Real gap so background caching yields to the stream
-const BURST_CONCURRENT = 5;
-const BURST_DELAY_MS = 15;
-let burstRefs = 0;
-const downloadQueue: Array<{ id: string, url: string }> = [];
-// Membership mirror of downloadQueue. The queue can hold a whole channel set
-// (thousands) while queueEmoteForCaching is called per rendered emote, so the
-// dedupe check must be O(1), not a queue scan.
-const queuedIds = new Set<string>();
-let activeDownloads = 0;
-let processingScheduled = false;
-let lastDownloadTime = 0;
-
-function burstActive(): boolean { return burstRefs > 0; }
-function currentConcurrency(): number { return burstActive() ? BURST_CONCURRENT : POLITE_CONCURRENT; }
-function currentDelayMs(): number { return burstActive() ? BURST_DELAY_MS : POLITE_DELAY_MS; }
+// Filling the disk cache is Rust's (services/asset_cache_queue.rs): one queue
+// for every window, deliberately STREAM-POLITE. Caching is a background
+// optimization that must never compete with the live video, so emotes trickle
+// one at a time with a real gap, except while an emote picker is open (the one
+// moment the user is waiting on emotes), when they burst five at a time.
+onAssetsCached('emote', {
+  arrived: (files) => {
+    for (const [id, path] of Object.entries(files)) cachedEmoteFiles.set(id, path);
+  },
+  cleared: () => cachedEmoteFiles.clear(),
+});
 
 /**
- * Raise (true) or lower (false) the emote disk-cache fill rate. Ref-counted so
- * multiple open pickers (split panes, popouts) compose — the burst stays on
- * until the last one closes. Call `true` when a picker opens and `false` from
- * the matching effect cleanup when it closes. Safe to over-call; clamps at zero.
+ * Raise (true) or lower (false) the emote disk-cache fill rate while a picker is
+ * open. Pair `true` on open with `false` from the matching effect cleanup; Rust
+ * counts per window, so split panes and popouts compose, and a window that
+ * closes with a picker open stops counting.
  */
 export function setEmoteCacheBurst(active: boolean) {
-  burstRefs = Math.max(0, burstRefs + (active ? 1 : -1));
-  if (burstActive()) pumpQueue();
+  setAssetCacheBurst(active);
 }
-
-// Settings cache
-let cachedSettings: { enabled: boolean; expiryDays: number } | null = null;
 
 let initializationPromise: Promise<void> | null = null;
 
-async function getEmoteCacheSettings(): Promise<{ enabled: boolean; expiryDays: number }> {
-  if (cachedSettings) return cachedSettings;
-  try {
-    const settings = await invoke('load_settings') as any;
-    cachedSettings = {
-      enabled: settings.cache?.enabled !== false,
-      expiryDays: settings.cache?.expiry_days ?? 7
-    };
-    return cachedSettings;
-  } catch (e) {
-    Logger.warn('[EmoteService] Failed to load settings:', e);
-    return { enabled: true, expiryDays: 7 };
-  }
-}
-
-// Drain the cache queue. POLITE mode stays one-at-a-time and waits for the main
-// thread to go idle between downloads (the original stream-safe trickle). BURST
-// mode (a picker is open) launches up to BURST_CONCURRENT in flight with a tiny
-// spacing and does NOT wait for idle, so the set lands on disk fast while the
-// user is looking at it. The HTTP fetch + disk write happen in Rust either way,
-// so this only governs how many tiny requests are in flight at once.
-function pumpQueue() {
-  if (processingScheduled || downloadQueue.length === 0) return;
-  if (activeDownloads >= currentConcurrency()) return;
-
-  const sinceLast = Date.now() - lastDownloadTime;
-  const delay = Math.max(0, currentDelayMs() - sinceLast);
-
-  processingScheduled = true;
-  const launch = () => {
-    processingScheduled = false;
-    // Fill every free slot the current mode allows, then let each completion
-    // re-pump. Polite mode has a single slot, so this runs serially.
-    while (activeDownloads < currentConcurrency() && downloadQueue.length > 0) {
-      const next = downloadQueue.shift();
-      if (!next) break;
-      queuedIds.delete(next.id);
-      activeDownloads++;
-      lastDownloadTime = Date.now();
-      void downloadEmoteIfNeeded(next.id, next.url)
-        .catch((e) => Logger.debug(`[EmoteService] Error processing queue item ${next.id}:`, e))
-        .finally(() => {
-          activeDownloads--;
-          pumpQueue();
-        });
-    }
-  };
-
-  if (burstActive()) {
-    // User is waiting on these — don't gate on main-thread idle.
-    setTimeout(launch, delay);
-  } else if (typeof requestIdleCallback === 'function') {
-    // Background: wait the polite gap, then for a true idle moment.
-    setTimeout(() => requestIdleCallback(launch, { timeout: 10000 }), delay);
-  } else {
-    setTimeout(launch, delay + 200);
-  }
-}
-
-async function downloadEmoteIfNeeded(id: string, url: string): Promise<string | null> {
-  if (cachedEmoteFiles.has(id)) {
-    return cachedEmoteFiles.get(id)!;
-  }
-
-  if (pendingDownloads.has(id)) {
-    return pendingDownloads.get(id)!;
-  }
-
-  // When the disk cache is off, consumers fall back to the CDN URL they already
-  // carry. This used to claim the cache was unavailable on mobile; that stopped
-  // being true when the flag was turned on for Android. See features.ts.
-  if (!features.assetDiskCache) return null;
-
-  const settings = await getEmoteCacheSettings();
-  if (!settings.enabled) return null;
-
-  const downloadPromise = (async () => {
-    try {
-      const localPath = await invoke('download_and_cache_file', {
-        cacheType: 'emote',
-        id,
-        url,
-        expiryDays: settings.expiryDays
-      }) as string;
-
-      if (localPath) {
-        cachedEmoteFiles.set(id, localPath);
-        return localPath;
-      }
-      return null;
-    } catch (e) {
-      Logger.debug(`[EmoteService] Failed to cache emote ${id}:`, e);
-      return null;
-    } finally {
-      pendingDownloads.delete(id);
-    }
-  })();
-
-  pendingDownloads.set(id, downloadPromise);
-  return downloadPromise;
-}
-
 export function queueEmoteForCaching(id: string, url: string, priority: boolean = false) {
-  if (cachedEmoteFiles.has(id) || pendingDownloads.has(id) || queuedIds.has(id)) {
-    return;
-  }
-
-  // Priority items go to front of queue (for search results)
-  if (priority) {
-    downloadQueue.unshift({ id, url });
-  } else {
-    downloadQueue.push({ id, url });
-  }
-  queuedIds.add(id);
-  // Drain the queue: idle-gated trickle normally, fast burst while a picker is open.
-  pumpQueue();
+  if (cachedEmoteFiles.has(id)) return;
+  requestAssetCaching('emote', id, url, priority);
 }
 
 export function getCachedEmoteUrl(
@@ -450,23 +306,6 @@ async function ensureEmoteFileCache() {
   })();
 
   return initializationPromise;
-}
-
-/**
- * Re-pull the on-disk emote file map and merge it into memory. Unlike the
- * one-shot `ensureEmoteFileCache` (which no-ops once populated), this always
- * runs. Used after the AFK prefetch writes a batch of files so the picker's
- * live disk-first lookup (`getCachedEmoteUrl`) sees them THIS session; without
- * it the newly-cached files would only be picked up on the next launch.
- */
-export async function refreshEmoteFileCache(): Promise<void> {
-  try {
-    const files = await invoke('get_cached_files', { cacheType: 'emote' }) as Record<string, string>;
-    Object.entries(files).forEach(([id, path]) => cachedEmoteFiles.set(id, path));
-    Logger.debug(`[EmoteService] Emote file cache refreshed (${cachedEmoteFiles.size} entries)`);
-  } catch (e) {
-    Logger.warn('[EmoteService] Failed to refresh emote file cache:', e);
-  }
 }
 
 export function preloadChannelEmotes(emotes: Emote[]) {
@@ -690,6 +529,7 @@ export async function getEmoteByName(channelId: string | null, emoteName: string
  */
 export async function clearEmoteCache() {
   cachedEmoteFiles.clear();
+  forgetAssetRequests('emote');
 
   try {
     await invoke('clear_emote_cache');

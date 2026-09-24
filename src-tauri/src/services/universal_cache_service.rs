@@ -1126,6 +1126,104 @@ pub fn migrate_ffz_animated_cache() -> Result<bool> {
     Ok(true)
 }
 
+/// One-time purge of cached 7TV paint images that hold a still frame.
+///
+/// A paint image is cached under its layer id alone, and every surface draws
+/// whatever file sits there. Stills got into that slot two ways: callers that
+/// cached a layer's first scale-1 image, which 7TV lists as the `_static`
+/// variant, and layers that 7TV animated after they were cached. This drops
+/// every 7TV paint entry fetched from a `_static` URL or holding a still WebP, so
+/// each re-downloads through the renderer's own pick. A paint that really is
+/// still comes back as the same still. Gated by its own token file so it runs
+/// exactly once.
+const PAINT_ANIMATED_MIGRATION_TOKEN: &str = "PAINT_ANIMATED_2026_V1";
+
+pub fn migrate_paint_animated_cache() -> Result<bool> {
+    let cache_dir = get_universal_cache_dir()?;
+    let token_file = cache_dir.join(".paint_animated_migration");
+
+    let stored_token = fs::read_to_string(&token_file).unwrap_or_default();
+    if stored_token.trim() == PAINT_ANIMATED_MIGRATION_TOKEN {
+        return Ok(false);
+    }
+
+    let manifest_path = cache_dir.join("manifest.json");
+    if manifest_path.exists() {
+        if let Ok(mut manifest) = load_manifest() {
+            let still: Vec<String> = manifest
+                .entries
+                .iter()
+                .filter(|(_, entry)| is_still_paint_entry(entry))
+                .map(|(key, _)| key.clone())
+                .collect();
+
+            for key in &still {
+                if let Some(entry) = manifest.entries.remove(key) {
+                    if let Some(path) = entry.data.get("local_path").and_then(|p| p.as_str()) {
+                        let _ = fs::remove_file(path);
+                    }
+                }
+            }
+
+            if !still.is_empty() {
+                // Written through like the FFZ purge: this runs before the async
+                // runtime, so the debounced flush cannot persist it yet.
+                let _ = save_manifest_to_disk(&manifest);
+                let _ = save_manifest_owned(manifest);
+                debug!(
+                    "[UniversalCache] Purged {} still 7TV paint images for re-fetch",
+                    still.len()
+                );
+            }
+        }
+    }
+
+    fs::write(&token_file, PAINT_ANIMATED_MIGRATION_TOKEN)?;
+
+    Ok(true)
+}
+
+/// A cached 7TV paint image that draws a still frame: fetched from a `_static`
+/// URL, or a WebP whose header says it does not animate.
+fn is_still_paint_entry(entry: &UniversalCacheEntry) -> bool {
+    if entry.cache_type != CacheType::Cosmetic {
+        return false;
+    }
+    let Some(url) = entry.data.get("url").and_then(|u| u.as_str()) else {
+        return false;
+    };
+    if !url.contains("cdn.7tv.app/paint/") {
+        return false;
+    }
+    if url.contains("_static.") {
+        return true;
+    }
+    entry
+        .data
+        .get("local_path")
+        .and_then(|p| p.as_str())
+        .and_then(read_image_head)
+        .and_then(|head| webp_is_animated(&head))
+        == Some(false)
+}
+
+fn read_image_head(path: &str) -> Option<[u8; 21]> {
+    use std::io::Read;
+    let mut head = [0u8; 21];
+    fs::File::open(path).ok()?.read_exact(&mut head).ok()?;
+    Some(head)
+}
+
+/// Whether a WebP animates, from its first 21 bytes; `None` when they are not
+/// WebP. A still WebP is a plain `VP8 ` or `VP8L` file, or `VP8X` with the
+/// animation flag (0x02 in the flags byte) clear.
+fn webp_is_animated(head: &[u8]) -> Option<bool> {
+    if head.len() < 21 || &head[0..4] != b"RIFF" || &head[8..12] != b"WEBP" {
+        return None;
+    }
+    Some(&head[12..16] == b"VP8X" && head[20] & 0x02 != 0)
+}
+
 /// One-time migration to provider-namespaced cache keys + content-typed
 /// extensions. Purges ONLY the non-7TV emote files (Twitch/BTTV/FFZ): they were
 /// keyed by bare id (so a Twitch and an FFZ emote sharing an integer id could
@@ -1464,6 +1562,34 @@ pub fn get_cached_items_batch(
 }
 
 /// Get all cached files for a specific type
+/// The on-disk path a file entry serves, when it may be served. Emote and badge
+/// files never go stale by age; a cosmetic's art can change under the same id
+/// (7TV can animate a paint after it was cached), so cosmetic files honor their
+/// expiry and re-download the next time they are shown.
+fn usable_file_path<'a>(cache_type: &CacheType, entry: &'a UniversalCacheEntry) -> Option<&'a str> {
+    if entry.cache_type != *cache_type {
+        return None;
+    }
+    if *cache_type == CacheType::Cosmetic && is_cache_expired(&entry.metadata) {
+        return None;
+    }
+    entry.data.get("local_path").and_then(|p| p.as_str())
+}
+
+/// The cached files among `ids` (id -> path), by the same rule as the listing.
+/// Reads the in-memory manifest only.
+pub fn cached_file_paths(cache_type: CacheType, ids: &[String]) -> HashMap<String, String> {
+    let Ok(guard) = MANIFEST_MEMORY.read() else {
+        return HashMap::new();
+    };
+    ids.iter()
+        .filter_map(|id| {
+            let entry = guard.entries.get(&format!("file:{id}"))?;
+            usable_file_path(&cache_type, entry).map(|p| (id.clone(), p.to_string()))
+        })
+        .collect()
+}
+
 pub async fn get_cached_files_list(cache_type: CacheType) -> Result<HashMap<String, String>> {
     // debug!(
     //     "[UniversalCache] Getting cached files list for {:?}",
@@ -1472,14 +1598,9 @@ pub async fn get_cached_files_list(cache_type: CacheType) -> Result<HashMap<Stri
     let manifest = load_manifest()?;
     let mut files = HashMap::new();
 
-    for (key, entry) in manifest.entries {
-        // Check if it's a file entry (id starts with "file:") and matches type
-        if entry.cache_type == cache_type && key.starts_with("file:") {
-            if let Some(path) = entry.data.get("local_path").and_then(|p| p.as_str()) {
-                // Strip "file:" prefix from key to get original ID
-                let id = key.trim_start_matches("file:").to_string();
-                files.insert(id, path.to_string());
-            }
+    for (key, entry) in manifest.entries.iter() {
+        if let (Some(id), Some(path)) = (key.strip_prefix("file:"), usable_file_path(&cache_type, entry)) {
+            files.insert(id.to_string(), path.to_string());
         }
     }
 
@@ -1572,7 +1693,84 @@ pub fn manifest_len() -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::badge_date_key;
+    use super::{
+        badge_date_key, is_still_paint_entry, usable_file_path, webp_is_animated, CacheMetadata, CacheType,
+        UniversalCacheEntry,
+    };
+
+    fn file_entry(cache_type: CacheType, age_days: u64) -> UniversalCacheEntry {
+        UniversalCacheEntry {
+            id: "file:x".into(),
+            cache_type,
+            data: serde_json::json!({ "local_path": "C:/cache/x.png" }),
+            metadata: CacheMetadata {
+                timestamp: super::get_current_timestamp() - age_days * 24 * 60 * 60,
+                expiry_days: 7,
+                source: "universal_file".into(),
+                version: 1,
+            },
+            position: None,
+        }
+    }
+
+    #[test]
+    fn only_cosmetic_files_go_stale_by_age() {
+        let old_badge = file_entry(CacheType::Badge, 30);
+        assert_eq!(usable_file_path(&CacheType::Badge, &old_badge), Some("C:/cache/x.png"));
+        let old_paint = file_entry(CacheType::Cosmetic, 30);
+        assert_eq!(usable_file_path(&CacheType::Cosmetic, &old_paint), None);
+        let new_paint = file_entry(CacheType::Cosmetic, 1);
+        assert!(usable_file_path(&CacheType::Cosmetic, &new_paint).is_some());
+        assert_eq!(usable_file_path(&CacheType::Emote, &old_badge), None, "the kind must match");
+    }
+
+    fn webp_head(fourcc: &[u8; 4], flags: u8) -> [u8; 21] {
+        let mut head = [0u8; 21];
+        head[0..4].copy_from_slice(b"RIFF");
+        head[8..12].copy_from_slice(b"WEBP");
+        head[12..16].copy_from_slice(fourcc);
+        head[20] = flags;
+        head
+    }
+
+    #[test]
+    fn webp_animation_comes_from_the_vp8x_flag() {
+        assert_eq!(webp_is_animated(&webp_head(b"VP8X", 0x12)), Some(true));
+        assert_eq!(webp_is_animated(&webp_head(b"VP8X", 0x10)), Some(false));
+        // A simple-format WebP cannot animate, whatever its bitstream bytes are.
+        assert_eq!(webp_is_animated(&webp_head(b"VP8 ", 0x02)), Some(false));
+        assert_eq!(webp_is_animated(&webp_head(b"VP8L", 0x02)), Some(false));
+        assert_eq!(webp_is_animated(b"GIF89a"), None);
+    }
+
+    fn cached(cache_type: CacheType, url: &str) -> UniversalCacheEntry {
+        UniversalCacheEntry {
+            id: "01K6ZYS5X633HHK0K3JVDK4FT0".into(),
+            cache_type,
+            data: serde_json::json!({ "url": url }),
+            metadata: CacheMetadata {
+                timestamp: 0,
+                expiry_days: 7,
+                source: "universal_file".into(),
+                version: 1,
+            },
+            position: None,
+        }
+    }
+
+    #[test]
+    fn only_7tv_paint_stills_are_purged() {
+        let paint = "https://cdn.7tv.app/paint/01K6ZYS5X6TF6EGK85Y9ZZR8YC/layer/01K6ZYS5X633HHK0K3JVDK4FT0";
+        assert!(is_still_paint_entry(&cached(CacheType::Cosmetic, &format!("{paint}/1x_static.webp"))));
+        // The animated URL with no readable file is left alone.
+        assert!(!is_still_paint_entry(&cached(CacheType::Cosmetic, &format!("{paint}/1x.webp"))));
+        // A 7TV badge shares the cosmetic cache and is never touched.
+        assert!(!is_still_paint_entry(&cached(
+            CacheType::Cosmetic,
+            "https://cdn.7tv.app/badge/01GFR6GNB80001V63R0CCB85YD/1x_static.webp",
+        )));
+        assert!(!is_still_paint_entry(&cached(CacheType::Emote, &format!("{paint}/1x_static.webp"))));
+    }
 
     #[test]
     fn badge_dates_order_by_calendar_not_text() {

@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { DownloadCloud, Check, Loader2, Square, RefreshCw } from 'lucide-react';
 import { SettingsSection, SettingsRow } from './_primitives';
-import { inlineEmoteTier, refreshEmoteFileCache } from '../../services/emoteService';
+import { inlineEmoteTier } from '../../services/emoteService';
 import { Logger } from '../../utils/logger';
 
 // Mirrors the Rust PrefetchProgress (serde serializes the snake_case fields as-is).
@@ -56,12 +56,6 @@ const EmotePrefetchSection = () => {
       if (unlistenComplete) unlistenComplete();
     };
   }, []);
-
-  // When a run finishes, merge the new files into the picker's in-memory disk
-  // map so they render disk-first this session, not only on next launch.
-  useEffect(() => {
-    if (progress?.phase === 'complete') void refreshEmoteFileCache();
-  }, [progress?.phase]);
 
   const scan = async () => {
     try { await invoke('emote_prefetch_plan', { tier: inlineEmoteTier() }); } catch (e) { Logger.warn('[EmotePrefetch] scan failed:', e); }

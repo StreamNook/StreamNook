@@ -108,13 +108,28 @@ const computeRadialGradientLayer = (layer: PaintLayer['ty'], opacity: number) =>
   };
 };
 
+/**
+ * The image of a paint image layer that gets drawn: scale 1, and the animated
+ * file whenever the layer animates. 7TV lists a layer's still `_static` variants
+ * first, so the first scale-1 image is the still. Anything that caches a layer's
+ * image must use this pick too: the cache is keyed by layer, and every surface
+ * draws whichever file is stored there.
+ */
+export function pickPaintLayerImage<
+  T extends { url: string; localUrl?: string; scale: number; frameCount: number },
+>(
+  images: readonly T[],
+): T | undefined {
+  const isAnimated = images.some((img) => img.frameCount > 1);
+  return images.find((img) => img.scale === 1 && (!isAnimated || img.frameCount > 1));
+}
+
 const computeImageLayer = (layer: PaintLayer['ty'], opacity: number) => {
   if (layer.__typename !== 'PaintLayerTypeImage' || !layer.images) {
     return undefined;
   }
 
-  const isAnimated = layer.images.some((img) => img.frameCount > 1);
-  const img = layer.images.find((i) => i.scale === 1 && (isAnimated ? i.frameCount > 1 : true));
+  const img = pickPaintLayerImage(layer.images);
 
   if (!img) {
     return undefined;

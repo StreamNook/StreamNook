@@ -27,6 +27,7 @@ use tokio::task::JoinSet;
 use crate::services::emote_service::{
     seventv_circuit_open, Emote, EmoteProvider, EmoteService, EmoteSet,
 };
+use crate::services::asset_cache_queue::{announce_entries, AssetKind};
 use crate::services::twitch_service::TwitchService;
 use crate::services::universal_cache_service::{
     download_file_to_disk, get_cached_files_list, save_cached_items_batch, CacheType,
@@ -444,6 +445,7 @@ async fn run_downloads(
 
         if buffer.len() >= MANIFEST_FLUSH_EVERY {
             let batch = std::mem::take(&mut buffer);
+            announce_entries(&app_handle, AssetKind::Emote, &batch);
             let _ = save_cached_items_batch(batch).await;
         }
 
@@ -470,6 +472,7 @@ async fn run_downloads(
 
     // Persist whatever is left.
     if !buffer.is_empty() {
+        announce_entries(&app_handle, AssetKind::Emote, &buffer);
         let _ = save_cached_items_batch(buffer).await;
     }
 

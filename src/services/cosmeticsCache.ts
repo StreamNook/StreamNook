@@ -235,7 +235,7 @@ export async function forceRefreshCosmetics(userId: string): Promise<CachedCosme
   hardFailTimestamps.delete(userId);
   try {
     const { invalidateUserCosmeticsCache } = await import('./seventvService');
-    invalidateUserCosmeticsCache(userId);
+    await invalidateUserCosmeticsCache(userId);
   } catch (e) {
     Logger.warn('[cosmeticsCache] forceRefresh: failed to clear 7TV cache:', e);
   }
@@ -255,7 +255,7 @@ export async function revalidateOwnCosmetics(userId: string): Promise<void> {
   if (!userId) return;
   try {
     const { getUserCosmetics, invalidateUserCosmeticsCache } = await import('./seventvService');
-    invalidateUserCosmeticsCache(userId);
+    await invalidateUserCosmeticsCache(userId);
     const { data, hardFail } = await getUserCosmetics(userId);
     if (!hardFail) publishCosmetics(userId, data, false);
   } catch (e) {
@@ -493,94 +493,6 @@ export async function getFullProfileWithFallback(
 
   pendingProfileRequests.set(userId, request);
   return request;
-}
-
-/**
- * Refresh profile data in background and update cache
- * This fetches fresh data without blocking
- */
-export async function refreshProfileInBackground(
-  userId: string,
-  username: string,
-  channelId?: string,
-  channelName?: string
-): Promise<void> {
-  const effectiveChannelId = channelId || userId;
-  const effectiveChannelName = channelName || username;
-  const twitchCacheKey = `${userId}-${effectiveChannelId}`;
-
-  Logger.debug('[CosmeticsCache] Refreshing profile in background for:', username);
-
-  try {
-    // Fetch badge data from unified service and 7TV cosmetics in parallel
-    // Use getAllUserBadgesWithEarned for profile overlays to get full earned badge collection
-    const { getAllUserBadgesWithEarned } = await import('./badgeService');
-    const [badgeDataResult, seventvCosmeticsResult] = await Promise.allSettled([
-      getAllUserBadgesWithEarned(userId, username, effectiveChannelId, effectiveChannelName),
-      (async () => {
-        const { getUserCosmetics } = await import('./seventvService');
-        return await getUserCosmetics(userId);
-      })()
-    ]);
-
-    // Process badge data if successful
-    let twitchBadges: any[] = [];
-    let thirdPartyBadges: any[] = [];
-    
-    if (badgeDataResult.status === 'fulfilled') {
-      const badgeData = badgeDataResult.value;
-      
-      // Merge display and earned badges
-      const uniqueBadges = new Map<string, any>();
-      badgeData.displayBadges.forEach((badge: any) => uniqueBadges.set(badge.id, badge));
-      badgeData.earnedBadges.forEach((badge: any) => {
-        if (!uniqueBadges.has(badge.id)) uniqueBadges.set(badge.id, badge);
-      });
-      twitchBadges = compactTwitchBadges(Array.from(uniqueBadges.values()));
-
-      // Transform third-party badges. `link` intentionally omitted — no
-      // consumer reads it; compactThirdPartyBadges would strip it anyway.
-      thirdPartyBadges = (badgeData.thirdPartyBadges || []).map((b: any) => ({
-        id: b.id,
-        title: b.title,
-        imageUrl: b.imageUrl,
-        provider: b.provider,
-      }));
-    }
-
-    // Update individual caches with fresh data
-    if (twitchBadges.length > 0) {
-      inMemoryTwitchBadgesCache.set(twitchCacheKey, twitchBadges);
-    }
-    if (seventvCosmeticsResult.status === 'fulfilled') {
-      const { data, hardFail } = seventvCosmeticsResult.value;
-      publishCosmetics(userId, data, hardFail);
-    }
-    if (thirdPartyBadges.length > 0) {
-      inMemoryThirdPartyBadgesCache.set(userId, thirdPartyBadges);
-    }
-
-    // Update full profile cache
-    const seventvCosmeticsForProfile: CachedCosmetics =
-      seventvCosmeticsResult.status === 'fulfilled'
-        ? seventvCosmeticsResult.value.data
-        : inMemoryCosmeticsCache.get(userId) || { paints: [], badges: [] };
-    const profile: CachedProfile = {
-      userId,
-      username,
-      channelId: effectiveChannelId,
-      channelName: effectiveChannelName,
-      twitchBadges: twitchBadges.length > 0 ? twitchBadges : inMemoryTwitchBadgesCache.get(twitchCacheKey) || [],
-      seventvCosmetics: seventvCosmeticsForProfile,
-      thirdPartyBadges: thirdPartyBadges.length > 0 ? thirdPartyBadges : inMemoryThirdPartyBadgesCache.get(userId) || [],
-      lastUpdated: Date.now()
-    };
-
-    inMemoryProfileCache.set(userId, profile);
-    Logger.debug('[CosmeticsCache] Profile refreshed for:', username, `(${twitchBadges.length} Twitch, ${thirdPartyBadges.length} third-party badges)`);
-  } catch (error) {
-    Logger.error('[CosmeticsCache] Failed to refresh profile:', error);
-  }
 }
 
 /**

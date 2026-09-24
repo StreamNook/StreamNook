@@ -122,25 +122,14 @@ const CacheSettings = () => {
                   await invoke('clear_cache'); // legacy cache root
                   await invoke('clear_all_universal_cache'); // emotes/badges/cosmetics + prefetch
 
-                  // Wiping the disk is only half of it. Both services keep an
-                  // in-memory Map of id -> local file path, and those entries
-                  // outlive the files: `getCachedEmoteUrl` keeps handing back
-                  // convertFileSrc(<deleted path>), so emotes and badges render
-                  // BROKEN until the app restarts. Rust already learned this
-                  // lesson - `clear_universal_cache` drops its manifest mirror
-                  // for exactly this reason, with a comment saying so - but the
-                  // frontend half was never wired up: both of these existed with
-                  // ZERO callers.
-                  //
-                  // This was dormant while `assetDiskCache` was off for mobile,
-                  // because the maps were never populated there. Turning the
-                  // cache on made it reachable.
-                  const [{ clearEmoteCache }, { clearBadgeImageCache }] = await Promise.all([
-                    import('../../services/emoteService'),
-                    import('../../services/badgeImageCacheService'),
-                  ]);
+                  // Wiping the disk is only half of it. Every window keeps
+                  // id -> local file maps for emotes, badges and cosmetics, and
+                  // those entries outlive the files: a deleted path renders
+                  // BROKEN until the app restarts. Rust announces the wipe
+                  // (`asset-cache://cleared`) and every window drops its maps;
+                  // this also drops Rust's in-memory emote sets.
+                  const { clearEmoteCache } = await import('../../services/emoteService');
                   await clearEmoteCache();
-                  await clearBadgeImageCache();
 
                   // The panel is showing a count that is now wrong, so say so
                   // rather than leaving a stale number sitting there.
