@@ -148,6 +148,9 @@ export const WatchScreen: React.FC = () => {
   const refreshNonce = usePinStore((s) => s.refreshNonce);
   const shape = useWindowShape();
   const [landscapeChat, setLandscapeChat] = useState(false);
+  // A large screen shows chat by default (beside or under the video), so its
+  // toggle runs the other way: it HIDES chat, and the video takes the screen.
+  const [largeChatHidden, setLargeChatHidden] = useState(false);
   const [watchLayout, setWatchLayout] = useState<WatchLayout>(readWatchLayout);
   const [chatSplit, setChatSplit] = useState<number | null>(readWatchSplit);
   const [pip, setPip] = useState(false);
@@ -300,11 +303,18 @@ export const WatchScreen: React.FC = () => {
   const phoneOverlayChat = !shape.largeScreen && (fsChat?.phone_layout ?? 'overlay') === 'overlay';
   const twoColumns =
     shape.largeScreen
-      ? watchLayout === 'auto'
+      ? largeChatHidden
+        ? false
+        : watchLayout === 'auto'
         ? autoColumns
         : watchLayout === 'columns' && sideFits
       : landscapeChat && !phoneOverlayChat;
-  const immersiveLandscape = shape.twoPane && !shape.largeScreen;
+  // Full-bleed video on its side: a phone always, a tablet once chat is hidden.
+  // Leaving the tablet out entirely is what made its chat button do nothing.
+  const immersiveLandscape = shape.twoPane && (!shape.largeScreen || largeChatHidden);
+  // Where the chat button appears and what it flips. A large screen gets it
+  // whenever it is on its side, in either layout, so stacked can go full too.
+  const largeToggle = shape.largeScreen && shape.twoPane && shape.splitY == null;
   // Tabletop: the phone is bent across a horizontal hinge. The bend is the
   // natural boundary between picture and chat, so the band ends on it and
   // chat takes the lower half. Posture beats the remembered split and beats
@@ -959,15 +969,22 @@ export const WatchScreen: React.FC = () => {
             immersive={sideBySide || pip}
             compact={mini || pip}
             onMinimize={mini || pip ? undefined : () => setPlayerMode('mini')}
-            onToggleFullscreen={sideBySide ? () => setLandscapeChat((v) => !v) : undefined}
-            chatOpen={chatOverlay || chatBeside}
+            onToggleFullscreen={
+              largeToggle && !mini && !pip
+                ? () => setLargeChatHidden((v) => !v)
+                : sideBySide
+                  ? () => setLandscapeChat((v) => !v)
+                  : undefined
+            }
+            chatOpen={largeToggle ? !largeChatHidden : chatOverlay || chatBeside}
             // With chat floating over one edge, the controls keep to the
             // picture that is still visible: otherwise the chat toggle sat
             // under the very column it was meant to dismiss.
             controlsInset={chatOverlay ? { side: overlaySide, px: overlayWidth } : undefined}
             layoutMode={twoColumns ? 'columns' : 'stacked'}
             onToggleLayout={
-              canChooseLayout && !mini && !pip
+              // Nothing to arrange while chat is hidden.
+              canChooseLayout && !mini && !pip && !(largeToggle && largeChatHidden)
                 ? () => {
                     // Writes an explicit choice, so it stops tracking `auto` and
                     // survives a restart.
