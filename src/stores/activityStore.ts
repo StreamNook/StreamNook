@@ -1,46 +1,41 @@
+import { invoke } from '@tauri-apps/api/core';
 import { create } from 'zustand';
 import type { ActivityEvent } from '../types/activity';
+import { Logger } from '../utils/logger';
 
-// Standalone store for the MultiChat Activity feed. Kept separate from the main
-// AppStore so nothing here can affect normal chat. Persisted to localStorage so a
-// streamer's past activity is still there on reopen, capped PER SOURCE so one
-// busy channel can't evict another's history. Purgeable per source or all.
+// The MultiChat Activity feed as this window shows it. Kept separate from the
+// main AppStore so nothing here can affect normal chat.
+//
+// The history itself is Rust's (services/activity_history_service.rs): one
+// store for every window, persisted, capped per source so one busy channel
+// can't evict another's history. This store holds only the events the open
+// feed is showing, and drops whatever Rust's caps evict.
 
-const STORAGE_KEY = 'sn-activity-history-v1';
-const PER_CHANNEL_CAP = 200; // newest events kept per source key
-const TOTAL_CAP = 2500; // overall safety ceiling across all sources
+/** Where each window used to keep its own copy, moved into Rust once. */
+const LEGACY_STORAGE_KEY = 'sn-activity-history-v1';
 
-// Keep the newest PER_CHANNEL_CAP per source (events are newest-first), bounded
-// overall. Drops the oldest of a source once it exceeds its cap.
-function capEvents(events: ActivityEvent[]): ActivityEvent[] {
-  const counts = new Map<string, number>();
-  const out: ActivityEvent[] = [];
-  for (const e of events) {
-    if (out.length >= TOTAL_CAP) break;
-    const k = e.channel.toLowerCase();
-    const n = counts.get(k) ?? 0;
-    if (n >= PER_CHANNEL_CAP) continue;
-    counts.set(k, n + 1);
-    out.push(e);
-  }
-  return out;
+interface Appended {
+  added: boolean;
+  evicted: string[];
 }
 
-function loadPersisted(): ActivityEvent[] {
+/** Hand a window's pre-Rust localStorage history to Rust, then forget it. */
+async function importLegacyHistory(): Promise<void> {
+  let raw: string | null = null;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? capEvents(parsed) : [];
+    raw = localStorage.getItem(LEGACY_STORAGE_KEY);
   } catch {
-    return [];
+    return;
   }
-}
-
-function write(events: ActivityEvent[]) {
+  if (!raw) return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(events));
-  } catch {
-    /* quota exceeded or storage unavailable; the in-memory feed still works */
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      await invoke('activity_import', { events: parsed });
+    }
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+  } catch (err) {
+    Logger.warn('[Activity] could not move saved history into the app store:', err);
   }
 }
 
@@ -59,37 +54,52 @@ interface ActivityState {
 }
 
 export const useActivityStore = create<ActivityState>((set) => ({
-  // Hydrate the whole persisted history; the widget filters it to the open sources.
-  events: loadPersisted(),
-  addEvent: (event) =>
+  events: [],
+  addEvent: (event) => {
+    // Sources can echo the same event; the id check keeps the feed from
+    // flashing a duplicate before Rust says so.
+    let shown = false;
     set((state) => {
-      // Dedup by id (sources can echo the same event); prepend newest-first, cap.
       if (event.id && state.events.some((e) => e.id === event.id)) return state;
-      const events = capEvents([event, ...state.events]);
-      // Merge with what's on disk before writing, so a second MultiChat window's
-      // history never clobbers this one's (each window has its own store).
-      const seen = new Set(events.map((e) => e.id));
-      write(capEvents([...events, ...loadPersisted().filter((e) => !seen.has(e.id))]));
-      return { events };
-    }),
-  purgeChannels: (sourceKeys) =>
-    set((state) => {
-      const drop = new Set(sourceKeys.map((k) => k.toLowerCase()));
-      const keep = (e: ActivityEvent) => !drop.has(e.channel.toLowerCase());
-      // Filter on-disk too (keeping other sources) so the purged ones don't
-      // return on the next reopen.
-      write(loadPersisted().filter(keep));
-      return { events: state.events.filter(keep) };
-    }),
-  clear: () =>
-    set(() => {
-      try {
-        localStorage.removeItem(STORAGE_KEY);
-      } catch {
-        /* ignore */
-      }
-      return { events: [] };
-    }),
+      shown = true;
+      return { events: [event, ...state.events] };
+    });
+    if (!shown) return;
+    invoke<Appended>('activity_append', { event })
+      .then(({ evicted }) => {
+        if (evicted.length === 0) return;
+        const gone = new Set(evicted);
+        set((state) => ({ events: state.events.filter((e) => !gone.has(e.id)) }));
+      })
+      .catch((err) => Logger.warn('[Activity] failed to record event:', err));
+  },
+  purgeChannels: (sourceKeys) => {
+    const drop = new Set(sourceKeys.map((k) => k.toLowerCase()));
+    set((state) => ({ events: state.events.filter((e) => !drop.has(e.channel.toLowerCase())) }));
+    invoke('activity_purge', { sourceKeys }).catch((err) =>
+      Logger.warn('[Activity] failed to purge history:', err),
+    );
+  },
+  clear: () => {
+    set({ events: [] });
+    invoke('activity_clear').catch((err) => Logger.warn('[Activity] failed to clear history:', err));
+  },
   release: () => set({ events: [] }),
-  hydrate: () => set({ events: loadPersisted() }),
+  hydrate: () => {
+    void (async () => {
+      await importLegacyHistory();
+      try {
+        const stored = await invoke<ActivityEvent[]>('activity_load');
+        // Anything that arrived while the load was in flight is newer than the
+        // snapshot and already on its way to Rust; keep it on top.
+        set((state) => {
+          const storedIds = new Set(stored.map((e) => e.id));
+          const arrived = state.events.filter((e) => !storedIds.has(e.id));
+          return { events: [...arrived, ...stored] };
+        });
+      } catch (err) {
+        Logger.warn('[Activity] failed to load history:', err);
+      }
+    })();
+  },
 }));
