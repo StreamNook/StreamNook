@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "StreamNook"
-version = "8.6.4"
+version = "8.7.0"
 dependencies = [
  "ammonia",
  "anyhow",

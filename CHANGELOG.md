@@ -1,3 +1,47 @@
+## [8.7.0] - 2026-09-24
+
+## 🎉 New: TikTok LIVE, one chat for multistreamers, and Linux
+> TikTok LIVE joins Twitch, Kick and YouTube: watch it, see when the creators you
+> follow go live, and chat as your account. Link a streamer's channels across
+> platforms and their chats merge into the one you are watching. StreamNook also
+> ships for Linux now, as an AppImage that updates itself.
+
+---
+
+### ✨ Features
+- **TikTok LIVE.** Watch a TikTok LIVE on its own or in the MultiNook grid, browse a Top live feed, and sign in to open age-restricted rooms. Signed in, the creators you follow appear in Following and the sidebar when they go live, with go-live alerts, and you can chat as your account.
+- **One chat for a streamer on several platforms.** Link a streamer's Twitch, Kick and YouTube channels, and a bar under the chat header merges their other platforms into the feed you are watching. Replies go back to the platform the message came from.
+- **Following and Discover across every platform.** Channels you follow anywhere share one list, and Discover shows who is live on the other platforms, with their categories.
+- **See who a channel is streaming with.** When streamers share a stream on Twitch, the group and its combined viewer count show on the stream, and one click opens all of them in MultiNook.
+- **VOD chapters and seek previews.** A VOD's category changes show as chapters on the seek bar and in a chapter list, and hovering the bar previews that moment. The broadcast timeline scrubs more finely too.
+- **StreamNook member profiles.** Clicking a StreamNook member's name opens their full profile: atmosphere, frame, relics, stats, accolades and every badge they own, next to the usual Twitch details and actions. Hovering the name decodes their member number.
+- **Chat, styled your way.** New options for event rows (with custom wording and per-platform filters), badges, how messages arrive, emoji style, emote extras, replies and links. You can also hide commands and ring first-time chatters, and name colors stay readable on any background.
+- **Linux.** StreamNook now builds for Linux as an AppImage, and it installs its own updates.
+- **Design your OBS overlay on the web.** The overlay builder in Settings is the same one at streamnook.app/overlays, and both edit the same overlays.
+- Your Twitch badge standing shows without a Drops sign-in, with an estimate of the subs and hours it takes to earn the badges you are missing.
+- Release notes moved from Settings into the changelog popup, and the title bar checks for updates every half hour.
+- Snippets are part of your settings now, so a backup carries them.
+- Streams that arrive framed, like TikTok co-host views, zoom to the picture they actually carry.
+
+### 🐛 Bug Fixes
+- Your chat messages show the moment you send them, and your replies are recognized as yours.
+- Sub notices show Twitch's gift art, and chat defaults to Twitch's own size: 14px text with 4px spacing.
+- Sorting badges by Newest, Oldest, Available or Coming soon follows the real dates.
+- Saving a setting in one window no longer undoes a change another window just saved.
+- Whispers that arrive while StreamNook sits in the tray are kept.
+- A keyword reminder fires once per message instead of once per open window.
+- A profile card keeps showing every 7TV cosmetic someone owns after its first open.
+- Clearing the cache no longer leaves broken images in MultiChat windows.
+- Channel badges such as broadcaster and subscriber no longer count among someone's own badges.
+- 7TV renews its sign-in before it expires, and the plugin marketplace says why it is empty instead of blaming the network.
+
+### ⚡ Performance
+- Spell checking, 7TV cosmetics lookups, image caching, hype train updates and the activity feed history now run once in the app's core instead of in every window, so MultiChat windows use less memory.
+- Profile cards open about a third faster and fill in as each part arrives.
+
+### 🔧 Maintenance
+- The app reports its version periodically instead of only at sign-in. Settings > Support lists what it sends.
+
 ## [8.6.4] - 2026-09-18
 
 ## 🎉 New: a fresh look
