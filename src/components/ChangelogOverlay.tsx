@@ -1,23 +1,23 @@
-import { X, ExternalLink, ChevronDown, Github, Heart } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { X, ExternalLink, ChevronDown, Github, Heart, Check, Download, AlertCircle, RefreshCw } from 'lucide-react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { ACCENT_BUTTON, ACCENT_FILL } from './ui/glazeButtons';
 import { invoke } from '@tauri-apps/api/core';
-import type { ReleaseNotes } from '../types';
-import { parseInlineMarkdown } from '../services/markdownService';
-import { motion } from 'framer-motion';
+import type { Changelog, ChangelogRelease } from '../types';
+import { motion, AnimatePresence } from 'framer-motion';
+import { ReleaseNotes } from './changelog/ReleaseNotes';
+import { useUpdateCheck } from './changelog/useUpdateCheck';
 import { Logger } from '../utils/logger';
-import {
-  fetchReleases,
-  loadReleasesCache,
-  saveReleasesCache,
-  type GitHubRelease,
-} from '../services/releasesService';
 
 // Compare versions ignoring a leading "v" (tags and props mix both forms).
 const normalizeTag = (t: string) => t.replace(/^v/i, '').trim();
 
-const formatShortDate = (iso: string): string => {
+const formatShortDate = (iso: string | null): string => {
+  if (!iso) return '';
   try {
-    return new Date(iso).toLocaleDateString('en-US', {
+    // A bare date (the offline fallback reads it off CHANGELOG.md) is a
+    // calendar day, not UTC midnight, or it shows as the day before in the Americas.
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(iso) ? new Date(`${iso}T00:00:00`) : new Date(iso);
+    return d.toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric',
       year: 'numeric',
@@ -36,10 +36,6 @@ const CHANGELOG_URL = 'https://github.com/winters27/StreamNook/blob/main/CHANGEL
 const GITHUB_ISSUE_URL = 'https://github.com/winters27/StreamNook/issues/new';
 const COMMUNITY_DISCORD_INVITE = 'https://discord.gg/2xvuF9TES7';
 
-// Softer-than-secondary blue tone for body copy so descriptions read clearly
-// without feeling muted, while keeping the StreamNook accent tint.
-const BODY_TEXT = 'color-mix(in srgb, var(--color-text-secondary) 70%, #ffffff)';
-
 // Opens an external URL in the OS browser via Tauri's shell plugin (not the
 // in-app WebView). Falls back to window.open if the plugin import fails.
 const openExternal = async (url: string) => {
@@ -52,20 +48,6 @@ const openExternal = async (url: string) => {
   }
 };
 
-// Drop the appended download/installation boilerplate (the "grab the 7z…"
-// section release_manager.ps1 tacks on). We only want the change notes.
-const stripBoilerplate = (content: string): string => {
-  const lines = content.split('\n');
-  const idx = lines.findIndex((l) => {
-    const t = l.trim();
-    return (
-      /^#{1,4}\s*(installation|install|bundle components|downloads?|how to (install|update))\b/i.test(t) ||
-      /^installation$/i.test(t)
-    );
-  });
-  return idx >= 0 ? lines.slice(0, idx).join('\n') : content;
-};
-
 // Official Discord brand mark, sized to match the lucide icons around it.
 const DiscordIcon = ({ size = 14 }: { size?: number }) => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width={size} height={size} fill="currentColor" aria-hidden="true">
@@ -73,236 +55,65 @@ const DiscordIcon = ({ size = 14 }: { size?: number }) => (
   </svg>
 );
 
-// Sign-off + community links, themed to the accent. Sits at the foot of the
-// change notes.
-const ConnectFooter = () => (
-  <div>
-    <p className="text-[13px] text-textSecondary text-center leading-snug">
+
+// Sign-off + community links. Closes the notes as their last word, where
+// someone who just read about a change is most likely to have something to say.
+const communityLink =
+  'glass-button-secondary inline-flex items-center gap-1.5 px-3 py-1.5 text-[12.5px] font-medium text-textSecondary hover:text-textPrimary';
+
+const SignOff = () => (
+  <div className="flex flex-col items-center text-center pt-2">
+    <p className="text-[13px] text-textSecondary leading-snug">
       Run into a bug or have an idea? Reach out and let us know.
     </p>
-    <div className="flex justify-center gap-2 mt-2">
-      <button
-        type="button"
-        onClick={() => openExternal(GITHUB_ISSUE_URL)}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-textSecondary hover:text-textPrimary hover:bg-accent/10 active:bg-accent/15 transition-colors"
-      >
+    <div className="flex justify-center gap-2 mt-3">
+      <button type="button" onClick={() => openExternal(GITHUB_ISSUE_URL)} className={communityLink}>
         <Github size={14} />
         GitHub
       </button>
-      <button
-        type="button"
-        onClick={() => openExternal(COMMUNITY_DISCORD_INVITE)}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] text-textSecondary hover:text-textPrimary hover:bg-accent/10 active:bg-accent/15 transition-colors"
-      >
+      <button type="button" onClick={() => openExternal(COMMUNITY_DISCORD_INVITE)} className={communityLink}>
         <DiscordIcon size={14} />
         Discord
       </button>
     </div>
-    <p className="flex items-center justify-center gap-1 mt-2.5 text-[11px] text-textMuted italic text-center leading-snug">
+    <p className="flex items-center justify-center gap-1 mt-4 text-[11px] text-textMuted italic leading-snug">
       May your points always claim, your streams never buffer, and your drops always finish.
       <Heart size={11} className="inline-block text-accent shrink-0" fill="currentColor" />
     </p>
   </div>
 );
 
-// A changelog body is rendered in DOCUMENT ORDER as a list of typed blocks, so
-// a description or image always shows where it was written (an earlier version
-// bucketed loose paragraphs into a "notes" group that rendered at the very
-// bottom, which is why a lead blurb could jump to the end).
-type Block =
-  | { t: 'hero'; title: string; desc: string }   // ## 🎉 New: <headline> + > <blurb>
-  | { t: 'image'; url: string; alt: string }      // ![alt](url)
-  | { t: 'header'; label: string }                // ### <section>
-  | { t: 'item'; title: string; desc: string }    // - **Title**: description
-  | { t: 'note'; desc: string };                  // a plain paragraph
-
-// Turn a release-notes markdown body into ordered blocks. release_manager.ps1
-// emits an optional "## 🎉 New: <headline>" + "> <blurb>" lead, then
-// "### <section>" blocks of "- **Title**: description" bullets; images and loose
-// paragraphs are also supported and render in place.
-const parseChangelog = (content: string): Block[] => {
-  const blocks: Block[] = [];
-  let hero: { title: string; desc: string[] } | null = null;
-
-  const flushHero = () => {
-    if (hero) {
-      blocks.push({ t: 'hero', title: hero.title, desc: hero.desc.join(' ').trim() });
-      hero = null;
-    }
-  };
-
-  for (const raw of content.split('\n')) {
-    const line = raw.trim();
-    if (!line) continue;
-
-    // Version/date line — the header/bar already show the version, so drop it.
-    if (/^#{0,3}\s*\[.*?\]\s*-\s*\d{4}-\d{2}-\d{2}/.test(line)) {
-      flushHero();
-      continue;
-    }
-    // Image — ![alt](url). Rendered as a preview where it appears.
-    const img = line.match(/^!\[(.*?)\]\((.+?)\)\s*$/);
-    if (img) {
-      flushHero();
-      blocks.push({ t: 'image', alt: img[1], url: img[2] });
-      continue;
-    }
-    // Section heading (### ✨ Features) — a styled header in place.
-    if (/^###\s+/.test(line)) {
-      flushHero();
-      const label = line.replace(/^###\s+/, '').replace(/^[^A-Za-z0-9]+/, '').trim();
-      blocks.push({ t: 'header', label });
-      continue;
-    }
-    // Headline (## 🎉 New: ...) becomes the lead hero; strip the emoji + "New:".
-    if (/^##\s+/.test(line)) {
-      flushHero();
-      const title = line
-        .replace(/^##\s+/, '')
-        .replace(/^[^A-Za-z0-9]*\bNew:\s*/i, '')
-        .replace(/^[^A-Za-z0-9]+/, '')
-        .trim();
-      hero = { title, desc: [] };
-      continue;
-    }
-    // Blockquote — the hero's description, or a standalone note in place.
-    if (line.startsWith('>')) {
-      const t = line.replace(/^>\s?/, '');
-      if (hero) hero.desc.push(t);
-      else blocks.push({ t: 'note', desc: t });
-      continue;
-    }
-    // Horizontal rule — drop it.
-    if (line === '---') {
-      flushHero();
-      continue;
-    }
-    // Bullet — "**Title**: description" splits into title + description.
-    if (/^[-*]\s+/.test(line)) {
-      flushHero();
-      const text = line.replace(/^[-*]\s+/, '');
-      const m = text.match(/^\*\*(.+?)\*\*\s*[:—-]?\s*(.*)$/);
-      blocks.push({ t: 'item', title: m ? m[1] : text, desc: m ? m[2] : '' });
-      continue;
-    }
-    // Anything else — a plain paragraph, in place.
-    flushHero();
-    blocks.push({ t: 'note', desc: line });
-  }
-  flushHero();
-  return blocks;
-};
-
-// A single change: bold title, readable description. No icon, no bullet.
-const ChangeItem = ({ title, desc, lead }: { title: string; desc: string; lead?: boolean }) => (
-  <div>
-    <div className={`${lead ? 'text-lg' : 'text-base'} font-semibold text-textPrimary`}>
-      {parseInlineMarkdown(title)}
-    </div>
-    {desc && (
-      <div className="text-[15px] mt-1 leading-relaxed" style={{ color: BODY_TEXT }}>
-        {parseInlineMarkdown(desc)}
-      </div>
-    )}
-  </div>
-);
-
-const ReleaseBody = ({ content }: { content: string }) => {
-  const blocks = parseChangelog(stripBoilerplate(content));
-  if (blocks.length === 0) return null;
-
-  return (
-    <div className="text-left">
-      {blocks.map((b, i) => {
-        switch (b.t) {
-          case 'hero':
-            return (
-              <div key={i} className="first:mt-0 mt-6">
-                <ChangeItem title={b.title} desc={b.desc} lead />
-              </div>
-            );
-          case 'image':
-            return (
-              <div key={i} className="first:mt-0 mt-5 rounded-xl overflow-hidden border border-borderSubtle bg-black/20">
-                <img src={b.url} alt={b.alt} className="block w-full h-auto" loading="lazy" />
-              </div>
-            );
-          case 'header':
-            return (
-              <div key={i} className="first:mt-0 mt-8 mb-4">
-                <div className="text-xs font-bold uppercase tracking-[0.14em] text-accent">
-                  {b.label}
-                </div>
-                <div className="h-[2px] w-7 rounded-full bg-accent/60 mt-1.5" />
-              </div>
-            );
-          case 'item':
-            return (
-              <div key={i} className="first:mt-0 mt-4">
-                <ChangeItem title={b.title} desc={b.desc} />
-              </div>
-            );
-          case 'note':
-            return b.desc ? (
-              <p key={i} className="first:mt-0 mt-4 text-[15px] leading-relaxed" style={{ color: BODY_TEXT }}>
-                {parseInlineMarkdown(b.desc)}
-              </p>
-            ) : null;
-        }
-      })}
-    </div>
-  );
-};
-
 const ChangelogOverlay = ({ version, onClose }: ChangelogOverlayProps) => {
-  // The release list carries every version's body, so switching is instant once
-  // it's loaded. Seed from cache so a known list shows without waiting.
-  const [releases, setReleases] = useState<GitHubRelease[] | null>(
-    () => loadReleasesCache()?.releases ?? null,
-  );
+  // Rust fetches, caches and parses every recent release (falling back to the
+  // cache, then to this version's CHANGELOG.md section), so switching versions
+  // is instant and nothing here parses anything.
+  const [releases, setReleases] = useState<ChangelogRelease[] | null>(null);
   const [selectedTag, setSelectedTag] = useState<string>(() => normalizeTag(version));
-  // Single-version fallback when the GitHub list can't be reached at all.
-  const [fallbackBody, setFallbackBody] = useState<string | null>(null);
-  const [fallbackVersion, setFallbackVersion] = useState<string>(version);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const switcherRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   // Set once the user picks a version from the switcher, so the auto-default
   // below stops overriding their choice.
   const userPickedRef = useRef(false);
 
   useEffect(() => {
-    const controller = new AbortController();
-    (async () => {
-      const result = await fetchReleases({ signal: controller.signal });
-      if (controller.signal.aborted) return;
-      if (result.ok && result.kind === 'fresh') {
-        setReleases(result.releases);
-        saveReleasesCache({ fetchedAt: Date.now(), etag: result.etag, releases: result.releases });
-        setIsLoading(false);
-      } else if (result.ok && result.kind === 'not-modified') {
-        setIsLoading(false); // cached releases already in state
-      } else if (releases && releases.length) {
-        setIsLoading(false); // fetch failed but we have a cached list
-      } else {
-        // No list at all — fall back to the single-version notes from the backend
-        // so the changelog still shows something (no switcher in this case).
-        try {
-          const notes = await invoke<ReleaseNotes>('get_release_notes', { version });
-          if (!controller.signal.aborted) {
-            setFallbackBody(notes.body);
-            setFallbackVersion(notes.version || version);
-          }
-        } catch (err) {
-          Logger.error('Failed to fetch release notes:', err);
-          if (!controller.signal.aborted) setError('Failed to load release notes');
-        }
-        if (!controller.signal.aborted) setIsLoading(false);
-      }
-    })();
-    return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let cancelled = false;
+    invoke<Changelog>('get_changelog', { version })
+      .then((c) => {
+        if (!cancelled) setReleases(c.releases);
+      })
+      .catch((err) => {
+        Logger.error('Failed to load the changelog:', err);
+        if (!cancelled) setError('Failed to load release notes');
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [version]);
 
   // Default the open changelog to what you just updated to (the `version` prop is
@@ -314,9 +125,15 @@ const ChangelogOverlay = ({ version, onClose }: ChangelogOverlayProps) => {
   useEffect(() => {
     if (userPickedRef.current || !releases || !releases.length) return;
     const wanted = normalizeTag(version);
-    const hasWanted = releases.some((r) => normalizeTag(r.tag_name) === wanted);
-    setSelectedTag(hasWanted ? wanted : normalizeTag(releases[0].tag_name));
+    const hasWanted = releases.some((r) => r.version === wanted);
+    setSelectedTag(hasWanted ? wanted : releases[0].version);
   }, [releases, version]);
+
+  // Another version's notes start at their top, not at wherever the last one
+  // was scrolled to.
+  useEffect(() => {
+    bodyRef.current?.scrollTo({ top: 0 });
+  }, [selectedTag]);
 
   // Close the version menu on an outside click.
   useEffect(() => {
@@ -330,12 +147,16 @@ const ChangelogOverlay = ({ version, onClose }: ChangelogOverlayProps) => {
     return () => document.removeEventListener('mousedown', onDown);
   }, [menuOpen]);
 
-  const currentRelease = releases?.find((r) => normalizeTag(r.tag_name) === selectedTag);
-  const body = currentRelease?.body ?? fallbackBody;
-  const displayVersion = currentRelease
-    ? normalizeTag(currentRelease.tag_name)
-    : normalizeTag(fallbackVersion);
+  const currentRelease = releases?.find((r) => r.version === selectedTag);
+  const notes = currentRelease?.notes ?? null;
+  const displayVersion = currentRelease?.version ?? normalizeTag(version);
   const hasSwitcher = !!releases && releases.length > 1;
+
+  const publishedAt = formatShortDate(currentRelease?.published_at ?? null);
+  const update = useUpdateCheck();
+  const pending = update.pending;
+  const pendingInList =
+    !!pending && !!releases?.some((r) => r.version === normalizeTag(pending.latest));
 
   return (
     <motion.div
@@ -353,114 +174,222 @@ const ChangelogOverlay = ({ version, onClose }: ChangelogOverlayProps) => {
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.96, y: 12 }}
         transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-        className="glass-modal relative z-10 w-[640px] max-w-[94vw] h-[820px] max-h-[92vh] flex flex-col"
+        className="glass-modal relative z-10 w-[580px] max-w-[94vw] h-[780px] max-h-[90vh] flex flex-col"
       >
-        {/* Close */}
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 z-10 p-1.5 text-textMuted hover:text-textPrimary rounded-lg transition-colors duration-200"
+          aria-label="Close"
+          className="absolute top-3.5 right-3.5 z-10 p-1.5 text-textMuted hover:text-textPrimary hover:bg-white/[0.06] rounded-full transition-colors duration-150"
         >
-          <X size={18} />
+          <X size={16} />
         </button>
 
-        {/* Title */}
-        <h2 className="text-[28px] font-bold text-textPrimary text-center pt-10 pb-7 px-10">
-          What's New
-        </h2>
+        {/* Header. The version is the subtitle and doubles as the switcher, so
+            what you are reading and the way to read another are one control. */}
+        <div className="flex flex-col items-center px-10 pt-8 pb-5">
+          <h2 className="text-[24px] font-bold text-textPrimary tracking-tight">What's New</h2>
+          {hasSwitcher ? (
+            <div className="relative mt-1.5" ref={switcherRef}>
+              <button
+                onClick={() => setMenuOpen((o) => !o)}
+                aria-haspopup="listbox"
+                aria-expanded={menuOpen}
+                className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[13px] text-textMuted hover:text-textPrimary hover:bg-white/[0.05] transition-colors"
+              >
+                <span className="font-medium text-textSecondary">{displayVersion}</span>
+                {publishedAt && <span>· {publishedAt}</span>}
+                <ChevronDown
+                  size={13}
+                  className={`transition-transform duration-200 ${menuOpen ? 'rotate-180' : ''}`}
+                />
+              </button>
+              <AnimatePresence>
+                {menuOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.14 }}
+                    className="sn-popover absolute top-full left-1/2 -ml-[108px] mt-2 w-[216px] z-20 p-1.5"
+                    // Near-opaque: this menu opens over the notes, and a menu is
+                    // something you read, so the text behind must not show through.
+                    style={{ '--sn-popover-tint': '96%' } as CSSProperties}
+                  >
+                    <div role="listbox" className="max-h-72 overflow-y-auto custom-scrollbar">
+                      {releases!.map((r) => {
+                        const tag = r.version;
+                        const active = tag === selectedTag;
+                        return (
+                          <button
+                            key={tag}
+                            role="option"
+                            aria-selected={active}
+                            onClick={() => {
+                              userPickedRef.current = true;
+                              setSelectedTag(tag);
+                              setMenuOpen(false);
+                            }}
+                            className={`w-full flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors ${
+                              active
+                                ? 'bg-white/[0.08] text-textPrimary'
+                                : 'text-textSecondary hover:bg-white/[0.05] hover:text-textPrimary'
+                            }`}
+                          >
+                            <span className="w-3.5 shrink-0">
+                              {active && <Check size={13} className="text-accent" />}
+                            </span>
+                            <span className="flex-1 text-[13px] font-medium">{tag}</span>
+                            <span className="text-[11px] text-textMuted">
+                              {formatShortDate(r.published_at)}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          ) : (
+            <div className="mt-1.5 px-2.5 py-1 text-[13px] text-textMuted">
+              <span className="font-medium text-textSecondary">{displayVersion}</span>
+              {publishedAt && <span> · {publishedAt}</span>}
+            </div>
+          )}
+        </div>
+
+        {/* Update. Only drawn when there is something to act on: a new version
+            to install, or a check that failed. Sits above the notes so the way
+            to get a release is next to the story of what is in it. */}
+        {(pending || update.failure) && (
+          <div className="px-7 pb-3">
+            {pending ? (
+              <div className="glaze-inset rounded-xl bg-white/[0.03] flex items-center gap-3 pl-4 pr-3 py-3">
+                <Download size={18} className="text-accent shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[14px] font-semibold text-textPrimary leading-snug">
+                    StreamNook {normalizeTag(pending.latest)} is ready
+                  </div>
+                  <div className="mt-0.5 text-[12.5px] text-textMuted leading-snug">
+                    You're on {normalizeTag(pending.current)}
+                    {pending.size && <> · {pending.size}</>}
+                    {pending.behind && pending.behind > 1 && (
+                      <> · at least {pending.behind} releases behind</>
+                    )}
+                    {pendingInList && selectedTag !== normalizeTag(pending.latest) && (
+                      <>
+                        {' · '}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            userPickedRef.current = true;
+                            setSelectedTag(normalizeTag(pending.latest));
+                          }}
+                          className="text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline"
+                        >
+                          See what's in it
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={update.install}
+                  disabled={update.starting}
+                  className={`${ACCENT_BUTTON} shrink-0 px-5 py-1.5`}
+                  style={ACCENT_FILL}
+                >
+                  {update.starting ? 'Starting…' : 'Install'}
+                </button>
+              </div>
+            ) : (
+              <div className="glaze-inset rounded-xl bg-white/[0.03] flex items-center gap-3 pl-4 pr-3 py-3">
+                <AlertCircle size={18} className="text-amber-400 shrink-0" />
+                <p className="min-w-0 flex-1 text-[12.5px] text-textSecondary leading-snug">
+                  {update.failure}
+                </p>
+                <button
+                  type="button"
+                  onClick={update.runCheck}
+                  disabled={update.checking}
+                  className="glass-button-secondary shrink-0 px-3 py-1.5 text-[12.5px] font-medium text-textSecondary hover:text-textPrimary"
+                >
+                  {update.checking ? 'Checking…' : 'Try again'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar px-10">
-          {isLoading && !body ? (
+        <div
+          ref={bodyRef}
+          className="flex-1 overflow-y-auto custom-scrollbar px-7 pt-2 pb-8"
+          // Notes fade out under the header instead of being cut by a hard edge.
+          style={{
+            maskImage: 'linear-gradient(to bottom, transparent, #000 14px)',
+            WebkitMaskImage: 'linear-gradient(to bottom, transparent, #000 14px)',
+          }}
+        >
+          {isLoading && !notes ? (
             <div className="flex items-center justify-center py-10">
               <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-accent" />
             </div>
-          ) : error && !body ? (
+          ) : error && !notes ? (
             <div className="text-center py-10">
               <p className="text-sm text-textSecondary">{error}</p>
             </div>
-          ) : body ? (
-            <ReleaseBody content={body} />
+          ) : notes ? (
+            <ReleaseNotes nodes={notes} />
           ) : (
             <div className="text-center py-10">
               <p className="text-sm text-textSecondary">No release notes available</p>
             </div>
           )}
 
-          <div className="flex justify-center pt-7 pb-4">
-            <button
-              type="button"
-              onClick={() => openExternal(CHANGELOG_URL)}
-              className="inline-flex items-center gap-1.5 text-xs text-accent hover:text-accent/80 transition-colors"
-            >
-              <ExternalLink size={13} />
-              View full changelog
-            </button>
+          <div className="mt-10">
+            <SignOff />
           </div>
         </div>
 
-        {/* Bottom bar — the whole sign-off (prompt, links, blessing) pinned
-            above the version switcher + Continue */}
-        <div className="px-6 pt-5 pb-4 border-t border-borderSubtle">
-          <ConnectFooter />
-          <div className="flex items-center justify-between mt-5">
-            {hasSwitcher ? (
-            <div className="relative" ref={switcherRef}>
-              <button
-                onClick={() => setMenuOpen((o) => !o)}
-                className="glass-button-secondary inline-flex items-center gap-1.5 text-xs font-medium text-textSecondary hover:text-textPrimary px-2.5 py-1.5 transition-colors"
-              >
-                v{displayVersion}
-                <ChevronDown
-                  size={12}
-                  className={`transition-transform duration-200 ${menuOpen ? 'rotate-180' : ''}`}
-                />
-              </button>
-              {menuOpen && (
-                <div
-                  className="absolute bottom-full left-0 mb-2 w-52 max-h-64 overflow-y-auto custom-scrollbar rounded-lg border border-borderSubtle shadow-xl py-1"
-                  style={{
-                    background: 'color-mix(in srgb, var(--color-background-tertiary) 98%, transparent)',
-                  }}
-                >
-                  {releases!.map((r) => {
-                    const tag = normalizeTag(r.tag_name);
-                    const active = tag === selectedTag;
-                    return (
-                      <button
-                        key={r.tag_name}
-                        onClick={() => {
-                          userPickedRef.current = true;
-                          setSelectedTag(tag);
-                          setMenuOpen(false);
-                        }}
-                        className={`w-full flex items-center justify-between gap-3 px-3 py-2 text-left transition-colors ${
-                          active
-                            ? 'bg-accent/15 text-textPrimary'
-                            : 'text-textSecondary hover:bg-white/5 hover:text-textPrimary'
-                        }`}
-                      >
-                        <span className="text-xs font-medium">v{tag}</span>
-                        <span className="text-[10px] text-textMuted">
-                          {formatShortDate(r.published_at)}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          ) : (
-            <span className="text-xs font-medium text-textMuted px-2.5 py-1 rounded-md bg-white/5 border border-white/5">
-              v{displayVersion}
-            </span>
-          )}
+        {/* Footer */}
+        <div className="flex items-center justify-between gap-3 px-6 py-4 border-t border-white/[0.06]">
+          <div className="flex items-center gap-4">
             <button
-              onClick={onClose}
-              className="glass-button px-6 py-2 text-sm font-semibold text-textPrimary rounded-full"
+              type="button"
+              onClick={() => openExternal(CHANGELOG_URL)}
+              className="inline-flex items-center gap-1.5 text-[12.5px] text-textMuted hover:text-textPrimary transition-colors"
             >
-              Continue
+              <ExternalLink size={13} />
+              Full changelog
             </button>
+            {/* Once an update is known, Install above is the action; a second
+                check here would only repeat it. */}
+            {!pending && (
+              <button
+                type="button"
+                onClick={update.runCheck}
+                disabled={update.checking}
+                className="inline-flex items-center gap-1.5 text-[12.5px] text-textMuted hover:text-textPrimary disabled:hover:text-textMuted transition-colors"
+              >
+                {update.upToDate && !update.checking ? (
+                  <>
+                    <Check size={13} className="text-emerald-400" />
+                    Up to date
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw size={13} className={update.checking ? 'animate-spin' : ''} />
+                    {update.checking ? 'Checking…' : 'Check for updates'}
+                  </>
+                )}
+              </button>
+            )}
           </div>
+          <button onClick={onClose} className={`${ACCENT_BUTTON} px-7 py-2`} style={ACCENT_FILL}>
+            Continue
+          </button>
         </div>
       </motion.div>
     </motion.div>

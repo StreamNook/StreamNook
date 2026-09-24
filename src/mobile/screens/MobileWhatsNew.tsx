@@ -1,9 +1,9 @@
 // What's New, for the Android build.
 //
-// The desktop panel lists GitHub releases from winters27/StreamNook, which are
-// DESKTOP releases: their notes describe desktop fixes, and their version
-// numbers are the 8.x line the phone does not follow. Showing them here told a
-// phone user about changes that never shipped to them.
+// The desktop changelog lists GitHub releases from winters27/StreamNook, which
+// are DESKTOP releases: their notes describe desktop fixes, and their version
+// numbers are the 8.x line the phone does not follow. Showing them here would
+// tell a phone user about changes that never shipped to them.
 //
 // The mobile changelog is the `notes` field of the Android update manifest,
 // which is written next to the APK it describes. That makes the changelog and
@@ -13,7 +13,8 @@
 // release, so this shows one entry rather than a history. A real archive would
 // need a separate object in R2 that accumulates past releases; that is worth
 // doing once there are enough Android releases for a history to mean anything.
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import {
   BatteryCharging,
   BellSimple,
@@ -30,67 +31,29 @@ import {
 } from 'phosphor-react';
 import { getAppVersion } from '../updateCheck';
 import { Logger } from '../../utils/logger';
+import type { AndroidChangeTopic, AndroidRelease } from '../../types';
 
-const MANIFEST_URL = 'https://streamnook.app/api/v1/update-android';
+// Rust (`services::changelog`) fetches the manifest, splits each paragraph into
+// a headline and its detail, and picks the topic; this screen only draws it.
+// Deliberately a small icon set with an honest fallback: a confidently wrong
+// icon reads worse than a neutral one.
+const TOPIC_ICONS: Record<AndroidChangeTopic, React.ElementType> = {
+  audio: SpeakerHigh,
+  power: BatteryCharging,
+  playback: PlayCircle,
+  profile: UserCircle,
+  link: LinkSimple,
+  chat: ChatCircleText,
+  notifications: BellSimple,
+  fix: Wrench,
+  build: Path,
+  other: Sparkle,
+};
 
-interface Release {
-  version: string;
-  notes?: string;
-  published_at?: string;
-}
-
-/**
- * One change, as the notes are actually written.
- *
- * Every paragraph in the manifest follows the same shape: a headline sentence,
- * then the detail. "Much easier on the battery. The app now matches video
- * quality to what your screen can actually show..." Splitting on that gives a
- * real title and body to lay out, instead of one preformatted block where
- * every line carries the same weight and nothing is scannable.
- */
-interface Change {
-  title: string;
-  body: string;
-}
-
-function parseChanges(notes: string): Change[] {
-  return notes
-    .split(/\n\s*\n/)
-    .map((p) => p.trim())
-    .filter(Boolean)
-    .map((para) => {
-      // The whitespace after the stop is load-bearing: without it "0.1.9" and
-      // "e.g." split a sentence in half.
-      const m = para.match(/^(.+?[.!?])\s+([\s\S]+)$/);
-      if (!m) return { title: para.replace(/\.$/, ''), body: '' };
-      return { title: m[1].replace(/\.$/, ''), body: m[2].trim() };
-    });
-}
-
-/**
- * An icon for a change, chosen from what it talks about.
- *
- * Deliberately a small set with an honest fallback. A confidently wrong icon
- * reads worse than a neutral one, so anything unmatched gets the spark rather
- * than a guess.
- */
-function iconFor(title: string): React.ElementType {
-  const t = title.toLowerCase();
-  if (/(audio|listen|lock|media control|background|picture-in-picture)/.test(t)) return SpeakerHigh;
-  if (/(batter|cooler|hot|power|data|performance|quality)/.test(t)) return BatteryCharging;
-  // Playback words are some of the commonest things a release note is about,
-  // and the first real changelog through here matched none of the original
-  // rules: every entry fell back to the spark, which makes the whole layout
-  // look like it is not trying.
-  if (/(pause|paused|play|player|playback|stream|video|buffer|latency)/.test(t)) return PlayCircle;
-  if (/(profile|badge|paint|identity|avatar|cosmetic)/.test(t)) return UserCircle;
-  if (/(link|clip)/.test(t)) return LinkSimple;
-  if (/(chat|reply|message|emote)/.test(t)) return ChatCircleText;
-  if (/(notification|alert)/.test(t)) return BellSimple;
-  if (/(fix|bug|no longer|stuck|crash)/.test(t)) return Wrench;
-  if (/(emulator|build|install|update)/.test(t)) return Path;
-  return Sparkle;
-}
+const topicIcon = (topic: AndroidChangeTopic) => {
+  const Icon = TOPIC_ICONS[topic] ?? Sparkle;
+  return <Icon size={17} className="text-accent" />;
+};
 
 /** Designed skeleton rather than the word "Loading". */
 const Skeleton: React.FC = () => (
@@ -118,7 +81,7 @@ const Skeleton: React.FC = () => (
 );
 
 export const MobileWhatsNew: React.FC = () => {
-  const [release, setRelease] = useState<Release | null>(null);
+  const [release, setRelease] = useState<AndroidRelease | null>(null);
   const [running, setRunning] = useState<string | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'unavailable'>('loading');
 
@@ -126,18 +89,18 @@ export const MobileWhatsNew: React.FC = () => {
     let cancelled = false;
     void (async () => {
       try {
-        const [ver, res] = await Promise.all([
+        const [ver, rel] = await Promise.all([
           getAppVersion(),
-          fetch(MANIFEST_URL, { cache: 'no-store' }),
+          invoke<AndroidRelease | null>('get_android_changelog'),
         ]);
         if (cancelled) return;
         setRunning(ver);
-        // 503 is the documented "nothing published yet" state.
-        if (!res.ok) {
+        // Null is the manifest's documented "nothing published yet" state.
+        if (!rel) {
           setState('unavailable');
           return;
         }
-        setRelease((await res.json()) as Release);
+        setRelease(rel);
         setState('ready');
       } catch (err) {
         Logger.warn('[WhatsNew] could not load the Android release notes:', err);
@@ -148,12 +111,6 @@ export const MobileWhatsNew: React.FC = () => {
       cancelled = true;
     };
   }, []);
-
-  // Hoisted so the dependency is the string itself. Depending on
-  // `release?.notes` inline reads as a dependency on `release` to the React
-  // Compiler, which then refuses to preserve the memo at all.
-  const notes = release?.notes;
-  const changes = useMemo(() => (notes ? parseChanges(notes) : []), [notes]);
 
   if (state === 'loading') return <Skeleton />;
 
@@ -186,6 +143,7 @@ export const MobileWhatsNew: React.FC = () => {
   // The published version is not necessarily the one running: someone can be a
   // release behind. Saying so is more useful than implying they match.
   const isRunning = running === release.version;
+  const changes = release.changes;
 
   return (
     <div className="space-y-4 pb-2">
@@ -227,11 +185,10 @@ export const MobileWhatsNew: React.FC = () => {
         // a card is 185px and the whole release is nearly scannable at once.
         <div className="space-y-2">
           {changes.map((c, i) => {
-            const Icon = iconFor(c.title);
             return (
               <div key={i} className="glass-panel rounded-xl px-[13px] py-3 flex gap-3">
                 <div className="h-8 w-8 rounded-lg bg-surface flex items-center justify-center shrink-0 mt-0.5">
-                  <Icon size={17} className="text-accent" />
+                  {topicIcon(c.topic)}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="text-[14.5px] font-semibold text-textPrimary leading-snug">
