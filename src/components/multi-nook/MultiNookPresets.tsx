@@ -145,14 +145,17 @@ const MultiNookPresets: React.FC = () => {
         <button
           onClick={() => (isOpen ? close() : setIsOpen(true))}
           aria-pressed={isOpen}
-          className={`w-8 h-8 flex items-center justify-center overflow-hidden transition-all duration-200 ${
+          // Wears the cluster's own button treatment rather than a glass
+          // button of its own: this sits INSIDE the toolbar's glaze cluster,
+          // and a glass button nested in a glass cluster is two materials
+          // arguing over the same 30px. An equipped preset is the exception —
+          // its icon fills the button and needs a rim to read as a control, so
+          // that case keeps its ring and drops the padding.
+          className={`overflow-hidden transition-all duration-200 ${
             activeThumb
-              ? `ring-1 ${isOpen ? 'ring-white/30' : 'ring-white/15 hover:ring-white/30'}`
-              : isOpen
-                ? 'glass-button-active text-accent'
-                : 'glass-button text-textSecondary hover:text-accent'
+              ? `h-[30px] w-[30px] shrink-0 rounded-lg !p-0 ring-1 ${isOpen ? 'ring-white/30' : 'ring-white/15 hover:ring-white/30'}`
+              : `titlebar-icon-btn ${isOpen ? 'is-active !text-accent' : 'hover:!text-accent'}`
           }`}
-          style={{ borderRadius: '8px' }}
         >
           {activeThumb ? (
             // When a preset is equipped its icon IS the button (fills it), so it's
@@ -168,7 +171,7 @@ const MultiNookPresets: React.FC = () => {
               className="w-full h-full object-cover"
             />
           ) : (
-            <Bookmark size={15} className={activePreset ? 'text-accent' : undefined} />
+            <Bookmark size={16} className={activePreset ? 'text-accent' : undefined} />
           )}
         </button>
       </Tooltip>

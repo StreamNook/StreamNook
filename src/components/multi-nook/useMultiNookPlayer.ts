@@ -441,8 +441,13 @@ export const useMultiNookPlayer = ({
       // stream's segment length, and the frag-count cap keeps the wait bounded so
       // it never hangs on the loading spinner. Non-LL only: the LL path starts in
       // MANIFEST_PARSED above.
+      //
+      // Three frags, not four: only a source with segments shorter than about
+      // 1.2 s reaches the cap before the seconds do, and that is TikTok's relay,
+      // whose one second segments already come with three seconds held back
+      // before the first playlist answers. A fourth frag only cost it a second.
       const START_CUSHION_SECONDS = 3.5;
-      const MAX_STARTUP_FRAGS = 4;
+      const MAX_STARTUP_FRAGS = 3;
 
       if (!isLowLatencyChannel) {
         hls.on(Hls.Events.FRAG_BUFFERED, () => {

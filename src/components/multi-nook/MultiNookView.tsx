@@ -24,6 +24,7 @@ import { ArrowUpFromLine } from 'lucide-react';
 import { MultiNookCell } from './MultiNookCell';
 import MultiNookToolbar from './MultiNookToolbar';
 import { MultiNookTutorial } from './MultiNookTutorial';
+import { MultiNookTileMenu } from './MultiNookTileMenu';
 import { usemultiNookStore } from '../../stores/multiNookStore';
 import { useTutorialStore } from '../../stores/tutorialStore';
 import { acquireChannel, releaseChannel } from '../../stores/chatConnectionStore';
@@ -418,6 +419,12 @@ export const MultiNookView: React.FC = () => {
           )}
         </div>
       </DndContext>
+
+      {/* Tile right-click menu. Mounted beside the grid rather than inside a
+          cell so it is not clipped by a tile's `overflow-hidden`, and so it
+          survives the cell unmounting under it (closing a stream from its own
+          menu is the ordinary case). */}
+      <MultiNookTileMenu />
     </div>
   );
 };

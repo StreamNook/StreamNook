@@ -1,5 +1,9 @@
+use crate::commands::streaming::StreamStartResult;
 use crate::models::settings::AppState;
-use crate::services::multi_nook_server::{MultiNookServer, TileProfile, TileRefresher};
+use crate::services::multi_nook_server::{
+    MultiNookServer, TileProfile, TilePromotion, TileRefresher,
+};
+use crate::services::stream_server::StreamServer;
 use crate::services::providers::source::PlaybackKind;
 use crate::services::providers::watch_urls::WatchTarget;
 use crate::services::twitch_resolver as tr;
@@ -83,6 +87,18 @@ pub async fn start_multi_nook(
         .await
         .map_err(|e| e.to_string())?;
 
+    // Keep what the resolve learned, so this tile can be handed to the solo
+    // player later without asking usher again. Costs one clone per tile start.
+    MultiNookServer::set_promotion(
+        &stream_id,
+        TilePromotion {
+            quality: r.quality.clone(),
+            available: r.available.clone(),
+            status: Some(r.status.clone()),
+        },
+    )
+    .await;
+
     // Tag the proxy URL when the tile's relay activated its LL-HLS origin (settled
     // inside start_proxy, before this point). The player must choose its hls.js mode
     // at construction, and riding the flag on the URL it already consumes keeps the
@@ -142,6 +158,18 @@ async fn start_provider_tile(
             )
             .await
             .map_err(|e| e.to_string())?;
+            MultiNookServer::set_promotion(
+                stream_id,
+                TilePromotion {
+                    quality: resolved.quality.clone(),
+                    available: crate::services::providers::hls_master::quality_names(
+                        &resolved.qualities,
+                    ),
+                    // No ad-source badge on a provider stream, so nothing to carry.
+                    status: None,
+                },
+            )
+            .await;
             // No `&ll=1`: the LL origin is Twitch-only and is not probed for this
             // profile, so the player must not select its low-latency mode.
             let proxy_url = format!(
@@ -327,6 +355,86 @@ pub async fn stop_all_multi_nooks() -> Result<(), String> {
         crate::services::stream_server::SOLO_STREAM_ID,
     );
     MultiNookServer::stop_all().await.map_err(|e| e.to_string())
+}
+
+/// Hand ONE grid tile to the solo player and tear the rest of the grid down.
+///
+/// The point is that nothing is resolved again. The tile's relay is already
+/// serving an upstream media playlist it fetched, authorized and (for Kick)
+/// signed; `promotion_target` reads that live url back out and the solo relay
+/// is pointed straight at it. No usher call, no GQL, no token mint, no
+/// entitlement probe: the expensive half of `start_stream` is skipped outright,
+/// which is the whole difference between this and closing the grid and starting
+/// the channel again.
+///
+/// Order is deliberate. The solo relay comes up FIRST and only then is the grid
+/// stopped, so a failure anywhere in here leaves the grid exactly as it was
+/// rather than half torn down with nothing playing.
+///
+/// Returns `None` when the tile has nothing to hand over: it never resolved, it
+/// was closed while this was in flight, or it is a YouTube tile, whose adapter
+/// serves its own local relay and never registers with `MultiNookServer`. The
+/// caller starts that channel the ordinary way instead.
+#[tauri::command]
+pub async fn promote_multi_nook_tile(
+    stream_id: String,
+) -> Result<Option<StreamStartResult>, String> {
+    let Some((upstream, promotion)) = MultiNookServer::promotion_target(&stream_id).await else {
+        debug!(
+            "[MultiNook] '{}' has no promotion target; caller falls back to a normal start",
+            stream_id
+        );
+        return Ok(None);
+    };
+
+    // The badge reads from here, exactly as the solo path sets it. A provider
+    // tile carries no status and leaves whatever the last Twitch stream wrote,
+    // which is the same thing `start_provider_stream` does.
+    let status = promotion.status.clone();
+    if let Some(ref s) = status {
+        crate::services::auth_proxy::set_status(s.clone());
+    }
+
+    // The relay re-probes the low-latency origin against this upstream, so the
+    // solo player picks its hls.js mode from a settled answer just as it does on
+    // a cold start. Probing is skipped for a non-Twitch upstream inside the
+    // relay itself (the origin only speaks Twitch's playlist shape).
+    let port = StreamServer::start_proxy_server(upstream)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Serving now, so the grid can go. Everything EXCEPT the tile we just
+    // promoted still has a relay to stop.
+    crate::services::youtube_dash::stop_all_except(crate::services::stream_server::SOLO_STREAM_ID)
+        .await;
+    crate::services::tiktok_relay::stop_all_except(
+        crate::services::stream_server::SOLO_STREAM_ID,
+    );
+    MultiNookServer::stop_all().await.map_err(|e| e.to_string())?;
+
+    // Register the solo session only once the relay is serving, matching
+    // `start_live`: the plugin protocol's "solo" stream id must always address a
+    // live relay.
+    if let Some(ref s) = status {
+        crate::services::stream_server::set_solo_session(Some(s.channel.clone()));
+    }
+
+    debug!(
+        "[MultiNook] '{}' promoted to the solo player on port {} without resolving again",
+        stream_id, port
+    );
+
+    Ok(Some(StreamStartResult {
+        url: crate::commands::streaming::local_player_url(port),
+        quality: promotion.quality,
+        mode: status.as_ref().map(|s| s.mode.clone()),
+        entitled: status.as_ref().map(|s| s.entitled).unwrap_or(false),
+        proxy_region: status.and_then(|s| s.proxy_region),
+        available: promotion.available,
+        clip_source: None,
+        vod: None,
+        kind: None,
+    }))
 }
 
 /// Get a list of active multi-stream IDs

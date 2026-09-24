@@ -1,8 +1,9 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
+import { patchSettings } from '../utils/settingsBroadcast';
 import { helixGet } from '../services/helix';
-import { useAppStore } from './AppStore';
-import { MultiNookSlot, MultiNookPresetChannel } from '../types';
+import { useAppStore, type StreamStartResult } from './AppStore';
+import { MultiNookSlot, MultiNookPresetChannel, TwitchStream } from '../types';
 import type { ProviderId } from '../types/providers';
 import { makeKey, parseKey } from '../utils/providerKey';
 import { canGridProvider, gridRefusal } from '../types/providers';
@@ -211,6 +212,17 @@ interface MultiNookState {
   setActivePresetId: (id: string | null) => Promise<void>;
   /** Stop and tear down every tile, leaving an empty grid (used by "Stop preset"). Stays in MultiNook. */
   clearAllSlots: () => Promise<void>;
+  /** Close every other tile and leave the grid watching this one channel in the
+   *  ordinary single-stream player.
+   *
+   *  The point is that the kept stream never stops. Its relay is already
+   *  serving an upstream the tile resolved when it opened, and
+   *  `promote_multi_nook_tile` points the solo relay at that same upstream, so
+   *  there is no resolve, no token mint and no spinner between the grid and the
+   *  player. A tile the backend cannot hand over that way (a YouTube tile
+   *  serves its own relay and never registers) falls back to an ordinary start,
+   *  which still works and merely costs the usual load. */
+  promoteSlotToSolo: (id: string) => Promise<void>;
   
   // Synchronization
   resyncAllSlots: () => void;
@@ -480,6 +492,107 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       broadcastMultiNookPresence(newSlots);
     }
     await get().saveSlots();
+  },
+
+  promoteSlotToSolo: async (id: string) => {
+    const keep = get().slots.find((s) => s.id === id);
+    if (!keep) return;
+
+    const provider = keep.provider ?? 'twitch';
+    const keepKey = slotKey(keep);
+
+    // Point the chat pane at the kept channel BEFORE anything is torn down.
+    // MultiNookView holds a background chat connection per visible tile and
+    // releases them all on unmount; ChatWidget holds the ACTIVE one separately.
+    // Making this tile the active one first means the solo widget inherits a
+    // connection whose refcount never reaches zero, so the room is never PARTed
+    // and rejoined and the backlog on screen survives the switch.
+    if (get().activeChatChannelId !== keepKey) {
+      set({ activeChatChannelId: keepKey });
+    }
+
+    // Hand the tile's live upstream to the solo relay. Rust stops the rest of
+    // the grid itself, but only once the solo relay is serving, so a failure
+    // here leaves the grid exactly as it was.
+    let preResolved: StreamStartResult | null = null;
+    try {
+      preResolved = await invoke<StreamStartResult | null>('promote_multi_nook_tile', {
+        streamId: id,
+      });
+    } catch (e) {
+      Logger.warn('[MultiNook] Could not promote tile, falling back to a normal start:', e);
+    }
+
+    // Every OTHER tile loses its watch registration. The kept channel keeps
+    // its own: startStream re-registers it, and unregistering here would
+    // briefly aim the heartbeat at nothing.
+    for (const slot of get().slots) {
+      if (slot.id !== id && slot.channelId) {
+        invoke('unregister_active_channel', { channelId: slot.channelId }).catch(() => {});
+      }
+    }
+
+    // The relays are already gone when promote succeeded; when it did not, the
+    // grid is still running and has to be stopped the ordinary way.
+    if (!preResolved) {
+      try {
+        await invoke('stop_all_multi_nooks');
+      } catch (e) {
+        Logger.error('[MultiNook] Failed to stop proxies while leaving for a single stream', e);
+      }
+    }
+
+    // What the player and chat know about this channel, from what the tile
+    // already had. startStream enriches it (and backfills the thumbnail), but
+    // seeding it here means the identity row is never blank.
+    const seed: TwitchStream = {
+      id: '',
+      user_id: keep.channelId || '',
+      user_name: keep.channelName || keep.channelLogin,
+      user_login: keep.channelLogin,
+      title: keep.title || '',
+      viewer_count: 0,
+      game_name: keep.gameName || '',
+      thumbnail_url: '',
+      profile_image_url: keep.profileImageUrl || '',
+      started_at: new Date().toISOString(),
+      ...(provider === 'twitch' ? {} : { provider }),
+    };
+
+    // Swap the view in ONE synchronous commit. `streamUrl` is set here rather
+    // than waiting for startStream because startStream resolves its stream info
+    // first and only then publishes; on the seamless path the picture is
+    // already playing, and leaving the grid up meanwhile (or dropping to Home
+    // for a frame) is the flicker this whole feature exists to avoid.
+    // startStream then re-sets the identical url, and VideoPlayer is keyed on
+    // it, so it does not remount.
+    if (preResolved) {
+      useAppStore.setState({
+        streamUrl: preResolved.url,
+        activeQuality: preResolved.quality,
+        availableQualities: preResolved.available ?? [],
+        playbackKind: (preResolved.kind as 'hls' | 'flv' | 'mp4') ?? 'hls',
+        currentStream: seed,
+        currentMediaType: 'live',
+        isHomeActive: false,
+      });
+    }
+    set({
+      isMultiNookActive: false,
+      slots: [],
+      activeChatChannelId: null,
+      activePresetId: null,
+      maximizedSlotId: null,
+      isAllMuted: false,
+    });
+    await get().saveSlots();
+
+    // Full session setup: EventSub, drops, rewind info, presence, chat. With
+    // `preResolved` it skips only the resolve; `skipChatRefresh` because the
+    // room this channel is in was joined by the grid and is still joined.
+    await useAppStore
+      .getState()
+      .startStream(keep.channelLogin, seed, !!preResolved, preResolved ?? undefined);
   },
 
   setActivePresetId: async (id: string | null) => {
@@ -1054,19 +1167,11 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
     const newState = !currentState;
     set({ isChatHidden: newState });
     
-    const appStore = useAppStore.getState();
-    const currentSettings = appStore.settings;
-    if (currentSettings) {
-      const newSettings = {
-        ...currentSettings,
-        multi_nook_chat_hidden: newState,
-      };
-      try {
-        await invoke('save_settings', { settings: newSettings });
-        useAppStore.setState({ settings: newSettings });
-      } catch (e) {
-        Logger.error('Failed to save multi_nook_chat_hidden state', e);
-      }
+    try {
+      await patchSettings({ multi_nook_chat_hidden: newState });
+      useAppStore.setState((s) => ({ settings: { ...s.settings, multi_nook_chat_hidden: newState } }));
+    } catch (e) {
+      Logger.error('Failed to save multi_nook_chat_hidden state', e);
     }
   },
 
@@ -1155,9 +1260,6 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
 
   saveSlots: async () => {
     // Save to settings.json via AppStore
-    const appStore = useAppStore.getState();
-    const currentSettings = appStore.settings;
-    
     // Strip ephemeral fields (proxy URL, load state, and the live stream title,
     // which would be stale the moment the streamer edits it)
     const cleanSlots = get().slots.map(s => {
@@ -1169,15 +1271,16 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       return cleaned as MultiNookSlot;
     });
     
-    const newSettings = {
-      ...currentSettings,
-      multi_nook_slots: cleanSlots,
-      multi_nook_active_preset_id: get().activePresetId ?? undefined,
-    };
+    const activePresetId = get().activePresetId ?? undefined;
 
     try {
-      await invoke('save_settings', { settings: newSettings });
-      useAppStore.setState({ settings: newSettings }); // Update local app store reference
+      await patchSettings({
+        multi_nook_slots: cleanSlots,
+        multi_nook_active_preset_id: activePresetId ?? null,
+      });
+      useAppStore.setState((s) => ({
+        settings: { ...s.settings, multi_nook_slots: cleanSlots, multi_nook_active_preset_id: activePresetId },
+      }));
     } catch (e) {
       Logger.error('Failed to save multi-nook slots to settings', e);
     }

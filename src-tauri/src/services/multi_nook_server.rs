@@ -32,6 +32,24 @@ pub enum TileProfile {
 pub type TileRefresher =
     Arc<dyn Fn() -> futures::future::BoxFuture<'static, Option<String>> + Send + Sync>;
 
+/// What a tile's resolve produced, kept so the tile can be handed to the SOLO
+/// player without resolving again. The upstream playlist itself lives in
+/// `StreamInstance::proxy_url` and is read alongside this (see
+/// `take_promotion_target`); this carries only what the resolve knew and the
+/// relay cannot re-derive: the quality menu and the entitlement decision the
+/// ad-source badge is drawn from.
+#[derive(Clone)]
+pub struct TilePromotion {
+    /// The quality the resolver actually served for this tile.
+    pub quality: String,
+    /// The quality menu discovered for it, so the solo player's selector is
+    /// populated without a second probe.
+    pub available: Vec<String>,
+    /// Entitlement / proxy decision. `None` for a non-Twitch tile, whose solo
+    /// path carries no ad-source badge either.
+    pub status: Option<crate::services::auth_proxy::PlaybackStatus>,
+}
+
 /// Represents a single stream proxy instance
 struct StreamInstance {
     handle: tokio::task::JoinHandle<()>,
@@ -52,6 +70,10 @@ struct StreamInstance {
     /// One re-sign at a time per tile. Everyone who queues behind the winner
     /// gets the winner's url rather than stampeding the platform.
     resign_lock: Arc<Mutex<()>>,
+    /// Set right after the tile resolves, read only when the tile is promoted
+    /// to the solo player. `None` until `set_promotion` runs, and for a tile
+    /// that failed to resolve at all.
+    promotion: Option<TilePromotion>,
 }
 
 pub struct MultiNookServer;
@@ -148,6 +170,7 @@ impl MultiNookServer {
                         profile,
                         refresher,
                         resign_lock: Arc::new(Mutex::new(())),
+                        promotion: None,
                     },
                 );
                 (port, origin)
@@ -246,6 +269,35 @@ impl MultiNookServer {
 
         debug!("[MultiNook] Stopped {} proxy servers", count);
         Ok(())
+    }
+
+    /// Record what this tile's resolve produced, so it can later be handed to
+    /// the solo player without resolving again. Called by `start_multi_nook`
+    /// once the relay is serving; a tile that is not in the registry (it was
+    /// closed while resolving) is silently skipped.
+    pub async fn set_promotion(stream_id: &str, promotion: TilePromotion) {
+        let mut registry = STREAM_REGISTRY.lock().await;
+        if let Some(instance) = registry.get_mut(stream_id) {
+            instance.promotion = Some(promotion);
+        }
+    }
+
+    /// Everything the solo player needs to take this tile over: the upstream
+    /// playlist the relay is currently serving, plus the resolve metadata.
+    ///
+    /// The upstream is read from `proxy_url` rather than from a copy taken at
+    /// start, because a Kick tile re-signs its url mid-session and a plugin can
+    /// swap it outright; the live value is the only one that still plays.
+    ///
+    /// Read-only: the tile keeps running. The caller stops the grid itself,
+    /// AFTER the solo relay is serving, so nothing is torn down on a path that
+    /// might still fail.
+    pub async fn promotion_target(stream_id: &str) -> Option<(String, TilePromotion)> {
+        let registry = STREAM_REGISTRY.lock().await;
+        let instance = registry.get(stream_id)?;
+        let promotion = instance.promotion.clone()?;
+        let upstream = instance.proxy_url.lock().await.clone()?;
+        Some((upstream, promotion))
     }
 
     /// Get the port for a specific stream

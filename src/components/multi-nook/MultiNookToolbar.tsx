@@ -149,116 +149,113 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
 
   return (
     <div className="relative z-10" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-      {/* Toolbar — also acts as the dock drop zone when dragging a visible stream */}
+      {/* The strip that carries MultiNook's own controls.
+
+          It paints NOTHING. It used to be a full-bleed `bg-surface/50` row with a
+          hard bottom border, which put a second horizontal bar in the old visual
+          language directly beneath the floating, glazed title bar: a
+          double-decker, with the lower deck flat and bordered. What reads as a
+          bar here is now only the two glaze clusters, in exactly the material
+          the title bar 40px above wears, floating over the app background.
+
+          It still RESERVES its height, and that is deliberate rather than
+          leftover. A tile's own chrome is anchored to the top of the tile
+          (identity on the left, follow/spotlight/dock/close on the right), so
+          clusters hovering over the first row would sit on top of the very
+          controls the pointer went there for. Reserving the strip costs 44px of
+          grid and buys no collision anywhere; see StreamNook_Floating_Title_Bar
+          for the same decision taken the other way, one level up, where nothing
+          was underneath to collide with.
+
+          Also still the dock drop zone: the whole strip accepts a dragged tile,
+          which is where the gesture has always been aimed. */}
       <div
         ref={setDockRef}
-        className={`
-          relative flex items-center justify-between px-4 py-2 backdrop-blur-md border-b shadow-sm
-          transition-all duration-300
-          ${isDragging && isOver
-            ? 'bg-accent/15 border-accent/50 shadow-[0_0_25px_rgba(var(--color-accent-rgb),0.2),0_2px_10px_rgba(var(--color-accent-rgb),0.15)]'
-            : isDragging
-              ? 'bg-surface/50 border-accent/30 shadow-[0_0_12px_rgba(var(--color-accent-rgb),0.08)]'
-              : 'bg-surface/50 border-borderSubtle'
-          }
-        `}
+        className="relative flex h-11 items-center justify-between bg-transparent px-3"
       >
-        {/* Animated shimmer overlay when dragging */}
+        {/* The drop target, drawn only while a tile is in the air.
+
+            It used to be a full-bleed shimmer sweeping the whole bar, in a
+            hardcoded violet that ignored the theme. With the bar itself gone
+            there is no surface for a sweep to travel across, so the target is
+            now a bounded outline sitting inside the strip's own gutter: a
+            dashed rule while the tile is merely airborne, a solid accent ring
+            once it is over the strip. Both derive from --color-accent, so a
+            theme change carries. */}
         {isDragging && (
           <div
-            className="absolute inset-0 pointer-events-none overflow-hidden rounded-[inherit]"
-            style={{ opacity: isOver ? 0.7 : 0.35 }}
+            aria-hidden
+            className={`
+              pointer-events-none absolute inset-x-2 inset-y-1 rounded-full
+              flex items-center justify-center
+              transition-[background-color,border-color,box-shadow] duration-200
+              ${isOver
+                ? 'border border-accent/60 bg-accent/10 shadow-[0_0_20px_rgba(var(--color-accent-rgb),0.12)_inset]'
+                : 'border border-dashed border-white/15'
+              }
+            `}
           >
-            <div
-              className="absolute inset-0"
-              style={{
-                background: 'linear-gradient(90deg, transparent 0%, rgba(167,139,250,0.35) 40%, rgba(167,139,250,0.5) 50%, rgba(167,139,250,0.35) 60%, transparent 100%)',
-                animation: 'dock-shimmer 1.5s ease-in-out infinite',
-              }}
-            />
+            {/* The label only when there is room for it. Docked pills occupy
+                the middle of the strip, which is the only place a centred
+                label can go, and a caption reading through a row of channel
+                names is worse than no caption: the outline alone already says
+                "target". */}
+            {minimizedSlots.length === 0 && (
+              <span
+                className={`text-[10px] font-bold uppercase tracking-widest transition-colors duration-200 ${
+                  isOver ? 'text-accent' : 'text-textMuted'
+                }`}
+              >
+                {isOver ? 'Release to dock' : 'Drag here to dock'}
+              </span>
+            )}
           </div>
         )}
 
-        {/* Pulsing border glow when dragging (not hovering) */}
-        {isDragging && !isOver && (
-          <div
-            className="absolute inset-0 pointer-events-none rounded-[inherit]"
-            style={{
-              boxShadow: '0 0 0 1px rgba(var(--color-accent-rgb), 0.2)',
-              animation: 'dock-pulse 1.5s ease-in-out infinite',
-            }}
-          />
-        )}
-
-        {/* Floating "Drop to dock" label */}
-        <div
-          className={`
-            absolute left-1/2 -translate-x-1/2 bottom-0 translate-y-full
-            px-3 py-1 rounded-b-md text-[10px] font-bold uppercase tracking-widest
-            transition-all duration-300 pointer-events-none z-20
-            ${isDragging && isOver
-              ? 'opacity-100 bg-accent/25 text-accent border border-t-0 border-accent/30 backdrop-blur-md shadow-lg'
-              : isDragging
-                ? 'opacity-70 bg-glass/60 text-textMuted border border-t-0 border-borderSubtle backdrop-blur-md'
-                : 'opacity-0'
-            }
-          `}
-        >
-          {isOver ? '↓ Release to dock' : '↑ Drag here to dock'}
-        </div>
-
-        <style>{`
-          @keyframes dock-shimmer {
-            0%, 100% { transform: translateX(-100%); }
-            50% { transform: translateX(100%); }
-          }
-          @keyframes dock-pulse {
-            0%, 100% { box-shadow: 0 0 0 1px rgba(167,139,250,0.15); }
-            50% { box-shadow: 0 0 0 2px rgba(167,139,250,0.35), 0 0 15px rgba(167,139,250,0.1); }
-          }
-        `}</style>
-
-        {/* Left side: Stats & Title */}
-        <div className="flex items-center gap-4 flex-1 overflow-hidden mr-4">
-          <div className="flex items-center gap-1.5 shrink-0">
+        {/* Leaving the grid, either way round: Browse keeps every tile playing
+            behind Home, Exit stops them. Two ways out of one surface, so they
+            share a cluster and a hairline separates them. */}
+        <div className="flex items-center gap-3 flex-1 overflow-hidden mr-4">
+          <div className="chrome-glaze titlebar-icon-group shrink-0">
             {slots.length > 0 ? (
               <>
-                <Tooltip content="Browse Streams (Keep Playing)" delay={200} side="bottom">
+                <Tooltip content="Browse without stopping the streams" delay={200} side="bottom">
                   <button
                     onClick={() => useAppStore.getState().toggleHome()}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-bold tracking-wide rounded-lg transition-all whitespace-nowrap glass-button text-textSecondary hover:text-white"
+                    className="titlebar-icon-btn gap-1.5 !px-2.5"
                   >
                     <ArrowLeft size={16} />
-                    <span>Browse</span>
+                    <span className="text-[12.5px] font-semibold">Browse</span>
                   </button>
                 </Tooltip>
-
-                <Tooltip content="Exit (Kill Streams)" delay={200} side="bottom">
+                <span className="mx-0.5 h-4 w-px bg-borderSubtle" aria-hidden />
+                <Tooltip content="Leave MultiNook and stop every stream" delay={200} side="bottom">
                   <button
                     onClick={toggleMultiNook}
-                    className="flex items-center justify-center w-[32px] h-[32px] rounded-lg transition-all glass-button text-textSecondary hover:text-red-400 hover:bg-red-500/10 shrink-0"
+                    className="titlebar-icon-btn hover:!text-error hover:!bg-error/10"
                   >
                     <X size={16} />
                   </button>
                 </Tooltip>
               </>
             ) : (
-              <Tooltip content="Close Grid Engine" delay={200} side="bottom">
+              <Tooltip content="Leave MultiNook" delay={200} side="bottom">
                 <button
                   onClick={toggleMultiNook}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-bold tracking-wide rounded-lg transition-all whitespace-nowrap glass-button text-textSecondary hover:text-white hover:text-red-400 hover:bg-red-500/10 group"
+                  className="titlebar-icon-btn gap-1.5 !px-2.5 group hover:!text-error hover:!bg-error/10"
                 >
-                  <ArrowLeft size={16} className="group-hover:-translate-x-0.5 transition-transform" />
-                  <span>Exit</span>
+                  <ArrowLeft size={16} className="transition-transform group-hover:-translate-x-0.5" />
+                  <span className="text-[12.5px] font-semibold">Exit</span>
                 </button>
               </Tooltip>
             )}
           </div>
 
+          {/* Docked streams live between the two clusters, scrolling if there
+              are more of them than fit. Still mounted and still playing; the
+              pill is how you bring one back. */}
           {(minimizedSlots.length > 0 || (slots.length === 0 && isTutorialDocked)) && (
-            <>
-              <div className="h-4 w-px bg-borderSubtle shrink-0" />
-              <div className="flex items-center gap-2 flex-1 overflow-x-auto scrollbar-none mask-edges">
+            <div className="flex items-center gap-2 flex-1 overflow-x-auto scrollbar-none mask-edges py-1">
                 {minimizedSlots.map((slot) => (
                   <DraggableDockPill
                     key={slot.id}
@@ -273,20 +270,26 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
                   <TutorialDockPill onUndock={() => setTutorialDocked(false)} />
                 )}
               </div>
-            </>
           )}
         </div>
 
-        {/* Right side: Add Stream & Controls */}
-        <div className="flex items-center gap-3 relative z-30">
+        {/* Everything that acts ON the grid, in one cluster wearing the title
+            bar's material. Three jobs, hairline-separated in the order you reach
+            for them: put a stream in (add, presets), fix the streams that are in
+            (resync, mute all), decide what is shown beside them (mod logs,
+            chat). The cluster is one surface so the eleven-ish controls read as
+            a toolkit rather than as a row of loose buttons. */}
+        <div className="chrome-glaze titlebar-icon-group relative z-30 shrink-0">
           {/* Add Stream — Collapsible search */}
           <div ref={searchContainerRef} className="relative">
+            {/* Collapsed, this is one more icon in the cluster and wears no
+                surface of its own: a glass button inside a glass cluster is two
+                materials arguing. Open, it becomes a real input and takes the
+                recessed field treatment, which is the cue that it now accepts
+                typing. */}
             <div className={`
               flex items-center rounded-full transition-all duration-300 overflow-hidden
-              ${isSearchOpen
-                ? 'w-56 glass-input'
-                : 'w-8 h-8 glass-button group cursor-pointer text-textSecondary hover:text-white'
-              }
+              ${isSearchOpen ? 'w-56 glass-input' : 'w-8 h-[30px]'}
             `}>
               {isSearchOpen ? (
                 <>
@@ -314,13 +317,17 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
                   )}
                 </>
               ) : (
-                <Tooltip content="Add Stream" delay={200} side="bottom">
+                <Tooltip
+                  content={slots.length >= 25 ? 'The grid is full (25 streams)' : 'Add a stream'}
+                  delay={200}
+                  side="bottom"
+                >
                   <button
                     onClick={() => {
                       if (slots.length < 25) setIsSearchOpen(true);
                     }}
                     disabled={slots.length >= 25}
-                    className="w-full h-full flex items-center justify-center transition-colors disabled:opacity-40"
+                    className="titlebar-icon-btn !min-w-0 w-full h-full disabled:opacity-40"
                   >
                     <Plus size={16} />
                   </button>
@@ -425,67 +432,60 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
             )}
           </div>
 
-          <div className="flex items-center gap-1.5 ml-2 border-l border-white/10 pl-2">
-            {/* Presets. Saved, named channel sets openable in one click */}
-            <MultiNookPresets />
+          {/* Presets. Saved, named channel sets openable in one click */}
+          <MultiNookPresets />
 
-            {/* Resync Toggle */}
-            <Tooltip content="Resynchronize Playback (Force Reload All)" delay={200} side="bottom">
-              <button
-                onClick={resyncAllSlots}
-                disabled={slots.length === 0}
-                className={`w-8 h-8 flex items-center justify-center transition-all duration-200 glass-button text-textSecondary hover:text-accent active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed`}
-              >
-                <RefreshCcw size={15} />
-              </button>
-            </Tooltip>
+          <span className="mx-0.5 h-4 w-px bg-borderSubtle" aria-hidden />
 
-            {/* Mute All Toggle — cuts audio on every tile at once. Per-tile mute
-                state is untouched, so unmuting restores the previous audio focus. */}
-            <Tooltip content={isAllMuted ? 'Unmute All' : 'Mute All'} delay={200} side="bottom">
-              <button
-                onClick={toggleAllMuted}
-                disabled={slots.length === 0}
-                aria-pressed={isAllMuted}
-                className={`w-8 h-8 flex items-center justify-center transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${
-                  isAllMuted
-                    ? 'glass-button-active text-error drop-shadow-md'
-                    : 'glass-button text-textSecondary hover:text-error'
-                }`}
-              >
-                {isAllMuted ? <VolumeX size={15} /> : <Volume2 size={15} />}
-              </button>
-            </Tooltip>
-
-            {/* Mod View Toggle — shows/hides the Moderator Logs pane (persisted) */}
-            <Tooltip content={showModLogs ? 'Hide Mod View' : 'Show Mod View'} delay={200} side="bottom">
-              <button
-                onClick={toggleModLogs}
-                aria-pressed={showModLogs}
-                className={`w-8 h-8 flex items-center justify-center transition-all duration-200 ${
-                  showModLogs
-                    ? 'glass-button-active text-success drop-shadow-md'
-                    : 'glass-button text-error/80 hover:text-success'
-                }`}
-              >
-                <ShieldCheck size={15} />
-              </button>
-            </Tooltip>
-
-            {/* Chat Toggle */}
-          <Tooltip content={isChatHidden ? 'Show Chat' : 'Hide Chat'} delay={200} side="bottom">
+          {/* Resync — force every tile to reload so co-streams line up again. */}
+          <Tooltip content="Resync playback on every stream" delay={200} side="bottom">
             <button
-              onClick={toggleChatHidden}
-              className={`w-8 h-8 flex items-center justify-center transition-all duration-200 ${
-                isChatHidden
-                  ? 'glass-button-active text-accent drop-shadow-md'
-                  : 'glass-button text-textSecondary hover:text-error hover:bg-error/10'
-              }`}
+              onClick={resyncAllSlots}
+              disabled={slots.length === 0}
+              className="titlebar-icon-btn hover:!text-accent active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {isChatHidden ? <MessageSquareOff size={15} /> : <MessageSquare size={15} />}
+              <RefreshCcw size={16} />
             </button>
           </Tooltip>
-          </div>
+
+          {/* Mute All Toggle — cuts audio on every tile at once. Per-tile mute
+              state is untouched, so unmuting restores the previous audio focus. */}
+          <Tooltip content={isAllMuted ? 'Unmute every stream' : 'Mute every stream'} delay={200} side="bottom">
+            <button
+              onClick={toggleAllMuted}
+              disabled={slots.length === 0}
+              aria-pressed={isAllMuted}
+              className={`titlebar-icon-btn disabled:opacity-40 disabled:cursor-not-allowed ${
+                isAllMuted ? 'is-active !text-error' : 'hover:!text-error'
+              }`}
+            >
+              {isAllMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+            </button>
+          </Tooltip>
+
+          <span className="mx-0.5 h-4 w-px bg-borderSubtle" aria-hidden />
+
+          {/* Mod View Toggle — shows/hides the Moderator Logs pane (persisted) */}
+          <Tooltip content={showModLogs ? 'Hide mod logs' : 'Show mod logs'} delay={200} side="bottom">
+            <button
+              onClick={toggleModLogs}
+              aria-pressed={showModLogs}
+              className={`titlebar-icon-btn ${showModLogs ? 'is-active !text-success' : 'hover:!text-success'}`}
+            >
+              <ShieldCheck size={16} />
+            </button>
+          </Tooltip>
+
+          {/* Chat Toggle */}
+          <Tooltip content={isChatHidden ? 'Show chat' : 'Hide chat'} delay={200} side="bottom">
+            <button
+              onClick={toggleChatHidden}
+              aria-pressed={isChatHidden}
+              className={`titlebar-icon-btn ${isChatHidden ? 'is-active' : 'hover:!text-error'}`}
+            >
+              {isChatHidden ? <MessageSquareOff size={16} /> : <MessageSquare size={16} />}
+            </button>
+          </Tooltip>
 
         </div>
       </div>
@@ -522,8 +522,13 @@ const DraggableDockPill: React.FC<{
       <div
         ref={setNodeRef}
         style={style}
+        // Glaze, not glass. The pill sits between the two glaze clusters, so a
+        // flat glass button here put a third material in a strip that is only
+        // 44px tall. `--control` is the variant for a glazed surface that IS
+        // the button: it lifts under the pointer instead of relying on a
+        // separate hover fill.
         className={`
-          group flex items-center gap-2 pl-1 pr-1 py-1 rounded-full glass-button
+          group flex h-[30px] items-center gap-2 pl-1 pr-1 chrome-glaze chrome-glaze--control
           cursor-grab active:cursor-grabbing
           transition-all duration-300 shrink-0 touch-none
           ${isPillDragging
@@ -588,9 +593,11 @@ const TutorialDockPill: React.FC<{
       <div
         ref={setNodeRef}
         style={style}
+        // Same material as a real dock pill, tinted so the tutorial's stand-in
+        // is obviously not one of your streams.
         className={`
-          group flex items-center gap-2 pl-1 pr-1 py-1 rounded-full glass-button
-          cursor-grab active:cursor-grabbing border-emerald-400/30 bg-emerald-400/10
+          group flex h-[30px] items-center gap-2 pl-1 pr-1 chrome-glaze chrome-glaze--control
+          cursor-grab active:cursor-grabbing ring-1 ring-emerald-400/30
           transition-all duration-300 shrink-0 touch-none
           ${isDragging
             ? 'opacity-80 scale-105 shadow-[0_0_20px_color-mix(in_srgb,var(--color-success)_30%,transparent)] ring-1 ring-emerald-400'

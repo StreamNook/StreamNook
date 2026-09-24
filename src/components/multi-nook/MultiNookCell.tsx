@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { MultiNookSlot } from '../../types';
 import { useMultiNookPlayer } from './useMultiNookPlayer';
 import { usemultiNookStore } from '../../stores/multiNookStore';
+import { useContextMenuStore } from '../../stores/contextMenuStore';
 import { useAppStore } from '../../stores/AppStore';
 import { buildProviderUrl } from '../../utils/streamProvider';
 import { useMediaGlow } from '../../utils/mediaGlow';
@@ -399,6 +400,35 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
 
   const combinedStyle = { ...style, ...customStyle };
 
+  // Right-click anywhere on the tile that is not a control. The menu takes a
+  // channel the way every other menu in the app does, so the slot's cached
+  // identity is shaped into one here; the tile actions address the SLOT and
+  // ride along as `slotId`, because two tiles can be the same channel on two
+  // platforms and only the slot id tells them apart.
+  const handleContextMenu = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('button') || target.closest('.plyr__controls') || target.closest('.plyr__menu')) {
+      return;
+    }
+    useContextMenuStore.getState().openTileMenu(
+      e,
+      {
+        id: '',
+        user_id: channelId || '',
+        user_name: channelName || channelLogin,
+        user_login: channelLogin,
+        title: title || '',
+        viewer_count: 0,
+        game_name: slot.gameName || '',
+        thumbnail_url: '',
+        profile_image_url: profileImageUrl || '',
+        started_at: new Date().toISOString(),
+        ...((provider ?? 'twitch') === 'twitch' ? {} : { provider }),
+      },
+      id,
+    );
+  };
+
   const glassButton = 'flex items-center justify-center p-1.5 glass-button rounded-lg';
 
   return (
@@ -408,6 +438,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
       transition={isDragging ? { duration: 0 } : { type: 'spring', stiffness: 350, damping: 30 }}
       ref={setRefs}
       style={combinedStyle}
+      onContextMenu={handleContextMenu}
       onClick={(e) => {
         // Ignore clicks on buttons, tools, or plyr control sliders.
         const target = e.target as HTMLElement;

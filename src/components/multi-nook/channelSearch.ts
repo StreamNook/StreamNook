@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { searchPlatforms } from '../../services/platformSearch';
 import { TwitchStream } from '../../types';
 import { useAppStore } from '../../stores/AppStore';
 import { useFollowsStore } from '../../stores/followsStore';
@@ -243,51 +243,39 @@ export function useChannelSearch({ excludeKeys, providers = ['twitch'] }: Channe
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
 
     setIsSearching(true);
-    searchTimeoutRef.current = setTimeout(async () => {
+    searchTimeoutRef.current = setTimeout(() => {
       const seq = ++requestSeq.current;
       const raw = searchInput.trim();
-      // Every platform settles INDEPENDENTLY. Kick's client times out at 12s and
-      // YouTube's at 15s, and both fail often enough (Cloudflare, expired
-      // session) that an all-or-nothing await would blank the whole picker,
-      // including the Twitch results that already came back.
-      const [twitchRows, ...providerRows] = await Promise.all([
-        wantsTwitch
-          ? (invoke('search_channels', { query: raw }) as Promise<TwitchStream[]>).catch((err) => {
-              Logger.error('channel search failed:', err);
-              return [] as TwitchStream[];
-            })
-          : Promise.resolve([] as TwitchStream[]),
-        ...searchProviders.map((p) =>
-          invoke<{ streams: TwitchStream[] }>('provider_search', { provider: p, query: raw })
-            .then((page) => (page?.streams ?? []).map((r) => resultToItem(r, p)))
-            // LOGGED, not swallowed. This catch only fires when the call actually
-            // REJECTS, never on an empty result, so it cannot become per-keystroke
-            // noise for a platform that simply found nothing.
-            //
-            // It was silent, and that made a failing platform indistinguishable
-            // from one that legitimately matched nothing: "YouTube results never
-            // appear" produced no log line of any kind, so there was no way to
-            // tell which. The comment directly above already said these fail often
-            // (Cloudflare, expired session), which is precisely why the failure
-            // needs to be visible rather than absorbed.
-            .catch((err) => {
-              Logger.error(`${p} channel search failed:`, err);
-              return [] as ChannelItem[];
-            }),
-        ),
-      ]);
-
-      // A slower platform answering an earlier keystroke must not overwrite a
-      // newer result set.
-      if (seq !== requestSeq.current) return;
-
-      setSearchResults(
-        rankResults(
-          (twitchRows ?? []).slice(0, 8).map((r) => resultToItem(r, 'twitch')),
-          providerRows.flat(),
-        ),
-      );
-      setIsSearching(false);
+      // Rust searches every platform at once and hands back each one's rows as
+      // it answers. Kick's client times out at 12s and YouTube's at 15s, and both
+      // fail often enough (Cloudflare, expired session) that waiting on all of
+      // them would hold back the Twitch results that already came back.
+      const platforms: ProviderId[] = [...(wantsTwitch ? (['twitch'] as ProviderId[]) : []), ...searchProviders];
+      const found = new Map<ProviderId, ChannelItem[]>();
+      void searchPlatforms(raw, platforms, (batch) => {
+        // A slower platform answering an earlier keystroke must not overwrite a
+        // newer result set.
+        if (seq !== requestSeq.current) return;
+        // LOGGED, not swallowed: an error here means the platform failed, never
+        // that it matched nothing, so "YouTube results never appear" leaves a
+        // line saying which.
+        if (batch.error) Logger.error(`${batch.provider} channel search failed:`, batch.error);
+        const rows = batch.provider === 'twitch' ? batch.streams.slice(0, 8) : batch.streams;
+        found.set(
+          batch.provider,
+          rows.map((r) => resultToItem(r, batch.provider)),
+        );
+        setSearchResults(
+          rankResults(
+            found.get('twitch') ?? [],
+            searchProviders.flatMap((p) => found.get(p) ?? []),
+          ),
+        );
+      })
+        .catch((err) => Logger.error('channel search failed:', err))
+        .finally(() => {
+          if (seq === requestSeq.current) setIsSearching(false);
+        });
     }, 300);
 
     return () => {

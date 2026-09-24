@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { invoke } from '@tauri-apps/api/core';
+import { patchSettings } from '../utils/settingsBroadcast';
 import { useAppStore } from './AppStore';
 import { usemultiNookStore } from './multiNookStore';
 import { MultiNookPreset, MultiNookPresetChannel, MultiNookPresetIcon, MultiNookSlot } from '../types';
@@ -79,14 +79,11 @@ export const useMultiNookPresetsStore = create<MultiNookPresetsState>((set, get)
 
   persist: async (presets) => {
     set({ presets });
-    // Mirror multiNookStore.saveSlots: read the freshest settings, swap only this
-    // one key, and write through. Unknown keys round-trip via the Rust `extra`
-    // catch-all, so presets persist without a backend struct change.
-    const currentSettings = useAppStore.getState().settings;
-    const newSettings = { ...currentSettings, multi_nook_presets: presets };
+    // Write this one key. Unknown keys round-trip via the Rust `extra` catch-all,
+    // so presets persist without a backend struct change.
     try {
-      await invoke('save_settings', { settings: newSettings });
-      useAppStore.setState({ settings: newSettings });
+      await patchSettings({ multi_nook_presets: presets });
+      useAppStore.setState((s) => ({ settings: { ...s.settings, multi_nook_presets: presets } }));
     } catch (e) {
       Logger.error('[MultiNookPresets] Failed to persist presets to settings', e);
     }
