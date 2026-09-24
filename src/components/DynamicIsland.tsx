@@ -2,17 +2,17 @@ import { Fragment, useState, useEffect, useLayoutEffect, useRef, useCallback } f
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Bell, Radio, MessageCircle, User, Download, Award, Check, CheckCheck, Info, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
-import { X, SpeakerSlash, Trash, PuzzlePiece, Package } from 'phosphor-react';
+import { X, SpeakerSlash, Trash, PuzzlePiece, Package, Gift, Sparkle } from 'phosphor-react';
 import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../stores/AppStore';
+import { requestChangelog } from '../utils/changelogEvents';
 import { Logger } from '../utils/logger';
 import { formatBadgeDateInfo } from '../utils/badgeWindow';
 import { windowStatusAt, type WindowRun } from '../services/badgeStanding';
-import { playSound, type SoundId } from '../utils/notificationSound';
+import { playNotificationSound as playGatedNotificationSound } from '../utils/notificationSound';
 import { liveActivityText } from '../utils/liveActivity';
 import { Tooltip } from './ui/Tooltip';
-import { parseKey } from '../utils/providerKey';
 import { ProviderIcon } from './overlay/ProviderIcon';
 import type { ProviderId } from '../types/providers';
 import type {
@@ -24,6 +24,10 @@ import type {
     ChannelPointsNotificationData,
     BadgeNotificationData,
     SystemNotificationData,
+    GiftSubNotificationData,
+    TwitchRewardNotificationData,
+    MembershipGiftNotificationData,
+    WhisperUpdate,
 } from '../types';
 
 const MAX_NOTIFICATIONS = 20;
@@ -34,18 +38,26 @@ const CACHE_EXPIRY_DAYS = 7;
 // Kept >= the live preview hold (8s) so the entry outlasts its own preview.
 const TEST_NOTIFICATION_TTL_MS = 8000;
 
-/** How long the same channel is suppressed after a go-live announcement.
- *  Module scope, not component state: the listener must not re-arm on every
- *  render, and there is only ever one Dynamic Island. */
-const GO_LIVE_DEDUPE_MS = 5 * 60_000;
-const recentGoLive = new Map<string, number>();
 
-/** How long a live entry stays open to absorb the same channel on another
- *  platform. Generous on purpose: a multicast rarely starts everywhere at once,
- *  and two rows an hour apart are two events, not one. */
-const CROSS_PLATFORM_MERGE_MS = 10 * 60_000;
-/** channel (platform-free) -> the live entry currently standing for it. */
-const openLiveEntries = new Map<string, { id: string; providers: ProviderId[]; at: number }>();
+interface TwitchRewardFromBackend {
+    id: string;
+    kind: 'badge' | 'drop';
+    body_plain: string;
+    body_spans: { text: string; bold: boolean }[];
+    created_at: string;
+    thumbnail_url: string;
+    action_url: string | null;
+}
+
+interface GiftSubFromBackend {
+    id: string;
+    body_plain: string;
+    body_spans: { text: string; bold: boolean }[];
+    created_at: string;
+    thumbnail_url: string;
+    channel_login: string | null;
+    action_url: string | null;
+}
 
 interface LiveNotificationFromBackend {
     streamer_name: string;
@@ -60,17 +72,12 @@ interface LiveNotificationFromBackend {
      *  favorites sweep, which has its own setting: a channel you favorited but
      *  don't follow must not be silenced by the follows toggle, or the reverse. */
     source?: string;
-}
-
-interface WhisperFromBackend {
-    from_user_id: string;
-    from_user_login: string;
-    from_user_name: string;
-    to_user_id: string;
-    to_user_login: string;
-    to_user_name: string;
-    whisper_id: string;
-    text: string;
+    /** From Rust's go-live gate (services/live_announce.rs), which has already
+     *  dropped repeats: the entry this is, every platform the person is live
+     *  on, and the open entry it joins when it is another platform's go-live. */
+    notification_id: string;
+    providers: ProviderId[];
+    merge_into: string | null;
 }
 
 interface BundleUpdateStatus {
@@ -80,6 +87,7 @@ interface BundleUpdateStatus {
     download_url: string | null;
     bundle_name: string | null;
     download_size: string | null;
+    releases_behind?: number | null;
 }
 
 interface DropClaimedEvent {
@@ -89,26 +97,14 @@ interface DropClaimedEvent {
     benefit_image_url?: string;
 }
 
-interface ChannelPointsEarnedEvent {
-    channel_id: string | null;
-    channel_login: string | null;
-    channel_display_name: string | null;
-    points: number;
-    reason: string;
-    balance: number;
-}
-
-// Clustering state for channel points (batching rapid events)
-interface ClusteredChannelPoints {
-    totalPoints: number;
-    events: Array<{
-        points: number;
-        reason: string;
-        channel_name: string | null;
-        timestamp: number;
-    }>;
-    lastUpdate: number;
-    lastBalance?: number; // Track the most recent balance
+/** A burst of channel-points earns, gathered by Rust
+ *  (services/channel_points_summary.rs). Channels are busiest first. */
+interface ChannelPointsSummary {
+    total_points: number;
+    channels: Array<{ name: string; points: number }>;
+    reasons: Array<{ name: string; points: number }>;
+    first_reason: string;
+    last_balance: number | null;
 }
 
 // Cache helpers
@@ -166,6 +162,12 @@ const getPreviewText = (n: DynamicIslandNotification): string => {
         }
         case 'badge':
             return (n.data as BadgeNotificationData).badge_name;
+        case 'gift_sub':
+            return (n.data as GiftSubNotificationData).body_plain;
+        case 'twitch_reward':
+            return (n.data as TwitchRewardNotificationData).body_plain;
+        case 'membership_gift':
+            return 'You were given a StreamNook membership';
         case 'system':
             return (n.data as SystemNotificationData).message;
         default:
@@ -205,6 +207,22 @@ const renderPreviewIcon = (n: DynamicIslandNotification): React.ReactNode => {
             );
         case 'badge':
             return <Award size={11} className="text-cyan-400 flex-shrink-0" />;
+        case 'gift_sub': {
+            // The thumbnail is the gifter's avatar, so it wins over the glyph
+            // for the same reason every other row prefers a face.
+            const d = n.data as GiftSubNotificationData;
+            return d.thumbnail_url
+                ? <img src={d.thumbnail_url} alt="" className="w-4 h-4 rounded-full object-cover flex-shrink-0" />
+                : <Gift size={11} className="text-pink-400 flex-shrink-0" />;
+        }
+        case 'twitch_reward': {
+            const d = n.data as TwitchRewardNotificationData;
+            return d.thumbnail_url
+                ? <img src={d.thumbnail_url} alt="" className="w-4 h-4 rounded object-contain flex-shrink-0" />
+                : <Award size={11} className="text-cyan-400 flex-shrink-0" />;
+        }
+        case 'membership_gift':
+            return <Sparkle size={11} className="text-amber-400 flex-shrink-0" weight="fill" />;
         case 'system': {
             const d = n.data as SystemNotificationData;
             // Same order the row uses, for the same reason: a face beats a
@@ -248,8 +266,7 @@ const DynamicIsland = () => {
         { left: number; top: number; width: number; height: number; cover: number; radius: number } | null
     >(null);
     const previewTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-    const updateCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
-    
+
     // Track current time for "X ago" formatting - updated every 30 seconds
     // This avoids calling Date.now() during render (impure function)
     const [now, setNow] = useState(() => Date.now());
@@ -260,7 +277,7 @@ const DynamicIsland = () => {
 
     // Actions are stable, so read them without subscribing; only the two state
     // fields drive re-renders now (this was a whole-store subscription).
-    const { startStream, openWhisperWithUser, openSettings, addToast, setShowDropsOverlay, setShowBadgesOverlay, setUpdateInfo } = useAppStore.getState();
+    const { startStream, openWhisperWithUser, openSettings, addToast, setShowDropsOverlay, setShowBadgesOverlay } = useAppStore.getState();
     const settings = useAppStore((s) => s.settings);
     const isSettingsOpen = useAppStore((s) => s.isSettingsOpen);
 
@@ -359,9 +376,15 @@ const DynamicIsland = () => {
     const showFavoriteDropsNotifications = settings.live_notifications?.show_favorite_drops_notifications ?? true;
     const showChannelPointsNotifications = settings.live_notifications?.show_channel_points_notifications ?? true;
     const showBadgeNotifications = settings.live_notifications?.show_badge_notifications ?? true;
+    const showGiftSubNotifications = settings.live_notifications?.show_gift_sub_notifications ?? true;
+    const showTwitchRewardNotifications = settings.live_notifications?.show_twitch_reward_notifications ?? true;
     const useDynamicIsland = settings.live_notifications?.use_dynamic_island ?? true;
     const useToast = settings.live_notifications?.use_toast ?? true;
-    const quickUpdateOnToast = settings.live_notifications?.quick_update_on_toast ?? false;
+    // `quick_update_on_toast` used to be read here and used in no branch, while
+    // its Settings row promised "clicking the update toast starts installing
+    // right away". There is no update toast (removed deliberately, see
+    // checkForUpdates), so the toggle configured nothing, and the row is gone.
+    // The install action people actually needed lives in the changelog popup.
 
     // Save notifications to cache whenever they change
     useEffect(() => {
@@ -434,7 +457,7 @@ const DynamicIsland = () => {
     // toast path uses) so the notification-center sound honors the user's chosen
     // Sound Style instead of a hardcoded tone, and reuses one AudioContext.
     const playNotificationSound = useCallback(() => {
-        playSound((settings.live_notifications?.sound_type as SoundId | undefined) ?? 'boop');
+        playGatedNotificationSound(settings.live_notifications?.sound_type);
     }, [settings.live_notifications?.sound_type]);
 
     // Send native Windows desktop notification (disabled - plugin not installed)
@@ -492,83 +515,38 @@ const DynamicIsland = () => {
         return () => { unlisten.then((fn) => fn()); };
     }, [addNotification, notificationsEnabled, useDynamicIsland]);
 
-    // Check for updates periodically
-    const checkForUpdates = useCallback(async () => {
-        try {
-            const status = await invoke('check_for_bundle_update') as BundleUpdateStatus;
-            setUpdateInfo(
-                status.update_available
-                    ? { current_version: status.current_version, latest_version: status.latest_version }
-                    : null
-            );
-
-            // Stop here if notification surfaces are disabled. The passive
-            // title-bar indicator still surfaces via setUpdateInfo above.
-            if (!notificationsEnabled || !showUpdateNotifications) return;
-
-            if (status.update_available) {
-                // Check if we already have an update notification for this version
-                const existingUpdateNotification = notifications.find(
-                    n => n.type === 'update' &&
-                        (n.data as UpdateNotificationData).latest_version === status.latest_version
-                );
-
-                if (!existingUpdateNotification) {
-                    // Add to Dynamic Island if enabled
-                    if (useDynamicIsland) {
-                        const notification: DynamicIslandNotification = {
-                            id: `update-${status.latest_version}-${Date.now()}`,
-                            type: 'update',
-                            timestamp: Date.now(),
-                            read: false,
-                            data: {
-                                current_version: status.current_version,
-                                latest_version: status.latest_version,
-                                has_update: true,
-                            } as UpdateNotificationData,
-                        };
-
-                        addNotification(notification);
-                    }
-
-                    // No toast for available updates. The title-bar cog morphs
-                    // into a green download button when setUpdateInfo above runs,
-                    // which is a less noisy passive signal that the user can act on
-                    // at their own pace.
-
-                    if (soundEnabled) {
-                        playNotificationSound();
-                    }
-
-                    // Send native notification for updates
-                    sendNativeNotification(
-                        'Update Available',
-                        `StreamNook v${status.latest_version} is ready to download`
-                    );
-                }
-            }
-        } catch (error) {
-            Logger.warn('Could not check for updates:', error);
-        }
-    }, [notificationsEnabled, showUpdateNotifications, notifications, addNotification, soundEnabled, playNotificationSound, useDynamicIsland, useToast, quickUpdateOnToast, addToast, openSettings, sendNativeNotification, setUpdateInfo]);
-
-    // Check for updates on mount and periodically (every 30 minutes)
+    // Updates: Rust checks shortly after start and every half hour
+    // (services/update_watch.rs) and says when a version is new enough to
+    // announce (once per version, across restarts). The title-bar indicator is
+    // App's listener; this adds the notification-centre entry.
     useEffect(() => {
-        const initialTimeout = setTimeout(() => {
-            checkForUpdates();
-        }, 5000);
-
-        updateCheckIntervalRef.current = setInterval(() => {
-            checkForUpdates();
-        }, 30 * 60 * 1000);
-
-        return () => {
-            clearTimeout(initialTimeout);
-            if (updateCheckIntervalRef.current) {
-                clearInterval(updateCheckIntervalRef.current);
+        const unlisten = listen<{ status: BundleUpdateStatus; announce: boolean }>('update://status', (event) => {
+            const { status, announce } = event.payload;
+            if (!announce || !notificationsEnabled || !showUpdateNotifications) return;
+            if (useDynamicIsland) {
+                addNotification({
+                    id: `update-${status.latest_version}-${Date.now()}`,
+                    type: 'update',
+                    timestamp: Date.now(),
+                    read: false,
+                    data: {
+                        current_version: status.current_version,
+                        latest_version: status.latest_version,
+                        has_update: true,
+                    } as UpdateNotificationData,
+                });
             }
+            // No toast for available updates: the title-bar cog turning into a
+            // download button is the quieter signal the user acts on.
+            if (soundEnabled) {
+                playNotificationSound();
+            }
+            sendNativeNotification('Update Available', `StreamNook v${status.latest_version} is ready to download`);
+        });
+        return () => {
+            unlisten.then((fn) => fn());
         };
-    }, [checkForUpdates]);
+    }, [notificationsEnabled, showUpdateNotifications, addNotification, soundEnabled, playNotificationSound, useDynamicIsland, sendNativeNotification]);
 
     // Listen for live notifications
     useEffect(() => {
@@ -585,24 +563,6 @@ const DynamicIsland = () => {
                 : showLiveNotifications;
             if (!typeEnabled) return;
 
-            // A channel you both follow AND favorite is announced by BOTH
-            // watchers, so without this it pops twice. Suppressing a repeat of
-            // the same channel for a few minutes also damps a stream that drops
-            // and comes straight back, which used to announce itself again.
-            // Test notifications are exempt: the point of the button is that it
-            // fires every time it is pressed.
-            if (!data.is_test) {
-                const now = Date.now();
-                const key = data.streamer_login.toLowerCase();
-                const last = recentGoLive.get(key);
-                if (last !== undefined && now - last < GO_LIVE_DEDUPE_MS) return;
-                recentGoLive.set(key, now);
-                // Bounded: without a sweep this grows for the life of the session.
-                for (const [k, t] of recentGoLive) {
-                    if (now - t >= GO_LIVE_DEDUPE_MS) recentGoLive.delete(k);
-                }
-            }
-
             // Test notifications mirror whichever surfaces the user has enabled
             // so the "Test" button previews their actual setup:
             //  - Dynamic Island on -> drop a dummy entry in the notification
@@ -613,7 +573,7 @@ const DynamicIsland = () => {
             // toast popups off.
             if (data.is_test) {
                 if (useDynamicIsland) {
-                    const testId = `live-test-${Date.now()}`;
+                    const testId = data.notification_id;
                     addNotification({
                         id: testId,
                         type: 'live',
@@ -628,6 +588,7 @@ const DynamicIsland = () => {
                             stream_title: data.stream_title,
                             is_live: true,
                             is_test: true,
+                            providers: data.providers,
                         } as LiveNotificationData,
                     });
                     setTimeout(() => {
@@ -645,42 +606,24 @@ const DynamicIsland = () => {
 
             // Add to Dynamic Island if enabled (real notifications only)
             if (useDynamicIsland) {
-                // `streamer_login` is a bare login for Twitch and a composite
-                // `provider:channel` key for everyone else (see the emitter in
-                // favorite_live_service.rs), so the two key spaces this app
-                // keeps apart meet right here. `parseKey` is the seam between
-                // them: it hands back the platform and the platform-FREE
-                // channel, and the channel is what a person means when they say
-                // "xQc went live". That is the only thing worth merging on.
-                const { provider, channel } = parseKey(data.streamer_login);
-                const now = Date.now();
-
-                // Sweep first: unbounded otherwise, and a stale entry would let
-                // a go-live an hour later silently graft onto the old row.
-                for (const [k, v] of openLiveEntries) {
-                    if (now - v.at >= CROSS_PLATFORM_MERGE_MS) openLiveEntries.delete(k);
-                }
-
-                const open = openLiveEntries.get(channel);
-                if (open && !open.providers.includes(provider)) {
+                if (data.merge_into) {
                     // Same person, another platform. One row, two marks.
-                    open.providers = [...open.providers, provider];
-                    open.at = now;
+                    const mergeId = data.merge_into;
                     setNotifications(prev => prev.map(n =>
-                        n.id === open.id
+                        n.id === mergeId
                             ? {
                                 ...n,
                                 // Unread again: something new happened on it.
                                 read: false,
-                                data: { ...(n.data as LiveNotificationData), providers: open.providers },
+                                data: { ...(n.data as LiveNotificationData), providers: data.providers },
                             }
                             : n,
                     ));
-                } else if (!open) {
-                    const notification: DynamicIslandNotification = {
-                        id: `live-${now}-${data.streamer_login}`,
+                } else {
+                    addNotification({
+                        id: data.notification_id,
                         type: 'live',
-                        timestamp: now,
+                        timestamp: Date.now(),
                         read: false,
                         data: {
                             streamer_name: data.streamer_name,
@@ -690,11 +633,9 @@ const DynamicIsland = () => {
                             game_image: data.game_image,
                             stream_title: data.stream_title,
                             is_live: true,
-                            providers: [provider],
+                            providers: data.providers,
                         } as LiveNotificationData,
-                    };
-                    openLiveEntries.set(channel, { id: notification.id, providers: [provider], at: now });
-                    addNotification(notification);
+                    });
                 }
             }
 
@@ -724,20 +665,22 @@ const DynamicIsland = () => {
 
     // Listen for whisper notifications
     useEffect(() => {
-        const unlisten = listen<WhisperFromBackend>('whisper-received', async (event) => {
+        // Rust records each incoming whisper before announcing it, and the
+        // announcement already carries the sender's picture.
+        const unlisten = listen<WhisperUpdate>('whisper-conversation-updated', (event) => {
             // Check if notifications are enabled
             if (!notificationsEnabled || !showWhisperNotifications) return;
 
-            const data = event.payload;
-
-            // Get profile image for the sender
-            let profileImageUrl: string | undefined;
-            try {
-                const userInfo = await invoke<{ profile_image_url?: string }>('get_user_by_id', { userId: data.from_user_id });
-                profileImageUrl = userInfo.profile_image_url;
-            } catch {
-                // Ignore error, profile image is optional
-            }
+            const whisper = event.payload.message;
+            if (!whisper || whisper.is_sent) return;
+            const data = {
+                from_user_id: whisper.from_user_id,
+                from_user_login: whisper.from_user_login,
+                from_user_name: whisper.from_user_name,
+                whisper_id: whisper.id,
+                text: whisper.message,
+            };
+            const profileImageUrl = event.payload.meta.profile_image_url ?? undefined;
 
             // Add to Dynamic Island if enabled
             if (useDynamicIsland) {
@@ -787,13 +730,151 @@ const DynamicIsland = () => {
                 `Whisper from ${data.from_user_name}`,
                 data.text.length > 100 ? `${data.text.substring(0, 100)}...` : data.text
             );
-            // Note: Whisper conversation storage is handled by WhispersWidget
         });
 
         return () => {
             unlisten.then((fn) => fn());
         };
     }, [addNotification, playNotificationSound, notificationsEnabled, showWhisperNotifications, soundEnabled, useDynamicIsland, useToast, addToast, openWhisperWithUser, sendNativeNotification]);
+
+    // Rewards Twitch names for your account (a badge earned, a drop reward
+    // waiting), off its own notification feed, polled and classified in Rust.
+    // These say WHICH reward, which the app's own drop and badge notices
+    // cannot always do.
+    useEffect(() => {
+        const unlisten = listen<TwitchRewardFromBackend>('twitch-reward-received', (event) => {
+            if (!notificationsEnabled || !showTwitchRewardNotifications) return;
+
+            const data = event.payload;
+            const title = data.kind === 'badge' ? 'Badge earned' : 'Drop reward';
+
+            if (useDynamicIsland) {
+                const notification: DynamicIslandNotification = {
+                    id: `twitch-reward-${data.id}`,
+                    // Twitch's timestamp, not arrival: the poll runs on an interval.
+                    timestamp: Date.parse(data.created_at) || Date.now(),
+                    type: 'twitch_reward',
+                    read: false,
+                    data: {
+                        kind: data.kind,
+                        body_plain: data.body_plain,
+                        body_spans: data.body_spans,
+                        thumbnail_url: data.thumbnail_url,
+                        action_url: data.action_url ?? undefined,
+                    } as TwitchRewardNotificationData,
+                };
+
+                addNotification(notification);
+
+                if (soundEnabled) {
+                    playNotificationSound();
+                }
+            }
+
+            if (useToast) {
+                addToast(data.body_plain, 'success', undefined, { skipIsland: true });
+            }
+
+            sendNativeNotification(title, data.body_plain);
+        });
+
+        return () => {
+            unlisten.then((fn) => fn());
+        };
+    }, [addNotification, playNotificationSound, notificationsEnabled, showTwitchRewardNotifications, soundEnabled, useDynamicIsland, useToast, addToast, sendNativeNotification]);
+
+    // Gift subs you received. The only source for these is Twitch's own
+    // notification feed, polled in Rust; the event arrives already filtered to
+    // the gift_subscriptions category with its markdown split into spans.
+    useEffect(() => {
+        const unlisten = listen<GiftSubFromBackend>('gift-sub-received', (event) => {
+            if (!notificationsEnabled || !showGiftSubNotifications) return;
+
+            const data = event.payload;
+
+            if (useDynamicIsland) {
+                const notification: DynamicIslandNotification = {
+                    id: `gift-sub-${data.id}`,
+                    // Twitch's own timestamp, not arrival time: the poll runs on
+                    // an interval, so Date.now() would bunch a gift received at
+                    // 14:02 with one received at 14:06 under the same minute.
+                    timestamp: Date.parse(data.created_at) || Date.now(),
+                    type: 'gift_sub',
+                    read: false,
+                    data: {
+                        body_plain: data.body_plain,
+                        body_spans: data.body_spans,
+                        thumbnail_url: data.thumbnail_url,
+                        channel_login: data.channel_login ?? undefined,
+                        action_url: data.action_url ?? undefined,
+                    } as GiftSubNotificationData,
+                };
+
+                addNotification(notification);
+
+                if (soundEnabled) {
+                    playNotificationSound();
+                }
+            }
+
+            if (useToast) {
+                addToast(data.body_plain, 'success', undefined, { skipIsland: true });
+            }
+
+            sendNativeNotification('Gift subscription', data.body_plain);
+        });
+
+        return () => {
+            unlisten.then((fn) => fn());
+        };
+    }, [addNotification, playNotificationSound, notificationsEnabled, showGiftSubNotifications, soundEnabled, useDynamicIsland, useToast, addToast, sendNativeNotification]);
+
+    // Somebody gave this member a StreamNook membership. Raised by
+    // supabaseService off the cosmetics realtime channel, which already carries
+    // the grant, so there is no extra connection or poll behind this.
+    //
+    // Gated on the master switch alone, with no per-type toggle: being given a
+    // membership is rare and never unwanted, and a row nobody would turn off
+    // does not earn a line in Settings.
+    useEffect(() => {
+        const unlisten = listen<{ grantedAt: string; permanent: boolean }>(
+            'membership-gift-received',
+            (event) => {
+                if (!notificationsEnabled) return;
+                const { grantedAt, permanent } = event.payload;
+
+                if (useDynamicIsland) {
+                    addNotification({
+                        id: `membership-gift-${grantedAt}`,
+                        type: 'membership_gift',
+                        timestamp: Date.parse(grantedAt) || Date.now(),
+                        read: false,
+                        data: { grantedAt, permanent } as MembershipGiftNotificationData,
+                    });
+                    if (soundEnabled) {
+                        playNotificationSound();
+                    }
+                }
+
+                if (useToast) {
+                    addToast(
+                        'You were given a StreamNook membership',
+                        'success',
+                        undefined,
+                        { skipIsland: true, alwaysShow: true },
+                    );
+                }
+
+                sendNativeNotification(
+                    'StreamNook membership',
+                    'Somebody gave you a membership. Your perks are already active.',
+                );
+            },
+        );
+        return () => {
+            unlisten.then((fn) => fn());
+        };
+    }, [addNotification, playNotificationSound, notificationsEnabled, soundEnabled, useDynamicIsland, useToast, addToast, sendNativeNotification]);
 
     // Listen for drop claimed notifications
     useEffect(() => {
@@ -827,7 +908,9 @@ const DynamicIsland = () => {
             // Show toast if enabled
             if (useToast) {
                 addToast(
-                    `Drop claimed: ${data.drop_name} (${data.game_name})`,
+                    data.game_name
+                        ? `Drop claimed: ${data.drop_name} (${data.game_name})`
+                        : `Drop claimed: ${data.drop_name}`,
                     'success',
                     {
                         label: 'View',
@@ -840,7 +923,7 @@ const DynamicIsland = () => {
             // Send native notification for drops
             sendNativeNotification(
                 'Drop Claimed',
-                `${data.drop_name} - ${data.game_name}`
+                data.game_name ? `${data.drop_name} - ${data.game_name}` : data.drop_name
             );
         });
 
@@ -849,14 +932,8 @@ const DynamicIsland = () => {
         };
     }, [addNotification, notificationsEnabled, showDropsNotifications, useDynamicIsland, useToast, addToast, soundEnabled, playNotificationSound, setShowDropsOverlay, sendNativeNotification]);
 
-    // Listen for channel points earned notifications with clustering
-    // Ref to track clustered channel points
-    const channelPointsClusterRef = useRef<ClusteredChannelPoints>({
-        totalPoints: 0,
-        events: [],
-        lastUpdate: 0,
-    });
-    const channelPointsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    // Channel points: Rust gathers a burst of earns and announces it once
+    // (services/channel_points_summary.rs); this presents the summary.
 
     // Function to format reason codes into human-readable text
     const formatReasonCode = (reason: string): string => {
@@ -874,43 +951,30 @@ const DynamicIsland = () => {
         return reasonMap[reason.toUpperCase()] || reason.toLowerCase();
     };
 
-    // Function to flush clustered channel points as a single notification
-    const flushChannelPointsCluster = useCallback(() => {
-        const cluster = channelPointsClusterRef.current;
-        if (cluster.events.length === 0) return;
-
-        // Create a summary of the clustered events
-        const totalPoints = cluster.totalPoints;
-
-        // Get unique channel names
-        const uniqueChannels = [...new Set(cluster.events.map(e => e.channel_name).filter(Boolean))];
-
-        // Group events by channel for display
-        const channelPoints: Record<string, number> = {};
-        cluster.events.forEach(e => {
-            const channel = e.channel_name || 'Unknown';
-            channelPoints[channel] = (channelPoints[channel] || 0) + e.points;
-        });
+    // Present one burst as a notification entry, a toast, or both.
+    const showChannelPointsSummary = useCallback((summary: ChannelPointsSummary) => {
+        const totalPoints = summary.total_points;
+        const uniqueChannels = summary.channels.map(c => c.name);
 
         // Per-channel earned breakdown ("ninja +50, pokimane +82"), highest
         // first and capped so the line stays short. This names the actual
         // streamers the points came from instead of a bare "N channels" count.
         const MAX_CHANNELS_SHOWN = 3;
-        const channelBreakdown = Object.entries(channelPoints)
-            .filter(([name]) => name && name !== 'Unknown')
-            .sort((a, b) => b[1] - a[1]);
+        const channelBreakdown = summary.channels.map(c => [c.name, c.points] as const);
         const channelListDisplay = channelBreakdown.length === 0
             ? null
             : channelBreakdown.length <= MAX_CHANNELS_SHOWN
                 ? channelBreakdown.map(([name, pts]) => `${name} +${pts.toLocaleString()}`).join(', ')
                 : `${channelBreakdown.slice(0, MAX_CHANNELS_SHOWN).map(([name, pts]) => `${name} +${pts.toLocaleString()}`).join(', ')} +${channelBreakdown.length - MAX_CHANNELS_SHOWN} more`;
 
-        // Group events by reason for display
+        // What each reason gave, in words.
         const reasonCounts: Record<string, number> = {};
-        cluster.events.forEach(e => {
-            const reason = formatReasonCode(e.reason);
-            reasonCounts[reason] = (reasonCounts[reason] || 0) + e.points;
+        summary.reasons.forEach(r => {
+            const reason = formatReasonCode(r.name);
+            reasonCounts[reason] = (reasonCounts[reason] || 0) + r.points;
         });
+        const firstReason = formatReasonCode(summary.first_reason || 'watch');
+        const lastBalance = summary.last_balance ?? undefined;
 
         // Create notification data - we'll store the breakdown for expanded view
         const reasonSummary = Object.entries(reasonCounts)
@@ -944,7 +1008,7 @@ const DynamicIsland = () => {
                     // per-channel breakdown already carries each amount, and
                     // lastBalance is only the final channel's balance (a sum
                     // would be misleading).
-                    total_points: uniqueChannels.length > 1 ? undefined : cluster.lastBalance,
+                    total_points: uniqueChannels.length > 1 ? undefined : lastBalance,
                     // Mark if this is a reason summary (not a real channel name)
                     is_reason_summary: !channelNameDisplay,
                 } as ChannelPointsNotificationData,
@@ -979,17 +1043,17 @@ const DynamicIsland = () => {
                         <div className="text-xs text-textSecondary">
                             {uniqueChannels.length === 1 && uniqueChannels[0] ? (
                                 // Single channel - show channel name, reason, and new balance
-                                cluster.lastBalance
-                                    ? `${uniqueChannels[0]} • ${formatReasonCode(cluster.events[0]?.reason || 'watch')} • ${cluster.lastBalance.toLocaleString()} points`
-                                    : `${uniqueChannels[0]} • ${formatReasonCode(cluster.events[0]?.reason || 'watch')}`
+                                lastBalance
+                                    ? `${uniqueChannels[0]} • ${firstReason} • ${lastBalance.toLocaleString()} points`
+                                    : `${uniqueChannels[0]} • ${firstReason}`
                             ) : uniqueChannels.length > 1 ? (
                                 // Multiple channels - name the streamers + each earn
                                 channelListDisplay ?? `From ${uniqueChannels.length} channels`
                             ) : (
                                 // No channel info - show reason and balance if available
-                                cluster.lastBalance
-                                    ? `${formatReasonCode(cluster.events[0]?.reason || 'watch')} • ${cluster.lastBalance.toLocaleString()} points`
-                                    : formatReasonCode(cluster.events[0]?.reason || 'watch')
+                                lastBalance
+                                    ? `${firstReason} • ${lastBalance.toLocaleString()} points`
+                                    : firstReason
                             )}
                         </div>
                     </div>
@@ -1004,70 +1068,23 @@ const DynamicIsland = () => {
             ? uniqueChannels[0]
             : uniqueChannels.length > 1
                 ? (channelListDisplay ?? `${uniqueChannels.length} channels`)
-                : formatReasonCode(cluster.events[0]?.reason || 'watch');
+                : firstReason;
         sendNativeNotification(
             `+${totalPoints.toLocaleString()} Channel Points`,
             channelInfo
         );
 
-        // Reset the cluster
-        channelPointsClusterRef.current = {
-            totalPoints: 0,
-            events: [],
-            lastUpdate: 0,
-        };
     }, [useDynamicIsland, useToast, addNotification, addToast, soundEnabled, playNotificationSound, sendNativeNotification]);
 
     useEffect(() => {
-        const unlisten = listen<ChannelPointsEarnedEvent>('channel-points-earned', (event) => {
+        const unlisten = listen<ChannelPointsSummary>('channel-points-summary', (event) => {
             if (!notificationsEnabled || !showChannelPointsNotifications) return;
-
-            const data = event.payload;
-
-            // Skip if no points (shouldn't happen, but safety check)
-            if (!data.points || data.points <= 0) return;
-
-            // Get channel name from available sources
-            const channelName = data.channel_display_name || data.channel_login || null;
-
-            // Add to the cluster
-            channelPointsClusterRef.current.totalPoints += data.points;
-            channelPointsClusterRef.current.events.push({
-                points: data.points,
-                reason: data.reason || 'watch',
-                channel_name: channelName,
-                timestamp: Date.now(),
-            });
-            channelPointsClusterRef.current.lastUpdate = Date.now();
-
-            // Store the latest balance
-            if (data.balance) {
-                channelPointsClusterRef.current.lastBalance = data.balance;
-            }
-
-            // Clear any existing timeout
-            if (channelPointsTimeoutRef.current) {
-                clearTimeout(channelPointsTimeoutRef.current);
-            }
-
-            // Set a new timeout to flush the cluster after 3 seconds of no new events
-            // This batches rapid-fire notifications together
-            channelPointsTimeoutRef.current = setTimeout(() => {
-                flushChannelPointsCluster();
-            }, 3000);
+            if (event.payload.total_points > 0) showChannelPointsSummary(event.payload);
         });
-
         return () => {
             unlisten.then((fn) => fn());
-            // Flush any remaining clustered notifications on unmount
-            if (channelPointsTimeoutRef.current) {
-                clearTimeout(channelPointsTimeoutRef.current);
-            }
-            if (channelPointsClusterRef.current.events.length > 0) {
-                flushChannelPointsCluster();
-            }
         };
-    }, [notificationsEnabled, showChannelPointsNotifications, flushChannelPointsCluster]);
+    }, [notificationsEnabled, showChannelPointsNotifications, showChannelPointsSummary]);
 
     // Listen for badge notifications from Rust backend
     useEffect(() => {
@@ -1298,9 +1315,30 @@ const DynamicIsland = () => {
             });
 
             setIsExpanded(false);
+        } else if (notification.type === 'gift_sub') {
+            const data = notification.data as GiftSubNotificationData;
+            // channel_login is only set when the action URL was a plain channel
+            // link, so this never tries to open "inventory" or "save-streak" as
+            // a stream. Offline is fine; the app opens offline channels.
+            if (data.channel_login) {
+                await startStream(data.channel_login);
+            }
+            setIsExpanded(false);
+        } else if (notification.type === 'twitch_reward') {
+            const data = notification.data as TwitchRewardNotificationData;
+            if (data.kind === 'badge') {
+                setShowBadgesOverlay(true);
+            } else {
+                setShowDropsOverlay(true);
+            }
+            setIsExpanded(false);
+        } else if (notification.type === 'membership_gift') {
+            openSettings('Profile');
+            setIsExpanded(false);
         } else if (notification.type === 'update') {
-            // Open settings to the Updates tab
-            openSettings("What's New");
+            // The changelog on the NEW version's notes, with Install beside
+            // them, so the reason to update arrives before the update does.
+            requestChangelog(useAppStore.getState().updateInfo?.latest_version);
             setIsExpanded(false);
         } else if (notification.type === 'drops' || notification.type === 'channel_points') {
             // Open drops overlay
@@ -1806,6 +1844,91 @@ const DynamicIsland = () => {
                                                                 </p>
                                                             </div>
                                                         </>
+                                                    ) : notification.type === 'gift_sub' ? (
+                                                        <>
+                                                            {/* Gift sub received */}
+                                                            <div className="relative flex-shrink-0">
+                                                                {(notification.data as GiftSubNotificationData).thumbnail_url ? (
+                                                                    <img
+                                                                        src={(notification.data as GiftSubNotificationData).thumbnail_url}
+                                                                        alt=""
+                                                                        className="w-[34px] h-[34px] rounded-full object-cover"
+                                                                    />
+                                                                ) : (
+                                                                    <div className="sn-notif-glyph">
+                                                                        <Gift size={21} className="text-pink-400" />
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="flex items-center gap-2">
+                                                                    <Gift size={14} className="text-pink-400 flex-shrink-0" />
+                                                                    <span className="text-white text-sm font-semibold truncate">
+                                                                        Gift subscription
+                                                                    </span>
+                                                                </div>
+                                                                <p className="text-white/50 text-sm truncate mt-0.5">
+                                                                    {(notification.data as GiftSubNotificationData).body_spans.map((span, i) => (
+                                                                        <span key={i} className={span.bold ? 'text-white/80 font-semibold' : undefined}>
+                                                                            {span.text}
+                                                                        </span>
+                                                                    ))}
+                                                                </p>
+                                                            </div>
+                                                        </>
+                                                    ) : notification.type === 'twitch_reward' ? (
+                                                        <>
+                                                            {/* A reward Twitch named: the reward's art and its name */}
+                                                            <div className="relative flex-shrink-0">
+                                                                {(notification.data as TwitchRewardNotificationData).thumbnail_url ? (
+                                                                    <img
+                                                                        src={(notification.data as TwitchRewardNotificationData).thumbnail_url}
+                                                                        alt=""
+                                                                        className="w-[34px] h-[34px] rounded-lg object-contain"
+                                                                    />
+                                                                ) : (
+                                                                    <div className="sn-notif-glyph">
+                                                                        <Award size={21} className="text-cyan-400" />
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="flex items-center gap-2">
+                                                                    <Award size={14} className="text-cyan-400 flex-shrink-0" />
+                                                                    <span className="text-white text-sm font-semibold truncate">
+                                                                        {(notification.data as TwitchRewardNotificationData).kind === 'badge' ? 'Badge earned' : 'Drop reward'}
+                                                                    </span>
+                                                                </div>
+                                                                <p className="text-white/50 text-sm truncate mt-0.5">
+                                                                    {(notification.data as TwitchRewardNotificationData).body_spans.map((span, i) => (
+                                                                        <span key={i} className={span.bold ? 'text-white/80 font-semibold' : undefined}>
+                                                                            {span.text}
+                                                                        </span>
+                                                                    ))}
+                                                                </p>
+                                                            </div>
+                                                        </>
+                                                    ) : notification.type === 'membership_gift' ? (
+                                                        <>
+                                                            {/* Membership someone gave this member */}
+                                                            <div className="relative flex-shrink-0">
+                                                                <div className="sn-notif-glyph">
+                                                                    <Sparkle size={21} weight="fill" className="text-amber-400" />
+                                                                </div>
+                                                            </div>
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="flex items-center gap-2">
+                                                                    <span className="text-white text-sm font-semibold truncate">
+                                                                        StreamNook membership
+                                                                    </span>
+                                                                </div>
+                                                                <p className="text-white/50 text-sm truncate mt-0.5">
+                                                                    {(notification.data as MembershipGiftNotificationData).permanent
+                                                                        ? 'Somebody gave you a membership. It does not expire.'
+                                                                        : 'Somebody gave you a membership. Your perks are active now.'}
+                                                                </p>
+                                                            </div>
+                                                        </>
                                                     ) : notification.type === 'update' ? (
                                                         <>
                                                             {/* Update notification */}
@@ -1856,7 +1979,9 @@ const DynamicIsland = () => {
                                                                     </span>
                                                                 </div>
                                                                 <p className="text-white/50 text-sm truncate mt-0.5">
-                                                                    {(notification.data as DropsNotificationData).drop_name} ({(notification.data as DropsNotificationData).game_name})
+                                                                    {(notification.data as DropsNotificationData).game_name
+                                                                        ? `${(notification.data as DropsNotificationData).drop_name} (${(notification.data as DropsNotificationData).game_name})`
+                                                                        : (notification.data as DropsNotificationData).drop_name}
                                                                 </p>
                                                             </div>
                                                         </>

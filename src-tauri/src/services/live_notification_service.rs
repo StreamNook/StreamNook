@@ -133,8 +133,8 @@ impl LiveNotificationService {
             source: None,
         };
 
-        // Emit event to frontend (for in-app notifications)
-        app_handle.emit("streamer-went-live", &notification)?;
+        // Through the one gate (dedupe, cross-platform merge, the toggles).
+        crate::services::live_announce::announce(app_handle, notification.clone());
 
         debug!(
             "[In-App Notification] {} is now live!",

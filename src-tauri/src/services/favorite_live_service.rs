@@ -25,8 +25,13 @@
 //!                 batched liveness endpoint, and a channel whose chat socket is
 //!                 already open is answered from that instead of a fetch.
 //!
-//! Channels already covered by `provider_follows` are skipped here, so a channel
-//! that is both followed and favourited costs one platform call, not two.
+//! A channel that is also followed is checked here as well (see `plan` for why
+//! the follow poller alone can miss it), but only the follow poller announces
+//! it going live.
+//!
+//! Every source has a poller of its own, on its own clock, and its rows land
+//! the moment its check returns: a slow YouTube pass never holds back a Twitch
+//! or Kick favourite.
 //!
 //! Results reach the frontend the same two ways the provider poller uses: a
 //! `favorites-live-update` event carrying the whole snapshot, and, on an
@@ -45,10 +50,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::RwLock;
 use std::sync::atomic::Ordering;
-use tokio::time::{interval, Duration, Instant};
-
-/// Base tick. Each source has its own cadence on top of this.
-const TICK: Duration = Duration::from_secs(30);
+use tokio::time::Duration;
 
 /// How many YouTube favourites one sweep will look at.
 ///
@@ -61,6 +63,13 @@ const YOUTUBE_PER_SWEEP: usize = 10;
 /// Where the next capped YouTube sweep starts. Without this the cap examines the
 /// same window forever and everything past it is invisible for the whole session.
 static ROTATION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Every source this service checks: Twitch, and each platform adapter.
+async fn sources() -> Vec<&'static str> {
+    let mut out = vec!["twitch"];
+    out.extend(registry().await.sources().map(|(id, _)| id));
+    out
+}
 
 fn cadence_for(source: &str) -> Duration {
     match source {
@@ -201,31 +210,75 @@ fn twitch_row(s: crate::models::stream::TwitchStream) -> ProviderStream {
     }
 }
 
-/// Sweep everything immediately, outside the poll cadence.
+/// Check now, outside the poll cadence.
 ///
 /// Favouriting a channel that is live right now should put it in the sidebar
-/// now, not up to a minute later. Same reasoning (and same `notify: false`) as
-/// `provider_live_service::refresh_provider`: a manual refresh paints the list,
-/// it does not fire a go-live toast for a stream that was already running.
-pub async fn refresh_favorites(app: AppHandle, state: AppState) {
+/// now, not up to a minute later. With `key` (the favourite just added) only
+/// that channel is asked about, one request on its own platform; without it
+/// every source is checked, each landing as it returns. Same reasoning (and
+/// same `notify: false`) as `provider_live_service::refresh_provider`: a manual
+/// refresh paints the list, it does not fire a go-live toast for a stream that
+/// was already running.
+pub async fn refresh_favorites(app: AppHandle, state: AppState, key: Option<String>) {
+    if let Some(key) = key {
+        let parsed = parse_key(&key);
+        if let Some(rows) = check_one(&parsed.provider, &parsed.channel).await {
+            // Nothing else on that platform was examined, so its other
+            // favourites keep their rows.
+            let none_examined = HashSet::new();
+            apply(&app, &parsed.provider, rows, false, &HashSet::new(), Some(&none_examined)).await;
+        }
+        return;
+    }
     let Some(plan) = plan(&state) else { return };
-    for (source, rows, examined) in collect(&plan).await {
-        apply(&app, &source, rows, false, &plan.also_followed, examined.as_ref()).await;
+    let plan = &plan;
+    let app = &app;
+    futures::future::join_all(sources().await.into_iter().map(|source| async move {
+        if let Some((rows, examined)) = check(plan, source).await {
+            apply(app, source, rows, false, &plan.also_followed, examined.as_ref()).await;
+        }
+    }))
+    .await;
+}
+
+/// Whether one channel is live, for a favourite just added.
+async fn check_one(provider: &str, channel: &str) -> Option<Vec<ProviderStream>> {
+    let channels = [channel.to_string()];
+    if provider == "twitch" {
+        return match TwitchService::get_streams_by_user_ids(&channels).await {
+            Ok(streams) => Some(streams.into_iter().map(twitch_row).collect()),
+            Err(e) => {
+                debug!("[FavoriteLive] twitch check skipped: {}", e);
+                None
+            }
+        };
+    }
+    let src = registry().await.get_source(provider)?;
+    if !src.caps().live_check {
+        return None;
+    }
+    match src.live_check(&channels).await {
+        Ok(rows) => Some(rows),
+        Err(e) => {
+            debug!("[FavoriteLive] {} live_check failed: {}", provider, e);
+            None
+        }
     }
 }
 
-/// Run the checks for every source that has work, returning
-/// `(source, rows, examined)`. `examined` is `None` for a COMPLETE sweep and
-/// `Some(keys)` when the sweep was capped, so `apply` knows which previously
-/// live rows it must KEEP rather than read as having gone offline.
-#[allow(clippy::type_complexity)]
-async fn collect(
+/// Check one source's favourites, returning `(rows, examined)`, or `None` when
+/// it has none, cannot check, or the check failed. `examined` is `None` for a
+/// COMPLETE check and `Some(keys)` when it was capped, so `apply` knows which
+/// previously live rows it must KEEP rather than read as having gone offline.
+async fn check(
     plan: &SweepPlan,
-) -> Vec<(String, Vec<ProviderStream>, Option<HashSet<String>>)> {
-    let mut out = Vec::new();
-
-    if !plan.twitch_ids.is_empty() {
-        match TwitchService::get_streams_by_user_ids(&plan.twitch_ids).await {
+    source: &str,
+) -> Option<(Vec<ProviderStream>, Option<HashSet<String>>)> {
+    if source == "twitch" {
+        if plan.twitch_ids.is_empty() {
+            return None;
+        }
+        return match TwitchService::get_streams_by_user_ids(&plan.twitch_ids).await {
             Ok(streams) => {
                 // One line per sweep, deliberately at INFO. Diagnosing "I
                 // favourited it and nothing happened" with only failure-path
@@ -238,78 +291,74 @@ async fn collect(
                 );
                 // `None` = a COMPLETE sweep: Twitch batches 100 ids per call
                 // with no cap, so every favourite was examined.
-                out.push((
-                    "twitch".to_string(),
-                    streams.into_iter().map(twitch_row).collect(),
-                    None,
-                ));
+                Some((streams.into_iter().map(twitch_row).collect(), None))
             }
             // Signed out is the common case here, not an error worth shouting
             // about once a minute. The offline roster still lists these.
-            Err(e) => debug!("[FavoriteLive] twitch check skipped: {}", e),
-        }
-    }
-
-    let reg = registry().await;
-    for (provider, channels) in &plan.by_provider {
-        let Some(src) = reg.get_source(provider) else {
-            // TikTok lands here: a provider with chat and playback but no
-            // StreamSource, so there is nothing to ask.
-            debug!(
-                "[FavoriteLive] {} has {} favourite(s) but no live check exists; \
-                 they are unchecked, NOT offline",
-                provider,
-                channels.len()
-            );
-            continue;
-        };
-        if !src.caps().live_check {
-            continue;
-        }
-        // Capped sweeps ROTATE. `take(N)` read as reasonable and was in fact
-        // permanent starvation: it examined the same first N every sweep, so
-        // favourite N+1 was never checked once, ever - and an unchecked channel
-        // reads as offline, which is a wrong answer rather than a slow one.
-        let mut partial: Option<HashSet<String>> = None;
-        let checked: Vec<String> = if provider == "youtube" && channels.len() > YOUTUBE_PER_SWEEP {
-            // Say what was dropped. Reported as silence, "we looked at 10 of
-            // your 30" and "nobody is live" are indistinguishable — the same
-            // reasoning the YouTube source itself spells out at its own cap.
-            log::warn!(
-                "[FavoriteLive] checking {} of {} YouTube favourites this sweep; \
-                 the rest are NOT being reported as offline, they are unchecked",
-                YOUTUBE_PER_SWEEP,
-                channels.len()
-            );
-            let start = ROTATION.fetch_add(YOUTUBE_PER_SWEEP, Ordering::Relaxed) % channels.len();
-            let window: Vec<String> = channels
-                .iter()
-                .cycle()
-                .skip(start)
-                .take(YOUTUBE_PER_SWEEP)
-                .cloned()
-                .collect();
-            partial = Some(window.iter().map(|c| make_key(provider, c)).collect());
-            window
-        } else {
-            channels.clone()
-        };
-
-        match src.live_check(&checked).await {
-            Ok(rows) => {
-                log::info!(
-                    "[FavoriteLive] {}: checked {} favourite(s), {} live",
-                    provider,
-                    checked.len(),
-                    rows.iter().filter(|r| r.is_live).count()
-                );
-                out.push((provider.clone(), rows, partial));
+            Err(e) => {
+                debug!("[FavoriteLive] twitch check skipped: {}", e);
+                None
             }
-            Err(e) => debug!("[FavoriteLive] {} live_check failed: {}", provider, e),
-        }
+        };
     }
 
-    out
+    let channels = plan.by_provider.get(source).filter(|c| !c.is_empty())?;
+    let Some(src) = registry().await.get_source(source) else {
+        debug!(
+            "[FavoriteLive] {} has {} favourite(s) but no live check exists; \
+             they are unchecked, NOT offline",
+            source,
+            channels.len()
+        );
+        return None;
+    };
+    if !src.caps().live_check {
+        return None;
+    }
+    // Capped sweeps ROTATE. `take(N)` read as reasonable and was in fact
+    // permanent starvation: it examined the same first N every sweep, so
+    // favourite N+1 was never checked once, ever - and an unchecked channel
+    // reads as offline, which is a wrong answer rather than a slow one.
+    let mut partial: Option<HashSet<String>> = None;
+    let checked: Vec<String> = if source == "youtube" && channels.len() > YOUTUBE_PER_SWEEP {
+        // Say what was dropped. Reported as silence, "we looked at 10 of
+        // your 30" and "nobody is live" are indistinguishable, the same
+        // reasoning the YouTube source itself spells out at its own cap.
+        log::warn!(
+            "[FavoriteLive] checking {} of {} YouTube favourites this sweep; \
+             the rest are NOT being reported as offline, they are unchecked",
+            YOUTUBE_PER_SWEEP,
+            channels.len()
+        );
+        let start = ROTATION.fetch_add(YOUTUBE_PER_SWEEP, Ordering::Relaxed) % channels.len();
+        let window: Vec<String> = channels
+            .iter()
+            .cycle()
+            .skip(start)
+            .take(YOUTUBE_PER_SWEEP)
+            .cloned()
+            .collect();
+        partial = Some(window.iter().map(|c| make_key(source, c)).collect());
+        window
+    } else {
+        channels.clone()
+    };
+
+    match src.live_check(&checked).await {
+        Ok(rows) => {
+            log::info!(
+                "[FavoriteLive] {}: checked {} favourite(s), {} live",
+                source,
+                checked.len(),
+                rows.iter().filter(|r| r.is_live).count()
+            );
+            Some((rows, partial))
+        }
+        Err(e) => {
+            debug!("[FavoriteLive] {} live_check failed: {}", source, e);
+            None
+        }
+    }
 }
 
 pub fn start(app: AppHandle, state: AppState) {
@@ -317,91 +366,53 @@ pub fn start(app: AppHandle, state: AppState) {
     // the main thread outside any runtime context, so a bare tokio spawn panics
     // with "there is no reactor running".
     tauri::async_runtime::spawn(async move {
-        let mut tick = interval(TICK);
-        let mut last_run: HashMap<String, Instant> = HashMap::new();
-        // The first sweep only populates: without this every favourite that
-        // happens to be live at launch would fire a "went live" toast.
-        let mut primed = false;
+        for source in sources().await {
+            tauri::async_runtime::spawn(poll(app.clone(), state.clone(), source));
+        }
+    });
+}
 
-        loop {
-            tick.tick().await;
-
-            let Some(full) = plan(&state) else { continue };
-
-            // Prune against the FULL favourites list, BEFORE narrowing to what
-            // is due. Pruning against the narrowed plan would read "only Twitch
-            // is due this tick" as "there are no Kick favourites" and drop every
-            // Kick row from the snapshot, which the very next emit would publish
-            // as the whole truth.
-            prune_absent(&full).await;
-
-            // Narrow the plan to the sources actually due, so a 60s Kick cadence
-            // doesn't drag YouTube's 180s one along with it.
-            let due = |source: &str| {
-                last_run
-                    .get(source)
-                    .map(|t| t.elapsed() >= cadence_for(source))
-                    .unwrap_or(true)
-            };
-
-            let plan = SweepPlan {
-                twitch_ids: if due("twitch") {
-                    full.twitch_ids
-                } else {
-                    Vec::new()
-                },
-                by_provider: full
-                    .by_provider
-                    .into_iter()
-                    .filter(|(p, _)| due(p))
-                    .collect(),
-                also_followed: full.also_followed,
-                notify: full.notify,
-            };
-
-            if plan.twitch_ids.is_empty() && plan.by_provider.is_empty() {
-                continue;
-            }
-
-            if !plan.twitch_ids.is_empty() {
-                last_run.insert("twitch".to_string(), Instant::now());
-            }
-            for provider in plan.by_provider.keys() {
-                last_run.insert(provider.clone(), Instant::now());
-            }
-
-            for (source, rows, examined) in collect(&plan).await {
+/// One source's poller: check, rest for its cadence, check again.
+async fn poll(app: AppHandle, state: AppState, source: &'static str) {
+    // The first check only populates: without this every favourite that
+    // happens to be live at launch would fire a "went live" toast.
+    let mut primed = false;
+    loop {
+        if let Some(plan) = plan(&state) {
+            // Against the FULL favourites list: a source down to no favourites
+            // is never checked again, so its last rows would otherwise linger.
+            prune_absent(&app, &plan, source).await;
+            if let Some((rows, examined)) = check(&plan, source).await {
                 apply(
                     &app,
-                    &source,
+                    source,
                     rows,
                     primed && plan.notify,
                     &plan.also_followed,
                     examined.as_ref(),
                 )
                 .await;
+                primed = true;
             }
-
-            primed = true;
         }
-    });
+        tokio::time::sleep(cadence_for(source)).await;
+    }
 }
 
-/// Drop snapshot rows for channels that are no longer favourited.
+/// Drop `source`'s snapshot rows for channels that are no longer favourited.
 ///
 /// `apply` clears a source's rows wholesale each sweep, so this only matters for
 /// a source that has dropped to zero favourites and is therefore never swept
-/// again — without it, its last known rows would linger for the session.
-async fn prune_absent(plan: &SweepPlan) {
-    let mut wanted: HashSet<String> = HashSet::new();
-    for id in &plan.twitch_ids {
-        wanted.insert(format!("twitch:{}", id));
-    }
-    for (provider, channels) in &plan.by_provider {
-        for c in channels {
-            wanted.insert(make_key(provider, c));
-        }
-    }
+/// again: without it, its last known rows would linger for the session.
+async fn prune_absent(app: &AppHandle, plan: &SweepPlan, source: &str) {
+    let wanted: HashSet<String> = if source == "twitch" {
+        plan.twitch_ids.iter().map(|id| format!("twitch:{}", id)).collect()
+    } else {
+        plan.by_provider
+            .get(source)
+            .map(|channels| channels.iter().map(|c| make_key(source, c)).collect())
+            .unwrap_or_default()
+    };
     let mut st = STATE.write().await;
     // Rows are keyed by PLATFORM key, favourites by favourite key, and for
     // YouTube those differ (a live row is keyed by video id, a favourite by UC
@@ -413,13 +424,23 @@ async fn prune_absent(plan: &SweepPlan) {
         .filter(|(_, row)| {
             let by_id = format!("{}:{}", row.provider, row.user_id);
             let by_login = make_key(&row.provider, &row.user_login);
-            !wanted.contains(&by_id) && !wanted.contains(&by_login)
+            row.provider == source && !wanted.contains(&by_id) && !wanted.contains(&by_login)
         })
         .map(|(k, _)| k.clone())
         .collect();
+    if stale.is_empty() {
+        return;
+    }
     for k in stale {
         st.snapshot.remove(&k);
     }
+    let full: Vec<ProviderStream> = st.snapshot.values().cloned().collect();
+    drop(st);
+    let _ = app.emit(
+        "favorites-live-update",
+        serde_json::json!({ "source": source, "streams": full }),
+    );
+    crate::services::home_snapshot::note_discover_inputs_changed();
 }
 
 /// Fold one source's results into the shared state, emit the list update, and
@@ -490,6 +511,8 @@ async fn apply(
             "favorites-live-update",
             serde_json::json!({ "source": source, "streams": full }),
         );
+        // Home's unified Discover list leaves out live favourites.
+        crate::services::home_snapshot::note_discover_inputs_changed();
     }
 
     if !notify {
@@ -501,8 +524,8 @@ async fn apply(
         if suppress_notify.contains(&row.key) {
             continue;
         }
-        let _ = app.emit(
-            "streamer-went-live",
+        crate::services::live_announce::announce(
+            &app,
             LiveNotification {
                 streamer_name: row.user_name.clone(),
                 // Twitch rows carry a bare login and provider rows the composite

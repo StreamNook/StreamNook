@@ -7,7 +7,7 @@ import { parseEmojisProxied, EmojiSegment } from '../services/emojiService';
 import { ToastPosition, DEFAULT_TOAST_POSITION, DEFAULT_TOAST_EDGE_OFFSET } from '../types';
 
 import { Logger } from '../utils/logger';
-import { playSound, type SoundId } from '../utils/notificationSound';
+import { playNotificationSound as playGatedNotificationSound } from '../utils/notificationSound';
 import { liveActivityText } from '../utils/liveActivity';
 import { IS_MOBILE } from '../utils/platform';
 interface LiveNotification {
@@ -199,7 +199,7 @@ const ToastManager = () => {
   // Actual sound generation lives in utils/notificationSound so chat highlights
   // can share the same AudioContext + envelope library.
   const playNotificationSound = useCallback((soundType?: string) => {
-    playSound((soundType as SoundId | undefined) ?? 'boop');
+    playGatedNotificationSound(soundType);
   }, []);
 
   // Listen for live stream notifications from backend

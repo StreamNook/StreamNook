@@ -140,6 +140,21 @@ export function playSound(soundId: SoundRef | undefined | null): void {
   }
 }
 
+// Notification sounds (go-live, whisper, drops, badges, ...) share one gate.
+// Overlapping tones add together at the output, so a burst of go-lives from a
+// single poll would otherwise stack into one ping several times louder than
+// normal. One ping per window says "something happened"; the toasts and the
+// notification center carry the count.
+const NOTIFICATION_SOUND_GAP_MS = 2000;
+let lastNotificationSoundAt = 0;
+
+export function playNotificationSound(soundId: SoundRef | undefined | null): void {
+  const now = Date.now();
+  if (now - lastNotificationSoundAt < NOTIFICATION_SOUND_GAP_MS) return;
+  lastNotificationSoundAt = now;
+  playSound(soundId || 'boop');
+}
+
 // Per-key cooldown tracking. Skipping plays inside the cooldown window avoids
 // audio spam in fast chats where the same phrase matches many messages in a
 // row. The key is caller-defined (typically a phrase id) so different keys

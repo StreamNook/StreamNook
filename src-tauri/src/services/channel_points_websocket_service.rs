@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 use tokio::task::JoinHandle;
@@ -20,6 +21,46 @@ use crate::services::twitch_limits::{
 };
 
 const PUBSUB_URL: &str = "wss://pubsub-edge.twitch.tv";
+
+/// A bonus-chest claim reaches the page twice: Twitch pushes it as a
+/// `points-earned` (reason `CLAIM`) on `community-points-user-v1`, and
+/// `claim_channel_points` emits the same `channel-points-earned` itself after
+/// its GQL mutation so the claim is still reported while this socket is down
+/// or mid-reconnect. Either can land first, so both paths go through
+/// `claim_emit_is_first` and whichever comes second within the window is
+/// dropped. Keyed by channel id; the marker lives here because the socket
+/// handler has no service handle to reach.
+static RECENT_CLAIM_EMITS: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+
+/// Longer than the gap between the GQL response and the socket push (well
+/// under a second in practice), far shorter than the time between two chests
+/// on one channel.
+const CLAIM_EMIT_DEDUPE_WINDOW: Duration = Duration::from_secs(15);
+
+/// Records that a chest-claim `channel-points-earned` is about to be emitted
+/// for `channel_id`. Returns false when the other path already emitted one for
+/// that channel within the window, in which case the caller must not emit.
+pub fn claim_emit_is_first(channel_id: &str) -> bool {
+    let map = RECENT_CLAIM_EMITS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = map.lock().unwrap_or_else(|e| e.into_inner());
+    claim_emit_is_first_in(&mut map, channel_id, Instant::now())
+}
+
+/// The rule itself, over a map the caller owns. Expiry is measured against the
+/// `now` handed in, so everyone sharing a map must share a clock: a call with a
+/// later `now` prunes entries the other callers still expect to find.
+fn claim_emit_is_first_in(
+    map: &mut HashMap<String, Instant>,
+    channel_id: &str,
+    now: Instant,
+) -> bool {
+    map.retain(|_, at| now.duration_since(*at) < CLAIM_EMIT_DEDUPE_WINDOW);
+    if map.contains_key(channel_id) {
+        return false;
+    }
+    map.insert(channel_id.to_string(), now);
+    true
+}
 
 /// Mapping structure for channel information
 #[derive(Debug, Clone)]
@@ -655,6 +696,21 @@ impl ChannelPointsWebSocketService {
                         channel_id_str,
                         channel_login_str
                     );
+
+                    // The watched channel's chest claim also arrives through
+                    // claim_channel_points, which emits this same event after its
+                    // GQL mutation; whichever lands second is the duplicate.
+                    if reason.eq_ignore_ascii_case("claim") {
+                        if let Some(cid) = channel_id.as_deref() {
+                            if !claim_emit_is_first(cid) {
+                                debug!(
+                                    "Skipping CLAIM push for {}: claim_channel_points already reported it",
+                                    cid
+                                );
+                                return;
+                            }
+                        }
+                    }
 
                     let _ = app_handle.emit(
                         "channel-points-earned",
@@ -1357,5 +1413,52 @@ impl ChannelPointsWebSocketService {
                 Ok(None)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod claim_dedupe_tests {
+    use super::*;
+
+    // Each test drives its own map, so the clocks below stay independent and
+    // channel ids need only be distinct within one test.
+
+    #[test]
+    fn second_emit_within_window_is_dropped_then_window_reopens() {
+        let mut map = HashMap::new();
+        let t0 = Instant::now();
+        assert!(claim_emit_is_first_in(&mut map, "chest", t0));
+        assert!(!claim_emit_is_first_in(
+            &mut map,
+            "chest",
+            t0 + Duration::from_secs(1)
+        ));
+        assert!(!claim_emit_is_first_in(
+            &mut map,
+            "chest",
+            t0 + CLAIM_EMIT_DEDUPE_WINDOW - Duration::from_millis(1)
+        ));
+        assert!(claim_emit_is_first_in(
+            &mut map,
+            "chest",
+            t0 + CLAIM_EMIT_DEDUPE_WINDOW
+        ));
+    }
+
+    #[test]
+    fn channels_do_not_share_a_marker() {
+        let mut map = HashMap::new();
+        let t0 = Instant::now();
+        assert!(claim_emit_is_first_in(&mut map, "first", t0));
+        assert!(claim_emit_is_first_in(
+            &mut map,
+            "second",
+            t0 + Duration::from_secs(1)
+        ));
+        assert!(!claim_emit_is_first_in(
+            &mut map,
+            "first",
+            t0 + Duration::from_secs(2)
+        ));
     }
 }

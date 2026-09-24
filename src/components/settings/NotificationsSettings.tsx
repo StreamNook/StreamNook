@@ -9,7 +9,7 @@ import {
   DEFAULT_TOAST_EDGE_OFFSET,
 } from '../../types';
 import { invoke } from '@tauri-apps/api/core';
-import { Bell } from 'lucide-react';
+import { Award, Bell, Gift } from 'lucide-react';
 import { SettingsSection, SettingsRow } from './_primitives';
 import { grantAccolade } from '../../services/supabaseService';
 import {
@@ -121,6 +121,8 @@ const NotificationsSettings = () => {
     show_favorite_drops_notifications: true,
     show_channel_points_notifications: true,
     show_badge_notifications: true,
+    show_gift_sub_notifications: true,
+    show_twitch_reward_notifications: true,
     use_dynamic_island: true,
     use_toast: true,
     toast_position: DEFAULT_TOAST_POSITION,
@@ -135,6 +137,28 @@ const NotificationsSettings = () => {
         ...updates,
       },
     });
+  };
+
+  // Dev builds only. Gift subs arrive days apart, so there is otherwise no
+  // way to look at that row on demand. Prefers a real one off the feed and
+  // falls back to a stand-in, so it also proves the query works end to end.
+  const handleGiftSubPreview = async () => {
+    try {
+      await invoke('send_test_notification', { kind: 'gift_sub' });
+    } catch (error) {
+      Logger.error('Failed to preview gift sub notification:', error);
+      addToast('Gift sub preview failed, see the log', 'error');
+    }
+  };
+
+  // Dev builds only: the newest real reward row off your Twitch feed.
+  const handleRewardPreview = async () => {
+    try {
+      await invoke('send_test_notification', { kind: 'twitch_reward' });
+    } catch (error) {
+      Logger.error('Failed to preview reward notification:', error);
+      addToast(`Reward preview failed: ${error}`, 'error');
+    }
   };
 
   const handleTestNotification = async () => {
@@ -284,9 +308,13 @@ const NotificationsSettings = () => {
               }
             />
 
+            {/* The notification opens the changelog popup on the new
+                version, with Install beside the notes. Turning this row off
+                still leaves the title-bar button and Check for updates in the
+                changelog, which is what the description says. */}
             <SettingsRow
               title="When an app update is ready"
-              description="You hear about new StreamNook versions as soon as they are available, and clicking takes you to the Updates page."
+              description="A notification tells you when a new StreamNook version is out, and opens the changelog to what is in it. Turning this off leaves the update button in the title bar and Check for updates in the changelog."
               control={
                 <Toggle
                   enabled={liveNotifications.show_update_notifications ?? true}
@@ -296,21 +324,6 @@ const NotificationsSettings = () => {
                 />
               }
             />
-
-            {(liveNotifications.show_update_notifications ?? true) && (liveNotifications.use_toast ?? true) && (
-              <SettingsRow
-                title="Update straight from the toast"
-                description="Clicking the update toast starts installing right away instead of opening the Updates page first."
-                control={
-                  <Toggle
-                    enabled={liveNotifications.quick_update_on_toast ?? false}
-                    onChange={() => updateLiveNotifications({
-                      quick_update_on_toast: !(liveNotifications.quick_update_on_toast ?? false)
-                    })}
-                  />
-                }
-              />
-            )}
 
             <SettingsRow
               title="When a drop is claimed"
@@ -361,6 +374,32 @@ const NotificationsSettings = () => {
                   enabled={liveNotifications.show_badge_notifications ?? true}
                   onChange={() => updateLiveNotifications({
                     show_badge_notifications: !(liveNotifications.show_badge_notifications ?? true)
+                  })}
+                />
+              }
+            />
+
+            <SettingsRow
+              title="When someone gifts you a sub"
+              description="You hear about gift subs you receive, even for a channel you were not watching at the time."
+              control={
+                <Toggle
+                  enabled={liveNotifications.show_gift_sub_notifications ?? true}
+                  onChange={() => updateLiveNotifications({
+                    show_gift_sub_notifications: !(liveNotifications.show_gift_sub_notifications ?? true)
+                  })}
+                />
+              }
+            />
+
+            <SettingsRow
+              title="When Twitch names a reward for you"
+              description="You hear which badge you earned or which drop reward is waiting, by name, however it was earned."
+              control={
+                <Toggle
+                  enabled={liveNotifications.show_twitch_reward_notifications ?? true}
+                  onChange={() => updateLiveNotifications({
+                    show_twitch_reward_notifications: !(liveNotifications.show_twitch_reward_notifications ?? true)
                   })}
                 />
               }
@@ -422,6 +461,38 @@ const NotificationsSettings = () => {
                 </button>
               }
             />
+
+            {import.meta.env.DEV && (
+              <SettingsRow
+                title="Preview a gift sub"
+                description="Development builds only. Shows the gift sub row using a real one from your Twitch feed when there is one."
+                control={
+                  <button
+                    onClick={handleGiftSubPreview}
+                    className="glass-button flex items-center gap-2 px-4 py-2 rounded-lg text-textPrimary text-sm font-medium"
+                  >
+                    <Gift size={16} />
+                    Preview
+                  </button>
+                }
+              />
+            )}
+
+            {import.meta.env.DEV && (
+              <SettingsRow
+                title="Preview a Twitch reward"
+                description="Development builds only. Shows the newest real badge or drop reward from your Twitch feed."
+                control={
+                  <button
+                    onClick={handleRewardPreview}
+                    className="glass-button flex items-center gap-2 px-4 py-2 rounded-lg text-textPrimary text-sm font-medium"
+                  >
+                    <Award size={16} />
+                    Preview
+                  </button>
+                }
+              />
+            )}
           </SettingsSection>
         </>
       )}
