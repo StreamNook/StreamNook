@@ -38,6 +38,7 @@ export default function ConnectionsSettings() {
   // store, which is event-driven, so this panel costs nothing while it is open.
   const kick = usePlatformAccountStore((s) => s.kick);
   const youtube = usePlatformAccountStore((s) => s.youtube);
+  const tiktok = usePlatformAccountStore((s) => s.tiktok);
   const connectPlatform = usePlatformAccountStore((s) => s.connect);
   const disconnectPlatform = usePlatformAccountStore((s) => s.disconnect);
   const resyncYoutube = usePlatformAccountStore((s) => s.resyncYoutube);
@@ -55,6 +56,8 @@ export default function ConnectionsSettings() {
   const connectKick = useCallback(() => void connectPlatform('kick'), [connectPlatform]);
   const disconnectKick = useCallback(() => void disconnectPlatform('kick'), [disconnectPlatform]);
   const connectYoutube = useCallback(() => void connectPlatform('youtube'), [connectPlatform]);
+  const connectTiktok = useCallback(() => void connectPlatform('tiktok'), [connectPlatform]);
+  const disconnectTiktok = useCallback(() => void disconnectPlatform('tiktok'), [disconnectPlatform]);
   const disconnectYoutube = useCallback(
     () => void disconnectPlatform('youtube'),
     [disconnectPlatform],
@@ -70,8 +73,9 @@ export default function ConnectionsSettings() {
     if (p === 'twitch') return 'native';
     if (p === 'kick') return kickConnected ? 'connected' : 'disconnected';
     if (p === 'youtube') return youtubeConnected ? 'connected' : 'disconnected';
-    // A read-only adapter with no sign-in (TikTok) is working as designed, not
-    // "not connected"; only platforms without an adapter are still upcoming.
+    if (p === 'tiktok') return tiktok.connected ? 'connected' : 'disconnected';
+    // A read-only adapter with no sign-in is working as designed, not "not
+    // connected"; only platforms without an adapter are still upcoming.
     if (PROVIDERS[p].chatEnabled) {
       return PROVIDERS[p].send === 'none' ? 'anonymous' : 'disconnected';
     }
@@ -90,6 +94,10 @@ export default function ConnectionsSettings() {
       return kickFollowCount > 0
         ? `${who} · ${kickFollowCount} channel${kickFollowCount === 1 ? '' : 's'}`
         : who;
+    }
+    if (p === 'tiktok' && status === 'connected') {
+      const who = tiktok.handle ? `@${tiktok.handle}` : tiktok.name;
+      return who ? `Connected as ${who}` : 'Connected';
     }
     if (p === 'youtube' && status === 'connected') {
       const who = youtubeName ? `Connected as ${youtubeName}` : 'Connected';
@@ -131,7 +139,9 @@ export default function ConnectionsSettings() {
                     ? kickStep
                     : p === 'youtube' && youtubeStep
                       ? youtubeStep
-                      : subtitleFor(p, status)}
+                      : p === 'tiktok' && tiktok.step
+                        ? tiktok.step
+                        : subtitleFor(p, status)}
                 </div>
               </div>
 
@@ -184,6 +194,27 @@ export default function ConnectionsSettings() {
                     style={{ color: '#ff4d4d' }}
                   >
                     {youtubeBusy ? 'Connecting…' : 'Connect'}
+                  </button>
+                ))}
+
+              {p === 'tiktok' &&
+                (tiktok.connected ? (
+                  <button
+                    type="button"
+                    onClick={disconnectTiktok}
+                    className="glass-button-secondary shrink-0 px-3 py-1 text-xs font-medium text-textSecondary transition-colors hover:text-red-400"
+                  >
+                    Disconnect
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void connectTiktok()}
+                    disabled={tiktok.busy}
+                    className="glass-button-secondary shrink-0 px-3 py-1 text-xs font-semibold transition-colors disabled:opacity-60"
+                    style={{ color: '#00f2ea' }}
+                  >
+                    {tiktok.busy ? 'Connecting…' : 'Connect'}
                   </button>
                 ))}
 

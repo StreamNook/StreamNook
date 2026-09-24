@@ -10,18 +10,17 @@
 // channels, then one send fans out to every ticked channel.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import ChatMessageList from '../ChatMessageList';
 import { ProviderLogo } from '../ProviderLogo';
-import { useChatConnectionStore, sendChannelMessage, injectSystemMessage, systemSourceFor } from '../../stores/chatConnectionStore';
+import { useChatConnectionStore } from '../../stores/chatConnectionStore';
 import { useChatUserStore } from '../../stores/chatUserStore';
-import { useAppStore } from '../../stores/AppStore';
-import { makeKey, parseKey } from '../../utils/providerKey';
+import { parseKey } from '../../utils/providerKey';
 import { openProfilePopup } from '../../utils/openProfilePopup';
 import { PROVIDERS, PROVIDER_IDS, type ProviderId } from '../../types/providers';
 import { parseMessage, type BackendChatMessage } from '../../services/twitchChat';
+import { sendToSource, sourceKeyOf, sourceProviderOf } from '../../utils/sendToSource';
+import { useBlendedChatSource } from '../../hooks/useBlendedChatSource';
 import { initializeBadgeCache } from '../../services/twitchBadges';
-import type { ModerationContext } from '../../hooks/useTwitchChat';
 import { usePlatformAccountStore } from '../../stores/platformAccountStore';
 import HypeTrainBanner from '../HypeTrainBanner';
 import { useBlendedHypeTrains } from './useBlendedHypeTrains';
@@ -42,70 +41,10 @@ const noop = () => {};
 // `force` transitions (Resume button, reply-jump) bypass it.
 const PAUSE_SETTLE_MS = 120;
 
-const provOf = (c: BlendedChannel): ProviderId => c.provider ?? 'twitch';
-// Stable per-source key used by the picker, the merge match, and the send router.
-const sourceKey = (c: BlendedChannel) => `${provOf(c)}::${c.channel.toLowerCase()}`;
-
-// Common sortable epoch-ms from either a structured message (`timestamp`, which
-// is ISO-UTC for Kick and an epoch for Twitch) or a raw IRC string (`tmi-sent-ts`).
-function tsOf(m: string | BackendChatMessage): number {
-  const t = typeof m === 'string' ? m.match(/tmi-sent-ts=(\d+)/)?.[1] ?? '' : m.timestamp ?? '';
-  if (!t) return 0;
-  if (/^\d+$/.test(t)) return Number(t);
-  const d = Date.parse(t);
-  return Number.isNaN(d) ? 0 : d;
-}
-
-// Send `text` to one source. With `reply`, route a reply through that provider's
-// own mechanism: Twitch and Kick thread natively off the parent message id; YouTube
-// has no threaded reply, so we @mention the recipient instead.
-async function sendTo(
-  c: BlendedChannel,
-  text: string,
-  reply?: { parentId: string; parentUser: string },
-): Promise<void> {
-  const prov = provOf(c);
-  if (prov === 'twitch') {
-    // Route Twitch sends through the shared store path the rest of the app uses. It
-    // sends via Helix with the real broadcaster + sender ids AND adds the optimistic
-    // copy to the slice (so the message also shows in the feed). The previous raw
-    // invoke passed null ids, which made the backend skip Helix and fall back to an
-    // IRC write that doesn't deliver here, so blended sends silently went nowhere.
-    const cu = useAppStore.getState().currentUser;
-    if (!cu?.user_id) return;
-    await sendChannelMessage(
-      c.channel,
-      text,
-      {
-        username: cu.login || cu.username,
-        displayName: cu.display_name || cu.username,
-        userId: cu.user_id,
-      },
-      reply?.parentId,
-    );
-  } else {
-    // YouTube live chat has no reply threads, so a reply becomes an @mention.
-    const isYouTubeReply = prov === 'youtube' && !!reply;
-    const outcome = await invoke<{
-      message_id: string | null;
-      is_sent: boolean;
-      drop_reason: string | null;
-    }>('provider_send_message', {
-      provider: prov,
-      channel: c.channel.toLowerCase(),
-      text: isYouTubeReply ? `@${reply!.parentUser} ${text}` : text,
-      replyTo: isYouTubeReply ? null : reply?.parentId ?? null,
-    });
-    // The platform can accept the request and still refuse the message. Say so
-    // in the pane and rethrow so the composer can restore what was typed.
-    if (outcome && outcome.is_sent === false) {
-      const reason = outcome.drop_reason || 'Message not sent';
-      const key = `${prov}:${c.channel.toLowerCase()}`;
-      injectSystemMessage(key, `Your message was not sent: ${reason}`, undefined, systemSourceFor(key));
-      throw new Error(reason);
-    }
-  }
-}
+// The provider/key helpers and the send router are shared with the main chat
+// panel (utils/sendToSource), so both surfaces route a reply the same way.
+const provOf = sourceProviderOf;
+const sourceKey = sourceKeyOf;
 
 // Small themed checkbox (checked / indeterminate / empty).
 function Check({ checked, indeterminate }: { checked: boolean; indeterminate?: boolean }) {
@@ -148,179 +87,23 @@ export function BlendedChatPane({
   /** No own background: the host paints the (glass) ground. */
   transparent?: boolean;
 }) {
-  // Re-render when any of THIS blend's sources change. Summing the per-channel
-  // counters (instead of the global revision) keeps the O(all sources) reconcile
-  // below from re-running on flushes of channels this pane doesn't show.
-  const revision = useChatConnectionStore((s) =>
-    channels.reduce((sum, c) => {
-      // Slice keys are the acquisition keys: bare login for Twitch, composite
-      // provider:channel otherwise (mirrors the store's channel map).
-      const prov = provOf(c);
-      const sliceKey =
-        prov === 'twitch' ? c.channel.toLowerCase() : makeKey(prov, c.channel);
-      return sum + (s.revisionByChannel[sliceKey] ?? 0);
-    }, 0),
-  );
+  // The merge itself is shared with the main chat panel (hooks/useBlendedChatSource),
+  // so both surfaces order, dedupe and reconcile a multi-source feed identically.
+  const {
+    messages,
+    deletedMessageIds,
+    clearedUserContexts,
+    renderToken: revision,
+    sourceRef: idToChannelRef,
+    seqRef,
+  } = useBlendedChatSource(channels);
+
   // Twitch Hype Trains across the blended Twitch sources (blended mounts no per-pane
   // poller, so this drives both the banner here and the activity-feed rows).
   const hypeTrains = useBlendedHypeTrains(channels);
   // A level-up's confetti rains over the whole feed, so the shared banner portals
   // it into this element.
   const [feedEl, setFeedEl] = useState<HTMLElement | null>(null);
-
-  // Incremental, append-only merge. The feed is ordered by FIRST-seen arrival and
-  // only ever grows at the bottom (YouTube is polled, so a send-time sort would slot
-  // its late messages mid-feed and thrash the scroll; freezing each slot on first
-  // sight keeps everything on screen still). Blended mode used to re-derive AND
-  // re-sort the entire combined feed on every frame any source got a message, which
-  // pins the single webview main thread. Most visibly, a clip played over the feed
-  // stutters. Instead we keep a persistent ordered list of ids and reconcile it
-  // against the live slices each tick: append genuinely-new ids (send-time-sorted as
-  // one batch), refresh in-place upgrades (own-message repaint / IRC echo / Helix-id
-  // stamp keep the SAME id but swap the slot reference), and drop ids that have left
-  // every slice (per-channel cap eviction, or a source removed from the blend). No
-  // per-frame re-sort, and the rendered array keeps a STABLE identity on any tick
-  // that changed nothing, so the memoized rows + list bail instead of re-rendering.
-  const orderRef = useRef<string[]>([]);
-  const idToMsgRef = useRef<Map<string, string | BackendChatMessage>>(new Map());
-  // messageId -> the source it came from, so a right-click reply routes to the right
-  // channel/account (a raw Twitch IRC line doesn't carry its own slug). Persistent +
-  // read through a ref by the row callbacks so their identity stays stable.
-  const idToChannelRef = useRef<Map<string, BlendedChannel>>(new Map());
-  // Monotonic counter for the "N new since paused" badge. Order now lives in
-  // orderRef, so this no longer drives placement, only the unread count.
-  const seqRef = useRef<{ next: number }>({ next: 0 });
-  // Cached render outputs. Their references only change when their contents do, so a
-  // quiet tick hands the memoized list the exact same props and it skips the work.
-  const renderCacheRef = useRef<{
-    messages: (string | BackendChatMessage)[];
-    deleted: Set<string>;
-    cleared: Map<string, { context: ModerationContext; affectedMessageIds: Set<string> }>;
-  }>({ messages: [], deleted: new Set(), cleared: new Map() });
-
-  const { messages, deletedMessageIds, clearedUserContexts } = useMemo(() => {
-    const store = useChatConnectionStore.getState();
-    // Match by the STORE MAP KEY via parseKey (the source of truth): a Kick slice
-    // is keyed `kick:slug` and its own `.channel` field holds that composite key,
-    // not the bare slug. parseKey normalizes both bare Twitch (`xqc`) and composite.
-    const open = new Set(channels.map(sourceKey));
-    const byKey = new Map(channels.map((c) => [sourceKey(c), c] as const));
-    const keyOf = (m: string | BackendChatMessage) =>
-      typeof m === 'string' ? m.match(/id=([^;]+)/)?.[1] ?? m : m.id;
-    const order = orderRef.current;
-    const idToMsg = idToMsgRef.current;
-    const idToChannel = idToChannelRef.current;
-
-    let structuralChange = false; // appended/removed -> messages identity must change
-    let refChange = false; // an on-screen row's reference upgraded in place
-
-    // One pass over the open slices: record presence, queue newcomers, refresh
-    // in-place upgrades. Newcomers are gathered in store-iteration order so that
-    // equal-timestamp ties resolve the same way the old full-rebuild did. This
-    // reconcile is idempotent (driven off the slices, keyed by id), so React 18
-    // StrictMode's double-invoke in dev is a harmless no-op the second time.
-    const present = new Set<string>();
-    const newcomers: Array<{ id: string; m: string | BackendChatMessage; ch?: BlendedChannel }> = [];
-    for (const [key, slice] of store.channels.entries()) {
-      const pk = parseKey(key);
-      const skey = `${pk.provider}::${pk.channel.toLowerCase()}`;
-      if (!open.has(skey)) continue;
-      const ch = byKey.get(skey);
-      for (const m of slice.messages) {
-        const id = keyOf(m);
-        if (!id) continue; // unkeyable; can't track/dedupe/remove it reliably
-        if (present.has(id)) continue; // a dup id across slices renders once (the list guards too)
-        present.add(id);
-        const prev = idToMsg.get(id);
-        if (prev === undefined) {
-          newcomers.push({ id, m, ch });
-        } else if (prev !== m) {
-          // Same id, new slot reference: an in-place upgrade (own repaint / echo /
-          // Helix-id stamp). Refresh the held reference so the row repaints.
-          idToMsg.set(id, m);
-          refChange = true;
-          if (ch) {
-            idToChannel.set(id, ch);
-            const tagId = typeof m !== 'string' ? m.tags?.['id'] : undefined;
-            if (tagId && tagId !== id) idToChannel.set(tagId, ch);
-          }
-        }
-      }
-    }
-
-    // Removals: ids we hold that no longer appear in any open slice (cap eviction,
-    // or the source was removed from the blend). `present` already includes this
-    // tick's newcomers (still absent from idToMsg), so a size comparison can't tell
-    // us anything, so scan the held ids directly. Compact the order array in one pass
-    // only when something was actually dropped.
-    let removedAny = false;
-    for (const id of Array.from(idToMsg.keys())) {
-      if (!present.has(id)) {
-        idToMsg.delete(id);
-        idToChannel.delete(id);
-        removedAny = true;
-      }
-    }
-    if (removedAny) {
-      let w = 0;
-      for (let r = 0; r < order.length; r++) {
-        if (idToMsg.has(order[r])) order[w++] = order[r];
-      }
-      order.length = w;
-      structuralChange = true;
-    }
-
-    // Append newcomers as one send-time-ordered batch (Array.sort is stable, so
-    // equal timestamps keep their store-iteration order).
-    if (newcomers.length) {
-      newcomers.sort((a, b) => tsOf(a.m) - tsOf(b.m));
-      for (const x of newcomers) {
-        idToMsg.set(x.id, x.m);
-        order.push(x.id);
-        seqRef.current.next++;
-        if (x.ch) {
-          idToChannel.set(x.id, x.ch);
-          const tagId = typeof x.m !== 'string' ? x.m.tags?.['id'] : undefined;
-          if (tagId && tagId !== x.id) idToChannel.set(tagId, x.ch);
-        }
-      }
-      structuralChange = true;
-    }
-
-    // Moderation sets are FLAGGED on the slice (never spliced from messages), so
-    // they stay cheap to re-collect; reuse the prior reference when unchanged so a
-    // quiet tick doesn't re-render the list.
-    const cache = renderCacheRef.current;
-    const deleted = new Set<string>();
-    const cleared = new Map<string, { context: ModerationContext; affectedMessageIds: Set<string> }>();
-    for (const [key, slice] of store.channels.entries()) {
-      const pk = parseKey(key);
-      const skey = `${pk.provider}::${pk.channel.toLowerCase()}`;
-      if (!open.has(skey)) continue;
-      slice.deletedMessageIds?.forEach((id: string) => deleted.add(id));
-      slice.clearedUserContexts?.forEach(
-        (v: { context: ModerationContext; affectedMessageIds: Set<string> }, k: string) => cleared.set(k, v),
-      );
-    }
-    const deletedSame =
-      deleted.size === cache.deleted.size && [...deleted].every((id) => cache.deleted.has(id));
-    const clearedSame =
-      cleared.size === cache.cleared.size && [...cleared.keys()].every((k) => cache.cleared.has(k));
-    if (!deletedSame) cache.deleted = deleted;
-    if (!clearedSame) cache.cleared = cleared;
-
-    // Rebuild the rendered array only when the set or a reference actually changed;
-    // otherwise hand back the identical reference so the memoized rows + list bail.
-    if (structuralChange || refChange || cache.messages.length !== order.length) {
-      cache.messages = order.map((id) => idToMsg.get(id) as string | BackendChatMessage);
-    }
-    return {
-      messages: cache.messages,
-      deletedMessageIds: cache.deleted,
-      clearedUserContexts: cache.cleared,
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [channels, revision]);
 
   // Stable view of the current feed + source map for the row callbacks, so those
   // callbacks keep a fixed identity (they read the ref) and don't defeat the row
@@ -340,7 +123,7 @@ export function BlendedChatPane({
   }, [messages, mode]);
 
   const getMessageId = useCallback(
-    (m: string | BackendChatMessage) => (typeof m === 'string' ? m.match(/id=([^;]+)/)?.[1] ?? null : m.id),
+    (m: string | BackendChatMessage) => (typeof m === 'string' ? m.match(/(?:^@|;)id=([^;]+)/)?.[1] ?? null : m.id),
     [],
   );
 
@@ -452,7 +235,10 @@ export function BlendedChatPane({
         scrollPaneToBottom();
       }
     },
-    [scrollPaneToBottom],
+    // seqRef is a ref, so its identity never changes; listing it satisfies the
+    // exhaustive-deps rule without affecting the callback's own stability, which
+    // is what keeps the row memo intact.
+    [scrollPaneToBottom, seqRef],
   );
 
   // Reply jump. Normal panes get this from ChatWidget; the blended pane wires its
@@ -496,12 +282,12 @@ export function BlendedChatPane({
 
   // ----- composer -----------------------------------------------------------
   const [text, setText] = useState('');
-  const [sending, setSending] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   // From the shared event-driven store. Previously two 5s polls per blended pane,
   // both reading in-memory bools that change only on connect/disconnect.
   const kickConnected = usePlatformAccountStore((s) => s.kick.connected);
   const youtubeConnected = usePlatformAccountStore((s) => s.youtube.connected);
+  const tiktokConnected = usePlatformAccountStore((s) => s.tiktok.connected);
   // Right-click-a-name reply target. The send routes to THIS source + account,
   // overriding the multi-select for that one message.
   const [replyingTo, setReplyingTo] = useState<{ messageId: string; username: string; channel: BlendedChannel } | null>(
@@ -515,17 +301,18 @@ export function BlendedChatPane({
   const isOn = useCallback((c: BlendedChannel) => !deselected.has(sourceKey(c)), [deselected]);
   const selected = useMemo(() => channels.filter(isOn), [channels, isOn]);
 
-  // Whether we can actually post to a source: Twitch always; Kick/YouTube once
-  // their account is connected; TikTok (and other read-only providers) never.
+  // Whether we can actually post to a source: Twitch always; Kick, YouTube and
+  // TikTok once their account is connected; read-only providers never.
   const canSendTo = useCallback(
     (c: BlendedChannel) => {
       const p = provOf(c);
       if (p === 'twitch') return true;
       if (p === 'kick') return kickConnected;
       if (p === 'youtube') return youtubeConnected;
+      if (p === 'tiktok') return tiktokConnected;
       return false;
     },
-    [kickConnected, youtubeConnected],
+    [kickConnected, youtubeConnected, tiktokConnected],
   );
   // The per-source picker badge: 'login' (connect to send), 'readonly' (no send
   // path at all), or null (good to go).
@@ -535,9 +322,10 @@ export function BlendedChatPane({
       if (p === 'twitch') return null;
       if (p === 'kick') return kickConnected ? null : 'login';
       if (p === 'youtube') return youtubeConnected ? null : 'login';
+      if (p === 'tiktok') return tiktokConnected ? null : 'login';
       return 'readonly';
     },
-    [kickConnected, youtubeConnected],
+    [kickConnected, youtubeConnected, tiktokConnected],
   );
   const sendableSelected = useMemo(() => selected.filter(canSendTo), [selected, canSendTo]);
 
@@ -591,7 +379,9 @@ export function BlendedChatPane({
       setReplyingTo({ messageId, username, channel });
       requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
     },
-    [],
+    // A ref identity, stable for the component's life: the callback still never
+    // changes, which is what stops it defeating the row memo.
+    [idToChannelRef],
   );
 
   // Click a badge on a message -> open its detail in the badges overlay, which lives
@@ -641,7 +431,9 @@ export function BlendedChatPane({
         clientY: event.clientY,
       });
     },
-    [],
+    // A ref identity, stable for the component's life: the callback still never
+    // changes, which is what stops it defeating the row memo.
+    [idToChannelRef],
   );
 
   // Drop a pending reply if its channel was removed from the blend.
@@ -651,37 +443,44 @@ export function BlendedChatPane({
     }
   }, [channels, replyingTo]);
 
-  const handleSend = useCallback(async () => {
+  // Each source sends on its own queue, in the order things were typed. A slow
+  // platform only delays its own next message: never another platform's, and
+  // never the composer, which clears and takes the next message at once.
+  const sendQueuesRef = useRef(new Map<string, Promise<void>>());
+  const queueSend = useCallback((c: BlendedChannel, send: () => Promise<void>) => {
+    const key = sourceKey(c);
+    const queues = sendQueuesRef.current;
+    const next = (queues.get(key) ?? Promise.resolve())
+      .then(send)
+      .catch((e) => Logger.warn(`[Blended] send to ${key} failed:`, e));
+    queues.set(key, next);
+    void next.then(() => {
+      if (queues.get(key) === next) queues.delete(key);
+    });
+  }, []);
+
+  const handleSend = useCallback(() => {
     const body = text.trim();
-    if (!body || sending) return;
+    if (!body) return;
     // A reply overrides the multi-select: it goes to just the one source the person
     // posted in, through that provider's reply path.
     if (replyingTo) {
       const { channel, messageId, username } = replyingTo;
       // Not logged in to that platform -> can't reply; the connect chip prompts.
       if (!canSendTo(channel)) return;
-      setSending(true);
       setText('');
       setReplyingTo(null);
-      await sendTo(channel, body, { parentId: messageId, parentUser: username }).catch((e) =>
-        Logger.warn(`[Blended] reply to ${sourceKey(channel)} failed:`, e),
-      );
-      setSending(false);
+      queueSend(channel, () => sendToSource(channel, body, { parentId: messageId, parentUser: username }));
       return;
     }
     // Only the chats we can actually post to (Twitch, or a connected Kick/YouTube).
     // A selected-but-not-logged-in (or read-only) source is skipped, never silently
-    // "sent" — the picker badges + connect chips tell the user why.
+    // "sent": the picker badges and connect chips tell the user why.
     const targets = selected.filter(canSendTo);
     if (targets.length === 0) return;
-    setSending(true);
     setText('');
-    // Send to each target independently so one failure doesn't block the rest.
-    await Promise.all(
-      targets.map((c) => sendTo(c, body).catch((e) => Logger.warn(`[Blended] send to ${sourceKey(c)} failed:`, e))),
-    );
-    setSending(false);
-  }, [text, sending, selected, replyingTo, canSendTo]);
+    for (const c of targets) queueSend(c, () => sendToSource(c, body));
+  }, [text, selected, replyingTo, canSendTo, queueSend]);
 
   // Scroll-to-pause, mirroring ChatWidget: `onPauseIntent` is the primary pause (fires
   // on a real scroll-up gesture, before any threshold); `onScroll` adds distance-based
@@ -904,7 +703,7 @@ export function BlendedChatPane({
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                void handleSend();
+                handleSend();
               } else if (e.key === 'Escape' && replyingTo) {
                 e.preventDefault();
                 setReplyingTo(null);
@@ -928,10 +727,9 @@ export function BlendedChatPane({
           <Tooltip content="Send">
             <button
               type="button"
-              onClick={() => void handleSend()}
+              onClick={handleSend}
               disabled={
                 !text.trim() ||
-                sending ||
                 (replyingTo ? !canSendTo(replyingTo.channel) : sendableSelected.length === 0)
               }
               className="glass-button flex h-9 w-9 shrink-0 items-center justify-center self-center rounded text-white transition-all disabled:cursor-not-allowed disabled:opacity-50"

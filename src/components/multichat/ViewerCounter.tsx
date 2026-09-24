@@ -1,20 +1,26 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { createPortal } from 'react-dom';
-import { Eye } from 'lucide-react';
+import { UsersThree } from 'phosphor-react';
 import { ProviderLogo } from '../ProviderLogo';
 import type { ProviderId } from '../../types/providers';
 import { useVisibleInterval } from '../../utils/useVisibleInterval';
+import { unwatchChannel, useChannelStateStore, watchChannel } from '../../stores/channelStateStore';
 
 // A clean, aggregate viewer counter for the MultiChat title bar: total live
-// viewers across every open source, with a per-stream breakdown on hover. Polls
-// at the WINDOW level (not per pane) so it works in every mode — including
-// blended, where the per-channel panes aren't mounted.
+// viewers across every open source, with a per-stream breakdown on hover. It
+// asks nothing of any platform itself. Twitch counts come from Rust's channel
+// state, one batched poll for every watched channel that the chat panes share;
+// the counter holds its own watches because blended mode mounts no panes.
+// Every other platform's count is already held by its chat adapter in Rust
+// and is read from there, each source on its own.
 
 interface ViewerSource {
   channel: string;
   channelName?: string;
   provider?: ProviderId;
+  /** Twitch user id, which a channel-state watch is keyed by. */
+  channelId?: string | null;
 }
 
 interface ViewerStat {
@@ -34,17 +40,12 @@ function metaCommandFor(provider: ProviderId): string | null {
   return null;
 }
 
+/** A non-Twitch source's count, read from what its chat adapter holds. */
 async function fetchStat(src: ViewerSource): Promise<ViewerStat> {
   const provider = src.provider ?? 'twitch';
   const slug = src.channel.toLowerCase();
   const base = { key: `${provider}:${slug}`, name: src.channelName || src.channel, provider };
   try {
-    if (provider === 'twitch') {
-      const s = await invoke<{ viewer_count?: number | null } | null>('check_stream_online', {
-        userLogin: slug,
-      });
-      return { ...base, count: s?.viewer_count ?? null, isLive: s !== null };
-    }
     const cmd = metaCommandFor(provider);
     if (cmd) {
       const m = await invoke<{ viewer_count?: number | null; is_live?: boolean } | null>(cmd, {
@@ -59,30 +60,60 @@ async function fetchStat(src: ViewerSource): Promise<ViewerStat> {
 }
 
 export default function ViewerCounter({ channels }: { channels: ViewerSource[] }) {
-  const [stats, setStats] = useState<ViewerStat[]>([]);
+  const [providerStats, setProviderStats] = useState<Record<string, ViewerStat>>({});
   const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
 
-  const poll = useCallback(async () => {
-    if (channels.length === 0) return;
-    setStats(await Promise.all(channels.map(fetchStat)));
-  }, [channels]);
-
-  // Initial fetch on mount / when the channel set changes. Inline async (setState
-  // only AFTER the await, inside a callback) so it doesn't trip the cascading-
-  // render guard the way a direct `void poll()` in the effect body would. When
-  // channels empties the component returns null, so stale stats are never shown.
+  // Twitch: watch each channel in Rust's channel state for as long as it is
+  // here. A channel whose id has not resolved yet joins once it has.
+  const twitchWatch = useMemo(
+    () =>
+      channels
+        .filter((c) => (c.provider ?? 'twitch') === 'twitch' && c.channelId)
+        .map((c) => `${c.channel.toLowerCase()} ${c.channelId}`)
+        .join(','),
+    [channels],
+  );
   useEffect(() => {
-    let active = true;
-    (async () => {
-      if (channels.length === 0) return;
-      const results = await Promise.all(channels.map(fetchStat));
-      if (active) setStats(results);
-    })();
+    const pairs = twitchWatch ? twitchWatch.split(',').map((p) => p.split(' ')) : [];
+    for (const [login, id] of pairs) void watchChannel(login, id);
     return () => {
-      active = false;
+      for (const [login] of pairs) void unwatchChannel(login);
     };
-  }, [channels]);
-  useVisibleInterval(poll, VIEWER_POLL_MS);
+  }, [twitchWatch]);
+  const twitchStates = useChannelStateStore((s) => s.channels);
+
+  // Everything else: each source's count lands on its own, so a slow one never
+  // holds back the rest.
+  const providerSources = useMemo(
+    () => channels.filter((c) => (c.provider ?? 'twitch') !== 'twitch'),
+    [channels],
+  );
+  const readProviders = useCallback(() => {
+    for (const src of providerSources) {
+      void fetchStat(src).then((stat) => setProviderStats((prev) => ({ ...prev, [stat.key]: stat })));
+    }
+  }, [providerSources]);
+  useEffect(() => {
+    readProviders();
+  }, [readProviders]);
+  useVisibleInterval(readProviders, VIEWER_POLL_MS);
+
+  const stats = useMemo<ViewerStat[]>(
+    () =>
+      channels.map((src) => {
+        const provider = src.provider ?? 'twitch';
+        const slug = src.channel.toLowerCase();
+        const key = `${provider}:${slug}`;
+        const name = src.channelName || src.channel;
+        if (provider === 'twitch') {
+          // Rust reports no count for a channel that is not live.
+          const count = twitchStates.get(slug)?.viewer_count ?? null;
+          return { key, name, provider, count, isLive: count !== null };
+        }
+        return providerStats[key] ?? { key, name, provider, count: null, isLive: false };
+      }),
+    [channels, twitchStates, providerStats],
+  );
 
   const total = useMemo(
     () => stats.reduce((sum, s) => sum + (s.isLive && s.count ? s.count : 0), 0),
@@ -104,7 +135,7 @@ export default function ViewerCounter({ channels }: { channels: ViewerSource[] }
         onMouseLeave={() => setAnchor(null)}
         className="flex items-center gap-1.5 rounded px-2 py-0.5 text-xs text-textSecondary transition-colors hover:bg-white/5 hover:text-textPrimary"
       >
-        <Eye size={13} />
+        <UsersThree size={13} weight="fill" />
         <span className="font-medium tabular-nums">{total.toLocaleString()}</span>
         {liveCount > 0 && (
           <span className="relative flex h-1.5 w-1.5">

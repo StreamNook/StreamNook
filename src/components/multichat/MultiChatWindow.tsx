@@ -28,6 +28,22 @@ import { ActivityFeedWidget } from '../activity/ActivityFeedWidget';
 import { startActivityNormalizer, stopActivityNormalizer } from '../../services/activityNormalizer';
 import { useActivityStore } from '../../stores/activityStore';
 import { makeKey, parseKey } from '../../utils/providerKey';
+import {
+  isYouTubeChannelId,
+  isYouTubeLegacyPath,
+  kickSlugFromInput,
+  kickSlugHasTwoSpellings,
+  parseKickLink,
+  parseTikTokLink,
+  parseYouTubeIdentifier,
+  parseYouTubeLink,
+} from '../../utils/parseChannelInput';
+import {
+  lookupError,
+  resolveKickSlug,
+  resolveYouTubeIdentifier,
+  youTubeChannelTitle,
+} from '../../services/channelLookup';
 import { CHAT_PROVIDERS, PROVIDERS, type ProviderId } from '../../types/providers';
 import { ProviderLogo } from '../ProviderLogo';
 import { BlendedChatPane } from './BlendedChatPane';
@@ -390,19 +406,7 @@ export default function MultiChatWindow() {
   // controller (see ChatWidget), and this drives the hotkeys against it.
   useKeybindings();
   useEffect(() => {
-    let unlistenSnippets: (() => void) | undefined;
-    let cancelled = false;
-    void startSnippetSync().then((u) => {
-      if (cancelled) {
-        u?.();
-        return;
-      }
-      unlistenSnippets = u;
-    });
-    return () => {
-      cancelled = true;
-      unlistenSnippets?.();
-    };
+    startSnippetSync();
   }, []);
   const [params] = useState<ParsedMultiChatParams>(() => parseMultiChatParams());
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
@@ -1118,20 +1122,25 @@ export default function MultiChatWindow() {
       // A Kick source: chosen via the provider dropdown, or auto-detected from a
       // pasted kick.com link / "kick:" / "kick/" prefix. Read anonymously over
       // Kick's Pusher socket; no Twitch resolve.
-      const kickMatch =
-        trimmed.match(/^(?:https?:\/\/)?(?:www\.)?kick\.com\/(@?[a-z0-9_]+)/i) ||
-        trimmed.match(/^kick[:/](@?[a-z0-9_]+)$/i);
-      if (provider === 'kick' || kickMatch) {
-        // Kick slugs are [a-z0-9_] only (no spaces/punctuation), so normalize to
-        // that: it turns a typed display name like "ice poseidon" into the real
-        // slug "iceposeidon", and keeps an invalid char from reaching the backend
-        // (a space there crashed the resolver — Tauri window labels reject spaces).
-        const slug = (kickMatch ? kickMatch[1] : trimmed)
-          .toLowerCase()
-          .replace(/[^a-z0-9_]/g, '');
+      const kickFromLink = parseKickLink(trimmed);
+      if (provider === 'kick' || kickFromLink) {
+        let slug = kickSlugFromInput(trimmed);
         if (!slug) {
           setAddError('Channel name is required');
           return;
+        }
+        if (kickSlugHasTwoSpellings(slug)) {
+          // A typed "some_name" can be some-name on Kick, depending on the account.
+          setAddBusy(true);
+          setAddError(null);
+          try {
+            slug = await resolveKickSlug(slug);
+          } catch (err) {
+            setAddError(lookupError(err, 'Kick'));
+            return;
+          } finally {
+            setAddBusy(false);
+          }
         }
         if (channels.some((c) => c.channel === slug && (c.provider ?? 'twitch') === 'kick')) {
           setAddError(`#${slug} is already open`);
@@ -1148,23 +1157,32 @@ export default function MultiChatWindow() {
       }
       // A YouTube source: chosen via the dropdown, or auto-detected from a pasted
       // youtube.com / youtu.be link. Read anonymously over YouTube's InnerTube API
-      // (no login); only live streams have chat.
-      const ytFromLink = parseYouTubeInput(trimmed);
+      // (no login); only live streams have chat. Links only, like the TikTok
+      // parser below: a typed word has to fall through to the Twitch login.
+      const ytFromLink = parseYouTubeLink(trimmed);
       if (provider === 'youtube' || ytFromLink) {
-        let identifier = ytFromLink ?? '';
-        if (!identifier) {
-          // Typed directly with the YouTube dropdown: a bare handle / id. Bare
-          // handles get an @ so the backend never confuses one with a video id.
-          const raw = trimmed.replace(/^youtube[:/]/i, '').replace(/^#/, '');
-          if (/^[A-Za-z0-9_-]{11}$/.test(raw) || /^UC[A-Za-z0-9_-]{22}$/.test(raw)) {
-            identifier = raw;
-          } else if (raw) {
-            identifier = raw.startsWith('@') ? raw : `@${raw}`;
-          }
-        }
-        if (!identifier || identifier === '@') {
+        // Typed with the YouTube dropdown: a handle (with or without the @) or a
+        // UC id, by the same rules as the overlay. A typed word is always a
+        // handle, never a video id; a video has a link to paste.
+        const ytParsed =
+          ytFromLink ?? parseYouTubeIdentifier(trimmed.replace(/^youtube[:/]/i, '').replace(/^#/, ''));
+        if (!ytParsed) {
           setAddError('Enter a YouTube channel (@handle) or a live URL');
           return;
+        }
+        let identifier = ytParsed;
+        if (isYouTubeLegacyPath(ytParsed)) {
+          // A /c/ or /user/ link names no channel until YouTube says which.
+          setAddBusy(true);
+          setAddError(null);
+          try {
+            identifier = await resolveYouTubeIdentifier(ytParsed);
+          } catch (err) {
+            setAddError(lookupError(err, 'YouTube'));
+            return;
+          } finally {
+            setAddBusy(false);
+          }
         }
         if (
           channels.some(
@@ -1193,7 +1211,7 @@ export default function MultiChatWindow() {
       // A TikTok source: chosen via the dropdown, or auto-detected from a pasted
       // tiktok.com link. Read anonymously over TikTok's webcast socket (no login);
       // only creators currently LIVE have chat.
-      const ttFromLink = parseTikTokInput(trimmed);
+      const ttFromLink = parseTikTokLink(trimmed);
       if (provider === 'tiktok' || ttFromLink) {
         const handle = (ttFromLink ?? trimmed.replace(/^tiktok[:/]/i, '').replace(/^[@#]/, '')).trim();
         if (!handle) {
@@ -1753,6 +1771,41 @@ export default function MultiChatWindow() {
       cancelled = true;
       clearInterval(t);
     };
+  }, [channels]);
+
+  // A YouTube channel added by its UC id (a /channel/ or legacy /c/ link, or a
+  // typed id) is renamed only by its pane's live metadata, so an offline one kept
+  // the raw id as its tab name. Ask YouTube for the channel's name, which it gives
+  // live or not. A result is applied even if `channels` changed meanwhile: the
+  // update itself checks the tab still shows the raw id, and dropping it would
+  // strand the tab, since the ref already marks the id as asked.
+  const titledYouTubeIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const c of channels) {
+      if (
+        c.provider !== 'youtube' ||
+        c.channelName !== c.channel ||
+        !isYouTubeChannelId(c.channel) ||
+        titledYouTubeIdsRef.current.has(c.channel)
+      ) {
+        continue;
+      }
+      const id = c.channel;
+      titledYouTubeIdsRef.current.add(id);
+      void youTubeChannelTitle(id).then((title) => {
+        if (!title) {
+          titledYouTubeIdsRef.current.delete(id); // YouTube didn't answer: try again later
+          return;
+        }
+        setChannels((prev) =>
+          prev.map((e) =>
+            e.provider === 'youtube' && e.channel === id && e.channelName === e.channel
+              ? { ...e, channelName: title }
+              : e,
+          ),
+        );
+      });
+    }
   }, [channels]);
 
   // --- Go Live profile: one saved snapshot of the streamer's own sources +
@@ -3106,6 +3159,9 @@ interface TabContextMenuState {
 // pattern so the popout's channel switcher looks and feels identical to the
 // in-app MultiNook switcher. Active tab: `glass-input` + accent text;
 // inactive: `glass-button` + secondary text → primary on hover.
+/** How far the tab strip fades at an edge with tabs scrolled behind it. */
+const TAB_FADE_PX = 24;
+
 function TabStrip({
   channels,
   active,
@@ -3143,6 +3199,61 @@ function TabStrip({
     return () => window.removeEventListener('keydown', onKey);
   }, [contextMenu]);
 
+  // The tabs scroll sideways with no scrollbar: a bar under a row of pills is
+  // chrome, not information. Overflow shows as a fade on each edge that has tabs
+  // behind it, a mouse wheel scrolls the row, and the active tab is kept in view.
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const [edges, setEdges] = useState({ left: false, right: false });
+  const measureEdges = useCallback(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const left = el.scrollLeft > 1;
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+    setEdges((prev) => (prev.left === left && prev.right === right ? prev : { left, right }));
+  }, []);
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    // Re-measure when the window resizes or the tabs change width (added,
+    // removed, renamed). A vertical mouse wheel turns into a sideways scroll;
+    // trackpads already send deltaX, so only a mostly-vertical wheel is taken.
+    const observer = new ResizeObserver(measureEdges);
+    observer.observe(el);
+    if (el.firstElementChild) observer.observe(el.firstElementChild);
+    const onWheel = (e: WheelEvent) => {
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX) || el.scrollWidth <= el.clientWidth) return;
+      e.preventDefault();
+      el.scrollLeft += e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    measureEdges();
+    return () => {
+      observer.disconnect();
+      el.removeEventListener('wheel', onWheel);
+    };
+  }, [measureEdges]);
+  // A tab added past the right edge becomes the active one: bring it into view,
+  // clear of the fade, instead of leaving it scrolled out of sight.
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el || !active) return;
+    const tab = el.querySelector<HTMLElement>(`[data-tab-key="${CSS.escape(active)}"]`);
+    if (!tab) return;
+    const t = tab.getBoundingClientRect();
+    const s = el.getBoundingClientRect();
+    if (t.left < s.left + TAB_FADE_PX) {
+      el.scrollBy({ left: t.left - s.left - TAB_FADE_PX, behavior: 'smooth' });
+    } else if (t.right > s.right - TAB_FADE_PX) {
+      el.scrollBy({ left: t.right - s.right + TAB_FADE_PX, behavior: 'smooth' });
+    }
+  }, [active, channels.length]);
+  const edgeMask =
+    edges.left || edges.right
+      ? `linear-gradient(to right, ${edges.left ? `transparent, #000 ${TAB_FADE_PX}px` : '#000'}, ${
+          edges.right ? `#000 calc(100% - ${TAB_FADE_PX}px), transparent` : '#000'
+        })`
+      : undefined;
+
   return (
     <div className="flex flex-shrink-0 items-center gap-2 border-b border-borderSubtle bg-glass/30 px-3 py-2.5 portrait:py-3.5 shadow-sm backdrop-blur-sm">
       {/* Permanent, pinned-left Go Live control: one click loads the streamer's
@@ -3159,7 +3270,18 @@ function TabStrip({
         onExitLive={onGoLiveExit}
       />
       <div className="h-5 w-px flex-shrink-0 bg-borderSubtle" aria-hidden />
-      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto scrollbar-thin">
+      {/* Only the tabs scroll. The new-window and add buttons sit outside the
+          scroller, so a narrow window (a new one is 402 px) can't push "+" off
+          its right edge. While the tabs fit, the buttons still follow the last
+          tab, because the scroller takes only the width its tabs need. The
+          standard scrollbar-width (not ::-webkit-scrollbar) hides the bar, so it
+          also beats the macOS thin-bar rule in globals.css. */}
+      <div
+        ref={scrollerRef}
+        onScroll={measureEdges}
+        className="flex min-w-0 flex-initial items-center overflow-x-auto"
+        style={{ scrollbarWidth: 'none', maskImage: edgeMask, WebkitMaskImage: edgeMask }}
+      >
         <div className="flex min-w-max items-center gap-1.5">
         {channels.map((c) => {
           // Provider-namespaced identity — bare `c.channel` collides when the
@@ -3221,6 +3343,9 @@ function TabStrip({
             />
           );
         })}
+        </div>
+      </div>
+      <div className="flex flex-shrink-0 items-center gap-1.5">
         <Tooltip content="New MultiChat window. Each window is its own renderer, about 150 MB; splits inside one window are free." side="bottom">
           <button
             type="button"
@@ -3259,7 +3384,6 @@ function TabStrip({
             <line x1="2" y1="6" x2="10" y2="6" />
           </svg>
         </button>
-        </div>
       </div>
 
       {contextMenu && (
@@ -3340,6 +3464,7 @@ function TabButton({
 
   return (
     <div
+      data-tab-key={entryKey(entry)}
       className={`group relative transition-opacity ${
         isDragOver ? 'opacity-60' : ''
       }`}
@@ -3538,35 +3663,6 @@ interface AddChannelPanelProps {
 // search API to autocomplete). Derived from the chat flags so this list can't
 // drift from what the adapters actually support.
 const ADDABLE_PROVIDERS: ProviderId[] = CHAT_PROVIDERS;
-
-// Extract a stable YouTube source identifier from a pasted link or typed value.
-// Returns `@handle` for a channel (case-insensitive at YouTube) or a verbatim
-// 11-char video id / UC… channel id (case-SENSITIVE — kept as-is; only the
-// composite key is lowercased and the backend resolves with the original case).
-function parseYouTubeInput(input: string): string | null {
-  const s = input.trim();
-  let m = s.match(/youtu\.be\/([A-Za-z0-9_-]{11})/);
-  if (m) return m[1];
-  if (/youtube\.com\/watch/i.test(s)) {
-    m = s.match(/[?&]v=([A-Za-z0-9_-]{11})/);
-    if (m) return m[1];
-  }
-  m = s.match(/youtube\.com\/live\/([A-Za-z0-9_-]{11})/i);
-  if (m) return m[1];
-  m = s.match(/youtube\.com\/channel\/(UC[A-Za-z0-9_-]{22})/i);
-  if (m) return m[1];
-  m = s.match(/youtube\.com\/@([A-Za-z0-9_.-]+)/i);
-  if (m) return `@${m[1]}`;
-  return null;
-}
-
-// Extract a TikTok handle from a pasted profile / LIVE link (link-only, like
-// YouTube — a bare word only becomes TikTok when the dropdown picks TikTok, so it
-// can't hijack a typed Twitch login). Returns the bare unique id (no @).
-function parseTikTokInput(input: string): string | null {
-  const m = input.trim().match(/tiktok\.com\/@([A-Za-z0-9_.]+)/i);
-  return m ? m[1] : null;
-}
 
 function AddChannelPanel({
   value,
