@@ -667,65 +667,36 @@ pub async fn cache_item(
     save_cached_item(entry).await
 }
 
-/// Parse date string in format "DD Month YYYY" to timestamp for sorting
-fn parse_date_to_timestamp(date_str: &str) -> i64 {
-    use chrono::{NaiveDate};
-
-    // Try to parse "DD Month YYYY" format
-    let months = [
-        ("January", 1),
-        ("February", 2),
-        ("March", 3),
-        ("April", 4),
-        ("May", 5),
-        ("June", 6),
-        ("July", 7),
-        ("August", 8),
-        ("September", 9),
-        ("October", 10),
-        ("November", 11),
-        ("December", 12),
+/// Badgebase's "Date of addition" as a sortable (year, month, day). It comes
+/// as "30 March 2026", or as "March 2018" for older badges, and anything else
+/// is (0, 0, 0) so it sorts as oldest. Compared as raw text these orderings
+/// scramble: "4 February 2026" sorts above "30 March 2026" because '4' > '3'.
+/// A month-only date takes day 0, so it sorts after every dated day of that
+/// month.
+fn badge_date_key(date_str: &str) -> (i32, u32, u32) {
+    const MONTHS: [&str; 12] = [
+        "january", "february", "march", "april", "may", "june", "july", "august",
+        "september", "october", "november", "december",
     ];
+    let month_of = |s: &str| {
+        let s = s.to_ascii_lowercase();
+        MONTHS.iter().position(|m| *m == s).map(|i| i as u32 + 1)
+    };
+    let year_of = |s: &str| s.parse::<i32>().ok().filter(|y| (1900..=3000).contains(y));
 
-    // Split the date string
     let parts: Vec<&str> = date_str.split_whitespace().collect();
-    if parts.len() != 3 {
-        return 0; // Invalid format
-    }
-
-    // Parse day
-    let day = match parts[0].parse::<u32>() {
-        Ok(d) if (1..=31).contains(&d) => d,
-        _ => return 0,
+    let parsed = match parts.as_slice() {
+        [day, month, year] => day
+            .parse::<u32>()
+            .ok()
+            .filter(|d| (1..=31).contains(d))
+            .zip(month_of(month))
+            .zip(year_of(year))
+            .map(|((d, m), y)| (y, m, d)),
+        [month, year] => month_of(month).zip(year_of(year)).map(|(m, y)| (y, m, 0)),
+        _ => None,
     };
-
-    // Parse month
-    let month = months
-        .iter()
-        .find(|(name, _)| *name == parts[1])
-        .map(|(_, num)| *num)
-        .unwrap_or(0);
-
-    if month == 0 {
-        return 0;
-    }
-
-    // Parse year
-    let year = match parts[2].parse::<i32>() {
-        Ok(y) if (1900..=3000).contains(&y) => y,
-        _ => return 0,
-    };
-
-    // Create a date and convert to timestamp
-    match NaiveDate::from_ymd_opt(year, month, day) {
-        Some(date) => {
-            // Convert to timestamp (seconds since epoch)
-            date.and_hms_opt(0, 0, 0)
-                .map(|dt| dt.and_utc().timestamp())
-                .unwrap_or(0)
-        }
-        None => 0,
-    }
+    parsed.unwrap_or((0, 0, 0))
 }
 
 /// Internal function to assign positions (called from download_universal_manifest with lock already held)
@@ -753,15 +724,11 @@ fn assign_badge_metadata_positions_impl() -> Result<usize> {
         let a_data = &a.1.data;
         let b_data = &b.1.data;
 
-        // Extract date_added
-        let a_date = a_data
-            .get("date_added")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let b_date = b_data
-            .get("date_added")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let date_of = |data: &serde_json::Value| {
+            badge_date_key(data.get("date_added").and_then(|v| v.as_str()).unwrap_or(""))
+        };
+        let a_date = date_of(a_data);
+        let b_date = date_of(b_data);
 
         // Parse usage stats
         let parse_usage = |stats: &str| -> u32 {
@@ -784,7 +751,7 @@ fn assign_badge_metadata_positions_impl() -> Result<usize> {
             .unwrap_or(0);
 
         // Sort by date (newest first), then usage (highest first)
-        b_date.cmp(a_date).then(b_usage.cmp(&a_usage))
+        b_date.cmp(&a_date).then(b_usage.cmp(&a_usage)).then(a.0.cmp(&b.0))
     });
 
     // Assign positions
@@ -1601,4 +1568,41 @@ pub async fn auto_sync_if_stale() -> Result<bool> {
 /// for the resource line.
 pub fn manifest_len() -> Option<usize> {
     MANIFEST_MEMORY.try_read().ok().map(|m| m.entries.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::badge_date_key;
+
+    #[test]
+    fn badge_dates_order_by_calendar_not_text() {
+        let mut dates = vec![
+            "4 February 2026",
+            "30 March 2026",
+            "March 2018",
+            "2 September 2026",
+            "16 September 2025",
+            "garbage",
+            "13 August 2026",
+        ];
+        dates.sort_by(|a, b| badge_date_key(b).cmp(&badge_date_key(a)));
+        assert_eq!(
+            dates,
+            [
+                "2 September 2026",
+                "13 August 2026",
+                "30 March 2026",
+                "4 February 2026",
+                "16 September 2025",
+                "March 2018",
+                "garbage",
+            ]
+        );
+    }
+
+    #[test]
+    fn month_only_sorts_after_that_months_dated_days() {
+        assert!(badge_date_key("1 March 2018") > badge_date_key("March 2018"));
+        assert!(badge_date_key("March 2018") > badge_date_key("28 February 2018"));
+    }
 }

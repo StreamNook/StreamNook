@@ -23,6 +23,7 @@ import {
   useBadgeGallery,
   type GlobalBadge,
 } from '../rewards/badgeGalleryStore';
+import { orderBadges, type BadgeSort } from '../rewards/badgeSort';
 import { gameBoxArt } from '../../utils/boxArt';
 import { openExternal } from '../../utils/openExternal';
 import { Logger } from '../../utils/logger';
@@ -137,7 +138,6 @@ const GameGroupSection: React.FC<{
 // The badge wall itself (GlobalBadge, loading, the metadata backfill) lives in
 // rewards/badgeGalleryStore so it survives this screen unmounting on every
 // tab switch. This file only sorts and draws it.
-type BadgeSort = 'newest' | 'oldest' | 'available' | 'soon' | 'usage';
 
 const BADGE_SORTS: { id: BadgeSort; label: string }[] = [
   { id: 'newest', label: 'Newest' },
@@ -360,46 +360,7 @@ export const RewardsScreen: React.FC = () => {
     (b) => b.status === 'available' && !ownedTitles.has(b.title),
   ).length;
 
-  // Same ordering rules as the desktop gallery: prefer the precomputed
-  // positions when the cache has them broadly, otherwise fall back to
-  // date_added, with a stable key as the final tiebreak.
-  const sortedBadges = useMemo(() => {
-    const withPos = globalBadges.filter((b) => b.position !== Number.MAX_SAFE_INTEGER).length;
-    const usePositions = withPos >= globalBadges.length * 0.9 && globalBadges.length > 0;
-    // Desktop rule, kept faithfully: positions only order badges that BOTH
-    // have one. A badge without a position while positions are in broad use is
-    // one the ranker has not seen yet, i.e. brand new, and comparing it by
-    // position sent it to the very bottom of Newest; dates place it honestly.
-    const byNewest = (a: GlobalBadge, b: GlobalBadge) => {
-      if (
-        usePositions &&
-        a.position !== Number.MAX_SAFE_INTEGER &&
-        b.position !== Number.MAX_SAFE_INTEGER
-      ) {
-        return a.position - b.position || a.key.localeCompare(b.key);
-      }
-      return b.addedMs - a.addedMs || a.key.localeCompare(b.key);
-    };
-
-    return [...globalBadges].sort((a, b) => {
-      switch (badgeSort) {
-        case 'oldest':
-          return byNewest(b, a);
-        case 'available': {
-          const rank = (x: GlobalBadge) => (x.status === 'available' ? 1 : 0);
-          return rank(b) - rank(a) || byNewest(a, b);
-        }
-        case 'soon': {
-          const rank = (x: GlobalBadge) => (x.status === 'coming-soon' ? 1 : 0);
-          return rank(b) - rank(a) || byNewest(a, b);
-        }
-        case 'usage':
-          return b.usage - a.usage || byNewest(a, b);
-        default:
-          return byNewest(a, b);
-      }
-    });
-  }, [globalBadges, badgeSort]);
+  const sortedBadges = useMemo(() => orderBadges(globalBadges, badgeSort), [globalBadges, badgeSort]);
 
   const inProgress = (inventory?.items ?? []).filter(
     (i: InventoryItem) => i.status === 'Active' || i.drops_in_progress > 0,

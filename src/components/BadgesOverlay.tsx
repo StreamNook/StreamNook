@@ -1225,20 +1225,18 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
 
     if (canUsePositions) {
       Logger.debug(`[BadgesOverlay] Using pre-computed positions for sorting (${badgesWithPositions}/${badgesWithMetadata.length} badges have positions)`);
+      // Date always leads and the rank only breaks same-day ties (it orders
+      // those by usage). Using the rank for some pairs and the date for others
+      // is not a consistent order, and the sort scrambled under it.
+      const rankOf = (x: BadgeWithMetadata) => {
+        const pos = (x.badgebase_info as any)?.position;
+        return typeof pos === 'number' ? pos : Number.MAX_SAFE_INTEGER;
+      };
       return [...badgesWithMetadata].sort((a, b) => {
-        const aPos = (a.badgebase_info as any)?.position;
-        const bPos = (b.badgebase_info as any)?.position;
-
-        // If both have positions, use them
-        if (typeof aPos === 'number' && typeof bPos === 'number') {
-          return aPos - bPos;
-        }
-
-        // If only one has a position, sort by date for fair comparison
         const dateCompare = parseDate(b.badgebase_info?.date_added) - parseDate(a.badgebase_info?.date_added);
         if (dateCompare !== 0) return dateCompare;
-
-        // Fallback to stable sort
+        const rankCompare = rankOf(a) - rankOf(b);
+        if (rankCompare !== 0) return rankCompare;
         return `${a.set_id}-${a.id}`.localeCompare(`${b.set_id}-${b.id}`);
       });
     }
