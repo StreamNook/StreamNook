@@ -5,12 +5,20 @@
 // time: the cached badge set, the whole metadata cache over IPC, your earned
 // set, then a metadata backfill that re-ran for anything still missing. Kept
 // here, a revisit renders what was on screen a moment ago and only re-reads
-// when the data is stale, was pushed to (`badge-metadata-amended`), or you
-// pull to refresh. The backfill runs once per session.
+// when the data is stale, was pushed to (`badge-standing-changed`), or you
+// pull to refresh. The backfill runs once per session. What you own, each
+// badge's earn window and what you are missing come from Rust's badge
+// standing; this store only holds what the screen renders.
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
-import { getAllUserBadgesWithEarned } from '../../services/badgeService';
-import { deriveBadgeStatus, formatBadgeDateInfo, type BadgeWindowStatus } from '../../utils/badgeWindow';
+import {
+  getBadgeStanding,
+  windowStatusAt,
+  type BadgeStanding,
+  type MissingBadge,
+  type WindowRun,
+} from '../../services/badgeStanding';
+import { formatBadgeDateInfo, type BadgeWindowStatus } from '../../utils/badgeWindow';
 import { Logger } from '../../utils/logger';
 
 export interface GlobalBadge {
@@ -26,6 +34,11 @@ export interface GlobalBadge {
   addedMs: number;
   usage: number;
   status: BadgeWindowStatus | null;
+  /** The earn window Rust resolved, for reading against the clock. */
+  window: WindowRun[] | null;
+  /** Every `set/version` this tile stands for. Tiles are merged by title, and
+   *  owning any of the merged badges means owning the tile. */
+  keys: string[];
   dateInfo: string;
   moreInfo: string;
   infoUrl: string;
@@ -89,7 +102,11 @@ function versionRank(id: string): number {
   return Number.isNaN(n) ? 0 : n;
 }
 
-function build(global: GlobalBadgeResponse | null, metaMap: Record<string, CachedBadgeMeta>): GlobalBadge[] {
+function build(
+  global: GlobalBadgeResponse | null,
+  metaMap: Record<string, CachedBadgeMeta>,
+  windows: Record<string, WindowRun[]>,
+): GlobalBadge[] {
   // Keyed by title. The same badge genuinely repeats across sets (keep the
   // first), but a REVISION arrives as a higher version id in the SAME set with
   // the same title, and it must replace the original: first-wins here is how
@@ -102,6 +119,8 @@ function build(global: GlobalBadgeResponse | null, metaMap: Record<string, Cache
       const image = v.image_url_4x || v.image_url_2x;
       if (!v.title || !image || !set.set_id || !v.id) continue;
       const cached = metaMap[`metadata:${set.set_id}-v${v.id}`];
+      const ownKey = `${set.set_id}/${v.id}`;
+      const window = windows[ownKey] ?? null;
       const entry: GlobalBadge = {
         key: `${set.set_id}-${v.id}`,
         setId: set.set_id,
@@ -112,14 +131,20 @@ function build(global: GlobalBadgeResponse | null, metaMap: Record<string, Cache
         position: typeof cached?.position === 'number' ? cached.position : Number.MAX_SAFE_INTEGER,
         addedMs: parseAdded(cached?.data?.date_added) || enrichmentStartMs(cached),
         usage: parseUsage(cached?.data?.usage_stats),
-        status: deriveBadgeStatus(cached?.data?.more_info, cached?.data?.enrichment),
+        status: windowStatusAt(window),
+        window,
+        keys: [ownKey],
         dateInfo: formatBadgeDateInfo(cached?.data?.more_info),
         moreInfo: cached?.data?.more_info ?? '',
         infoUrl: cached?.data?.info_url ?? '',
       };
       const prev = byTitle.get(v.title);
-      if (!prev || (prev.setId === entry.setId && versionRank(entry.versionId) > versionRank(prev.versionId))) {
+      if (!prev) {
         byTitle.set(v.title, entry);
+      } else if (prev.setId === entry.setId && versionRank(entry.versionId) > versionRank(prev.versionId)) {
+        byTitle.set(v.title, { ...entry, keys: [...prev.keys, ownKey] });
+      } else {
+        prev.keys.push(ownKey);
       }
     }
   }
@@ -137,7 +162,11 @@ async function readMeta(): Promise<Record<string, CachedBadgeMeta>> {
 
 interface BadgeGalleryState {
   badges: GlobalBadge[];
-  ownedTitles: Set<string>;
+  /** Owned badge ids (`set/version`), from the Rust badge standing. */
+  owned: Set<string>;
+  /** Unowned badges earnable right now, ending soonest first (Rust-built). */
+  missingNow: MissingBadge[];
+  standing: BadgeStanding | null;
   loading: boolean;
   /** Badges whose metadata is still being fetched; 0 when idle. */
   metaProgress: number;
@@ -148,12 +177,37 @@ interface BadgeGalleryState {
 
 export const useBadgeGallery = create<BadgeGalleryState>(() => ({
   badges: [],
-  ownedTitles: new Set(),
+  owned: new Set(),
+  missingNow: [],
+  standing: null,
   loading: false,
   metaProgress: 0,
   loadedAt: 0,
   backfillDone: false,
 }));
+
+// The last catalogue and metadata the wall was built from, so a standing that
+// arrives on its own (a refresh landing, a window boundary) can re-stamp the
+// tiles without re-reading either.
+let lastGlobal: GlobalBadgeResponse | null = null;
+let lastMeta: Record<string, CachedBadgeMeta> = {};
+
+/** Take a standing from Rust: ownership, the missing list, and the windows the tiles read. */
+export function applyStanding(standing: BadgeStanding): void {
+  useBadgeGallery.setState({
+    standing,
+    owned: new Set(standing.owned),
+    missingNow: standing.missing_now,
+    ...(lastGlobal ? { badges: build(lastGlobal, lastMeta, standing.windows) } : {}),
+  });
+}
+
+/** Re-ask Rust for the standing (a refresh landed, or a window opened or closed). */
+export function refreshBadgeStanding(force = false): Promise<void> {
+  return getBadgeStanding(force)
+    .then(applyStanding)
+    .catch((err) => Logger.warn('[Rewards] badge standing unavailable:', err));
+}
 
 /** True when the wall can render straight from memory. */
 export function badgeGalleryIsWarm(): boolean {
@@ -167,7 +221,7 @@ let inFlight: Promise<void> | null = null;
  * Populate the wall. Served from memory while fresh unless `force`; one call
  * at a time, later callers joining the one in flight.
  */
-export function loadBadgeGallery(opts: { userId?: string; login?: string; force?: boolean }): Promise<void> {
+export function loadBadgeGallery(opts: { force?: boolean } = {}): Promise<void> {
   if (!opts.force && badgeGalleryIsWarm()) return Promise.resolve();
   if (inFlight) return inFlight;
   inFlight = run(opts).finally(() => {
@@ -176,25 +230,34 @@ export function loadBadgeGallery(opts: { userId?: string; login?: string; force?
   return inFlight;
 }
 
-async function run(opts: { userId?: string; login?: string }): Promise<void> {
+async function run(opts: { force?: boolean }): Promise<void> {
   const set = useBadgeGallery.setState;
   set({ loading: true });
   try {
+    // Ownership, windows and the missing list come from Rust, which answers
+    // from its cache at once; asked alongside the catalogue read.
+    const standingRequest = getBadgeStanding(opts.force ?? false).catch((err) => {
+      Logger.warn('[Rewards] badge standing unavailable:', err);
+      return null;
+    });
+
     let global = await invoke<GlobalBadgeResponse | null>('get_cached_global_badges');
     if (!global?.data?.length) {
       await invoke('prefetch_global_badges').catch(() => {});
       global = await invoke<GlobalBadgeResponse | null>('get_cached_global_badges');
     }
 
-    // Badge metadata (earn window + newest-first position) comes from the
+    // Badge metadata (newest-first position, dates, usage) comes from the
     // universal cache in one batch, keyed exactly as the desktop gallery keys it.
-    set({ badges: build(global, await readMeta()), loadedAt: Date.now() });
-
-    if (opts.userId && opts.login) {
-      const mine = await getAllUserBadgesWithEarned(opts.userId, opts.login, opts.userId, opts.login);
-      set({ ownedTitles: new Set((mine.earnedBadges ?? []).map((b) => b.title)) });
+    lastGlobal = global;
+    lastMeta = await readMeta();
+    const standing = await standingRequest;
+    if (standing) {
+      applyStanding(standing);
+    } else {
+      set({ badges: build(global, lastMeta, {}) });
     }
-    set({ loading: false });
+    set({ loading: false, loadedAt: Date.now() });
 
     // Mobile had never populated the badge metadata cache, which is why the
     // gallery had almost no dates or earn windows to sort by. Fetch what is
@@ -217,7 +280,16 @@ async function run(opts: { userId?: string; login?: string }): Promise<void> {
           );
           set({ metaProgress: Math.max(0, missing.length - (i + batchSize)) });
         }
-        set({ badges: build(global, await readMeta()), loadedAt: Date.now() });
+        lastMeta = await readMeta();
+        // The backfill can carry earn windows the standing has not seen yet;
+        // taking the new standing rebuilds the tiles from the refreshed cache.
+        const refreshed = await getBadgeStanding(false).catch(() => null);
+        if (refreshed) {
+          applyStanding(refreshed);
+        } else {
+          set({ badges: build(global, lastMeta, useBadgeGallery.getState().standing?.windows ?? {}) });
+        }
+        set({ loadedAt: Date.now() });
       }
     } catch (err) {
       Logger.warn('[Rewards] badge metadata backfill failed:', err);

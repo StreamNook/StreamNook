@@ -60,7 +60,9 @@ static PROSE_SINGLE_RE: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
-fn month_index(m: &str) -> Option<u32> {
+/// 1-based month from a full month name, any casing. Shared with the badge
+/// window classifier so there is one month table for full names.
+pub(crate) fn month_index(m: &str) -> Option<u32> {
     [
         "january",
         "february",

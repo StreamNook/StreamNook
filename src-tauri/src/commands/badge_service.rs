@@ -296,9 +296,33 @@ pub async fn get_discovered_bttv_pro_badges() -> Result<Vec<String>, String> {
     Ok(crate::services::bttv_pro_service::get_discovered_bttv_pro_badges())
 }
 
+/// The primary account's badge standing: what it owns, every badge's earn
+/// window, and the badges it is missing that are earnable right now. Answers
+/// from cache at once; a due refresh runs in the background and is announced
+/// with `badge-standing-changed`.
+#[tauri::command]
+pub async fn get_badge_standing(
+    app_handle: tauri::AppHandle,
+    force: Option<bool>,
+) -> Result<crate::services::badge_standing::BadgeStanding, String> {
+    Ok(crate::services::badge_standing::get_standing(&app_handle, force.unwrap_or(false)).await)
+}
+
+/// One badge's earn window, for a surface that shows a single badge.
+#[tauri::command]
+pub async fn get_badge_window(
+    set_id: String,
+    version: String,
+) -> Result<Option<Vec<crate::services::badge_window::WindowRun>>, String> {
+    Ok(crate::services::badge_standing::window_for(&set_id, &version).await)
+}
+
 /// Whether a badge's earn window is open right now. Prefers the enrichment's
 /// ISO window (authoritative campaign data) over the payload's `status`, which
 /// is only a snapshot of when the relay sent it.
+///
+/// Campaign windows only: a toast or an Android push must never fire off a
+/// prose window, because year-less prose ("Dec 1-12") re-matches every year.
 ///
 /// Crate-visible so the Android background poll classifies a drop exactly as
 /// this path does. Duplicating the window logic would let the two drift, and a
@@ -308,24 +332,13 @@ pub(crate) fn is_window_open(
     badge: &crate::services::badge_polling_service::BadgeNotification,
 ) -> bool {
     use crate::services::badge_polling_service::BadgeNotificationStatus;
-    use chrono::{DateTime, Utc};
+    use crate::services::badge_window::{campaign_runs, status_at, WindowStatus};
 
-    let iso = |key: &str| -> Option<DateTime<Utc>> {
-        badge
-            .enrichment
-            .as_ref()?
-            .get(key)?
-            .as_str()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|d| d.with_timezone(&Utc))
-    };
-
-    match (iso("starts_utc"), iso("ends_utc")) {
-        (None, None) => matches!(badge.status, BadgeNotificationStatus::Available),
-        (start, end) => {
-            let now = Utc::now();
-            start.map(|s| now >= s).unwrap_or(true) && end.map(|e| now <= e).unwrap_or(true)
+    match campaign_runs(badge.enrichment.as_ref()) {
+        Some(runs) => {
+            status_at(&runs, chrono::Utc::now().timestamp_millis()) == WindowStatus::Available
         }
+        None => matches!(badge.status, BadgeNotificationStatus::Available),
     }
 }
 
@@ -385,6 +398,7 @@ pub async fn ingest_badge_drops(
 
     let _ = crate::commands::badges::prune_invalid_global_badges().await;
 
+    let mut stored_any = false;
     for badge in &badges {
         let feed_id = badge.feed_id();
         let hash = badge.content_hash();
@@ -401,17 +415,29 @@ pub async fn ingest_badge_drops(
         }
 
         apply_drop(&app_handle, badge).await;
+        stored_any = true;
+
+        // The toast and the stored notification row read the resolved window,
+        // so a row keeps classifying itself correctly as time passes. Set on the
+        // emitted copy only: the relay's payload, and so `content_hash`, never
+        // carries it.
+        let mut announced = badge.clone();
+        announced.window = crate::services::badge_window::resolve(
+            badge.date_info.as_deref(),
+            badge.enrichment.as_ref(),
+        )
+        .map(|w| w.runs);
 
         match action {
             FeedAction::NotifyNew => {
-                let _ = app_handle.emit("badge-notification", vec![badge.clone()]);
+                let _ = app_handle.emit("badge-notification", vec![announced.clone()]);
                 if available {
-                    let _ = app_handle.emit("badge-available", vec![badge.clone()]);
+                    let _ = app_handle.emit("badge-available", vec![announced.clone()]);
                 }
             }
             FeedAction::NotifyAvailable => {
-                let _ = app_handle.emit("badge-notification", vec![badge.clone()]);
-                let _ = app_handle.emit("badge-available", vec![badge.clone()]);
+                let _ = app_handle.emit("badge-notification", vec![announced.clone()]);
+                let _ = app_handle.emit("badge-available", vec![announced.clone()]);
             }
             // Corrections refresh open surfaces via apply_drop; no toast.
             FeedAction::SilentStore | FeedAction::Skip => {}
@@ -422,7 +448,116 @@ pub async fn ingest_badge_drops(
     }
 
     feed::persist().await;
+
+    // One event per stored batch, so an open gallery rebuilds once rather than
+    // once per drop (a startup batch carries up to fifty).
+    if stored_any {
+        let _ = app_handle.emit("badge-standing-changed", ());
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::is_window_open;
+    use crate::services::badge_polling_service::{BadgeNotification, BadgeNotificationStatus};
+    use chrono::{DateTime, Utc};
+    use serde_json::json;
+
+    /// The body `is_window_open` had before the window classifier existed,
+    /// kept so the two can be compared case by case.
+    fn legacy_is_window_open(badge: &BadgeNotification) -> bool {
+        let iso = |key: &str| -> Option<DateTime<Utc>> {
+            badge
+                .enrichment
+                .as_ref()?
+                .get(key)?
+                .as_str()
+                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                .map(|d| d.with_timezone(&Utc))
+        };
+        match (iso("starts_utc"), iso("ends_utc")) {
+            (None, None) => matches!(badge.status, BadgeNotificationStatus::Available),
+            (start, end) => {
+                let now = Utc::now();
+                start.map(|s| now >= s).unwrap_or(true) && end.map(|e| now <= e).unwrap_or(true)
+            }
+        }
+    }
+
+    fn drop_with(
+        status: BadgeNotificationStatus,
+        date_info: Option<&str>,
+        enrichment: Option<serde_json::Value>,
+    ) -> BadgeNotification {
+        BadgeNotification {
+            badge_name: "Test".into(),
+            badge_set_id: "test".into(),
+            badge_version: "1".into(),
+            badge_image_url: String::new(),
+            badge_description: None,
+            status,
+            date_info: date_info.map(String::from),
+            enrichment,
+            window: None,
+        }
+    }
+
+    #[test]
+    fn classifies_every_campaign_shape_exactly_as_before() {
+        let past = "2020-01-01T00:00:00Z";
+        let future = "2099-01-01T00:00:00Z";
+        let windows = [
+            json!({ "starts_utc": past, "ends_utc": future }),
+            json!({ "starts_utc": future, "ends_utc": "2099-02-01T00:00:00Z" }),
+            json!({ "starts_utc": past, "ends_utc": "2020-02-01T00:00:00Z" }),
+            json!({ "starts_utc": past }),
+            json!({ "ends_utc": future }),
+            json!({ "starts_utc": "not a date", "ends_utc": future }),
+            json!({ "starts_utc": "2026-07-24T07:00Z" }),
+            json!({}),
+        ];
+        for status in [
+            BadgeNotificationStatus::New,
+            BadgeNotificationStatus::Available,
+            BadgeNotificationStatus::ComingSoon,
+        ] {
+            for w in &windows {
+                let badge = drop_with(status, None, Some(w.clone()));
+                assert_eq!(is_window_open(&badge), legacy_is_window_open(&badge), "{w}");
+            }
+            let bare = drop_with(status, None, None);
+            assert_eq!(is_window_open(&bare), legacy_is_window_open(&bare));
+        }
+    }
+
+    #[test]
+    fn a_prose_only_window_falls_back_to_the_payload_status() {
+        let badge = drop_with(BadgeNotificationStatus::New, Some("Dec 1-12"), None);
+        assert!(!is_window_open(&badge));
+        let badge = drop_with(BadgeNotificationStatus::Available, Some("Dec 1-12"), None);
+        assert!(is_window_open(&badge));
+    }
+
+    #[test]
+    fn the_emitted_window_never_changes_the_content_hash() {
+        let badge = drop_with(
+            BadgeNotificationStatus::Available,
+            Some("2026-09-24T12:00:00Z - 2026-10-10T11:59:59Z"),
+            Some(json!({ "starts_utc": "2026-09-24T12:00:00Z" })),
+        );
+        let before = badge.content_hash();
+        let json = serde_json::to_value(&badge).unwrap();
+        assert!(json.get("window").is_none(), "an unset window is not serialized");
+        let mut announced = badge.clone();
+        announced.window = crate::services::badge_window::resolve(
+            badge.date_info.as_deref(),
+            badge.enrichment.as_ref(),
+        )
+        .map(|w| w.runs);
+        assert!(announced.window.is_some());
+        assert_eq!(badge.content_hash(), before);
+    }
 }
 
 /// Badge cache counts for the resource line, without waiting on the service lock.

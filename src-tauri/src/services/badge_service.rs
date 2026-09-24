@@ -1239,6 +1239,37 @@ impl BadgeService {
         channel_id: &str,
         channel_name: &str,
     ) -> Result<(Vec<String>, Vec<String>), String> {
+        let (display, earned) = self
+            .lookup_badges(user_id, username, channel_id, channel_name)
+            .await?;
+        Ok((display.unwrap_or_default(), earned.unwrap_or_default()))
+    }
+
+    /// A user's earned badges, read anonymously, as "set_id/version" strings.
+    ///
+    /// `channelViewer.earnedBadges` is the user's WHOLE global collection plus
+    /// the channel's own badges (subscriber, broadcaster...) for the channel it
+    /// is asked in, so no sign-in of any kind is needed to know what a user owns.
+    /// Asked in the user's own channel. Errs, rather than answering empty, when
+    /// Twitch did not return the field: an empty list must mean "owns nothing".
+    pub async fn earned_badge_collection(
+        &self,
+        user_id: &str,
+        login: &str,
+    ) -> Result<Vec<String>, String> {
+        let (_, earned) = self.lookup_badges(user_id, login, user_id, login).await?;
+        earned.ok_or_else(|| "Twitch returned no earnedBadges for this user".to_string())
+    }
+
+    /// The badge lookup with each field's absence kept: `None` means Twitch did
+    /// not answer that field, `Some(vec![])` means it answered "none".
+    async fn lookup_badges(
+        &self,
+        user_id: &str,
+        username: &str,
+        channel_id: &str,
+        channel_name: &str,
+    ) -> Result<(Option<Vec<String>>, Option<Vec<String>>), String> {
         let request = BadgeLookupRequest {
             query: BADGE_LOOKUP_QUERY,
             variables: BadgeLookupVariables {
@@ -1300,12 +1331,12 @@ impl BadgeService {
             );
         }
 
-        let to_ids = |badges: Option<Vec<GQLBadge>>| -> Vec<String> {
-            badges
-                .unwrap_or_default()
-                .into_iter()
-                .map(|b| format!("{}/{}", b.set_id, b.version))
-                .collect()
+        let to_ids = |badges: Option<Vec<GQLBadge>>| -> Option<Vec<String>> {
+            badges.map(|list| {
+                list.into_iter()
+                    .map(|b| format!("{}/{}", b.set_id, b.version))
+                    .collect()
+            })
         };
 
         let display_badges = to_ids(gql_data.user.and_then(|u| u.display_badges));

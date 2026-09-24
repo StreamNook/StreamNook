@@ -15,6 +15,8 @@ const badge = (key: string, position: number, addedMs: number, extra: Partial<Gl
   addedMs,
   usage: 0,
   status: null,
+  window: null,
+  keys: [`${key}/1`],
   dateInfo: '',
   moreInfo: '',
   infoUrl: '',

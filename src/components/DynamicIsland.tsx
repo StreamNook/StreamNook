@@ -7,7 +7,8 @@ import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../stores/AppStore';
 import { Logger } from '../utils/logger';
-import { deriveBadgeStatus, formatBadgeDateInfo } from '../utils/badgeWindow';
+import { formatBadgeDateInfo } from '../utils/badgeWindow';
+import { windowStatusAt, type WindowRun } from '../services/badgeStanding';
 import { playSound, type SoundId } from '../utils/notificationSound';
 import { liveActivityText } from '../utils/liveActivity';
 import { Tooltip } from './ui/Tooltip';
@@ -1084,6 +1085,7 @@ const DynamicIsland = () => {
             status: 'new' | 'available' | 'coming_soon';
             date_info?: string;
             enrichment?: Record<string, unknown>;
+            window?: WindowRun[] | null;
         }>>('badge-notification', (event) => {
             const badges = event.payload;
 
@@ -1104,6 +1106,7 @@ const DynamicIsland = () => {
                             status: badge.status,
                             date_info: badge.date_info,
                             enrichment: badge.enrichment,
+                            window: badge.window ?? null,
                         } as BadgeNotificationData,
                     };
 
@@ -1114,9 +1117,9 @@ const DynamicIsland = () => {
                 // a badge queued before its window opened would announce itself
                 // as "Coming soon" after it had already gone live. Prefer the
                 // window when the relay gave us one.
-                // `date_info` is passed as the copy to parse so a badge with no
-                // enrichment still classifies off the stamps in its own window.
-                const derived = deriveBadgeStatus(badge.date_info, badge.enrichment);
+                // Rust resolves the window from the campaign dates, or from the
+                // stamps in `date_info` when there are none.
+                const derived = windowStatusAt(badge.window);
                 const effectiveStatus = derived === 'available' ? 'available'
                     : derived === 'coming-soon' ? 'coming_soon'
                     : badge.status;
@@ -1937,7 +1940,7 @@ const DynamicIsland = () => {
                                                                         // Derived here, not read off the stored row: a badge
                                                                         // saved while upcoming would otherwise keep saying
                                                                         // "Coming soon" long after its window opened.
-                                                                        const derived = deriveBadgeStatus(data.date_info, data.enrichment);
+                                                                        const derived = windowStatusAt(data.window);
                                                                         const effective = derived === 'available' ? 'available'
                                                                             : derived === 'coming-soon' ? 'coming_soon'
                                                                             : data.status;

@@ -1,5 +1,8 @@
 pub mod default_name_color;
 pub mod link_detect;
+pub mod badge_earn;
+pub mod badge_standing;
+pub mod badge_window;
 pub mod background_service;
 pub mod badge_feed;
 pub mod badge_polling_service;

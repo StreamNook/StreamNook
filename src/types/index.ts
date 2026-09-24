@@ -1782,9 +1782,12 @@ export interface BadgeNotificationData {
   badge_description?: string;
   status: 'new' | 'available' | 'coming_soon';
   date_info?: string; // e.g., "Dec 1-12" or "Available now"
-  // Relay campaign facts, kept so the stored row can re-derive its status at
-  // render time instead of freezing the one that was true when it arrived.
   enrichment?: Record<string, unknown>;
+  // The earn window Rust resolved when the badge arrived (same shape as
+  // services/badgeStanding WindowRun), kept so the stored row reads its status
+  // against the clock at render time instead of freezing the one that was true
+  // when it arrived. Absent on rows stored before it existed.
+  window?: { start_ms: number | null; end_ms: number | null }[] | null;
 }
 
 // Whisper Types

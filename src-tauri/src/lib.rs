@@ -1536,6 +1536,8 @@ pub fn run() {
             get_bttv_pro_badge,
             get_discovered_bttv_pro_badges,
             ingest_badge_drops,
+            get_badge_standing,
+            get_badge_window,
             // Badge Metadata commands
             fetch_badge_metadata,
             // Link preview commands

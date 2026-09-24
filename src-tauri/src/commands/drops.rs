@@ -115,6 +115,7 @@ pub async fn get_campaign_eligible_channels(
 
 #[tauri::command]
 pub async fn claim_drop(
+    app_handle: tauri::AppHandle,
     drop_id: String,
     drop_instance_id: Option<String>,
     state: State<'_, AppState>,
@@ -123,7 +124,10 @@ pub async fn claim_drop(
     drops_service
         .claim_drop(&drop_id, drop_instance_id.as_deref())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // A claimed reward can be a badge; the missing-badges list should drop it now.
+    crate::services::badge_standing::collection_may_have_changed(&app_handle);
+    Ok(())
 }
 
 #[tauri::command]

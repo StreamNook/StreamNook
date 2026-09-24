@@ -40,6 +40,11 @@ pub struct BadgeNotification {
     /// in the badge More Info panel. Absent on locally-detected notifications.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enrichment: Option<serde_json::Value>,
+    /// Earn window resolved by `badge_window`, set on the copy that is emitted
+    /// to the page and never on the relay's own payload, so it stays out of
+    /// `content_hash` (which serializes this struct).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<Vec<crate::services::badge_window::WindowRun>>,
 }
 
 impl BadgeNotification {
@@ -274,6 +279,7 @@ mod tests {
             status: BadgeNotificationStatus::New,
             date_info: None,
             enrichment: None,
+            window: None,
         }
     }
 

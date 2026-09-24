@@ -14,7 +14,8 @@ import { BadgeSiblingChips } from './badge/BadgeSiblingChips';
 import { BadgeEligibleCategories } from './badge/BadgeEligibleCategories';
 
 import { Logger } from '../utils/logger';
-import { decodeHtmlEntities, deriveBadgeStatus } from '../utils/badgeWindow';
+import { decodeHtmlEntities } from '../utils/badgeWindow';
+import { getBadgeWindow, windowStatusAt, type WindowRun } from '../services/badgeStanding';
 import { extractChannelLogins, splitChannelMentions } from '../utils/badgeChannels';
 import { dedupeResolvedLinks } from '../utils/badgeLinks';
 
@@ -170,6 +171,7 @@ interface BadgeDetailOverlayProps {
 
 const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverlayProps) => {
   const [badgeBaseInfo, setBadgeBaseInfo] = useState<BadgeMetadata | null>(null);
+  const [windowRuns, setWindowRuns] = useState<WindowRun[] | null>(null);
   const [loadingBadgeBase, setLoadingBadgeBase] = useState(true);
   const [techOpen, setTechOpen] = useState(false);
   const [refinedLinks, setRefinedLinks] = useState<DisplayLink[]>([]);
@@ -378,6 +380,9 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
       } finally {
         setLoadingBadgeBase(false);
       }
+      // After the fetch, which may have just cached the metadata the window is
+      // resolved from.
+      getBadgeWindow(setId, badge.id).then(setWindowRuns).catch(() => {});
     };
 
     fetchBadgeBaseInfo();
@@ -397,6 +402,7 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
           })
             .then(setBadgeBaseInfo)
             .catch(() => {});
+          getBadgeWindow(setId, badge.id).then(setWindowRuns).catch(() => {});
         }
       }
     );
@@ -405,12 +411,10 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
     };
   }, [setId, badge.id]);
 
-  // Derived from the window rather than read off the payload, so a badge whose
-  // earn period opens while the app is running stops reading "Coming Soon".
-  const badgeStatus = deriveBadgeStatus(
-    badgeBaseInfo?.more_info,
-    badgeBaseInfo?.enrichment as Record<string, unknown> | undefined
-  );
+  // Read against the clock from the window Rust resolved, rather than off the
+  // payload, so a badge whose earn period opens while the app is running stops
+  // reading "Coming Soon".
+  const badgeStatus = windowStatusAt(windowRuns);
   const isAvailable = badgeStatus === 'available';
   const isComingSoon = badgeStatus === 'coming-soon';
 

@@ -20,9 +20,12 @@ import { SettleIn, useSettleIn } from '../ui/SettleIn';
 import {
   badgeGalleryIsWarm,
   loadBadgeGallery,
+  refreshBadgeStanding,
   useBadgeGallery,
   type GlobalBadge,
 } from '../rewards/badgeGalleryStore';
+import { MobileMissingNow } from '../rewards/MobileMissingNow';
+import { refetchDelay } from '../../services/badgeStanding';
 import { orderBadges, type BadgeSort } from '../rewards/badgeSort';
 import { gameBoxArt } from '../../utils/boxArt';
 import { openExternal } from '../../utils/openExternal';
@@ -225,7 +228,10 @@ export const RewardsScreen: React.FC = () => {
   const startStream = useAppStore((s) => s.startStream);
   // The wall comes from the gallery store, which outlives this screen.
   const globalBadges = useBadgeGallery((s) => s.badges);
-  const ownedTitles = useBadgeGallery((s) => s.ownedTitles);
+  const owned = useBadgeGallery((s) => s.owned);
+  const missingNow = useBadgeGallery((s) => s.missingNow);
+  const standing = useBadgeGallery((s) => s.standing);
+  const isOwned = (badge: GlobalBadge) => badge.keys.some((k) => owned.has(k));
   const badgesLoading = useBadgeGallery((s) => s.loading);
   const metaProgress = useBadgeGallery((s) => s.metaProgress);
   // Whether the wall was already in memory when this screen mounted: a warm
@@ -283,29 +289,41 @@ export const RewardsScreen: React.FC = () => {
   // the memory that survives this screen unmounting all live in the gallery
   // store; this only asks for it. `force` is the refresh gesture and the
   // relay push, both of which mean "what you have may be stale".
+  // The account is the signed-in main one, which Rust resolves itself; the id
+  // only re-runs the load when the account changes.
   const uid = currentUser?.user_id;
-  const login = currentUser?.login || currentUser?.username;
-  const loadBadges = useCallback(
-    () => loadBadgeGallery({ userId: uid, login, force: true }),
-    [uid, login],
-  );
+  const loadBadges = useCallback(() => loadBadgeGallery({ force: true }), []);
 
   useEffect(() => {
-    if (tab === 'badges') void loadBadgeGallery({ userId: uid, login });
-  }, [tab, uid, login]);
+    if (tab !== 'badges') return;
+    void loadBadgeGallery();
+    // Opening the tab is when someone checks what they have: re-read the
+    // collection in the background even when the wall is still warm.
+    void refreshBadgeStanding(true);
+  }, [tab, uid]);
 
-  // Relay pushed a badge (or corrected one): the Rust side has already merged
-  // the global cache and stored the enrichment, so re-reading surfaces the new
-  // tile with its real window. Desktop's BadgesOverlay has had this listener
-  // all along; without it the phone's gallery only ever changed on remount.
+  // Relay pushed badges (or corrected some), or the collection refresh landed:
+  // Rust has already merged the global cache and stored the enrichment, so
+  // re-reading surfaces new tiles with their real windows. Desktop's
+  // BadgesOverlay listens for the same event.
   useEffect(() => {
-    const unlisten = listen('badge-metadata-amended', () => {
+    const unlisten = listen('badge-standing-changed', () => {
       void loadBadges();
     });
     return () => {
       void unlisten.then((fn) => fn());
     };
   }, [loadBadges]);
+
+  // Ask again when the next earn window opens or closes, so the missing list
+  // and the tiles move on their own. Clamped: see refetchDelay.
+  const nextChangeMs = standing?.next_change_ms;
+  useEffect(() => {
+    const delay = refetchDelay(nextChangeMs);
+    if (delay == null) return;
+    const timer = setTimeout(() => void refreshBadgeStanding(), delay);
+    return () => clearTimeout(timer);
+  }, [nextChangeMs]);
 
   // The redirect grant, the same one desktop moved to when Twitch closed the
   // device-code grant on the drops client. The authorize page opens in the
@@ -356,9 +374,11 @@ export const RewardsScreen: React.FC = () => {
     }
   };
 
-  const availableCount = globalBadges.filter(
-    (b) => b.status === 'available' && !ownedTitles.has(b.title),
-  ).length;
+  const ownedCount = globalBadges.filter(isOwned).length;
+  const openMissing = (key: string) => {
+    const badge = globalBadges.find((b) => b.keys.includes(key));
+    if (badge) setBadgeDetail(badge);
+  };
 
   const sortedBadges = useMemo(() => orderBadges(globalBadges, badgeSort), [globalBadges, badgeSort]);
 
@@ -453,19 +473,15 @@ export const RewardsScreen: React.FC = () => {
             <>
               <div className="flex items-center gap-2 pt-1 pb-2">
                 <span className="text-[12px] text-textMuted">
-                  {ownedTitles.size} of {globalBadges.length} collected
+                  {ownedCount} of {globalBadges.length} collected
                 </span>
-                {availableCount > 0 && (
-                  <span className="text-[12px] text-success font-medium">
-                    {availableCount} available now
-                  </span>
-                )}
                 {metaProgress > 0 && (
                   <span className="ml-auto text-[11.5px] text-textMuted">
                     {metaProgress} to sync
                   </span>
                 )}
               </div>
+              <MobileMissingNow standing={standing} missing={missingNow} onOpen={openMissing} />
               {/* Sort options, mirroring the desktop gallery's set. */}
               <div className="flex gap-1 overflow-x-auto pb-2 -mx-1 px-1">
                 {BADGE_SORTS.map((s) => (
@@ -484,7 +500,7 @@ export const RewardsScreen: React.FC = () => {
               </div>
               <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-7 gap-2">
                 {sortedBadges.map((badge, bi) => {
-                  const owned = ownedTitles.has(badge.title);
+                  const owned = isOwned(badge);
                   const available = badge.status === 'available';
                   const comingSoon = badge.status === 'coming-soon';
                   return (
@@ -807,7 +823,7 @@ export const RewardsScreen: React.FC = () => {
             />
             <div className="text-[16px] font-semibold text-textPrimary">{badgeDetail.title}</div>
             <div className="mt-1 mb-2.5">
-              {ownedTitles.has(badgeDetail.title) ? (
+              {isOwned(badgeDetail) ? (
                 <span className="text-[11px] font-semibold text-accent">OWNED</span>
               ) : badgeDetail.status === 'available' ? (
                 <span className="text-[11px] font-semibold text-success">AVAILABLE NOW</span>
