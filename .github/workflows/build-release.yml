@@ -494,10 +494,16 @@ jobs:
           fi
           # The SAME key that signs the Windows and macOS bundles; the client
           # pins one public half as a compile-time const.
-          sudo apt-get install -y --no-install-recommends minisign
+          # The official static binary, pinned, as the Windows job does. apt has no
+          # `minisign` package on ubuntu-22.04 ("Unable to locate package").
+          ms_ver=0.12
+          curl -fsSL -o minisign.tgz "https://github.com/jedisct1/minisign/releases/download/$ms_ver/minisign-$ms_ver-linux.tar.gz"
+          tar xzf minisign.tgz 2>/dev/null
+          ms=./minisign-linux/x86_64/minisign
+          [ -x "$ms" ] || { echo "::error title=minisign missing::$ms not found in minisign-$ms_ver-linux.tar.gz"; exit 1; }
           printf '%s' "$UPDATE_SIGNING_KEY" > ./update.key
           trap 'rm -f ./update.key' EXIT
-          minisign -S -s ./update.key -m "$bundle" -x "$bundle.minisig"
+          "$ms" -S -s ./update.key -m "$bundle" -x "$bundle.minisig"
           echo "SIGNATURE<<EOF" >> "$GITHUB_OUTPUT"
           cat "$bundle.minisig" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
