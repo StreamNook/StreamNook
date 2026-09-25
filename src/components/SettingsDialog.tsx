@@ -46,6 +46,7 @@ const BackupSettings = lazy(() => import('./settings/BackupSettings'));
 const ProfileSettings = lazy(() => import('./settings/ProfileSettings'));
 const SettingsSearchResults = lazy(() => import('./settings/SettingsSearchResults'));
 import type { SettingsIndexEntry } from './settings/searchIndex';
+import { findSettingTarget, flashSettingRow } from './settings/settingsNavigation';
 import { Tooltip } from './ui/Tooltip';
 import { requestChangelog } from '../utils/changelogEvents';
 
@@ -144,11 +145,14 @@ const SettingsDialog = () => {
   // yet on the first frames; poll by rAF (2s cap) until it does, then apply the
   // same pinned-header (data-settings-sticky) compensation as before. Sync
   // mounts resolve on the first attempt, matching the old double-rAF timing.
-  const scrollToSection = (sectionId: string) => {
+  const scrollToSection = (sectionId: string, entry?: SettingsIndexEntry) => {
     const start = performance.now();
     const attempt = () => {
-      const el = document.getElementById(sectionId);
+      // A search hit names a row: land on the row itself and flash it, since a
+      // section can run to dozens of rows. A plain deep link names a section.
+      const el = entry ? findSettingTarget(contentRef.current, entry) : document.getElementById(sectionId);
       if (el && contentRef.current) {
+        if (entry) flashSettingRow(el);
         const containerTop = contentRef.current.getBoundingClientRect().top;
         const elTop = el.getBoundingClientRect().top;
         const sticky = contentRef.current.querySelector('[data-settings-sticky]');
@@ -194,8 +198,7 @@ const SettingsDialog = () => {
   const handleResultSelect = (entry: SettingsIndexEntry) => {
     setSearchQuery('');
     setActiveTab(entry.tab as SettingsTab);
-    if (!entry.sectionId) return;
-    scrollToSection(entry.sectionId);
+    scrollToSection(entry.sectionId ?? '', entry);
   };
 
   return (

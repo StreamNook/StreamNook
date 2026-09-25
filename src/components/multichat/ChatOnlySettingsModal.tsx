@@ -14,6 +14,7 @@ import ChatSettings from '../settings/ChatSettings';
 import ConnectionsSettings from './ConnectionsSettings';
 import MultiChatThemePicker from './MultiChatThemePicker';
 import SettingsSearchResults from '../settings/SettingsSearchResults';
+import { findSettingTarget, flashSettingRow } from '../settings/settingsNavigation';
 import { searchSettings, type SettingsIndexEntry } from '../settings/searchIndex';
 
 type SettingsTab = 'chat' | 'theme' | 'connections' | 'panes';
@@ -170,13 +171,15 @@ export default function ChatOnlySettingsModal({
     setQuery('');
     const target = RESULT_TAB[entry.tab] ?? 'chat';
     setTab(target);
-    // Only Chat results carry a sectionId into a long scrolling panel; the other
-    // tabs are short, so switching to them is enough.
-    if (target === 'chat' && entry.sectionId) {
+    // Only the Chat panel is long enough to need a scroll; the other tabs are
+    // short, so switching to them is enough. Land on the row the result names,
+    // falling back to its section.
+    if (target === 'chat') {
       requestAnimationFrame(() =>
         requestAnimationFrame(() => {
-          const el = document.getElementById(entry.sectionId!);
+          const el = findSettingTarget(contentRef.current, entry);
           if (el && contentRef.current) {
+            flashSettingRow(el);
             const cTop = contentRef.current.getBoundingClientRect().top;
             const eTop = el.getBoundingClientRect().top;
             contentRef.current.scrollBy({ top: eTop - cTop - 8, behavior: 'smooth' });

@@ -1913,6 +1913,28 @@ body {
   background: rgba(255, 255, 255, 0.05);
 }
 
+/* The row a settings search result landed on: an accent wash that fades in and
+   out once, so the eye finds the setting inside a long section. Opacity only,
+   on a pseudo-element, so it never repaints the row's own contents. */
+.settings-row-found {
+  position: relative;
+}
+.settings-row-found::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  opacity: 0;
+  animation: settings-row-found 1.8s ease-out;
+}
+@keyframes settings-row-found {
+  0% { opacity: 0; }
+  15% { opacity: 1; }
+  60% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
 /* A faint 1px hairline between adjacent settings within a card. Only BETWEEN rows
    (the adjacent-sibling selector skips the first row), so a setting and its own
    enable-dependent sub-controls — rendered as children inside the same row — stay

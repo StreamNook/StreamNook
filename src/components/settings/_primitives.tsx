@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { CircleHelp, RotateCcw } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
 import { IS_MOBILE } from '../../utils/platform';
+import { sectionIdFromLabel } from './sectionId';
 
 interface SettingsSectionProps {
   label: string;
@@ -11,11 +12,7 @@ interface SettingsSectionProps {
   bare?: boolean;
 }
 
-/** Deterministic id from a section label, so the "On this page" strip can
- *  target sections that never declared one. Explicit ids still win (the
- *  search index deep-links to those). */
-export const sectionIdFromLabel = (label: string): string =>
-  `settings-section-${label.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
+export { sectionIdFromLabel };
 
 export const SettingsSection = ({
   label,
@@ -80,6 +77,9 @@ export const SettingsRow = ({
     className={`settings-row -mx-4 px-4 py-3 ${
       disabled ? 'opacity-50 pointer-events-none' : ''
     }`}
+    // What a search result scrolls to. A title that carries a live value
+    // ("Text size: 14px") still starts with the name the search index uses.
+    data-setting-row={typeof title === 'string' ? title : undefined}
   >
     <div className="flex items-start justify-between gap-4">
       <div className="min-w-0 flex-1">
