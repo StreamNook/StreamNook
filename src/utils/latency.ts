@@ -50,11 +50,12 @@ export type LivePath = 'll' | 'promotion' | 'plain';
  * cannot sustain it.
  */
 export const AUTO_GAP: Record<LivePath, number> = {
-  // twitch.tv rides a 1.5 to 1.8 s buffer at what its panel calls 2.0 to
-  // 2.3 s; 2.0 here lands an edge distance of 1.7 s, level with the site by
-  // ear, and the stall-adaptive cushion still ramps a channel that cannot
-  // sustain it.
-  ll: 2.0,
+  // twitch.tv rides a 1.1 s buffer at what its panel calls 1.6 to 1.8 s.
+  // At 2.0 the app held 1.8 s of buffer and played 0.5 s behind the site by
+  // ear, on CMAF and TS channels alike; 1.5 lands an edge distance of 1.2 s
+  // and a 1.1 to 1.5 s buffer at rate 1.0 with no stalls. The
+  // stall-adaptive cushion still ramps a channel that cannot sustain it.
+  ll: 1.5,
   promotion: 3.0,
   plain: 5.0,
 };

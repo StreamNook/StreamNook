@@ -452,7 +452,7 @@ const PlayerSettings = () => {
           <div className="flex items-center gap-3">
             <input
               type="range"
-              min="2"
+              min="1"
               max="10"
               step="0.1"
               value={videoPlayer?.ll_target_latency ?? AUTO_GAP.ll}
