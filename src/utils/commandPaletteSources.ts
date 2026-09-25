@@ -21,6 +21,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { helixGet } from '../services/helix';
 import { useAppStore, clipSourceOf, type SettingsTab } from '../stores/AppStore';
+import { sectionIdFromLabel } from '../components/settings/sectionId';
 import { useChatUserStore } from '../stores/chatUserStore';
 import { useFollowsStore } from '../stores/followsStore';
 import { favoriteIdOf, favoriteMetaOf } from './favorites';
@@ -826,6 +827,7 @@ const SETTINGS_CATALOG: SettingsEntry[] = [
   { tab: 'Chat', section: 'Chat Placement', keywords: 'chat placement position right bottom hidden where show hide' },
   { tab: 'Chat', section: 'Channel Points', keywords: 'channel points auto claim bonus chest reward collect points' },
   { tab: 'Chat', section: 'YouTube Chat', sectionId: 'settings-section-youtube-chat', label: 'Which chat to read', keywords: 'youtube chat view live chat top chat filtered firehose every message flooding flood too fast too many messages slow down readable quality filter' },
+  { tab: 'Chat', section: 'YouTube Chat', sectionId: 'settings-section-youtube-chat', label: 'Super Chat currency', keywords: 'youtube super chat superchat super sticker currency amount money donation dollars euros convert local original' },
   { tab: 'Chat', section: 'Chat Events', sectionId: 'settings-section-chat-events', keywords: 'chat events live activity overlay show hide toggle turn off in chat' },
   { tab: 'Chat', section: 'Chat Events', sectionId: 'settings-section-chat-events', label: 'Polls', keywords: 'polls poll vote voting live poll overlay chat event show hide toggle turn off' },
   { tab: 'Chat', section: 'Chat Events', sectionId: 'settings-section-chat-events', label: 'Predictions', keywords: 'predictions prediction bet outcome channel points overlay chat event show hide toggle turn off' },
@@ -834,9 +836,12 @@ const SETTINGS_CATALOG: SettingsEntry[] = [
   { tab: 'Chat', section: 'Chat Events', sectionId: 'settings-section-chat-events', label: 'Collapse gift-sub floods', keywords: 'gift subs gifted collapse flood mystery bomb community batch spam one liner recipients sub gift show hide toggle turn off' },
   { tab: 'Chat', section: 'Chat Events', sectionId: 'settings-section-chat-events', label: 'Chat replay on clips', keywords: 'clip chat replay historical past chat vod comments beside clip player show hide toggle' },
   { tab: 'Chat', section: 'Chat Logging', keywords: 'chat logging save logs text files folder per channel timestamps events moderation record history' },
-  { tab: 'Chat', section: 'Chat Design', keywords: 'chat design font size weight spacing dividers timestamps seconds mention colors reply name separator style prefix colon dot arrow pipe dash chip bracket accent bar pinned message collapse bar alternating backgrounds' },
+  { tab: 'Chat', section: 'Message Layout', keywords: 'message layout chat design font text size weight spacing dividers lines striped rows timestamps clock seconds 24 hour entrance animation new message arrives history opacity backfill' },
+  { tab: 'Chat', section: 'Pinned Messages', keywords: 'pinned message pin pins collapsed collapse expand bar hide banner top of chat' },
+  { tab: 'Chat', section: 'Names & Badges', keywords: 'names badges name separator style prefix colon dot arrow pipe dash chip readable name colors badge size add-on third party badges profile pictures avatars at sign 7tv paints cosmetics drop shadows' },
+  { tab: 'Chat', section: 'Mentions & Replies', keywords: 'mentions replies mention color flash when mentioned highlight reply thread color parent paint mentions inline' },
   { tab: 'Chat', section: 'Link Previews', keywords: 'link preview previews load card url unfurl embed trusted sources shorten links domains clean' },
-  { tab: 'Chat', section: 'Emotes', keywords: 'emotes emote size hover preview spacing inline scale 7tv bttv ffz' },
+  { tab: 'Chat', section: 'Emotes', keywords: 'emotes emote size hover preview spacing inline scale 7tv bttv ffz emoji style animate gifs compact emote tooltips ffz effects bttv modifiers giant emotes update notices' },
   { tab: 'Chat', section: 'Chat Input', keywords: 'chat input composer bypass duplicate message quick send ctrl enter keep message repeat' },
   { tab: 'Chat', section: 'Chat Input', label: 'Check spelling as you type', keywords: 'spell check spelling typo autocorrect correction misspelled underline squiggle red wavy dictionary proofread grammar' },
   { tab: 'Chat', section: 'Chat Input', label: 'Spell check dictionary', keywords: 'dictionary custom words add word taught spell check spelling ignore list personal vocabulary' },
@@ -844,7 +849,7 @@ const SETTINGS_CATALOG: SettingsEntry[] = [
   { tab: 'Chat', section: 'Chat Input', label: 'Hide the emote button', keywords: 'hide emote emoji button smiley face icon input box composer picker clean minimal remove' },
   { tab: 'Chat', section: 'Chat Input', label: 'Hide the points balance', keywords: 'hide channel points balance number counter button input box composer clean minimal remove' },
   { tab: 'Chat', section: 'Emote Tab Completion', sectionId: 'settings-section-emote-tab-completion', keywords: 'emote tab completion autocomplete carousel kappa cycle shift starts contains match include chat users' },
-  { tab: 'Chat', section: 'Render Style', keywords: 'render style deleted messages strikethrough dimmed hidden shared chat paint mentions inline compact emote tooltips 7tv update notices smooth scroll resume message buffer scrollback ffz emote effects modifier wide flip rainbow shake frankerfacez bttv betterttv emote modifiers cursed party rotate zero space giant emotes gigantify gigantified power-up powerup big huge large' },
+  { tab: 'Chat', section: 'Chat Behavior', keywords: 'chat behavior render style deleted messages strikethrough dimmed hidden shared chat smooth scroll resume message buffer how many messages kept scrollback' },
   { tab: 'Chat', section: 'Chat Events', sectionId: 'settings-section-chat-events', label: 'Start a poll or prediction', keywords: 'poll prediction create start new make run builder composer outcomes choices duration channel points vote bet broadcaster streamer' },
   { tab: 'Chat', section: 'Combined Chat', sectionId: 'settings-section-combined-chat', keywords: 'combined combine chat across platforms multi platform multiplatform cross platform merged unified blend blended youtube kick twitch tiktok together one feed multistream multistreamer same streamer link linked channels platform badge source mark suggest links' },
   { tab: 'Chat', section: 'Hidden Users & Bots', sectionId: 'settings-section-chat-filters', keywords: 'hide hidden users bots filter block blocklist mute ignore streamelements nightbot moobot fossabot bot spam gamble flood chat filters per channel everywhere global unhide' },
@@ -852,7 +857,7 @@ const SETTINGS_CATALOG: SettingsEntry[] = [
   { tab: 'Chat', section: 'Repeated Messages', sectionId: 'settings-section-repeated-messages', label: 'Repeat counter colour and threshold', keywords: 'repeat counter colour color threshold window seconds sensitivity match exact nearly identical mods vips streamer exempt moderator' },
   { tab: 'Chat', section: 'User Cards', sectionId: 'settings-section-user-cards', keywords: 'user card profile popup click username open messages chat history first badges stats view default landing' },
   { tab: 'Chat', section: 'User Cards', sectionId: 'settings-section-user-cards', label: 'User card details', keywords: 'user card fields rows details show hide joined twitch account age followage following since follows channels chatters chatter count past subscriber last live relative time how long ago 7tv profile link banned suspended' },
-  { tab: 'Chat', section: '7TV Cosmetics', keywords: '7tv cosmetics paint drop shadows username paints shadow readability' },
+  { tab: 'Chat', section: 'Names & Badges', label: '7TV paint shadows', keywords: '7tv cosmetics paint drop shadows username paints shadow readability' },
   { tab: 'Chat', section: 'Highlight Appearance', keywords: 'highlight appearance display style tint opacity flash window title unfocused look' },
   { tab: 'Chat', section: 'Highlight Phrases', keywords: 'highlights phrases keywords alerts words names patterns flash match' },
   { tab: 'Chat', section: 'Built-in Event Highlights', keywords: 'built-in event highlights first-time chatters returning your own messages raid announcements auto highlight' },
@@ -977,7 +982,12 @@ function buildSettingsItems(): PaletteItem[] {
       subtitle,
       keywords: `${entry.tab.toLowerCase()} ${entry.keywords ?? ''}`.trim(),
       initial: title.slice(0, 1).toUpperCase(),
-      run: () => useAppStore.getState().openSettings(entry.tab, entry.sectionId),
+      // Every section has a DOM id, declared or derived from its label, so an entry
+      // without a declared one still scrolls to its section instead of the tab top.
+      run: () =>
+        useAppStore
+          .getState()
+          .openSettings(entry.tab, entry.sectionId ?? (entry.section ? sectionIdFromLabel(entry.section) : undefined)),
     };
   });
 }

@@ -465,103 +465,121 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Chat',
-    section: 'Chat Design',
-    title: 'Chat Design',
-    description: 'Customize the appearance of chat messages: dividers, backgrounds, spacing, font, timestamps, mentions, name prefix.'
+    section: 'Message Layout',
+    title: 'Message Layout',
+    description: 'How chat messages are laid out: dividers, striped rows, spacing, text size and weight, timestamps, how a new message arrives, history opacity.'
   },
   {
     tab: 'Chat',
-    section: 'Chat Design',
+    section: 'Pinned Messages',
+    title: 'Pinned Messages',
+    description: 'How a pinned message shows at the top of chat: open or collapsed when you arrive, and whether a collapsed pin is a thin bar or hidden.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Names & Badges',
+    title: 'Names & Badges',
+    description: 'How chatter names look: name prefix and style, readable colors, badges and add-on badges, profile pictures, the @ before names, 7TV paints and cosmetics.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Mentions & Replies',
+    title: 'Mentions & Replies',
+    description: 'How a message that mentions you stands out, the mention and reply colors, inline paint on @mentions, and how a reply shows its parent.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Message Layout',
     title: 'Lines between messages',
     description: 'Draws a thin line between messages so a fast chat is easier to scan.'
   },
   {
     tab: 'Chat',
-    section: 'Chat Design',
+    section: 'Message Layout',
     title: 'Striped message rows',
     description: "Gives every other message a slightly different background, in your theme's colors, so rows are easier to follow."
   },
   {
     tab: 'Chat',
-    section: 'Chat Design',
+    section: 'Message Layout',
     title: 'Message spacing',
     description: 'Blank space between one message and the next; more room means fewer messages on screen.'
   },
   {
     tab: 'Chat',
-    section: 'Chat Design',
+    section: 'Message Layout',
     title: 'Text size',
     description: 'Size of message text, with room to go large when MultiChat fills a whole monitor.'
   },
   {
     tab: 'Chat',
-    section: 'Chat Design',
+    section: 'Message Layout',
     title: 'Activity feed size',
     description: 'Text size for the MultiChat activity feed, where subs, raids, and gifts land.'
   },
   {
     tab: 'Chat',
-    section: 'Chat Design',
+    section: 'Message Layout',
     title: 'Text weight',
     description: 'How heavy the message text is, from light to bold.'
   },
   {
     tab: 'Chat',
-    section: 'Chat Design',
+    section: 'Mentions & Replies',
     title: 'Flash when you are mentioned',
     description: 'Briefly flashes any message that mentions or replies to you, so you spot it in a fast chat.'
   },
   {
     tab: 'Chat',
-    section: 'Chat Design',
+    section: 'Message Layout',
     title: 'Show timestamps',
     description: 'Shows the time each message was sent, next to the name.'
   },
   {
     tab: 'Chat',
-    section: 'Chat Design',
+    section: 'Message Layout',
     title: 'Include seconds',
     description: 'Shows seconds too, so 7:42 PM reads 7:42:30 PM.'
   },
   {
     tab: 'Chat',
-    section: 'Chat Design',
+    section: 'Pinned Messages',
     title: 'Pins start collapsed',
     description: 'Shows the pinned message as a compact one-line bar when you enter a channel.'
   },
   {
     tab: 'Chat',
-    section: 'Chat Design',
+    section: 'Pinned Messages',
     title: 'Collapsed pin style',
     description: 'Shrinks a collapsed pin to a thin one-line bar you can click to expand, or hides it completely.'
   },
   {
     tab: 'Chat',
-    section: 'Chat Design',
+    section: 'Names & Badges',
     title: 'Name separator',
     description: 'The mark between a name and its message, like a colon or an arrow.'
   },
   {
     tab: 'Chat',
-    section: 'Chat Design',
+    section: 'Names & Badges',
     title: 'Name style',
     description: 'How names stand out from the message: plain, or with a bar, chip, brackets, or dot.'
   },
   {
     tab: 'Chat',
-    section: 'Chat Design',
+    section: 'Names & Badges',
     title: 'Prefix color',
     description: "Colors the separator, bar, dot, brackets, or chip with the chatter's own color or your theme accent."
   },
   {
     tab: 'Chat',
-    section: 'Chat Design',
+    section: 'Mentions & Replies',
     title: 'Mention color',
     description: 'The highlight color on messages that mention you.'
   },
   {
     tab: 'Chat',
-    section: 'Chat Design',
+    section: 'Mentions & Replies',
     title: 'Reply thread color',
     description: 'The color that marks replies in a thread.'
   },
@@ -697,49 +715,49 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Chat',
-    section: 'Render Style',
-    title: 'Render Style',
-    description: 'How specific message classes look in chat: deleted messages, shared chat, mention paint, emote tooltips, scroll, message buffer.'
+    section: 'Chat Behavior',
+    title: 'Chat Behavior',
+    description: 'Deleted messages, shared chat messages, the smooth scroll on Resume, and how many messages chat keeps.'
   },
   {
     tab: 'Chat',
-    section: 'Render Style',
+    section: 'Chat Behavior',
     title: 'Deleted messages',
     description: 'What happens to a message once it is deleted or its sender is timed out or banned: crossed out, dimmed, left as is, or removed.'
   },
   {
     tab: 'Chat',
-    section: 'Render Style',
+    section: 'Chat Behavior',
     title: 'Hide shared chat messages',
     description: "Hides messages that came from the other channel in a Twitch Shared Chat, so you only see this channel's own chatters."
   },
   {
     tab: 'Chat',
-    section: 'Render Style',
+    section: 'Mentions & Replies',
     title: 'Paint @mentions inline',
     description: "Draws a mentioned name in that person's 7TV paint instead of a flat color."
   },
   {
     tab: 'Chat',
-    section: 'Render Style',
+    section: 'Emotes',
     title: 'Compact emote tooltips',
     description: 'Show just the emote name on hover instead of the full hint.'
   },
   {
     tab: 'Chat',
-    section: 'Render Style',
+    section: 'Emotes',
     title: 'FFZ emote effects',
     description: 'Applies FrankerFaceZ modifiers (wide, flips, rainbow, shake) to the emote before them, the way FFZ does.'
   },
   {
     tab: 'Chat',
-    section: 'Render Style',
+    section: 'Emotes',
     title: 'BetterTTV emote modifiers',
     description: 'Applies BetterTTV modifiers (w! wide, h! and v! flips, c! cursed, p! party, s! shake) to the emote after them, the way BetterTTV does.'
   },
   {
     tab: 'Chat',
-    section: 'Render Style',
+    section: 'Emotes',
     title: 'Giant emotes',
     description: 'Draws the last emote of a "Gigantify an Emote" power-up message at 4x below the message, like Twitch does.'
   },
@@ -779,16 +797,16 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Chat',
-    section: 'Message Filters',
+    section: 'Message Filters & Search',
     sectionId: 'settings-section-chat-query',
     title: 'Saved filters',
     description: 'Saved message filters (mods only, subs only, mentions, redemptions, links, custom expressions). Apply one to a chat pane from its header.'
   },
   {
     tab: 'Chat',
-    section: 'Message Filters',
+    section: 'Message Filters & Search',
     sectionId: 'settings-section-chat-query',
-    title: 'Search history size',
+    title: 'How far back search reaches',
     description: 'How many recent messages per channel Ctrl+F can search. Kept in the Rust backend, not in the chat view.'
   },
   {
@@ -835,31 +853,31 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Chat',
-    section: 'Render Style',
+    section: 'Emotes',
     title: '7TV emote update notices',
     description: 'Shows a chat notice when a mod adds, removes, or renames a 7TV emote in the channel.'
   },
   {
     tab: 'Chat',
-    section: 'Render Style',
+    section: 'Chat Behavior',
     title: 'Smooth scroll on Resume',
     description: 'Animates the scroll back to the bottom when you click Resume; auto-scroll for new messages stays instant.'
   },
   {
     tab: 'Chat',
-    section: 'Render Style',
+    section: 'Chat Behavior',
     title: 'Message buffer',
     description: 'How many messages each chat keeps on screen to scroll back through; more history uses more memory.'
   },
   {
     tab: 'Chat',
-    section: '7TV Cosmetics',
+    section: 'Names & Badges',
     title: '7TV Cosmetics',
     description: 'Visual controls for 7TV-rendered usernames (paints), including drop shadows.'
   },
   {
     tab: 'Chat',
-    section: '7TV Cosmetics',
+    section: 'Names & Badges',
     title: 'Paint drop shadows',
     description: 'Some paints stack several drop shadows for readability; keep them all, just one, or none if names look too noisy.'
   },
@@ -965,19 +983,19 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   // === Moderation ===
   {
     tab: 'Chat',
-    section: 'Chat Design',
-    title: 'Timestamp clock',
+    section: 'Message Layout',
+    title: 'Clock',
     description: '12-hour or 24-hour timestamps next to chat messages.'
   },
   {
     tab: 'Chat',
-    section: 'Chat Design',
+    section: 'Emotes',
     title: 'Animate emotes',
     description: 'Play animated emotes always, only on hover, or never (first frame). Never is lightest on the GPU.'
   },
   {
     tab: 'Chat',
-    section: 'Chat Design',
+    section: 'Message Layout',
     title: 'History opacity',
     description: 'Dim the scrollback loaded on join so live messages stand out.'
   },

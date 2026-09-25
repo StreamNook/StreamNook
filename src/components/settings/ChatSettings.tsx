@@ -802,28 +802,6 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       )}
 
       <SettingsSection
-        label="Channel Points"
-        description="Bonus chest pickup on the channel you are watching."
-      >
-        <SettingsRow
-          title="Auto-claim bonus chests"
-          description="Collects the bonus chest on the stream you are watching the moment it appears."
-          help="When this is off, a claim button appears on the points icon so you can grab it yourself. Claiming on channels you are not watching is a separate opt-in plugin."
-          control={
-            <Toggle
-              enabled={settings.auto_claim_points_watching ?? true}
-              onChange={() =>
-                updateSettings({
-                  ...settings,
-                  auto_claim_points_watching: !(settings.auto_claim_points_watching ?? true),
-                })
-              }
-            />
-          }
-        />
-      </SettingsSection>
-
-      <SettingsSection
         id="settings-section-combined-chat"
         label="Combined Chat"
         description="Show a streamer's chat from their other platforms alongside the one you are watching."
@@ -899,7 +877,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       <SettingsSection
         id="settings-section-youtube-chat"
         label="YouTube Chat"
-        description="Which of YouTube's two chat feeds you read. Changes apply the next time you open a YouTube stream."
+        description="Settings that only apply to YouTube chat: which of its two feeds you read, and how Super Chat amounts show."
       >
         <SettingsRow
           title="Which chat to read"
@@ -913,6 +891,19 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               { value: 'live', label: 'Live chat' },
               { value: 'top', label: 'Top chat' },
             ]}
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          title="Super Chat currency"
+          description="Show amounts converted to one currency. Rates refresh daily; until they load the amount shows as sent."
+        >
+          <Dropdown<string>
+            value={chatEvents.superchat_currency ?? ''}
+            onChange={(superchat_currency) => setEvents({ superchat_currency })}
+            className="w-full"
+            ariaLabel="Super Chat currency"
+            options={[{ value: '', label: 'As sent' }, ...CURRENCY_OPTIONS.map((c) => ({ value: c, label: c }))]}
           />
         </SettingsRow>
       </SettingsSection>
@@ -932,6 +923,21 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
           }
         />
+
+        <SettingsRow
+          title="Polls start collapsed"
+          description="Opens live polls as their header bar instead of expanded, so a poll never takes over the top of chat. Tap the header to expand it."
+          help="Collapsing a poll sticks: it no longer reopens itself every time somebody votes."
+          control={
+            <Toggle
+              enabled={cd.polls_start_collapsed ?? false}
+              onChange={() =>
+                setDesign({ polls_start_collapsed: !(cd.polls_start_collapsed ?? false) })
+              }
+            />
+          }
+        />
+
         <SettingsRow
           title="Predictions"
           description="Show a live prediction card at the top of chat, with the outcomes and how points are stacking up."
@@ -944,6 +950,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
           }
         />
+
         {(settings.show_polls ?? true) && (settings.show_predictions ?? true) && (
           <SettingsRow
             title="When both are running"
@@ -960,6 +967,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
           </SettingsRow>
         )}
+
         <SettingsRow
           title="Channel point redemptions"
           description="Shows a chat row when someone redeems a reward that does not post its own message, like a no-input reward."
@@ -976,6 +984,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
           }
         />
+
         <SettingsRow
           title="Collapse gift-sub floods"
           description="Shows one 'gifting N subs' row with the recipients attached when someone gifts a batch, instead of a row per gift."
@@ -989,6 +998,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
           }
         />
+
         <SettingsRow
           title="Chat replay on clips"
           description="Shows the chat that was live while a clip was recorded, beside the clip."
@@ -1075,19 +1085,6 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         </SettingsRow>
 
         <SettingsRow
-          title="Super Chat currency"
-          description="Show amounts converted to one currency. Rates refresh daily; until they load the amount shows as sent."
-        >
-          <Dropdown<string>
-            value={chatEvents.superchat_currency ?? ''}
-            onChange={(superchat_currency) => setEvents({ superchat_currency })}
-            className="w-full"
-            ariaLabel="Super Chat currency"
-            options={[{ value: '', label: 'As sent' }, ...CURRENCY_OPTIONS.map((c) => ({ value: c, label: c }))]}
-          />
-        </SettingsRow>
-
-        <SettingsRow
           title="Event wording"
           description="Your own sentence for each kind of event. Tokens in braces fill in from the event; if one is missing, the platform's wording is used."
           help="Tokens: {username} {tier} {months} {years} {streak} {recipient} {count} {bits} {viewers} {channel} {platform} {time} {default}. Leave a box empty to keep the platform's wording."
@@ -1145,96 +1142,41 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         </SettingsRow>
       </SettingsSection>
 
-      {/* Desktop only. Writes .log files into a folder the user picks, and there
-          is no user-visible folder to point at on Android. */}
-      {!IS_MOBILE && (
       <SettingsSection
-        label="Chat Logging"
-        description="Keep a text copy of chat on your disk, for searching later or feeding another tool."
+        label="Pinned Messages"
+        description="How a pinned message shows at the top of chat."
       >
         <SettingsRow
-          title="Save chat logs"
-          description="Writes chat to plain text files as you watch: one folder per channel, one file per day."
-          help="The files grow with the chat, so a busy channel adds up over weeks. Delete old days from the folder any time."
+          title="Pins start collapsed"
+          description="Shows the pinned message as a compact one-line bar when you enter a channel."
+          help="Click the bar to expand it. Turn this off to always open pins fully expanded."
           control={
             <Toggle
-              enabled={loggingEnabled}
-              onChange={() => setLogging({ enabled: !loggingEnabled })}
+              enabled={cd.pinned_start_collapsed ?? true}
+              onChange={() => setDesign({ pinned_start_collapsed: !(cd.pinned_start_collapsed ?? true) })}
             />
           }
         />
-        {loggingEnabled && (
-          <>
-            <SettingsRow
-              title="Log folder"
-              description="Where the files are written. Browse to pick your own folder, Reset to go back to the default."
-            >
-              <div className="flex items-center gap-2">
-                <div className="glass-input min-w-0 flex-1 truncate rounded-md px-3 py-1.5 text-[13px] text-textPrimary">
-                  {logDir}
-                </div>
-                <button
-                  type="button"
-                  onClick={browseLogFolder}
-                  className="glass-button-secondary flex-shrink-0 px-3 py-1.5 text-[13px] text-textSecondary hover:text-textPrimary"
-                >
-                  Browse
-                </button>
-                {(logging.folder ?? '') !== '' && (
-                  <button
-                    type="button"
-                    onClick={() => setLogging({ folder: '' })}
-                    className="glass-button-secondary flex-shrink-0 px-2 py-1.5 text-[13px] text-textMuted hover:text-textPrimary"
-                  >
-                    Reset
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={openLogFolder}
-                  className="glass-button-secondary flex-shrink-0 px-3 py-1.5 text-[13px] text-textSecondary hover:text-textPrimary"
-                >
-                  Open
-                </button>
-              </div>
-            </SettingsRow>
-            <SettingsRow
-              title="Only log these channels"
-              description="Leave empty to log every channel you open."
-            >
-              <PanelChannelList
-                value={logging.channels ?? []}
-                onChange={(channels) => setLogging({ channels })}
-              />
-            </SettingsRow>
-            <SettingsRow
-              title="Timestamps"
-              description="Start each line with the time it was sent."
-              control={
-                <Toggle
-                  enabled={logging.timestamps ?? true}
-                  onChange={() => setLogging({ timestamps: !(logging.timestamps ?? true) })}
-                />
-              }
-            />
-            <SettingsRow
-              title="Events and moderation"
-              description="Also log subscriptions, raids, announcements, timeouts, and deleted messages."
-              control={
-                <Toggle
-                  enabled={logging.include_events ?? true}
-                  onChange={() => setLogging({ include_events: !(logging.include_events ?? true) })}
-                />
-              }
-            />
-          </>
-        )}
+
+        <SettingsRow
+          title="Collapsed pin style"
+          description="Shrinks a collapsed pin to a thin one-line bar you can click to expand, or hides it completely."
+          help="The bar shows the sender and the start of the message."
+        >
+          <SegmentedSelect<'bar' | 'hidden'>
+            value={cd.pinned_collapsed_style ?? 'bar'}
+            onChange={(v) => setDesign({ pinned_collapsed_style: v })}
+            options={[
+              { value: 'bar', label: 'Bar' },
+              { value: 'hidden', label: 'Hidden' },
+            ]}
+          />
+        </SettingsRow>
       </SettingsSection>
-      )}
 
       <SettingsSection
-        label="Chat Design"
-        description="Spacing, text size, timestamps, and how names and mentions look in the chat feed."
+        label="Message Layout"
+        description="Spacing, text size, timestamps, and how a new message arrives."
       >
         <SettingsRow
           title="Lines between messages"
@@ -1328,15 +1270,144 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         </SettingsRow>
 
         <SettingsRow
-          title="Flash when you are mentioned"
-          description="Briefly flashes any message that mentions or replies to you, so you spot it in a fast chat."
+          title="How a new message arrives"
+          description="A short fade or slide as each message lands. History loaded on join never animates, and it is skipped when motion is reduced."
+        >
+          <SegmentedSelect<'none' | 'fade' | 'slide' | 'rise'>
+            value={cd.message_entrance}
+            onChange={(message_entrance) => setDesign({ message_entrance })}
+            options={[
+              { value: 'none', label: 'Instant' },
+              { value: 'fade', label: 'Fade' },
+              { value: 'slide', label: 'Slide' },
+              { value: 'rise', label: 'Rise' },
+            ]}
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          title={`History opacity: ${cd.backfill_opacity ?? 100}%`}
+          description="Dim the scrollback that loads when you join a chat, so live messages stand out."
+        >
+          <input
+            type="range"
+            min={30}
+            max={100}
+            step={5}
+            value={cd.backfill_opacity ?? 100}
+            onChange={(e) => setDesign({ backfill_opacity: Number(e.target.value) })}
+            className="w-40 accent-accent"
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          title="Show timestamps"
+          description="Shows the time each message was sent, next to the name."
           control={
             <Toggle
-              enabled={cd.mention_animation ?? true}
-              onChange={() => setDesign({ mention_animation: !(cd.mention_animation ?? true) })}
+              enabled={cd.show_timestamps ?? false}
+              onChange={() => setDesign({ show_timestamps: !(cd.show_timestamps ?? false) })}
             />
           }
-        />
+        >
+          {cd.show_timestamps && (
+            <SettingsRow title="Clock" description="12-hour (7:42 PM) or 24-hour (19:42). Formatted once in the backend.">
+              <SegmentedSelect<'12h' | '24h'>
+                value={cd.timestamp_format ?? '12h'}
+                onChange={(timestamp_format) => setDesign({ timestamp_format })}
+                options={[
+                  { value: '12h', label: '12h' },
+                  { value: '24h', label: '24h' },
+                ]}
+              />
+            </SettingsRow>
+          )}
+          {cd.show_timestamps && (
+            <SettingsRow
+              title="Include seconds"
+              description="Shows seconds too, so 7:42 PM reads 7:42:30 PM."
+              control={
+                <Toggle
+                  enabled={cd.show_timestamp_seconds ?? false}
+                  onChange={() => setDesign({ show_timestamp_seconds: !(cd.show_timestamp_seconds ?? false) })}
+                />
+              }
+            />
+          )}
+        </SettingsRow>
+      </SettingsSection>
+
+      <SettingsSection
+        label="Names & Badges"
+        description="How chatter names, badges and 7TV paints look."
+      >
+        <div className="space-y-2">
+          <div className="flex items-baseline gap-2">
+            <span className="text-xs font-medium text-textSecondary uppercase tracking-wider">Preview</span>
+            <span className="text-[11px] text-textMuted">how your name looks in chat</span>
+          </div>
+          <NamePrefixPreview
+            separator={cd.username_separator ?? 'none'}
+            nameStyle={cd.username_style ?? 'plain'}
+            accentSource={cd.username_accent_source ?? 'user'}
+          />
+        </div>
+
+        <SettingsRow
+          title="Name separator"
+          description="The mark between a name and its message, like a colon or an arrow."
+          help="Action messages (/me) never get a separator."
+        >
+          <Dropdown<'none' | 'colon' | 'dot' | 'arrow' | 'pipe' | 'dash'>
+            value={cd.username_separator ?? 'none'}
+            onChange={(v) => setDesign({ username_separator: v })}
+            className="w-full"
+            ariaLabel="Name separator"
+            options={[
+              { value: 'none', label: 'None' },
+              { value: 'colon', label: 'Colon   name:' },
+              { value: 'dot', label: 'Dot   name ·' },
+              { value: 'arrow', label: 'Arrow   name ›' },
+              { value: 'pipe', label: 'Pipe   name |' },
+              { value: 'dash', label: 'Dash   name –' },
+            ]}
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          title="Name style"
+          description="How names stand out from the message: plain, or with a bar, chip, brackets, or dot."
+        >
+          <Dropdown<'plain' | 'bar' | 'chip' | 'brackets' | 'dot'>
+            value={cd.username_style ?? 'plain'}
+            onChange={(v) => setDesign({ username_style: v })}
+            className="w-full"
+            ariaLabel="Name style"
+            options={[
+              { value: 'plain', label: 'Plain' },
+              { value: 'bar', label: 'Accent bar' },
+              { value: 'chip', label: 'Chip / tag' },
+              { value: 'brackets', label: 'Brackets   [name]' },
+              { value: 'dot', label: 'Color dot' },
+            ]}
+          />
+        </SettingsRow>
+
+        {(cd.username_separator !== 'none' || cd.username_style !== 'plain') && (
+          <SettingsRow
+            title="Prefix color"
+            description="Colors the separator, bar, dot, brackets, or chip with the chatter's own color or your theme accent."
+          >
+            <SegmentedSelect<'user' | 'theme'>
+              value={cd.username_accent_source ?? 'user'}
+              onChange={(v) => setDesign({ username_accent_source: v })}
+              options={[
+                { value: 'user', label: 'User color' },
+                { value: 'theme', label: 'Theme accent' },
+              ]}
+            />
+          </SettingsRow>
+        )}
 
         <SettingsRow
           title="Keep name colors readable"
@@ -1352,22 +1423,6 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
           }
         />
-
-        <SettingsRow
-          title="How a new message arrives"
-          description="A short fade or slide as each message lands. History loaded on join never animates, and it is skipped when motion is reduced."
-        >
-          <SegmentedSelect<'none' | 'fade' | 'slide' | 'rise'>
-            value={cd.message_entrance}
-            onChange={(message_entrance) => setDesign({ message_entrance })}
-            options={[
-              { value: 'none', label: 'Instant' },
-              { value: 'fade', label: 'Fade' },
-              { value: 'slide', label: 'Slide' },
-              { value: 'rise', label: 'Rise' },
-            ]}
-          />
-        </SettingsRow>
 
         <SettingsRow
           title="Show badges"
@@ -1445,149 +1500,35 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
 
         <SettingsRow
-          title="Show timestamps"
-          description="Shows the time each message was sent, next to the name."
-          control={
-            <Toggle
-              enabled={cd.show_timestamps ?? false}
-              onChange={() => setDesign({ show_timestamps: !(cd.show_timestamps ?? false) })}
-            />
-          }
+          title="Paint drop shadows"
+          description="Some paints stack several drop shadows for readability; keep them all, just one, or none if names look too noisy."
         >
-          {cd.show_timestamps && (
-            <SettingsRow title="Clock" description="12-hour (7:42 PM) or 24-hour (19:42). Formatted once in the backend.">
-              <SegmentedSelect<'12h' | '24h'>
-                value={cd.timestamp_format ?? '12h'}
-                onChange={(timestamp_format) => setDesign({ timestamp_format })}
-                options={[
-                  { value: '12h', label: '12h' },
-                  { value: '24h', label: '24h' },
-                ]}
-              />
-            </SettingsRow>
-          )}
-          {cd.show_timestamps && (
-            <SettingsRow
-              title="Include seconds"
-              description="Shows seconds too, so 7:42 PM reads 7:42:30 PM."
-              control={
-                <Toggle
-                  enabled={cd.show_timestamp_seconds ?? false}
-                  onChange={() => setDesign({ show_timestamp_seconds: !(cd.show_timestamp_seconds ?? false) })}
-                />
-              }
-            />
-          )}
-        </SettingsRow>
-
-        <SettingsRow
-          title="Pins start collapsed"
-          description="Shows the pinned message as a compact one-line bar when you enter a channel."
-          help="Click the bar to expand it. Turn this off to always open pins fully expanded."
-          control={
-            <Toggle
-              enabled={cd.pinned_start_collapsed ?? true}
-              onChange={() => setDesign({ pinned_start_collapsed: !(cd.pinned_start_collapsed ?? true) })}
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Polls start collapsed"
-          description="Opens live polls as their header bar instead of expanded, so a poll never takes over the top of chat. Tap the header to expand it."
-          help="Collapsing a poll sticks: it no longer reopens itself every time somebody votes."
-          control={
-            <Toggle
-              enabled={cd.polls_start_collapsed ?? false}
-              onChange={() =>
-                setDesign({ polls_start_collapsed: !(cd.polls_start_collapsed ?? false) })
-              }
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Collapsed pin style"
-          description="Shrinks a collapsed pin to a thin one-line bar you can click to expand, or hides it completely."
-          help="The bar shows the sender and the start of the message."
-        >
-          <SegmentedSelect<'bar' | 'hidden'>
-            value={cd.pinned_collapsed_style ?? 'bar'}
-            onChange={(v) => setDesign({ pinned_collapsed_style: v })}
+          <SegmentedSelect<'all' | 'one' | 'none'>
+            value={(settings.cosmetics?.paint_shadows ?? 'all') as 'all' | 'one' | 'none'}
+            onChange={(value) => setCosmetics({ paint_shadows: value })}
             options={[
-              { value: 'bar', label: 'Bar' },
-              { value: 'hidden', label: 'Hidden' },
-            ]}
-          />
-        </SettingsRow>
-
-        <div className="space-y-2">
-          <div className="flex items-baseline gap-2">
-            <span className="text-xs font-medium text-textSecondary uppercase tracking-wider">Preview</span>
-            <span className="text-[11px] text-textMuted">how your name looks in chat</span>
-          </div>
-          <NamePrefixPreview
-            separator={cd.username_separator ?? 'none'}
-            nameStyle={cd.username_style ?? 'plain'}
-            accentSource={cd.username_accent_source ?? 'user'}
-          />
-        </div>
-
-        <SettingsRow
-          title="Name separator"
-          description="The mark between a name and its message, like a colon or an arrow."
-          help="Action messages (/me) never get a separator."
-        >
-          <Dropdown<'none' | 'colon' | 'dot' | 'arrow' | 'pipe' | 'dash'>
-            value={cd.username_separator ?? 'none'}
-            onChange={(v) => setDesign({ username_separator: v })}
-            className="w-full"
-            ariaLabel="Name separator"
-            options={[
+              { value: 'all', label: 'All' },
+              { value: 'one', label: 'One' },
               { value: 'none', label: 'None' },
-              { value: 'colon', label: 'Colon   name:' },
-              { value: 'dot', label: 'Dot   name ·' },
-              { value: 'arrow', label: 'Arrow   name ›' },
-              { value: 'pipe', label: 'Pipe   name |' },
-              { value: 'dash', label: 'Dash   name –' },
             ]}
           />
         </SettingsRow>
+      </SettingsSection>
 
+      <SettingsSection
+        label="Mentions & Replies"
+        description="How a message that mentions you, and a reply, stand out."
+      >
         <SettingsRow
-          title="Name style"
-          description="How names stand out from the message: plain, or with a bar, chip, brackets, or dot."
-        >
-          <Dropdown<'plain' | 'bar' | 'chip' | 'brackets' | 'dot'>
-            value={cd.username_style ?? 'plain'}
-            onChange={(v) => setDesign({ username_style: v })}
-            className="w-full"
-            ariaLabel="Name style"
-            options={[
-              { value: 'plain', label: 'Plain' },
-              { value: 'bar', label: 'Accent bar' },
-              { value: 'chip', label: 'Chip / tag' },
-              { value: 'brackets', label: 'Brackets   [name]' },
-              { value: 'dot', label: 'Color dot' },
-            ]}
-          />
-        </SettingsRow>
-
-        {(cd.username_separator !== 'none' || cd.username_style !== 'plain') && (
-          <SettingsRow
-            title="Prefix color"
-            description="Colors the separator, bar, dot, brackets, or chip with the chatter's own color or your theme accent."
-          >
-            <SegmentedSelect<'user' | 'theme'>
-              value={cd.username_accent_source ?? 'user'}
-              onChange={(v) => setDesign({ username_accent_source: v })}
-              options={[
-                { value: 'user', label: 'User color' },
-                { value: 'theme', label: 'Theme accent' },
-              ]}
+          title="Flash when you are mentioned"
+          description="Briefly flashes any message that mentions or replies to you, so you spot it in a fast chat."
+          control={
+            <Toggle
+              enabled={cd.mention_animation ?? true}
+              onChange={() => setDesign({ mention_animation: !(cd.mention_animation ?? true) })}
             />
-          </SettingsRow>
-        )}
+          }
+        />
 
         <SettingsRow
           title="Mention color"
@@ -1600,6 +1541,18 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             tooltip="Mention color"
           />
         </SettingsRow>
+
+        <SettingsRow
+          title="Paint @mentions inline"
+          description="Draws a mentioned name in that person's 7TV paint instead of a flat color."
+          help="Off shows mentions in the chatter's plain name color."
+          control={
+            <Toggle
+              enabled={cd.paint_mentions_in_body}
+              onChange={() => setDesign({ paint_mentions_in_body: !cd.paint_mentions_in_body })}
+            />
+          }
+        />
 
         <SettingsRow
           title="Reply thread color"
@@ -1748,6 +1701,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             ]}
           />
         </SettingsRow>
+
         <SettingsRow
           title="Show GIFs in chat"
           description="Twitch lets Tier 2 and Tier 3 subscribers post GIFs. Off swaps each one for a small chip you can click to reveal."
@@ -1759,20 +1713,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
           }
         />
-        <SettingsRow
-          title={`History opacity: ${cd.backfill_opacity ?? 100}%`}
-          description="Dim the scrollback that loads when you join a chat, so live messages stand out."
-        >
-          <input
-            type="range"
-            min={30}
-            max={100}
-            step={5}
-            value={cd.backfill_opacity ?? 100}
-            onChange={(e) => setDesign({ backfill_opacity: Number(e.target.value) })}
-            className="w-40 accent-accent"
-          />
-        </SettingsRow>
+
         <SettingsRow
           title={`Emote size: ${(cd.emote_scale ?? 1).toFixed(2)}x`}
           description="Scales emotes in chat relative to the text, with 1.00x being the default size."
@@ -1825,6 +1766,83 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             className="w-full accent-accent cursor-pointer"
           />
         </SettingsRow>
+
+        <SettingsRow
+          title="Compact emote tooltips"
+          description='Show just the emote name on hover instead of the full "Right-click to copy" hint.'
+          control={
+            <Toggle
+              enabled={cd.compact_emote_tooltips}
+              onChange={() => setDesign({ compact_emote_tooltips: !cd.compact_emote_tooltips })}
+            />
+          }
+        />
+
+        <SettingsRow
+          title="FFZ emote effects"
+          description="Applies FrankerFaceZ modifiers (wide, flips, rainbow, shake) to the emote before them, the way FFZ does."
+          help="Off shows modifier emotes as plain overlay emotes."
+          control={
+            <Toggle
+              enabled={cd.ffz_emote_effects}
+              onChange={() => setDesign({ ffz_emote_effects: !cd.ffz_emote_effects })}
+            />
+          }
+        />
+
+        <SettingsRow
+          title="BetterTTV emote modifiers"
+          description="Applies BetterTTV modifiers (w! wide, h! and v! flips, c! cursed, p! party, s! shake) to the emote after them, the way BetterTTV does."
+          help="Off shows the modifiers as plain emotes."
+          control={
+            <Toggle
+              enabled={cd.bttv_emote_modifiers}
+              onChange={() => setDesign({ bttv_emote_modifiers: !cd.bttv_emote_modifiers })}
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Giant emotes"
+          description={'Draws the last emote of a "Gigantify an Emote" power-up message at 4x below the message, like Twitch does.'}
+          help="Off shows the emote inline at its normal size."
+          control={
+            <Toggle
+              enabled={cd.giant_emotes}
+              onChange={() => setDesign({ giant_emotes: !cd.giant_emotes })}
+            />
+          }
+        />
+
+        {cd.giant_emotes && (
+          <SettingsRow
+            title="Where the giant emote sits"
+            description="Under the message on the left, centered or on the right, or kept in the text at its normal size."
+          >
+            <SegmentedSelect<'left' | 'center' | 'right' | 'inline'>
+              value={cd.giant_emote_align}
+              onChange={(giant_emote_align) => setDesign({ giant_emote_align })}
+              options={[
+                { value: 'left', label: 'Left' },
+                { value: 'center', label: 'Center' },
+                { value: 'right', label: 'Right' },
+                { value: 'inline', label: 'In the text' },
+              ]}
+            />
+          </SettingsRow>
+        )}
+
+        <SettingsRow
+          title="7TV emote update notices"
+          description="Shows a chat notice when a mod adds, removes, or renames a 7TV emote in the channel."
+          help="The new emote is usable right away either way."
+          control={
+            <Toggle
+              enabled={cd.seventv_emote_notices ?? true}
+              onChange={() => setDesign({ seventv_emote_notices: !(cd.seventv_emote_notices ?? true) })}
+            />
+          }
+        />
       </SettingsSection>
 
       <SettingsSection
@@ -1989,8 +2007,30 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       </SettingsSection>
 
       <SettingsSection
-        label="Render Style"
-        description="How deleted messages, mentions, modifier emotes, and a few other special cases are drawn."
+        label="Channel Points"
+        description="Bonus chest pickup on the channel you are watching."
+      >
+        <SettingsRow
+          title="Auto-claim bonus chests"
+          description="Collects the bonus chest on the stream you are watching the moment it appears."
+          help="When this is off, a claim button appears on the points icon so you can grab it yourself. Claiming on channels you are not watching is a separate opt-in plugin."
+          control={
+            <Toggle
+              enabled={settings.auto_claim_points_watching ?? true}
+              onChange={() =>
+                updateSettings({
+                  ...settings,
+                  auto_claim_points_watching: !(settings.auto_claim_points_watching ?? true),
+                })
+              }
+            />
+          }
+        />
+      </SettingsSection>
+
+      <SettingsSection
+        label="Chat Behavior"
+        description="Deleted messages, shared chat, scrolling, and how much chat is kept."
       >
         <SettingsRow
           title="Deleted messages"
@@ -2015,95 +2055,6 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             <Toggle
               enabled={cd.hide_shared_chat}
               onChange={() => setDesign({ hide_shared_chat: !cd.hide_shared_chat })}
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Paint @mentions inline"
-          description="Draws a mentioned name in that person's 7TV paint instead of a flat color."
-          help="Off shows mentions in the chatter's plain name color."
-          control={
-            <Toggle
-              enabled={cd.paint_mentions_in_body}
-              onChange={() => setDesign({ paint_mentions_in_body: !cd.paint_mentions_in_body })}
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Compact emote tooltips"
-          description='Show just the emote name on hover instead of the full "Right-click to copy" hint.'
-          control={
-            <Toggle
-              enabled={cd.compact_emote_tooltips}
-              onChange={() => setDesign({ compact_emote_tooltips: !cd.compact_emote_tooltips })}
-            />
-          }
-        />
-
-        <SettingsRow
-          title="FFZ emote effects"
-          description="Applies FrankerFaceZ modifiers (wide, flips, rainbow, shake) to the emote before them, the way FFZ does."
-          help="Off shows modifier emotes as plain overlay emotes."
-          control={
-            <Toggle
-              enabled={cd.ffz_emote_effects}
-              onChange={() => setDesign({ ffz_emote_effects: !cd.ffz_emote_effects })}
-            />
-          }
-        />
-
-        <SettingsRow
-          title="BetterTTV emote modifiers"
-          description="Applies BetterTTV modifiers (w! wide, h! and v! flips, c! cursed, p! party, s! shake) to the emote after them, the way BetterTTV does."
-          help="Off shows the modifiers as plain emotes."
-          control={
-            <Toggle
-              enabled={cd.bttv_emote_modifiers}
-              onChange={() => setDesign({ bttv_emote_modifiers: !cd.bttv_emote_modifiers })}
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Giant emotes"
-          description={'Draws the last emote of a "Gigantify an Emote" power-up message at 4x below the message, like Twitch does.'}
-          help="Off shows the emote inline at its normal size."
-          control={
-            <Toggle
-              enabled={cd.giant_emotes}
-              onChange={() => setDesign({ giant_emotes: !cd.giant_emotes })}
-            />
-          }
-        />
-
-        {cd.giant_emotes && (
-          <SettingsRow
-            title="Where the giant emote sits"
-            description="Under the message on the left, centered or on the right, or kept in the text at its normal size."
-          >
-            <SegmentedSelect<'left' | 'center' | 'right' | 'inline'>
-              value={cd.giant_emote_align}
-              onChange={(giant_emote_align) => setDesign({ giant_emote_align })}
-              options={[
-                { value: 'left', label: 'Left' },
-                { value: 'center', label: 'Center' },
-                { value: 'right', label: 'Right' },
-                { value: 'inline', label: 'In the text' },
-              ]}
-            />
-          </SettingsRow>
-        )}
-
-        <SettingsRow
-          title="7TV emote update notices"
-          description="Shows a chat notice when a mod adds, removes, or renames a 7TV emote in the channel."
-          help="The new emote is usable right away either way."
-          control={
-            <Toggle
-              enabled={cd.seventv_emote_notices ?? true}
-              onChange={() => setDesign({ seventv_emote_notices: !(cd.seventv_emote_notices ?? true) })}
             />
           }
         />
@@ -2461,25 +2412,92 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       </SettingsSection>
       )}
 
+      {/* Desktop only. Writes .log files into a folder the user picks, and there
+          is no user-visible folder to point at on Android. */}
+      {!IS_MOBILE && (
       <SettingsSection
-        label="7TV Cosmetics"
-        description="How 7TV paints on usernames are drawn."
+        label="Chat Logging"
+        description="Keep a text copy of chat on your disk, for searching later or feeding another tool."
       >
         <SettingsRow
-          title="Paint drop shadows"
-          description="Some paints stack several drop shadows for readability; keep them all, just one, or none if names look too noisy."
-        >
-          <SegmentedSelect<'all' | 'one' | 'none'>
-            value={(settings.cosmetics?.paint_shadows ?? 'all') as 'all' | 'one' | 'none'}
-            onChange={(value) => setCosmetics({ paint_shadows: value })}
-            options={[
-              { value: 'all', label: 'All' },
-              { value: 'one', label: 'One' },
-              { value: 'none', label: 'None' },
-            ]}
-          />
-        </SettingsRow>
+          title="Save chat logs"
+          description="Writes chat to plain text files as you watch: one folder per channel, one file per day."
+          help="The files grow with the chat, so a busy channel adds up over weeks. Delete old days from the folder any time."
+          control={
+            <Toggle
+              enabled={loggingEnabled}
+              onChange={() => setLogging({ enabled: !loggingEnabled })}
+            />
+          }
+        />
+        {loggingEnabled && (
+          <>
+            <SettingsRow
+              title="Log folder"
+              description="Where the files are written. Browse to pick your own folder, Reset to go back to the default."
+            >
+              <div className="flex items-center gap-2">
+                <div className="glass-input min-w-0 flex-1 truncate rounded-md px-3 py-1.5 text-[13px] text-textPrimary">
+                  {logDir}
+                </div>
+                <button
+                  type="button"
+                  onClick={browseLogFolder}
+                  className="glass-button-secondary flex-shrink-0 px-3 py-1.5 text-[13px] text-textSecondary hover:text-textPrimary"
+                >
+                  Browse
+                </button>
+                {(logging.folder ?? '') !== '' && (
+                  <button
+                    type="button"
+                    onClick={() => setLogging({ folder: '' })}
+                    className="glass-button-secondary flex-shrink-0 px-2 py-1.5 text-[13px] text-textMuted hover:text-textPrimary"
+                  >
+                    Reset
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={openLogFolder}
+                  className="glass-button-secondary flex-shrink-0 px-3 py-1.5 text-[13px] text-textSecondary hover:text-textPrimary"
+                >
+                  Open
+                </button>
+              </div>
+            </SettingsRow>
+            <SettingsRow
+              title="Only log these channels"
+              description="Leave empty to log every channel you open."
+            >
+              <PanelChannelList
+                value={logging.channels ?? []}
+                onChange={(channels) => setLogging({ channels })}
+              />
+            </SettingsRow>
+            <SettingsRow
+              title="Timestamps"
+              description="Start each line with the time it was sent."
+              control={
+                <Toggle
+                  enabled={logging.timestamps ?? true}
+                  onChange={() => setLogging({ timestamps: !(logging.timestamps ?? true) })}
+                />
+              }
+            />
+            <SettingsRow
+              title="Events and moderation"
+              description="Also log subscriptions, raids, announcements, timeouts, and deleted messages."
+              control={
+                <Toggle
+                  enabled={logging.include_events ?? true}
+                  onChange={() => setLogging({ include_events: !(logging.include_events ?? true) })}
+                />
+              }
+            />
+          </>
+        )}
       </SettingsSection>
+      )}
 
       <HighlightAppearanceSettings />
       <CustomSoundsSettings />
