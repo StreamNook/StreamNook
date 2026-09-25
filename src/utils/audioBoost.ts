@@ -19,6 +19,14 @@
 // Because of rule 1, the element is never tapped until the feature has been
 // enabled at least once: while it has always been off, this module leaves
 // playback completely untouched.
+//
+// A third rule is about lifetime: once a tapped element has played through its
+// source node, that node stays registered with its AudioContext, and holds the
+// element, for as long as the context is open. Disconnecting does not reliably
+// release it; only closing the context does. So every element gets a context of
+// its own, and the player hands the element back with `releaseAudioGraph` when
+// it unmounts. A shared context kept every player the app ever built alive,
+// with its whole DOM subtree, for the rest of the session.
 
 import { Logger } from './logger';
 import { IS_MAC } from './platform';
@@ -50,35 +58,30 @@ export const AUDIO_GRAPH_REFUSAL =
   "Not available on macOS: the system's video engine won't share stream audio with the app.";
 
 interface MediaGraph {
+  ctx: AudioContext;
   source: MediaElementAudioSourceNode;
   compressor: DynamicsCompressorNode;
   gain: GainNode;
 }
 
-// One shared context for stream-audio processing across the app's lifetime.
-// Browsers cap the number of AudioContexts, and there is only ever one stream
-// element to process at a time, so we never spin up a context per stream.
-let sharedCtx: AudioContext | null = null;
-
-// Per-element graphs, keyed weakly so a discarded element can be collected.
+// Per-element graphs, each with its own context (rule 3). The player releases
+// its element on unmount, so only the element on screen holds an open context.
 const graphs = new WeakMap<HTMLMediaElement, MediaGraph>();
 
 const clamp = (v: number, min: number, max: number) =>
   Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : min;
 
-function getCtx(): AudioContext | null {
-  if (sharedCtx) return sharedCtx;
+function createCtx(): AudioContext | null {
   const Ctor =
     window.AudioContext ||
     (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!Ctor) return null;
   try {
-    sharedCtx = new Ctor();
+    return new Ctor();
   } catch (e) {
     Logger.warn('[AudioBoost] Could not create AudioContext:', e);
     return null;
   }
-  return sharedCtx;
 }
 
 function getOrCreateGraph(video: HTMLMediaElement): MediaGraph | null {
@@ -90,7 +93,7 @@ function getOrCreateGraph(video: HTMLMediaElement): MediaGraph | null {
   const existing = graphs.get(video);
   if (existing) return existing;
 
-  const ctx = getCtx();
+  const ctx = createCtx();
   if (!ctx) return null;
 
   let source: MediaElementAudioSourceNode;
@@ -99,16 +102,52 @@ function getOrCreateGraph(video: HTMLMediaElement): MediaGraph | null {
   } catch (e) {
     // Already tapped, or the element can't be routed. Leave playback untouched.
     Logger.warn('[AudioBoost] createMediaElementSource failed:', e);
+    void ctx.close().catch(() => {});
     return null;
   }
 
   const graph: MediaGraph = {
+    ctx,
     source,
     compressor: ctx.createDynamicsCompressor(),
     gain: ctx.createGain(),
   };
   graphs.set(video, graph);
   return graph;
+}
+
+/**
+ * Hand back an element the player is discarding. Closes its context, which is
+ * the only thing that lets the element (and the player DOM around it) be
+ * collected once it has played through the graph. A no-op for an element that
+ * was never tapped. The element cannot make sound afterwards, so call this only
+ * when it is leaving for good.
+ */
+export function releaseAudioGraph(video: HTMLMediaElement | null): void {
+  if (!video) return;
+  const graph = graphs.get(video);
+  if (!graph) return;
+  graphs.delete(video);
+  for (const node of [graph.source, graph.compressor, graph.gain]) {
+    try {
+      node.disconnect();
+    } catch {
+      /* not connected */
+    }
+  }
+  void graph.ctx.close().catch((e) => Logger.warn('[AudioBoost] could not close AudioContext:', e));
+}
+
+/**
+ * `releaseAudioGraph`, but only once the element has actually left the page.
+ * For effect cleanups: checked on the next task, after React has removed the
+ * element on a real unmount, while a rehearsal unmount (StrictMode) leaves it in
+ * place and it keeps its sound.
+ */
+export function releaseAudioGraphOnceGone(video: HTMLMediaElement): void {
+  setTimeout(() => {
+    if (!video.isConnected) releaseAudioGraph(video);
+  }, 0);
 }
 
 // Fill in any missing fields from the defaults so callers can pass a possibly
@@ -122,8 +161,9 @@ export function resolveAudioBoost(
 /**
  * Route the player's audio through the compressor + makeup-gain chain when
  * enabled, or straight through when not. Idempotent: safe to call on every
- * settings change and after every stream swap (the <video> element persists, so
- * its one-time tap stays valid). A no-op while the feature has never been on.
+ * settings change. A no-op while the feature has never been on for this
+ * element. The caller releases the element with `releaseAudioGraph` when it
+ * discards it.
  */
 export function applyAudioBoost(
   video: HTMLMediaElement | null,
@@ -136,8 +176,7 @@ export function applyAudioBoost(
 
   const graph = getOrCreateGraph(video);
   if (!graph) return;
-  const ctx = sharedCtx;
-  if (!ctx) return;
+  const { ctx } = graph;
 
   // A suspended context outputs silence (autoplay policy). This runs from a
   // settings toggle or a play event, both user gestures, so resume succeeds.
@@ -209,15 +248,16 @@ class SnCaptureProcessor extends AudioWorkletProcessor {
 registerProcessor('sn-capture', SnCaptureProcessor);
 `;
 
-let captureWorkletReady: Promise<void> | null = null;
+// A worklet module is registered per context, and each element has its own.
+const captureWorkletReady = new WeakMap<AudioContext, Promise<void>>();
 function ensureCaptureWorklet(ctx: AudioContext): Promise<void> {
-  if (captureWorkletReady) return captureWorkletReady;
+  const pending = captureWorkletReady.get(ctx);
+  if (pending) return pending;
   const blob = new Blob([CAPTURE_PROCESSOR_SOURCE], { type: 'application/javascript' });
   const url = URL.createObjectURL(blob);
-  captureWorkletReady = ctx.audioWorklet
-    .addModule(url)
-    .finally(() => URL.revokeObjectURL(url));
-  return captureWorkletReady;
+  const ready = ctx.audioWorklet.addModule(url).finally(() => URL.revokeObjectURL(url));
+  captureWorkletReady.set(ctx, ready);
+  return ready;
 }
 
 // Linear-resample a mono Float32 buffer to `outRate` and convert to signed 16
@@ -256,8 +296,6 @@ export async function captureStreamSamples(
 ): Promise<Int16Array | null> {
   if (!video) return null;
   if (!AUDIO_GRAPH_SUPPORTED) return null;
-  const ctx = getCtx();
-  if (!ctx) return null;
 
   // This may be the first time the element is ever tapped (boost never enabled).
   // If so, nothing routes the source to the speakers yet, so add the passthrough
@@ -265,6 +303,7 @@ export async function captureStreamSamples(
   const firstTap = !graphs.has(video);
   const graph = getOrCreateGraph(video);
   if (!graph) return null;
+  const { ctx } = graph;
   if (firstTap) {
     try {
       graph.source.connect(ctx.destination);

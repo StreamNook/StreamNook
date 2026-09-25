@@ -45,6 +45,7 @@ import { behindLiveFromEdge, edgeTargetForGap, resolveLiveEdgeGap, type LivePath
 import { startLLDiagnostics, stopLLDiagnostics, llDiagNote, isLLDiagEnabled } from '../utils/llDiagnostics';
 import {
   applyAudioBoost,
+  releaseAudioGraphOnceGone,
   resolveAudioBoost,
   audioBoostFaderDefs,
   audioBoostResetPatch,
@@ -357,16 +358,32 @@ const VideoPlayer = () => {
   }, [clipModalOpen]);
 
   // Route the live audio through the optional compressor + makeup-gain graph.
-  // Re-applied whenever the audio-boost settings change and after each stream
-  // swap (the player is rebuilt then, but the <video> element itself persists,
-  // so its one-time audio tap stays valid and we just reconfirm the routing).
-  // While the feature has never been turned on, this is a no-op and playback is
-  // left completely untouched. Scoped to the main player; MultiNook tiles keep
-  // their own per-tile audio.
+  // Re-applied whenever the audio-boost settings change. While the feature has
+  // never been turned on, this is a no-op and playback is left completely
+  // untouched. Scoped to the main player; MultiNook tiles keep their own
+  // per-tile audio.
+  //
+  // This player is keyed by stream URL, so every channel switch builds a new
+  // <video>. An element that played through the graph stays alive until its
+  // audio context is closed, so the element is handed back once it has actually
+  // left the page. The check runs after cleanup rather than in it: a rehearsal
+  // unmount (StrictMode) keeps the element in the page, and closing its context
+  // then would silence a stream that is still playing.
   const audioBoostSettings = playerSettings?.audio_boost;
+  const audioElRef = useRef<HTMLVideoElement | null>(null);
   useEffect(() => {
-    applyAudioBoost(videoRef.current, resolveAudioBoost(audioBoostSettings));
+    const el = videoRef.current;
+    const prev = audioElRef.current;
+    if (prev && prev !== el) releaseAudioGraphOnceGone(prev);
+    audioElRef.current = el;
+    applyAudioBoost(el, resolveAudioBoost(audioBoostSettings));
   }, [audioBoostSettings, streamUrl, playerReady]);
+  useEffect(
+    () => () => {
+      if (audioElRef.current) releaseAudioGraphOnceGone(audioElRef.current);
+    },
+    [],
+  );
 
   // Expose the player element so the "/song" chat command (which runs outside
   // this component) can capture from the stream that's actually playing.
