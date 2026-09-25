@@ -153,19 +153,55 @@ async fn publish_presence(app: &AppHandle, target: &WatchTarget) {
     };
     let small = format!("{}_logo", target.provider);
     let started = u64::try_from(now_ms()).unwrap_or_default();
-    if let Err(e) = crate::services::discord_service::DiscordService::update_presence(
-        &format!("Watching {name}"),
-        &activity,
-        "icon_256x256",
-        &small,
-        started,
-        &target.game_name,
-        &watch_url(target),
-        &state,
-    )
-    .await
-    {
+    if let Err(e) = discord::watching(&format!("Watching {name}"), &activity, &small, started, &target.game_name, &watch_url(target), &state).await {
         log::debug!("[WatchSession] Discord presence not updated (Discord may not be running): {e}");
+    }
+}
+
+/// Discord Rich Presence exists only on desktop; on the phone these do nothing.
+mod discord {
+    use crate::models::settings::AppState;
+
+    #[cfg(desktop)]
+    pub async fn watching(
+        details: &str,
+        activity: &str,
+        small_image: &str,
+        started: u64,
+        game: &str,
+        url: &str,
+        state: &AppState,
+    ) -> Result<(), String> {
+        crate::services::discord_service::DiscordService::update_presence(
+            details, activity, "icon_256x256", small_image, started, game, url, state,
+        )
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    #[cfg(desktop)]
+    pub async fn idle(state: &AppState) -> Result<(), String> {
+        crate::services::discord_service::DiscordService::set_idle_presence(state)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    #[cfg(not(desktop))]
+    pub async fn watching(
+        _details: &str,
+        _activity: &str,
+        _small_image: &str,
+        _started: u64,
+        _game: &str,
+        _url: &str,
+        _state: &AppState,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    #[cfg(not(desktop))]
+    pub async fn idle(_state: &AppState) -> Result<(), String> {
+        Ok(())
     }
 }
 
@@ -247,7 +283,7 @@ pub async fn stop(app: AppHandle, preserve_backend: bool) {
         app.state::<EventSubServiceState>().0.read().await.disconnect().await;
     }
     let state = app.state::<AppState>();
-    if let Err(e) = crate::services::discord_service::DiscordService::set_idle_presence(&state).await {
+    if let Err(e) = discord::idle(&state).await {
         log::debug!("[WatchSession] Could not set idle Discord presence: {e}");
     }
 }
@@ -260,7 +296,7 @@ pub async fn refresh_presence(app: AppHandle) {
         Some(target) => publish_presence(&app, &target).await,
         None => {
             let state = app.state::<AppState>();
-            let _ = crate::services::discord_service::DiscordService::set_idle_presence(&state).await;
+            let _ = discord::idle(&state).await;
         }
     }
 }
