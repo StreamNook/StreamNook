@@ -335,6 +335,7 @@ fn close_main_window(app: tauri::AppHandle) {
 #[cfg(target_os = "android")]
 mod android_notify;
 mod commands;
+mod linux_desktop_entry;
 mod linux_graphics;
 mod models;
 mod platform;
@@ -878,13 +879,15 @@ pub fn run() {
             // Register deep link scheme on Windows
             #[cfg(windows)]
             {
-                // Windows-only ON PURPOSE, not an unfinished port. Windows
-                // registers a URL scheme at RUNTIME by writing registry keys,
-                // which is what register_all() does. macOS and Linux register
+                // Windows registers a URL scheme at RUNTIME by writing registry
+                // keys, which is what register_all() does. macOS registers
                 // DECLARATIVELY - the bundler copies
                 // `plugins.deep-link.desktop.schemes` into the .app's
-                // Info.plist (CFBundleURLSchemes) and the .desktop file. Calling
-                // this there would be a no-op at best.
+                // Info.plist (CFBundleURLSchemes). Linux ships as an AppImage,
+                // whose bundled .desktop file nothing installs, so
+                // linux_desktop_entry installs it (scheme handler included)
+                // below; the plugin's own Linux register() would write a
+                // separate `-handler` entry that carries no icon.
                 //
                 // Verified on the built bundle: Info.plist carries
                 // CFBundleURLSchemes = [streamnook]. Because that path depends
@@ -893,6 +896,13 @@ pub fn run() {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 let _ = app.deep_link().register_all();
             }
+
+            // Install the AppImage's desktop entry and icons, which gives the
+            // window its icon on Wayland, a launcher entry, and the
+            // streamnook:// handler. Off the setup thread: it reads files and
+            // runs xdg-mime.
+            #[cfg(target_os = "linux")]
+            std::thread::spawn(|| info!("{}", linux_desktop_entry::install()));
 
             // Resolve streamnook:// share links to a channel and hand it to the UI.
             //
