@@ -37,6 +37,7 @@ import {
 } from '../themes';
 import { getSidebarSettings, saveSidebarSettings, type SidebarMode } from './settings/InterfaceSettings';
 import { TwitchGlyph } from './ui/TwitchGlyph';
+import { WindowCaptionButtons } from './titlebar/WindowCaptionButtons';
 
 import { Logger } from '../utils/logger';
 import { ANNOUNCEMENTS_BASELINE_PENDING_KEY } from './AnnouncementsBanner';
@@ -1254,6 +1255,10 @@ const SetupWizard = ({ isOpen, onClose }: SetupWizardProps) => {
                 data-tauri-drag-region
                 className="absolute top-0 left-0 right-0 h-12 z-0"
             />
+
+            {/* The wizard covers the title bar, and the window has no OS frame,
+                so it carries the window's own controls in the same corner. */}
+            <WindowCaptionButtons className="absolute top-0 right-0 z-30" />
 
             <div className="relative h-full w-full flex flex-col">
                 {/* Mobile back control. Pinned to the top-left the way onboarding
