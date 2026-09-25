@@ -1385,6 +1385,20 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     ro.observe(chromeEl);
     return () => ro.disconnect();
   }, [chromeEl]);
+  // Where the combined-chat bar ends. It sits in flow under the header and its
+  // height moves too (an invite, a suggestion, the link editor), so the floating
+  // pinned message is placed below whichever of the two reaches lower instead of
+  // at a fixed offset that lands on top of the bar.
+  const [blendBarEl, setBlendBarEl] = useState<HTMLElement | null>(null);
+  const [blendBarBottom, setBlendBarBottom] = useState(0);
+  useEffect(() => {
+    if (!blendBarEl) return;
+    const sync = () => setBlendBarBottom(blendBarEl.offsetTop + blendBarEl.offsetHeight);
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(blendBarEl);
+    return () => ro.disconnect();
+  }, [blendBarEl]);
 
 
   const settings = useAppStore((s) => s.settings);
@@ -1922,7 +1936,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         : NO_BLEND_SOURCES,
     [blendActive, homeChannel, provider, currentStream?.user_name, blendAttached],
   );
-  const blendSource = useBlendedChatSource(blendSources);
+  const blendSource = useBlendedChatSource(blendSources, isPaused);
   // Linking and unlinking go through Rust, which owns the link table and
   // persists it; `refreshBlendLinks` then re-reads so the bar updates without a
   // round trip through settings.
@@ -4833,7 +4847,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         {pinnedMessages.length > 0 && (
           <div className="absolute left-3 right-3 z-[15] pointer-events-none flex flex-col items-center"
             style={{
-              top: currentHypeTrain ? '80px' : '48px', // Positioning based on header height
+              top: Math.max(chromeHeight, blendBarEl ? blendBarBottom : 0) + 8,
             }}>
             <AnimatePresence>
               {isPinnedExpanded && (
@@ -5104,7 +5118,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         {/* Combined chat. Renders nothing at all unless this streamer has another
             platform linked, so single-platform chat gains no chrome. */}
         {activeView === 'chat' && blendEnabled && (
-          <div style={{ paddingTop: chromeHeight }}>
+          <div ref={setBlendBarEl} style={{ paddingTop: chromeHeight }}>
           <BlendBar
             linked={blendLinked}
             onAdd={(p, ch) => void editBlendLink({ provider: p, channel: ch }, 'link')}

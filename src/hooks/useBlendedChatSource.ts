@@ -13,6 +13,7 @@
 
 import { useMemo, useRef } from 'react';
 import { useChatConnectionStore, sliceLookupKey, getActiveHistoryMax } from '../stores/chatConnectionStore';
+import { mergedFeedLimit } from '../stores/chatBufferTrim';
 import { parseKey } from '../utils/providerKey';
 import { sourceKeyOf, sourceProviderOf, type ChatSource } from '../utils/sendToSource';
 import type { BackendChatMessage } from '../services/twitchChat';
@@ -50,7 +51,11 @@ export function tsOf(m: string | BackendChatMessage): number {
  *  is comfortable to roughly a thousand rows, so this leaves generous headroom. */
 const MERGED_ROW_CEILING = 400;
 
-export function useBlendedChatSource<T extends ChatSource>(channels: T[]): BlendedChatSource<T> {
+export function useBlendedChatSource<T extends ChatSource>(
+  channels: T[],
+  /** The reader has scrolled up. The feed then stops trimming from the top. */
+  paused = false,
+): BlendedChatSource<T> {
   // Re-render when any of THESE sources change. Summing the per-channel counters
   // (instead of the global revision) keeps the O(all sources) reconcile below from
   // re-running on flushes of channels this feed doesn't show.
@@ -87,6 +92,9 @@ export function useBlendedChatSource<T extends ChatSource>(channels: T[]): Blend
   // Monotonic counter for the "N new since paused" badge. Order lives in orderRef,
   // so this drives only the unread count, not placement.
   const seqRef = useRef<{ next: number }>({ next: 0 });
+  // Post-resume scrollback cushion (see mergedFeedLimit), drained once per
+  // render token so StrictMode's double-invoke of the memo cannot drain it twice.
+  const resumeRef = useRef<{ overflow: number; token: number }>({ overflow: 0, token: -1 });
   // Cached render outputs. Their references only change when their contents do, so a
   // quiet tick hands the memoized list the exact same props and it skips the work.
   const renderCacheRef = useRef<{
@@ -212,8 +220,16 @@ export function useBlendedChatSource<T extends ChatSource>(channels: T[]): Blend
     // scales with the number of sources and stops at a ceiling the unwindowed
     // list is comfortable with, so scrollback grows with the feed while the DOM
     // stays bounded whatever the buffer setting is. Trim from the top, where
-    // the oldest are.
-    const cap = Math.min(getActiveHistoryMax() * Math.max(1, channels.length), MERGED_ROW_CEILING);
+    // the oldest are, but not while the reader is paused: a row cut from the top
+    // slides everything they are reading upward.
+    const base = Math.min(getActiveHistoryMax() * Math.max(1, channels.length), MERGED_ROW_CEILING);
+    const resume = resumeRef.current;
+    if (paused || resume.token !== renderToken) {
+      const next = mergedFeedLimit(base, channels.length, paused, resume.overflow);
+      resume.overflow = next.resumeOverflow;
+      resume.token = renderToken;
+    }
+    const cap = base + resume.overflow;
     if (order.length > cap) {
       const drop = order.length - cap;
       for (let i = 0; i < drop; i++) {
@@ -265,7 +281,7 @@ export function useBlendedChatSource<T extends ChatSource>(channels: T[]): Blend
       clearedUserContexts: cache.cleared,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [channels, renderToken]);
+  }, [channels, renderToken, paused]);
 
   return {
     messages,

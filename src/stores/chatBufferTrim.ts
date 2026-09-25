@@ -144,3 +144,25 @@ export function resumeFlushLimit(
   const remaining = Math.max(0, Math.min(CHAT_BUFFER_SIZE, resumeOverflow) - RESUME_DECAY_PER_FLUSH);
   return { limit: historyMax + remaining, resumeOverflow: remaining };
 }
+
+/**
+ * The cap for a feed merged from several slices (combined chat), given the
+ * merge's own base cap. Mirrors what each slice does on its own: while the
+ * reader is paused the feed keeps a scrollback cushion instead of trimming,
+ * because every row cut from the top slides the rows being read upward; after
+ * a resume the cushion drains a few rows per update from the top, out of sight
+ * of the bottom the reader resumed to. Both scale with the number of sources,
+ * since each of them fills its own cushion while paused.
+ */
+export function mergedFeedLimit(
+  base: number,
+  sources: number,
+  paused: boolean,
+  resumeOverflow: number,
+): { limit: number; resumeOverflow: number } {
+  const n = Math.max(1, sources);
+  const cushion = CHAT_BUFFER_SIZE * n;
+  if (paused) return { limit: base + cushion, resumeOverflow: cushion };
+  const remaining = Math.max(0, Math.min(cushion, resumeOverflow) - RESUME_DECAY_PER_FLUSH * n);
+  return { limit: base + remaining, resumeOverflow: remaining };
+}

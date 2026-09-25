@@ -89,6 +89,7 @@ export function BlendedChatPane({
 }) {
   // The merge itself is shared with the main chat panel (hooks/useBlendedChatSource),
   // so both surfaces order, dedupe and reconcile a multi-source feed identically.
+  const [paused, setPaused] = useState(false);
   const {
     messages,
     deletedMessageIds,
@@ -96,7 +97,7 @@ export function BlendedChatPane({
     renderToken: revision,
     sourceRef: idToChannelRef,
     seqRef,
-  } = useBlendedChatSource(channels);
+  } = useBlendedChatSource(channels, paused);
 
   // Twitch Hype Trains across the blended Twitch sources (blended mounts no per-pane
   // poller, so this drives both the banner here and the activity-feed rows).
@@ -204,8 +205,8 @@ export function BlendedChatPane({
   // grace periods stop the rapid pause/resume flapping a fast chat would otherwise
   // produce. `pausedRef` mirrors the state for synchronous reads in the scroll
   // handlers; `pausedAtSeqRef` snapshots the arrival counter on the pause edge for the
-  // exact "N new" count.
-  const [paused, setPaused] = useState(false);
+  // exact "N new" count. The `paused` state itself is declared above the merge,
+  // which needs it to stop trimming while the reader is scrolled up.
   const pausedRef = useRef(false);
   const lastPauseToggleRef = useRef(0);
   const lastResumeTimeRef = useRef(0);

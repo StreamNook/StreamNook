@@ -3,6 +3,7 @@ import {
   CHAT_BUFFER_SIZE,
   currentBufferLimit,
   liveAppendLimit,
+  mergedFeedLimit,
   EVENT_LOOKBACK,
   EVENT_RETAIN,
   RESUME_DECAY_PER_FLUSH,
@@ -217,5 +218,28 @@ describe('currentBufferLimit', () => {
     expect(
       currentBufferLimit({ isPausedForBuffer: false, resumeOverflow: 9999 }, HISTORY_MAX),
     ).toBe(HISTORY_MAX + CHAT_BUFFER_SIZE);
+  });
+});
+
+describe('mergedFeedLimit (combined chat)', () => {
+  it('keeps a cushion per source while paused, so nothing is cut from the top', () => {
+    const paused = mergedFeedLimit(200, 2, true, 0);
+    expect(paused.limit).toBe(200 + 2 * CHAT_BUFFER_SIZE);
+    expect(paused.resumeOverflow).toBe(2 * CHAT_BUFFER_SIZE);
+  });
+  it('drains the cushion gradually after a resume, down to the base cap', () => {
+    let overflow = mergedFeedLimit(200, 2, true, 0).resumeOverflow;
+    const limits: number[] = [];
+    for (let i = 0; i < 100; i++) {
+      const next = mergedFeedLimit(200, 2, false, overflow);
+      overflow = next.resumeOverflow;
+      limits.push(next.limit);
+    }
+    expect(limits[0]).toBe(200 + 2 * CHAT_BUFFER_SIZE - 2 * RESUME_DECAY_PER_FLUSH);
+    for (let i = 1; i < limits.length; i++) expect(limits[i]).toBeLessThanOrEqual(limits[i - 1]);
+    expect(limits[limits.length - 1]).toBe(200);
+  });
+  it('is the plain base cap when never paused', () => {
+    expect(mergedFeedLimit(300, 3, false, 0)).toEqual({ limit: 300, resumeOverflow: 0 });
   });
 });
