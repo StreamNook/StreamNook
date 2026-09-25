@@ -421,6 +421,11 @@ jobs:
             find "$appdir" -name "$keep" | grep -q . || { echo "$keep went missing"; exit 1; }
           done
 
+          # The GTK plugin's AppRun hook forces X11 on every Wayland desktop and
+          # lets the host's GIO modules load against our older GLib. The script
+          # explains both and fails the job if the hook no longer matches.
+          bash scripts/linux-appimage-hooks.sh "$appdir"
+
           # Find the packer rather than assuming one path: tauri caches it under
           # ~/.cache/tauri today, but a hardcoded path that moves would abort the
           # whole Linux job on a step that is meant to be a refinement.

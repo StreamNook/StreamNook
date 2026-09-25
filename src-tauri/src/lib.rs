@@ -335,6 +335,7 @@ fn close_main_window(app: tauri::AppHandle) {
 #[cfg(target_os = "android")]
 mod android_notify;
 mod commands;
+mod linux_graphics;
 mod models;
 mod platform;
 mod plugin_host;
@@ -464,6 +465,12 @@ async fn read_clipboard_text_native(app: tauri::AppHandle) -> Result<String, Str
 /// via the `mobile_entry_point` macro.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // WebKitGTK takes its renderer settings from the environment when GTK starts,
+    // and the environment is only safe to change while no other thread exists,
+    // so this runs before anything else.
+    #[cfg(target_os = "linux")]
+    let linux_graphics_report = linux_graphics::configure();
+
     // Apply WebView2 browser arguments uniformly to every webview in the process.
     // Setting them via this env var (inherited by the msedgewebview2.exe child)
     // instead of on a single window in tauri.conf.json avoids HRESULT 0x8007139F
@@ -504,6 +511,9 @@ pub fn run() {
 
     // Initialize the logging system FIRST so all debug!/error! macros work
     services::diagnostic_logger::init_logging();
+
+    #[cfg(target_os = "linux")]
+    info!("{linux_graphics_report}");
 
     // Every panic goes to streamnook.log. Without this, a panic on a
     // background thread prints to stderr, which nobody sees in a release

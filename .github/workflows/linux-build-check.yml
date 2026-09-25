@@ -186,6 +186,10 @@ jobs:
             find "$appdir" -name "$keep" | grep -q . || { echo "$keep went missing"; exit 1; }
           done
 
+          # Same AppRun hook patch as the release job (native Wayland first,
+          # bundled GIO modules only).
+          bash scripts/linux-appimage-hooks.sh "$appdir"
+
           tool=$(find "$HOME/.cache" -name "linuxdeploy-plugin-appimage*.AppImage" -type f 2>/dev/null | head -1)
           test -n "$tool" || { echo "AppImage packer not found under \$HOME/.cache"; exit 1; }
           chmod +x "$tool"
@@ -242,6 +246,13 @@ jobs:
           done
 
           echo "| gstreamer plugins | $(find "$appdir" -path '*gstreamer*' -name '*.so' | wc -l) |" >> "$GITHUB_STEP_SUMMARY"
+
+          # A hook that still forces X11 puts every Wayland user on XWayland.
+          hook="$appdir/apprun-hooks/linuxdeploy-plugin-gtk.sh"
+          if grep -q '^export GDK_BACKEND=x11' "$hook" || ! grep -q '^export GIO_MODULE_DIR=' "$hook"; then
+            echo "| AppRun hook | NOT PATCHED (forces X11 or loads host GIO modules) |" >> "$GITHUB_STEP_SUMMARY"; exit 1
+          fi
+          echo "| AppRun hook | Wayland first, bundled GIO modules only |" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the AppImage for manual testing
         uses: actions/upload-artifact@v4
