@@ -1,3 +1,16 @@
+## [8.7.1] - 2026-09-24
+
+### 🐛 Bug Fixes
+- Low-latency channels play about half a second closer to live again, level with twitch.tv. The live-edge slider now goes down to 1 second.
+- Scrolling up in combined chat pauses it properly, so messages stop sliding up while you read.
+- Combined chat no longer gets flooded with a burst of old YouTube messages, and a batch of catch-up messages no longer plays the entrance animation all at once.
+- A pinned message no longer covers the combined chat bar or the "same streamer?" question under it.
+- Clicking a settings search result takes you to that setting and highlights it. The command palette now opens the right section instead of the top of the tab.
+
+### 🔧 Maintenance
+- Chat settings are reorganized. Pinned messages, names and badges, and mentions and replies have their own sections, the YouTube settings sit together, and every emote option is under Emotes.
+- Linux builds publish again.
+
 ## [8.7.0] - 2026-09-24
 
 ## 🎉 New: TikTok LIVE, one chat for multistreamers, and Linux
