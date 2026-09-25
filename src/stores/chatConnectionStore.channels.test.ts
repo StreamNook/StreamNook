@@ -77,6 +77,9 @@ afterEach(async () => {
       await releaseChannel(slice.channel.includes(':') ? slice.channel.split(':')[1] : slice.channel, slice.provider);
     }
   }
+  // A non-Twitch source's last release tears down after a grace period; run it
+  // out so the next test starts with no channels.
+  await vi.advanceTimersByTimeAsync(20_000);
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -171,5 +174,37 @@ describe('each chat channel connects on its own', () => {
     await releaseChannel('keepsoffline', 'tiktok');
     await vi.advanceTimersByTimeAsync(600_000);
     expect(calls('provider_chat_connect')).toHaveLength(1);
+  });
+});
+
+describe('a non-Twitch source released and taken back', () => {
+  it('keeps the live connection when re-acquired inside the grace', async () => {
+    answers.chat_bridge_port = () => 4242;
+    answers.provider_chat_connect = () => 4242;
+    const { acquireChannel, releaseChannel, useChatConnectionStore } = await import('./chatConnectionStore');
+
+    await withClock(acquireChannel('UCsomeone', null, 'youtube'));
+    await releaseChannel('UCsomeone', 'youtube');
+    await vi.advanceTimersByTimeAsync(5_000);
+    await withClock(acquireChannel('UCsomeone', null, 'youtube'));
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(calls('provider_chat_connect')).toHaveLength(1);
+    expect(calls('provider_chat_disconnect')).toHaveLength(0);
+    expect(useChatConnectionStore.getState().channels.get('youtube:ucsomeone')?.refCount).toBe(1);
+  });
+
+  it('tears down once the grace runs out', async () => {
+    answers.chat_bridge_port = () => 4242;
+    answers.provider_chat_connect = () => 4242;
+    const { acquireChannel, releaseChannel, useChatConnectionStore } = await import('./chatConnectionStore');
+
+    await withClock(acquireChannel('UCsomeone', null, 'youtube'));
+    await releaseChannel('UCsomeone', 'youtube');
+    expect(calls('provider_chat_disconnect')).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(calls('provider_chat_disconnect')).toHaveLength(1);
+    expect(useChatConnectionStore.getState().channels.has('youtube:ucsomeone')).toBe(false);
   });
 });

@@ -1897,6 +1897,10 @@ async fn stream_live_chat(
             // Join backlog: deliver at once (the frontend coalesces it into a single
             // render) and keep only the newest rows, so joining looks like arriving
             // with context instead of a high-speed replay of the last ~20 seconds.
+            // Its rows are history (the join's context, or what a re-resolve missed),
+            // so they carry `from_backfill` like Twitch's join history does: the list
+            // then draws them without the per-row entrance animation instead of
+            // playing it on thirty rows at once.
             first_batch = false;
             if batch.len() > BACKLOG_KEEP {
                 log::info!(
@@ -1906,7 +1910,7 @@ async fn stream_live_chat(
                 );
             }
             for action in batch.iter().skip(batch.len().saturating_sub(BACKLOG_KEEP)) {
-                process_action(action, channel_key).await;
+                process_action(action, channel_key, true).await;
             }
         } else if !batch.is_empty() {
             // Live: spread the batch across what's LEFT of the poll window, so a fast
@@ -1917,7 +1921,7 @@ async fn stream_live_chat(
                 .as_millis() as u64;
             let gap = (remaining / batch.len() as u64).min(MAX_PACE_GAP_MS);
             for action in &batch {
-                process_action(action, channel_key).await;
+                process_action(action, channel_key, false).await;
                 // Never pace past the window: if dispatch ran long, the rest of the
                 // batch goes out at once so the next poll still leaves on time.
                 if tokio::time::Instant::now() >= deadline {
@@ -1973,9 +1977,10 @@ fn action_keys(action: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-async fn process_action(action: &Value, channel_key: &str) {
+async fn process_action(action: &Value, channel_key: &str, backlog: bool) {
     if let Some(item) = action.pointer("/addChatItemAction/item") {
-        if let Some(msg) = parse_item(item, channel_key) {
+        if let Some(mut msg) = parse_item(item, channel_key) {
+            msg.metadata.from_backfill = backlog;
             publish_chat_message(&msg).await;
         }
         return;

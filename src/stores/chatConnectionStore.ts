@@ -2920,6 +2920,18 @@ export async function acquireChannel(
   const existing = state.channels.get(key);
 
   if (existing) {
+    const held = pendingReleases.get(key);
+    if (held) {
+      // Taken back inside the release grace: the live connection, the buffer and
+      // its dedupe set are all still here, so nothing reconnects and no backlog
+      // replays. Logged because it means a consumer let go and re-took the same
+      // channel within seconds, which is churn worth knowing about.
+      clearTimeout(held.timer);
+      pendingReleases.delete(key);
+      Logger.warn(
+        `[ChatStore] ${key} re-acquired ${Date.now() - held.at}ms after its last release; kept the live connection`,
+      );
+    }
     existing.refCount += 1;
     if (channelId && !existing.channelId) {
       existing.channelId = channelId;
@@ -3024,6 +3036,36 @@ export async function releaseChannel(
     bumpRevision();
     return;
   }
+  if (provider !== 'twitch') {
+    // Hold the last release of a non-Twitch source for a grace period. Tearing
+    // it down at once and re-taking it a moment later (a consumer that re-renders
+    // through an empty channel list, a remount) rebuilt the slice and the Rust
+    // connection from nothing, and YouTube answers every fresh connection with
+    // its recent-chat backlog: dozens of rows landing at once as if new, and the
+    // old rows leaving the combined feed under the reader. Twitch is excluded:
+    // its history is a deliberate backfill the store dedupes, and callers rely
+    // on its PART being immediate.
+    if (!pendingReleases.has(key)) {
+      const timer = setTimeout(() => {
+        pendingReleases.delete(key);
+        const current = useChatConnectionStore.getState().channels.get(key);
+        if (!current || current.refCount > 0) return;
+        void finishRelease(key, channel, provider);
+      }, RELEASE_GRACE_MS);
+      pendingReleases.set(key, { timer, at: Date.now() });
+    }
+    bumpRevision();
+    return;
+  }
+  await finishRelease(key, channel, provider);
+}
+
+/** How long the last release of a non-Twitch source waits before it tears down. */
+const RELEASE_GRACE_MS = 15_000;
+/** Non-Twitch channels whose last consumer let go, still inside the grace. */
+const pendingReleases = new Map<string, { timer: ReturnType<typeof setTimeout>; at: number }>();
+
+async function finishRelease(key: string, channel: string, provider: ProviderId): Promise<void> {
   // Last consumer for this channel — drop the slice and PART the channel on
   // the IRC side so messages stop flowing in for it. Critically, we do NOT
   // call `stop_chat` here even when this window's channel set goes empty —
