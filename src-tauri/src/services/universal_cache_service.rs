@@ -189,7 +189,7 @@ pub struct UniversalCacheManifest {
 
 const CACHE_VERSION: u32 = 1;
 const UNIVERSAL_CACHE_URL: &str =
-    "https://raw.githubusercontent.com/winters27/StreamNook/refs/heads/main/universal-cache/main";
+    "https://raw.githubusercontent.com/StreamNook/StreamNook/refs/heads/main/universal-cache/main";
 
 /// Get the universal cache directory
 pub fn get_universal_cache_dir() -> Result<PathBuf> {

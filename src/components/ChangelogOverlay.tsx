@@ -32,8 +32,8 @@ interface ChangelogOverlayProps {
   onClose: () => void;
 }
 
-const CHANGELOG_URL = 'https://github.com/winters27/StreamNook/blob/main/CHANGELOG.md';
-const GITHUB_ISSUE_URL = 'https://github.com/winters27/StreamNook/issues/new';
+const CHANGELOG_URL = 'https://github.com/StreamNook/StreamNook/blob/main/CHANGELOG.md';
+const GITHUB_ISSUE_URL = 'https://github.com/StreamNook/StreamNook/issues/new';
 const COMMUNITY_DISCORD_INVITE = 'https://discord.gg/2xvuF9TES7';
 
 // Opens an external URL in the OS browser via Tauri's shell plugin (not the

@@ -434,7 +434,7 @@ impl DiscordService {
         }
 
         // Add Twitch logo as small image
-        assets = assets.small_image("https://raw.githubusercontent.com/winters27/StreamNook/refs/heads/main/src-tauri/images/logo_1704751143960.JPG");
+        assets = assets.small_image("https://raw.githubusercontent.com/StreamNook/StreamNook/refs/heads/main/src-tauri/images/logo_1704751143960.JPG");
         assets = assets.small_text("Twitch");
 
         let mut activity = Activity::new()

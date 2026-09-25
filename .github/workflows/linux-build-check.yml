@@ -36,7 +36,7 @@ env:
 
 jobs:
   linux-check:
-    if: github.repository == 'winters27/StreamNook'
+    if: github.repository == 'StreamNook/StreamNook' || github.repository == 'winters27/StreamNook'
     # Pinned for the same reason the release job is: glibc is forward-compatible
     # only, so the OLDEST supported runner is the correct builder. Checking on a
     # newer image than we ship from would validate the wrong binary.

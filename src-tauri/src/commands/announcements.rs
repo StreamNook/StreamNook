@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 const ANNOUNCEMENTS_URL: &str =
-    "https://raw.githubusercontent.com/winters27/StreamNook/main/announcements.json";
+    "https://raw.githubusercontent.com/StreamNook/StreamNook/main/announcements.json";
 
 /// Live announcement payload served from the repo root. Edits to announcements.json
 /// land in users' apps on the next poll without a release — used for situations

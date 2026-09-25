@@ -61,7 +61,7 @@ pub async fn get_remote_component_versions() -> Result<ComponentManifest, String
     // Directly download components.json from the latest release asset redirect
     // This entirely bypasses the api.github.com rate limit for unauthenticated users
     let components_json: ComponentManifest = client
-        .get("https://github.com/winters27/StreamNook/releases/latest/download/components.json")
+        .get("https://github.com/StreamNook/StreamNook/releases/latest/download/components.json")
         .send()
         .await
         .map_err(|e| format!("Failed to download components.json: {}", e))?
@@ -802,7 +802,7 @@ async fn check_for_bundle_update_github() -> Result<BundleUpdateStatus, String> 
     // Directly download components.json from the latest release asset redirect
     // This entirely bypasses the api.github.com rate limit for unauthenticated users
     let remote: ComponentManifest = client
-        .get("https://github.com/winters27/StreamNook/releases/latest/download/components.json")
+        .get("https://github.com/StreamNook/StreamNook/releases/latest/download/components.json")
         .send()
         .await
         .map_err(|e| format!("Failed to download remote components.json: {}", e))?
@@ -848,7 +848,7 @@ async fn check_for_bundle_update_github() -> Result<BundleUpdateStatus, String> 
 
     // Set deterministic download URLs since we bypassed the API
     let download_url = format!(
-        "https://github.com/winters27/StreamNook/releases/download/v{}/StreamNook.7z",
+        "https://github.com/StreamNook/StreamNook/releases/download/v{}/StreamNook.7z",
         remote.streamnook.version
     );
     status.bundle_name = Some("StreamNook.7z".to_string());
@@ -856,7 +856,7 @@ async fn check_for_bundle_update_github() -> Result<BundleUpdateStatus, String> 
 
     // Fetch release notes strictly from raw CHANGELOG.md to bypass the API restrictions entirely.
     let changelog_url = format!(
-        "https://raw.githubusercontent.com/winters27/StreamNook/v{}/CHANGELOG.md",
+        "https://raw.githubusercontent.com/StreamNook/StreamNook/v{}/CHANGELOG.md",
         remote.streamnook.version
     );
 

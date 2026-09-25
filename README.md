@@ -7,10 +7,10 @@
 A native desktop client for Twitch, Kick, and YouTube.
 
 <p>
-  <a href="https://github.com/winters27/StreamNook/releases/latest"><img src="https://img.shields.io/github/v/release/winters27/StreamNook?color=ff6b6b&style=for-the-badge&logo=github&logoColor=white&labelColor=1a1a2e" alt="Latest release" /></a>
-  <a href="https://github.com/winters27/StreamNook/stargazers"><img src="https://img.shields.io/github/stars/winters27/StreamNook?color=00d9ff&style=for-the-badge&logo=star&logoColor=white&labelColor=1a1a2e" alt="Stars" /></a>
-  <a href="https://github.com/winters27/StreamNook/issues"><img src="https://img.shields.io/badge/Issues-ff6b6b?style=for-the-badge&logo=github&logoColor=white&labelColor=1a1a2e" alt="Issues" /></a>
-  <a href="https://github.com/winters27/StreamNook/discussions"><img src="https://img.shields.io/badge/Discussions-4ecdc4?style=for-the-badge&logo=github&logoColor=white&labelColor=1a1a2e" alt="Discussions" /></a>
+  <a href="https://github.com/StreamNook/StreamNook/releases/latest"><img src="https://img.shields.io/github/v/release/StreamNook/StreamNook?color=ff6b6b&style=for-the-badge&logo=github&logoColor=white&labelColor=1a1a2e" alt="Latest release" /></a>
+  <a href="https://github.com/StreamNook/StreamNook/stargazers"><img src="https://img.shields.io/github/stars/StreamNook/StreamNook?color=00d9ff&style=for-the-badge&logo=star&logoColor=white&labelColor=1a1a2e" alt="Stars" /></a>
+  <a href="https://github.com/StreamNook/StreamNook/issues"><img src="https://img.shields.io/badge/Issues-ff6b6b?style=for-the-badge&logo=github&logoColor=white&labelColor=1a1a2e" alt="Issues" /></a>
+  <a href="https://github.com/StreamNook/StreamNook/discussions"><img src="https://img.shields.io/badge/Discussions-4ecdc4?style=for-the-badge&logo=github&logoColor=white&labelColor=1a1a2e" alt="Discussions" /></a>
 </p>
 
 <p>
@@ -19,7 +19,7 @@ A native desktop client for Twitch, Kick, and YouTube.
   <img src="https://img.shields.io/badge/Tauri-FFC131?style=for-the-badge&logo=tauri&logoColor=white&labelColor=1a1a2e" alt="Tauri" />
 </p>
 
-<h3><a href="https://github.com/winters27/StreamNook/releases/latest">Download the latest release</a></h3>
+<h3><a href="https://github.com/StreamNook/StreamNook/releases/latest">Download the latest release</a></h3>
 
 <sub>Windows. Extract and run, everything else is built in.</sub>
 
@@ -214,7 +214,7 @@ Rust, TypeScript, React, and Tailwind. Packaged as a native desktop app with Tau
 
 ## Install
 
-1. Grab the latest build from the [Releases page](https://github.com/winters27/StreamNook/releases/latest).
+1. Grab the latest build from the [Releases page](https://github.com/StreamNook/StreamNook/releases/latest).
 2. Extract and run.
 3. Follow the setup wizard to sign in with Twitch, then connect Kick or YouTube from Settings whenever you want them.
 

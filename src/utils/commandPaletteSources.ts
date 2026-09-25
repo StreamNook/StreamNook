@@ -756,7 +756,7 @@ function buildQuickActions(): PaletteItem[] {
       keywords: 'github issue bug report feedback help',
       run: async () => {
         try {
-          await invoke('open_browser_url', { url: 'https://github.com/winters27/StreamNook/issues/new' });
+          await invoke('open_browser_url', { url: 'https://github.com/StreamNook/StreamNook/issues/new' });
         } catch (e) {
           Logger.warn('[CommandPalette] open_browser_url failed:', e);
         }
@@ -770,7 +770,7 @@ function buildQuickActions(): PaletteItem[] {
       keywords: 'github repo source code repository',
       run: async () => {
         try {
-          await invoke('open_browser_url', { url: 'https://github.com/winters27/StreamNook' });
+          await invoke('open_browser_url', { url: 'https://github.com/StreamNook/StreamNook' });
         } catch (e) {
           Logger.warn('[CommandPalette] open_browser_url failed:', e);
         }

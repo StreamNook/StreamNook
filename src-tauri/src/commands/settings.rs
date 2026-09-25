@@ -450,7 +450,7 @@ pub async fn get_latest_app_version() -> Result<String, String> {
     let client = crate::services::http::client().clone();
 
     let response = client
-        .get("https://github.com/winters27/StreamNook/releases/latest")
+        .get("https://github.com/StreamNook/StreamNook/releases/latest")
         .send()
         .await
         .map_err(|e| format!("Failed to fetch latest release: {}", e))?;
@@ -458,7 +458,7 @@ pub async fn get_latest_app_version() -> Result<String, String> {
     let final_url = response.url().to_string();
 
     // Extract version from the final URL
-    // Example: https://github.com/winters27/StreamNook/releases/tag/v1.0.1
+    // Example: https://github.com/StreamNook/StreamNook/releases/tag/v1.0.1
     let version_regex = Regex::new(r"/tag/v?([0-9]+\.[0-9]+\.[0-9]+)")
         .map_err(|e| format!("Failed to create regex: {}", e))?;
 
@@ -508,7 +508,7 @@ pub async fn get_release_notes(version: Option<String>) -> Result<ReleaseNotes, 
     let client = crate::services::http::client().clone();
 
     // Fetch the raw CHANGELOG.md from the GitHub repo
-    let url = "https://raw.githubusercontent.com/winters27/StreamNook/main/CHANGELOG.md";
+    let url = "https://raw.githubusercontent.com/StreamNook/StreamNook/main/CHANGELOG.md";
 
     let response = client
         .get(url)
@@ -602,7 +602,7 @@ pub async fn download_and_install_app_update(
     let client = crate::services::http::client().clone();
 
     let response = client
-        .get("https://github.com/winters27/StreamNook/releases/latest")
+        .get("https://github.com/StreamNook/StreamNook/releases/latest")
         .send()
         .await
         .map_err(|e| format!("Failed to fetch latest release: {}", e))?;
@@ -620,9 +620,9 @@ pub async fn download_and_install_app_update(
         .ok_or("Failed to extract version from final release URL")?;
 
     // Construct the download URL for the executable
-    // Pattern: https://github.com/winters27/StreamNook/releases/download/v{version}/StreamNook.exe
+    // Pattern: https://github.com/StreamNook/StreamNook/releases/download/v{version}/StreamNook.exe
     let download_url = format!(
-        "https://github.com/winters27/StreamNook/releases/download/v{}/StreamNook.exe",
+        "https://github.com/StreamNook/StreamNook/releases/download/v{}/StreamNook.exe",
         version
     );
 

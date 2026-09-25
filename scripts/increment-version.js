@@ -134,7 +134,7 @@ async function main() {
                     
                     console.log('\n📦 Next steps:');
                     console.log(`  1. Build the app: npm run tauri build`);
-                    console.log(`  2. Go to: https://github.com/winters27/StreamNook/releases/new?tag=v${newVersion}`);
+                    console.log(`  2. Go to: https://github.com/StreamNook/StreamNook/releases/new?tag=v${newVersion}`);
                     console.log(`  3. Upload: src-tauri/target/release/StreamNook.exe`);
                     console.log(`  4. Publish the release\n`);
                   }
@@ -143,7 +143,7 @@ async function main() {
                 console.log('\n📦 Next steps:');
                 console.log('  1. Build the app: npm run tauri build');
                 console.log('  2. Push changes: git push && git push --tags');
-                console.log(`  3. Create GitHub release: https://github.com/winters27/StreamNook/releases/new?tag=v${newVersion}\n`);
+                console.log(`  3. Create GitHub release: https://github.com/StreamNook/StreamNook/releases/new?tag=v${newVersion}\n`);
               }
             }
           } else {
@@ -151,7 +151,7 @@ async function main() {
             console.log('  1. Build the app: npm run tauri build');
             console.log(`  2. Create tag: git tag v${newVersion}`);
             console.log('  3. Push changes: git push && git push --tags');
-            console.log(`  4. Create GitHub release: https://github.com/winters27/StreamNook/releases/new?tag=v${newVersion}\n`);
+            console.log(`  4. Create GitHub release: https://github.com/StreamNook/StreamNook/releases/new?tag=v${newVersion}\n`);
           }
         }
       }
@@ -161,7 +161,7 @@ async function main() {
       console.log(`  2. Commit: git add . && git commit -m "chore: bump version to v${newVersion}"`);
       console.log(`  3. Tag: git tag v${newVersion}`);
       console.log('  4. Push: git push && git push --tags');
-      console.log(`  5. Create GitHub release: https://github.com/winters27/StreamNook/releases/new?tag=v${newVersion}\n`);
+      console.log(`  5. Create GitHub release: https://github.com/StreamNook/StreamNook/releases/new?tag=v${newVersion}\n`);
     }
     
     rl.close();

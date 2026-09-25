@@ -12,7 +12,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-const RELEASES_URL: &str = "https://api.github.com/repos/winters27/StreamNook/releases?per_page=20";
+const RELEASES_URL: &str = "https://api.github.com/repos/StreamNook/StreamNook/releases?per_page=20";
 const ANDROID_MANIFEST_URL: &str = "https://streamnook.app/api/v1/update-android";
 const CACHE_FILE: &str = "changelog_releases.json";
 

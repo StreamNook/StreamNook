@@ -19,7 +19,7 @@ env:
 jobs:
   merge-to-main:
     # Ports inherit this file on sync merges; only run it in the desktop repo.
-    if: github.repository == 'winters27/StreamNook'
+    if: github.repository == 'StreamNook/StreamNook' || github.repository == 'StreamNook/StreamNook'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -1067,7 +1067,7 @@ jobs:
         run: |
           $version = "${{ steps.version.outputs.VERSION }}"
           $bundleName = "${{ steps.bundle.outputs.BUNDLE_NAME }}"
-          $releaseUrl = "https://github.com/winters27/StreamNook/releases/tag/v$version"
+          $releaseUrl = "https://github.com/StreamNook/StreamNook/releases/tag/v$version"
 
           # --- Custom server emote substitution ---
           # Format: '<:name:snowflake_id>' for static, '<a:name:id>' for animated.
@@ -1171,7 +1171,7 @@ jobs:
           $children.Add(@{
             type = 9
             components = @(@{ type = 10; content = "$titleText`n$liveLine" })
-            accessory = @{ type = 11; media = @{ url = "https://raw.githubusercontent.com/winters27/StreamNook/main/src-tauri/icons/icon.png" } }
+            accessory = @{ type = 11; media = @{ url = "https://raw.githubusercontent.com/StreamNook/StreamNook/main/src-tauri/icons/icon.png" } }
           })
           if ($heroUrl) {
             # Type 12 Media Gallery: one item, full width of the container.

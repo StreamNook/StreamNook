@@ -1,6 +1,6 @@
 // What's New, for the Android build.
 //
-// The desktop changelog lists GitHub releases from winters27/StreamNook, which
+// The desktop changelog lists GitHub releases from StreamNook/StreamNook, which
 // are DESKTOP releases: their notes describe desktop fixes, and their version
 // numbers are the 8.x line the phone does not follow. Showing them here would
 // tell a phone user about changes that never shipped to them.
