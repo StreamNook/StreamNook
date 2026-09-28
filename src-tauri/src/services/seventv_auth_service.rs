@@ -1,5 +1,6 @@
 use anyhow::Result;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use crate::services::token_vault;
 use log::debug;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -59,57 +60,18 @@ impl SevenTVAuthService {
 
     fn store_token_to_file(token: &StorableSevenTVToken) -> Result<()> {
         let path = Self::get_token_file_path()?;
-        let token_json = serde_json::to_string(token)?;
-
-        // Simple XOR encryption with a fixed key for basic obfuscation
-        let key: Vec<u8> = "StreamNook7TVKey2024"
-            .bytes()
-            .cycle()
-            .take(token_json.len())
-            .collect();
-        let encrypted: Vec<u8> = token_json
-            .bytes()
-            .zip(key.iter())
-            .map(|(a, b)| a ^ b)
-            .collect();
-
-        fs::write(&path, encrypted)?;
-        debug!("[7TV_AUTH] Token saved to file: {:?}", path);
+        token_vault::store_json(&path, token)?;
+        debug!("[7TV_AUTH] Token sealed to {:?}", path);
         Ok(())
     }
 
     fn load_token_from_file() -> Result<StorableSevenTVToken> {
-        let path = Self::get_token_file_path()?;
-
-        if !path.exists() {
-            return Err(anyhow::anyhow!("7TV token file does not exist"));
-        }
-
-        let encrypted = fs::read(&path)?;
-
-        // Decrypt using the same XOR method
-        let key: Vec<u8> = "StreamNook7TVKey2024"
-            .bytes()
-            .cycle()
-            .take(encrypted.len())
-            .collect();
-        let decrypted: String = encrypted
-            .iter()
-            .zip(key.iter())
-            .map(|(a, b)| (a ^ b) as char)
-            .collect();
-
-        let token: StorableSevenTVToken = serde_json::from_str(&decrypted)?;
-        Ok(token)
+        token_vault::load_json(&Self::get_token_file_path()?)?
+            .ok_or_else(|| anyhow::anyhow!("7TV token file does not exist"))
     }
 
     fn delete_token_file() -> Result<()> {
-        let path = Self::get_token_file_path()?;
-        if path.exists() {
-            fs::remove_file(&path)?;
-            debug!("[7TV_AUTH] 7TV token file deleted: {:?}", path);
-        }
-        Ok(())
+        token_vault::remove(&Self::get_token_file_path()?)
     }
 
     /// Store a 7TV token (called after OAuth flow captures the token)
@@ -331,18 +293,10 @@ impl SevenTVAuthService {
     }
 
     // ── Per-account 7TV tokens (for linked secondary accounts) ───────────────
-    // Each linked account's 7TV token lives in its own obfuscated file keyed by
+    // Each linked account's 7TV token lives in its own sealed file keyed by
     // Twitch user id, separate from the primary's single `.seventv_token`.
     // Connected through an incognito login window so the alt's Twitch session
     // never touches the main's. The primary continues to use the methods above.
-
-    fn xor_obfuscate(data: &[u8]) -> Vec<u8> {
-        let key = b"StreamNook7TVKey2024";
-        data.iter()
-            .enumerate()
-            .map(|(i, b)| b ^ key[i % key.len()])
-            .collect()
-    }
 
     fn account_token_file_path(twitch_id: &str) -> Result<PathBuf> {
         // Mobile: app-private sandbox dir; desktop keeps dirs::config_dir.
@@ -363,16 +317,8 @@ impl SevenTVAuthService {
     }
 
     fn load_token_for(twitch_id: &str) -> Result<StorableSevenTVToken> {
-        let path = Self::account_token_file_path(twitch_id)?;
-        if !path.exists() {
-            return Err(anyhow::anyhow!("No 7TV token for account {}", twitch_id));
-        }
-        let bytes = fs::read(&path)?;
-        let decoded = Self::xor_obfuscate(&bytes);
-        let s = String::from_utf8(decoded)
-            .map_err(|_| anyhow::anyhow!("Corrupt 7TV token for account {}", twitch_id))?;
-        let token: StorableSevenTVToken = serde_json::from_str(&s)?;
-        Ok(token)
+        token_vault::load_json(&Self::account_token_file_path(twitch_id)?)?
+            .ok_or_else(|| anyhow::anyhow!("No 7TV token for account {}", twitch_id))
     }
 
     /// Store a linked account's 7TV token (after the incognito login captures it).
@@ -387,9 +333,7 @@ impl SevenTVAuthService {
             twitch_id: twitch_id.to_string(),
             created_at: chrono::Utc::now().timestamp(),
         };
-        let json = serde_json::to_string(&token)?;
-        let path = Self::account_token_file_path(twitch_id)?;
-        fs::write(&path, Self::xor_obfuscate(json.as_bytes()))?;
+        token_vault::store_json(&Self::account_token_file_path(twitch_id)?, &token)?;
         debug!("[7TV_AUTH] stored 7TV token for account {}", twitch_id);
         Ok(())
     }
@@ -416,7 +360,7 @@ impl SevenTVAuthService {
     pub async fn logout_for(twitch_id: &str) -> Result<()> {
         let path = Self::account_token_file_path(twitch_id)?;
         if path.exists() {
-            fs::remove_file(&path)?;
+            token_vault::remove(&path)?;
             debug!("[7TV_AUTH] 7TV token deleted for account {}", twitch_id);
         }
         Ok(())

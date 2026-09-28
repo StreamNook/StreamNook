@@ -4,10 +4,12 @@
 
 use crate::models::settings::AppState;
 use crate::services::account_store::{AccountStore, StoredAccount};
+use crate::services::token_vault::{self, CredentialStorage};
 use crate::services::twitch_service::TwitchService;
 use crate::utils::oauth_server;
 use std::time::Duration;
-use tauri::{AppHandle, State};
+use crate::rt::AppHandle;
+use tauri::State;
 
 /// Every linked account, primary first. The frontend uses this to render the
 /// account list and the "send as" picker.
@@ -21,6 +23,16 @@ pub async fn list_twitch_accounts() -> Result<Vec<StoredAccount>, String> {
 #[tauri::command]
 pub async fn get_twitch_account_count() -> Result<usize, String> {
     Ok(AccountStore::count())
+}
+
+/// Whether stored sign-ins are protected by the system keyring, for the notice
+/// under Accounts. Off the async runtime because asking the keyring can wait on
+/// a prompt.
+#[tauri::command]
+pub async fn get_credential_storage() -> Result<CredentialStorage, String> {
+    tauri::async_runtime::spawn_blocking(token_vault::credential_storage)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Link a NEW secondary account via the system browser.

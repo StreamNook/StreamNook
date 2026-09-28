@@ -5,6 +5,7 @@ import { addAccount, removeAccount, type StoredAccount } from '../../services/ac
 import { useSendAccountStore } from '../../stores/sendAccountStore';
 import AccountIdentityEditor from './AccountIdentityEditor';
 import PlatformAccountRows from './PlatformAccountRows';
+import CredentialStorageNotice from './CredentialStorageNotice';
 import { Tooltip } from '../ui/Tooltip';
 
 /**
@@ -298,6 +299,8 @@ export default function LinkedAccountsSection() {
       {/* Kick and YouTube sit alongside Twitch rather than under it: three
           platforms, same weight, one place to manage all of them. */}
       <PlatformAccountRows />
+
+      <CredentialStorageNotice />
 
       {editing && <AccountIdentityEditor account={editing} onClose={() => setEditing(null)} />}
     </div>

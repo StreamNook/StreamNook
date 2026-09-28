@@ -3,24 +3,21 @@ use crate::models::{
     stream::TwitchStream,
     user::{ChannelInfo, UserInfo},
 };
-use crate::services::cookie_jar_service::CookieJarService;
+use crate::services::token_vault;
 use anyhow::Result;
 use chrono::{Duration as ChronoDuration, Utc};
-use crate::services::secure_store::Entry;
 use log::{debug, error, warn};
 use reqwest::header::{ACCEPT, AUTHORIZATION};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 
 const CLIENT_ID: &str = env!("TWITCH_APP_CLIENT_ID");
 const CLIENT_SECRET: &str = env!("TWITCH_APP_CLIENT_SECRET");
 const TWITCH_GQL_CLIENT_ID: &str = "kimne78kx3ncx6brgo4mv6wki5h1ko";
-const KEYRING_SERVICE: &str = "streamnook_twitch_token";
-const KEYRING_USERNAME: &str = "user"; // Standardized username
 const REDIRECT_URI: &str = "http://localhost:3000/callback";
 // Adding ANY scope here invalidates every stored token at once (see the
 // missing-scopes branch in check_token_health, which calls AccountStore::
@@ -108,11 +105,21 @@ pub(crate) fn get_app_data_dir() -> Result<PathBuf> {
 /// switches the web session too, and a re-login can never silently inherit a
 /// different account's session. Mirrors the 7TV per-account profile pattern.
 pub(crate) fn twitch_web_profile_dir(account_id: &str) -> Result<PathBuf> {
-    let mut path = get_app_data_dir()?;
-    path.push("twitch_web_profiles");
-    path.push(account_id);
+    let path = crate::platform::webview_store::profile_dir(
+        get_app_data_dir()?,
+        Path::new("twitch_web_profiles").join(account_id),
+    );
     fs::create_dir_all(&path)?;
     Ok(path)
+}
+
+/// The whole `twitch_web_profiles` tree: every account's profile and the
+/// pending stage.
+pub(crate) fn twitch_web_profiles_root() -> Result<PathBuf> {
+    Ok(crate::platform::webview_store::profile_dir(
+        get_app_data_dir()?,
+        "twitch_web_profiles",
+    ))
 }
 
 /// Staging WebView2 profile for a login whose account id isn't known yet. The
@@ -122,9 +129,7 @@ pub(crate) fn twitch_web_profile_dir(account_id: &str) -> Result<PathBuf> {
 /// own profile once the id is known, so the subscribe window (and every other
 /// per-account twitch webview) sees the same session the user logged into.
 pub(crate) fn twitch_pending_web_profile_dir() -> Result<PathBuf> {
-    let mut path = get_app_data_dir()?;
-    path.push("twitch_web_profiles");
-    path.push("_pending");
+    let path = twitch_web_profiles_root()?.join("_pending");
     fs::create_dir_all(&path)?;
     Ok(path)
 }
@@ -145,14 +150,19 @@ pub(crate) fn active_twitch_web_profile_dir() -> Result<PathBuf> {
     }
 }
 
-/// True when a WebView2 profile folder holds a twitch.tv session (its cookie
-/// store has been written at least once).
+/// True when a web profile folder holds a twitch.tv session (its cookie
+/// store has been written at least once): WebView2 keeps the store under
+/// `EBWebView/Default/Network/`, a Chromium profile (Linux) at its root.
 fn web_profile_has_session(dir: &PathBuf) -> bool {
-    dir.join("EBWebView")
-        .join("Default")
-        .join("Network")
-        .join("Cookies")
-        .exists()
+    if cfg!(target_os = "linux") {
+        dir.join("Cookies").exists()
+    } else {
+        dir.join("EBWebView")
+            .join("Default")
+            .join("Network")
+            .join("Cookies")
+            .exists()
+    }
 }
 
 /// Adopt a freshly-staged login session into `account_id`'s own web profile.
@@ -167,8 +177,8 @@ fn web_profile_has_session(dir: &PathBuf) -> bool {
 /// already have its own. Best-effort: a failure just leaves the user to
 /// re-login, it never breaks the window.
 pub(crate) fn adopt_pending_web_profile(account_id: &str) {
-    let base = match get_app_data_dir() {
-        Ok(b) => b.join("twitch_web_profiles"),
+    let base = match twitch_web_profiles_root() {
+        Ok(b) => b,
         Err(_) => return,
     };
     let pending = base.join("_pending");
@@ -222,11 +232,10 @@ fn copy_dir_recursive(from: &PathBuf, to: &PathBuf) -> std::io::Result<()> {
 /// account is unlinked or fully signed out, so a removed account leaves no
 /// lingering browser session behind).
 pub(crate) fn delete_twitch_web_profile(account_id: &str) {
-    if let Ok(mut base) = get_app_data_dir() {
-        base.push("twitch_web_profiles");
-        base.push(account_id);
-        if base.exists() {
-            let _ = fs::remove_dir_all(&base);
+    if let Ok(base) = twitch_web_profiles_root() {
+        let profile = base.join(account_id);
+        if profile.exists() {
+            let _ = fs::remove_dir_all(&profile);
         }
     }
 }
@@ -296,151 +305,41 @@ impl TwitchService {
 
     /// Check if stored credentials exist (for showing appropriate toast)
     pub async fn has_stored_credentials() -> bool {
-        // Check file first
-        if let Ok(path) = Self::get_token_file_path() {
-            if path.exists() {
-                debug!("[TWITCH_SERVICE] Found stored token file");
-                return true;
-            }
-        }
-
-        // Check cookies
-        if let Ok(cookie_jar) = CookieJarService::new_main() {
-            if cookie_jar.has_auth_token().await {
-                debug!("[TWITCH_SERVICE] Found stored cookie token");
-                return true;
-            }
-        }
-
-        // Check keyring
-        if let Ok(entry) = Entry::new(KEYRING_SERVICE, KEYRING_USERNAME) {
-            if entry.get_password().is_ok() {
-                debug!("[TWITCH_SERVICE] Found stored keyring token");
-                return true;
-            }
-        }
-
-        false
+        Self::get_token_file_path()
+            .map(|path| path.exists())
+            .unwrap_or(false)
     }
 
     fn store_token_to_file(token: &StorableToken) -> Result<()> {
         let path = Self::get_token_file_path()?;
-        let token_json = serde_json::to_string(token)?;
-
-        // Simple XOR encryption with a fixed key for basic obfuscation
-        let key: Vec<u8> = "StreamNookTokenKey2024"
-            .bytes()
-            .cycle()
-            .take(token_json.len())
-            .collect();
-        let encrypted: Vec<u8> = token_json
-            .bytes()
-            .zip(key.iter())
-            .map(|(a, b)| a ^ b)
-            .collect();
-
-        fs::write(&path, encrypted)?;
-        debug!("[STORAGE] Token saved to file: {:?}", path);
+        token_vault::store_json(&path, token)?;
+        debug!("[STORAGE] Token sealed to {:?}", path);
         Ok(())
     }
 
-    fn load_token_from_file() -> Result<StorableToken> {
-        let path = Self::get_token_file_path()?;
-
-        if !path.exists() {
-            return Err(anyhow::anyhow!("Token file does not exist"));
-        }
-
-        let encrypted = fs::read(&path)?;
-
-        // Decrypt using the same XOR method
-        let key: Vec<u8> = "StreamNookTokenKey2024"
-            .bytes()
-            .cycle()
-            .take(encrypted.len())
-            .collect();
-        let decrypted: String = encrypted
-            .iter()
-            .zip(key.iter())
-            .map(|(a, b)| (a ^ b) as char)
-            .collect();
-
-        let token: StorableToken = serde_json::from_str(&decrypted)?;
-        Ok(token)
+    fn load_token_from_file() -> Result<Option<StorableToken>> {
+        token_vault::load_json(&Self::get_token_file_path()?)
     }
 
     fn delete_token_file() -> Result<()> {
-        let path = Self::get_token_file_path()?;
-        if path.exists() {
-            fs::remove_file(&path)?;
-            debug!("[STORAGE] Token file deleted: {:?}", path);
-        }
-        Ok(())
+        token_vault::remove(&Self::get_token_file_path()?)
     }
 
-    // Cookie-based storage methods
-    async fn store_token_to_cookies(token: &StorableToken) -> Result<()> {
-        let cookie_jar = CookieJarService::new_main()?;
-        // Store full token data including refresh token and expiration
-        cookie_jar
-            .set_full_token_data(&token.access_token, &token.refresh_token, token.expires_at)
-            .await?;
-        debug!("[STORAGE] Full token data saved to cookies (access, refresh, expires_at)");
-        Ok(())
-    }
-
-    async fn load_token_from_cookies() -> Result<StorableToken> {
-        let cookie_jar = CookieJarService::new_main()?;
-
-        let access_token = cookie_jar
-            .get_auth_token()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("No auth token in cookies"))?;
-
-        let refresh_token = cookie_jar.get_refresh_token().await.unwrap_or_default();
-
-        let expires_at = cookie_jar.get_token_expires_at().await.unwrap_or(0);
-
-        Ok(StorableToken {
-            access_token,
-            refresh_token,
-            expires_at,
-        })
-    }
-
-    /// Write a token to ALL primary-slot storage (file + cookies + keyring). This
-    /// is the single definition of "occupying the primary slot", so login,
-    /// refresh, and account-switch all persist it identically. `refresh_token`
-    /// deliberately does NOT call this: keeping refresh a pure transform is what
-    /// stops a SECONDARY account's refresh (via `AccountStore::get_token_for`)
-    /// from silently clobbering the primary's token.
+    /// Write a token to the primary slot. This is the single definition of
+    /// "occupying the primary slot", so login, refresh, and account-switch all
+    /// persist it identically. `refresh_token` deliberately does NOT call this:
+    /// keeping refresh a pure transform is what stops a SECONDARY account's
+    /// refresh (via `AccountStore::get_token_for`) from silently clobbering the
+    /// primary's token.
     pub(crate) async fn persist_primary_token(token: &StorableToken) -> Result<()> {
-        Self::store_token_to_file(token)?;
-        let _ = Self::store_token_to_cookies(token).await;
-        if let Ok(entry) = Entry::new(KEYRING_SERVICE, KEYRING_USERNAME) {
-            if let Ok(json) = serde_json::to_string(token) {
-                let _ = entry.set_password(&json);
-            }
-        }
-        Ok(())
+        Self::store_token_to_file(token)
     }
 
-    /// Read whatever token currently occupies the primary slot (file first, then
-    /// cookies). The account registry uses this to capture the outgoing main's
-    /// token before a switch so the old main can be preserved as a linked
-    /// secondary instead of being lost.
+    /// Read whatever token currently occupies the primary slot. The account
+    /// registry uses this to capture the outgoing main's token before a switch so
+    /// the old main can be preserved as a linked secondary instead of being lost.
     pub(crate) async fn load_primary_token() -> Result<StorableToken> {
-        if let Ok(token) = Self::load_token_from_file() {
-            return Ok(token);
-        }
-        Self::load_token_from_cookies().await
-    }
-
-    async fn delete_cookies() -> Result<()> {
-        let cookie_jar = CookieJarService::new_main()?;
-        cookie_jar.clear().await?;
-        debug!("[STORAGE] Cookies deleted");
-        Ok(())
+        Self::load_token_from_file()?.ok_or_else(|| anyhow::anyhow!("No stored Twitch token"))
     }
 
     // Device Code Flow - the main login method.
@@ -454,7 +353,7 @@ impl TwitchService {
     // hanging the login and leaving the app unauthenticated.)
     pub async fn login(
         _state: &AppState,
-        app_handle: tauri::AppHandle,
+        app_handle: crate::rt::AppHandle,
     ) -> Result<(String, String)> {
         let client = crate::services::http::client().clone();
 
@@ -512,14 +411,7 @@ impl TwitchService {
                         expires_at: expires_at.timestamp(),
                     };
 
-                    // Store token to both file and cookies for persistence
-                    debug!("[LOGIN] Storing token to file and cookies...");
-
-                    // Store to file (backward compatibility)
-                    let file_result = Self::store_token_to_file(&storable_token);
-
-                    // Store to cookies (new persistent storage)
-                    let cookie_result = Self::store_token_to_cookies(&storable_token).await;
+                    let store_result = Self::persist_primary_token(&storable_token).await;
 
                     // The web-session reads (stream resolver, follow/unfollow,
                     // entitlement checks) gate on a logged_out flag that
@@ -537,17 +429,9 @@ impl TwitchService {
                             .await;
                     }
 
-                    match (file_result, cookie_result) {
-                        (Ok(_), Ok(_)) => {
-                            debug!("[LOGIN] Token stored successfully to file and cookies!");
-
-                            // Try to also store in keyring as backup (but don't fail if it doesn't work)
-                            if let Ok(entry) = Entry::new(KEYRING_SERVICE, KEYRING_USERNAME) {
-                                if let Ok(token_json) = serde_json::to_string(&storable_token) {
-                                    let _ = entry.set_password(&token_json);
-                                    debug!("[LOGIN] Also stored token in keyring as backup");
-                                }
-                            }
+                    match store_result {
+                        Ok(()) => {
+                            debug!("[LOGIN] Token stored");
 
                             // Emit success event
                             debug!("[LOGIN] Emitting twitch-login-complete event...");
@@ -557,24 +441,11 @@ impl TwitchService {
                                 debug!("[LOGIN] Event emitted successfully");
                             }
                         }
-                        (Ok(_), Err(e)) => {
-                            error!("[LOGIN] Token saved to file but cookies failed: {:?}", e);
-                            // Still emit success since file storage worked
-                            let _ = app_handle.emit("twitch-login-complete", ());
-                        }
-                        (Err(e), Ok(_)) => {
-                            error!("[LOGIN] Token saved to cookies but file failed: {:?}", e);
-                            // Still emit success since cookies worked
-                            let _ = app_handle.emit("twitch-login-complete", ());
-                        }
-                        (Err(file_err), Err(cookie_err)) => {
-                            error!(
-                                "[LOGIN] Failed to store token anywhere! File: {:?}, Cookie: {:?}",
-                                file_err, cookie_err
-                            );
+                        Err(e) => {
+                            error!("[LOGIN] Failed to store token: {:?}", e);
                             let _ = app_handle.emit(
                                 "twitch-login-error",
-                                format!("Failed to store token: {}", file_err),
+                                format!("Failed to store token: {}", e),
                             );
                         }
                     }
@@ -619,20 +490,8 @@ impl TwitchService {
             expires_at: expires_at.timestamp(),
         };
 
-        // Store token to file (primary storage)
-        Self::store_token_to_file(&storable_token)?;
+        Self::persist_primary_token(&storable_token).await?;
 
-        // Also try to store in keyring as backup
-        if let Ok(entry) = Entry::new(KEYRING_SERVICE, KEYRING_USERNAME) {
-            let token_json = serde_json::to_string(&storable_token)?;
-            let _ = entry.set_password(&token_json);
-        }
-
-        // Log for debugging
-        debug!(
-            "Token stored successfully in keyring. Service: {}, Username: {}",
-            KEYRING_SERVICE, KEYRING_USERNAME
-        );
         debug!(
             "Access token: {}...",
             &token_response.access_token[..10.min(token_response.access_token.len())]
@@ -780,22 +639,6 @@ impl TwitchService {
         // Delete token from file storage
         let _ = Self::delete_token_file();
 
-        // Delete cookies
-        let _ = Self::delete_cookies().await;
-
-        // Also try to delete from all known keyring locations
-        if let Ok(entry) = Entry::new(KEYRING_SERVICE, KEYRING_USERNAME) {
-            let _ = entry.delete_credential();
-        }
-
-        if let Ok(entry) = Entry::new("StreamNook", "twitch_token") {
-            let _ = entry.delete_credential();
-        }
-
-        if let Ok(entry) = Entry::new("streamnook", "twitch_token") {
-            let _ = entry.delete_credential();
-        }
-
         debug!("[LOGOUT] Complete - all tokens cleared from all storage locations");
         Ok(())
     }
@@ -854,163 +697,40 @@ impl TwitchService {
         static REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
         let _guard = REFRESH_LOCK.lock().await;
 
-        // Try to load from file first (primary storage)
-        match Self::load_token_from_file() {
-            Ok(mut token) => {
-                // debug!("[GET_TOKEN] Token retrieved from file storage");
-
-                // Check if token is expired or about to expire (within 5 minutes)
-                let buffer_time = 300; // 5 minutes buffer
-                if Utc::now().timestamp() >= (token.expires_at - buffer_time) {
-                    // Token is expired or about to expire, refresh it
-                    if !token.refresh_token.is_empty() {
-                        debug!("[GET_TOKEN] Token expired or expiring soon, refreshing...");
-                        match Self::refresh_token(&token.refresh_token).await {
-                            Ok(new_token) => {
-                                token = new_token;
-                                // Persist the refreshed primary token everywhere
-                                // (file + cookies + keyring).
-                                let _ = Self::persist_primary_token(&token).await;
-                            }
-                            Err(e) => {
-                                error!("[GET_TOKEN] Failed to refresh token: {:?}", e);
-                                return Err(anyhow::anyhow!(
-                                    "Token expired and refresh failed. Please log in again."
-                                ));
-                            }
-                        }
-                    } else {
-                        return Err(anyhow::anyhow!(
-                            "Token expired and no refresh token available. Please log in again."
-                        ));
-                    }
-                }
-
-                return Ok(token.access_token);
+        let mut token = match Self::load_primary_token().await {
+            Ok(token) => token,
+            Err(e) => {
+                debug!("[GET_TOKEN] No usable stored token: {:#}", e);
+                return Err(anyhow::anyhow!(
+                    "Not authenticated. Please log in to Twitch first."
+                ));
             }
-            Err(file_err) => {
-                debug!("[GET_TOKEN] Could not read from file: {:?}", file_err);
+        };
 
-                // Try cookies as fallback (new persistent storage)
-                debug!("[GET_TOKEN] Trying cookies as fallback...");
-                match Self::load_token_from_cookies().await {
-                    Ok(mut cookie_token) => {
-                        debug!("[GET_TOKEN] Token retrieved from cookies");
-
-                        // Check if token is expired or about to expire
-                        let buffer_time = 300; // 5 minutes buffer
-                        if cookie_token.expires_at > 0
-                            && Utc::now().timestamp() >= (cookie_token.expires_at - buffer_time)
-                        {
-                            // Try to refresh if we have a refresh token
-                            if !cookie_token.refresh_token.is_empty() {
-                                debug!(
-                                    "[GET_TOKEN] Cookie token expired or expiring soon, refreshing..."
-                                );
-                                match Self::refresh_token(&cookie_token.refresh_token).await {
-                                    Ok(new_token) => {
-                                        cookie_token = new_token.clone();
-                                        // Persist to all primary-slot storage.
-                                        let _ = Self::persist_primary_token(&new_token).await;
-                                    }
-                                    Err(e) => {
-                                        error!(
-                                            "[GET_TOKEN] Failed to refresh cookie token: {:?}",
-                                            e
-                                        );
-                                        let _ = Self::delete_cookies().await;
-                                        return Err(anyhow::anyhow!(
-                                            "Token expired and refresh failed. Please log in again."
-                                        ));
-                                    }
-                                }
-                            } else {
-                                // No refresh token, validate the token directly
-                                let client = crate::services::http::client().clone();
-                                let response = client
-                                    .get("https://id.twitch.tv/oauth2/validate")
-                                    .header(
-                                        "Authorization",
-                                        format!("OAuth {}", cookie_token.access_token),
-                                    )
-                                    .send()
-                                    .await?;
-
-                                if response.status() == 401 {
-                                    debug!("[GET_TOKEN] Cookie token is invalid, clearing cookies");
-                                    let _ = Self::delete_cookies().await;
-                                    return Err(anyhow::anyhow!(
-                                        "Not authenticated. Please log in to Twitch first."
-                                    ));
-                                }
-                            }
-                        }
-
-                        // Save to file for next time
-                        let _ = Self::store_token_to_file(&cookie_token);
-
-                        return Ok(cookie_token.access_token);
-                    }
-                    Err(_) => {
-                        // Fallback to keyring if cookies don't exist
-                        debug!("[GET_TOKEN] Trying keyring as fallback...");
-
-                        if let Ok(entry) = Entry::new(KEYRING_SERVICE, KEYRING_USERNAME) {
-                            if let Ok(pwd) = entry.get_password() {
-                                debug!("[GET_TOKEN] Token retrieved from keyring fallback");
-
-                                let mut token: StorableToken = match serde_json::from_str(&pwd) {
-                                    Ok(t) => t,
-                                    Err(e) => {
-                                        error!(
-                                            "[GET_TOKEN] Failed to parse keyring token: {:?}",
-                                            e
-                                        );
-                                        return Err(anyhow::anyhow!(
-                                            "Not authenticated. Please log in to Twitch first."
-                                        ));
-                                    }
-                                };
-
-                                // Save it to file and cookies for next time
-                                let _ = Self::store_token_to_file(&token);
-                                let _ = Self::store_token_to_cookies(&token).await;
-
-                                // Check if token needs refresh
-                                let buffer_time = 300;
-                                if Utc::now().timestamp() >= (token.expires_at - buffer_time) {
-                                    if !token.refresh_token.is_empty() {
-                                        debug!("[GET_TOKEN] Keyring token expired, refreshing...");
-                                        match Self::refresh_token(&token.refresh_token).await {
-                                            Ok(new_token) => {
-                                                token = new_token;
-                                                let _ = Self::persist_primary_token(&token).await;
-                                            }
-                                            Err(e) => {
-                                                error!(
-                                                    "[GET_TOKEN] Failed to refresh keyring token: {:?}",
-                                                    e
-                                                );
-                                                return Err(anyhow::anyhow!(
-                                                    "Token expired and refresh failed. Please log in again."
-                                                ));
-                                            }
-                                        }
-                                    }
-                                }
-
-                                return Ok(token.access_token);
-                            }
-                        }
-
-                        error!("[GET_TOKEN] No token found in file, cookies, or keyring storage");
-                        Err(anyhow::anyhow!(
-                            "Not authenticated. Please log in to Twitch first."
-                        ))
-                    }
+        // Refresh when expired or within 5 minutes of expiring.
+        let buffer_time = 300;
+        if Utc::now().timestamp() >= (token.expires_at - buffer_time) {
+            if token.refresh_token.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "Token expired and no refresh token available. Please log in again."
+                ));
+            }
+            debug!("[GET_TOKEN] Token expired or expiring soon, refreshing...");
+            match Self::refresh_token(&token.refresh_token).await {
+                Ok(new_token) => {
+                    token = new_token;
+                    let _ = Self::persist_primary_token(&token).await;
+                }
+                Err(e) => {
+                    error!("[GET_TOKEN] Failed to refresh token: {:?}", e);
+                    return Err(anyhow::anyhow!(
+                        "Token expired and refresh failed. Please log in again."
+                    ));
                 }
             }
         }
+
+        Ok(token.access_token)
     }
 
     /// Verify the current token's health and return detailed status
@@ -1148,23 +868,7 @@ impl TwitchService {
 
     /// Force refresh the token even if it hasn't expired yet
     pub async fn force_refresh_token() -> Result<String> {
-        // Try to load token from any storage
-        let token = Self::load_token_from_file()
-            .or_else(|_| {
-                // Try synchronous approach for cookies
-                futures::executor::block_on(Self::load_token_from_cookies())
-            })
-            .or_else(|_| {
-                // Try keyring
-                if let Ok(entry) = Entry::new(KEYRING_SERVICE, KEYRING_USERNAME) {
-                    if let Ok(pwd) = entry.get_password() {
-                        return serde_json::from_str::<StorableToken>(&pwd).map_err(|e| {
-                            anyhow::anyhow!("Failed to parse keyring token: {:?}", e)
-                        });
-                    }
-                }
-                Err(anyhow::anyhow!("No token found in any storage"))
-            })?;
+        let token = Self::load_primary_token().await?;
 
         if token.refresh_token.is_empty() {
             return Err(anyhow::anyhow!(
@@ -1175,8 +879,7 @@ impl TwitchService {
         debug!("[Auth Debug] Force refreshing token...");
         let new_token = Self::refresh_token(&token.refresh_token).await?;
 
-        // This is an explicit PRIMARY refresh, so persist to all primary-slot
-        // storage (file + cookies + keyring).
+        // This is an explicit PRIMARY refresh, so persist it to the primary slot.
         let _ = Self::persist_primary_token(&new_token).await;
 
         debug!("[Auth Debug] Token refreshed successfully!");
@@ -1896,7 +1599,6 @@ impl TwitchService {
                         .unwrap_or("")
                         .to_string(),
                     broadcaster_type,
-                    has_shared_chat: None,
                     profile_image_url: broadcaster
                         .get("profileImageURL")
                         .and_then(|v| v.as_str())
@@ -2021,40 +1723,6 @@ impl TwitchService {
         Ok(streams)
     }
 
-    async fn populate_shared_chat_status(streams: &mut Vec<TwitchStream>) {
-        let token = match Self::get_token().await {
-            Ok(t) => t,
-            Err(_) => return, // Can't check without token
-        };
-
-        let client = crate::services::http::client().clone();
-
-        for stream in streams.iter_mut() {
-            // Check if this broadcaster is in a shared chat session
-            let url = format!(
-                "https://api.twitch.tv/helix/chat/shared?broadcaster_id={}",
-                stream.user_id
-            );
-
-            match client
-                .get(&url)
-                .header("Client-Id", CLIENT_ID)
-                .header(AUTHORIZATION, format!("Bearer {}", token))
-                .send()
-                .await
-            {
-                Ok(response) => {
-                    // 200 OK means they're in a shared chat session
-                    // 404 means they're not
-                    stream.has_shared_chat = Some(response.status().is_success());
-                }
-                Err(_) => {
-                    stream.has_shared_chat = Some(false);
-                }
-            }
-        }
-    }
-
     pub async fn get_top_games(_state: &AppState, limit: u32) -> Result<Vec<serde_json::Value>> {
         let (games, _) = Self::get_top_games_paginated(_state, None, limit).await?;
         Ok(games)
@@ -2167,6 +1835,28 @@ impl TwitchService {
             }
             None => Ok((Vec::new(), None)),
         }
+    }
+
+    /// Live streams in any of several categories, most-watched first, in one
+    /// Helix request (it takes up to 100 `game_id` values). A drop that counts
+    /// in many categories (the Pokémon balls count in 21) is watched from here.
+    pub async fn get_streams_in_categories(
+        state: &AppState,
+        category_ids: &[String],
+        limit: u32,
+    ) -> Result<Vec<TwitchStream>> {
+        let ids: Vec<&str> = category_ids
+            .iter()
+            .map(String::as_str)
+            .filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
+            .take(100)
+            .collect();
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (streams, _) =
+            Self::get_streams_by_game(state, &ids.join("&game_id="), None, limit).await?;
+        Ok(streams)
     }
 
     pub async fn get_streams_by_game(
@@ -2328,7 +2018,6 @@ impl TwitchService {
                                 .unwrap_or("")
                                 .to_string(),
                             broadcaster_type,
-                            has_shared_chat: None, // Will be populated later
                             profile_image_url: Some(thumbnail_url.clone()), // Preserve the actual profile picture from search
                             is_live: channel.get("is_live").and_then(|v| v.as_bool()),
                             tags: None,
@@ -2439,7 +2128,6 @@ impl TwitchService {
                             thumbnail_url: exact_user.profile_image_url.clone().unwrap_or_default(),
                             started_at: String::new(),
                             broadcaster_type: exact_user.broadcaster_type,
-                            has_shared_chat: None,
                             profile_image_url: exact_user.profile_image_url,
                             is_live: Some(false),
                             tags: None,
@@ -2670,8 +2358,8 @@ impl TwitchService {
                         user_ids.insert(pinned_by_id.to_string());
                     }
 
-                    // Extract badges array
-                    let badges: Vec<serde_json::Value> = node
+                    // Extract badges array, in the order chat draws them
+                    let mut badges: Vec<serde_json::Value> = node
                         .pointer("/pinnedMessage/sender/displayBadges")
                         .and_then(|v| v.as_array())
                         .map(|arr| {
@@ -2683,6 +2371,11 @@ impl TwitchService {
                         }).collect()
                         })
                         .unwrap_or_default();
+                    badges.sort_by_key(|b| {
+                        crate::models::chat_layout::twitch_badge_rank(
+                            b.get("set_id").and_then(|v| v.as_str()).unwrap_or(""),
+                        )
+                    });
 
                     raw_pins.push((
                         node.clone(),
@@ -2825,7 +2518,6 @@ impl TwitchService {
                             thumbnail_url: String::new(),
                             started_at: followed_at.to_string(), // use started_at to store followed_at temporarily
                             broadcaster_type: None,
-                            has_shared_chat: None,
                             profile_image_url: None,
                             is_live: Some(false),
                             tags: None,
@@ -3121,7 +2813,6 @@ impl TwitchService {
                 thumbnail_url: String::new(),
                 started_at: String::new(),
                 broadcaster_type: kind,
-                has_shared_chat: None,
                 profile_image_url: avatar,
                 is_live: if probe_failed { None } else { Some(false) },
                 tags: None,
@@ -3628,7 +3319,6 @@ impl TwitchService {
                         .to_string(),
                     started_at: node.get("createdAt").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                     broadcaster_type,
-                    has_shared_chat: None,
                     profile_image_url,
                     is_live: Some(true),
                     tags: if stream_tags.is_empty() { None } else { Some(stream_tags) },
@@ -3781,6 +3471,67 @@ impl TwitchService {
         let body = serde_json::json!({
             "operationName": "StreamNookCollaborations",
             "query": format!("query StreamNookCollaborations({}) {{\n{fields}}}", params.join(", ")),
+            "variables": vars,
+        });
+        let resp = Self::gql_public_read(body).await?;
+        Ok(resp.get("data").cloned().unwrap_or(serde_json::Value::Null))
+    }
+
+    /// The Shared Chat session a channel is in: its host and every participating
+    /// broadcaster id. `None` when it is in none. Helix only; Twitch answers
+    /// this for signed-in callers alone, and one channel per request.
+    pub async fn get_shared_chat_session(broadcaster_id: &str) -> Result<Option<(String, Vec<String>)>> {
+        let token = Self::get_token().await?;
+        let response = crate::services::http::client()
+            .get("https://api.twitch.tv/helix/chat/shared")
+            .query(&[("broadcaster_id", broadcaster_id)])
+            .header("Client-Id", CLIENT_ID)
+            .header(AUTHORIZATION, format!("Bearer {}", token))
+            .send()
+            .await?;
+        let status = response.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            return Err(anyhow::anyhow!("shared chat lookup: HTTP {status}"));
+        }
+        let body: serde_json::Value = response.json().await?;
+        let Some(session) = body.pointer("/data/0") else { return Ok(None) };
+        let host = session
+            .get("host_broadcaster_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let participants = session
+            .get("participants")
+            .and_then(|v| v.as_array())
+            .map(|list| {
+                list.iter()
+                    .filter_map(|p| p.get("broadcaster_id").and_then(|v| v.as_str()).map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(Some((host, participants)))
+    }
+
+    /// Name, avatar and live viewer count for a batch of Twitch channel ids,
+    /// one aliased anonymous GQL request (`u0`, `u1`, ... in the order given).
+    /// `stream` is null for a channel that is not live.
+    pub async fn get_channel_faces(ids: &[String]) -> Result<serde_json::Value> {
+        let mut vars = serde_json::Map::new();
+        let mut params = Vec::with_capacity(ids.len());
+        let mut fields = String::new();
+        for (i, id) in ids.iter().enumerate() {
+            params.push(format!("$i{i}: ID!"));
+            vars.insert(format!("i{i}"), serde_json::Value::String(id.clone()));
+            fields.push_str(&format!(
+                "u{i}: user(id: $i{i}) {{ id login displayName profileImageURL(width: 70) stream {{ viewersCount }} }}\n"
+            ));
+        }
+        let body = serde_json::json!({
+            "operationName": "StreamNookChannelFaces",
+            "query": format!("query StreamNookChannelFaces({}) {{\n{fields}}}", params.join(", ")),
             "variables": vars,
         });
         let resp = Self::gql_public_read(body).await?;

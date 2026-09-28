@@ -6,8 +6,8 @@
 //! into the build. The user signs in to tiktok.com normally, in the shared
 //! login overlay, inside a persistent per-platform WebView2 profile; Rust then
 //! reads that profile's cookie jar (which sees the HttpOnly `sessionid` page
-//! script never can) and keeps the whole tiktok.com cookie set in the keyring,
-//! with an obfuscated-file fallback, exactly as the YouTube session is kept.
+//! script never can) and seals the whole tiktok.com cookie set to
+//! `.tiktok_session` (see `token_vault`), exactly as the YouTube session is kept.
 //!
 //! WHERE THE SESSION IS USED, AND WHERE IT IS NOT. Two requests carry it:
 //!   * room info on the watch path, only after TikTok has refused that same
@@ -24,11 +24,12 @@
 //! StreamNook already declines to send on TikTok. Do not thread the cookies
 //! into anything beyond these two.
 
+use crate::services::token_vault::CachedCredential;
 use crate::services::twitch_service::get_app_data_dir;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use std::time::Duration;
 
 const ORIGIN: &str = "https://www.tiktok.com";
@@ -38,9 +39,6 @@ const LOGIN_URL: &str = "https://www.tiktok.com/login";
 /// the page's request signing, which the LIVE endpoints demand.
 const ACCOUNT_INFO_URL: &str =
     "https://www.tiktok.com/passport/web/account/info/?aid=1459&app_language=en&device_platform=web_pc";
-const KEYRING_SERVICE: &str = "streamnook_tiktok_session";
-const KEYRING_USER: &str = "default";
-const OBF_KEY: &[u8] = b"StreamNookTikTokKey2026";
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -63,55 +61,20 @@ struct TikTokSession {
     account_handle: Option<String>,
 }
 
-static SESSION: OnceLock<Mutex<Option<TikTokSession>>> = OnceLock::new();
+static SESSION: CachedCredential<TikTokSession> = CachedCredential::new(".tiktok_session");
 
 fn session_cell() -> &'static Mutex<Option<TikTokSession>> {
-    SESSION.get_or_init(|| Mutex::new(load_persisted()))
+    SESSION.cell()
 }
 
-fn session_path() -> Option<PathBuf> {
-    get_app_data_dir().ok().map(|d| d.join(".tiktok_session"))
-}
-
-fn obfuscate(data: &[u8]) -> Vec<u8> {
-    data.iter()
-        .enumerate()
-        .map(|(i, b)| b ^ OBF_KEY[i % OBF_KEY.len()])
-        .collect()
-}
-
-fn persist(sess: &TikTokSession) {
-    let Ok(json) = serde_json::to_string(sess) else {
-        return;
-    };
-    if let Ok(entry) = crate::services::secure_store::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
-        let _ = entry.set_password(&json);
+fn persist(value: &TikTokSession) {
+    if let Err(e) = SESSION.store(value) {
+        log::warn!("could not store the TikTok session: {e:#}");
     }
-    if let Some(p) = session_path() {
-        let _ = std::fs::write(p, obfuscate(json.as_bytes()));
-    }
-}
-
-fn load_persisted() -> Option<TikTokSession> {
-    if let Ok(entry) = crate::services::secure_store::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
-        if let Ok(json) = entry.get_password() {
-            if let Ok(s) = serde_json::from_str::<TikTokSession>(&json) {
-                return Some(s);
-            }
-        }
-    }
-    let raw = std::fs::read(session_path()?).ok()?;
-    let json = String::from_utf8(obfuscate(&raw)).ok()?;
-    serde_json::from_str(&json).ok()
 }
 
 fn clear_persisted() {
-    if let Ok(entry) = crate::services::secure_store::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
-        let _ = entry.delete_credential();
-    }
-    if let Some(p) = session_path() {
-        let _ = std::fs::remove_file(p);
-    }
+    SESSION.remove_file();
 }
 
 fn snapshot() -> Option<TikTokSession> {
@@ -122,7 +85,7 @@ fn snapshot() -> Option<TikTokSession> {
 /// directory page's profile, which stays signed out.
 pub fn tiktok_profile_dir() -> PathBuf {
     let base = get_app_data_dir().unwrap_or_else(|_| std::env::temp_dir());
-    let dir = base.join("platform_web_profiles").join("tiktok");
+    let dir = crate::platform::webview_store::profile_dir(base, "platform_web_profiles/tiktok");
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
@@ -208,10 +171,10 @@ pub fn account_handle() -> Option<String> {
     snapshot().and_then(|s| s.account_handle)
 }
 
-/// Sign out, leaving nothing of the account behind: not in memory, not in the
-/// keyring or on disk, and not in the sign-in profile. That last one matters
-/// beyond tidiness. A profile still signed in makes TikTok's page treat the
-/// next "Continue with Apple" as LINKING Apple to the account already there, so
+/// Sign out, leaving nothing of the account behind: not in memory, not on disk,
+/// and not in the sign-in profile. That last one matters beyond tidiness. A
+/// profile still signed in makes TikTok's page treat the next "Continue with
+/// Apple" as LINKING Apple to the account already there, so
 /// signing out and back in with Apple would bind the user's Apple ID to the
 /// account they had just signed out of.
 pub async fn disconnect() {

@@ -3,7 +3,7 @@
 // instance is the global default in `crate::services::http`.
 lazy_static::lazy_static! { static ref HTTP_CLIENT: reqwest::Client = crate::services::http::client().clone(); }
 
-use crate::services::cookie_jar_service::CookieJarService;
+use crate::services::token_vault;
 use anyhow::Result;
 use chrono::{Duration as ChronoDuration, Utc};
 use log::{debug, error};
@@ -79,94 +79,18 @@ impl DropsAuthService {
 
     fn store_token_to_file(token: &StorableDropsToken) -> Result<()> {
         let path = Self::get_token_file_path()?;
-        let token_json = serde_json::to_string(token)?;
-
-        // Simple XOR encryption with a fixed key for basic obfuscation
-        let key: Vec<u8> = "StreamNookDropsKey2024"
-            .bytes()
-            .cycle()
-            .take(token_json.len())
-            .collect();
-        let encrypted: Vec<u8> = token_json
-            .bytes()
-            .zip(key.iter())
-            .map(|(a, b)| a ^ b)
-            .collect();
-
-        fs::write(&path, encrypted)?;
-        debug!("[DROPS_AUTH] Token saved to file: {:?}", path);
+        token_vault::store_json(&path, token)?;
+        debug!("[DROPS_AUTH] Token sealed to {:?}", path);
         Ok(())
-    }
-
-    fn load_token_from_file() -> Result<StorableDropsToken> {
-        let path = Self::get_token_file_path()?;
-
-        if !path.exists() {
-            return Err(anyhow::anyhow!("Drops token file does not exist"));
-        }
-
-        let encrypted = fs::read(&path)?;
-
-        // Decrypt using the same XOR method
-        let key: Vec<u8> = "StreamNookDropsKey2024"
-            .bytes()
-            .cycle()
-            .take(encrypted.len())
-            .collect();
-        let decrypted: String = encrypted
-            .iter()
-            .zip(key.iter())
-            .map(|(a, b)| (a ^ b) as char)
-            .collect();
-
-        let token: StorableDropsToken = serde_json::from_str(&decrypted)?;
-        Ok(token)
     }
 
     fn delete_token_file() -> Result<()> {
-        let path = Self::get_token_file_path()?;
-        if path.exists() {
-            fs::remove_file(&path)?;
-            debug!("[DROPS_AUTH] Drops token file deleted: {:?}", path);
-        }
-        Ok(())
+        token_vault::remove(&Self::get_token_file_path()?)
     }
 
-    // Cookie-based storage methods
-    async fn store_token_to_cookies(token: &StorableDropsToken) -> Result<()> {
-        let cookie_jar = CookieJarService::new_drops()?;
-        // Store full token data for consistency (even though refresh isn't used for drops)
-        cookie_jar
-            .set_full_token_data(&token.access_token, &token.refresh_token, token.expires_at)
-            .await?;
-        debug!("[DROPS_AUTH] Full token data saved to cookies");
-        Ok(())
-    }
-
-    async fn load_token_from_cookies() -> Result<StorableDropsToken> {
-        let cookie_jar = CookieJarService::new_drops()?;
-
-        let access_token = cookie_jar
-            .get_auth_token()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("No drops auth token in cookies"))?;
-
-        let refresh_token = cookie_jar.get_refresh_token().await.unwrap_or_default();
-
-        let expires_at = cookie_jar.get_token_expires_at().await.unwrap_or(0);
-
-        Ok(StorableDropsToken {
-            access_token,
-            refresh_token,
-            expires_at,
-        })
-    }
-
-    async fn delete_cookies() -> Result<()> {
-        let cookie_jar = CookieJarService::new_drops()?;
-        cookie_jar.clear().await?;
-        debug!("[DROPS_AUTH] Cookies deleted");
-        Ok(())
+    fn load_token() -> Result<StorableDropsToken> {
+        token_vault::load_json(&Self::get_token_file_path()?)?
+            .ok_or_else(|| anyhow::anyhow!("No stored drops token"))
     }
 
     /// The page the browser lands on once the grant completes. Registered for this
@@ -206,25 +130,8 @@ impl DropsAuthService {
             expires_at: 0,
         };
 
-        let file_result = Self::store_token_to_file(&token);
-        let cookie_result = Self::store_token_to_cookies(&token).await;
-
-        match (file_result, cookie_result) {
-            (Ok(_), Ok(_)) => Ok(()),
-            (Ok(_), Err(e)) => {
-                error!("[DROPS_AUTH] Token saved to file but cookies failed: {:?}", e);
-                Ok(())
-            }
-            (Err(e), Ok(_)) => {
-                error!("[DROPS_AUTH] Token saved to cookies but file failed: {:?}", e);
-                Ok(())
-            }
-            (Err(file_err), Err(cookie_err)) => Err(anyhow::anyhow!(
-                "could not store the drops token (file: {:?}, cookies: {:?})",
-                file_err,
-                cookie_err
-            )),
-        }
+        Self::store_token_to_file(&token)
+            .map_err(|e| anyhow::anyhow!("could not store the drops token: {e:#}"))
     }
 
     /// Start the device code flow for drops authentication
@@ -334,34 +241,9 @@ impl DropsAuthService {
                     expires_at: expires_at.timestamp(),
                 };
 
-                // Store token to both file and cookies for persistence
-                debug!("[DROPS_AUTH] Storing token to file and cookies...");
-                let file_result = Self::store_token_to_file(&storable_token);
-                let cookie_result = Self::store_token_to_cookies(&storable_token).await;
-
-                match (file_result, cookie_result) {
-                    (Ok(_), Ok(_)) => {
-                        debug!("[DROPS_AUTH] Token stored successfully to file and cookies!");
-                    }
-                    (Ok(_), Err(e)) => {
-                        error!(
-                            "[DROPS_AUTH] Token saved to file but cookies failed: {:?}",
-                            e
-                        );
-                    }
-                    (Err(e), Ok(_)) => {
-                        error!(
-                            "[DROPS_AUTH] Token saved to cookies but file failed: {:?}",
-                            e
-                        );
-                    }
-                    (Err(file_err), Err(cookie_err)) => {
-                        error!(
-                            "[DROPS_AUTH] Failed to store token! File: {:?}, Cookie: {:?}",
-                            file_err, cookie_err
-                        );
-                        // Still continue since we have the token in memory
-                    }
+                if let Err(e) = Self::store_token_to_file(&storable_token) {
+                    // Still continue since we have the token in memory
+                    error!("[DROPS_AUTH] Failed to store token: {:?}", e);
                 }
 
                 debug!(
@@ -399,7 +281,6 @@ impl DropsAuthService {
     /// Logout - delete the drops token
     pub async fn logout() -> Result<()> {
         Self::delete_token_file()?;
-        let _ = Self::delete_cookies().await;
         // Settled drop ids are per ACCOUNT. Carrying them into the next sign-in
         // would skip the auto-claim for drops that account has genuinely not
         // claimed, which fails silently because a skipped drop looks identical
@@ -436,7 +317,6 @@ impl DropsAuthService {
                 error!("[DROPS_AUTH] Token refresh failed - clearing stored tokens");
                 error!("[DROPS_AUTH] Error: {}", error_text);
                 let _ = Self::delete_token_file();
-                let _ = Self::delete_cookies().await;
                 return Err(anyhow::anyhow!(
                     "{}\n\nPlease log in again for drops functionality.",
                     error_msg
@@ -472,44 +352,23 @@ impl DropsAuthService {
     /// at which point validate_token() will delete it and require re-authentication.
     /// This matches the official Android app's behavior.
     pub async fn get_token() -> Result<String> {
-        // Try to load from file first (primary storage)
-        match Self::load_token_from_file() {
-            Ok(token) => {
-                // NOTE: We don't check expires_at here - just use the token until it fails
-                // Twitch will reject it with 401 when it's actually invalid
-                Ok(token.access_token)
-            }
-            Err(file_err) => {
-                debug!(
-                    "[DROPS_AUTH] Could not read from file: {:?}, trying cookies...",
-                    file_err
-                );
-
-                // Try cookies as fallback
-                match Self::load_token_from_cookies().await {
-                    Ok(cookie_token) => {
-                        debug!("[DROPS_AUTH] Token retrieved from cookies");
-
-                        // Save to file for next time
-                        let _ = Self::store_token_to_file(&cookie_token);
-
-                        Ok(cookie_token.access_token)
-                    }
-                    Err(_) => Err(anyhow::anyhow!(
-                        "Not authenticated for drops. Please log in to Twitch for drops functionality."
-                    )),
-                }
+        // NOTE: We don't check expires_at here - just use the token until it fails
+        // Twitch will reject it with 401 when it's actually invalid
+        match Self::load_token() {
+            Ok(token) => Ok(token.access_token),
+            Err(e) => {
+                debug!("[DROPS_AUTH] No usable stored token: {:#}", e);
+                Err(anyhow::anyhow!(
+                    "Not authenticated for drops. Please log in to Twitch for drops functionality."
+                ))
             }
         }
     }
 
     /// Check if the user is authenticated for drops.
     ///
-    /// Uses get_token() (file, then the cookie-jar fallback) rather than the
-    /// file alone: the device-code flow stores the fresh token in the cookie
-    /// jar, so a file-only check reports "not authenticated" immediately after
-    /// a successful connect. Desktop never noticed (its UI trusts the poll
-    /// result); the mobile Activity screen re-checks and exposed it.
+    /// Uses get_token(), which reads the same sealed file the connect flow
+    /// writes, so the answer is right immediately after a successful connect.
     pub async fn is_authenticated() -> bool {
         Self::get_token().await.is_ok()
     }
@@ -529,10 +388,9 @@ impl DropsAuthService {
             .await?;
 
         if response.status() == 401 {
-            // Token is invalid, delete it from both file and cookies
+            // Token is invalid, delete it
             debug!("[DROPS_AUTH] Token validation failed (401) - clearing stored tokens");
             let _ = Self::delete_token_file();
-            let _ = Self::delete_cookies().await;
             return Ok(false);
         }
 

@@ -9,8 +9,8 @@
 //!
 //! It is also on-demand: the consent runs the first time a user opens a mod room,
 //! not at login, so users who never touch the feature grant nothing and there is
-//! no global re-auth. The credential lives in its own obfuscated file in the app
-//! data dir, independent of the primary token storage.
+//! no global re-auth. The credential lives in its own sealed file in the app data
+//! dir (see `token_vault`), independent of the primary token storage.
 
 use anyhow::{anyhow, Result};
 use chrono::{Duration as ChronoDuration, Utc};
@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
 
+use crate::services::token_vault;
 use crate::services::twitch_service::get_app_data_dir;
 
 const CLIENT_ID: &str = env!("TWITCH_APP_CLIENT_ID");
@@ -34,9 +35,6 @@ const REDIRECT_URI: &str = "http://localhost:8765/modroom/callback";
 
 const CRED_FILE_NAME: &str = ".modroom_token";
 
-/// Light at-rest XOR obfuscation, matching the scheme the primary/secondary token
-/// files use. Not encryption; it just keeps the token out of plain sight on disk.
-const OBFUSCATION_KEY: &[u8] = b"StreamNookModRoomKey2026";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModRoomCredential {
@@ -84,24 +82,14 @@ fn cred_file_path() -> Result<PathBuf> {
     Ok(path)
 }
 
-fn xor(data: &[u8]) -> Vec<u8> {
-    data.iter()
-        .enumerate()
-        .map(|(i, b)| b ^ OBFUSCATION_KEY[i % OBFUSCATION_KEY.len()])
-        .collect()
-}
-
 fn store(cred: &ModRoomCredential) -> Result<()> {
-    let bytes = serde_json::to_vec(cred)?;
-    fs::write(cred_file_path()?, xor(&bytes))?;
-    Ok(())
+    token_vault::store_json(&cred_file_path()?, cred)
 }
 
 fn load() -> Option<ModRoomCredential> {
-    let path = cred_file_path().ok()?;
-    let raw = fs::read(path).ok()?;
-    let json = xor(&raw);
-    serde_json::from_slice::<ModRoomCredential>(&json).ok()
+    token_vault::load_json(&cred_file_path().ok()?)
+        .ok()
+        .flatten()
 }
 
 /// Whether a scoped credential is on file (does not check freshness).
@@ -116,11 +104,7 @@ pub fn connected_login() -> Option<String> {
 
 /// Forget the scoped credential. The user can reconnect later.
 pub fn disconnect() -> Result<()> {
-    let path = cred_file_path()?;
-    if path.exists() {
-        fs::remove_file(path)?;
-    }
-    Ok(())
+    token_vault::remove(&cred_file_path()?)
 }
 
 /// Authorize URL for the scoped consent. No `force_verify`, so it reuses the

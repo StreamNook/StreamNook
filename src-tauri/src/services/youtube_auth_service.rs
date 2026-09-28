@@ -8,15 +8,16 @@
 //! profile, and authenticate private `youtubei/v1` requests (send / moderate) with
 //! the `SAPISIDHASH` scheme the web client uses.
 //!
-//! The harvested cookies are cached + persisted (keyring, obfuscated-file fallback)
-//! so a send doesn't re-open a webview every launch; the WebView2 profile also keeps
-//! the login itself across restarts.
+//! The harvested cookies are cached + sealed to `.youtube_session` (see
+//! `token_vault`) so a send doesn't re-open a webview every launch; the WebView2
+//! profile also keeps the login itself across restarts.
 
+use crate::services::token_vault::CachedCredential;
 use crate::services::twitch_service::get_app_data_dir;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const ORIGIN: &str = "https://www.youtube.com";
@@ -35,9 +36,6 @@ const HARVEST_WINDOW_LABEL: &str = "youtube-harvest";
 // exactly what the browser sends. Modern YouTube validates more than the classic
 // SAPISID/APISID/HSID/SID/SSID set (e.g. the __Secure-*PSIDTS session-timestamp
 // cookies), so sending all of them is what stops the 401 "must be signed in".
-const KEYRING_SERVICE: &str = "streamnook_youtube_session";
-const KEYRING_USER: &str = "default";
-const OBF_KEY: &[u8] = b"StreamNookYouTubeKey2026";
 
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 struct YouTubeSession {
@@ -85,56 +83,20 @@ struct YouTubeSession {
     channel_id_checked: bool,
 }
 
-static SESSION: OnceLock<Mutex<Option<YouTubeSession>>> = OnceLock::new();
+static SESSION: CachedCredential<YouTubeSession> = CachedCredential::new(".youtube_session");
 
 fn session_cell() -> &'static Mutex<Option<YouTubeSession>> {
-    SESSION.get_or_init(|| Mutex::new(load_persisted()))
+    SESSION.cell()
 }
 
-fn session_path() -> Option<PathBuf> {
-    get_app_data_dir().ok().map(|d| d.join(".youtube_session"))
-}
-
-fn obfuscate(data: &[u8]) -> Vec<u8> {
-    data.iter()
-        .enumerate()
-        .map(|(i, b)| b ^ OBF_KEY[i % OBF_KEY.len()])
-        .collect()
-}
-
-fn persist(sess: &YouTubeSession) {
-    let Ok(json) = serde_json::to_string(sess) else {
-        return;
-    };
-    if let Ok(entry) = crate::services::secure_store::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
-        let _ = entry.set_password(&json);
+fn persist(value: &YouTubeSession) {
+    if let Err(e) = SESSION.store(value) {
+        log::warn!("could not store the YouTube session: {e:#}");
     }
-    if let Some(p) = session_path() {
-        let _ = std::fs::write(p, obfuscate(json.as_bytes()));
-    }
-}
-
-fn load_persisted() -> Option<YouTubeSession> {
-    if let Ok(entry) = crate::services::secure_store::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
-        if let Ok(json) = entry.get_password() {
-            if let Ok(s) = serde_json::from_str::<YouTubeSession>(&json) {
-                return Some(s);
-            }
-        }
-    }
-    let p = session_path()?;
-    let raw = std::fs::read(p).ok()?;
-    let json = String::from_utf8(obfuscate(&raw)).ok()?;
-    serde_json::from_str(&json).ok()
 }
 
 fn clear_persisted() {
-    if let Ok(entry) = crate::services::secure_store::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
-        let _ = entry.delete_credential();
-    }
-    if let Some(p) = session_path() {
-        let _ = std::fs::remove_file(p);
-    }
+    SESSION.remove_file();
 }
 
 fn now() -> u64 {
@@ -156,7 +118,7 @@ fn sha1_hex(input: &str) -> String {
 /// into this cookie jar when it is asked for the `youtube-account` profile.
 pub fn youtube_profile_dir() -> PathBuf {
     let base = get_app_data_dir().unwrap_or_else(|_| std::env::temp_dir());
-    let dir = base.join("platform_web_profiles").join("youtube");
+    let dir = crate::platform::webview_store::profile_dir(base, "platform_web_profiles/youtube");
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
@@ -373,10 +335,7 @@ async fn probe_identity() -> Option<Identity> {
         let sess = guard.as_ref()?;
         cookie_header(&sess.cookies)
     };
-    let html = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .ok()?
+    let html = page_client()
         .get(ORIGIN)
         .header("User-Agent", UA)
         .header("Cookie", cookies)
@@ -678,6 +637,22 @@ pub async fn connect() -> Result<()> {
 
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
+/// The client for signed-in YouTube PAGE fetches (a watch or channel page is
+/// megabytes of HTML): a 15 s deadline and nothing else on the client. The
+/// session's cookies and headers ride on each request, so one client serves
+/// every account. Built once; the identity probe and the subscribe /
+/// membership reads used to build one per call.
+static PAGE_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .expect("youtube page http client")
+});
+
+pub(crate) fn page_client() -> &'static reqwest::Client {
+    &PAGE_CLIENT
+}
+
 /// The connected account's display name, via the authenticated account-menu endpoint
 /// (best-effort; None on any failure). The public web key works for authed calls too.
 /// Ask YouTube whether the harvested cookie session is still accepted.
@@ -696,7 +671,7 @@ pub async fn validate_session() -> Option<bool> {
         "context": { "client": { "clientName": "WEB", "clientVersion": "2.20240101.00.00", "hl": "en", "gl": "US" } }
     });
     let url = "https://www.youtube.com/youtubei/v1/account/account_menu?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&prettyPrint=false";
-    let mut req = reqwest::Client::new()
+    let mut req = crate::services::http::client_unbounded()
         .post(url)
         .timeout(Duration::from_secs(10))
         .header("User-Agent", UA);
@@ -774,7 +749,9 @@ async fn fetch_account_name() -> Option<String> {
         "context": { "client": { "clientName": "WEB", "clientVersion": "2.20240101.00.00", "hl": "en", "gl": "US" } }
     });
     let url = "https://www.youtube.com/youtubei/v1/account/account_menu?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&prettyPrint=false";
-    let mut req = reqwest::Client::new().post(url).header("User-Agent", UA);
+    let mut req = crate::services::http::client_unbounded()
+        .post(url)
+        .header("User-Agent", UA);
     for (k, v) in headers {
         req = req.header(k, v);
     }
@@ -1041,7 +1018,7 @@ async fn resolve_handle_to_channel_id(handle: &str) -> Option<String> {
             "context": { "client": { "clientName": "WEB", "clientVersion": "2.20240101.00.00", "hl": "en", "gl": "US" } },
             "url": url,
         });
-        let mut req = reqwest::Client::new()
+        let mut req = crate::services::http::client_unbounded()
             .post("https://www.youtube.com/youtubei/v1/navigation/resolve_url?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&prettyPrint=false")
             .header("User-Agent", UA);
         for (k, v) in headers {
@@ -1210,7 +1187,8 @@ fn find_account_name(v: &serde_json::Value) -> Option<String> {
 /// open does for free.
 #[cfg(desktop)]
 pub async fn reharvest() -> bool {
-    use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+    use crate::rt::WebviewWindowBuilder;
+    use tauri::{Manager, WebviewUrl};
 
     // A re-harvest renews the session the app holds and never starts one. With
     // none stored the user signed out, and whatever the profile still holds
@@ -1321,7 +1299,7 @@ pub async fn reharvest() -> bool {
 /// every caller passes a real site origin.
 #[cfg(not(windows))]
 pub(crate) async fn fetch_cookies_for_origin(
-    app: &tauri::AppHandle,
+    app: &crate::rt::AppHandle,
     window_label: &str,
     names: &[&str],
     origin: &str,
@@ -1342,7 +1320,7 @@ pub(crate) async fn fetch_cookies_for_origin(
 
 #[cfg(desktop)]
 async fn fetch_cookies_from_window(
-    app: &tauri::AppHandle,
+    app: &crate::rt::AppHandle,
     window_label: &str,
     names: &[&str],
 ) -> Result<HashMap<String, String>> {
@@ -1372,7 +1350,7 @@ async fn fetch_cookies_from_window(
 /// this needs, so the cookie-SETTER gap (tauri#11691) does not matter here.
 #[cfg(windows)]
 pub(crate) async fn fetch_cookies_for_origin(
-    app: &tauri::AppHandle,
+    app: &crate::rt::AppHandle,
     window_label: &str,
     names: &[&str],
     origin: &str,

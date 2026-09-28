@@ -14,14 +14,13 @@
 //! `connect()`, which opens the system browser, still depends on binding
 //! localhost:3000. See `PendingAuth` for why that distinction is load-bearing.
 //!
-//! First slice keeps the token IN MEMORY (per session); keyring persistence like
-//! the Twitch tokens is an easy follow-up.
+//! The token is cached in memory and sealed to `.kick_token` (see `token_vault`),
+//! so a login survives restarts.
 
-use crate::services::twitch_service::get_app_data_dir;
+use crate::services::token_vault::CachedCredential;
 use anyhow::{anyhow, Result};
 use base64::Engine;
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -38,12 +37,6 @@ const TOKEN_URL: &str = "https://id.kick.com/oauth/token";
 // (events:subscribe is for the future Activity-feed work; its scope string is
 // unverified, and an unknown scope makes the whole authorize page bounce.)
 const SCOPES: &str = "user:read channel:read chat:write moderation:ban moderation:chat_message:manage";
-// Persisted so a Kick login survives app restarts (the token was in-memory only
-// before). Keyring is primary; an obfuscated file is the fallback for machines
-// where the OS keyring is unavailable.
-const KEYRING_SERVICE: &str = "streamnook_kick_token";
-const KEYRING_USER: &str = "default";
-const OBF_KEY: &[u8] = b"StreamNookKickKey2026";
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct KickToken {
@@ -65,57 +58,20 @@ struct KickToken {
     user_id: Option<String>,
 }
 
-static TOKEN: OnceLock<Mutex<Option<KickToken>>> = OnceLock::new();
+static TOKEN: CachedCredential<KickToken> = CachedCredential::new(".kick_token");
 
 fn token_cell() -> &'static Mutex<Option<KickToken>> {
-    // Seed from persisted storage on first access, so a prior login is restored.
-    TOKEN.get_or_init(|| Mutex::new(load_persisted()))
+    TOKEN.cell()
 }
 
-fn token_path() -> Option<PathBuf> {
-    get_app_data_dir().ok().map(|d| d.join(".kick_token"))
-}
-
-fn obfuscate(data: &[u8]) -> Vec<u8> {
-    data.iter()
-        .enumerate()
-        .map(|(i, b)| b ^ OBF_KEY[i % OBF_KEY.len()])
-        .collect()
-}
-
-fn persist(tok: &KickToken) {
-    let Ok(json) = serde_json::to_string(tok) else {
-        return;
-    };
-    if let Ok(entry) = crate::services::secure_store::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
-        let _ = entry.set_password(&json);
+fn persist(value: &KickToken) {
+    if let Err(e) = TOKEN.store(value) {
+        log::warn!("could not store the Kick token: {e:#}");
     }
-    if let Some(p) = token_path() {
-        let _ = std::fs::write(p, obfuscate(json.as_bytes()));
-    }
-}
-
-fn load_persisted() -> Option<KickToken> {
-    if let Ok(entry) = crate::services::secure_store::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
-        if let Ok(json) = entry.get_password() {
-            if let Ok(t) = serde_json::from_str::<KickToken>(&json) {
-                return Some(t);
-            }
-        }
-    }
-    let p = token_path()?;
-    let raw = std::fs::read(p).ok()?;
-    let json = String::from_utf8(obfuscate(&raw)).ok()?;
-    serde_json::from_str(&json).ok()
 }
 
 fn clear_persisted() {
-    if let Ok(entry) = crate::services::secure_store::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
-        let _ = entry.delete_credential();
-    }
-    if let Some(p) = token_path() {
-        let _ = std::fs::remove_file(p);
-    }
+    TOKEN.remove_file();
 }
 
 fn now() -> u64 {
@@ -217,7 +173,7 @@ pub fn account_id() -> Option<String> {
 async fn fetch_identity(
     access_token: &str,
 ) -> Option<(String, Option<String>, Option<String>)> {
-    let client = reqwest::Client::new();
+    let client = crate::services::http::client_unbounded();
     let resp = match client
         .get("https://api.kick.com/public/v1/users")
         .bearer_auth(access_token)
@@ -292,7 +248,7 @@ async fn fetch_identity(
 ///    behaviour below is still right; the reason given for it was not.
 pub async fn validate_session() -> Option<bool> {
     let token = access_token().await?;
-    let resp = reqwest::Client::new()
+    let resp = crate::services::http::client_unbounded()
         .get("https://api.kick.com/public/v1/users")
         .bearer_auth(&token)
         .timeout(Duration::from_secs(8))
@@ -525,7 +481,7 @@ pub async fn connect() -> Result<()> {
 
 /// Swap an authorization code for a token and store it.
 async fn exchange_code(cid: &str, secret: &str, verifier: &str, code: &str) -> Result<()> {
-    let client = reqwest::Client::new();
+    let client = crate::services::http::client_unbounded();
     let resp = client
         .post(TOKEN_URL)
         .form(&[
@@ -657,7 +613,7 @@ pub async fn app_access_token() -> Option<String> {
         }
     }
     let (cid, secret) = (client_id()?, client_secret()?);
-    let resp = reqwest::Client::new()
+    let resp = crate::services::http::client_unbounded()
         .post(TOKEN_URL)
         .form(&[
             ("grant_type", "client_credentials"),
@@ -726,7 +682,7 @@ pub async fn refresh_now() -> RefreshOutcome {
     if cur.refresh_token.is_empty() {
         return RefreshOutcome::TryLater;
     }
-    let client = reqwest::Client::new();
+    let client = crate::services::http::client_unbounded();
     let resp = match client
         .post(TOKEN_URL)
         .form(&[

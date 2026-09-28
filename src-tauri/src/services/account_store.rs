@@ -4,17 +4,14 @@
 //! Design constraints (deliberate, see Brain `projects/StreamNook.md` ->
 //! "Multi-account support"):
 //!
-//!   - The PRIMARY account (the one you watch / stream as) keeps its exact
-//!     existing storage: the obfuscated `.twitch_token` file, the main cookie
-//!     jar, and the legacy keyring entry (`streamnook_twitch_token` / `user`).
-//!     `TwitchService::get_token()` remains the unchanged hot path for it. This
-//!     module never reads or writes the primary's token storage; it only records
-//!     the primary's *identity* so the account list has a complete view.
+//!   - The PRIMARY account (the one you watch / stream as) keeps its own slot,
+//!     the sealed `.twitch_token` file, and `TwitchService::get_token()` remains
+//!     the hot path for it. This module only touches that slot through
+//!     `TwitchService`'s primary-slot methods; otherwise it records the
+//!     primary's *identity* so the account list has a complete view.
 //!
-//!   - SECONDARY ("action") accounts store their OAuth token in the OS keyring
-//!     keyed by Twitch user id, plus an obfuscated file backup. They NEVER touch
-//!     the cookie jar: the cookie jar is the single web session, which belongs
-//!     to the primary alone.
+//!   - SECONDARY ("action") accounts keep their OAuth token in their own sealed
+//!     `.twitch_account_<user id>` file (see `token_vault`).
 //!
 //!   - Phase 1 ships no UI. It establishes the data model, persistence, a
 //!     refresh-aware per-account token accessor, and a cheap startup reconcile
@@ -22,7 +19,7 @@
 //!     flows land in later phases.
 
 use anyhow::Result;
-use crate::services::secure_store::Entry;
+use crate::services::token_vault;
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -32,17 +29,9 @@ use crate::services::twitch_service::{get_app_data_dir, StorableToken, TwitchSer
 
 /// Plain-JSON registry of every known account (primary + secondaries). The
 /// metadata here is not secret (login, display name, avatar); the actual tokens
-/// live in the keyring / obfuscated per-account files.
+/// live in sealed per-account files.
 const ACCOUNTS_FILE_NAME: &str = "accounts.json";
 
-/// Keyring service name for SECONDARY account tokens. Deliberately distinct from
-/// the primary's legacy `streamnook_twitch_token` / `user` entry so the two can
-/// never collide. The keyring username is the account's Twitch user id.
-const ACCOUNT_KEYRING_SERVICE: &str = "streamnook_twitch_account";
-
-/// Matches the XOR obfuscation key TwitchService uses for the primary token file,
-/// so secondary token files are stored with the same (light) at-rest scheme.
-const TOKEN_OBFUSCATION_KEY: &[u8] = b"StreamNookTokenKey2024";
 
 /// The forced-logout switch. Bump this string to sign EVERY user out and back in
 /// on their next launch. Changing it is the only action required to ship a forced
@@ -137,14 +126,7 @@ impl AccountStore {
         Self::list().into_iter().find(|a| a.is_primary)
     }
 
-    // ----- secondary token storage (keyring + obfuscated file) -----------
-
-    fn xor(data: &[u8]) -> Vec<u8> {
-        data.iter()
-            .enumerate()
-            .map(|(i, b)| b ^ TOKEN_OBFUSCATION_KEY[i % TOKEN_OBFUSCATION_KEY.len()])
-            .collect()
-    }
+    // ----- secondary token storage (sealed per-account file) ---------------
 
     fn secondary_token_file_path(user_id: &str) -> Result<PathBuf> {
         let mut path = get_app_data_dir()?;
@@ -156,57 +138,16 @@ impl AccountStore {
     }
 
     fn store_secondary_token(user_id: &str, token: &StorableToken) -> Result<()> {
-        let json = serde_json::to_string(token)?;
-
-        // File (primary store for secondaries), obfuscated to match the primary scheme.
-        let path = Self::secondary_token_file_path(user_id)?;
-        fs::write(&path, Self::xor(json.as_bytes()))?;
-
-        // Keyring (backup), keyed by user id. Best-effort, like the primary path.
-        if let Ok(entry) = Entry::new(ACCOUNT_KEYRING_SERVICE, user_id) {
-            let _ = entry.set_password(&json);
-        }
-        Ok(())
+        token_vault::store_json(&Self::secondary_token_file_path(user_id)?, token)
     }
 
     fn load_secondary_token(user_id: &str) -> Result<StorableToken> {
-        // File first.
-        if let Ok(path) = Self::secondary_token_file_path(user_id) {
-            if path.exists() {
-                if let Ok(bytes) = fs::read(&path) {
-                    let decoded = Self::xor(&bytes);
-                    if let Ok(s) = String::from_utf8(decoded) {
-                        if let Ok(token) = serde_json::from_str::<StorableToken>(&s) {
-                            return Ok(token);
-                        }
-                    }
-                }
-            }
-        }
-        // Keyring fallback.
-        if let Ok(entry) = Entry::new(ACCOUNT_KEYRING_SERVICE, user_id) {
-            if let Ok(pwd) = entry.get_password() {
-                if let Ok(token) = serde_json::from_str::<StorableToken>(&pwd) {
-                    return Ok(token);
-                }
-            }
-        }
-        Err(anyhow::anyhow!(
-            "No stored token for secondary account {}",
-            user_id
-        ))
+        token_vault::load_json(&Self::secondary_token_file_path(user_id)?)?
+            .ok_or_else(|| anyhow::anyhow!("No stored token for secondary account {}", user_id))
     }
 
     fn delete_secondary_token(user_id: &str) -> Result<()> {
-        if let Ok(path) = Self::secondary_token_file_path(user_id) {
-            if path.exists() {
-                let _ = fs::remove_file(&path);
-            }
-        }
-        if let Ok(entry) = Entry::new(ACCOUNT_KEYRING_SERVICE, user_id) {
-            let _ = entry.delete_credential();
-        }
-        Ok(())
+        token_vault::remove(&Self::secondary_token_file_path(user_id)?)
     }
 
     // ----- public accessors / mutators -----------------------------------
@@ -497,7 +438,7 @@ impl AccountStore {
     pub async fn reset_all() {
         let accounts = Self::list();
 
-        // Clear the primary token stores (file + cookies + keyring).
+        // Clear the primary token slot.
         let _ = TwitchService::logout().await;
 
         // The drops/points credential is a separate device login; clear it too
@@ -592,10 +533,10 @@ impl AccountStore {
 fn wipe_default_webview_store() {
     let mut targets: Vec<PathBuf> = Vec::new();
 
-    if let Ok(base) = get_app_data_dir() {
+    if let Ok(root) = crate::services::twitch_service::twitch_web_profiles_root() {
         // Belt-and-suspenders over reset_all's per-account deletes: drop the whole
         // profiles tree so an orphaned profile can't rehydrate a session.
-        targets.push(base.join("twitch_web_profiles"));
+        targets.push(root);
     }
 
     // The main window's own web store. Tauri places it under the bundle id or the
