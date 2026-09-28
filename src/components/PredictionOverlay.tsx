@@ -474,7 +474,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
     setIsSubmitting(true);
 
     try {
-      await invoke('place_prediction', {
+      const result = await invoke<{ data?: { makePrediction?: { prediction?: { points?: number } } } }>('place_prediction', {
         eventId: activePrediction.prediction_id,
         outcomeId: selectedOutcome,
         points: betAmount,
@@ -489,11 +489,13 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
           : `Prediction placed! ${betAmount} points on "${selectedOutcomeTitle}"`,
         'success'
       );
-      // Optimistic; the predictions-user-v1 event reconciles it with the real
-      // total a moment later.
+      // The mutation answers with Twitch's running total. Set it rather than
+      // adding betAmount: the predictions-user-v1 event often lands before this
+      // response, and adding on top of it counted the bet twice.
+      const total = result?.data?.makePrediction?.prediction?.points;
       setSelfStake((prev) => ({
         outcomeId: selectedOutcome,
-        points: (prev?.points ?? 0) + betAmount,
+        points: typeof total === 'number' ? total : Math.max(prev?.points ?? 0, betAmount),
       }));
       
       // Refresh channel points
@@ -670,7 +672,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
                   {amount >= 1000 ? `${amount / 1000}k` : amount}
                 </button>
               ))}
-              {channelPoints && (
+              {channelPoints ? (
                 <button
                   onClick={() => {
                     setBetAmount(channelPoints);
@@ -680,7 +682,7 @@ const PredictionOverlay = ({ channelId, channelLogin }: PredictionOverlayProps) 
                 >
                   ALL
                 </button>
-              )}
+              ) : null}
             </div>
             
             {/* Bet Button - compact */}
