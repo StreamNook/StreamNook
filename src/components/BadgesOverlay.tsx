@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useMemo, useSyncExternalStore } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { createPortal } from 'react-dom';
 import { X, ArrowUpDown, RefreshCw, Check, Search, ExternalLink, Lock } from 'lucide-react';
@@ -154,6 +154,10 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
   // Twitch badges state
   const [badgesWithMetadata, setBadgesWithMetadata] = useState<BadgeWithMetadata[]>([]);
   const [loading, setLoading] = useState(true);
+  // Set once the grid has badges to show. A reload after that (the collection
+  // refresh that runs on every open ends in `badge-standing-changed`) swaps the
+  // data in place instead of blanking the grid back to the spinner.
+  const badgesShownRef = useRef(false);
   const [loadingMetadata, setLoadingMetadata] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -790,7 +794,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
 
   const loadBadges = async () => {
     try {
-      setLoading(true);
+      if (!badgesShownRef.current) setLoading(true);
       setError(null);
 
       // Try to load from cache first
@@ -838,6 +842,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
         }
 
         setBadgesWithMetadata(badgesWithPreloadedMetadata);
+        badgesShownRef.current = true;
         setLoading(false);
 
         // Fetch any missing metadata in the background
@@ -862,12 +867,14 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
       );
 
       setBadgesWithMetadata(flattened);
+      badgesShownRef.current = true;
 
       // Fetch metadata for all badges in the background
       fetchAllBadgeMetadata(flattened);
     } catch (err) {
       Logger.error('Failed to load badges:', err);
-      setError('Failed to load badges. Please try again.');
+      // A failed background reload keeps the badges already on screen.
+      if (!badgesShownRef.current) setError('Failed to load badges. Please try again.');
     } finally {
       setLoading(false);
     }
