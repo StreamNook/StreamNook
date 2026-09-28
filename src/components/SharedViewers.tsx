@@ -1,20 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Play, SquaresFour } from 'phosphor-react';
-import type { Collaboration, Collaborator } from '../types';
+import { ChatsCircle, Play, SquaresFour } from 'phosphor-react';
+import type { Collaborator } from '../types';
 import { useAppStore } from '../stores/AppStore';
 import { usemultiNookStore } from '../stores/multiNookStore';
 import { makeKey } from '../utils/providerKey';
-import { collabLabel, groupWord } from '../utils/sharedViewers';
+import { collabLabel, groupWord, isTogether, type ChannelGroup } from '../utils/sharedViewers';
 import { collabMissingFromGrid, watchCollabInMultiNook } from '../utils/collabMultiNook';
 import { ACCENT_BUTTON, ACCENT_FILL } from './ui/glazeButtons';
 
 // Twitch's Shared Viewership, presented as its own thing rather than folded
-// into the viewer count: a "+2" beside the channel's name on cards and rows,
-// a "Together" capsule in the chat header, both opening who the channel is
-// streaming with. Rust decides who is in the group (active and live members
-// only), orders them (the watched channel first, then by their own viewers)
-// and keeps the counts current; this only draws it and hands clicks on.
+// into the viewer count: the others' faces and "Together" beside the channel's
+// name on cards and rows, the same capsule in the chat header, both opening who
+// the channel is streaming with. A card whose channel shares its chat outside
+// such a group gets the same credit with a chat mark and "Shared chat". Rust
+// decides who is in a group (live members only), orders them (the channel
+// itself first, then by their own viewers) and keeps the counts current; this
+// only draws it and hands clicks on.
 
 const STACK_MAX = 3;
 const OPEN_DELAY_MS = 150;
@@ -44,15 +46,16 @@ function Avatar({ member, size }: { member: Collaborator; size: number }) {
 }
 
 /** Overlapping faces, capped with a "+N". By default everyone the channel is
- *  streaming with (not the channel itself); `everyone` includes it. `ringClass`
- *  cuts each face out of whatever surface the stack sits on. */
+ *  streaming with (not the channel itself); `everyone` includes it. No ring by
+ *  default: inside a glass capsule a dark ring reads as a black bar around each
+ *  face. `ringClass` cuts each face out of a solid surface where one helps. */
 export function CollabAvatarStack({
   collab,
   size = 16,
-  ringClass = 'ring-background',
+  ringClass,
   everyone = false,
 }: {
-  collab: Collaboration;
+  collab: ChannelGroup;
   size?: number;
   ringClass?: string;
   everyone?: boolean;
@@ -60,16 +63,17 @@ export function CollabAvatarStack({
   const faces = everyone ? collab.members : collab.members.filter((m) => !m.is_self);
   const shown = faces.slice(0, STACK_MAX);
   const extra = faces.length - shown.length;
+  const ring = ringClass ? ` ring-2 ${ringClass}` : '';
   return (
-    <span className="flex items-center -space-x-1.5">
+    <span className="flex items-center -space-x-1">
       {shown.map((m) => (
-        <span key={m.user_id} className={`flex rounded-full ring-2 ${ringClass}`}>
+        <span key={m.user_id} className={`flex rounded-full${ring}`}>
           <Avatar member={m} size={size} />
         </span>
       ))}
       {extra > 0 && (
         <span
-          className={`grid place-items-center rounded-full bg-white/15 px-1 text-[9px] font-semibold tabular-nums text-textPrimary ring-2 ${ringClass}`}
+          className={`grid place-items-center rounded-full bg-white/15 px-1 text-[9px] font-semibold tabular-nums text-textPrimary${ring}`}
           style={{ height: size, minWidth: size }}
         >
           +{extra}
@@ -79,24 +83,40 @@ export function CollabAvatarStack({
   );
 }
 
-/** The "+2" beside a channel's name: glass inside the card's glass, so the
- *  `glaze-inset` lighting and no frost of its own. */
+/** The credit beside a channel's name: glass inside the card's glass, so the
+ *  `glaze-inset` lighting and no frost of its own. Faces say who, the word says
+ *  what; a bare "+2" read as a count of anything. The negative margin keeps the
+ *  name line at its text height, so a card with a group sits level with its
+ *  neighbours. */
 const NAME_TAG =
-  'glaze-inset inline-flex h-[18px] shrink-0 items-center rounded-full bg-white/[0.08] px-1.5 text-[11px] font-semibold leading-none tabular-nums text-textPrimary';
+  'glaze-inset -my-[3px] inline-flex h-[22px] shrink-0 items-center gap-1.5 rounded-full bg-white/[0.12] pl-0.5 text-[11px] font-semibold leading-none text-textPrimary';
 
-/** How many others, as the name tag reads: "+2". */
-function othersCount(collab: Collaboration): number {
-  return collab.members.filter((m) => !m.is_self).length;
-}
-
-/** The name tag where the row or card itself is the tap target (Sidebar rows,
- *  the phone's cards): the count, nothing to open. */
-export function TogetherTag({ collab }: { collab: Collaboration }) {
+/** Shared Chat carries a chat mark ahead of the faces, so the compact form
+ *  (faces only) still tells the two apart. */
+function NameCredit({ collab, compact = false, lit = '' }: { collab: ChannelGroup; compact?: boolean; lit?: string }) {
+  const together = isTogether(collab);
   return (
-    <span className={NAME_TAG} aria-label={collabLabel(collab)}>
-      +{othersCount(collab)}
+    <span className={`${NAME_TAG} ${compact ? 'pr-0.5' : 'pr-2'}${lit}`}>
+      {!together && <ChatsCircle size={14} weight="fill" className="ml-1 shrink-0 text-textSecondary" aria-hidden />}
+      <CollabAvatarStack collab={collab} size={18} />
+      {!compact && <span>{together ? 'Together' : 'Shared chat'}</span>}
     </span>
   );
+}
+
+/** The credit where the row or card itself is the tap target (Sidebar rows,
+ *  the phone's cards), nothing to open. `compact` drops the word where the name
+ *  needs the room; a Sidebar row's hover card says who they are. */
+export function TogetherTag({ collab, compact = false }: { collab: ChannelGroup; compact?: boolean }) {
+  return (
+    <span className="flex shrink-0" aria-label={collabLabel(collab)}>
+      <NameCredit collab={collab} compact={compact} />
+    </span>
+  );
+}
+
+function panelTitle(collab: ChannelGroup): string {
+  return isTogether(collab) ? 'Streaming together' : 'Sharing chat';
 }
 
 /** Where a member already is on screen: the solo player, or a MultiNook tile. */
@@ -145,7 +165,7 @@ function MemberRow({ member, onScreen, onOpen }: { member: Collaborator; onScree
 /** MultiNook actions under the list. An empty grid gets one button; a grid
  *  with tiles in it gets the choice between adding the group and replacing
  *  the grid with it. */
-function MultiNookActions({ collab, onDone }: { collab: Collaboration; onDone: () => void }) {
+function MultiNookActions({ collab, onDone }: { collab: ChannelGroup; onDone: () => void }) {
   const slots = usemultiNookStore((s) => s.slots);
   const count = collab.members.length;
   const run = (mode: 'replace' | 'append') => {
@@ -202,7 +222,7 @@ export function TogetherPanel({
   allowMultiNook = false,
   onDone,
 }: {
-  collab: Collaboration;
+  collab: ChannelGroup;
   onOpenChannel?: (login: string) => void;
   allowMultiNook?: boolean;
   onDone: () => void;
@@ -227,9 +247,11 @@ export function TogetherPanel({
       <div className="flex items-center gap-2.5 px-1.5 pb-2 pt-1">
         <CollabAvatarStack collab={collab} size={22} everyone />
         <span className="min-w-0">
-          <span className="block text-xs font-semibold text-textPrimary">Streaming together</span>
+          <span className="block text-xs font-semibold text-textPrimary">{panelTitle(collab)}</span>
           <span className="block text-[11px] tabular-nums text-textSecondary">
-            {collab.shared_viewers.toLocaleString()} viewers combined
+            {isTogether(collab)
+              ? `${collab.shared_viewers.toLocaleString()} viewers combined`
+              : `One chat across ${collab.members.length} channels`}
           </span>
         </span>
       </div>
@@ -254,8 +276,8 @@ export function TogetherPanel({
 }
 
 /**
- * The trigger that opens the panel on hover or click. `name` is the "+2" beside
- * a stream card's channel name (the card underneath stays clickable, so
+ * The trigger that opens the panel on hover or click. `name` is the credit
+ * beside a stream card's channel name (the card underneath stays clickable, so
  * nothing here reaches it); `header` is the "Together" capsule in the chat
  * header and the title bar, glass inside their glass.
  */
@@ -265,7 +287,7 @@ export function TogetherChip({
   onOpenChannel,
   allowMultiNook = false,
 }: {
-  collab: Collaboration;
+  collab: ChannelGroup;
   variant: 'name' | 'header';
   onOpenChannel?: (login: string) => void;
   allowMultiNook?: boolean;
@@ -325,7 +347,7 @@ export function TogetherChip({
   const lit = anchor ? ' bg-white/[0.14]' : '';
   const trigger =
     variant === 'name' ? (
-      <span className={`${NAME_TAG} transition-colors hover:bg-white/[0.14]${lit}`}>+{othersCount(collab)}</span>
+      <NameCredit collab={collab} lit={` transition-colors hover:bg-white/[0.18]${anchor ? ' !bg-white/[0.18]' : ''}`} />
     ) : (
       <span
         className={`glaze-inset flex items-center gap-1.5 rounded-full bg-white/[0.08] py-0.5 pl-0.5 pr-2 text-xs text-textPrimary transition-colors hover:bg-white/[0.14]${lit}`}
@@ -361,7 +383,7 @@ export function TogetherChip({
         createPortal(
           <div
             role="dialog"
-            aria-label="Streaming together"
+            aria-label={panelTitle(collab)}
             onMouseEnter={keepOpen}
             onMouseLeave={closeSoon}
             // React carries events out of a portal to the component's parents,

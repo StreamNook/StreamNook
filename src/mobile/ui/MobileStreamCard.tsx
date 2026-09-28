@@ -17,7 +17,7 @@ import { isTwitchStream, streamProvider } from '../../utils/streamProvider';
 import { CardChip } from '../../components/ui/CardChip';
 import { TogetherTag } from '../../components/SharedViewers';
 import { useAppStore } from '../../stores/AppStore';
-import { collabFor } from '../../utils/sharedViewers';
+import { groupFor } from '../../utils/sharedViewers';
 
 // The stamp is what makes a refreshed list show refreshed previews: Twitch's
 // preview URL is fixed per channel and the WebView caches it, so without a
@@ -78,9 +78,9 @@ export const MobileStreamCard: React.FC<{
   // channel": that is a promise the channel cannot keep, and a card is the
   // wrong place to explain someone else's campaign rules.
   const isTwitch = isTwitchStream(stream);
-  // Twitch's Shared Viewership, from the Rust home snapshot. Read here rather
-  // than passed in, so every screen's cards carry it.
-  const collab = useAppStore((s) => collabFor(s.collaborations, stream));
+  // Twitch's Shared Viewership or Shared Chat, from the Rust home snapshot.
+  // Read here rather than passed in, so every screen's cards carry it.
+  const collab = useAppStore((s) => groupFor(s.collaborations, s.sharedChats, stream));
   // Drops are Twitch campaigns matched by category name; a Kick stream in the
   // same category earns nothing.
   const hasDrops = isTwitch && !!(
@@ -160,7 +160,7 @@ export const MobileStreamCard: React.FC<{
           </h3>
           <div className="flex items-center gap-1 text-textSecondary text-[12px]">
             <span className="truncate">{stream.user_name}</span>
-            {collab && <TogetherTag collab={collab} />}
+            {collab && <TogetherTag collab={collab} compact />}
             {showPlatform && !isTwitch && <ProviderMark provider={streamProvider(stream)} size={12} />}
             {stream.broadcaster_type === 'partner' && (
               <svg className="w-2.5 h-2.5 flex-shrink-0" viewBox="0 0 16 16" fill="#9146FF">

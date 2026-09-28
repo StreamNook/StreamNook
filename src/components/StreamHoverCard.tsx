@@ -1,12 +1,12 @@
 import StreamTitleWithEmojis from './StreamTitleWithEmojis';
 import { Package, UsersThree } from 'phosphor-react';
 import { formatStreamUptime } from '../utils/chatCommands';
-import type { Collaboration, TwitchStream } from '../types';
+import type { TwitchStream } from '../types';
 import { streamProvider } from '../utils/streamProvider';
 import { thumbFitFor } from '../utils/thumbFit';
 import { CardChip } from './ui/CardChip';
 import { CollabAvatarStack } from './SharedViewers';
-import { collabNames } from '../utils/sharedViewers';
+import { collabNames, isTogether, type ChannelGroup } from '../utils/sharedViewers';
 
 // Replaces the tooltip's default centered pill. Padding lives on the content
 // block instead, so the preview can run edge to edge under the rounded corners.
@@ -24,8 +24,9 @@ const thumbnailUrl = (url: string) =>
 interface StreamHoverCardProps {
     stream: TwitchStream;
     hasDrops?: boolean;
-    /** Twitch's Shared Viewership group, when the channel is in one. */
-    collab?: Collaboration;
+    /** Twitch's Shared Viewership group or Shared Chat session, when the
+     *  channel is in one. */
+    collab?: ChannelGroup;
 }
 
 /**
@@ -129,7 +130,7 @@ const StreamHoverCard = ({ stream, hasDrops, collab }: StreamHoverCardProps) => 
                     <div className="mt-2 flex items-center gap-2 min-w-0">
                         <CollabAvatarStack collab={collab} size={16} ringClass="ring-black/85" />
                         <span className="min-w-0 text-[11px] leading-snug text-white/75 line-clamp-2">
-                            Streaming together with {collabNames(collab)}
+                            {isTogether(collab) ? 'Streaming together with' : 'Sharing chat with'} {collabNames(collab)}
                         </span>
                     </div>
                 )}

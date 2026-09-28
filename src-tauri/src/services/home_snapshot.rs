@@ -25,6 +25,10 @@
 //!   sent AHEAD of that list, so a card paints with its group instead of
 //!   gaining it a poll later. Skipped while no window is on screen; a Home
 //!   mount catches up. See `services::collaboration`.
+//! - shared chats (Shared Chat outside a Stream Together group): started by
+//!   every collaborations pass, as a background pass of their own so the
+//!   per-channel Helix lookups never hold a list back; channels already in a
+//!   group are skipped. Signed out, nothing. See `services::shared_chat`.
 //! - watch streaks: hourly, for the followed-live channels.
 //! - drops: active campaigns plus the inventory's active game names, hourly
 //!   while any window exists and on mount when stale.
@@ -65,7 +69,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use log::{debug, warn};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use crate::rt::AppHandle;
+use tauri::{Emitter, Manager};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::commands::hype_train::{get_bulk_hype_train_status, HypeTrainBulkStatus};
@@ -75,6 +80,7 @@ use crate::models::provider_stream::ProviderCategory;
 use crate::models::settings::{AppState, FavoriteChannel, ProviderFollow};
 use crate::models::stream::TwitchStream;
 use crate::services::collaboration::{self, Collaboration};
+use crate::services::shared_chat::{self, SharedChat};
 use crate::services::live_notification_service::LiveNotificationService;
 use crate::services::providers::key::PROVIDER_IDS;
 use crate::services::providers::registry;
@@ -143,6 +149,10 @@ pub struct HomeSnapshot {
     /// that are in one.
     pub collaborations: HashMap<String, Collaboration>,
     pub collab_at: Option<u64>,
+    /// Twitch channel id -> its Shared Chat session, only for channels in one
+    /// and not in a Shared Viewership group.
+    pub shared_chats: HashMap<String, SharedChat>,
+    pub shared_chat_at: Option<u64>,
     /// channel_id -> current watch streak (only channels with a streak > 0).
     pub watch_streaks: HashMap<String, u32>,
     pub streaks_at: Option<u64>,
@@ -217,6 +227,10 @@ pub enum HomeUpdate {
     },
     Collaborations {
         collabs: HashMap<String, Collaboration>,
+        at: u64,
+    },
+    SharedChats {
+        chats: HashMap<String, SharedChat>,
         at: u64,
     },
     WatchStreaks {
@@ -408,6 +422,11 @@ static CONTINUE_PENDING: std::sync::atomic::AtomicBool =
 /// A unified Discover rebuild is already scheduled, and will see any change
 /// that lands before it starts.
 static DISCOVER_PENDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// A shared-chat pass is running, and one more is wanted after it.
+static SHARED_CHAT_RUNNING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static SHARED_CHAT_AGAIN: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 fn now_secs() -> u64 {
@@ -1208,6 +1227,7 @@ pub async fn refresh(
         "recommended" => "recommended",
         "hype_trains" => "hype_trains",
         "collaborations" => "collaborations",
+        "shared_chats" => "shared_chats",
         "watch_streaks" => "watch_streaks",
         "drops" => "drops",
         "continue_watching" => "continue_watching",
@@ -1228,6 +1248,7 @@ pub async fn refresh(
         "watch_streaks" => refresh_streaks(inner).await,
         "drops" => refresh_drops(inner).await,
         "collaborations" => refresh_collaborations(inner).await,
+        "shared_chats" => spawn_shared_chats(),
         // Explicit arm required: the catch-all below silently refreshes hype
         // trains instead, with no error, for any key added above but not here.
         "continue_watching" => {
@@ -1478,6 +1499,7 @@ async fn refresh_collaborations(inner: &Inner) {
     if inner.app.webview_windows().is_empty() || crate::services::window_visibility::all_hidden() {
         return;
     }
+    spawn_shared_chats();
     let ids = card_channel_ids(inner).await;
     let found = collaboration::fetch(&ids).await;
     let at = now_secs();
@@ -1504,6 +1526,77 @@ async fn refresh_collaborations(inner: &Inner) {
     };
     if changed {
         emit(&inner.app, HomeUpdate::Collaborations { collabs, at });
+    }
+}
+
+/// Start a shared-chat pass in the background, or queue one behind the pass
+/// already running. Never awaited by a list: a first pass is one Helix request
+/// per card channel.
+fn spawn_shared_chats() {
+    use std::sync::atomic::Ordering::SeqCst;
+    SHARED_CHAT_AGAIN.store(true, SeqCst);
+    if SHARED_CHAT_RUNNING.swap(true, SeqCst) {
+        return;
+    }
+    let Some(inner) = SERVICE.get().cloned() else {
+        SHARED_CHAT_RUNNING.store(false, SeqCst);
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        loop {
+            while SHARED_CHAT_AGAIN.swap(false, SeqCst) {
+                refresh_shared_chats(&inner).await;
+            }
+            SHARED_CHAT_RUNNING.store(false, SeqCst);
+            // A request that landed between the last check and the release.
+            if !SHARED_CHAT_AGAIN.load(SeqCst) || SHARED_CHAT_RUNNING.swap(true, SeqCst) {
+                break;
+            }
+        }
+    });
+}
+
+/// Shared Chat for every card on screen that is not in a Shared Viewership
+/// group. Same gates as collaborations; a channel whose lookup failed keeps
+/// the session it had.
+async fn refresh_shared_chats(inner: &Inner) {
+    if inner.app.webview_windows().is_empty() || crate::services::window_visibility::all_hidden() {
+        return;
+    }
+    let ids = card_channel_ids(inner).await;
+    let ask: Vec<String> = {
+        let s = inner.snap.read().await;
+        ids.into_iter().filter(|id| !s.collaborations.contains_key(id)).collect()
+    };
+    let found = shared_chat::fetch(&ask).await;
+    let at = now_secs();
+    let (changed, chats) = {
+        let mut s = inner.snap.write().await;
+        let mut next: HashMap<String, SharedChat> = HashMap::new();
+        for id in &ask {
+            // A group that formed while this pass ran wins.
+            if s.collaborations.contains_key(id) {
+                continue;
+            }
+            match found.get(id) {
+                Some(Some(c)) => {
+                    next.insert(id.clone(), c.clone());
+                }
+                Some(None) => {}
+                None => {
+                    if let Some(c) = s.shared_chats.get(id) {
+                        next.insert(id.clone(), c.clone());
+                    }
+                }
+            }
+        }
+        let changed = next != s.shared_chats;
+        s.shared_chats = next.clone();
+        s.shared_chat_at = Some(at);
+        (changed, next)
+    };
+    if changed {
+        emit(&inner.app, HomeUpdate::SharedChats { chats, at });
     }
 }
 

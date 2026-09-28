@@ -1,4 +1,5 @@
-import type { Collaboration, MultiNookPresetChannel } from '../types';
+import type { MultiNookPresetChannel } from '../types';
+import type { ChannelGroup } from './sharedViewers';
 import type { ProviderId } from '../types/providers';
 import { useAppStore } from '../stores/AppStore';
 import { usemultiNookStore } from '../stores/multiNookStore';
@@ -12,7 +13,7 @@ import { makeKey } from './providerKey';
 
 /** Members of a group not already tiles in the MultiNook grid. */
 export function collabMissingFromGrid(
-  collab: Collaboration,
+  collab: ChannelGroup,
   slots: { provider?: ProviderId; channelLogin: string }[],
 ): number {
   const inGrid = new Set(slots.map((s) => makeKey(s.provider ?? 'twitch', s.channelLogin)));
@@ -31,7 +32,7 @@ export function collabMissingFromGrid(
  * keeping its backend, so its chat carries straight over. Any other solo
  * stream is closed outright first.
  */
-export async function watchCollabInMultiNook(collab: Collaboration, mode: 'replace' | 'append'): Promise<void> {
+export async function watchCollabInMultiNook(collab: ChannelGroup, mode: 'replace' | 'append'): Promise<void> {
   const { members } = collab;
   const channels: MultiNookPresetChannel[] = members.map((m) => ({
     channelLogin: m.login,

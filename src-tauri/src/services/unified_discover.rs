@@ -365,7 +365,6 @@ mod tests {
             thumbnail_url: String::new(),
             started_at: String::new(),
             broadcaster_type: None,
-            has_shared_chat: None,
             profile_image_url: None,
             is_live: Some(true),
             tags: None,

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, emit } from '@tauri-apps/api/event';
-import type { Settings, TwitchUser, TwitchStream, UserInfo, TwitchCategory, HypeTrainData, TwitchVideo, ModLogEvent, DropProgressStatus, FavoriteChannel, VodStartInfo, LiveRewindInfo, HomeSnapshot, HomeSnapshotUpdate, HypeTrainBulkStatus, ContinueWatchingItem, FollowingLists, Collaboration } from '../types';
+import type { Settings, TwitchUser, TwitchStream, UserInfo, TwitchCategory, HypeTrainData, TwitchVideo, ModLogEvent, DropProgressStatus, FavoriteChannel, VodStartInfo, LiveRewindInfo, HomeSnapshot, HomeSnapshotUpdate, HypeTrainBulkStatus, ContinueWatchingItem, FollowingLists, Collaboration, SharedChat } from '../types';
 import { trackActivity } from '../services/logService';
 import { Logger, setDiagnosticsEnabled } from '../utils/logger';
 import { getAppVersion } from '../utils/appVersion';
@@ -20,6 +20,7 @@ import { signInRequiredFrom } from '../utils/signInRequired';
 import { transientSwapVerdict } from '../utils/transientSwap';
 import { providerLabel, WATCHABLE_PROVIDERS, type ProviderId, type ProviderCategory } from '../types/providers';
 import { takePreloadedSettings } from '../bootPreload';
+import { settleFirstSettings } from '../utils/settingsOnceLoaded';
 
 export type StreamStartResult = {
   url: string;
@@ -322,6 +323,9 @@ interface AppState {
   /** Mobile device-code login: the code + verify URL to show while the backend
    * polls for authorization; null when no login is in progress. */
   deviceCodeInfo: { userCode: string; verificationUri: string } | null;
+  // The code of the Twitch sign-in in progress, kept so the in-app page can be
+  // swapped for approval on another device without restarting the flow.
+  twitchLoginCode: { userCode: string; verificationUri: string } | null;
   isSettingsOpen: boolean;
   settingsInitialTab: SettingsTab | null;
   // DOM id of a settings section to scroll to when the dialog opens (e.g. from a
@@ -487,6 +491,10 @@ interface AppState {
    *  Owned by Rust's home snapshot; only channels in a group are present, and
    *  keys are Twitch ids, so read it for Twitch streams only. */
   collaborations: Record<string, Collaboration>;
+  /** Twitch channel id -> its Shared Chat session, for the stream cards, when
+   *  the channel is not also in a Shared Viewership group. Owned by Rust's home
+   *  snapshot, Twitch ids only, like `collaborations`. */
+  sharedChats: Record<string, SharedChat>;
   /** Home's Continue Watching row, owned by Rust's home snapshot. Derived from
    *  the local VOD watch-position store, so it is present on the first paint
    *  after a cold start. */
@@ -558,6 +566,7 @@ interface AppState {
   toggleWindowFullscreen: () => Promise<void>;
   toggleKeepOnTop: () => Promise<void>;
   loginToTwitch: () => Promise<void>;
+  switchTwitchLoginToAnotherDevice: () => void;
   logoutFromTwitch: () => Promise<void>;
   /** Make a linked account the main (watch & stream as it), then re-establish identity. */
   setActiveAccount: (userId: string) => Promise<void>;
@@ -1192,6 +1201,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   homeScrollTop: 0,
   watchStreaks: {},
   collaborations: {},
+  sharedChats: {},
   continueWatching: [],
   continueWatchingAt: null,
   recommendedStreams: [],
@@ -1224,6 +1234,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   chatPlacement: 'right',
   isLoading: false,
   deviceCodeInfo: null,
+  twitchLoginCode: null,
   isSettingsOpen: false,
   settingsInitialTab: null,
   settingsInitialSection: null,
@@ -1391,6 +1402,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (snapshot.hype_at !== null) applyHypeStatuses(snapshot.hype_trains);
     // `!= null`: a snapshot from a build without this section leaves it undefined.
     if (snapshot.collab_at != null && snapshot.collaborations) set({ collaborations: snapshot.collaborations });
+    if (snapshot.shared_chat_at != null && snapshot.shared_chats) set({ sharedChats: snapshot.shared_chats });
     if (snapshot.streaks_at !== null) set({ watchStreaks: snapshot.watch_streaks });
     if (snapshot.drops_at !== null) {
       set({ dropsCampaigns: snapshot.drops_campaigns, dropsActiveGameNames: snapshot.drops_active_game_names });
@@ -1429,6 +1441,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         break;
       case 'collaborations':
         set({ collaborations: update.collabs });
+        break;
+      case 'shared_chats':
+        set({ sharedChats: update.chats });
         break;
       case 'watch_streaks':
         set({ watchStreaks: update.streaks });
@@ -1594,7 +1609,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     // fresh invoke, NEVER to defaults: an early invoke can race state
     // management, and defaults here would let the next save wipe real settings.
     const pre = await (takePreloadedSettings() ?? Promise.resolve(null));
-    const settings = (pre as Settings | null) ?? ((await invoke('load_settings')) as Settings);
+    let settings: Settings;
+    try {
+      settings = (pre as Settings | null) ?? ((await invoke('load_settings')) as Settings);
+    } catch (e) {
+      // Whoever is waiting on the first load falls back to its own read.
+      settleFirstSettings(null);
+      throw e;
+    }
     // Ensure cache settings have defaults if not present
     if (!settings.cache) {
       settings.cache = { enabled: true, expiry_days: 7 };
@@ -1649,6 +1671,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     } else {
       set({ settings, chatPlacement: settings.chat_placement });
     }
+    // Stores that need a slice of the settings at boot wait on this instead
+    // of reading the file again (utils/settingsOnceLoaded.ts).
+    settleFirstSettings(settings);
 
     // The favorites re-key above has to reach DISK, not just this store: the
     // backend's who's-live sweep reads `favorite_streamers` from its own copy of
@@ -2661,7 +2686,6 @@ export const useAppStore = create<AppState>((set, get) => ({
           is_live: resolved?.is_live ?? seed?.is_live,
           tags: seed?.tags ?? resolved?.tags,
           language: seed?.language ?? resolved?.language,
-          has_shared_chat: seed?.has_shared_chat ?? resolved?.has_shared_chat,
           provider: seed?.provider,
           watch_url: seed?.watch_url,
         };
@@ -3081,6 +3105,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     trackActivity(next ? 'Pinned compact player on top' : 'Unpinned compact player');
   },
 
+  // Leave the in-app Twitch page and approve the same code on another device
+  // (phone, or any browser signed in to Twitch). The backend is already polling
+  // for this code, so the sign-in completes whichever device approves it. The
+  // way out when Twitch refuses the sign-in page on this machine.
+  switchTwitchLoginToAnotherDevice: () => {
+    const code = get().twitchLoginCode;
+    if (!code) return;
+    invoke('close_login_overlay', { label: 'twitch-login' }).catch(() => {});
+    set({ deviceCodeInfo: code });
+  },
+
   loginToTwitch: async () => {
     trackActivity('Started Twitch login');
     try {
@@ -3092,6 +3127,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       Logger.debug('Device code received:', userCode);
       Logger.debug('Verification URI:', verificationUri);
+
+      set({ twitchLoginCode: { userCode, verificationUri } });
 
       // Show the user code to the user
       get().addToast(`Enter code ${userCode} at twitch.tv/activate`, 'info');
@@ -3152,7 +3189,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         get().addToast('Login successful! You are now authenticated with Twitch.', 'success');
         await get().loadFollowedStreams();
 
-        set({ isLoading: false, deviceCodeInfo: null });
+        set({ isLoading: false, deviceCodeInfo: null, twitchLoginCode: null });
 
         // Bring the app window to focus after successful login
         try {
@@ -3171,7 +3208,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         Logger.error('Login error event received:', event.payload);
         const errorMessage = String(event.payload);
         get().addToast(`Login failed: ${errorMessage}`, 'error');
-        set({ isLoading: false, deviceCodeInfo: null });
+        set({ isLoading: false, deviceCodeInfo: null, twitchLoginCode: null });
 
         // Also dismiss the login overlay on error
         try {
@@ -3199,7 +3236,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           removeCancelListener?.();
           unlisten();
           unlistenError();
-          set({ isLoading: false, deviceCodeInfo: null });
+          set({ isLoading: false, deviceCodeInfo: null, twitchLoginCode: null });
         };
         removeCancelListener = () => {
           removeCancelListener = null;
