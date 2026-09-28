@@ -220,6 +220,12 @@ jobs:
   # leaves the Windows (and macOS) release standing.
   build-linux:
     needs: merge-to-main
+    # Linux releases are opt-in: they ship only while the repository variable
+    # LINUX_RELEASE is "true". Unset or anything else, a release is Windows and
+    # macOS only, and the manifest carries no linux-x86_64 entry at all (see the
+    # manifest step), so Linux clients stay on their build and are told "no
+    # update" instead of being offered the old AppImage under a newer version.
+    if: vars.LINUX_RELEASE == 'true'
     runs-on: ubuntu-22.04
     # NOT ubuntu-latest, and this is not stylistic. glibc is forward-compatible
     # only: a binary linked against 24.04's glibc refuses to start on 22.04 with
@@ -981,16 +987,24 @@ jobs:
           # than nothing, and finalize-* overwrites them minutes later. A client
           # already on that version simply sees no update, which is correct.
           #
-          # linux-x86_64 is in this list from the day the Linux job landed, not
-          # added later after the same gap bit Linux users too.
+          # linux-x86_64 joins this list while Linux releases are on, below.
           $prevManifest = $null
           try {
             $prevManifest = Invoke-RestMethod -Uri "https://streamnook.app/api/v1/update" -TimeoutSec 20
           } catch {
             Write-Host "::warning::Could not read the previous manifest ($($_.Exception.Message)); macOS keys will be absent until finalize-macos runs."
           }
+          # Linux is carried forward only while Linux releases are on
+          # (vars.LINUX_RELEASE). With them off no Linux build follows, and a
+          # carried entry would point at the previous AppImage under this
+          # release's version: the client compares only the manifest version, so
+          # it would offer that build as an update and reinstall it on every
+          # check. With no entry it reports "no update", which is the truth.
+          $carryKeys = @("macos-aarch64", "macos-x86_64")
+          if ("${{ vars.LINUX_RELEASE }}" -eq "true") { $carryKeys += "linux-x86_64" }
+          else { Write-Host "Linux releases are off (vars.LINUX_RELEASE); the manifest carries no linux-x86_64 entry" }
           if ($prevManifest -and $prevManifest.platforms) {
-            foreach ($key in @("macos-aarch64", "macos-x86_64", "linux-x86_64")) {
+            foreach ($key in $carryKeys) {
               $prev = $prevManifest.platforms.$key
               if ($prev -and $prev.download_url) {
                 $platforms[$key] = [ordered]@{
@@ -1191,6 +1205,7 @@ jobs:
     needs: [build, build-linux]
     if: >-
       ${{ !cancelled()
+          && vars.LINUX_RELEASE == 'true'
           && needs.build.result == 'success'
           && needs.build.outputs.RELEASE_EXISTS == 'false'
           && needs.build-linux.outputs.BUNDLE_NAME == '' }}
