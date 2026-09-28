@@ -48,7 +48,7 @@ import { vendorEmojiUrl } from '../services/emojiService';
 import { categoryOf, chatEventTemplateContext } from '../utils/chatEvents';
 import { renderEventTemplate } from './overlay/overlayConfig';
 import { convert as convertMoney, formatMoney, preloadRates, symbolToCode } from '../services/currencyService';
-import { CHANNEL_SPECIFIC_TWITCH_BADGES, orderTwitchBadges } from '../utils/badgeOrder';
+import { CHANNEL_SPECIFIC_TWITCH_BADGES } from '../utils/badgeOrder';
 import { LinkPreviewCard } from './chat/LinkPreviewCard';
 import { SongCard } from './chat/SongCard';
 import { extractPreviewUrls, prettyUrlLabel } from '../services/linkPreviewService';
@@ -3484,8 +3484,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                   />
                 </Tooltip>
               )}
-              {/* Twitch badges, channel-contextual (subscriber, poll, …) before global. */}
-              {orderTwitchBadges(visibleBadges).map((badge, idx) => {
+              {/* Twitch badges, in the order Rust set (chat_layout::twitch_badge_rank):
+                  roles, then subscription, then earned in the channel, then global. */}
+              {visibleBadges.map((badge, idx) => {
                 if (!badge.info) return null;
                 return (
                   <Tooltip key={`${badge.key}-${idx}`} content={badge.info.title} side="top">
