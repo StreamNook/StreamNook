@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
+import { GalleryHorizontal } from 'lucide-react';
 import EmoteThumb from './EmoteThumb';
 import EmoteProviderLogo, { type EmoteProviderId } from './EmoteProviderLogo';
 import type { EmoteMatchRow } from '../../services/emoteMatch';
@@ -17,6 +18,9 @@ interface EmoteSearchListProps {
   selectedIndex: number;
   onSelect: (row: EmoteMatchRow) => void;
   onSelectedIndexChange: (index: number) => void;
+  /** Make Tab open the carousel instead, from right here. Absent on a list
+   *  opened with ":", which Tab's setting does not govern. */
+  onSwitchToCarousel?: () => void;
 }
 
 // Browse headings that are a provider get its logo beside the title.
@@ -69,6 +73,7 @@ const EmoteSearchList: React.FC<EmoteSearchListProps> = ({
   selectedIndex,
   onSelect,
   onSelectedIndexChange,
+  onSwitchToCarousel,
 }) => {
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
 
@@ -97,13 +102,21 @@ const EmoteSearchList: React.FC<EmoteSearchListProps> = ({
             {capped ? `${rows.length} of ${total.toLocaleString()}` : total.toLocaleString()}
           </span>
         )}
-        <span className="ml-auto flex items-center gap-1 text-[10px] text-white/40">
-          <Kbd>Tab</Kbd>
-          <Kbd>↑↓</Kbd>
-          <span>to move</span>
-          <Kbd>Enter</Kbd>
-          <span>to insert</span>
-        </span>
+        {onSwitchToCarousel && (
+          <button
+            type="button"
+            title="Make Tab open the carousel instead"
+            className="ml-auto shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] leading-none text-white/60 hover:text-textPrimary hover:bg-white/[0.07] transition-colors"
+            // mousedown, not click: the textarea keeps focus and its caret.
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onSwitchToCarousel();
+            }}
+          >
+            <GalleryHorizontal className="w-3.5 h-3.5" />
+            Carousel
+          </button>
+        )}
       </div>
 
       {!ready && rows.length === 0 ? (
@@ -165,6 +178,17 @@ const EmoteSearchList: React.FC<EmoteSearchListProps> = ({
           {capped && (
             <div className="px-2 pt-2 pb-1 text-[10px] text-white/35">Keep typing to narrow the list</div>
           )}
+        </div>
+      )}
+
+      {rows.length > 0 && (
+        <div className="flex items-center gap-1 px-3 py-1.5 border-t border-white/[0.06] whitespace-nowrap overflow-hidden text-[10px] text-white/40">
+          <Kbd>↑↓</Kbd>
+          <span className="mr-1.5">move</span>
+          <Kbd>Enter</Kbd>
+          <span className="mr-1.5">insert</span>
+          <Kbd>Esc</Kbd>
+          <span>close</span>
         </div>
       )}
     </motion.div>

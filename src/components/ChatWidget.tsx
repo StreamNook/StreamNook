@@ -4318,6 +4318,43 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     return true;
   }, [emoteTabState, emoteMatchTarget, applyTabMatch, getMatchingUsers, settings.chat_input]);
 
+  /**
+   * Swap what Tab opens from the popover itself, and show the other view on the
+   * same word at once. Going to the list, the carousel's pick is taken back out
+   * first, so the list searches for what was typed rather than for the emote the
+   * carousel put in.
+   */
+  const switchEmoteTabStyle = useCallback(
+    (next: 'carousel' | 'list') => {
+      const state = useAppStore.getState();
+      const cur = state.settings;
+      void state.updateSettings({ ...cur, chat_input: { ...cur.chat_input, emote_tab_style: next } });
+      if (next === 'carousel') {
+        closeEmoteList();
+        handleEmoteTabPress(false);
+        return;
+      }
+      const tab = emoteTabState;
+      setEmoteTabState(null);
+      tabLookupRef.current = null;
+      if (!tab) return;
+      const value = inputRef.current?.value ?? messageInput;
+      const restored =
+        value.slice(0, tab.originalStart) + tab.originalQuery + value.slice(tab.originalStart + tab.currentLen);
+      const caret = tab.originalStart + tab.originalQuery.length;
+      setMessageInput(restored);
+      setTimeout(() => {
+        const ta = inputRef.current;
+        if (ta) {
+          ta.focus({ preventScroll: true });
+          ta.setSelectionRange(caret, caret);
+        }
+      }, 0);
+      openEmoteList('tab', tab.originalStart, tab.originalQuery);
+    },
+    [closeEmoteList, handleEmoteTabPress, emoteTabState, messageInput, openEmoteList],
+  );
+
   /** Replace the text from the list's anchor to the caret with the picked emote. */
   const insertEmoteFromList = useCallback(
     (row: EmoteMatchRow) => {
@@ -5811,6 +5848,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                         selectedIndex={emoteList.selected}
                         onSelect={insertEmoteFromList}
                         onSelectedIndexChange={(i) => setEmoteList((prev) => (prev ? { ...prev, selected: i } : prev))}
+                        onSwitchToCarousel={emoteList.source === 'tab' ? () => switchEmoteTabStyle('carousel') : undefined}
                       />
                     )}
                   </AnimatePresence>
@@ -5821,6 +5859,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                         current={emoteTabState.matches[emoteTabState.index]}
                         backwards={emoteTabState.matches.slice(Math.max(0, emoteTabState.index - 3), emoteTabState.index)}
                         forwards={emoteTabState.matches.slice(emoteTabState.index + 1, emoteTabState.index + 4)}
+                        onSwitchToList={() => switchEmoteTabStyle('list')}
                       />
                     )}
                   </AnimatePresence>

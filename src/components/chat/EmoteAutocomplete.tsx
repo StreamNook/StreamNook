@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
+import { List } from 'lucide-react';
 import { EmoteTabCandidate } from '../../utils/chatInputWord';
 import { Tooltip } from '../ui/Tooltip';
 import EmoteThumb from './EmoteThumb';
@@ -9,6 +10,8 @@ interface EmoteAutocompleteProps {
   current: EmoteTabCandidate;
   backwards: EmoteTabCandidate[];
   forwards: EmoteTabCandidate[];
+  /** Make Tab open the emote list instead, from right here. */
+  onSwitchToList?: () => void;
 }
 
 const Caret: React.FC<{ direction: 'left' | 'right' }> = ({ direction }) => (
@@ -54,7 +57,7 @@ const CandidateThumb: React.FC<{ tok: EmoteTabCandidate; size: number }> = ({ to
  * what was inserted into the textarea on this Tab press, so the carousel is
  * purely a preview of what comes next.
  */
-const EmoteAutocomplete: React.FC<EmoteAutocompleteProps> = ({ current, backwards, forwards }) => {
+const EmoteAutocomplete: React.FC<EmoteAutocompleteProps> = ({ current, backwards, forwards, onSwitchToList }) => {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -112,9 +115,26 @@ const EmoteAutocomplete: React.FC<EmoteAutocompleteProps> = ({ current, backward
             <span className="ml-1.5 text-[9px] uppercase tracking-wider text-white/40">user</span>
           )}
         </span>
-        <span className="flex items-center gap-1 opacity-60">
-          <kbd className="px-1.5 py-0.5 rounded bg-white/10 text-[9px] font-mono text-white tracking-widest border border-white/10 leading-none">TAB</kbd>
-          <span className="text-[10px] text-white">cycle</span>
+        <span className="shrink-0 flex items-center gap-2">
+          <span className="flex items-center gap-1 opacity-60">
+            <kbd className="px-1.5 py-0.5 rounded bg-white/10 text-[9px] font-mono text-white tracking-widest border border-white/10 leading-none">TAB</kbd>
+            <span className="text-[10px] text-white">cycle</span>
+          </span>
+          {onSwitchToList && (
+            <button
+              type="button"
+              title="Make Tab open the emote list instead"
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] leading-none text-white/60 hover:text-textPrimary hover:bg-white/[0.07] transition-colors"
+              // mousedown, not click: the textarea keeps focus and its caret.
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onSwitchToList();
+              }}
+            >
+              <List className="w-3.5 h-3.5" />
+              List
+            </button>
+          )}
         </span>
       </div>
     </motion.div>
