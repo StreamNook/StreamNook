@@ -83,7 +83,9 @@ impl KickProvider {
     pub fn new() -> Self {
         Self {
             conns: Mutex::new(HashMap::new()),
-            http: reqwest::Client::new(),
+            // A clone of the shared default-config client: same behaviour as a
+            // fresh `Client::new()`, one pool fewer.
+            http: crate::services::http::client_unbounded().clone(),
         }
     }
 }
@@ -92,6 +94,10 @@ impl KickProvider {
 impl ChatProvider for KickProvider {
     fn id(&self) -> &'static str {
         "kick"
+    }
+
+    fn open_channel_count(&self) -> Option<usize> {
+        self.conns.try_lock().ok().map(|c| c.len())
     }
 
     async fn connect(&self, channel: &str, window: &str) -> Result<()> {
@@ -422,7 +428,7 @@ pub async fn ban_user(
     if let Some(r) = reason.filter(|r| !r.is_empty()) {
         body["reason"] = json!(r.chars().take(100).collect::<String>());
     }
-    let resp = reqwest::Client::new()
+    let resp = crate::services::http::client_unbounded()
         .post("https://api.kick.com/public/v1/moderation/bans")
         .bearer_auth(&token)
         .json(&body)
@@ -441,7 +447,7 @@ pub async fn unban_user(broadcaster_user_id: u64, target_user_id: u64) -> Result
     let token = crate::services::kick_auth_service::access_token()
         .await
         .ok_or_else(|| anyhow!("Connect your Kick account to moderate"))?;
-    let resp = reqwest::Client::new()
+    let resp = crate::services::http::client_unbounded()
         .delete("https://api.kick.com/public/v1/moderation/bans")
         .bearer_auth(&token)
         .json(&json!({
@@ -465,7 +471,7 @@ pub async fn delete_message(message_id: &str) -> Result<()> {
         .await
         .ok_or_else(|| anyhow!("Connect your Kick account to moderate"))?;
     let url = format!("https://api.kick.com/public/v1/chat/{}", message_id);
-    let resp = reqwest::Client::new()
+    let resp = crate::services::http::client_unbounded()
         .delete(&url)
         .bearer_auth(&token)
         .send()
@@ -725,7 +731,7 @@ async fn resolve_via_webview(_slug: &str) -> Result<u64> {
 /// `kick_account.rs:145` and `youtube_auth_service.rs:408` use it: `close()` is
 /// a request the page can defer, and this one is pointed at kick.com.
 #[cfg(desktop)]
-struct ResolverWindow(Option<tauri::WebviewWindow>);
+struct ResolverWindow(Option<crate::rt::WebviewWindow>);
 
 #[cfg(desktop)]
 impl Drop for ResolverWindow {
@@ -738,7 +744,8 @@ impl Drop for ResolverWindow {
 
 #[cfg(desktop)]
 async fn resolve_via_webview(slug: &str) -> Result<u64> {
-    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    use crate::rt::WebviewWindowBuilder;
+    use tauri::WebviewUrl;
 
     let app = app_handle().ok_or_else(|| anyhow!("app handle not available for Kick resolver"))?;
     let slug_lc = slug.to_lowercase();
@@ -868,7 +875,7 @@ async fn resolve_via_webview(slug: &str) -> Result<u64> {
 /// The persistent WebView2 profile for kick.com. Shared by the playback
 /// resolver and the account sync, so signing in once also clears Cloudflare for
 /// the resolver and survives restarts.
-pub fn resolve_profile_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
+pub fn resolve_profile_dir(app: &crate::rt::AppHandle) -> std::path::PathBuf {
     kick_resolve_profile_dir(app)
 }
 
@@ -879,13 +886,13 @@ pub fn resolve_profile_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
 /// challenge state that then breaks the resolver — which would take playback
 /// down with it. Playback needs no login, so the two stay isolated and a bad
 /// sign-in can only ever cost you sign-in.
-pub fn account_profile_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
+pub fn account_profile_dir(app: &crate::rt::AppHandle) -> std::path::PathBuf {
     use tauri::Manager;
     let base = app
         .path()
         .app_local_data_dir()
         .unwrap_or_else(|_| std::env::temp_dir());
-    let dir = base.join("platform_web_profiles").join("kick-account");
+    let dir = crate::platform::webview_store::profile_dir(base, "platform_web_profiles/kick-account");
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
@@ -910,13 +917,13 @@ fn take_profile_reset(dir: &std::path::Path) {
     }
 }
 
-fn kick_resolve_profile_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
+fn kick_resolve_profile_dir(app: &crate::rt::AppHandle) -> std::path::PathBuf {
     use tauri::Manager;
     let base = app
         .path()
         .app_local_data_dir()
         .unwrap_or_else(|_| std::env::temp_dir());
-    let dir = base.join("platform_web_profiles").join("kick");
+    let dir = crate::platform::webview_store::profile_dir(base, "platform_web_profiles/kick");
     let _ = std::fs::create_dir_all(&dir);
     dir
 }

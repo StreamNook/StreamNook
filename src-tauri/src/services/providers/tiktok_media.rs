@@ -1057,7 +1057,7 @@ mod tests {
     #[ignore = "needs live TikTok rooms; set SN_TIKTOK_HANDLES"]
     async fn times_a_start_per_delivery() {
         let handles = std::env::var("SN_TIKTOK_HANDLES").expect("SN_TIKTOK_HANDLES");
-        let client = reqwest::Client::new();
+        let client = crate::services::http::client_unbounded();
         for handle in handles.split(',').map(clean_handle) {
             let t = Instant::now();
             let Some(room) = room_id_for(&handle).await.expect("room") else {
@@ -1183,7 +1183,7 @@ mod tests {
         assert!(matches!(resolved.kind, PlaybackKind::LocalHls));
         assert!(resolved.url.contains("/s/probe/"), "url: {}", resolved.url);
 
-        let client = reqwest::Client::new();
+        let client = crate::services::http::client_unbounded();
         let master = client.get(&resolved.url).send().await.expect("master");
         assert!(master.status().is_success(), "master {}", master.status());
         let master = master.text().await.unwrap();

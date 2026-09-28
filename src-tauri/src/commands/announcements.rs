@@ -43,24 +43,19 @@ pub struct AnnouncementAction {
 
 #[tauri::command]
 pub async fn fetch_announcements() -> Result<AnnouncementsFile, String> {
-    let mut builder = reqwest::Client::builder()
-        .user_agent("StreamNook")
+    // Shared client; the user agent, the 10 s deadline and the optional GitHub
+    // token ride on the request, exactly as the per-call client used to carry
+    // them as defaults.
+    let mut req = crate::services::http::client()
+        .get(ANNOUNCEMENTS_URL)
+        .header(reqwest::header::USER_AGENT, "StreamNook")
         .timeout(std::time::Duration::from_secs(10));
 
     if let Ok(token) = std::env::var("GH_TOKEN").or_else(|_| std::env::var("GITHUB_TOKEN")) {
-        builder = builder.default_headers(
-            std::iter::once((
-                reqwest::header::AUTHORIZATION,
-                reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
-            ))
-            .collect(),
-        );
+        req = req.bearer_auth(token);
     }
 
-    let client = builder.build().map_err(|e| e.to_string())?;
-
-    let resp = client
-        .get(ANNOUNCEMENTS_URL)
+    let resp = req
         .send()
         .await
         .map_err(|e| format!("Failed to fetch announcements: {}", e))?;

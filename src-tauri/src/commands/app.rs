@@ -2,9 +2,9 @@ use lru::LruCache;
 use once_cell::sync::Lazy;
 use std::env;
 use std::num::NonZeroUsize;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::command;
-use tauri::window::Window;
+use crate::rt::Window;
 
 // In-memory cache for emoji images (codepoint -> base64 data URL).
 // LRU-bounded at 256 entries (~5 KB per entry → ~1.3 MB cap). Twitch chat uses
@@ -16,6 +16,38 @@ static EMOJI_CACHE: Lazy<Mutex<LruCache<String, String>>> = Lazy::new(|| {
         NonZeroUsize::new(EMOJI_CACHE_CAP).expect("cap > 0"),
     ))
 });
+
+// Codepoints the CDN has no image for (both candidate files answered 404).
+// Without this every render of such an emoji is two more guaranteed 404s; a
+// network error or a 5xx is NOT remembered, so a transient failure retries.
+// Bounded by clearing: the whole emoji set is a few thousand names.
+const EMOJI_MISSING_CAP: usize = 4096;
+static EMOJI_MISSING: Lazy<Mutex<std::collections::HashMap<String, String>>> =
+    Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
+
+// One fetch per codepoint at a time. Chat renders the same emoji many times in
+// one frame, and before this gate every render that missed the memory cache
+// went to the CDN on its own (15 requests for one codepoint in one second at
+// boot was measured). The first caller fetches; the rest wait on the gate and
+// then find the memory cache filled.
+type EmojiGate = Arc<tokio::sync::Mutex<()>>;
+static EMOJI_INFLIGHT: Lazy<Mutex<std::collections::HashMap<String, EmojiGate>>> =
+    Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
+
+// On-disk copy of every fetched image, so a cold start reads emojis from the
+// cache directory instead of jsDelivr. Files are `<codepoint>.png` under
+// `<app cache dir>/emoji`. The directory is bounded by bytes: when a sweep
+// finds it over the cap, the least recently modified files go until it is at
+// three quarters of the cap. The sweep runs on the first write of a session and
+// then every EMOJI_DISK_SWEEP_EVERY writes; each sweep is one read_dir.
+const EMOJI_DISK_CAP_BYTES: u64 = 24 * 1024 * 1024;
+const EMOJI_DISK_SWEEP_EVERY: u64 = 32;
+static EMOJI_DISK_DIR: Lazy<Option<std::path::PathBuf>> = Lazy::new(|| {
+    let dir = crate::services::cache_service::get_cache_dir().ok()?.join("emoji");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+});
+static EMOJI_DISK_WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Emoji entries resident in the LRU (try-lock). Diagnostics for the resource line.
 pub fn emoji_cache_len() -> Option<usize> {
@@ -37,7 +69,7 @@ pub fn get_app_version() -> String {
 /// `services::client_identity` for the full history.
 #[command]
 pub fn get_client_identity(
-    app: tauri::AppHandle,
+    app: crate::rt::AppHandle,
 ) -> crate::services::client_identity::ClientIdentity {
     crate::services::client_identity::current(&app)
 }
@@ -70,7 +102,11 @@ pub async fn fetch_exchange_rates(
         return Err("invalid base currency".to_string());
     }
     let url = format!("https://api.frankfurter.app/latest?base={}", base);
-    let resp = reqwest::get(&url).await.map_err(|e| e.to_string())?;
+    let resp = crate::services::http::client_unbounded()
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
     }
@@ -469,21 +505,142 @@ fn is_lone_regional_indicator(codepoint: &str) -> bool {
     u32::from_str_radix(codepoint, 16).is_ok_and(|c| (0x1F1E6..=0x1F1FF).contains(&c))
 }
 
-/// Fetch an emoji image from CDN and return as base64 data URL
-/// This bypasses the browser's tracking prevention by using Tauri's HTTP client
-#[command]
-pub async fn get_emoji_image(codepoint: String) -> Result<String, String> {
-    if is_lone_regional_indicator(&codepoint) {
-        return Err(format!("{codepoint} is half of a flag; request the pair"));
-    }
+/// A codepoint name as the CDN spells it: lowercase hex groups joined by `-`
+/// (`1f600`, `1f1e7-1f1f7`). Also what makes it safe as a cache file name.
+fn is_codepoint_name(codepoint: &str) -> bool {
+    !codepoint.is_empty()
+        && codepoint.len() <= 64
+        && codepoint
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() || c == '-')
+}
 
-    // Check cache first. `LruCache::get` takes &mut self because it bumps the
-    // entry to most-recently-used — so the lock has to be a mutable borrow.
-    {
-        let mut cache = EMOJI_CACHE.lock().map_err(|e| e.to_string())?;
-        if let Some(data_url) = cache.get(&codepoint) {
-            return Ok(data_url.clone());
+/// The in-memory entry, bumping it to most-recently-used. `LruCache::get`
+/// takes &mut self for that bump, so the lock is a mutable borrow.
+fn emoji_memory_get(codepoint: &str) -> Result<Option<String>, String> {
+    let mut cache = EMOJI_CACHE.lock().map_err(|e| e.to_string())?;
+    Ok(cache.get(codepoint).cloned())
+}
+
+fn emoji_memory_put(codepoint: &str, data_url: &str) -> Result<(), String> {
+    let mut cache = EMOJI_CACHE.lock().map_err(|e| e.to_string())?;
+    // `put` returns the previous value if any; it is not needed.
+    cache.put(codepoint.to_string(), data_url.to_string());
+    Ok(())
+}
+
+fn emoji_data_url(bytes: &[u8]) -> String {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    format!("data:image/png;base64,{}", STANDARD.encode(bytes))
+}
+
+fn emoji_disk_path(codepoint: &str) -> Option<std::path::PathBuf> {
+    EMOJI_DISK_DIR
+        .as_ref()
+        .map(|dir| dir.join(format!("{codepoint}.png")))
+}
+
+/// The cached image bytes from disk, if the file is there and not empty. Read
+/// off the async runtime; any failure is a miss.
+async fn emoji_disk_get(codepoint: &str) -> Option<Vec<u8>> {
+    let path = emoji_disk_path(codepoint)?;
+    tokio::task::spawn_blocking(move || std::fs::read(path).ok().filter(|b| !b.is_empty()))
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Write the image to disk (temp file, then rename, so a reader never sees a
+/// partial PNG) and sweep the directory when it is that write's turn. Errors
+/// are dropped: the disk copy is a convenience over the in-memory one.
+fn emoji_disk_put_blocking(codepoint: &str, bytes: &[u8]) {
+    let Some(path) = emoji_disk_path(codepoint) else {
+        return;
+    };
+    let tmp = path.with_extension("png.tmp");
+    if std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, &path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    let n = EMOJI_DISK_WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if n % EMOJI_DISK_SWEEP_EVERY == 0 {
+        emoji_disk_sweep_blocking();
+    }
+}
+
+/// Bring the emoji directory under EMOJI_DISK_CAP_BYTES by deleting the least
+/// recently modified files, down to three quarters of the cap so the next sweeps
+/// have room to skip.
+fn emoji_disk_sweep_blocking() {
+    let Some(dir) = EMOJI_DISK_DIR.as_ref() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(std::time::SystemTime, u64, std::path::PathBuf)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let meta = e.metadata().ok()?;
+            if !meta.is_file() {
+                return None;
+            }
+            Some((meta.modified().ok()?, meta.len(), e.path()))
+        })
+        .collect();
+    let mut total: u64 = files.iter().map(|f| f.1).sum();
+    if total <= EMOJI_DISK_CAP_BYTES {
+        return;
+    }
+    let target = EMOJI_DISK_CAP_BYTES / 4 * 3;
+    files.sort_by_key(|f| f.0);
+    for (_, len, path) in files {
+        if total <= target {
+            break;
         }
+        if std::fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(len);
+        }
+    }
+}
+
+/// The gate for one codepoint: created on first demand, shared by everyone who
+/// asks while a fetch is in flight, and dropped from the table by the last one out.
+fn emoji_gate(codepoint: &str) -> Result<EmojiGate, String> {
+    let mut inflight = EMOJI_INFLIGHT.lock().map_err(|e| e.to_string())?;
+    Ok(inflight
+        .entry(codepoint.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone())
+}
+
+fn emoji_gate_release(codepoint: &str, gate: EmojiGate) {
+    if let Ok(mut inflight) = EMOJI_INFLIGHT.lock() {
+        // Ours plus the table's: nobody else is waiting on this codepoint.
+        if Arc::strong_count(&gate) <= 2 {
+            inflight.remove(codepoint);
+        }
+    }
+}
+
+/// One codepoint's fetch, run by whoever holds the gate: memory, then the
+/// negative cache, then disk, then the CDN. Every source that answers fills the
+/// ones before it.
+async fn fetch_emoji_gated(codepoint: &str) -> Result<String, String> {
+    // The previous holder of the gate may have just filled this.
+    if let Some(data_url) = emoji_memory_get(codepoint)? {
+        return Ok(data_url);
+    }
+    if let Some(err) = EMOJI_MISSING
+        .lock()
+        .map_err(|e| e.to_string())?
+        .get(codepoint)
+    {
+        return Err(err.clone());
+    }
+    if let Some(bytes) = emoji_disk_get(codepoint).await {
+        let data_url = emoji_data_url(&bytes);
+        emoji_memory_put(codepoint, &data_url)?;
+        return Ok(data_url);
     }
 
     // emoji-datasource-apple names some older text-default symbols (clock, dove,
@@ -497,16 +654,23 @@ pub async fn get_emoji_image(codepoint: String) -> Result<String, String> {
     ];
 
     let mut last_err = String::from("Failed to fetch emoji: no candidate URLs");
+    let mut every_candidate_404 = true;
     for url in &candidates {
-        let response = match reqwest::get(url).await {
+        // The shared client's 30 s deadline bounds the fetch, which matters
+        // here: every waiter on the gate is waiting on this request.
+        let response = match crate::services::http::client().get(url).send().await {
             Ok(r) => r,
             Err(e) => {
                 last_err = format!("Failed to fetch emoji: {}", e);
+                every_candidate_404 = false;
                 continue;
             }
         };
 
         if !response.status().is_success() {
+            if response.status() != reqwest::StatusCode::NOT_FOUND {
+                every_candidate_404 = false;
+            }
             last_err = format!("Failed to fetch emoji: HTTP {}", response.status());
             continue;
         }
@@ -516,26 +680,65 @@ pub async fn get_emoji_image(codepoint: String) -> Result<String, String> {
             .await
             .map_err(|e| format!("Failed to read emoji bytes: {}", e))?;
 
-        // Convert to base64 data URL
-        use base64::{engine::general_purpose::STANDARD, Engine};
-        let base64_data = STANDARD.encode(&bytes);
-        let data_url = format!("data:image/png;base64,{}", base64_data);
-
-        // Cache the result. `put` returns the previous value if any; we ignore it.
-        {
-            let mut cache = EMOJI_CACHE.lock().map_err(|e| e.to_string())?;
-            cache.put(codepoint.clone(), data_url.clone());
-        }
-
+        let data_url = emoji_data_url(&bytes);
+        emoji_memory_put(codepoint, &data_url)?;
+        let name = codepoint.to_string();
+        tokio::task::spawn_blocking(move || emoji_disk_put_blocking(&name, &bytes));
         return Ok(data_url);
     }
 
+    if every_candidate_404 {
+        if let Ok(mut missing) = EMOJI_MISSING.lock() {
+            if missing.len() >= EMOJI_MISSING_CAP {
+                missing.clear();
+            }
+            missing.insert(codepoint.to_string(), last_err.clone());
+        }
+    }
     Err(last_err)
+}
+
+/// Fetch an emoji image from CDN and return as base64 data URL
+/// This bypasses the browser's tracking prevention by using Tauri's HTTP client
+#[command]
+pub async fn get_emoji_image(codepoint: String) -> Result<String, String> {
+    if is_lone_regional_indicator(&codepoint) {
+        return Err(format!("{codepoint} is half of a flag; request the pair"));
+    }
+    if !is_codepoint_name(&codepoint) {
+        return Err(format!("{codepoint} is not an emoji codepoint"));
+    }
+
+    // Memory first, with no gate: the common case after the first render.
+    if let Some(data_url) = emoji_memory_get(&codepoint)? {
+        return Ok(data_url);
+    }
+
+    let gate = emoji_gate(&codepoint)?;
+    let result = {
+        let _held = gate.lock().await;
+        fetch_emoji_gated(&codepoint).await
+    };
+    emoji_gate_release(&codepoint, gate);
+    result
 }
 
 #[cfg(test)]
 mod tests {
-    use super::is_lone_regional_indicator;
+    use super::{is_codepoint_name, is_lone_regional_indicator};
+
+    #[test]
+    fn a_codepoint_name_is_hex_groups_and_nothing_else() {
+        assert!(is_codepoint_name("1f600"));
+        assert!(is_codepoint_name("1f1e7-1f1f7"));
+        assert!(is_codepoint_name("1f469-200d-1f4bb"));
+        // Anything that could name a different file, or nothing at all.
+        assert!(!is_codepoint_name(""));
+        assert!(!is_codepoint_name("../1f600"));
+        assert!(!is_codepoint_name("1f600.png"));
+        assert!(!is_codepoint_name("smile"));
+        assert!(!is_codepoint_name(&"1f600-".repeat(20)));
+    }
 
     #[test]
     fn a_flag_letter_alone_is_refused_but_the_flag_is_not() {

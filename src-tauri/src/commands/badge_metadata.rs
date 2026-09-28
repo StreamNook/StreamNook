@@ -235,14 +235,14 @@ pub async fn fetch_badge_metadata(
 
     debug!("[BadgeMetadata] Fetching info from: {}", url);
 
-    // Fetch the HTML page
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-
-    let response = client
+    // Fetch the HTML page. Shared client; the browser user agent rides on the
+    // request, and there was never a deadline on this fetch.
+    let response = crate::services::http::client_unbounded()
         .get(&url)
+        .header(
+            reqwest::header::USER_AGENT,
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        )
         .send()
         .await
         .map_err(|e| format!("Failed to fetch badge metadata page: {}", e))?;

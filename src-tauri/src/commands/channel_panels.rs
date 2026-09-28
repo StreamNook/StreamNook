@@ -1,6 +1,5 @@
 use log::debug;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT};
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -419,7 +418,7 @@ pub async fn get_similar_channels(channel_login: String) -> Result<Vec<SimilarCh
         }} }}"#
     );
 
-    let client = Client::new();
+    let client = crate::services::http::client_unbounded();
     let response = client
         .post(GQL_URL)
         .headers(create_gql_headers())

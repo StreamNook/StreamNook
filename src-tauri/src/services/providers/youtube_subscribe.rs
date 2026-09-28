@@ -16,7 +16,6 @@
 use super::youtube::{extract_json, live_page_url};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-use std::time::Duration;
 
 const SUBSCRIBE_API: &str = "https://www.youtube.com/youtubei/v1/subscription/subscribe";
 const UNSUBSCRIBE_API: &str = "https://www.youtube.com/youtubei/v1/subscription/unsubscribe";
@@ -34,10 +33,7 @@ pub async fn set_subscribed(identifier: &str, subscribe: bool) -> Result<()> {
     let headers = crate::services::youtube_auth_service::auth_headers()
         .ok_or_else(|| anyhow!("Sign into YouTube to do that"))?;
 
-    let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+    let http = crate::services::youtube_auth_service::page_client();
 
     let url = live_page_url(identifier);
     // Fetch the page AS THE SIGNED-IN USER, not anonymously. The `visitorData` and
@@ -393,10 +389,7 @@ pub struct MembershipState {
 pub async fn membership_state(identifier: &str) -> Result<MembershipState> {
     let headers = crate::services::youtube_auth_service::auth_headers()
         .ok_or_else(|| anyhow!("Sign into YouTube to do that"))?;
-    let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+    let http = crate::services::youtube_auth_service::page_client();
 
     let url = live_page_url(identifier);
     // The signed-in page is the one that personalises this button, so the request

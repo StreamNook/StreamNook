@@ -18,6 +18,22 @@ pub(crate) const PLAYBACK_ACCESS_TOKEN_HASH: &str =
 pub(crate) const USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:146.0) Gecko/20100101 Firefox/146.0";
 
+/// The one client for Twitch's web GQL and the playback-token flow: the site's
+/// user agent and an 8 s deadline. Built once; a client per call rebuilt the
+/// TLS configuration (and on Linux re-parsed the CA bundle) on every stream
+/// start, VOD, clip and entitlement check.
+static WEB_CLIENT: std::sync::LazyLock<reqwest::Client> = std::sync::LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .user_agent(USER_AGENT)
+        .build()
+        .expect("twitch web http client")
+});
+
+pub(crate) fn web_client() -> &'static reqwest::Client {
+    &WEB_CLIENT
+}
+
 // Out-of-band entitlement detection.
 //
 // The PlaybackAccessToken `turbo`/`subscriber` flags are vestigial — verified
@@ -56,10 +72,7 @@ pub(crate) fn clear_entitlement_caches() {
 
 /// POST an inline GQL query with the viewer's web cookie; return the JSON body.
 async fn gql_query(oauth_token: &str, body: serde_json::Value) -> Result<serde_json::Value> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .user_agent(USER_AGENT)
-        .build()?;
+    let client = web_client();
     let resp: serde_json::Value = client
         .post("https://gql.twitch.tv/gql")
         .header("Authorization", format!("OAuth {}", oauth_token))
@@ -192,10 +205,7 @@ pub(crate) async fn fetch_auth_master(channel: &str, oauth_token: Option<&str>) 
     // Region unlock (below) only helps an authenticated viewer: an anonymous token
     // stays not-logged-in blocked from the high tiers regardless of fetch region.
     let authenticated = oauth_token.is_some();
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .user_agent(USER_AGENT)
-        .build()?;
+    let client = web_client();
 
     let gql_body = serde_json::json!({
         "operationName": "PlaybackAccessToken",

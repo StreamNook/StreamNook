@@ -270,7 +270,7 @@ async fn player_response_authed(
         "racyCheckOk": true,
         "context": { "client": ctx }
     });
-    let mut req = reqwest::Client::new()
+    let mut req = crate::services::http::client_unbounded()
         .post(format!("{}/player?prettyPrint=false", INNERTUBE))
         .header(reqwest::header::USER_AGENT, client.user_agent)
         .header(reqwest::header::CONTENT_TYPE, "application/json")

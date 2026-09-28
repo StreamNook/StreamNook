@@ -1943,7 +1943,11 @@ mod tests {
     }
 
     async fn get(url: &str) -> (u16, String) {
-        let r = reqwest::get(url).await.expect("request");
+        let r = crate::services::http::client_unbounded()
+            .get(url)
+            .send()
+            .await
+            .expect("request");
         let status = r.status().as_u16();
         (status, r.text().await.unwrap_or_default())
     }

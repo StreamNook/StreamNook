@@ -43,25 +43,20 @@ pub fn get_local_component_versions() -> Result<ComponentManifest, String> {
 /// Fetch remote component versions from GitHub
 #[tauri::command]
 pub async fn get_remote_component_versions() -> Result<ComponentManifest, String> {
-    let mut builder = reqwest::Client::builder().user_agent("StreamNook");
+    // Shared client (no deadline, as before); the user agent and the optional
+    // GitHub token ride on the request.
+    let mut req = crate::services::http::client_unbounded()
+        .get("https://github.com/StreamNook/StreamNook/releases/latest/download/components.json")
+        .header(reqwest::header::USER_AGENT, "StreamNook");
 
     // Inject PAT to bypass 60-req/hour limit during intense development
     if let Ok(token) = std::env::var("GH_TOKEN").or_else(|_| std::env::var("GITHUB_TOKEN")) {
-        builder = builder.default_headers(
-            std::iter::once((
-                reqwest::header::AUTHORIZATION,
-                reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
-            ))
-            .collect(),
-        );
+        req = req.bearer_auth(token);
     }
-
-    let client = builder.build().map_err(|e| e.to_string())?;
 
     // Directly download components.json from the latest release asset redirect
     // This entirely bypasses the api.github.com rate limit for unauthenticated users
-    let components_json: ComponentManifest = client
-        .get("https://github.com/StreamNook/StreamNook/releases/latest/download/components.json")
+    let components_json: ComponentManifest = req
         .send()
         .await
         .map_err(|e| format!("Failed to download components.json: {}", e))?
@@ -783,27 +778,27 @@ pub async fn check_for_bundle_update() -> Result<BundleUpdateStatus, String> {
 /// from the install path again.
 #[allow(dead_code)]
 async fn check_for_bundle_update_github() -> Result<BundleUpdateStatus, String> {
-    // Fetch remote version info
-    let mut builder = reqwest::Client::builder().user_agent("StreamNook");
-
+    // Fetch remote version info through the shared client (no deadline, as
+    // before); the user agent and the optional GitHub token ride on each request.
+    let client = crate::services::http::client_unbounded();
     // Inject PAT to bypass 60-req/hour limit during intense development
-    if let Ok(token) = std::env::var("GH_TOKEN").or_else(|_| std::env::var("GITHUB_TOKEN")) {
-        builder = builder.default_headers(
-            std::iter::once((
-                reqwest::header::AUTHORIZATION,
-                reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
-            ))
-            .collect(),
-        );
-    }
-
-    let client = builder.build().map_err(|e| e.to_string())?;
+    let token = std::env::var("GH_TOKEN")
+        .or_else(|_| std::env::var("GITHUB_TOKEN"))
+        .ok();
+    let github = |req: reqwest::RequestBuilder| {
+        let req = req.header(reqwest::header::USER_AGENT, "StreamNook");
+        match &token {
+            Some(t) => req.bearer_auth(t),
+            None => req,
+        }
+    };
 
     // Directly download components.json from the latest release asset redirect
     // This entirely bypasses the api.github.com rate limit for unauthenticated users
-    let remote: ComponentManifest = client
-        .get("https://github.com/StreamNook/StreamNook/releases/latest/download/components.json")
-        .send()
+    let remote: ComponentManifest = github(client.get(
+        "https://github.com/StreamNook/StreamNook/releases/latest/download/components.json",
+    ))
+    .send()
         .await
         .map_err(|e| format!("Failed to download remote components.json: {}", e))?
         .json()
@@ -860,7 +855,7 @@ async fn check_for_bundle_update_github() -> Result<BundleUpdateStatus, String> 
         remote.streamnook.version
     );
 
-    if let Ok(changelog_res) = client.get(&changelog_url).send().await {
+    if let Ok(changelog_res) = github(client.get(&changelog_url)).send().await {
         if let Ok(changelog_text) = changelog_res.text().await {
             // Find the start of the version section
             let pattern = format!(
@@ -882,7 +877,7 @@ async fn check_for_bundle_update_github() -> Result<BundleUpdateStatus, String> 
     }
 
     // Optionally grab the download size using an HTTP HEAD request via redirects, skipping API data
-    if let Ok(head_res) = client.head(&download_url).send().await {
+    if let Ok(head_res) = github(client.head(&download_url)).send().await {
         if let Some(content_length) = head_res.headers().get(reqwest::header::CONTENT_LENGTH) {
             if let Ok(len_str) = content_length.to_str() {
                 if let Ok(size) = len_str.parse::<u64>() {
@@ -905,7 +900,7 @@ pub async fn extract_bundled_components() -> Result<(), String> {
 
 /// Download and install bundle update
 #[tauri::command]
-pub async fn download_and_install_bundle(app_handle: tauri::AppHandle) -> Result<(), String> {
+pub async fn download_and_install_bundle(app_handle: crate::rt::AppHandle) -> Result<(), String> {
     let status = check_for_bundle_update().await?;
     if !status.update_available {
         return Err("No update available".to_string());
@@ -919,7 +914,7 @@ pub async fn download_and_install_bundle(app_handle: tauri::AppHandle) -> Result
 /// on macOS the `.app` tarball is unpacked and left in temp for a whole-bundle
 /// swap.
 async fn install_bundle_from_status(
-    app_handle: tauri::AppHandle,
+    app_handle: crate::rt::AppHandle,
     status: BundleUpdateStatus,
 ) -> Result<(), String> {
     use tauri::Emitter;
@@ -937,14 +932,12 @@ async fn install_bundle_from_status(
 
     let bundle_path = temp_dir.join(&bundle_name);
 
-    // Download the bundle
-    let client = reqwest::Client::builder()
-        .user_agent("StreamNook")
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let mut response = client
+    // Download the bundle through the shared client. Unbounded on purpose: a
+    // bundle is tens of megabytes and an overall deadline would cut a slow
+    // download short; the user agent rides on the request.
+    let mut response = crate::services::http::client_unbounded()
         .get(&download_url)
+        .header(reqwest::header::USER_AGENT, "StreamNook")
         .send()
         .await
         .map_err(|e| format!("Failed to download bundle: {}", e))?;
@@ -1190,7 +1183,7 @@ WshShell.Run """{batch}""", 0, False
 /// anything is staged: a stray archive would otherwise turn into an `rm -rf`
 /// of the installed app followed by a `mv` of nothing.
 async fn stage_macos_bundle(
-    app_handle: &tauri::AppHandle,
+    app_handle: &crate::rt::AppHandle,
     temp_dir: &Path,
     bundle_path: &Path,
 ) -> Result<(), String> {
@@ -1240,7 +1233,7 @@ async fn stage_macos_bundle(
 /// and the executable bit, which is the one attribute an AppImage cannot launch
 /// without.
 async fn stage_linux_bundle(
-    app_handle: &tauri::AppHandle,
+    app_handle: &crate::rt::AppHandle,
     temp_dir: &Path,
     bundle_path: &Path,
 ) -> Result<(), String> {
@@ -1353,7 +1346,7 @@ fn running_app_bundle() -> Result<PathBuf, String> {
 /// before a hard exit, matching the flags the plugin is built with
 /// (position/size/maximized only). The window-state plugin is desktop-only,
 /// and no swap path runs on mobile (Android updates via the package installer).
-fn flush_stores_before_hard_exit(app_handle: &tauri::AppHandle) {
+fn flush_stores_before_hard_exit(app_handle: &crate::rt::AppHandle) {
     #[cfg(desktop)]
     {
         use tauri_plugin_window_state::{AppHandleExt, StateFlags};
@@ -1378,7 +1371,7 @@ fn flush_stores_before_hard_exit(app_handle: &tauri::AppHandle) {
 /// the "Restart StreamNook" button on the update-installed card, so the user
 /// controls when the swap happens instead of it firing mid-install.
 #[tauri::command]
-pub async fn restart_to_apply_update(app_handle: tauri::AppHandle) -> Result<(), String> {
+pub async fn restart_to_apply_update(app_handle: crate::rt::AppHandle) -> Result<(), String> {
     let temp_dir = std::env::temp_dir().join("StreamNook-update");
 
     // In a `tauri dev` build, current_exe() is the dev binary under target/debug.

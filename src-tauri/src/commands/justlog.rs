@@ -1,6 +1,29 @@
 use crate::services::drops_auth_service::DropsAuthService;
 use serde::{Deserialize, Serialize};
 
+/// The two clients this module uses, built once. Both carry the app's user
+/// agent; they differ only in the deadline, which is why they are two: the
+/// card fetch is on the viewer card's critical path (8 s), the deep history
+/// fetch is off it and waits longer for a slow proxy (16 s). A client per
+/// call used to rebuild the TLS configuration on every card open.
+fn justlog_client(secs: u64) -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent("StreamNook")
+        .timeout(std::time::Duration::from_secs(secs))
+        .build()
+        .expect("justlog http client")
+}
+static CARD_CLIENT: std::sync::LazyLock<reqwest::Client> =
+    std::sync::LazyLock::new(|| justlog_client(8));
+static DEEP_CLIENT: std::sync::LazyLock<reqwest::Client> =
+    std::sync::LazyLock::new(|| justlog_client(16));
+fn card_client() -> &'static reqwest::Client {
+    &CARD_CLIENT
+}
+fn deep_client() -> &'static reqwest::Client {
+    &DEEP_CLIENT
+}
+
 const JUSTLOG_BASE: &str = "https://logs.ivr.fi";
 // best-logs (ZonianMidian) routes a channel/user to whichever justlog instance
 // actually logs it. logs.ivr.fi covers a lot but not everything, so without this
@@ -179,11 +202,7 @@ pub async fn fetch_user_chat_logs(
     let channel_lower = channel.to_lowercase();
     let username_lower = username.to_lowercase();
 
-    let client = reqwest::Client::builder()
-        .user_agent("StreamNook")
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = card_client();
 
     // Mod-gated Twitch GQL only fires when we have both IDs.
     let twitch_modlogs_fut = async {
@@ -268,11 +287,7 @@ pub async fn fetch_user_deep_logs(
     let channel_lower = channel.to_lowercase();
     let username_lower = username.to_lowercase();
 
-    let client = reqwest::Client::builder()
-        .user_agent("StreamNook")
-        .timeout(std::time::Duration::from_secs(16))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = deep_client();
 
     // Generous cap: this is OFF the card's critical path, so we'd rather wait for
     // a slow proxy (a heavy chatter's full history measured ~7s) than drop it.

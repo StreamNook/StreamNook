@@ -743,10 +743,7 @@ pub fn clip_slug_from_url(url: &str) -> Option<String> {
 /// `videoPlaybackAccessToken` (not `streamPlaybackAccessToken`) and usher uses
 /// the `nauthsig`/`nauth` param names. No client-integrity needed for VODs.
 async fn fetch_vod_master(vod_id: &str, oauth_token: Option<&str>) -> Result<String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .user_agent(auth_proxy::USER_AGENT)
-        .build()?;
+    let client = auth_proxy::web_client();
 
     let gql_body = json!({
         "operationName": "PlaybackAccessToken",
@@ -871,10 +868,7 @@ pub async fn resolve_clip(
     oauth_token: Option<&str>,
     quality: &str,
 ) -> Result<ResolvedMedia> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .user_agent(auth_proxy::USER_AGENT)
-        .build()?;
+    let client = auth_proxy::web_client();
 
     let body = json!({
         "operationName": "VideoAccessToken_Clip",
@@ -1532,10 +1526,7 @@ impl LiveArchive {
 /// the answer is the same for everyone and the token stays out of an extra
 /// request.
 async fn gql_web_query(query: &str, variables: Value) -> Result<Value> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .user_agent(auth_proxy::USER_AGENT)
-        .build()?;
+    let client = auth_proxy::web_client();
     let body = json!({ "query": query, "variables": variables });
     let resp: Value = client
         .post("https://gql.twitch.tv/gql")

@@ -1040,10 +1040,8 @@ pub async fn youtube_sabr_probe(video_id: String) -> Result<String, String> {
         .await
         .map_err(|e| format!("could not resolve streams: {}", e))?;
 
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| e.to_string())?;
+    // Shared client; the probe's 60 s deadline rides on each request.
+    let http = crate::services::http::client();
 
     // No `&sq=`, which asks for the live edge and is also the cheapest way to
     // learn the head sequence number.
@@ -1055,6 +1053,7 @@ pub async fn youtube_sabr_probe(video_id: String) -> Result<String, String> {
         let started = std::time::Instant::now();
         let resp = http
             .get(url)
+            .timeout(std::time::Duration::from_secs(60))
             .send()
             .await
             .map_err(|e| format!("{}: request failed: {}", label, e))?;

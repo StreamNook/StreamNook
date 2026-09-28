@@ -11,7 +11,6 @@
 //! client only holds connection-level config, so sharing doesn't leak auth.
 //!
 //! What does NOT belong here:
-//! - `cookie_jar_service::create_client` — per-call cookie provider, can't share.
 //! - Stream/HLS proxy clients (`stream_server`, `multi_nook_server`) — already
 //!   shared via their own LazyLock, need Chrome UA + keepalive tuning.
 //! - Browser-spoofing clients with custom UA strings (badge scrapers).
@@ -43,10 +42,27 @@ static CLIENT_NO_REDIRECT: LazyLock<Client> = LazyLock::new(|| {
         .expect("Failed to build no-redirect HTTP client")
 });
 
+/// reqwest's own defaults and nothing else: no overall timeout, no default
+/// headers, the exact configuration `reqwest::Client::new()` and `reqwest::get`
+/// produce. This is the drop-in for the sites that used to build one of those
+/// per call: long downloads that must not be capped, callers that put their own
+/// timeout on the request, and calls that were never bounded. Only the
+/// connection pool and TLS setup are shared; no request changes shape. A site
+/// that wants a user agent or a deadline sets it on the RequestBuilder.
+static CLIENT_UNBOUNDED: LazyLock<Client> = LazyLock::new(|| {
+    Client::builder()
+        .build()
+        .expect("Failed to build unbounded HTTP client")
+});
+
 pub fn client() -> &'static Client {
     &CLIENT_DEFAULT
 }
 
 pub fn client_no_redirect() -> &'static Client {
     &CLIENT_NO_REDIRECT
+}
+
+pub fn client_unbounded() -> &'static Client {
+    &CLIENT_UNBOUNDED
 }

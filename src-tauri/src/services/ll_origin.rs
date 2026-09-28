@@ -372,7 +372,10 @@ pub struct LlOrigin {
 /// it ever becomes the default.
 static DISABLED: AtomicBool = AtomicBool::new(true);
 
-fn http_client() -> Client {
+/// The origin's client, built once. `start` used to build a new one per stream
+/// start, which rebuilt the TLS configuration (and on Linux re-parsed the CA
+/// bundle) on every channel switch; a clone shares the pool and costs an Arc.
+static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
     Client::builder()
         .tcp_keepalive(Duration::from_secs(15))
         .pool_idle_timeout(Duration::from_secs(30))
@@ -381,6 +384,10 @@ fn http_client() -> Client {
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .build()
         .expect("ll_origin http client")
+});
+
+fn http_client() -> Client {
+    HTTP_CLIENT.clone()
 }
 
 // ──────────────────────────── CMAF box chunker ────────────────────────────

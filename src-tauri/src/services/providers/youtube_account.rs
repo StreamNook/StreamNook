@@ -42,7 +42,7 @@ pub async fn subscriptions() -> Result<Vec<YouTubeSubscription>> {
         "browseId": BROWSE_ID,
         "context": { "client": { "clientName": "WEB", "clientVersion": "2.20240101.00.00", "hl": "en", "gl": "US" } }
     });
-    let mut req = reqwest::Client::new()
+    let mut req = crate::services::http::client_unbounded()
         .post(format!("{}/browse?key={}", INNERTUBE, INNERTUBE_KEY))
         .header(reqwest::header::CONTENT_TYPE, "application/json");
     for (k, v) in headers {
