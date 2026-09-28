@@ -588,32 +588,6 @@ export interface GlobalStats {
     total_streams_watched: number;
 }
 
-/**
- * Get the total count of users from the database
- * @returns Total user count
- */
-export const getTotalUsersCount = async (): Promise<number> => {
-    if (!supabase) {
-        return 0;
-    }
-
-    try {
-        const { count, error } = await supabase
-            .from('users')
-            .select('*', { count: 'exact', head: true });
-
-        if (error) {
-            Logger.error('[Supabase] Failed to get total users count:', error);
-            return 0;
-        }
-
-        return count || 0;
-    } catch (error) {
-        Logger.error('[Supabase] Failed to get total users count:', error);
-        return 0;
-    }
-};
-
 // ---------------------------------------------------------------------------
 // Stat increment health tracking
 // ---------------------------------------------------------------------------
@@ -2491,7 +2465,6 @@ export default {
     subscribeToOnlineCount,
     subscribeToOnlinePresence,
     isPresenceReady,
-    getTotalUsersCount,
     incrementStat,
     getLastWriteIssue,
     subscribeToWriteIssues,

@@ -57,7 +57,6 @@ import { TwitchGlyph, TwitchVerifiedMark } from '../ui/TwitchGlyph';
 import { Logger } from '../../utils/logger';
 import {
   getUserStats,
-  getTotalUsersCount,
   getAccolades,
   grantAccolade,
   claimLoginAccolades,
@@ -348,7 +347,6 @@ const ProfileOverview = ({
   const [createdAt, setCreatedAt] = useState<string | null>(null);
   const [roles, setRoles] = useState<{ isAffiliate: boolean; isPartner: boolean; isStaff: boolean } | null>(null);
   const [dropsClaimed, setDropsClaimed] = useState<number | null>(null);
-  const [totalMembers, setTotalMembers] = useState<number | null>(null);
   const [earnedAccolades, setEarnedAccolades] = useState<Set<string>>(new Set());
   // Real channel-points holdings: the summed current balance across every
   // channel StreamNook has tracked for you (not the auto-collected counter).
@@ -375,10 +373,6 @@ const ProfileOverview = ({
         if (alive) setStats(s ?? ({ user_id: userId, channel_points_collected: 0, hours_watched: 0, messages_sent: 0, streams_watched: 0, updated_at: '' } as UserStats));
       })
       .catch((e) => Logger.error('[ProfileOverview] stats:', e));
-
-    getTotalUsersCount()
-      .then((c) => { if (alive) setTotalMembers(c || null); })
-      .catch(() => {});
 
     getFavoriteChannel(userId)
       .then((c) => { if (alive) setFavoriteChannel(c); })
@@ -774,11 +768,7 @@ const ProfileOverview = ({
             icon={Sparkles}
             label="Member rank"
             value={`#${streamNookUserNumber.toLocaleString()}`}
-            caption={
-              totalMembers
-                ? `of ${totalMembers.toLocaleString()}${tier?.label ? ` · ${tier.label}` : ''}`
-                : tier?.label || 'StreamNook member'
-            }
+            caption={tier?.label || 'StreamNook member'}
             color={ICON_COLOR.slate}
           />
         )}
