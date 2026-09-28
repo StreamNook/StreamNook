@@ -792,6 +792,54 @@ function queueMessage(channelKey: string, msg: any): void {
   scheduleFlush();
 }
 
+/**
+ * Drop the rows of users a settings save just hid. Rust stops their next
+ * messages at ingest and names them here (a `HIDE_USERS` bridge frame), so the
+ * rows already on screen go at once instead of scrolling away later.
+ * `channelKey` is the filter's composite key (`twitch:xqc`), resolved through
+ * the slice codec; null means every channel.
+ */
+function dropHiddenUsersRows(channelKey: string | null, logins: string[]): void {
+  const names = new Set(logins.map((n) => n.toLowerCase()));
+  if (names.size === 0) return;
+  const store = useChatConnectionStore.getState();
+  const targets = channelKey
+    ? (() => {
+        const { provider, channel } = parseKey(channelKey);
+        return [sliceLookupKey(provider, channel)];
+      })()
+    : [...store.channels.keys()];
+  const isHidden = (m: unknown): boolean => {
+    if (typeof m === 'string') {
+      const login = /^(?:@[^ ]* )?:([^!\s]+)!/.exec(m)?.[1];
+      const display = /(?:^@|;)display-name=([^;\s]*)/.exec(m)?.[1];
+      return (!!login && names.has(login.toLowerCase())) || (!!display && names.has(display.toLowerCase()));
+    }
+    const row = m as { username?: string; display_name?: string } | null;
+    return (
+      (!!row?.username && names.has(row.username.toLowerCase())) ||
+      (!!row?.display_name && names.has(row.display_name.toLowerCase()))
+    );
+  };
+  const touched: string[] = [];
+  for (const key of targets) {
+    const slice = store.channels.get(key);
+    if (!slice) continue;
+    const kept = slice.messages.filter((m) => !isHidden(m));
+    if (kept.length !== slice.messages.length) {
+      slice.messages = kept;
+      touched.push(slice.channel);
+    }
+    const pending = pendingByChannel.get(slice.channel);
+    if (pending) {
+      for (let i = pending.length - 1; i >= 0; i--) {
+        if (isHidden(pending[i])) pending.splice(i, 1);
+      }
+    }
+  }
+  if (touched.length) bumpRevisionFor(touched);
+}
+
 function getSlice(channel: string): ChannelSlice | undefined {
   return useChatConnectionStore.getState().channels.get(channel.toLowerCase());
 }
@@ -2104,6 +2152,10 @@ function handleWsMessage(raw: string) {
   if (raw.startsWith('{')) {
     try {
       const parsed = JSON.parse(raw);
+      if (parsed.type === 'HIDE_USERS' && Array.isArray(parsed.logins)) {
+        dropHiddenUsersRows((parsed.channel_key as string | null | undefined) ?? null, parsed.logins);
+        return;
+      }
       if (parsed.type === 'PERSONAL_EMOTES' && Array.isArray(parsed.message_ids)) {
         void repaintPersonalEmotes(String(parsed.channel ?? ''), String(parsed.user_id ?? ''), parsed.message_ids);
         return;

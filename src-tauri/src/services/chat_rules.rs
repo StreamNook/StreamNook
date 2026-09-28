@@ -368,7 +368,7 @@ fn built_in(rule: &Option<BuiltInRule>, default_enabled: bool, default_color: &s
     BuiltIn { enabled, color }
 }
 
-fn normalize_name(name: &str) -> String {
+pub(crate) fn normalize_name(name: &str) -> String {
     name.trim().to_lowercase().trim_start_matches('@').to_string()
 }
 
@@ -861,6 +861,42 @@ impl Evaluation {
     }
 }
 
+/// `HIDE_USERS` bridge frames for the users `next` hides that `prev` did not:
+/// one frame for everywhere (`channel_key` null) and one per channel, keyed by
+/// the filter's composite channel key (`twitch:xqc`). Switching "hide known
+/// bots" on names every known bot everywhere.
+fn newly_hidden_frames(prev: &CompiledRules, next: &CompiledRules) -> Vec<String> {
+    let mut frames = Vec::new();
+    let mut everywhere: Vec<String> = next.hidden_global.difference(&prev.hidden_global).cloned().collect();
+    if next.hide_bots && !prev.hide_bots {
+        everywhere.extend(KNOWN_BOTS.iter().map(|b| b.to_string()));
+    }
+    if !everywhere.is_empty() {
+        everywhere.sort();
+        everywhere.dedup();
+        frames.push(
+            serde_json::json!({ "type": "HIDE_USERS", "channel_key": null, "logins": everywhere }).to_string(),
+        );
+    }
+    let mut keys: Vec<&String> = next.hidden_per_channel.keys().collect();
+    keys.sort();
+    for key in keys {
+        let names = &next.hidden_per_channel[key];
+        let mut added: Vec<String> = match prev.hidden_per_channel.get(key) {
+            Some(old) => names.difference(old).cloned().collect(),
+            None => names.iter().cloned().collect(),
+        };
+        if added.is_empty() {
+            continue;
+        }
+        added.sort();
+        frames.push(
+            serde_json::json!({ "type": "HIDE_USERS", "channel_key": key, "logins": added }).to_string(),
+        );
+    }
+    frames
+}
+
 impl ChatRules {
     /// Current compiled snapshot. One RwLock read + Arc clone.
     pub fn snapshot() -> Arc<CompiledRules> {
@@ -937,10 +973,28 @@ impl ChatRules {
             compiled.history_cap
         );
         crate::services::chat_history::ChatHistory::set_cap(compiled.history_cap);
+        // The ingest gate only stops a newly hidden user's NEXT messages. Their
+        // rows already in a chat window are named to every window here, so they
+        // go the moment the hide is saved. Not on the first compile at boot:
+        // nothing is on screen yet.
+        let frames = if RULES_HASH.load(std::sync::atomic::Ordering::Acquire) == 0 {
+            Vec::new()
+        } else {
+            newly_hidden_frames(&Self::snapshot(), &compiled)
+        };
         if let Ok(mut g) = rules_cell().write() {
             *g = Arc::new(compiled);
         }
         RULES_HASH.store(h, std::sync::atomic::Ordering::Release);
+        if !frames.is_empty() {
+            tauri::async_runtime::spawn(async move {
+                if let Some(tx) = crate::services::irc_service::IrcService::broadcaster().await {
+                    for frame in frames {
+                        let _ = tx.send(frame);
+                    }
+                }
+            });
+        }
     }
 
     /// Evaluate every rule against one message and stamp the metadata. Returns
@@ -2005,6 +2059,32 @@ mod tests {
         let warn = ChatRules::validate_filter("flags.automod || channel.live").unwrap();
         assert_eq!(warn, vec!["channel.live".to_string(), "flags.automod".to_string()]);
         assert!(ChatRules::validate_filter("message.content match \"(\"").is_err());
+    }
+
+    #[test]
+    fn a_save_names_only_the_users_it_newly_hides() {
+        let compile = |json: &str| {
+            let cf: ChatFilterSettings = serde_json::from_str(json).expect("filters parse");
+            CompiledRules::compile(&Default::default(), &cf, &Default::default())
+        };
+        let before = compile(r#"{"hidden_users":["alice"],"per_channel":{"twitch:forsen":["carl"]}}"#);
+        let after = compile(
+            r#"{"hidden_users":["alice","bob"],"per_channel":{"twitch:forsen":["carl","potatbotat"],"kick:xqc":["dave"]}}"#,
+        );
+        let frames: Vec<serde_json::Value> = newly_hidden_frames(&before, &after)
+            .iter()
+            .map(|f| serde_json::from_str(f).expect("frame is json"))
+            .collect();
+        assert_eq!(frames.len(), 3);
+        assert_eq!(frames[0]["channel_key"], serde_json::Value::Null);
+        assert_eq!(frames[0]["logins"], serde_json::json!(["bob"]));
+        assert_eq!(frames[1]["channel_key"], "kick:xqc");
+        assert_eq!(frames[1]["logins"], serde_json::json!(["dave"]));
+        assert_eq!(frames[2]["channel_key"], "twitch:forsen");
+        assert_eq!(frames[2]["logins"], serde_json::json!(["potatbotat"]));
+        // Unhiding, or saving the same lists again, names nobody.
+        assert!(newly_hidden_frames(&after, &before).is_empty());
+        assert!(newly_hidden_frames(&after, &after).is_empty());
     }
 
     #[test]
