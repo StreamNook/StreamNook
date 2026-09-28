@@ -42,7 +42,7 @@ pub async fn start_chat(
     channel: String,
     claim: Option<bool>,
     reattach: Option<bool>,
-    window: tauri::Window,
+    window: crate::rt::Window,
     state: State<'_, AppState>,
 ) -> Result<u16, String> {
     ChatService::start(
@@ -64,7 +64,7 @@ pub async fn start_chat(
 pub async fn provider_chat_connect(
     provider: String,
     channel: String,
-    window: tauri::Window,
+    window: crate::rt::Window,
 ) -> Result<u16, String> {
     let port = IrcService::ensure_local_ws_bridge()
         .await
@@ -97,7 +97,7 @@ pub async fn chat_bridge_port() -> Result<u16, String> {
 pub async fn provider_chat_disconnect(
     provider: String,
     channel: String,
-    window: tauri::Window,
+    window: crate::rt::Window,
 ) -> Result<(), String> {
     if let Some(p) = registry().await.get(&provider) {
         p.disconnect(&channel, window.label())
@@ -367,7 +367,7 @@ pub async fn kick_connect() -> Result<(), String> {
 /// account state. Sending goes read-only, Following becomes the login wall, and
 /// Twitch (and YouTube) are untouched.
 #[tauri::command]
-pub async fn kick_disconnect(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn kick_disconnect(app: crate::rt::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     crate::services::kick_auth_service::disconnect();
     // The OAuth token and the site session are two different credentials in two
     // different places. Clearing only the first left kick.com still logged in, so
@@ -602,7 +602,7 @@ pub fn invalidate_member_aliases() {
 /// Providers that aren't connected are skipped entirely, so a Twitch-only user
 /// pays nothing.
 #[tauri::command]
-pub async fn validate_platform_sessions(app: tauri::AppHandle) -> Vec<String> {
+pub async fn validate_platform_sessions(app: crate::rt::AppHandle) -> Vec<String> {
     use tauri::Emitter;
     // All three at once. Each is a real round trip, and YouTube's can re-read
     // its cookies through a hidden page, which must not hold up the other two.
@@ -708,7 +708,7 @@ pub async fn send_chat_message(
 #[tauri::command]
 pub async fn join_chat_channel(
     channel: String,
-    window: tauri::Window,
+    window: crate::rt::Window,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     ChatService::join_channel(&channel, &state, window.label())
@@ -717,7 +717,7 @@ pub async fn join_chat_channel(
 }
 
 #[tauri::command]
-pub async fn leave_chat_channel(channel: String, window: tauri::Window) -> Result<(), String> {
+pub async fn leave_chat_channel(channel: String, window: crate::rt::Window) -> Result<(), String> {
     ChatService::leave_channel(&channel, window.label())
         .await
         .map_err(|e| e.to_string())
@@ -726,7 +726,7 @@ pub async fn leave_chat_channel(channel: String, window: tauri::Window) -> Resul
 #[tauri::command]
 pub async fn start_multi_chat(
     channels: Vec<String>,
-    window: tauri::Window,
+    window: crate::rt::Window,
     state: State<'_, AppState>,
 ) -> Result<u16, String> {
     if channels.is_empty() {
@@ -973,6 +973,17 @@ pub fn get_youtube_channel_emojis(
     channel: String,
 ) -> Vec<crate::services::providers::youtube::YouTubeEmoji> {
     crate::services::providers::youtube::channel_emojis(&channel)
+}
+
+/// A row's segments with its sender's 7TV personal emotes applied, for a row
+/// named by a `PERSONAL_EMOTES` bridge frame (their set arrived after the row
+/// did). `None` when nothing changes.
+#[tauri::command]
+pub fn apply_personal_emotes(
+    user_id: String,
+    segments: Vec<crate::models::chat_layout::MessageSegment>,
+) -> Option<Vec<crate::models::chat_layout::MessageSegment>> {
+    IrcService::apply_personal_emotes(&user_id, &segments)
 }
 
 /// The row for a message the user is about to send, built by the same parser

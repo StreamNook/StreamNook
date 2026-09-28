@@ -95,6 +95,10 @@ static PERSONAL_EMOTES: OnceLock<
 > = OnceLock::new();
 static PERSONAL_EMOTES_PRESENT: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+/// How far back a newly arrived personal set repaints its owner's rows, and
+/// how many of each channel's newest rows that looks through.
+const PERSONAL_REPAINT_WINDOW_MS: i64 = 10 * 60 * 1000;
+const PERSONAL_REPAINT_SCAN: usize = 300;
 
 // Serializes start()'s check-then-spawn body. Two concurrent fresh starts
 // (boot storm, or two windows' watchdogs escalating together) could each
@@ -684,6 +688,26 @@ pub async fn remove_provider_room_state(channel_key: &str) {
 
 fn get_channel_emotes() -> &'static Mutex<HashMap<String, EmoteSet>> {
     CHANNEL_EMOTES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Run `f` over a joined channel's emote set without cloning it. `None` when
+/// the channel is not joined or its set has not landed yet. This set lives
+/// exactly as long as the chat does and takes live 7TV changes, which is why
+/// the composer's emote matching reads it rather than the picker's LRU.
+pub async fn with_channel_emotes<R>(channel: &str, f: impl FnOnce(&EmoteSet) -> R) -> Option<R> {
+    let map = get_channel_emotes().lock().await;
+    map.get(&channel.to_lowercase()).map(f)
+}
+
+/// Run `f` over a user's 7TV personal emotes (name -> emote), which work in
+/// every channel. `None` until 7TV has reported that user's personal set; ours
+/// arrives through the presence we post on each channel we join.
+pub fn with_personal_emotes<R>(twitch_id: &str, f: impl FnOnce(&HashMap<String, Emote>) -> R) -> Option<R> {
+    let set = {
+        let cache = get_personal_emotes().read().ok()?;
+        cache.peek(twitch_id).map(|(_, map)| map.clone())?
+    };
+    Some(f(&set))
 }
 
 /// Parse the `gifs` PRIVMSG tag (Twitch, 2026-07-17) into positions that ride
@@ -1920,6 +1944,8 @@ impl IrcService {
 
             // Extract badges from USERSTATE and cache them per channel
             if let Some(badges) = Self::extract_tag_value(trimmed, "badges") {
+                // In chat order, so rows built or repainted from it match everyone else's.
+                let badges = crate::models::chat_layout::order_twitch_badge_tag(&badges);
                 debug!(
                     "[IRC Chat] Caching user badges from USERSTATE for {:?}: {}",
                     channel_name, badges
@@ -1934,11 +1960,14 @@ impl IrcService {
                 // Send badges to frontend tagged with the channel they apply to.
                 // Format: USER_BADGES:#<channel>:<badges>. The leading '#' lets
                 // the frontend parser locate the channel-prefix segment unambiguously.
-                let badges_message = match &channel_name {
-                    Some(ch) => format!("USER_BADGES:#{}:{}", ch, badges),
-                    None => format!("USER_BADGES:{}", badges),
-                };
-                send_to_bridge(badges_message, false).await;
+                // A line with no channel is GLOBALUSERSTATE (this branch matches it
+                // too): account-wide badges only, never a channel's subscriber or
+                // founder badge. Forwarded untagged, the page applied it to its
+                // only open channel and repainted the user's own rows without
+                // their channel badges, so it is not forwarded at all.
+                if let Some(ch) = &channel_name {
+                    send_to_bridge(format!("USER_BADGES:#{}:{}", ch, badges), false).await;
+                }
             }
 
             // Cache and forward the user's own chat color. An empty tag means the
@@ -3145,13 +3174,81 @@ impl IrcService {
     /// flag only flips when there is at least one emote to overlay.
     pub async fn set_personal_emotes(twitch_id: String, set_id: String, emotes: Vec<Emote>) {
         let has_any = !emotes.is_empty();
-        let map: HashMap<String, Emote> = emotes.into_iter().map(|e| (e.name.clone(), e)).collect();
+        let map: Arc<HashMap<String, Emote>> =
+            Arc::new(emotes.into_iter().map(|e| (e.name.clone(), e)).collect());
         if let Ok(mut g) = get_personal_emotes().write() {
-            g.put(twitch_id, (set_id, Arc::new(map)));
+            g.put(twitch_id.clone(), (set_id, map.clone()));
         }
         if has_any {
             PERSONAL_EMOTES_PRESENT.store(true, std::sync::atomic::Ordering::Relaxed);
+            Self::repaint_personal_rows(&twitch_id, &map).await;
         }
+    }
+
+    /// A personal set usually lands a second or so after its owner is first
+    /// seen, so the messages they sent in that gap were parsed without it and
+    /// show their emotes as plain words. Name those rows to every window
+    /// (a `PERSONAL_EMOTES` bridge frame per channel) so each re-applies the set
+    /// in place through `apply_personal_emotes`. Only rows whose text holds one
+    /// of the set's names are named, which is usually none.
+    async fn repaint_personal_rows(twitch_id: &str, set: &HashMap<String, Emote>) {
+        let since_ms = chrono::Utc::now().timestamp_millis() - PERSONAL_REPAINT_WINDOW_MS;
+        let rows = ChatHistory::recent_by_user(twitch_id, since_ms, PERSONAL_REPAINT_SCAN);
+        for (channel, message_ids) in Self::rows_naming_personal_emotes(rows, set) {
+            let frame = serde_json::json!({
+                "type": "PERSONAL_EMOTES",
+                "channel": channel,
+                "user_id": twitch_id,
+                "message_ids": message_ids,
+            });
+            send_to_bridge(frame.to_string(), false).await;
+        }
+    }
+
+    /// The ids, per channel, of the rows whose text holds one of the set's
+    /// names as a whole word (the same split the parser uses).
+    fn rows_naming_personal_emotes(
+        rows: Vec<(String, String, String)>,
+        set: &HashMap<String, Emote>,
+    ) -> HashMap<String, Vec<String>> {
+        let mut by_channel: HashMap<String, Vec<String>> = HashMap::new();
+        for (channel, id, text) in rows {
+            if text.split(' ').any(|word| set.contains_key(word)) {
+                by_channel.entry(channel).or_default().push(id);
+            }
+        }
+        by_channel
+    }
+
+    /// `segments` with the sender's 7TV personal emotes applied: every text
+    /// segment that is exactly one of their names becomes that emote, built as
+    /// the parser builds it. `None` when nothing changed or no set is held.
+    pub fn apply_personal_emotes(twitch_id: &str, segments: &[MessageSegment]) -> Option<Vec<MessageSegment>> {
+        with_personal_emotes(twitch_id, |set| {
+            let mut changed = false;
+            let out: Vec<MessageSegment> = segments
+                .iter()
+                .map(|segment| match segment {
+                    MessageSegment::Text { content } => match set.get(content.as_str()) {
+                        Some(emote) => {
+                            changed = true;
+                            MessageSegment::Emote {
+                                content: content.clone(),
+                                emote_id: Some(emote.id.clone()),
+                                emote_url: emote.url.clone(),
+                                is_zero_width: emote.is_zero_width,
+                                modifier_flags: emote.modifier_flags,
+                                is_personal: Some(true),
+                            }
+                        }
+                        None => segment.clone(),
+                    },
+                    _ => segment.clone(),
+                })
+                .collect();
+            changed.then_some(out)
+        })
+        .flatten()
     }
 
     /// Drop a user's personal emotes when their EMOTE_SET entitlement is revoked.
@@ -3757,7 +3854,7 @@ impl IrcService {
             .or_else(|| tag_map.get("badges"))
             .unwrap_or(&"");
 
-        let badges: Vec<Badge> = badges_str
+        let mut badges: Vec<Badge> = badges_str
             .split(',')
             .filter(|s| !s.is_empty())
             .map(|b_str| {
@@ -3773,6 +3870,8 @@ impl IrcService {
                 }
             })
             .collect();
+        crate::services::badge_service::add_ffz_bot_badge(&user_id, &mut badges);
+        crate::models::chat_layout::order_twitch_badges(&mut badges);
 
         // Use EmotePos struct
         // emotes format: 25:0-4,12-16/1902:6-10 ...
@@ -4076,7 +4175,7 @@ impl IrcService {
             .or_else(|| tag_map.get("badges"))
             .unwrap_or(&"");
 
-        let badges: Vec<Badge> = badges_str
+        let mut badges: Vec<Badge> = badges_str
             .split(',')
             .filter(|s| !s.is_empty())
             .map(|b_str| {
@@ -4092,6 +4191,8 @@ impl IrcService {
                 }
             })
             .collect();
+        crate::services::badge_service::add_ffz_bot_badge(&user_id, &mut badges);
+        crate::models::chat_layout::order_twitch_badges(&mut badges);
 
         // Parse emotes from user's message content (if any)
         let emotes_str = tag_map.get("emotes").unwrap_or(&"");
@@ -4637,6 +4738,16 @@ fn own_emotes_tag(text: &str, twitch: &[Emote]) -> String {
         .join("/")
 }
 
+/// The badges a sent row carries: the channel's USERSTATE badges from the
+/// connection's cache when the sender is the connected account and the cache
+/// has them, else whatever the page passed.
+fn own_row_badges(page: &str, cached: Option<&str>, is_primary: bool) -> String {
+    match cached {
+        Some(c) if is_primary && !c.is_empty() => c.to_string(),
+        _ => page.to_string(),
+    }
+}
+
 fn own_message_line(m: &OwnMessage, emotes_tag: &str, timestamp_ms: i64) -> String {
     let channel = m.channel.trim_start_matches('#').to_lowercase();
     let reply = match &m.reply_to {
@@ -4678,8 +4789,21 @@ impl IrcService {
     /// one is (segments, emotes, reply info, rule stamps), so the composer
     /// shows it at once and the echo later upgrades it in place by id. Nothing
     /// is recorded: the echo is what goes into history.
-    pub async fn build_own_message(m: OwnMessage) -> Option<ChatMessage> {
+    pub async fn build_own_message(mut m: OwnMessage) -> Option<ChatMessage> {
         let key = m.channel.trim_start_matches('#').to_lowercase();
+        // The IRC-connected account's badges for this channel, as USERSTATE
+        // reported them on JOIN. Messages go out over Helix, which triggers no
+        // USERSTATE, so a page that missed the JOIN one (its slice did not exist
+        // yet when the replay arrived) passed none and every row it sent stayed
+        // bare. The cache here always saw it. A secondary account is not the
+        // connected user, so its rows keep what the page passed.
+        let is_primary = ChatRules::own_identity()
+            .map(|(login, id)| {
+                (!id.is_empty() && id == m.sender_id) || login == m.sender_login.to_lowercase()
+            })
+            .unwrap_or(false);
+        let cached = get_user_badges_cache().lock().await.get(&key).cloned();
+        m.badges = own_row_badges(&m.badges, cached.as_deref(), is_primary);
         let emotes_tag = {
             let map = get_channel_emotes().lock().await;
             map.get(&key).map(|set| own_emotes_tag(&m.text, &set.twitch)).unwrap_or_default()
@@ -4724,6 +4848,19 @@ mod own_message_tests {
     }
 
     #[test]
+    fn a_sent_row_takes_the_cached_channel_badges_for_the_connected_account() {
+        // The page missed USERSTATE and passed nothing: the cache fills it.
+        assert_eq!(own_row_badges("", Some("subscriber/3012,premium/1"), true), "subscriber/3012,premium/1");
+        // The cache is newer than what the page held.
+        assert_eq!(own_row_badges("premium/1", Some("subscriber/3012,premium/1"), true), "subscriber/3012,premium/1");
+        // Nothing cached yet: keep the page's value.
+        assert_eq!(own_row_badges("vip/1", None, true), "vip/1");
+        assert_eq!(own_row_badges("vip/1", Some(""), true), "vip/1");
+        // A secondary account is not the connected user: never the cache.
+        assert_eq!(own_row_badges("", Some("subscriber/3012"), false), "");
+    }
+
+    #[test]
     fn emote_tags_match_what_twitch_would_send() {
         let set = vec![twitch_emote("25", "Kappa"), twitch_emote("88", "PogChamp")];
         assert_eq!(own_emotes_tag("Kappa hi Kappa PogChamp", &set), "25:0-4,9-13/88:15-22");
@@ -4756,6 +4893,69 @@ mod own_message_tests {
         let line = own_message_line(&own("hi", None), "", 1000);
         assert!(line.contains("display-name=Me\\sMe;"));
         assert!(line.ends_with("PRIVMSG #chan :hi"));
+    }
+}
+
+#[cfg(test)]
+mod personal_emote_tests {
+    use super::*;
+
+    fn emote(id: &str, name: &str) -> Emote {
+        Emote {
+            id: id.to_string(),
+            name: name.to_string(),
+            url: format!("https://cdn.7tv.app/emote/{id}/1x.avif"),
+            provider: crate::services::emote_service::EmoteProvider::SevenTV,
+            is_zero_width: Some(false),
+            local_url: None,
+            emote_type: None,
+            owner_id: None,
+            owner_name: None,
+            width: None,
+            modifier_flags: None,
+            ffz_sub_only: None,
+        }
+    }
+
+    fn text(s: &str) -> MessageSegment {
+        MessageSegment::Text { content: s.to_string() }
+    }
+
+    #[test]
+    fn only_rows_naming_a_personal_emote_are_repainted() {
+        let set: HashMap<String, Emote> = [("cuh".to_string(), emote("e1", "cuh"))].into_iter().collect();
+        let rows = vec![
+            ("xqc".to_string(), "m1".to_string(), "hello cuh".to_string()),
+            ("xqc".to_string(), "m2".to_string(), "cuhh not it".to_string()),
+            ("forsen".to_string(), "m3".to_string(), "cuh".to_string()),
+        ];
+        let named = IrcService::rows_naming_personal_emotes(rows, &set);
+        assert_eq!(named.get("xqc"), Some(&vec!["m1".to_string()]));
+        assert_eq!(named.get("forsen"), Some(&vec!["m3".to_string()]));
+    }
+
+    #[test]
+    fn applying_a_personal_set_swaps_exact_words_only() {
+        let owner = "personal-test-owner";
+        let set: HashMap<String, Emote> = [("cuh".to_string(), emote("e1", "cuh"))].into_iter().collect();
+        get_personal_emotes().write().unwrap().put(owner.to_string(), ("set".to_string(), Arc::new(set)));
+
+        let segments = vec![text("hello"), text(" "), text("cuh"), text(" "), text("cuhh")];
+        let painted = IrcService::apply_personal_emotes(owner, &segments).expect("one word changes");
+        match &painted[2] {
+            MessageSegment::Emote { content, emote_id, is_personal, .. } => {
+                assert_eq!(content, "cuh");
+                assert_eq!(emote_id.as_deref(), Some("e1"));
+                assert_eq!(*is_personal, Some(true));
+            }
+            other => panic!("expected an emote, got {other:?}"),
+        }
+        assert!(matches!(&painted[4], MessageSegment::Text { content } if content == "cuhh"));
+
+        // Nothing to change, or nobody's set: no repaint.
+        assert!(IrcService::apply_personal_emotes(owner, &[text("hello")]).is_none());
+        assert!(IrcService::apply_personal_emotes("someone-else", &segments).is_none());
+        get_personal_emotes().write().unwrap().pop(owner);
     }
 }
 

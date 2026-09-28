@@ -28,7 +28,8 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use tauri::{AppHandle, Emitter};
+use crate::rt::AppHandle;
+use tauri::Emitter;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{sleep, timeout, Duration, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -1035,6 +1036,13 @@ fn slow_entitlement_log_due() -> bool {
         *last = Some(std::time::Instant::now());
     }
     due
+}
+
+/// A chatter 7TV lists as an active subscriber holding this personal set, found
+/// outside the EventAPI (the cosmetics resolver). Same lane, dedup and repaint
+/// as an EMOTE_SET entitlement.
+pub(crate) fn personal_set_seen(twitch_id: &str, set_id: &str) {
+    enqueue_entitlement_fetch(twitch_id.to_string(), set_id.to_string());
 }
 
 fn enqueue_entitlement_fetch(twitch_id: String, set_id: String) {

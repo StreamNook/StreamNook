@@ -31,11 +31,12 @@ use std::time::{Duration, Instant};
 use tokio::sync::{oneshot, Notify};
 
 /// 7TV rejects a query past ~400 complexity with "Query is too complex." and
-/// the WHOLE batch comes back null. Re-measured against live 7TV on 2026-08-29
-/// with the active-only selection: 40 passed, 45 was rejected. 30 keeps a
-/// quarter of that headroom. Do not raise without re-measuring, and do not put
-/// definitions back into the per-user selection without lowering it again.
-const BATCH_MAX_SIZE: usize = 30;
+/// the WHOLE batch comes back null. The analyzer reports 12 per user for the
+/// selection below (9 before `roleIds` and the personal set id were added,
+/// measured 2026-09-24), so 25 users is ~300, the same headroom 30 had before.
+/// Do not raise without re-measuring, and do not put definitions back into the
+/// per-user selection without lowering it again.
+const BATCH_MAX_SIZE: usize = 25;
 /// In-flight chunks at once: 150 users in flight is plenty, and polite to 7TV
 /// on a cold-start burst (a hype-train channel join can queue 40+ chunks).
 const MAX_PARALLEL_CHUNKS: usize = 5;
@@ -70,9 +71,15 @@ const GQL_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 const PAINT_FIELDS: &str = "{ id name description data { layers { id ty { ... on PaintLayerTypeImage { __typename images { __typename url mime size scale width height frameCount } } ... on PaintLayerTypeRadialGradient { __typename repeating shape stops { at color { __typename hex r g b a } } } ... on PaintLayerTypeLinearGradient { __typename angle repeating stops { __typename at color { __typename hex r g b a } } } ... on PaintLayerTypeSingleColor { __typename color { __typename hex r g b a } } } opacity } shadows { __typename offsetX offsetY blur color { __typename hex r g b a } } } }";
 const BADGE_FIELDS: &str = "{ id name description images { url mime scale frameCount } }";
-/// What chat needs: which cosmetics a user is WEARING. Definitions come from
-/// the catalog.
-const ACTIVE_ONLY_SELECTION: &str = "{ id style { activePaint { id } activeBadge { id description } } }";
+/// What chat needs: which cosmetics a user is WEARING (definitions come from
+/// the catalog), plus their roles and personal emote set id, so a subscriber's
+/// personal emotes are known even when 7TV never announced them.
+const ACTIVE_ONLY_SELECTION: &str =
+    "{ id style { activePaint { id } activeBadge { id description } } roleIds personalEmoteSet { id } }";
+
+/// 7TV's Subscriber role. Roles are public where entitlements are not, so this
+/// is the public sign that a chatter's personal set is live.
+const SUBSCRIBER_ROLE_ID: &str = "01F37R3RFR0000K96678WEQT01";
 
 /// A chatter's cosmetics in the shape the renderer reads: the worn paint and
 /// badge (each `selected: true`) and their 7TV account id. An inventory lookup
@@ -340,6 +347,22 @@ fn owned_cosmetics(user: &Value) -> UserCosmetics {
     }
 }
 
+/// The personal emote set a chatter may use, when 7TV shows them as an active
+/// subscriber. The EventAPI entitlement stays the authoritative signal; this
+/// catches sets it never announced, such as a subscriber chatting from a client
+/// that posts no 7TV presence, or one who arrived before we subscribed.
+fn usable_personal_set(user: &Value) -> Option<&str> {
+    let subscribed = user
+        .get("roleIds")
+        .and_then(Value::as_array)?
+        .iter()
+        .any(|role| role.as_str() == Some(SUBSCRIBER_ROLE_ID));
+    if !subscribed {
+        return None;
+    }
+    user.pointer("/personalEmoteSet/id").and_then(Value::as_str)
+}
+
 // ---- Cache and batching -------------------------------------------------------
 
 struct Cached {
@@ -420,6 +443,10 @@ async fn resolve_chunk(chunk: &[String]) -> Option<HashMap<String, UserCosmetics
             let user = data.get(alias_of(id)).and_then(|u| u.get("userByConnection")).filter(|u| !u.is_null());
             if user.is_some() {
                 resolved += 1;
+            }
+            // Personal emotes are a Twitch feature; the bare id is the Twitch one.
+            if let (("TWITCH", twitch_id), Some(set_id)) = (platform_of(id), user.and_then(usable_personal_set)) {
+                crate::services::seventv_eventapi::personal_set_seen(twitch_id, set_id);
             }
             (id.clone(), user.map(worn_cosmetics).unwrap_or_default())
         })
@@ -580,10 +607,25 @@ mod tests {
         assert!(!q.contains("inventory"));
         assert!(q.contains("activePaint") && q.contains("activeBadge"));
         assert!(q.contains("u_111: users { userByConnection(platform: TWITCH, platformId: \"111\")"));
+        assert!(q.contains("roleIds personalEmoteSet { id }"));
     }
 
     #[test]
-    fn a_25_user_burst_fits_one_query_and_65_is_chunked_at_30() {
+    fn a_personal_set_counts_only_for_an_active_subscriber() {
+        let subscriber = json!({
+            "roleIds": ["01G68MMQFR0007J6GNM9E2M0TM", SUBSCRIBER_ROLE_ID],
+            "personalEmoteSet": { "id": "set1" }
+        });
+        assert_eq!(usable_personal_set(&subscriber), Some("set1"));
+        // Every account has a personal set object; without the role it is not live.
+        let lapsed = json!({ "roleIds": ["01G68MMQFR0007J6GNM9E2M0TM"], "personalEmoteSet": { "id": "set2" } });
+        assert_eq!(usable_personal_set(&lapsed), None);
+        let no_set = json!({ "roleIds": [SUBSCRIBER_ROLE_ID], "personalEmoteSet": null });
+        assert_eq!(usable_personal_set(&no_set), None);
+    }
+
+    #[test]
+    fn a_25_user_burst_fits_one_query_and_65_is_chunked_at_the_cap() {
         assert_eq!(chunks_of(ids(25, 1000)).len(), 1);
         let chunks = chunks_of(ids(65, 2000));
         assert!(chunks.len() > 1);

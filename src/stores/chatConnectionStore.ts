@@ -1145,6 +1145,44 @@ function repaintOwnRows(
   return true;
 }
 
+/**
+ * A chatter's 7TV personal set arrived after some of their messages did, so
+ * those rows show the emotes as plain words. Rust names the rows; each one's
+ * segments go back to Rust to have the set applied (the parser's own exact-word
+ * rule, so the page holds no copy of it) and the row is swapped in place.
+ */
+async function repaintPersonalEmotes(channel: string, userId: string, messageIds: unknown[]): Promise<void> {
+  const key = channel.toLowerCase();
+  const slice = getSlice(key);
+  if (!slice || !userId) return;
+  const wanted = new Set(messageIds.map(String));
+  const rows = slice.messages.filter(
+    (m): m is BackendChatMessage =>
+      typeof m === 'object' && m !== null && wanted.has(m.id) && m.user_id === userId && Array.isArray(m.segments),
+  );
+  if (rows.length === 0) return;
+  const painted = await Promise.all(
+    rows.map((m) =>
+      invoke<BackendChatMessage['segments'] | null>('apply_personal_emotes', { userId, segments: m.segments })
+        .then((segments) => (segments ? ([m.id, segments] as const) : null))
+        .catch(() => null),
+    ),
+  );
+  const byId = new Map(painted.filter((p): p is NonNullable<typeof p> => p !== null));
+  if (byId.size === 0) return;
+  withSlice(key, (s) => {
+    let next: ChannelSlice['messages'] | null = null;
+    for (let i = 0; i < s.messages.length; i++) {
+      const m = s.messages[i];
+      const segments = typeof m === 'object' && m !== null ? byId.get(m.id) : undefined;
+      if (!segments) continue;
+      next ??= s.messages.slice();
+      next[i] = { ...m, segments };
+    }
+    if (next) s.messages = next;
+  });
+}
+
 function setAllChannelsConnected(connected: boolean) {
   for (const slice of useChatConnectionStore.getState().channels.values()) {
     slice.isConnected = connected;
@@ -2066,6 +2104,10 @@ function handleWsMessage(raw: string) {
   if (raw.startsWith('{')) {
     try {
       const parsed = JSON.parse(raw);
+      if (parsed.type === 'PERSONAL_EMOTES' && Array.isArray(parsed.message_ids)) {
+        void repaintPersonalEmotes(String(parsed.channel ?? ''), String(parsed.user_id ?? ''), parsed.message_ids);
+        return;
+      }
       if (parsed.type === 'CLEARMSG' && parsed.target_msg_id) {
         const ch = (parsed.channel as string | undefined)?.toLowerCase();
         const modSettings = useAppStore.getState().settings.moderation;

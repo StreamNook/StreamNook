@@ -149,6 +149,24 @@ impl ChatHistory {
         }
     }
 
+    /// A sender's recent messages in every ring, as (channel key, message id,
+    /// text): at most the newest `per_channel` entries of each ring are looked
+    /// at, and only messages sent at or after `since_ms`. For repainting rows
+    /// when something about the sender (their 7TV personal set) arrives after
+    /// their messages did.
+    pub fn recent_by_user(user_id: &str, since_ms: i64, per_channel: usize) -> Vec<(String, String, String)> {
+        let Ok(map) = rings().lock() else { return Vec::new() };
+        let mut out = Vec::new();
+        for (channel, ring) in map.iter() {
+            for e in ring.iter().rev().take(per_channel) {
+                if e.user_id == user_id && e.ts_ms >= since_ms {
+                    out.push((channel.clone(), e.id.clone(), e.content.clone()));
+                }
+            }
+        }
+        out
+    }
+
     /// Drop a channel's ring. Called when its last consumer parts.
     pub fn clear_channel(channel: &str) {
         let key = channel.trim_start_matches('#').to_lowercase();
