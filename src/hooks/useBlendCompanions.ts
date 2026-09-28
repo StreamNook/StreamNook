@@ -22,11 +22,13 @@ export interface BlendCompanion {
    *  YouTube channel id is case-sensitive and slice keys are lowercased. */
   channel: string;
   channelName: string;
+  /** Left out of this streamer's feed from the chat header, still linked. */
+  hidden: boolean;
 }
 
 interface ChannelLinkView {
   group: ChannelLinkGroup | null;
-  companions: LinkMember[];
+  companions: (LinkMember & { hidden: boolean })[];
 }
 
 /** A channel that might be this streamer somewhere else. Never linked without
@@ -46,11 +48,14 @@ const PROBE_DELAY_MS = 6000;
 
 const EMPTY: BlendCompanion[] = [];
 
-const toCompanion = (m: LinkMember): BlendCompanion => ({
+const toCompanion = (m: LinkMember & { hidden: boolean }): BlendCompanion => ({
   provider: m.provider,
   channel: m.channel,
   channelName: m.display_name || m.channel,
+  hidden: m.hidden === true,
 });
+
+const NO_SUGGESTIONS: LinkSuggestion[] = [];
 
 export function useBlendCompanions(provider: ProviderId, channel: string | null) {
   const blend = useAppStore((s) => s.settings.chat_blend);
@@ -105,9 +110,21 @@ export function useBlendCompanions(provider: ProviderId, channel: string | null)
   // Derived against the channel on screen rather than cleared on change, so the
   // effect below writes no state synchronously and a late-arriving probe for the
   // previous channel can never surface here.
-  const [offered, setOffered] = useState<LinkSuggestion | null>(null);
-  const suggestion =
-    offered && wantKey && makeKey(offered.provider, offered.channel) === wantKey ? offered : null;
+  // Kick and YouTube answer separately, so every answer is kept: holding only
+  // the latest meant whichever platform answered second hid the other.
+  const [offered, setOffered] = useState<LinkSuggestion[]>(NO_SUGGESTIONS);
+  const suggestions = useMemo(
+    () =>
+      wantKey
+        ? offered.filter(
+            (s) =>
+              makeKey(s.provider, s.channel) === wantKey &&
+              // Once linked, the question is answered.
+              !linked.some((c) => c.provider === s.candidate.provider),
+          )
+        : NO_SUGGESTIONS,
+    [offered, wantKey, linked],
+  );
   useEffect(() => {
     if (!wantKey || !channel || blend?.suggest_links === false) return;
     const t = window.setTimeout(() => {
@@ -127,7 +144,13 @@ export function useBlendCompanions(provider: ProviderId, channel: string | null)
       // is no longer on screen, so it is dropped rather than offered here.
       const s = e.payload;
       if (makeKey(s.provider, s.channel) !== wantKey) return;
-      setOffered(s);
+      setOffered((prev) => [
+        // One per platform for this channel; anything for another channel is stale.
+        ...prev.filter(
+          (p) => makeKey(p.provider, p.channel) === wantKey && p.candidate.provider !== s.candidate.provider,
+        ),
+        s,
+      ]);
     })
       .then((un) => {
         if (cancelled) un();
@@ -140,14 +163,15 @@ export function useBlendCompanions(provider: ProviderId, channel: string | null)
     };
   }, [wantKey]);
 
-  // Which of them the user actually wants in the feed. A platform absent from
-  // the map is allowed; only an explicit false excludes it.
+  // Which of them the user actually wants in the feed: allowed by the global
+  // switches in Settings (absent means allowed; only an explicit false
+  // excludes), and not left out of this streamer's feed from the header.
   //
   // Memoized because this list is a dependency of the merge, and the merge walks
   // every open chat slice. A fresh array each render would re-run that walk on
   // every render of the chat panel, including every keystroke in its composer.
   const attached = useMemo(
-    () => (enabled ? linked.filter((c) => platforms?.[c.provider] !== false) : EMPTY),
+    () => (enabled ? linked.filter((c) => platforms?.[c.provider] !== false && !c.hidden) : EMPTY),
     [enabled, linked, platforms],
   );
 
@@ -192,5 +216,11 @@ export function useBlendCompanions(provider: ProviderId, channel: string | null)
     [],
   );
 
-  return { linked, attached, refresh, enabled, suggestion, dismissSuggestion: () => setOffered(null) };
+  const dismissSuggestion = useCallback(
+    (s: LinkSuggestion) =>
+      setOffered((prev) => prev.filter((p) => p.candidate.provider !== s.candidate.provider)),
+    [],
+  );
+
+  return { linked, attached, refresh, enabled, suggestions, dismissSuggestion };
 }

@@ -32,6 +32,13 @@ pub struct AudioBoostSettings {
     pub release: f32, // seconds to ease back off once under the threshold
 }
 
+/// Blur behind glass, on everywhere: every desktop now renders with a
+/// Chromium-family compositor (WebView2, CEF) or WebKit on macOS, where a
+/// backdrop blur is a one-off filter rather than a per-frame layer walk.
+fn default_glass_blur() -> bool {
+    true
+}
+
 fn default_audio_gain() -> f32 {
     1.5
 }
@@ -731,6 +738,12 @@ pub struct Settings {
     /// None falls back to the default (100) on the frontend.
     #[serde(default)]
     pub glass_transparency: Option<u32>,
+    /// Backdrop blur behind glass surfaces. On by default everywhere; only the
+    /// Linux build offers the switch (Settings > Theme), for machines where
+    /// the frost costs frames. A settings file written before this field
+    /// existed gets the default.
+    #[serde(default = "default_glass_blur")]
+    pub glass_blur: bool,
     #[serde(default)]
     pub setup_complete: bool,
     #[serde(default)]
@@ -858,6 +871,12 @@ pub struct ChannelLinkGroup {
     /// them again. Stored as `provider:channel`.
     #[serde(default)]
     pub dismissed: Vec<String>,
+    /// Members kept linked but left out of this streamer's combined feed, from
+    /// the platform marks in the chat header. Stored as `provider:channel`.
+    /// Per streamer on purpose: the Settings platform switches are the global
+    /// default, and a header click must never change them.
+    #[serde(default)]
+    pub hidden: Vec<String>,
 }
 
 /// One snippet the user wrote. Ids start `custom.` so they never collide with
@@ -893,14 +912,19 @@ pub struct ChatBlendSettings {
     /// absent from the map is allowed; only an explicit `false` excludes it.
     #[serde(default)]
     pub platforms: HashMap<String, bool>,
-    /// Offer a link when a channel looks like it exists on another platform.
-    /// Kick only — YouTube is never probed, because each lookup is a full
-    /// watch-page fetch and a burst of those gets the IP challenged.
+    /// Offer a link when a channel looks like it exists on another platform:
+    /// Kick by an exact channel lookup, YouTube through one search call (which
+    /// only sees live channels, and never a watch-page fetch).
     #[serde(default = "default_true")]
     pub suggest_links: bool,
     /// Mark rows that came from a platform other than the one being watched.
     #[serde(default = "default_true")]
     pub show_platform_badge: bool,
+    /// Set once `scope_blend_header_marks_once` has run. The header's platform
+    /// marks used to write `platforms`, so a click meant for one streamer turned
+    /// a platform off everywhere and stopped its link suggestions too.
+    #[serde(default)]
+    pub header_marks_scoped: bool,
 }
 
 impl Default for ChatBlendSettings {
@@ -910,6 +934,7 @@ impl Default for ChatBlendSettings {
             platforms: HashMap::new(),
             suggest_links: true,
             show_platform_badge: true,
+            header_marks_scoped: true,
         }
     }
 }
@@ -972,6 +997,7 @@ impl Default for Settings {
             font: None,
             font_custom: None,
             glass_transparency: None,
+            glass_blur: default_glass_blur(),
             setup_complete: false, // New users need to complete setup
             compact_view: None,
             error_reporting_enabled: true, // Diagnostics enabled by default
@@ -1124,6 +1150,18 @@ impl Settings {
         }
     }
 
+    /// One-time reset of the global combined-chat platform switches, for
+    /// installs written while the chat header's marks still wrote them. Almost
+    /// every `false` there came from a header click aimed at one streamer, and
+    /// it silently kept that platform out of every feed and every suggestion.
+    /// The Settings switches stay the global control from here on.
+    pub fn scope_blend_header_marks_once(&mut self) {
+        if !self.chat_blend.header_marks_scoped {
+            self.chat_blend.platforms.clear();
+            self.chat_blend.header_marks_scoped = true;
+        }
+    }
+
     pub fn retire_legacy_live_edge_gap(&mut self) {
         if self.video_player.ll_target_latency == Some(LEGACY_LIVE_EDGE_GAP_DEFAULT) {
             self.video_player.ll_target_latency = None;
@@ -1134,6 +1172,19 @@ impl Settings {
 #[cfg(test)]
 mod backup_persistence_tests {
     use super::*;
+
+    #[test]
+    fn header_marks_reset_the_global_platform_switches_once() {
+        let mut old = Settings::default();
+        old.chat_blend.header_marks_scoped = false;
+        old.chat_blend.platforms.insert("kick".into(), false);
+        old.scope_blend_header_marks_once();
+        assert!(old.chat_blend.platforms.is_empty());
+        // A switch turned off in Settings afterwards survives the next load.
+        old.chat_blend.platforms.insert("youtube".into(), false);
+        old.scope_blend_header_marks_once();
+        assert_eq!(old.chat_blend.platforms.get("youtube"), Some(&false));
+    }
 
     #[test]
     fn the_engine_turns_on_once_and_a_later_off_stays_off() {
@@ -1175,6 +1226,32 @@ mod backup_persistence_tests {
         json["video_player"].as_object_mut().expect("video_player object").remove("ll_target_latency");
         let parsed: Settings = serde_json::from_value(json).expect("settings without the field parse");
         assert_eq!(parsed.video_player.ll_target_latency, None);
+    }
+
+    /// A settings.json from before `glass_blur` existed lands on the default,
+    /// which is on for every platform (the frontend's DEFAULT_GLASS_BLUR agrees).
+    #[test]
+    fn glass_blur_defaults_on_when_absent() {
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize");
+        value
+            .as_object_mut()
+            .expect("settings object")
+            .remove("glass_blur");
+        let parsed: Settings = serde_json::from_value(value).expect("parse without the field");
+        assert!(parsed.glass_blur);
+        assert!(Settings::default().glass_blur);
+    }
+
+    /// The viewer's choice survives the round-trip at the top level, not in `extra`.
+    #[test]
+    fn glass_blur_round_trips() {
+        let mut s = Settings::default();
+        s.glass_blur = !s.glass_blur;
+        let value = serde_json::to_value(&s).expect("serialize");
+        assert_eq!(value.get("glass_blur").and_then(|v| v.as_bool()), Some(s.glass_blur));
+        let back: Settings = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(back.glass_blur, s.glass_blur);
+        assert!(!back.extra.contains_key("glass_blur"));
     }
 
     /// A modeled top-level preference must survive the save/load round-trip, and
@@ -1227,6 +1304,7 @@ mod backup_persistence_tests {
                 })
                 .collect(),
             dismissed: vec![],
+            hidden: vec![],
         }
     }
 

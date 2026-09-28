@@ -188,12 +188,30 @@ export function isTwitchLogin(s: string): boolean {
  * channels are addressed by an id or handle that a link or an @ already marks.
  * Anything YouTube-shaped still resolves, because `@name` and `UC…` are
  * unambiguous on their own.
+ *
+ * With `platform` given (the box has a platform picker), a bare word is read on
+ * that platform instead, and a link still names its own.
  */
-export function parseLinkInput(raw: string): { provider: ProviderId; channel: string } | null {
+export function parseLinkInput(
+  raw: string,
+  platform?: ProviderId,
+): { provider: ProviderId; channel: string } | null {
   const s = raw.trim();
   if (!s) return null;
   const fromLink = parseChannelInput(s);
   if (fromLink) return fromLink;
+  if (platform === 'youtube') {
+    const yt = parseYouTubeIdentifier(s);
+    return yt ? { provider: 'youtube', channel: yt } : null;
+  }
+  if (platform === 'twitch') {
+    const login = s.replace(/^@/, '');
+    return isTwitchLogin(login) ? { provider: 'twitch', channel: login.toLowerCase() } : null;
+  }
+  if (platform === 'kick') {
+    const slug = kickSlugFromInput(s.replace(/^@/, ''));
+    return slug ? { provider: 'kick', channel: slug } : null;
+  }
   if (s.startsWith('@') || isYouTubeChannelId(s)) {
     const yt = parseYouTubeIdentifier(s);
     return yt ? { provider: 'youtube', channel: yt } : null;

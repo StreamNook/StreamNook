@@ -211,6 +211,9 @@ interface ChatMessageListProps {
   /** Something above this list already cleared the floating header, so it must
    *  not reserve that space a second time. */
   headerSpaceReserved?: boolean;
+  /** How tall the floating header over this list is, measured by the host (a
+   *  hype train makes it much taller). Defaults to the plain header's 40px. */
+  headerInset?: number;
 }
 
 /**
@@ -247,6 +250,7 @@ const ChatMessageList = memo(function ChatMessageList({
   homeProvider,
   showSource,
   headerSpaceReserved,
+  headerInset = 40,
 }: ChatMessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   // Inner messages-wrapper div. We observe its size with a ResizeObserver so
@@ -623,7 +627,8 @@ const ChatMessageList = memo(function ChatMessageList({
           (history rows carry .is-backfill and are excluded by the selector). */}
       <div
         ref={contentRef}
-        className={`flex flex-col min-h-full justify-end ${headerSpaceReserved ? '' : 'pt-10'}${chatDesign?.alternating_backgrounds ? ' chat-striped' : ''}`}
+        className={`flex flex-col min-h-full justify-end${chatDesign?.alternating_backgrounds ? ' chat-striped' : ''}`}
+        style={headerSpaceReserved ? undefined : { paddingTop: headerInset }}
         data-entrance={chatDesign?.message_entrance && chatDesign.message_entrance !== 'none' ? chatDesign.message_entrance : undefined}
       >
         {messages.map((message, index) => {

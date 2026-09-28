@@ -195,3 +195,13 @@ test('a pasted link in the add box always wins over the bare-name default', () =
   });
   assert.equal(parseLinkInput('   '), null);
 });
+
+test('with a platform picked, a bare word is read on that platform and a link still wins', () => {
+  assert.deepEqual(parseLinkInput('xqc', 'kick'), { provider: 'kick', channel: 'xqc' });
+  assert.deepEqual(parseLinkInput('@Ice Poseidon', 'kick'), { provider: 'kick', channel: 'iceposeidon' });
+  assert.deepEqual(parseLinkInput('xqc', 'youtube'), { provider: 'youtube', channel: '@xqc' });
+  assert.deepEqual(parseLinkInput('@XQC', 'twitch'), { provider: 'twitch', channel: 'xqc' });
+  assert.equal(parseLinkInput('not a login!', 'twitch'), null);
+  assert.deepEqual(parseLinkInput('https://kick.com/xqc', 'youtube'), { provider: 'kick', channel: 'xqc' });
+  assert.equal(parseLinkInput('  ', 'kick'), null);
+});

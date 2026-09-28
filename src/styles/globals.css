@@ -826,6 +826,16 @@ body[data-window-blurred="true"] .glaze-inset::after {
   position: relative;
 }
 
+/* The chosen item inside a glazed bar or group, like the selected tab: a
+   darker pill set into the glass. A plain shade with no rim or shine, so the
+   glaze around it carries all the light and the pill reads as sunk into it.
+   Keep a little glass showing above and below it so it never presses against
+   the bar's edges. */
+.glaze-selected {
+  border-radius: 9999px;
+  background-color: rgb(0 0 0 / 0.72);
+}
+
 /* A glazed control that floats over media rather than over app chrome.
    Clear glass reads as a smudge on a busy thumbnail: there is nothing behind it
    with a consistent tone, so the icon has to fight the picture. A frosted floor
@@ -940,6 +950,425 @@ body[data-window-blurred="true"] .glaze-inset::after {
 .titlebar-icon-btn:hover svg,
 .titlebar-icon-btn:hover img {
   transform: scale(1.12);
+}
+
+/* ===== Chat header =====
+   The title bar's vocabulary at chat scale: a lit status dot, a real title,
+   the live numbers in one capsule and the actions in another. Both capsules
+   are `.chrome-glaze--flat`, because the header already blurs the chat under
+   it and a second live backdrop inside it would only smear the scroll. */
+.chat-header-title {
+  font-size: 13px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--color-text-primary);
+}
+
+/* Lit, not blinking: the glow says connected, and a still dot costs nothing. */
+.chat-header-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background-color: var(--color-success);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--color-success) 18%, transparent),
+    0 0 6px color-mix(in srgb, var(--color-success) 65%, transparent);
+}
+.chat-header-dot--off {
+  background-color: var(--color-error);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--color-error) 18%, transparent),
+    0 0 6px color-mix(in srgb, var(--color-error) 55%, transparent);
+}
+
+.chat-header-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  line-height: 1;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--color-text-primary);
+}
+.chat-header-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.chat-header-stat > svg {
+  color: var(--color-text-muted);
+}
+.chat-header-rule {
+  width: 1px;
+  height: 12px;
+  flex: none;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.chat-header-cluster {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  height: 26px;
+  padding: 0 2px;
+}
+.chat-header-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 22px;
+  border-radius: 9999px;
+  color: var(--color-text-secondary);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.chat-header-btn:hover {
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.1);
+}
+.chat-header-btn:active {
+  background: rgba(255, 255, 255, 0.06);
+}
+.chat-header-btn:focus-visible {
+  outline: 1.5px solid color-mix(in srgb, var(--color-accent) 70%, transparent);
+  outline-offset: -1.5px;
+}
+.chat-header-btn > svg {
+  transition: transform 0.2s cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+.chat-header-btn:hover > svg {
+  transform: scale(1.1);
+}
+/* An open panel: the title bar's pressed-in trench, in the accent. */
+.chat-header-btn.is-active,
+.chat-header-btn.is-active:hover {
+  color: var(--color-accent);
+  background: var(--color-surface);
+  box-shadow:
+    inset 2px 2px 5px -2px rgba(0, 0, 0, 0.55),
+    inset -2px -2px 5px -2px rgba(255, 255, 255, 0.09);
+}
+/* The pin toggle carries a caret, so it is wider than an icon button. */
+.chat-header-btn--pin {
+  display: inline-flex;
+  gap: 2px;
+  width: auto;
+  padding: 0 7px 0 8px;
+  color: var(--color-accent);
+}
+.chat-header-btn--pin:hover {
+  color: var(--color-accent);
+}
+.chat-header-btn--pin.is-unseen > svg:first-child {
+  filter: drop-shadow(0 0 4px var(--color-accent));
+}
+.chat-header-btn--pin > svg:last-child {
+  color: var(--color-text-muted);
+  transition: transform 0.2s ease;
+}
+.chat-header-btn--pin.is-open > svg:last-child {
+  transform: rotate(180deg);
+}
+
+/* ===== Combined chat: the link editor =====
+   Sits under the chat header in the header's material, so everything in it is
+   a quiet control on that surface: a sunken field, a sliding platform pill, and
+   a status line of fixed height that shows who a typed name really is. */
+.blend-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px 10px;
+}
+.blend-editor-label {
+  font-size: 9.5px;
+  line-height: 1.2;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.blend-done {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  transition: color 0.15s ease;
+}
+.blend-done:hover {
+  color: var(--color-text-primary);
+}
+
+/* The platform switch: the same sliding pill as the Chat / Mods toggle. */
+.blend-picker {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 28px;
+  padding: 2px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+}
+.blend-picker-option {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  transition: color 0.15s ease;
+}
+.blend-picker-option:hover,
+.blend-picker-option.is-active {
+  color: var(--color-text-primary);
+}
+.blend-picker-option > :not(.blend-picker-pill) {
+  position: relative;
+}
+.blend-picker-pill {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgba(255, 255, 255, 0.13);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.09), 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+/* Sunken, like every other field in the app, but a capsule to sit with the
+   header's pills. The Link button lives inside it, at its right end. */
+.blend-field {
+  display: flex;
+  flex: 1 1 180px;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 3px 0 10px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--color-background) 60%, rgba(0, 0, 0, 0.35));
+  box-shadow:
+    inset 0 1px 3px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 1px 0 rgba(255, 255, 255, 0.04);
+  cursor: text;
+  transition: box-shadow 0.18s ease;
+}
+.blend-field:focus-within {
+  box-shadow:
+    inset 0 1px 3px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 45%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+.blend-field > input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  background: transparent;
+  outline: none;
+  font-size: 12px;
+  color: var(--color-text-primary);
+}
+.blend-field > input::placeholder {
+  color: var(--color-text-muted);
+}
+.blend-link-btn {
+  flex: none;
+  height: 22px;
+  padding: 0 12px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 28%, transparent);
+  transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+.blend-link-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent) 26%, transparent);
+}
+.blend-link-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* One fixed height for every state, so typing never makes the bar jump. */
+.blend-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 5px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+.blend-status-text {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--color-text-muted);
+}
+.blend-status-text--error {
+  color: color-mix(in srgb, var(--color-error) 85%, white);
+}
+.blend-live-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background-color: var(--color-live);
+  box-shadow: 0 0 4px color-mix(in srgb, var(--color-live) 70%, transparent);
+}
+
+.blend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 3px 0 8px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 550;
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+}
+.blend-chip-remove {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  color: var(--color-text-muted);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.blend-chip-remove:hover {
+  color: var(--color-error);
+  background: color-mix(in srgb, var(--color-error) 14%, transparent);
+}
+
+/* "Same streamer on Kick?" One row per platform found, stacked. */
+.blend-suggest {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 6px 8px 6px 12px;
+}
+/* The face, with the platform worn as a badge so the row needs no second mark.
+   The badge is the bare logo with a soft shadow to lift it off the photo, not
+   a plate: a dark disc behind it read as a hole punched in the avatar. */
+.blend-suggest-face {
+  position: relative;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.blend-suggest-face > img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.blend-suggest-badge {
+  position: absolute;
+  right: -3px;
+  bottom: -2px;
+  display: grid;
+  place-items: center;
+  filter: drop-shadow(0 0 1.5px rgba(0, 0, 0, 0.9)) drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
+}
+
+/* The header's way into combining. A bare + at rest; with suggestions found it
+   becomes a small capsule carrying those platforms' marks, and a dot until the
+   viewer has looked. Nothing moves, so it never pulls at the eye mid-stream. */
+.blend-trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  min-width: 20px;
+  justify-content: center;
+  padding: 0 5px;
+  border-radius: 9999px;
+  color: var(--color-text-muted);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.blend-trigger:hover,
+.blend-trigger.is-open {
+  color: var(--color-text-secondary);
+  background: rgba(255, 255, 255, 0.1);
+}
+.blend-trigger--found {
+  padding: 0 6px 0 5px;
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.blend-trigger-dot {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 1.5px var(--color-background);
+}
+
+/* The panel's way on to linking by hand. */
+.blend-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  transition: color 0.15s ease;
+}
+.blend-more:hover {
+  color: var(--color-text-secondary);
+}
+
+/* The suggestion row's answers. */
+.blend-action {
+  flex: none;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.blend-action:hover {
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.08);
+}
+.blend-action--primary {
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 28%, transparent);
+}
+.blend-action--primary:hover {
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 26%, transparent);
 }
 /* The glaze without its live blur, for chrome that sits on an OPAQUE surface.
    The MultiChat popout's title bar is the case this exists for, and its own
@@ -1671,6 +2100,47 @@ body,
   overflow: hidden;
 }
 
+/* The window's own frame on Linux (src-tauri/src/linux_window_frame.rs).
+   Windows 11 rounds and borders every top-level window itself; on Linux
+   nothing frames an undecorated one, so on a floating desktop the main window
+   is transparent and the page draws the frame here, at the Windows 11 radius.
+
+   The background moves off body onto body::before because CSS paints body's
+   background across the whole canvas whenever html has none, which would fill
+   the transparent corners. contain: paint makes body the containing block for
+   fixed-position descendants and clips them, portals included, to the rounded
+   shape. Maximized and full screen are square with no border, as on Windows. */
+html[data-window-frame="rounded"] body {
+  background: transparent;
+  border-radius: 8px;
+  contain: paint;
+}
+html[data-window-frame="rounded"] body::before,
+html[data-window-frame="rounded"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+html[data-window-frame="rounded"] body::before {
+  z-index: -1;
+  background-color: var(--color-background);
+  transition: background-color 0.3s ease;
+}
+html[data-window-frame="rounded"] body::after {
+  z-index: 2147483647;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+html[data-window-frame="rounded"][data-window-state="maximized"] body,
+html[data-window-frame="rounded"][data-window-state="fullscreen"] body {
+  border-radius: 0;
+}
+html[data-window-frame="rounded"][data-window-state="maximized"] body::after,
+html[data-window-frame="rounded"][data-window-state="fullscreen"] body::after {
+  display: none;
+}
+
 /* Global box-sizing reset and text rendering */
 *,
 *::before,
@@ -2151,7 +2621,13 @@ body {
    and the per-class tint fades, so only the blur needs this global override. */
 html[data-glass="off"] *,
 html[data-glass="off"] *::before,
-html[data-glass="off"] *::after {
+html[data-glass="off"] *::after,
+/* Blur behind glass switched off (Linux only): same strip, but the
+   surfaces stay tinted glass, capped short of fully see-through by
+   applyGlassBlur so they read without frost. */
+html[data-blur="off"] *,
+html[data-blur="off"] *::before,
+html[data-blur="off"] *::after {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
 }
@@ -3296,6 +3772,74 @@ html[data-motion="reduced"] .animate-shimmer {
 }
 .penrose-march .pm-flow-c.pm-phase-b {
   animation-name: pm-flow-c, pm-phase-b;
+}
+
+/* Linux (WebKitGTK): the layered mark. A stack of same-size HTML layers, one
+   per moving group, each holding its own copy of the 128.64 x 146 viewBox, so
+   the compositor runs the march even while the page is busy (WebKitGTK drives
+   transforms on SVG groups from the main thread). Width comes from --pm-size
+   (set by the component, overridable by a caller's class) and the height from
+   the box's ratio, so every layer maps the viewBox exactly and the steps below
+   are fractions of the layer: 26 of 128.64 across, 15 and 30 of 146 down. */
+.penrose-march--layered {
+  position: relative;
+  width: var(--pm-size, 100px);
+  aspect-ratio: 128.64 / 146;
+}
+.penrose-march--layered .pm-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+.penrose-march--layered .pm-cube {
+  position: absolute;
+  inset: 0;
+}
+.penrose-march--layered .pm-cube > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+@keyframes pm-layer-flow-a {
+  from {
+    transform: translate(0, 0);
+  }
+  to {
+    transform: translate(20.2114%, 10.274%);
+  }
+}
+@keyframes pm-layer-flow-b {
+  from {
+    transform: translate(0, 0);
+  }
+  to {
+    transform: translate(-20.2114%, 10.274%);
+  }
+}
+@keyframes pm-layer-flow-c {
+  from {
+    transform: translate(0, 0);
+  }
+  to {
+    transform: translate(0, -20.5479%);
+  }
+}
+.penrose-march--layered .pm-flow-a {
+  animation-name: pm-layer-flow-a;
+}
+.penrose-march--layered .pm-flow-b {
+  animation-name: pm-layer-flow-b;
+}
+.penrose-march--layered .pm-flow-c {
+  animation-name: pm-layer-flow-c;
+}
+.penrose-march--layered .pm-flow-c.pm-phase-a {
+  animation-name: pm-layer-flow-c, pm-phase-a;
+}
+.penrose-march--layered .pm-flow-c.pm-phase-b {
+  animation-name: pm-layer-flow-c, pm-phase-b;
 }
 
 /* Deliberately NOT frozen under prefers-reduced-motion, unlike most looping
@@ -4644,6 +5188,99 @@ html[data-watching] .drops-progress-inline {
 .card-chip--hype .card-chip-shine > span {
   animation-duration: 2.5s;
 }
+/* WebKitGTK (Linux) re-walks every compositing layer on each frame an
+   animation runs, so an always-on sweep kept the whole grid recomputing at
+   60 fps with nothing happening: removing it took the worst idle frame from
+   58 ms to 19 ms and scrolling p95 from 51 ms to 39 ms. There the sweep plays
+   only while its card is hovered. Out of the tree rather than hidden: a hidden,
+   paused animation still holds a compositing layer, and every chip drawn above
+   it then needs one of its own.
+   The Linux build's Chromium pays the same way: every sweep on Discover keeps
+   ticking, on screen or not, and with them running the page held 13 fps
+   sitting still; hover-only gave back 60. */
+html[data-engine="webkitgtk"] .card-chip-shine > span,
+html[data-os="linux"] .card-chip-shine > span {
+  display: none;
+}
+html[data-engine="webkitgtk"] .group:hover .card-chip-shine > span,
+html[data-os="linux"] .group:hover .card-chip-shine > span {
+  display: block;
+}
+
+/* WebKitGTK and the Linux build: the glass rims share their element's paint
+   instead of each taking a compositing layer. Every forced rim layer made
+   everything drawn over it a layer too, 471 on Home against 13 without them,
+   and the compositor walks all of them on every animated frame. On the Linux
+   build's Chromium the same rims made Discover 1,101 layers, and re-layerizing
+   them was most of every scroll frame; without them it is 13. Repainting a
+   small rim is the cheaper side of that trade on both. */
+html[data-engine="webkitgtk"] .chrome-glaze::after,
+html[data-engine="webkitgtk"] .glaze-inset::after,
+html[data-engine="webkitgtk"] .sn-popover::after,
+html[data-os="linux"] .chrome-glaze::after,
+html[data-os="linux"] .glaze-inset::after,
+html[data-os="linux"] .sn-popover::after {
+  transform: none;
+}
+
+/* WebKitGTK only: looping animations that repaint every frame hold still.
+   These animate paint properties (background-position, box-shadow, filter,
+   text-shadow, colour) rather than transform or opacity, so the engine repaints
+   them on every frame, and on WebKitGTK that cost lands on the whole page: the
+   chat header's two shimmers alone held the player page at ~36 fps instead of
+   60, and video can only advance as fast as the page presents frames. Paused,
+   each keeps its first frame. Transform and opacity loops are unaffected. */
+html[data-engine="webkitgtk"] .iridescent-title,
+html[data-engine="webkitgtk"] .iridescent-border::after,
+html[data-engine="webkitgtk"] .live-glow,
+html[data-engine="webkitgtk"] .update-pill,
+html[data-engine="webkitgtk"] .ghost-card,
+html[data-engine="webkitgtk"] .drops-progress-inline,
+html[data-engine="webkitgtk"] .shimmer-text,
+html[data-engine="webkitgtk"] .shimmer-border::before,
+html[data-engine="webkitgtk"] .animate-shimmer,
+html[data-engine="webkitgtk"] .animate-progress-shimmer,
+html[data-engine="webkitgtk"] .automation-progress-bar,
+html[data-engine="webkitgtk"] .mining-card-border::before,
+html[data-engine="webkitgtk"] .hype-train-header,
+html[data-engine="webkitgtk"] .hype-train-progress-bar,
+html[data-engine="webkitgtk"] .hype-train-progress-golden,
+html[data-engine="webkitgtk"] .hype-train-progress-rainbow,
+html[data-engine="webkitgtk"] .blue-drop-animation,
+html[data-engine="webkitgtk"] .green-drop-animation,
+html[data-engine="webkitgtk"] .rainbow-drop-animation,
+html[data-engine="webkitgtk"] .rainbow-drop-icon,
+html[data-engine="webkitgtk"] .rainbow-puddle,
+html[data-engine="webkitgtk"] .rainbow-puddle-icon,
+html[data-engine="webkitgtk"] .sn-giftbomb-border::before,
+html[data-engine="webkitgtk"] .sn-bulb-rainbow stop,
+html[data-engine="webkitgtk"] .sn-ethereal-text,
+html[data-engine="webkitgtk"] .sn-ffz-anim-rainbow,
+html[data-engine="webkitgtk"] .sn-bttv-anim-party,
+html[data-engine="webkitgtk"] .sn-ft-anim-bar::after,
+html[data-engine="webkitgtk"] .sn-ft-anim-ring::after,
+html[data-engine="webkitgtk"] [style*="shimmer "] {
+  animation-play-state: paused !important;
+}
+
+/* Linux only (either engine): sidebar rows scrolled out of view skip rendering
+   entirely. The list holds every live follow, and without this each expand
+   painted all of them. Not on WebView2, where a skipped subtree has been seen
+   to stay unpainted until the pointer moved. The intrinsic size is the CONTENT
+   box: a row is 48 px, 12 of them padding, and a larger guess made every
+   skipped row taller than it renders. */
+html[data-os="linux"] .sn-sidebar-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 36px;
+}
+/* Linux only: the list is its own layout and paint island. While the panel
+   widens, the rows' relayout and repaint then stay inside the list instead of
+   dirtying the panel and everything composited over it. Safe to contain: the
+   list already clips its overflow, and the hover card and context menu are
+   rendered from a store outside it, never as descendants. */
+html[data-os="linux"] .sn-sidebar-list {
+  contain: layout paint;
+}
 .card-chip--hype-golden .card-chip-shine > span,
 .card-chip--lg .card-chip-shine > span {
   background: linear-gradient(
@@ -5896,6 +6533,12 @@ html[data-motion="reduced"] .sn-ffz-anim-leave {
 .sn-overlay-slider {
   accent-color: var(--color-accent);
   opacity: 0.85;
+}
+/* Linux: the overlay window is opaque and the slider fades the whole window,
+   so the slab is solid (alpha pinned to 1 by the page) and square to the
+   window's edges; a radius would show the window's own ground at the corners. */
+html[data-os="linux"] .sn-chat-overlay-frame {
+  border-radius: 0;
 }
 
 /* Fullscreen chat overlay column: same glass grammar as the overlay window,

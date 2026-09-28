@@ -19,7 +19,16 @@ use tauri::State;
 #[derive(Serialize)]
 pub struct ChannelLinkView {
     pub group: Option<ChannelLinkGroup>,
-    pub companions: Vec<LinkMember>,
+    pub companions: Vec<Companion>,
+}
+
+/// One of the other platforms' channels, and whether the viewer left it out of
+/// this streamer's feed. Answered here so the page never compares keys itself.
+#[derive(Serialize)]
+pub struct Companion {
+    #[serde(flatten)]
+    pub member: LinkMember,
+    pub hidden: bool,
 }
 
 #[derive(Deserialize)]
@@ -31,13 +40,22 @@ pub enum LinkAction {
     Unlink,
     /// It is not this streamer, and never suggest it again.
     Dismiss,
+    /// Keep it linked, but leave it out of this streamer's combined feed.
+    Hide,
+    /// Put a hidden member back into the feed.
+    Show,
 }
 
 fn view(settings: &crate::models::settings::Settings, provider: &str, channel: &str) -> ChannelLinkView {
-    ChannelLinkView {
-        group: links::group_for(settings, provider, channel),
-        companions: links::companions_of(settings, provider, channel),
-    }
+    let group = links::group_for(settings, provider, channel);
+    let companions = links::companions_of(settings, provider, channel)
+        .into_iter()
+        .map(|member| Companion {
+            hidden: group.as_ref().is_some_and(|g| links::is_hidden(g, &member)),
+            member,
+        })
+        .collect();
+    ChannelLinkView { group, companions }
 }
 
 /// The streamer that owns this channel, as seen FROM this channel.
@@ -76,6 +94,10 @@ pub async fn update_channel_link(
             LinkAction::Dismiss => {
                 links::dismiss(&mut settings, &provider, &channel, &member.provider, &member.channel);
             }
+            LinkAction::Hide | LinkAction::Show => {
+                let hide = matches!(action, LinkAction::Hide);
+                links::set_hidden(&mut settings, &provider, &channel, &member.provider, &member.channel, hide);
+            }
         }
         (settings.clone(), view(&settings, &provider, &channel))
     };
@@ -83,9 +105,8 @@ pub async fn update_channel_link(
     Ok(result)
 }
 
-/// Look for this streamer on another platform, and emit a suggestion if one
-/// turns up. Kick only — see `channel_link_service::probe` for why YouTube is
-/// never searched in the background.
+/// Look for this streamer on Kick and YouTube, and emit a suggestion for each
+/// one that turns up (see `channel_link_service::probe`).
 ///
 /// Answers immediately and does the lookup on a task, so opening a stream never
 /// waits on another platform's API. The result arrives on the `channel-links`
@@ -94,7 +115,7 @@ pub async fn update_channel_link(
 pub async fn probe_channel_links(
     provider: String,
     channel: String,
-    app: tauri::AppHandle,
+    app: crate::rt::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let settings = {

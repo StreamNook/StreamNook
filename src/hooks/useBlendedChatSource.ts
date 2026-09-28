@@ -115,6 +115,15 @@ export function useBlendedChatSource<T extends ChatSource>(
     const order = orderRef.current;
     const idToMsg = idToMsgRef.current;
     const idToChannel = idToChannelRef.current;
+    // A row routed under its Helix tag id as well must lose both entries when
+    // it leaves, or the alias outlives it for as long as the feed is open.
+    const forget = (id: string) => {
+      const m = idToMsg.get(id);
+      const tagId = m && typeof m !== 'string' ? m.tags?.['id'] : undefined;
+      if (tagId && tagId !== id) idToChannel.delete(tagId);
+      idToMsg.delete(id);
+      idToChannel.delete(id);
+    };
 
     let structuralChange = false; // appended/removed -> messages identity must change
     let refChange = false; // an on-screen row's reference upgraded in place
@@ -180,8 +189,7 @@ export function useBlendedChatSource<T extends ChatSource>(
     let removedAny = false;
     for (const id of Array.from(idToMsg.keys())) {
       if (!present.has(id)) {
-        idToMsg.delete(id);
-        idToChannel.delete(id);
+        forget(id);
         removedAny = true;
       }
     }
@@ -232,11 +240,7 @@ export function useBlendedChatSource<T extends ChatSource>(
     const cap = base + resume.overflow;
     if (order.length > cap) {
       const drop = order.length - cap;
-      for (let i = 0; i < drop; i++) {
-        const id = order[i];
-        idToMsg.delete(id);
-        idToChannel.delete(id);
-      }
+      for (let i = 0; i < drop; i++) forget(order[i]);
       order.splice(0, drop);
       evictedRef.current += drop;
       structuralChange = true;

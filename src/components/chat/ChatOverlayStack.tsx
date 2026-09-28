@@ -12,17 +12,21 @@ import { type ReactNode } from 'react';
  * Empty renders to zero height, so it never sits over chat when nothing is live.
  */
 interface ChatOverlayStackProps {
-  /** Shifts the column down so it clears the hype train bar. */
-  isHypeTrainActive?: boolean;
+  /** Where the column starts: just under the lowest piece of chat chrome (the
+   *  header, a hype train inside it, the combined-chat bar), measured by the
+   *  host so a taller header can never land a card on top of it. */
+  top: number;
+  /** Receives the column, so the host can place the pinned message under it. */
+  stackRef?: (el: HTMLDivElement | null) => void;
   children: ReactNode;
 }
 
-export function ChatOverlayStack({ isHypeTrainActive, children }: ChatOverlayStackProps) {
+export function ChatOverlayStack({ top, stackRef, children }: ChatOverlayStackProps) {
   return (
     <div
-      className={`absolute ${
-        isHypeTrainActive ? 'top-16' : 'top-10'
-      } left-2 right-2 z-40 flex flex-col gap-2 transition-[top] duration-300 ease-in-out`}
+      ref={stackRef}
+      className="absolute left-2 right-2 z-40 flex flex-col gap-2 transition-[top] duration-300 ease-in-out"
+      style={{ top }}
     >
       {children}
     </div>

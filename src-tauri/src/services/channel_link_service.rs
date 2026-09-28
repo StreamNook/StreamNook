@@ -11,9 +11,9 @@
 //! already belongs elsewhere moves it, because two groups claiming the same
 //! channel would make lookup order decide the answer.
 //!
-//! Storage and lookup only. The probe that SUGGESTS links lives alongside this
-//! and is Kick-only on purpose: every YouTube channel lookup is a full
-//! watch-page fetch, and a burst of those gets the IP challenged.
+//! Storage and lookup only. The probe that SUGGESTS links lives alongside this:
+//! Kick by an exact channel lookup, YouTube through one search call, never a
+//! watch-page fetch, because a burst of those gets the IP challenged.
 
 use crate::models::settings::{ChannelLinkGroup, LinkMember, Settings};
 use crate::services::providers::key::{make_key, normalize_channel, same_channel};
@@ -22,7 +22,8 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
+use crate::rt::AppHandle;
+use tauri::Emitter;
 
 /// The canonical address of one member, and the form `dismissed` stores.
 ///
@@ -117,6 +118,7 @@ pub fn link(
                     avatar: None,
                 }],
                 dismissed: vec![],
+                hidden: vec![],
             });
             settings.channel_links.len() - 1
         }
@@ -150,8 +152,49 @@ pub fn unlink(settings: &mut Settings, provider: &str, channel: &str) {
     settings.channel_links[idx]
         .members
         .retain(|m| !matches(m, provider, channel));
+    // An unlinked channel that is linked again later starts back in the feed.
+    let key = member_key(provider, channel);
+    settings.channel_links[idx]
+        .hidden
+        .retain(|h| !h.eq_ignore_ascii_case(&key));
     if settings.channel_links[idx].members.len() < 2 {
         settings.channel_links.remove(idx);
+    }
+}
+
+/// Whether `member` is left out of this streamer's combined feed.
+pub fn is_hidden(group: &ChannelLinkGroup, member: &LinkMember) -> bool {
+    let key = member_key(&member.provider, &member.channel);
+    group.hidden.iter().any(|h| h.eq_ignore_ascii_case(&key))
+}
+
+/// Leave a linked member out of (or put it back into) the combined feed of the
+/// streamer that owns (provider, channel). Only this streamer: the global
+/// platform switches are Settings' to change, never a header click's.
+pub fn set_hidden(
+    settings: &mut Settings,
+    provider: &str,
+    channel: &str,
+    member_provider: &str,
+    member_channel: &str,
+    hidden: bool,
+) {
+    let Some(idx) = index_of(&settings.channel_links, provider, channel) else {
+        return;
+    };
+    let group = &mut settings.channel_links[idx];
+    let Some(member) = group
+        .members
+        .iter()
+        .find(|m| matches(m, member_provider, member_channel))
+    else {
+        return;
+    };
+    // Keyed by the stored member, so the key is the canonical spelling.
+    let key = member_key(&member.provider, &member.channel);
+    group.hidden.retain(|h| !h.eq_ignore_ascii_case(&key));
+    if hidden {
+        group.hidden.push(key);
     }
 }
 
@@ -180,6 +223,7 @@ pub fn dismiss(
                     avatar: None,
                 }],
                 dismissed: vec![],
+                hidden: vec![],
             });
             settings.channel_links.len() - 1
         }
@@ -368,7 +412,11 @@ async fn probe_one(app: &AppHandle, settings: &Settings, provider: &str, channel
         return; // already the platform we would be suggesting
     }
     if settings.chat_blend.platforms.get(candidate) == Some(&false) {
-        return; // excluded everywhere, so finding one would be noise
+        // Excluded everywhere in Settings, so finding one would be noise. Said
+        // out loud: a platform switched off is otherwise a probe that silently
+        // never happens, which reads exactly like "suggestions are broken".
+        log::debug!("[ChannelLinks] {candidate} probe for {channel}: skipped, {candidate} is off in Settings");
+        return;
     }
     if group_for(settings, provider, channel)
         .map(|g| g.members.iter().any(|m| m.provider == candidate))
@@ -452,6 +500,25 @@ mod tests {
         assert!(group_for(&s, "twitch", "xqc").is_some());
         assert!(group_for(&s, "kick", "xqc").is_some(), "and from the member that was added");
         assert!(group_for(&s, "twitch", "someone_else").is_none());
+    }
+
+    #[test]
+    fn hiding_a_member_is_per_streamer_and_survives_nothing_else() {
+        let mut s = linked();
+        set_hidden(&mut s, "twitch", "xqc", "kick", "XQC", true);
+        let g = group_for(&s, "twitch", "xqc").unwrap();
+        assert!(is_hidden(&g, &member("kick", "xqc")), "found by its canonical key");
+        assert!(s.chat_blend.platforms.is_empty(), "never touches the global switches");
+        assert_eq!(companions_of(&s, "twitch", "xqc").len(), 1, "hidden is still linked");
+
+        set_hidden(&mut s, "twitch", "xqc", "kick", "xqc", false);
+        assert!(!is_hidden(&group_for(&s, "twitch", "xqc").unwrap(), &member("kick", "xqc")));
+
+        // Unlinking forgets the hide, so a later re-link starts in the feed.
+        set_hidden(&mut s, "twitch", "xqc", "kick", "xqc", true);
+        link(&mut s, "twitch", "xqc", member("youtube", "UCxvT6Dy8OjXlpLFhCAyPWlQ"));
+        unlink(&mut s, "kick", "xqc");
+        assert!(group_for(&s, "twitch", "xqc").unwrap().hidden.is_empty());
     }
 
     #[test]
