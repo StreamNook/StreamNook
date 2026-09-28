@@ -84,6 +84,17 @@ Everything else a plugin needs (icons, state libraries) it bundles itself.
 Native components plugins should reuse instead of rebuilding:
 
 - `api.components.Tooltip` (props: `content`, `side`, `delay`, `disabled`, `children`)
+- Compact panel controls: `Toggle` (`enabled`, `onChange`, `ariaLabel`, `disabled`), `ChipList`, `FolderPicker`, `Slider`, `Select`, `ChannelList` (the channel search-picker), laid out with `SettingsSection`, `SettingsRow` and `SettingsBlock`.
+- A full settings page in the Settings window's own look:
+  - `SettingsPage` (`railKey`, `children`): scrolls on its own and shows the "On this page" rail on wide windows.
+  - `PageSection` (`id`, `label`, `description`): one titled section; the rail lists every section by its label.
+  - `PageRow` (`title`, `description`, `help`, `control`, `children`, `disabled`): the control sits on the right, and `children` go under the text.
+  - `SegmentedSelect` (`value`, `options`, `onChange`).
+  - `PillList` (`items`, `numbered`, `placeholder`, `onChange`): a short list of names edited in place.
+  - `InlineSlider` (`value`, `min`, `max`, `step`, `label`, `format`, `disabled`, `onChange`).
+  - `SubControls` wrapping `SubControl` (`title`, `control`, `disabled`): the settings under a choice such as Custom.
+
+Build a page's markup from these rather than your own classes: the host stylesheet only contains the classes the host itself uses, so a plugin's own Tailwind classes may not exist in it.
 
 ### `api.ui`
 

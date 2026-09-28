@@ -8,24 +8,19 @@ import { useState, type ReactNode } from 'react';
 import { Plus, X } from 'lucide-react';
 import { Logger } from '../../utils/logger';
 import PanelChannelList from './PanelChannelList';
-import DropsSettingsTab from '../drops/DropsSettingsTab';
+import { Toggle } from '../ui/Toggle';
+import { SettingsSection as PageSection, SettingsRow as PageRow, SegmentedSelect } from '../settings/_primitives';
+import {
+  SettingsPage,
+  PillList,
+  InlineSlider,
+  SubControls,
+  SubControl,
+  DropsSettingsTab,
+} from './settingsPageKit';
 import type { PanelChannel } from '../../types/plugins';
 
-export const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
-  <button
-    type="button"
-    onClick={onChange}
-    className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
-      enabled ? 'bg-accent' : 'bg-gray-600'
-    }`}
-  >
-    <span
-      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-        enabled ? 'translate-x-6' : 'translate-x-1'
-      }`}
-    />
-  </button>
-);
+export { Toggle };
 
 // Add-and-remove chip rows for a list of strings (not a textarea).
 export const ChipList = ({
@@ -278,10 +273,11 @@ export const SettingsBlock = ({
   </div>
 );
 
-// The bundle of controls shared with plugins via `api.components`. Beyond the
-// generic controls, it re-exports the whole native Drops settings tab so a
-// drops plugin's panel can render the exact prod UI (prop-driven: settings +
-// onUpdateSettings + the automation callbacks) instead of rebuilding it.
+// The bundle of controls shared with plugins via `api.components`. The
+// SettingsSection/Row/Block trio is the compact panel layout; SettingsPage and
+// the Page* parts are the Settings window's own look, for a plugin that ships
+// a full page (see settingsPageKit.tsx). DropsSettingsTab only answers
+// Autopilot 0.4.x, which drew the app's page by that name.
 export const UI_KIT = {
   Toggle,
   ChipList,
@@ -292,6 +288,14 @@ export const UI_KIT = {
   SettingsSection,
   SettingsRow,
   SettingsBlock,
+  SettingsPage,
+  PageSection,
+  PageRow,
+  SegmentedSelect,
+  PillList,
+  InlineSlider,
+  SubControls,
+  SubControl,
   DropsSettingsTab,
 };
 
