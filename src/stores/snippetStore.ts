@@ -20,6 +20,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Logger } from '../utils/logger';
 import { patchSettings, SENDER_ID, SETTINGS_UPDATED_EVENT, type SettingsUpdatedPayload } from '../utils/settingsBroadcast';
+import { settingsOnceLoaded } from '../utils/settingsOnceLoaded';
 import { BUILTIN_SNIPPET_IDS, type Snippet } from '../utils/commandPaletteCopypastas';
 import type { Settings, SnippetSettings } from '../types';
 
@@ -224,10 +225,15 @@ function dropLegacy(): void {
 
 /** Read the stored snippets into this window's store. On the first run after
  *  the move to settings, snippets still in localStorage are saved there first
- *  (only when settings hold none, so a second window cannot double them). */
-export async function reloadSnippetStore(): Promise<void> {
+ *  (only when settings hold none, so a second window cannot double them).
+ *
+ *  `loaded` is the settings the window has already read, when it has: at boot
+ *  the AppStore reads them once and this takes that copy instead of reading
+ *  the file again. Without it (or when it resolves null, a failed boot load)
+ *  the settings are read here. */
+export async function reloadSnippetStore(loaded?: Promise<Settings | null>): Promise<void> {
   try {
-    const settings = await invoke<Settings>('load_settings');
+    const settings = (await loaded) ?? (await invoke<Settings>('load_settings'));
     let stored = storedOf(viewOf(settings.snippets));
     const legacy = readLegacy();
     if (legacy && isEmpty(stored)) {
@@ -247,7 +253,7 @@ let started = false;
 export function startSnippetSync(): void {
   if (started) return;
   started = true;
-  void reloadSnippetStore();
+  void reloadSnippetStore(settingsOnceLoaded());
   listen<SettingsUpdatedPayload>(SETTINGS_UPDATED_EVENT, (event) => {
     if (event.payload?.source === SENDER_ID) return;
     if (event.payload?.keys?.includes('snippets')) void reloadSnippetStore();

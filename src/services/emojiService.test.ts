@@ -37,8 +37,8 @@ describe('flag emoji', () => {
 describe('proxied flags', () => {
   beforeEach(() => {
     invoke.mockReset();
-    invoke.mockImplementation(async (cmd: string, args?: { text?: string; codepoint?: string }) =>
-      cmd === 'convert_emoji_shortcodes' ? args?.text : `data:image/png;base64,${args?.codepoint}`,
+    invoke.mockImplementation(async (cmd: string, args?: { texts?: string[]; codepoint?: string }) =>
+      cmd === 'convert_emoji_shortcodes_batch' ? args?.texts : `data:image/png;base64,${args?.codepoint}`,
     );
   });
 
@@ -46,5 +46,28 @@ describe('proxied flags', () => {
     await parseEmojisProxied(`Stream ${BRAZIL} ${LONE_B}`);
     const requested = invoke.mock.calls.filter(([cmd]) => cmd === 'get_emoji_image').map(([, a]) => a.codepoint);
     expect(requested).toEqual(['1f1e7-1f1f7']);
+  });
+});
+
+describe('shortcode conversion', () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    invoke.mockImplementation(async (cmd: string, args?: { texts?: string[] }) =>
+      cmd === 'convert_emoji_shortcodes_batch' ? args?.texts?.map((t) => t.replace(':fire:', '\u{1F525}')) : '',
+    );
+  });
+
+  it('never makes a round trip for a title that cannot hold a shortcode', async () => {
+    await Promise.all([parseEmojisProxied('no colons here'), parseEmojisProxied('one colon: here')]);
+    expect(invoke.mock.calls.some(([cmd]) => cmd === 'convert_emoji_shortcodes_batch')).toBe(false);
+  });
+
+  it('sends every title asked for in one tick as one batch, in order', async () => {
+    const [a, b] = await Promise.all([parseEmojisProxied('a :fire: b'), parseEmojisProxied('c :: d')]);
+    const batches = invoke.mock.calls.filter(([cmd]) => cmd === 'convert_emoji_shortcodes_batch');
+    expect(batches).toHaveLength(1);
+    expect(batches[0][1]).toEqual({ texts: ['a :fire: b', 'c :: d'] });
+    expect(a.map((s) => s.content).join('')).toBe('a \u{1F525} b');
+    expect(b.map((s) => s.content).join('')).toBe('c :: d');
   });
 });

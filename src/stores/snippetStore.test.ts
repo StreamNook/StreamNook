@@ -71,6 +71,24 @@ describe('snippetStore', () => {
     expect(useSnippetStore.getState().favoriteIds.has('old')).toBe(false);
   });
 
+  it('takes the settings the window already loaded at boot, reading the file no second time', async () => {
+    invokeMock.mockResolvedValue(undefined);
+
+    await reloadSnippetStore(Promise.resolve({ snippets: stored } as never));
+
+    expect(invokeMock.mock.calls.some((c) => c[0] === 'load_settings')).toBe(false);
+    expect(useSnippetStore.getState().favoriteIds.has('classic.kappa')).toBe(true);
+  });
+
+  it('reads the file itself when the boot load failed', async () => {
+    invokeMock.mockImplementation(settingsWith(stored));
+
+    await reloadSnippetStore(Promise.resolve(null));
+
+    expect(invokeMock.mock.calls.filter((c) => c[0] === 'load_settings')).toHaveLength(1);
+    expect(useSnippetStore.getState().favoriteIds.has('classic.kappa')).toBe(true);
+  });
+
   it('a change is shown at once and saved as the snippets key alone', () => {
     invokeMock.mockResolvedValue(undefined);
     useSnippetStore.setState(viewOf(stored));
