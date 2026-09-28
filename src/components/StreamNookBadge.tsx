@@ -464,7 +464,13 @@ export const StreamNookBadge = memo(function StreamNookBadge({
   const cosmeticName = cosmeticSlug ? getCosmeticBySlug(cosmeticSlug)?.name ?? null : null;
 
   const src = cosmeticAsset ?? streamNookLogo;
-  const label = cosmeticName ? `StreamNook ${cosmeticName}` : 'StreamNook';
+  // Some badge names already say StreamNook ("StreamNook Member"); prefixing
+  // those read "StreamNook StreamNook Member".
+  const label = !cosmeticName
+    ? 'StreamNook'
+    : /^streamnook\b/i.test(cosmeticName)
+      ? cosmeticName
+      : `StreamNook ${cosmeticName}`;
 
   return (
     <Tooltip content={label} side={side} delay={120}>
