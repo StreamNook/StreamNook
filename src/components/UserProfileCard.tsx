@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback, useSyncExternalStore } from 'react';
 import { MessageCircle, UserPlus, UserMinus, Loader2, ChevronDown, ChevronUp, Pencil, X, Gift, Share2, Check, EyeOff, History } from 'lucide-react';
-import { isHiddenInScope, withHiddenUser } from '../utils/chatFilters';
+import { filterChannelKey, isHiddenInScope } from '../utils/chatFilters';
 import { buildShareUrl } from '../utils/shareLink';
 import { providerLabel, type ProviderId } from '../types/providers';
 import { motion, AnimatePresence, useScroll, useTransform, useReducedMotion, useMotionValue, animate } from 'framer-motion';
@@ -609,15 +609,14 @@ const ChatFilterActions = ({
   const scope = channel ? ({ provider, channel } as const) : null;
   const hiddenHere = scope ? isHiddenInScope(cf, username, scope) : false;
   const hiddenGlobal = isHiddenInScope(cf, username, 'global');
+  // Rust edits the saved list in place and every window reloads it, so a card
+  // whose copy of the settings is behind can never drop other hidden users.
   const toggle = (target: 'channel' | 'global') => {
-    const st = useAppStore.getState();
-    const next = withHiddenUser(
-      st.settings.chat_filters,
-      username,
-      target === 'global' ? 'global' : scope!,
-      target === 'global' ? !hiddenGlobal : !hiddenHere,
-    );
-    st.updateSettings({ ...st.settings, chat_filters: next });
+    invoke('set_chat_user_hidden', {
+      name: username,
+      channelKey: target === 'global' ? null : filterChannelKey(scope!.provider, scope!.channel),
+      hidden: target === 'global' ? !hiddenGlobal : !hiddenHere,
+    }).catch((err) => Logger.warn('[ProfileCard] set_chat_user_hidden failed:', err));
   };
   return (
     <div className="pt-3 border-t border-borderSubtle">

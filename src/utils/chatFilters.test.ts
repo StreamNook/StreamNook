@@ -4,7 +4,6 @@ import {
   isFilteredChatUser,
   isHiddenInScope,
   normalizeFilterName,
-  withHiddenUser,
 } from './chatFilters';
 import type { ChatFilterSettings } from '../types';
 
@@ -45,24 +44,17 @@ describe('chatFilters matching', () => {
   });
 });
 
-describe('chatFilters writers', () => {
-  it('adds and removes a global name idempotently', () => {
-    let cf = withHiddenUser(undefined, '@SpamBot', 'global', true);
-    expect(isHiddenInScope(cf, 'spambot', 'global')).toBe(true);
-    cf = withHiddenUser(cf, 'SPAMBOT', 'global', true);
-    expect(cf.hidden_users).toEqual(['spambot']);
-    cf = withHiddenUser(cf, 'spambot', 'global', false);
-    expect(isHiddenInScope(cf, 'spambot', 'global')).toBe(false);
-  });
-
-  it('per-channel add targets one composite key and cleans up empty lists', () => {
+describe('chatFilters scope reads', () => {
+  it('reads a name hidden everywhere or in one channel', () => {
     const scope = { provider: 'twitch' as const, channel: 'TheBurntPeanut' };
-    let cf = withHiddenUser(undefined, 'streamelements', scope, true);
-    expect(Object.keys(cf.per_channel ?? {})).toEqual(['twitch:theburntpeanut']);
+    const cf: ChatFilterSettings = {
+      hidden_users: ['spambot'],
+      per_channel: { 'twitch:theburntpeanut': ['streamelements'], xqc: ['nightbot'] },
+    };
+    expect(isHiddenInScope(cf, '@SpamBot', 'global')).toBe(true);
     expect(isHiddenInScope(cf, 'streamelements', scope)).toBe(true);
     expect(isHiddenInScope(cf, 'streamelements', 'global')).toBe(false);
-    cf = withHiddenUser(cf, 'streamelements', scope, false);
-    expect(cf.per_channel).toEqual({});
+    expect(isHiddenInScope(cf, 'nightbot', { provider: 'twitch', channel: 'xqc' })).toBe(true);
   });
 
   it('normalization strips @ and folds case', () => {

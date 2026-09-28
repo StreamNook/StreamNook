@@ -2,6 +2,9 @@ import { useEffect } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { ProviderId } from '../types/providers';
 import UserProfileCard from '../components/UserProfileCard';
+import { useAppStore } from '../stores/AppStore';
+import { listenForSettingsUpdates } from '../utils/settingsBroadcast';
+import { Logger } from '../utils/logger';
 
 const ProfileCardPage = () => {
   // Parse URL parameters manually
@@ -23,6 +26,31 @@ const ProfileCardPage = () => {
   // Which platform this chatter is on. Absent defaults to Twitch, so a popout URL
   // from before this existed still resolves correctly.
   const provider = (params.get('provider') || 'twitch') as ProviderId;
+
+  // This window's own copy of the settings: loaded once, and reloaded whenever
+  // another window saves. Without it the card read defaults, so its toggles
+  // showed the wrong state and anything it saved started from an empty group.
+  useEffect(() => {
+    void useAppStore
+      .getState()
+      .loadSettings()
+      .catch((err) => Logger.warn('[ProfileCardPage] loadSettings failed:', err));
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listenForSettingsUpdates(() => {
+      void useAppStore.getState().loadSettings();
+    }).then((u) => {
+      if (cancelled) {
+        u();
+        return;
+      }
+      unlisten = u;
+    });
+    return () => {
+      cancelled = true;
+      void Promise.resolve(unlisten?.()).catch(() => {});
+    };
+  }, []);
 
   // Enable window dragging
   useEffect(() => {

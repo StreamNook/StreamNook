@@ -1685,6 +1685,7 @@ pub fn run() {
             // Settings commands
             load_settings,
             patch_settings,
+            set_chat_user_hidden,
             get_settings_dir,
             open_settings_folder,
             export_settings,

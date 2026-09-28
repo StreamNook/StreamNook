@@ -39,7 +39,8 @@ import type {
   YouTubeChatView,
   ChatFilterSettings,
 } from '../../types';
-import { withHiddenUser } from '../../utils/chatFilters';
+import { filterChannelKey } from '../../utils/chatFilters';
+import { Logger } from '../../utils/logger';
 import { parseKey } from '../../utils/providerKey';
 import { CHAT_PROVIDERS, PROVIDERS, type ProviderId } from '../../types/providers';
 
@@ -476,10 +477,11 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       chat_filters: { ...settings.chat_filters, ...patch },
     });
   const setHidden = (name: string, scope: { provider: ProviderId; channel: string } | 'global', hidden: boolean) =>
-    updateSettings({
-      ...settings,
-      chat_filters: withHiddenUser(settings.chat_filters, name, scope, hidden),
-    });
+    invoke('set_chat_user_hidden', {
+      name,
+      channelKey: scope === 'global' ? null : filterChannelKey(scope.provider, scope.channel),
+      hidden,
+    }).catch((err) => Logger.warn('[ChatSettings] set_chat_user_hidden failed:', err));
   // Per-channel entries flattened for display: [channelKey, label, names].
   const perChannelHidden = Object.entries(cfs?.per_channel ?? {})
     .map(([key, names]) => {

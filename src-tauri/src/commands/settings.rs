@@ -155,6 +155,112 @@ pub async fn patch_settings(
     Ok(())
 }
 
+/// Hide (or unhide) one chatter's messages, everywhere (`channel_key` None) or
+/// in one channel (`channel_key` the filter's composite key, `twitch:xqc`).
+///
+/// A read-modify-write on the canonical settings rather than a patch from the
+/// page: the page would send the whole `chat_filters` group, and a window
+/// holding an older copy of it (a profile card popout, before it had loaded
+/// settings at all) replaced every other hidden user with the one it added.
+/// Every other field of the group is kept as it is.
+#[tauri::command]
+pub async fn set_chat_user_hidden(
+    app: AppHandle,
+    name: String,
+    channel_key: Option<String>,
+    hidden: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let settings = {
+        let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
+        let mut filters = state_settings
+            .extra
+            .get("chat_filters")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        if !with_chat_user_hidden(&mut filters, &name, channel_key.as_deref(), hidden) {
+            return Ok(());
+        }
+        state_settings.extra.insert("chat_filters".to_string(), filters);
+        state_settings.clone()
+    };
+    after_settings_change(&settings, false);
+    write_settings_to_disk(&settings)?;
+    let _ = app.emit(
+        SETTINGS_UPDATED_EVENT,
+        SettingsUpdated { source: None, keys: vec!["chat_filters".to_string()] },
+    );
+    Ok(())
+}
+
+/// Apply one hide or unhide to a `chat_filters` JSON group in place. Names
+/// compare the way the rule engine matches them (case-insensitive, leading @
+/// dropped) and per-channel keys through `channel_filter_key`, so an entry saved
+/// under a bare legacy login is found and cleared too. Returns false when there
+/// was nothing to change.
+fn with_chat_user_hidden(
+    filters: &mut serde_json::Value,
+    name: &str,
+    channel_key: Option<&str>,
+    hidden: bool,
+) -> bool {
+    use crate::services::chat_rules::{channel_filter_key, normalize_name};
+    let name = normalize_name(name);
+    if name.is_empty() {
+        return false;
+    }
+    if !filters.is_object() {
+        *filters = serde_json::json!({});
+    }
+    let obj = filters.as_object_mut().expect("an object");
+    let strip = |list: &mut Vec<serde_json::Value>| -> bool {
+        let before = list.len();
+        list.retain(|v| v.as_str().map(normalize_name).as_deref() != Some(name.as_str()));
+        list.len() != before
+    };
+    let mut changed = false;
+    match channel_key {
+        None => {
+            let list = obj.entry("hidden_users").or_insert_with(|| serde_json::json!([]));
+            if !list.is_array() {
+                *list = serde_json::json!([]);
+            }
+            let list = list.as_array_mut().expect("an array");
+            changed |= strip(list);
+            if hidden {
+                list.push(serde_json::Value::String(name.clone()));
+                changed = true;
+            }
+        }
+        Some(key) => {
+            let target = channel_filter_key("twitch", key);
+            let per = obj.entry("per_channel").or_insert_with(|| serde_json::json!({}));
+            if !per.is_object() {
+                *per = serde_json::json!({});
+            }
+            let per = per.as_object_mut().expect("an object");
+            // Clear the name from every key that means this channel.
+            let same: Vec<String> =
+                per.keys().filter(|k| channel_filter_key("twitch", k) == target).cloned().collect();
+            for k in &same {
+                if let Some(list) = per.get_mut(k).and_then(|v| v.as_array_mut()) {
+                    changed |= strip(list);
+                }
+            }
+            if hidden {
+                let list = per.entry(target.clone()).or_insert_with(|| serde_json::json!([]));
+                if !list.is_array() {
+                    *list = serde_json::json!([]);
+                }
+                list.as_array_mut().expect("an array").push(serde_json::Value::String(name.clone()));
+                changed = true;
+            }
+            per.retain(|_, v| v.as_array().map_or(true, |a| !a.is_empty()));
+        }
+    }
+    changed
+}
+
 fn apply_settings_patch(
     current: &Settings,
     patch: serde_json::Map<String, serde_json::Value>,
@@ -705,6 +811,33 @@ start "" "{}"
 mod patch_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn hiding_one_chatter_keeps_every_other_filter() {
+        let mut filters = serde_json::json!({
+            "hidden_users": ["alice"],
+            "per_channel": { "streamdatabase": ["potatbotat"] },
+            "ignored_phrases": [{ "id": "p1", "pattern": "spam" }],
+            "hide_commands": true
+        });
+        assert!(with_chat_user_hidden(&mut filters, "@FossaBot", Some("twitch:StreamDatabase"), true));
+        assert_eq!(filters["hidden_users"], serde_json::json!(["alice"]));
+        assert_eq!(filters["per_channel"]["streamdatabase"], serde_json::json!(["potatbotat"]));
+        assert_eq!(filters["per_channel"]["twitch:streamdatabase"], serde_json::json!(["fossabot"]));
+        assert_eq!(filters["ignored_phrases"][0]["pattern"], "spam");
+        assert_eq!(filters["hide_commands"], true);
+
+        // Unhiding clears the name under the legacy bare key too, and drops
+        // the emptied list.
+        assert!(with_chat_user_hidden(&mut filters, "PotatBotat", Some("twitch:streamdatabase"), false));
+        assert!(filters["per_channel"].get("streamdatabase").is_none());
+
+        // Everywhere, twice, stays one entry; unhiding what is not hidden is a no-op.
+        assert!(with_chat_user_hidden(&mut filters, "bob", None, true));
+        assert!(with_chat_user_hidden(&mut filters, "BOB", None, true));
+        assert_eq!(filters["hidden_users"], serde_json::json!(["alice", "bob"]));
+        assert!(!with_chat_user_hidden(&mut filters, "carol", None, false));
+    }
 
     fn patch(v: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
         v.as_object().unwrap().clone()

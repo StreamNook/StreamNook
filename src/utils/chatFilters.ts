@@ -91,33 +91,8 @@ export function isFilteredChatUser(
   return (!!u && set.has(u)) || (!!d && set.has(d));
 }
 
-/** Immutable helpers for the settings writers (UserProfileCard, ChatSettings). */
-export function withHiddenUser(
-  cf: ChatFilterSettings | undefined,
-  name: string,
-  scope: { provider: ProviderId; channel: string } | 'global',
-  hidden: boolean,
-): ChatFilterSettings {
-  const norm = normalizeFilterName(name);
-  const next: ChatFilterSettings = {
-    ...cf,
-    hidden_users: [...(cf?.hidden_users ?? [])],
-    per_channel: { ...(cf?.per_channel ?? {}) },
-  };
-  if (scope === 'global') {
-    const list = next.hidden_users!.filter((n) => normalizeFilterName(n) !== norm);
-    if (hidden) list.push(norm);
-    next.hidden_users = list;
-  } else {
-    const key = filterChannelKey(scope.provider, scope.channel);
-    const list = (next.per_channel![key] ?? []).filter((n) => normalizeFilterName(n) !== norm);
-    if (hidden) list.push(norm);
-    if (list.length) next.per_channel![key] = list;
-    else delete next.per_channel![key];
-  }
-  return next;
-}
-
+/** Whether a name is hidden in one scope, for the buttons that toggle it. The
+ *  toggling itself is Rust's (`set_chat_user_hidden`). */
 export function isHiddenInScope(
   cf: ChatFilterSettings | undefined,
   name: string,

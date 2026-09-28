@@ -664,12 +664,7 @@ export const handleSlashCommand = async (
           addToast('Usage: /ignore <user>', 'info');
           return true;
         }
-        const { withHiddenUser } = await import('./chatFilters');
-        const st = useAppStore.getState();
-        st.updateSettings({
-          ...st.settings,
-          chat_filters: withHiddenUser(st.settings.chat_filters, target, 'global', true),
-        });
+        await invoke('set_chat_user_hidden', { name: target, channelKey: null, hidden: true });
         emitSystemMessage(`Hiding ${target} everywhere. Undo in Settings > Chat > Hidden Users.`);
         return true;
       }
