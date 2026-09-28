@@ -2408,13 +2408,16 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             <Tooltip content={`Click for details: ${seventvBadge.description || seventvBadge.name}`} side="top">
               <button
                 onClick={() => openBadgesWithBadgeInMain(seventvBadge.id)}
-                className="inline-block cursor-pointer hover:scale-110 transition-transform"
+                // A flex box around a block image: an inline-block button put the
+                // image on its text baseline, which sat it lower than the badges
+                // beside it.
+                className="inline-flex items-center cursor-pointer hover:scale-110 transition-transform"
               >
                 <FallbackImage
                   src={getBadgeImageUrl(seventvBadge)}
                   fallbackUrls={getBadgeFallbackUrls(seventvBadge.id).slice(1)}
                   alt={seventvBadge.description || seventvBadge.name}
-                  className="sn-chat-badge inline-block"
+                  className="sn-chat-badge block"
                 />
               </button>
             </Tooltip>
@@ -2597,13 +2600,16 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             <Tooltip content={`Click for details: ${seventvBadge.description || seventvBadge.name}`} side="top">
               <button
                 onClick={() => openBadgesWithBadgeInMain(seventvBadge.id)}
-                className="inline-block cursor-pointer hover:scale-110 transition-transform"
+                // A flex box around a block image: an inline-block button put the
+                // image on its text baseline, which sat it lower than the badges
+                // beside it.
+                className="inline-flex items-center cursor-pointer hover:scale-110 transition-transform"
               >
                 <FallbackImage
                   src={getBadgeImageUrl(seventvBadge)}
                   fallbackUrls={getBadgeFallbackUrls(seventvBadge.id).slice(1)}
                   alt={seventvBadge.description || seventvBadge.name}
-                  className="sn-chat-badge inline-block"
+                  className="sn-chat-badge block"
                 />
               </button>
             </Tooltip>
@@ -2780,13 +2786,16 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             <Tooltip content={`Click for details: ${seventvBadge.description || seventvBadge.name}`} side="top">
               <button
                 onClick={() => openBadgesWithBadgeInMain(seventvBadge.id)}
-                className="inline-block cursor-pointer hover:scale-110 transition-transform"
+                // A flex box around a block image: an inline-block button put the
+                // image on its text baseline, which sat it lower than the badges
+                // beside it.
+                className="inline-flex items-center cursor-pointer hover:scale-110 transition-transform"
               >
                 <FallbackImage
                   src={getBadgeImageUrl(seventvBadge)}
                   fallbackUrls={getBadgeFallbackUrls(seventvBadge.id).slice(1)}
                   alt={seventvBadge.description || seventvBadge.name}
-                  className="sn-chat-badge inline-block"
+                  className="sn-chat-badge block"
                 />
               </button>
             </Tooltip>
@@ -2898,13 +2907,16 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             <Tooltip content={`Click for details: ${seventvBadge.description || seventvBadge.name}`} side="top">
               <button
                 onClick={() => openBadgesWithBadgeInMain(seventvBadge.id)}
-                className="inline-block cursor-pointer hover:scale-110 transition-transform"
+                // A flex box around a block image: an inline-block button put the
+                // image on its text baseline, which sat it lower than the badges
+                // beside it.
+                className="inline-flex items-center cursor-pointer hover:scale-110 transition-transform"
               >
                 <FallbackImage
                   src={getBadgeImageUrl(seventvBadge)}
                   fallbackUrls={getBadgeFallbackUrls(seventvBadge.id).slice(1)}
                   alt={seventvBadge.description || seventvBadge.name}
-                  className="sn-chat-badge inline-block"
+                  className="sn-chat-badge block"
                 />
               </button>
             </Tooltip>
