@@ -23,8 +23,9 @@ export interface OverlayApiResponse {
 }
 
 export interface OverlayHost {
-  /** The signed-in Twitch account's id, or null. Overlays belong to it, so the
-   *  builder asks for sign-in until there is one. */
+  /** The signed-in Twitch account's id, or null. Published overlays belong to
+   *  it, so signing in is what publishing (the OBS link) needs; building and
+   *  previewing work without it. */
   accountId: string | null;
   /** Start Twitch sign-in. */
   signIn(): void;

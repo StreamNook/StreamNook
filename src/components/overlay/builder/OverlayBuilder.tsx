@@ -1005,6 +1005,12 @@ const OverlayEditor = () => {
   };
 
   const publish = () => {
+    // The link is the one thing that needs an account. Signing in keeps the
+    // draft, so the viewer publishes it right after.
+    if (!host.accountId) {
+      host.signIn();
+      return;
+    }
     const p = profiles[activeIdx];
     if (!p) return;
     cancelPendingSave(p.uid);
@@ -1137,6 +1143,7 @@ const OverlayEditor = () => {
   // overlays made elsewhere appear, and drafts stay as they are.
   const lastSyncRef = useRef(0);
   const syncWithAccount = async () => {
+    if (!host.accountId) return; // signed out: drafts only, no account to line up with
     if (Date.now() - lastSyncRef.current < 10_000) return;
     lastSyncRef.current = Date.now();
     let rows: ServerOverlay[];
@@ -1246,7 +1253,9 @@ const OverlayEditor = () => {
   );
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(340px,430px)]">
+    // The preview column's widest size is the host's to pick: the app's settings
+    // pane is narrow, the site page has room for a larger preview.
+    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(340px,var(--overlay-builder-preview-max,430px))]">
       {/* ── Controls ─────────────────────────────────────────────── */}
       <div className="space-y-5 min-w-0">
         {/* Which overlay you are editing, and the two things you do to it.
@@ -1360,7 +1369,9 @@ const OverlayEditor = () => {
             </Tooltip>
             <Tooltip
               content={
-                sources.length === 0
+                !host.accountId
+                  ? 'Sign in with Twitch to get an OBS Browser Source link. This overlay stays as you built it.'
+                  : sources.length === 0
                   ? 'Add a source first'
                   : publishedUrl
                     ? 'Copy the OBS link again. It stays in sync as you tweak, so you never need to re-copy.'
@@ -1369,7 +1380,7 @@ const OverlayEditor = () => {
             >
               <button
                 onClick={publish}
-                disabled={publishState === 'publishing' || sources.length === 0}
+                disabled={publishState === 'publishing' || (!!host.accountId && sources.length === 0)}
                 // Accent on GLASS, not a filled accent slab. Publish does need to
                 // outrank the four icon buttons beside it (it is the action you
                 // come back to after every tweak, and as a plain glass button it
@@ -1381,8 +1392,10 @@ const OverlayEditor = () => {
                 // `.glass-button:hover` already lifts the body, so no hover here.
                 className="glass-button inline-flex flex-shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] font-medium text-accent disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Link2 size={13} />{' '}
-                {publishState === 'publishing'
+                {host.accountId ? <Link2 size={13} /> : <LogIn size={13} />}{' '}
+                {!host.accountId
+                  ? 'Sign in to publish'
+                  : publishState === 'publishing'
                   ? 'Publishing…'
                   : publishState === 'done'
                     ? 'Copied'
@@ -1993,30 +2006,14 @@ const OverlayEditor = () => {
   );
 };
 
-// Overlays belong to a Twitch account, in the app and on the site alike, so the
-// builder asks for sign-in first. Keyed by account: signing in as someone else
-// starts a fresh editor that loads that account's overlays.
+// Anyone can build and preview an overlay; signing in is only needed for the
+// OBS link, because a published overlay belongs to a Twitch account. A draft
+// made signed out lives on this device and is still there after signing in.
+// Keyed by account: signing in as someone else starts a fresh editor that loads
+// that account's overlays.
 export const OverlayBuilder = () => {
   const host = useOverlayHost();
-  if (!host.accountId) return <SignInGate onSignIn={host.signIn} />;
-  return <OverlayEditor key={host.accountId} />;
+  return <OverlayEditor key={host.accountId ?? 'signed-out'} />;
 };
-
-const SignInGate = ({ onSignIn }: { onSignIn: () => void }) => (
-  <div className="flex min-h-[320px] items-center justify-center p-6">
-    <div className="settings-pinned-card max-w-sm space-y-3 px-5 py-5 text-center">
-      <p className="text-[15px] font-semibold text-textPrimary">Sign in to Twitch to build overlays</p>
-      <p className="text-[12.5px] leading-relaxed text-textSecondary">
-        Your overlays are saved to your Twitch account, so you can edit them in the app or on streamnook.app.
-      </p>
-      <button
-        onClick={onSignIn}
-        className="glass-button inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] font-medium text-accent"
-      >
-        <LogIn size={14} /> Sign in with Twitch
-      </button>
-    </div>
-  </div>
-);
 
 export default OverlayBuilder;
