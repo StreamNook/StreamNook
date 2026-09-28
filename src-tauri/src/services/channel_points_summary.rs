@@ -12,7 +12,8 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Listener};
+use crate::rt::AppHandle;
+use tauri::{Emitter, Listener};
 
 pub const SUMMARY_EVENT: &str = "channel-points-summary";
 const QUIET: Duration = Duration::from_secs(3);
@@ -35,9 +36,23 @@ pub struct Summary {
     pub last_balance: Option<i64>,
 }
 
+/// One earn. Paths report the same channel differently (the chest claim knows
+/// only the login, the socket and the poll carry the display name), so the
+/// channel is grouped by `key` and shown by the best `name` any of its earns had.
+#[derive(Debug, Clone)]
+struct Earn {
+    /// Channel id, else the lowercased login or name. None = no channel named.
+    key: Option<String>,
+    name: Option<String>,
+    /// `name` is a real display name, not a bare login.
+    display: bool,
+    points: i64,
+    reason: String,
+}
+
 #[derive(Default)]
 struct Burst {
-    events: Vec<(Option<String>, i64, String)>,
+    events: Vec<Earn>,
     last_balance: Option<i64>,
     generation: u64,
 }
@@ -48,32 +63,56 @@ fn summarize(burst: &Burst) -> Option<Summary> {
     if burst.events.is_empty() {
         return None;
     }
-    let mut by_channel: Vec<Earned> = Vec::new();
+    // (key, name is a display name, earned)
+    let mut by_channel: Vec<(&str, bool, Earned)> = Vec::new();
     let mut by_reason: Vec<Earned> = Vec::new();
     let mut total = 0;
-    for (channel, points, reason) in &burst.events {
-        total += points;
-        if let Some(name) = channel {
-            match by_channel.iter_mut().find(|e| &e.name == name) {
-                Some(e) => e.points += points,
-                None => by_channel.push(Earned { name: name.clone(), points: *points }),
+    for earn in &burst.events {
+        total += earn.points;
+        if let (Some(key), Some(name)) = (earn.key.as_deref(), earn.name.as_ref()) {
+            match by_channel.iter_mut().find(|(k, _, _)| *k == key) {
+                Some((_, display, e)) => {
+                    e.points += earn.points;
+                    if earn.display && !*display {
+                        e.name = name.clone();
+                        *display = true;
+                    }
+                }
+                None => by_channel.push((key, earn.display, Earned { name: name.clone(), points: earn.points })),
             }
         }
-        let code = reason.to_uppercase();
+        let code = earn.reason.to_uppercase();
         match by_reason.iter_mut().find(|e| e.name == code) {
-            Some(e) => e.points += points,
-            None => by_reason.push(Earned { name: code, points: *points }),
+            Some(e) => e.points += earn.points,
+            None => by_reason.push(Earned { name: code, points: earn.points }),
         }
     }
     // Stable: equal amounts keep first-seen order.
-    by_channel.sort_by(|a, b| b.points.cmp(&a.points));
+    by_channel.sort_by(|a, b| b.2.points.cmp(&a.2.points));
     Some(Summary {
         total_points: total,
-        channels: by_channel,
+        channels: by_channel.into_iter().map(|(_, _, e)| e).collect(),
         reasons: by_reason,
-        first_reason: burst.events[0].2.clone(),
+        first_reason: burst.events[0].reason.clone(),
         last_balance: burst.last_balance,
     })
+}
+
+fn earn_from(text: &dyn Fn(&str) -> Option<String>, points: i64) -> Earn {
+    let login = text("channel_login");
+    let display_name = text("channel_display_name");
+    // A display name equal to the login (the claim path sends the login in
+    // both fields) is no better than the login.
+    let display = display_name.as_ref().is_some_and(|d| Some(d) != login.as_ref());
+    let name = display_name.or_else(|| login.clone());
+    let key = text("channel_id").or_else(|| login.or_else(|| name.clone()).map(|s| s.to_lowercase()));
+    Earn {
+        key,
+        name,
+        display,
+        points,
+        reason: text("reason").unwrap_or_else(|| "watch".into()),
+    }
 }
 
 fn record(app: &AppHandle, payload: &serde_json::Value) {
@@ -82,12 +121,11 @@ fn record(app: &AppHandle, payload: &serde_json::Value) {
         return;
     }
     let text = |k: &str| payload.get(k).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(String::from);
-    let channel = text("channel_display_name").or_else(|| text("channel_login"));
-    let reason = text("reason").unwrap_or_else(|| "watch".into());
+    let earn = earn_from(&text, points);
     let generation = {
         let mut guard = BURST.lock().unwrap_or_else(|e| e.into_inner());
         let burst = guard.get_or_insert_with(Burst::default);
-        burst.events.push((channel, points, reason));
+        burst.events.push(earn);
         if let Some(balance) = payload.get("balance").and_then(|v| v.as_i64()).filter(|b| *b > 0) {
             burst.last_balance = Some(balance);
         }
@@ -126,12 +164,43 @@ pub fn init(app: &AppHandle) {
 mod tests {
     use super::*;
 
+    /// An earn as the event carries it: `fields` are (key, value) payload pairs.
+    fn earn(fields: &[(&str, &str)], points: i64) -> Earn {
+        let text = |k: &str| fields.iter().find(|(f, _)| *f == k).map(|(_, v)| v.to_string());
+        earn_from(&text, points)
+    }
+
     fn burst(events: &[(Option<&str>, i64, &str)], balance: Option<i64>) -> Burst {
         Burst {
-            events: events.iter().map(|(c, p, r)| (c.map(String::from), *p, r.to_string())).collect(),
+            events: events
+                .iter()
+                .map(|(c, p, r)| {
+                    let mut fields = vec![("reason", *r)];
+                    if let Some(c) = c {
+                        fields.push(("channel_login", c));
+                    }
+                    earn(&fields, *p)
+                })
+                .collect(),
             last_balance: balance,
             generation: 1,
         }
+    }
+
+    #[test]
+    fn one_channel_reported_by_login_and_by_display_name_is_one_row() {
+        // The chest claim sends the login in both name fields; the socket's
+        // watch earn carries the display name. Same channel id.
+        let claim = earn(
+            &[("channel_id", "42"), ("channel_login", "hutchmf"), ("channel_display_name", "hutchmf"), ("reason", "claim")],
+            50,
+        );
+        let watch = earn(
+            &[("channel_id", "42"), ("channel_login", "hutchmf"), ("channel_display_name", "HutchMF"), ("reason", "WATCH")],
+            10,
+        );
+        let s = summarize(&Burst { events: vec![claim, watch], last_balance: None, generation: 1 }).unwrap();
+        assert_eq!(s.channels, vec![Earned { name: "HutchMF".into(), points: 60 }]);
     }
 
     #[test]
