@@ -527,21 +527,25 @@ async fn fetch_badge_data(
         .await
         .map_err(|e| format!("Failed to get badges: {}", e))?;
 
+    // The card's badge row in the same order chat draws it.
+    let mut display_badges: Vec<Badge> = badge_response
+        .display_badges
+        .into_iter()
+        .map(|b| Badge {
+            id: b.badge_info.id,
+            set_id: b.badge_info.set_id,
+            version: b.badge_info.version,
+            title: b.badge_info.title,
+            description: b.badge_info.description,
+            image1x: b.badge_info.image_1x,
+            image2x: b.badge_info.image_2x,
+            image4x: b.badge_info.image_4x,
+        })
+        .collect();
+    display_badges.sort_by_key(|b| crate::models::chat_layout::twitch_badge_rank(&b.set_id));
+
     Ok(BadgeData {
-        display_badges: badge_response
-            .display_badges
-            .into_iter()
-            .map(|b| Badge {
-                id: b.badge_info.id,
-                set_id: b.badge_info.set_id,
-                version: b.badge_info.version,
-                title: b.badge_info.title,
-                description: b.badge_info.description,
-                image1x: b.badge_info.image_1x,
-                image2x: b.badge_info.image_2x,
-                image4x: b.badge_info.image_4x,
-            })
-            .collect(),
+        display_badges,
         earned_badges: badge_response
             .earned_badges
             .into_iter()
