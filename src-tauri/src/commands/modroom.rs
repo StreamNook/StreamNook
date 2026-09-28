@@ -10,7 +10,7 @@ use crate::services::modroom_auth_service as auth;
 use crate::utils::oauth_server;
 use serde::Serialize;
 use std::time::Duration;
-use tauri::AppHandle;
+use crate::rt::AppHandle;
 
 /// Gate Worker base (custom domain on the streamnook.app zone).
 const MODROOM_API_BASE: &str = "https://modroom.streamnook.app";

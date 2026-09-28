@@ -21,7 +21,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use log::debug;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use crate::rt::AppHandle;
+use tauri::{Emitter, Manager};
 use tokio::sync::RwLock;
 
 use crate::models::settings::AppState;

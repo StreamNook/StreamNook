@@ -12,8 +12,36 @@
 //! store on macOS, where every Mac user's session already is; moving them would
 //! sign everyone out once. `services::sign_in_profile` clears only the
 //! platform's cookies there instead.
+//!
+//! On Linux (Chromium, see `rt.rs`) a folder is a Chromium profile, and CEF
+//! requires every profile to sit under one root cache; a folder elsewhere is
+//! silently replaced by a hashed one under that root, which would leave the
+//! folder deletes in `sign_in_profile` and `account_store` hitting empty
+//! shells. `profile_dir` puts every named profile under the root on Linux and
+//! leaves the other platforms' folders where they have always been.
 
 use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
+
+/// The folder of the persistent profile `name` (`twitch_web_profiles/<id>`,
+/// `platform_web_profiles/youtube`, ...), given `base`, the app folder it
+/// lives under on Windows and macOS. Not created here.
+///
+/// On Linux `base` is ignored: the profile lives under Chromium's root cache
+/// (`linux_cef::profiles_root`), keeping the same relative name. Profiles
+/// written by the WebKitGTK builds under `base` are not readable by
+/// Chromium and are left behind; each platform asks for one sign-in again.
+pub fn profile_dir(base: PathBuf, name: impl AsRef<Path>) -> PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = base;
+        crate::linux_cef::profiles_root().join(name)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        base.join(name)
+    }
+}
 
 /// The identifier of the store that belongs to `name`, for
 /// `WebviewWindowBuilder::data_store_identifier`, which only macOS reads.

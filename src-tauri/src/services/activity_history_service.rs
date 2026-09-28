@@ -20,7 +20,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
+use crate::rt::AppHandle;
+use tauri::Manager;
 
 const HISTORY_FILE: &str = "activity_history.json";
 const PER_CHANNEL_CAP: usize = 200;

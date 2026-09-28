@@ -19,7 +19,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
-use tauri::{AppHandle, Manager};
+use crate::rt::AppHandle;
+use tauri::Manager;
 
 const MOD_LOGS_FILE: &str = "mod_logs.json";
 // Keep at most this many entries per channel on disk. Mod actions are

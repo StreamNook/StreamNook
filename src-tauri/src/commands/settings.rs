@@ -6,7 +6,8 @@ use regex::Regex;
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use tauri::{AppHandle, Emitter, State};
+use crate::rt::AppHandle;
+use tauri::{Emitter, State};
 
 // The debounced flusher snapshots the CURRENT in-memory settings from here at
 // flush time (the same Arc the managed AppState holds), never a caller-supplied
@@ -595,7 +596,7 @@ pub async fn get_release_notes(version: Option<String>) -> Result<ReleaseNotes, 
 
 #[tauri::command]
 pub async fn download_and_install_app_update(
-    app_handle: tauri::AppHandle,
+    app_handle: crate::rt::AppHandle,
 ) -> Result<String, String> {
     // First, get the latest version. Follow the full redirect chain so this
     // survives a repo rename/transfer (old URLs 301 to the new home first)

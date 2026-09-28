@@ -28,7 +28,8 @@ use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
+use crate::rt::AppHandle;
+use tauri::{Emitter, Manager};
 
 pub const REDIRECT_EVENT: &str = "watch-session://redirect";
 pub const OFFLINE_EVENT: &str = "watch-session://offline";

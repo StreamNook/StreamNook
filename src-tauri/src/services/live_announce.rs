@@ -21,7 +21,8 @@ use crate::services::live_notification_service::LiveNotification;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager};
+use crate::rt::AppHandle;
+use tauri::{Emitter, Manager};
 
 pub const EVENT: &str = "streamer-went-live";
 

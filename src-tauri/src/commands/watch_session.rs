@@ -1,7 +1,7 @@
 //! The main window's watch session (see services/watch_session.rs).
 
 use crate::services::watch_session::{self, OfflineDecision, WatchTarget};
-use tauri::AppHandle;
+use crate::rt::AppHandle;
 
 /// The main window started playing this stream.
 #[tauri::command]

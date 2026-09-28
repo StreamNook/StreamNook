@@ -33,7 +33,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use crate::rt::AppHandle;
+use tauri::Emitter;
 use tauri::async_runtime::JoinHandle;
 
 use crate::models::settings::Settings;

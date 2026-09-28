@@ -2,7 +2,8 @@ use log::{debug, error};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Listener};
+use crate::rt::AppHandle;
+use tauri::{Emitter, Listener};
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 

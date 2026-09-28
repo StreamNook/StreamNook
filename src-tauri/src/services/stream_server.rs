@@ -473,7 +473,7 @@ pub fn upstream_profile() -> UpstreamProfile {
 /// session addressable by plugins.
 static SOLO_CHANNEL: Lazy<std::sync::Mutex<Option<String>>> =
     Lazy::new(|| std::sync::Mutex::new(None));
-static APP_HANDLE: once_cell::sync::OnceCell<tauri::AppHandle> = once_cell::sync::OnceCell::new();
+static APP_HANDLE: once_cell::sync::OnceCell<crate::rt::AppHandle> = once_cell::sync::OnceCell::new();
 /// True when the LL-HLS origin is actively serving parts for this stream — what the
 /// player keys `lowLatencyMode` on. A real spec LL-HLS playlist (`#EXT-X-PART` +
 /// blocking reload) is being served, so hls.js's native low-latency controller has
@@ -485,7 +485,7 @@ pub fn is_low_latency() -> bool {
 
 /// Store the app handle so the relay can emit reload events and reach the
 /// plugin host for `on_ad_window` notifications.
-pub fn set_app_handle(handle: tauri::AppHandle) {
+pub fn set_app_handle(handle: crate::rt::AppHandle) {
     let _ = APP_HANDLE.set(handle);
 }
 

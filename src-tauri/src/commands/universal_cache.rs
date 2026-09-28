@@ -93,7 +93,7 @@ pub async fn cleanup_universal_cache() -> Result<usize, String> {
 }
 
 #[command]
-pub async fn clear_all_universal_cache(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn clear_all_universal_cache(app: crate::rt::AppHandle) -> Result<(), String> {
     clear_universal_cache().map_err(|e| e.to_string())?;
     crate::services::asset_cache_queue::announce_cleared(&app);
     Ok(())
@@ -191,7 +191,7 @@ pub async fn auto_sync_universal_cache_if_stale() -> Result<bool, String> {
 /// Results arrive as `asset-cache://cached`.
 #[command]
 pub fn asset_cache_enqueue(
-    app: tauri::AppHandle,
+    app: crate::rt::AppHandle,
     kind: crate::services::asset_cache_queue::AssetKind,
     items: Vec<crate::services::asset_cache_queue::AssetRequest>,
     priority: Option<bool>,
@@ -201,6 +201,6 @@ pub fn asset_cache_enqueue(
 
 /// An emote picker opened or closed in the calling window.
 #[command]
-pub fn asset_cache_set_burst(app: tauri::AppHandle, window: tauri::WebviewWindow, active: bool) {
+pub fn asset_cache_set_burst(app: crate::rt::AppHandle, window: crate::rt::WebviewWindow, active: bool) {
     crate::services::asset_cache_queue::set_burst(&app, window.label(), active);
 }

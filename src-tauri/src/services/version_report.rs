@@ -49,7 +49,7 @@ use std::time::Duration;
 
 use log::{debug, warn};
 use serde_json::json;
-use tauri::AppHandle;
+use crate::rt::AppHandle;
 
 use crate::services::client_identity;
 

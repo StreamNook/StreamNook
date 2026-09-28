@@ -1,6 +1,7 @@
 use log::debug;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use crate::rt::{AppHandle, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, WebviewUrl};
 
 // ==============================================
 // WHISPER SCRAPING AUTOMATION

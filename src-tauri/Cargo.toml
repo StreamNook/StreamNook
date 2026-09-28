@@ -24,11 +24,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.5.2", features = [] }
 
 [dependencies]
-tauri = { version = "2.9.4", features = ["protocol-asset", "tray-icon", "image-png"] }
+# `tauri` itself is declared per target below: the runtime differs on Linux
+# (CEF) and the feature set that picks the runtime cannot be expressed in one
+# line. Every other dependency is runtime-agnostic and stays here.
 tauri-plugin-shell = { git = "https://github.com/tauri-apps/plugins-workspace", branch = "v2" }
 tauri-plugin-opener = { git = "https://github.com/tauri-apps/plugins-workspace", branch = "v2" }
 tauri-plugin-window-state = { git = "https://github.com/tauri-apps/plugins-workspace", branch = "v2" }
-tauri-plugin-dialog = "2.2.0"
+# tauri-plugin-dialog is declared per target below: its Linux backend differs.
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 tokio = { version = "1.48.0", features = ["full"] }
@@ -100,26 +102,123 @@ tauri-plugin-os = "2"
 # had no way to request permission or actually post one.
 tauri-plugin-notification = "2"
 
+# Token vault (services/token_vault): AES-256-GCM over every stored credential.
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+getrandom = "0.3"
+
+# The Tauri runtime, per target.
+#
+# Windows, macOS, Android and iOS: Tauri's default features, which select the
+# wry runtime (WebView2, WKWebView, the Android System WebView). This is the
+# line the app has always had, only moved into a target table so the Linux
+# table below can differ; the dependency graph on these targets is unchanged.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+tauri = { version = "2.9.4", features = ["protocol-asset", "tray-icon", "image-png"] }
+tauri-plugin-dialog = "2.2.0"
+
+# Linux: the same crates.io `tauri` with the `wry` feature OFF (its defaults
+# minus wry are restated) and the Chromium Embedded Framework runtime supplied
+# by the app through `tauri-runtime-cef`. `src/rt.rs` names the runtime type
+# once; the `--type=` helper-process check in `main.rs` must run before any
+# app code because CEF re-executes this binary for its renderer, GPU, utility
+# and zygote processes. Feature unification is per compile target, so wry
+# never enters the Linux graph and CEF never enters the others (`cargo tree
+# --target` is the proof; `cargo metadata --filter-platform` lies about it).
+[target.'cfg(target_os = "linux")'.dependencies]
+tauri = { version = "2.9.4", default-features = false, features = [
+    "compression",
+    "common-controls-v6",
+    "dynamic-acl",
+    "protocol-asset",
+    "tray-icon",
+    "image-png",
+] }
+# Vendored (see vendor/tauri-runtime-cef/STREAMNOOK-VENDOR.md): SableClient's
+# port of Tauri's unreleased `feat/cef` branch onto the published crates, at
+# commit fbd0f206, with its `cef` pin moved to 151.8.1 so it binds the CEF
+# 151.3.24 distribution StreamNook builds with proprietary codecs. The runtime
+# checks CEF's API hash at startup, so the crate pin and the distribution move
+# together; `CEF_PATH` must point at that distribution when building.
+tauri-runtime-cef = { path = "vendor/tauri-runtime-cef" }
+# The runtime is written against winit 0.31.0-beta.2. beta.3 renamed the
+# drag-and-drop events and the runtime no longer compiles against it, so the
+# app pins the exact pre-release the runtime was built for.
+winit = "=0.31.0-beta.2"
+# Sign-in overlays are made transient for the main window through
+# WM_TRANSIENT_FOR directly (src/linux_x11.rs): the runtime answers
+# `WebviewWindowBuilder::parent` with an error on Linux. Both crates are
+# already in the Linux graph through the runtime; the versions match its.
+x11-dl = "2.21"
+raw-window-handle = "0.6"
+# The second-launch forward to a running instance (src/linux_cef.rs) speaks
+# tauri-plugin-single-instance's own D-Bus interface before the Tauri builder
+# exists, because the runtime takes Chromium's profile lock before plugins
+# initialise. Same zbus line the plugin resolves, so the tree carries one copy.
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
+# Dialogs through xdg-desktop-portal, not rfd's GTK 3 backend: that backend
+# pumps the default GLib main context on a thread of its own, which the CEF
+# runtime's X11 event source also hangs on, and Chromium then dispatches X
+# events off its UI sequence and dies in a mojo CHECK at the next window
+# activation. The portal backend talks D-Bus only. Same version as the other
+# targets, so the lock carries one copy.
+tauri-plugin-dialog = { version = "2.2.0", default-features = false, features = ["xdg-portal"] }
+# `gtk` is here for one call, `gtk::init` in src/linux_cef.rs: the tray icon's
+# menu is a GTK menu and building it aborts in a process that never initialised
+# GTK, which under CEF nothing else does. Pinned to the 0.18 line tauri and the
+# runtime already resolve to, so the tree carries one copy. (The aspect lock in
+# services/window_aspect.rs writes X11 WM_NORMAL_HINTS through x11-dl above
+# and no longer uses GTK.)
+#
+# `target_os = "linux"` and NOT the `all(unix, not(macos))` shape the other
+# platform shims use: Android is unix and has no GTK, but its target_os is
+# "android", so this spelling excludes it and that one does not.
+gtk = "0.18"
+# Secret Service store for the token vault's key. libdbus is already linked
+# (Tauri's window layer uses it); crypto-rust encrypts the session without OpenSSL.
+dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
+# reqwest on Linux: rustls only. With native-tls (OpenSSL) every
+# `reqwest::Client` build parses the system CA bundle (~150 certificates), and
+# with the tokio workers building clients concurrently at boot they convoy on
+# OpenSSL's locks and starve the renderer for seconds. The feature list is the
+# Windows/macOS set (see the reqwest table below) minus `default-tls`, restated
+# in full because `default-features = false` drops charset, http2 and
+# system-proxy too. Same version as the other tables, so the lock carries one copy.
+reqwest = { version = "0.12.24", default-features = false, features = ["json", "gzip", "cookies", "multipart", "rustls-tls", "http2", "charset", "system-proxy"] }
+
 # Desktop-only native crates — gated off Android/iOS, which have no backend for
 # them and would fail the mobile link. On desktop this cfg is true, so they build
-# exactly as before. keyring = OS credential store (services/secure_store uses a
-# file store on mobile instead); discord-rich-presence = Discord IPC;
+# exactly as before. keyring-core = the OS credential store API that holds the
+# token vault's key (services/token_vault; mobile keeps that key in the app sandbox);
+# discord-rich-presence = Discord IPC;
 # image/webp-animation = the animated-WebP profile-card capture (webp-animation
-# wraps libwebp's encoder). xcap, which grabs the real post-compositor WebView
-# pixels for that capture, lives under the Windows table below; see the note there.
+# wraps libwebp's encoder); image's jpeg decoder is for the card glow, which
+# reads Twitch and YouTube thumbnails (services/media_glow). xcap, which grabs
+# the real post-compositor WebView pixels for that capture, lives under the
+# Windows table below; see the note there.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 discord-rich-presence = "1.0.0"
-keyring = "3.6.3"
-image = { version = "0.25", default-features = false, features = ["png"] }
+# keyring-core holds the credential-store API; each OS's store is its own crate
+# in the tables below, and services/token_vault opens the one for this target.
+# Unlike keyring 3 (which silently fell back to an in-memory mock when no backend
+# feature was on), an entry with no store is an error.
+keyring-core = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 webp-animation = "0.10"
 
 # Transport stack is split per platform: desktop keeps the OS TLS it shipped
 # with (schannel on Windows, Security.framework on macOS); Android uses rustls
-# with the bundled Mozilla roots so the cross-compile never links OpenSSL. Both
+# with the bundled Mozilla roots so the cross-compile never links OpenSSL. All
 # tables pin the same version so the lockfile carries ONE copy of each crate;
 # resolver v2 only activates the table for the target being built.
 tokio-tungstenite = { version = "0.30.0", features = ["native-tls"] }
+
+# reqwest on Windows and macOS: the default feature set (native-tls = schannel /
+# Security.framework, charset, http2, system-proxy) plus rustls for the one
+# client that opts into it (HTTP_RESOLVE in providers/kick.rs).
+[target.'cfg(not(any(target_os = "android", target_os = "ios", target_os = "linux")))'.dependencies]
 reqwest = { version = "0.12.24", features = ["json", "gzip", "cookies", "multipart", "rustls-tls"] }
+
+# Linux's reqwest is rustls-only; it sits in the Linux table above.
 
 # Android-only. `jni` backs src/android_notify.rs, the entry point the
 # notification worker calls when there is no Tauri app to talk to. Pinned to the
@@ -140,6 +239,9 @@ reqwest = { version = "0.12.24", default-features = false, features = ["json", "
 # GPU-side via CopySubresourceRegion into a staging texture sized
 # exactly to the card — no full-monitor readback, no third-party binary.
 [target.'cfg(windows)'.dependencies]
+# Credential Manager store for the token vault's key. The default `search`
+# feature only adds a regex dependency the vault never uses.
+windows-native-keyring-store = { version = "1.1", default-features = false }
 # xcap sits under the Windows target for the macOS port: 0.0.14 does not
 # compile on modern rustc (E0282 in xcap-0.0.14/src/macos/boxed.rs). The
 # upgrade to 0.9.x is a genuine refactor - its accessors became fallible -
@@ -176,21 +278,9 @@ windows = { version = "0.61", features = [
 # dispatch; a redraw or a Dock click during that pump relocks tao's callback
 # mutex on the same thread and the app hangs for good. Versions are the ones
 # wry 0.55 already resolves to, so the lockfile keeps one copy of each crate.
-# Linux desktop only. `gtk` backs services/window_aspect.rs, which hangs GDK
-# geometry hints on the main GtkWindow so the window manager enforces the
-# aspect-ratio lock during a drag (the Windows build does it with a WM_SIZING
-# subclass instead). Pinned to the 0.18 line tauri and tao already resolve to,
-# so the tree carries one copy.
-#
-# `target_os = "linux"` and NOT the `all(unix, not(macos))` shape the other
-# platform shims use: Android is unix and has no GTK, but its target_os is
-# "android", so this spelling excludes it and that one does not. window_aspect
-# is compiled unconditionally from services/mod.rs, so the Android build would
-# otherwise try to resolve gtk.
-[target.'cfg(target_os = "linux")'.dependencies]
-gtk = "0.18"
-
 [target.'cfg(target_os = "macos")'.dependencies]
+# Login-keychain store for the token vault's key (the same items keyring 3 wrote).
+apple-native-keyring-store = { version = "1", features = ["keychain"] }
 block2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = [
     "std",
@@ -229,7 +319,10 @@ custom-protocol = ["tauri/custom-protocol"]
 # then attach from a Chromium browser at chrome://inspect (Firefox cannot inspect
 # a Chromium WebView). NEVER add this to `default`: the shipped build must not be
 # remotely inspectable.
-devtools = ["tauri/devtools"]
+# On Linux the CEF runtime has a `devtools` feature of its own that tauri's
+# does not switch on (and vice versa); naming a target-specific dependency
+# here is legal and inert on the targets that do not have it.
+devtools = ["tauri/devtools", "tauri-runtime-cef/devtools"]
 [profile.release]
 # opt-level 3: chat parsing and song-id FFT are CPU-hot, size-opt would cost them.
 # panic stays "unwind": tokio tasks and warp handlers contain isolated panics

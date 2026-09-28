@@ -25,7 +25,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter};
+use crate::rt::AppHandle;
+use tauri::Emitter;
 
 pub const UPDATED_EVENT: &str = "whisper-conversation-updated";
 /// Many conversations changed at once (an import); reload the archive.

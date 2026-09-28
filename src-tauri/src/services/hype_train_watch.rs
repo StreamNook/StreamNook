@@ -18,7 +18,8 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
+use crate::rt::AppHandle;
+use tauri::{Emitter, Manager};
 
 pub const UPDATE_EVENT: &str = "hype-train://update";
 

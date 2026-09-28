@@ -20,9 +20,12 @@
 //! the jar through a channel on a later, ordinary run-loop turn; the async
 //! caller awaits it with a deadline. Nothing pumps, so nothing re-enters.
 //!
-//! Other Unix targets keep `Webview::cookies()`: WebKitGTK's implementation
-//! does not pump. Windows keeps its hand-rolled `ICoreWebView2CookieManager`
-//! path inside the auth services and never calls into here.
+//! Linux keeps the runtime-generic `Webview::cookies()`. Under CEF that call
+//! visits the profile's cookie manager on Chromium's UI thread and blocks the
+//! caller until the visit completes, so it runs on a blocking thread under
+//! the same deadline, never on the main thread. Windows keeps its hand-rolled
+//! `ICoreWebView2CookieManager` path inside the auth services and never
+//! calls into here.
 
 /// The slice of a cookie the auth services consume.
 #[derive(Debug, Clone)]
@@ -47,7 +50,7 @@ const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 /// itself would send.
 #[cfg(not(windows))]
 pub async fn cookies_for_origin(
-    app: &tauri::AppHandle,
+    app: &crate::rt::AppHandle,
     window_label: &str,
     origin: &str,
 ) -> anyhow::Result<Vec<CookieRow>> {
@@ -82,7 +85,7 @@ fn domain_matches(cookie_domain: &str, host: &str) -> bool {
 #[cfg(target_os = "macos")]
 #[allow(unused_unsafe)]
 async fn all_cookies(
-    app: &tauri::AppHandle,
+    app: &crate::rt::AppHandle,
     window_label: &str,
 ) -> anyhow::Result<Vec<CookieRow>> {
     use anyhow::anyhow;
@@ -161,7 +164,7 @@ fn belongs_to(cookie_domain: &str, site: &str) -> bool {
 #[cfg(target_os = "macos")]
 #[allow(unused_unsafe)]
 pub async fn delete_site_cookies(
-    app: &tauri::AppHandle,
+    app: &crate::rt::AppHandle,
     window_label: &str,
     sites: &[&str],
 ) -> anyhow::Result<usize> {
@@ -216,7 +219,7 @@ pub async fn delete_site_cookies(
 
 #[cfg(all(unix, not(target_os = "macos")))]
 async fn all_cookies(
-    app: &tauri::AppHandle,
+    app: &crate::rt::AppHandle,
     window_label: &str,
 ) -> anyhow::Result<Vec<CookieRow>> {
     use anyhow::anyhow;
@@ -225,18 +228,31 @@ async fn all_cookies(
     let webview = app
         .get_webview_window(window_label)
         .ok_or_else(|| anyhow!("webview window '{window_label}' unavailable"))?;
-    let jar = webview
-        .cookies()
-        .map_err(|e| anyhow!("cookies() failed: {e}"))?;
-    Ok(jar
-        .into_iter()
-        .map(|c| CookieRow {
-            name: c.name().to_string(),
-            value: c.value().to_string(),
-            domain: c.domain().unwrap_or("").to_string(),
-            secure: c.secure().unwrap_or(false),
-        })
-        .collect())
+    // The read blocks until the engine's cookie visitor has run (on CEF, on
+    // its UI thread), so it goes to a blocking thread under a deadline: a
+    // wedged store must not pin a tokio worker or a harvest.
+    let read = tokio::task::spawn_blocking(move || {
+        webview
+            .cookies()
+            .map(|jar| {
+                jar.into_iter()
+                    .map(|c| CookieRow {
+                        name: c.name().to_string(),
+                        value: c.value().to_string(),
+                        domain: c.domain().unwrap_or("").to_string(),
+                        secure: c.secure().unwrap_or(false),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .map_err(|e| anyhow!("cookies() failed: {e}"))
+    });
+    match tokio::time::timeout(READ_TIMEOUT, read).await {
+        Ok(Ok(rows)) => rows,
+        Ok(Err(e)) => Err(anyhow!("the cookie read task failed: {e}")),
+        Err(_) => Err(anyhow!(
+            "the cookie store did not answer within {READ_TIMEOUT:?}"
+        )),
+    }
 }
 
 #[cfg(test)]

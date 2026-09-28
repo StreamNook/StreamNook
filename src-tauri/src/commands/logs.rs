@@ -178,7 +178,7 @@ pub(crate) fn zip_logs(logs_dir: &std::path::Path, dest: &std::path::Path) -> an
 /// hold, so a save falls back to the share sheet and answers "shared".
 #[cfg(target_os = "android")]
 #[command]
-pub async fn export_logs(app: tauri::AppHandle, to: String) -> Result<String, String> {
+pub async fn export_logs(app: crate::rt::AppHandle, to: String) -> Result<String, String> {
     use tauri::Manager;
 
     const MIME: &str = "application/zip";

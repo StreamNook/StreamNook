@@ -698,7 +698,7 @@ mod portable {
         }
     }
 
-    pub fn start(app: tauri::AppHandle) {
+    pub fn start(app: crate::rt::AppHandle) {
         // Same marker the Windows watchdog writes: an absent hang report can
         // then be read as "armed, never hung" rather than "never started".
         if let Some(dir) = logs_dir() {
@@ -756,6 +756,6 @@ pub fn set_active_overlay(ctx: Option<String>) {
 /// because the probe asks the main thread to run a closure; there is no window
 /// handle involved.
 #[cfg(not(windows))]
-pub fn start(app: tauri::AppHandle) {
+pub fn start(app: crate::rt::AppHandle) {
     portable::start(app);
 }

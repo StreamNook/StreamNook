@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, info, warn};
 use serde::Deserialize;
-use tauri::AppHandle;
+use crate::rt::AppHandle;
 use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 

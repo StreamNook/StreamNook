@@ -113,7 +113,8 @@ pub async fn mint(content_binding: &str) -> Result<Vec<u8>> {
 }
 
 async fn mint_uncached(content_binding: &str) -> Result<Vec<u8>> {
-    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    use crate::rt::WebviewWindowBuilder;
+    use tauri::WebviewUrl;
 
     let app = crate::services::providers::app_handle()
         .ok_or_else(|| anyhow!("no app handle; cannot open the minting window"))?;
@@ -405,7 +406,8 @@ pub async fn close_resolver() {
 }
 
 async fn resolve_uncached(video_id: &str, min_height: u32) -> Result<ResolvedStreams> {
-    use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+    use crate::rt::WebviewWindowBuilder;
+    use tauri::{Manager, WebviewUrl};
 
     let app = crate::services::providers::app_handle()
         .ok_or_else(|| anyhow!("no app handle; cannot open the resolver window"))?;

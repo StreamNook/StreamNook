@@ -13,7 +13,8 @@ use serde::Serialize;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use crate::rt::AppHandle;
+use tauri::Emitter;
 
 pub const STATUS_EVENT: &str = "update://status";
 

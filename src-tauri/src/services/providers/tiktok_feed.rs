@@ -718,8 +718,9 @@ pub(crate) mod window {
             });
         }
 
-        async fn open(&self, app: &tauri::AppHandle) -> Result<tauri::WebviewWindow> {
-            use tauri::{WebviewUrl, WebviewWindowBuilder};
+        async fn open(&self, app: &crate::rt::AppHandle) -> Result<crate::rt::WebviewWindow> {
+            use crate::rt::WebviewWindowBuilder;
+            use tauri::WebviewUrl;
             let url = self.page.parse().map_err(|e| anyhow!("bad page url: {e}"))?;
             let mut builder = WebviewWindowBuilder::new(app, self.label, WebviewUrl::External(url))
                 .data_directory((self.profile)())
@@ -811,7 +812,7 @@ pub(crate) mod window {
     fn directory_profile() -> std::path::PathBuf {
         let base = crate::services::twitch_service::get_app_data_dir()
             .unwrap_or_else(|_| std::env::temp_dir());
-        let dir = base.join("platform_web_profiles").join("tiktok-feed");
+        let dir = crate::platform::webview_store::profile_dir(base, "platform_web_profiles/tiktok-feed");
         let _ = std::fs::create_dir_all(&dir);
         dir
     }
@@ -850,7 +851,8 @@ pub(crate) mod window {
         profile: std::path::PathBuf,
         channel_id: &str,
     ) -> Result<(String, String)> {
-        use tauri::{WebviewUrl, WebviewWindowBuilder};
+        use crate::rt::WebviewWindowBuilder;
+        use tauri::WebviewUrl;
         let app = crate::services::providers::app_handle()
             .ok_or_else(|| anyhow!("app handle not available for TikTok"))?;
         if let Some(stale) = app.get_webview_window(label) {

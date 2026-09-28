@@ -302,7 +302,7 @@ pub async fn get_discovered_bttv_pro_badges() -> Result<Vec<String>, String> {
 /// with `badge-standing-changed`.
 #[tauri::command]
 pub async fn get_badge_standing(
-    app_handle: tauri::AppHandle,
+    app_handle: crate::rt::AppHandle,
     force: Option<bool>,
 ) -> Result<crate::services::badge_standing::BadgeStanding, String> {
     Ok(crate::services::badge_standing::get_standing(&app_handle, force.unwrap_or(false)).await)
@@ -345,7 +345,7 @@ pub(crate) fn is_window_open(
 /// Merge a drop into the gallery and store its writeup for the More Info panel.
 /// The amend event carries real ids because the detail panel filters on them.
 async fn apply_drop(
-    app_handle: &tauri::AppHandle,
+    app_handle: &crate::rt::AppHandle,
     badge: &crate::services::badge_polling_service::BadgeNotification,
 ) {
     use tauri::Emitter;
@@ -376,7 +376,7 @@ async fn apply_drop(
 /// writeup stores silently, an unchanged re-push does nothing.
 #[tauri::command]
 pub async fn ingest_badge_drops(
-    app_handle: tauri::AppHandle,
+    app_handle: crate::rt::AppHandle,
     badges: Vec<crate::services::badge_polling_service::BadgeNotification>,
 ) -> Result<(), String> {
     use crate::services::badge_polling_service::{self as feed, FeedAction};

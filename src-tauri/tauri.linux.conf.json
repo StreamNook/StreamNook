@@ -1,5 +1,38 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "security": {
+      "assetProtocol": {
+        "scope": [
+          "**",
+          "$LOCALDATA/StreamNook/**",
+          "$LOCALDATA/com.streamnook.dev/**",
+          "$CONFIG/StreamNook/**",
+          "$APPLOCALDATA/**",
+          "$APPDATA/**",
+          "$APPCACHE/**"
+        ]
+      }
+    },
+    "windows": [
+      {
+        "label": "main",
+        "title": "StreamNook",
+        "width": 1600,
+        "height": 1000,
+        "minWidth": 800,
+        "minHeight": 600,
+        "center": true,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": false,
+        "devtools": true,
+        "visible": false,
+        "backgroundColor": "#0c0c0d",
+        "create": false
+      }
+    ]
+  },
   "bundle": {
     "active": true,
     "targets": ["appimage"],

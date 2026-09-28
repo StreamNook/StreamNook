@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
+use crate::rt::AppHandle;
+use tauri::Emitter;
 
 /// Avatars change rarely; one a few days stale costs nothing next to fetching
 /// every face again on each launch.

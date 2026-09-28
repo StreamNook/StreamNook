@@ -404,8 +404,8 @@ pub async fn get_hype_train_status(
 /// surface in every window (see services/hype_train_watch.rs).
 #[tauri::command]
 pub async fn hype_train_watch(
-    app: tauri::AppHandle,
-    window: tauri::WebviewWindow,
+    app: crate::rt::AppHandle,
+    window: crate::rt::WebviewWindow,
     login: String,
     channel_id: Option<String>,
     name: Option<String>,
@@ -422,7 +422,7 @@ pub async fn hype_train_watch(
 
 /// Stop showing `login`'s hype train in this window.
 #[tauri::command]
-pub async fn hype_train_unwatch(window: tauri::WebviewWindow, login: String) -> Result<(), String> {
+pub async fn hype_train_unwatch(window: crate::rt::WebviewWindow, login: String) -> Result<(), String> {
     crate::services::hype_train_watch::unwatch(window.label(), &login);
     Ok(())
 }

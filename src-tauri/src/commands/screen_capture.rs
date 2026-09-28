@@ -28,7 +28,8 @@ use image::RgbaImage;
 use std::io::Cursor;
 use std::time::Duration;
 use tauri::ipc::Response;
-use tauri::{AppHandle, Emitter};
+use crate::rt::AppHandle;
+use tauri::Emitter;
 use webp_animation::{Encoder, EncoderOptions, EncodingConfig, EncodingType};
 // Windows-only: see the xcap note in Cargo.toml.
 #[cfg(windows)]

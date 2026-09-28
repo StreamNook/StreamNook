@@ -28,7 +28,8 @@
 //! indistinguishable both online and offline.
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
+use crate::rt::AppHandle;
+use tauri::Manager;
 
 /// The `<os>-<arch>` key for the running platform.
 ///

@@ -148,7 +148,7 @@ pub async fn get_favorite_live() -> Result<Vec<ProviderStream>, String> {
 /// `key` is that favourite, and then only it is checked.
 #[tauri::command]
 pub async fn refresh_favorites(
-    app: tauri::AppHandle,
+    app: crate::rt::AppHandle,
     state: State<'_, AppState>,
     key: Option<String>,
 ) -> Result<(), String> {
@@ -177,7 +177,7 @@ pub async fn provider_live_check(
 /// old avatar store, handed over once.
 #[tauri::command]
 pub async fn request_channel_avatars(
-    app: tauri::AppHandle,
+    app: crate::rt::AppHandle,
     channels: Vec<crate::services::channel_avatars::AvatarRequest>,
     legacy: Option<std::collections::HashMap<String, crate::services::channel_avatars::LegacyEntry>>,
 ) -> Result<std::collections::HashMap<String, String>, String> {

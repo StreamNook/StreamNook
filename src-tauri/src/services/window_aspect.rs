@@ -117,7 +117,7 @@ pub fn constrains_live() -> bool {
 /// `install_for_hwnd` shape forced every caller to be `#[cfg(windows)]`, which
 /// is exactly why Linux had no lock to install in the first place.
 #[allow(unused_variables)]
-pub fn install(window: &tauri::WebviewWindow) {
+pub fn install(window: &crate::rt::WebviewWindow) {
     #[cfg(windows)]
     {
         if let Ok(hwnd) = window.hwnd() {
@@ -142,45 +142,48 @@ fn push_to_os() {
     imp::apply();
 }
 
-/// Linux: the window manager does the constraining, via GTK geometry hints.
+/// Linux: the window manager does the constraining, via `WM_NORMAL_HINTS`.
 ///
 /// # Why hints rather than a resize handler
 ///
 /// This is the same argument the module header makes for `WM_SIZING`, arrived at
-/// by a different route. X11 and Wayland both let a client declare an aspect
-/// ratio up front (`GDK_HINT_ASPECT`), and the WM then rubber-bands the drag to
-/// it. The constraint is applied BEFORE the size is committed, every frame, by
-/// the compositor - so the dragged edge tracks the pointer and nothing is ever
-/// corrected after the fact. Functionally identical to the Windows hook.
+/// by a different route. X11 lets a client declare an aspect ratio, a base size
+/// and a minimum size on its top-level window, and the window manager applies
+/// them DURING the drag, so the pointer never gets ahead of the frame and
+/// nothing snaps back afterwards. A resize handler that corrects the window
+/// after the fact is the exact behaviour this module exists to replace.
 ///
-/// # Why `base_size` is the load-bearing part
+/// # Why a base size
 ///
-/// With `GDK_HINT_BASE_SIZE` set, the aspect ratio is enforced on
-/// `(width - base_width) / (height - base_height)` rather than on the window
-/// itself. That is EXACTLY this module's model: the ratio describes the video
-/// box, and `EXTRA_W` / `EXTRA_H` are the chrome around it. Without the base
-/// size the WM would lock the ratio of the whole window including chat and the
-/// title bar, which is the wrong rectangle and would look like the lock was
-/// simply mis-tuned.
+/// `PAspect` on its own would lock the ratio of the whole window. `PBaseSize`
+/// tells the WM to apply the ratio to the window MINUS the base, which is
+/// EXACTLY this module's model: the ratio describes the video box, and
+/// `EXTRA_W` / `EXTRA_H` are the chrome around it. Without the base size the
+/// WM would lock the ratio of the whole window including chat and the title
+/// bar, which is the wrong rectangle and would look like the lock was simply
+/// mis-tuned.
 ///
-/// Units need no DPI scaling here, unlike Windows: GTK3 window geometry is in
-/// logical pixels already, which is the unit the frontend sends.
+/// # Why X11 directly
+///
+/// The Linux build runs on the CEF runtime (`rt.rs`), whose windows are plain
+/// X11 windows: `gtk_window()` answers with an error there, so the hints are
+/// written on the X window itself (`linux_x11::set_normal_hints`), which is
+/// the property GTK's `set_geometry_hints` wrote underneath. X11 hints are in
+/// device pixels, unlike GTK's logical ones, so the frontend's logical values
+/// are scaled by the window's scale factor here.
 #[cfg(target_os = "linux")]
 mod imp {
-    use super::{
-        ENABLED, EXTRA_H, EXTRA_W, MIN_LOGICAL_H, MIN_LOGICAL_W, RATIO_BITS,
-    };
+    use super::{ENABLED, EXTRA_H, EXTRA_W, MIN_LOGICAL_H, MIN_LOGICAL_W, RATIO_BITS};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::OnceLock;
 
     static INSTALLED: AtomicBool = AtomicBool::new(false);
 
-    /// The window to hang hints on, resolved fresh each time rather than held
-    /// as a `GtkWindow`. GTK objects are not `Send`, and the tray can destroy
-    /// and recreate the main window, so a stored handle would be both unsound
-    /// to move across threads and stale after a recreate.
-    fn app() -> &'static OnceLock<tauri::AppHandle> {
-        static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
+    /// The window to write hints on, resolved fresh each time: the tray can
+    /// destroy and recreate the main window, so a stored X id would be stale
+    /// after a recreate.
+    fn app() -> &'static OnceLock<crate::rt::AppHandle> {
+        static APP: OnceLock<crate::rt::AppHandle> = OnceLock::new();
         &APP
     }
 
@@ -188,86 +191,65 @@ mod imp {
         INSTALLED.load(Ordering::Relaxed)
     }
 
-    pub fn install(window: &tauri::WebviewWindow) {
+    pub fn install(window: &crate::rt::WebviewWindow) {
         use tauri::Manager;
         let _ = app().set(window.app_handle().clone());
-        // Prove the GtkWindow is reachable before claiming the lock is live.
+        // Prove the X window is reachable before claiming the lock is live.
         // `constrains_live()` is what tells the frontend to stand its own
         // debounced correction down, so a false positive here means NO
         // correction from either side and a window that resizes freely.
-        if window.gtk_window().is_ok() {
-            INSTALLED.store(true, Ordering::Relaxed);
-            apply();
+        match crate::linux_x11::xid(window) {
+            Ok(_) => {
+                INSTALLED.store(true, Ordering::Relaxed);
+                apply();
+            }
+            Err(e) => log::warn!("[aspect] no X window to constrain: {e}"),
         }
     }
 
     /// Write (or clear) the hints for the current constraint.
     ///
-    /// GTK is main-thread-only and `set_constraint` is called from a Tauri
-    /// command, which is not the main thread. `run_on_main_thread` is the hop;
-    /// doing this inline is the class of mistake that cost 8.6.2 on macOS.
+    /// Safe from any thread: the hints go over an X connection of their own
+    /// (`linux_x11`), not through the runtime's event loop.
     pub fn apply() {
-        let Some(app) = app().get().cloned() else {
+        use tauri::Manager;
+
+        let Some(app) = app().get() else {
             return;
         };
+        let Some(window) = app.get_webview_window("main") else {
+            return;
+        };
+        let Ok(xid) = crate::linux_x11::xid(&window) else {
+            return;
+        };
+        let scale = window.scale_factor().unwrap_or(1.0).max(0.1);
+        let px = |logical: f64| (logical * scale).round() as i32;
+
         let enabled = ENABLED.load(Ordering::Acquire);
         let ratio = f64::from_bits(RATIO_BITS.load(Ordering::Relaxed));
-        let extra_w = EXTRA_W.load(Ordering::Relaxed) as i32;
-        let extra_h = EXTRA_H.load(Ordering::Relaxed) as i32;
+        let on_ratio = enabled && ratio.is_finite() && ratio > 0.0;
 
-        let _ = app.clone().run_on_main_thread(move || {
-            use gtk::prelude::*;
-            use tauri::Manager;
-
-            let Some(window) = app.get_webview_window("main") else {
-                return;
-            };
-            let Ok(gtk_window) = window.gtk_window() else {
-                return;
-            };
-
-            // `Geometry` is built in one shot rather than mutated: gdk 0.18
-            // exposes only `new(..)` plus getters, because the struct is a
-            // direct mirror of `GdkGeometry` and the fields the hints mask does
-            // not name are simply never read.
-            //
-            // The minimum is restated on BOTH paths. Clearing the aspect hint
-            // must not also drop `minWidth`/`minHeight` from tauri.conf.json,
-            // which the WM would otherwise forget the moment it is handed a
-            // hints struct that does not mention them.
-            let on_ratio = enabled && ratio.is_finite() && ratio > 0.0;
-            let geo = gtk::gdk::Geometry::new(
-                MIN_LOGICAL_W as i32,
-                MIN_LOGICAL_H as i32,
-                // max: unconstrained. 0 rather than i32::MAX because the mask
-                // below never sets MAX_SIZE, so these are not read at all.
-                0,
-                0,
-                // base_size is the chrome around the video box, and is what
-                // makes the WM apply the ratio to the video rather than to the
-                // whole window.
-                if on_ratio { extra_w } else { 0 },
-                if on_ratio { extra_h } else { 0 },
-                // No resize increments.
-                0,
-                0,
-                // min == max pins the ratio exactly, rather than allowing a
-                // range the WM could settle anywhere inside.
-                if on_ratio { ratio } else { 0.0 },
-                if on_ratio { ratio } else { 0.0 },
-                gtk::gdk::Gravity::NorthWest,
-            );
-
-            let hints = if on_ratio {
-                gtk::gdk::WindowHints::MIN_SIZE
-                    | gtk::gdk::WindowHints::BASE_SIZE
-                    | gtk::gdk::WindowHints::ASPECT
-            } else {
-                gtk::gdk::WindowHints::MIN_SIZE
-            };
-
-            gtk_window.set_geometry_hints(None::<&gtk::Widget>, Some(&geo), hints);
-        });
+        // The minimum is restated on BOTH paths. Clearing the aspect hint
+        // must not also drop `minWidth`/`minHeight` from tauri.conf.json,
+        // which the WM would otherwise forget the moment it is handed a
+        // hints property that does not mention them.
+        let hints = crate::linux_x11::SizeHints {
+            min_width: px(MIN_LOGICAL_W as f64),
+            min_height: px(MIN_LOGICAL_H as f64),
+            base: on_ratio.then(|| {
+                (
+                    px(EXTRA_W.load(Ordering::Relaxed) as f64),
+                    px(EXTRA_H.load(Ordering::Relaxed) as f64),
+                )
+            }),
+            // min == max pins the ratio exactly, rather than allowing a range
+            // the WM could settle anywhere inside.
+            aspect: on_ratio.then_some(ratio),
+        };
+        if let Err(e) = crate::linux_x11::set_normal_hints(xid, hints) {
+            log::warn!("[aspect] writing WM_NORMAL_HINTS failed: {e}");
+        }
     }
 }
 

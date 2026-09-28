@@ -22,7 +22,8 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use crate::rt::AppHandle;
+use tauri::Emitter;
 
 pub const FIRE_EVENT: &str = "reminders://fire";
 

@@ -117,8 +117,8 @@ pub(crate) fn opening_url(fresh: bool, login_url: &'static str) -> &'static str 
 /// unnoticed.
 #[cfg(desktop)]
 pub(crate) async fn begin_fresh(
-    app: &tauri::AppHandle,
-    win: &tauri::WebviewWindow,
+    app: &crate::rt::AppHandle,
+    win: &crate::rt::WebviewWindow,
     p: &SignInProfile,
     login_url: &str,
 ) -> Option<String> {
@@ -142,13 +142,16 @@ pub(crate) async fn begin_fresh(
 /// when it was still there, or the jar unreadable, after `attempts` looks.
 #[cfg(desktop)]
 async fn clear(
-    app: &tauri::AppHandle,
-    win: &tauri::WebviewWindow,
+    app: &crate::rt::AppHandle,
+    win: &crate::rt::WebviewWindow,
     p: &SignInProfile,
     attempts: u32,
 ) -> bool {
     // Windows and Linux give each profile a store of its own (a WebView2 user
-    // data folder; a WebKitGTK context per folder), so all of it goes.
+    // data folder; a Chromium profile under CEF's root cache), so all of it
+    // goes. Under CEF the clear removes the cookies and the HTTP cache; page
+    // storage stays, which is the same gap as macOS and why the pre-clear
+    // session is returned as stale below.
     #[cfg(not(target_os = "macos"))]
     if let Err(e) = win.clear_all_browsing_data() {
         log::warn!("[{}] clearing the sign-in profile failed: {e}", p.tag);
@@ -175,7 +178,7 @@ async fn clear(
 /// The session in the profile's jar right now, read through the webview `label`.
 #[cfg(desktop)]
 async fn session_in(
-    app: &tauri::AppHandle,
+    app: &crate::rt::AppHandle,
     label: &str,
     p: &SignInProfile,
 ) -> anyhow::Result<Option<String>> {
@@ -186,9 +189,9 @@ async fn session_in(
 }
 
 #[cfg(desktop)]
-fn hidden_window(app: &tauri::AppHandle, p: &SignInProfile) -> Result<tauri::WebviewWindow, String> {
+fn hidden_window(app: &crate::rt::AppHandle, p: &SignInProfile) -> Result<crate::rt::WebviewWindow, String> {
     let url: tauri::Url = BLANK.parse().map_err(|e| format!("{e}"))?;
-    tauri::WebviewWindowBuilder::new(app, p.sign_out_label, tauri::WebviewUrl::External(url))
+    crate::rt::WebviewWindowBuilder::new(app, p.sign_out_label, tauri::WebviewUrl::External(url))
         .data_directory(p.dir.clone())
         .visible(false)
         .focused(false)

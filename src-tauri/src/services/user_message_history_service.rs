@@ -47,7 +47,7 @@ static INSTANCE: OnceLock<UserMessageHistoryService> = OnceLock::new();
 /// them is pushed as `user-history-message` instead of the card polling the
 /// service every 2.5 s. Keyed the same way the cache is (`historyKey`).
 static WATCHED_USERS: OnceLock<std::sync::Mutex<HashSet<String>>> = OnceLock::new();
-static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
+static APP: OnceLock<crate::rt::AppHandle> = OnceLock::new();
 
 /// Event name for pushed messages. Payload: `{ user_key, message }`.
 pub const HISTORY_EVENT: &str = "user-history-message";
@@ -79,7 +79,7 @@ impl UserMessageHistoryService {
             .map(|c| (c.len(), c.values().map(|e| e.messages.len()).sum()))
     }
 
-    pub fn set_app_handle(app: tauri::AppHandle) {
+    pub fn set_app_handle(app: crate::rt::AppHandle) {
         let _ = APP.set(app);
     }
 

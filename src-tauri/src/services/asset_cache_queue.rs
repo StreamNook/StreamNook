@@ -20,7 +20,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
+use crate::rt::AppHandle;
+use tauri::{Emitter, Manager};
 
 pub const CACHED_EVENT: &str = "asset-cache://cached";
 /// The cache folder was wiped: every window drops its id -> path maps.

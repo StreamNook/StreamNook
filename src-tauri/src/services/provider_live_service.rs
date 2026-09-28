@@ -30,7 +30,8 @@ use crate::services::providers::source::StreamSource;
 use log::debug;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use crate::rt::AppHandle;
+use tauri::Emitter;
 use tokio::sync::RwLock;
 use tokio::time::{Duration, Instant};
 

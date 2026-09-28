@@ -3,7 +3,8 @@ use log::debug;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use crate::rt::{AppHandle, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, WebviewUrl};
 use uuid::Uuid;
 
 // Use Twitch Android app client ID for GQL operations

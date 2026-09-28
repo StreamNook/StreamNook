@@ -26,11 +26,18 @@ http = "1"
 futures-util = "0.3"
 
 # Same per-platform transport split as the main crate (see src-tauri/Cargo.toml):
-# desktop keeps native-tls, Android uses rustls with bundled roots. Versions match
-# StreamNook's so cargo builds one WebSocket/HTTP stack, not two.
+# desktop keeps native-tls for WebSockets; Windows and macOS keep it for HTTP too,
+# while Linux's reqwest is rustls-only (a native-tls client build there parses
+# the system CA bundle every time); Android uses rustls with bundled roots.
+# Versions match StreamNook's so cargo builds one WebSocket/HTTP stack, not two.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios", target_os = "linux")))'.dependencies]
 reqwest = { version = "0.12", features = ["json", "gzip"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "gzip", "rustls-tls"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }

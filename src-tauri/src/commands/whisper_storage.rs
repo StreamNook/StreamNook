@@ -7,7 +7,8 @@ use crate::services::whisper_storage_service::{
 };
 use log::debug;
 use std::collections::HashMap;
-use tauri::{AppHandle, State};
+use crate::rt::AppHandle;
+use tauri::State;
 
 /// Load the active account's whisper conversations from disk. `owner_id` is the
 /// signed-in user's id; an empty value (signed out) returns nothing.

@@ -2,7 +2,7 @@
 
 use crate::services::activity_history_service as history;
 use serde_json::Value;
-use tauri::AppHandle;
+use crate::rt::AppHandle;
 
 #[tauri::command]
 pub async fn activity_load(app: AppHandle) -> Result<Vec<Value>, String> {

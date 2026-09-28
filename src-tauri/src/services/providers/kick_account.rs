@@ -111,7 +111,8 @@ pub async fn import(interactive: bool) -> Result<KickImportReport> {
     }
     #[cfg(desktop)]
     {
-        use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+        use crate::rt::WebviewWindowBuilder;
+        use tauri::{Manager, WebviewUrl};
 
         let app = app_handle().ok_or_else(|| anyhow!("app handle not available for Kick sync"))?;
         let label = format!("kick-sync-{}", SEQ.fetch_add(1, Ordering::Relaxed));
@@ -676,7 +677,7 @@ pub async fn sign_in() -> Result<KickImportReport> {
 /// began.
 #[cfg(desktop)]
 async fn follows_via_cookies(
-    app: &tauri::AppHandle,
+    app: &crate::rt::AppHandle,
     label: &str,
     stale: Option<&str>,
 ) -> Option<Vec<KickFollowedChannel>> {
@@ -697,7 +698,7 @@ async fn follows_via_cookies(
 
 /// Whether the sign-in overlay's jar still holds the kick.com session `old`.
 #[cfg(desktop)]
-async fn still_holds(app: &tauri::AppHandle, old: &str) -> bool {
+async fn still_holds(app: &crate::rt::AppHandle, old: &str) -> bool {
     crate::services::youtube_auth_service::fetch_cookies_for_origin(
         app,
         LOGIN_LABEL,
@@ -730,7 +731,7 @@ const LOGIN_URL: &str = "https://kick.com/login";
 /// sign-in. Clearing it clears both halves at once: kick.com's session and
 /// id.kick.com's, the one consent runs on.
 #[cfg(desktop)]
-fn profile(app: &tauri::AppHandle) -> crate::services::sign_in_profile::SignInProfile {
+fn profile(app: &crate::rt::AppHandle) -> crate::services::sign_in_profile::SignInProfile {
     crate::services::sign_in_profile::SignInProfile {
         dir: crate::services::providers::kick::account_profile_dir(app),
         overlay_label: LOGIN_LABEL,
@@ -747,7 +748,7 @@ fn profile(app: &tauri::AppHandle) -> crate::services::sign_in_profile::SignInPr
 /// half of a Kick sign-out, which `kick_auth_service::disconnect` (the OAuth
 /// token) does not cover.
 #[cfg(desktop)]
-pub async fn clear_site_session(app: &tauri::AppHandle) {
+pub async fn clear_site_session(app: &crate::rt::AppHandle) {
     crate::services::sign_in_profile::sign_out(&profile(app)).await;
 }
 

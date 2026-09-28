@@ -1,7 +1,8 @@
 use crate::services::eventsub_service::EventSubService;
 use log::debug;
 use std::sync::Arc;
-use tauri::{AppHandle, State};
+use crate::rt::AppHandle;
+use tauri::State;
 use tokio::sync::RwLock;
 
 // Global EventSub service state

@@ -8,10 +8,11 @@ use crate::services::whisper_history_service::{
 };
 use crate::services::whisper_service::WhisperService;
 use anyhow::Result;
-use log::{debug, error};
+use log::{debug, error, warn};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, State, WebviewUrl};
+use crate::rt::AppHandle;
+use tauri::{Manager, State, WebviewUrl};
 use tokio::sync::Mutex as TokioMutex;
 
 // Device Code Flow - the main login command
@@ -742,8 +743,13 @@ const CONTAIN_POPUPS_IN_OVERLAY: &[&str] = &["youtube-login"];
 /// `response_mode=web_message`) and Google (`accounts.google.com` with
 /// `redirect_uri=gis_transform`). Unhandled, both were refused and TikTok
 /// said `popup_blocked_by_browser`.
+///
+/// On Linux the CEF runtime never consults a builder's `on_new_window` (a
+/// webview that installs one only gets its popups denied), so the same list
+/// drives the process-wide popup policy in `linux_cef` instead, and the popup
+/// is a native Chromium window on the overlay's profile.
 #[cfg(any(desktop, test))]
-const OPENER_POPUPS_IN_OVERLAY: &[&str] = &["tiktok-login"];
+pub(crate) const OPENER_POPUPS_IN_OVERLAY: &[&str] = &["tiktok-login"];
 
 #[cfg(desktop)]
 static SIGN_IN_POPUP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -764,14 +770,18 @@ fn sign_in_popup_label(owner_label: &str, n: u64) -> String {
 /// owned by the overlay so it stays above it, and sharing the overlay's web
 /// profile through `window_features`, so the session the provider completes
 /// lands in the cookie jar the sign-in reads.
-#[cfg(desktop)]
+///
+/// Not on Linux: the CEF runtime opens the popup itself under the policy in
+/// `linux_cef`, and a builder that installs this handler would get every
+/// popup denied instead.
+#[cfg(all(desktop, not(target_os = "linux")))]
 fn sign_in_popup(
     app: &AppHandle,
     owner_label: &str,
     url: tauri::Url,
     features: tauri::webview::NewWindowFeatures,
-) -> tauri::webview::NewWindowResponse<tauri::Wry> {
-    use tauri::webview::NewWindowResponse;
+) -> crate::rt::NewWindowResponse {
+    use crate::rt::NewWindowResponse;
 
     // A provider's page is https; a scripted popup starts blank and is pointed
     // somewhere afterwards. Nothing else gets a window.
@@ -784,7 +794,7 @@ fn sign_in_popup(
     let Ok(blank) = "about:blank".parse() else {
         return NewWindowResponse::Deny;
     };
-    let builder = tauri::WebviewWindowBuilder::new(app, &label, WebviewUrl::External(blank))
+    let builder = crate::rt::WebviewWindowBuilder::new(app, &label, WebviewUrl::External(blank))
         .window_features(features)
         .title("Sign in")
         .on_document_title_changed(|window, title| {
@@ -824,7 +834,7 @@ fn sign_in_popup(
 /// script approach silently leaves the popup escaping. `NewWindowRequested` fires
 /// for the whole webview whichever frame asked, which is why it is the right seam.
 #[cfg(windows)]
-fn contain_overlay_popups(win: &tauri::WebviewWindow) {
+fn contain_overlay_popups(win: &crate::rt::WebviewWindow) {
     use webview2_com::take_pwstr;
     use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2;
     use webview2_com::NewWindowRequestedEventHandler;
@@ -977,7 +987,7 @@ pub async fn mount_twitch_overlay(
     // so a sign-in lands in the right cookie jar.
     profile: Option<String>,
 ) -> Result<(), String> {
-    use tauri::WebviewWindowBuilder;
+    use crate::rt::WebviewWindowBuilder;
 
     debug!(
         "[overlay] open '{}' at screen ({}, {}) {}x{} -> {}",
@@ -1022,6 +1032,9 @@ pub async fn mount_twitch_overlay(
     }
 
     // Provider popups that must keep their opener (see OPENER_POPUPS_IN_OVERLAY).
+    // Linux: the CEF runtime never calls this handler; the popup policy in
+    // linux_cef allows these overlays' popups process-wide instead.
+    #[cfg(not(target_os = "linux"))]
     if OPENER_POPUPS_IN_OVERLAY.contains(&label.as_str()) {
         let popup_app = app.clone();
         let owner = label.clone();
@@ -1029,15 +1042,26 @@ pub async fn mount_twitch_overlay(
             .on_new_window(move |url, features| sign_in_popup(&popup_app, &owner, url, features));
     }
 
-    let win = builder
+    // Owned by the main window: it stays above it, hides with it, and is not a
+    // task of its own. The CEF runtime answers `parent()` with an error on
+    // Linux, so there the ownership is written onto the X window after the
+    // build (WM_TRANSIENT_FOR, which is what GTK's `parent` set underneath).
+    #[cfg(not(target_os = "linux"))]
+    let builder = builder
         .parent(&main)
-        .map_err(|e| format!("Failed to own overlay to main window: {}", e))?
-        .build()
-        .map_err(|e| {
-            let msg = format!("Failed to open Twitch overlay window: {}", e);
-            error!("[overlay] {}", msg);
-            msg
-        })?;
+        .map_err(|e| format!("Failed to own overlay to main window: {}", e))?;
+    let win = builder.build().map_err(|e| {
+        let msg = format!("Failed to open Twitch overlay window: {}", e);
+        error!("[overlay] {}", msg);
+        msg
+    })?;
+    #[cfg(target_os = "linux")]
+    {
+        if let Err(e) = crate::linux_x11::make_transient_for(&win, &main) {
+            warn!("[overlay] couldn't make '{}' transient for the main window: {}", label, e);
+        }
+        linux_overlays::mounted(&label);
+    }
 
     // The content sits inside React's rounded panel frame, so it must be a crisp
     // rectangle; suppress the DWM rounded corners Win11 gives borderless windows.
@@ -1061,7 +1085,7 @@ pub async fn mount_twitch_overlay(
 /// the overlay content reads as a crisp rectangle inside React's rounded panel frame.
 #[cfg(windows)]
 #[cfg(desktop)]
-fn square_window_corners(win: &tauri::WebviewWindow) {
+fn square_window_corners(win: &crate::rt::WebviewWindow) {
     use std::ffi::c_void;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Dwm::{
@@ -1131,6 +1155,78 @@ pub fn dismiss_login_overlay(app: &AppHandle, label: &str) {
 #[tauri::command]
 pub fn close_login_overlay(app: AppHandle, label: String) {
     dismiss_login_overlay(&app, &label);
+}
+
+/// The half of window ownership that `WM_TRANSIENT_FOR` does not cover on
+/// Linux. An owned overlay on Windows hides when the main window hides (close
+/// to tray) and is destroyed with it; a transient X window is only iconified
+/// with its owner, so a hidden main would leave the overlay floating over the
+/// desktop. These keep the overlays with the main window instead.
+#[cfg(target_os = "linux")]
+pub mod linux_overlays {
+    use crate::rt::AppHandle;
+    use std::sync::Mutex;
+    use tauri::Manager;
+
+    /// Labels `mount_twitch_overlay` has opened; a closed one is skipped.
+    static MOUNTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    /// The overlays `hide_with_main` hid, to show again with the main window.
+    static HIDDEN_WITH_MAIN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    pub fn mounted(label: &str) {
+        if let Ok(mut mounted) = MOUNTED.lock() {
+            if !mounted.iter().any(|l| l == label) {
+                mounted.push(label.to_string());
+            }
+        }
+    }
+
+    fn open_overlays(app: &AppHandle) -> Vec<(String, crate::rt::WebviewWindow)> {
+        let Ok(mut mounted) = MOUNTED.lock() else {
+            return Vec::new();
+        };
+        mounted.retain(|label| app.get_webview_window(label).is_some());
+        mounted
+            .iter()
+            .filter_map(|label| app.get_webview_window(label).map(|w| (label.clone(), w)))
+            .collect()
+    }
+
+    /// The main window is hiding: hide every overlay that is showing.
+    pub fn hide_with_main(app: &AppHandle) {
+        let mut hidden = Vec::new();
+        for (label, window) in open_overlays(app) {
+            if window.is_visible().unwrap_or(false) && window.hide().is_ok() {
+                hidden.push(label);
+            }
+        }
+        if !hidden.is_empty() {
+            log::debug!("[overlay] hidden with the main window: {hidden:?}");
+        }
+        if let Ok(mut h) = HIDDEN_WITH_MAIN.lock() {
+            h.extend(hidden);
+        }
+    }
+
+    /// The main window is back: show what `hide_with_main` hid.
+    pub fn show_with_main(app: &AppHandle) {
+        let labels = HIDDEN_WITH_MAIN.lock().map(|mut h| std::mem::take(&mut *h)).unwrap_or_default();
+        for label in labels {
+            if let Some(window) = app.get_webview_window(&label) {
+                let _ = window.show();
+            }
+        }
+    }
+
+    /// The main window is gone: its overlays go with it.
+    pub fn close_with_main(app: &AppHandle) {
+        if let Ok(mut h) = HIDDEN_WITH_MAIN.lock() {
+            h.clear();
+        }
+        for (label, _) in open_overlays(app) {
+            super::dismiss_login_overlay(app, &label);
+        }
+    }
 }
 
 /// Tell the React overlay to take over the app body (or, for subscribe, a centered
@@ -2034,6 +2130,8 @@ fn build_vod_comment_line(node: &VcNode, channel_lc: &str) -> String {
                 })
                 .collect::<Vec<_>>()
                 .join(",");
+            // Replayed rows draw their badges in the same order as live chat.
+            let badges_tag = crate::models::chat_layout::order_twitch_badge_tag(&badges_tag);
             (content, emote_groups.join("/"), badges_tag, m.user_color.clone())
         }
         None => (String::new(), String::new(), String::new(), None),

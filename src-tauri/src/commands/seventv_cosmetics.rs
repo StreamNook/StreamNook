@@ -4,7 +4,8 @@ use crate::services::seventv_auth_service::{
 };
 use log::debug;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use crate::rt::{AppHandle, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, WebviewUrl};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SevenTVCosmeticsResult {
@@ -25,10 +26,12 @@ fn is_primary_account(account_id: &str) -> bool {
 /// after the first login, so reconnects are frictionless and the token can be
 /// refreshed silently by reloading the login page in this same profile.
 fn seventv_profile_dir(account_id: &str) -> Result<std::path::PathBuf, String> {
-    let mut path =
+    let base =
         crate::services::twitch_service::get_app_data_dir().map_err(|e| e.to_string())?;
-    path.push("seventv_profiles");
-    path.push(account_id);
+    let path = crate::platform::webview_store::profile_dir(
+        base,
+        std::path::Path::new("seventv_profiles").join(account_id),
+    );
     std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
     Ok(path)
 }

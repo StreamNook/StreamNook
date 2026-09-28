@@ -25,7 +25,8 @@ use std::time::Duration;
 
 use log::debug;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use crate::rt::AppHandle;
+use tauri::{Emitter, Manager};
 
 pub const EVENT: &str = "window-visibility";
 const PERIOD: Duration = Duration::from_secs(1);

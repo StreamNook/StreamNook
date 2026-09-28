@@ -1,5 +1,5 @@
 use crate::services::mod_log_storage_service::ModLogStorageService;
-use tauri::AppHandle;
+use crate::rt::AppHandle;
 
 /// Load a channel's persisted mod-log entries (oldest first).
 #[tauri::command]

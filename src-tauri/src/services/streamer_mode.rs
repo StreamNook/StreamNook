@@ -12,7 +12,8 @@ use crate::models::settings::Settings;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::OnceLock;
-use tauri::{AppHandle, Emitter};
+use crate::rt::AppHandle;
+use tauri::Emitter;
 use tokio::sync::Notify;
 
 const AUTO_POLL_SECS: u64 = 30;

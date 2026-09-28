@@ -42,7 +42,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tauri::AppHandle;
+use crate::rt::AppHandle;
 use tokio::sync::{oneshot, Mutex, RwLock};
 
 /// How long a SUCCESSFUL harvest (one that found an auth-token) stays hot. Web
@@ -318,7 +318,8 @@ async fn harvest(app: &AppHandle) -> HashMap<String, String> {
 /// controller initializes. `None` if the window couldn't be built at all.
 #[cfg(desktop)]
 async fn harvest_from_active_profile(app: &AppHandle) -> Option<HashMap<String, String>> {
-    use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+    use crate::rt::WebviewWindowBuilder;
+    use tauri::{Manager, WebviewUrl};
 
     // Clear any leftover session window from a prior interrupted harvest so the
     // label is free and bound to the CURRENT active profile.
@@ -548,7 +549,7 @@ async fn harvest(app: &AppHandle) -> HashMap<String, String> {
     use tauri::Manager;
 
     let mut found = HashMap::new();
-    let Some(state) = app.try_state::<crate::twitch_login_plugin::TwitchLoginState<tauri::Wry>>()
+    let Some(state) = app.try_state::<crate::twitch_login_plugin::TwitchLoginState<crate::rt::Rt>>()
     else {
         log::warn!("[Auth] android harvest: twitch-login plugin is not registered");
         return found;

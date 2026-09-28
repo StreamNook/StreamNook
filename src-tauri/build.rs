@@ -63,7 +63,26 @@ fn main() {
 
     link_common_controls_v6_for_tests();
 
+    link_cef_next_to_the_executable();
+
     tauri_build::build()
+}
+
+/// Linux only: let the executable find `libcef.so` in its own directory.
+///
+/// The Linux build runs on the Chromium Embedded Framework, which is linked
+/// dynamically; `cef-dll-sys` copies the whole CEF distribution (`libcef.so`,
+/// `*.pak`, `locales/`, `icudtl.dat`, the sandbox helper) next to the binary
+/// in `target/<profile>/`, and the bundles keep that layout. Without an
+/// `$ORIGIN` rpath the loader would look for the library on the system path
+/// and the app would not start. Tauri's unreleased CEF branch does this in
+/// `tauri-build`; the published one does not, so the app does it itself.
+fn link_cef_next_to_the_executable() {
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os != "linux" {
+        return;
+    }
+    println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
 }
 
 /// Windows/MSVC only: give every linked executable a Common-Controls v6 dependency.

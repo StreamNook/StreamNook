@@ -10,6 +10,7 @@
 #![cfg(target_os = "android")]
 
 use serde::{Deserialize, Serialize};
+use crate::rt::Rt;
 use tauri::plugin::{PluginHandle, TauriPlugin};
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -154,12 +155,12 @@ pub async fn get_mobile_login_cookies<R: Runtime>(app: AppHandle<R>) -> Result<S
 // than bouncing through the page, so these are plain functions, not commands,
 // and need no ACL grant.
 
-fn handle(app: &AppHandle) -> tauri::State<'_, TwitchLoginState<tauri::Wry>> {
-    app.state::<TwitchLoginState<tauri::Wry>>()
+fn handle(app: &AppHandle<Rt>) -> tauri::State<'_, TwitchLoginState<Rt>> {
+    app.state::<TwitchLoginState<Rt>>()
 }
 
 /// Show (or re-navigate) the login overlay.
-pub fn open_overlay(app: &AppHandle, url: &str, title: &str) -> Result<(), String> {
+pub fn open_overlay(app: &AppHandle<Rt>, url: &str, title: &str) -> Result<(), String> {
     handle(app)
         .0
         .run_mobile_plugin::<serde_json::Value>(
@@ -175,7 +176,7 @@ pub fn open_overlay(app: &AppHandle, url: &str, title: &str) -> Result<(), Strin
         .map_err(|e| e.to_string())
 }
 
-pub fn overlay_is_open(app: &AppHandle) -> bool {
+pub fn overlay_is_open(app: &AppHandle<Rt>) -> bool {
     handle(app)
         .0
         .run_mobile_plugin::<OpenResp>("isOpen", ())
@@ -183,14 +184,14 @@ pub fn overlay_is_open(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
-pub fn close_overlay(app: &AppHandle) {
+pub fn close_overlay(app: &AppHandle<Rt>) {
     let _ = handle(app)
         .0
         .run_mobile_plugin::<serde_json::Value>("closeLogin", ());
 }
 
 /// The overlay's cookie header for `url` (`a=b; c=d`), HttpOnly included.
-pub fn cookies_for(app: &AppHandle, url: &str) -> String {
+pub fn cookies_for(app: &AppHandle<Rt>, url: &str) -> String {
     handle(app)
         .0
         .run_mobile_plugin::<CookiesResp>("getCookiesFor", CookieUrlArgs { url })
@@ -199,7 +200,7 @@ pub fn cookies_for(app: &AppHandle, url: &str) -> String {
 }
 
 /// The Kick consent redirect the overlay caught, once; empty when none.
-pub fn take_kick_redirect(app: &AppHandle) -> String {
+pub fn take_kick_redirect(app: &AppHandle<Rt>) -> String {
     handle(app)
         .0
         .run_mobile_plugin::<KickRedirectResp>("takeKickRedirect", ())
@@ -208,7 +209,7 @@ pub fn take_kick_redirect(app: &AppHandle) -> String {
 }
 
 /// Expire every cookie on these origins, leaving other sites signed in.
-pub fn expire_cookies(app: &AppHandle, urls: &[&str]) {
+pub fn expire_cookies(app: &AppHandle<Rt>, urls: &[&str]) {
     let _ = handle(app)
         .0
         .run_mobile_plugin::<serde_json::Value>("expireCookies", ExpireCookiesArgs { urls });
@@ -232,7 +233,7 @@ struct StatusResp {
 /// when the OS is too old to do that without a storage permission (below
 /// Android 10), so the caller can fall back to sharing.
 pub fn save_to_downloads(
-    app: &AppHandle,
+    app: &AppHandle<Rt>,
     path: &std::path::Path,
     name: &str,
     mime: &str,
@@ -249,7 +250,7 @@ pub fn save_to_downloads(
 }
 
 /// Open the share sheet with this file.
-pub fn share_file(app: &AppHandle, path: &std::path::Path, name: &str, mime: &str) -> Result<(), String> {
+pub fn share_file(app: &AppHandle<Rt>, path: &std::path::Path, name: &str, mime: &str) -> Result<(), String> {
     let path = path.to_string_lossy();
     handle(app)
         .0

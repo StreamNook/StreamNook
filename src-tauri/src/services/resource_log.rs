@@ -26,7 +26,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use log::{debug, info};
-use tauri::{AppHandle, Manager};
+use crate::rt::AppHandle;
+use tauri::Manager;
 
 /// Cadence while at least one window exists.
 const ACTIVE_PERIOD: Duration = Duration::from_secs(60);
@@ -147,6 +148,11 @@ fn cache_summary(app: &AppHandle) -> String {
         pair(crate::services::mod_log_storage_service::cache_counts())
     ));
     parts.push(format!("7tv_subs={}", n(crate::services::seventv_eventapi::sub_count())));
+    // Which other-platform chats are actually open, so a report of "it is still
+    // loading a source I turned off" is settled from the log.
+    for (id, count) in crate::services::providers::open_channel_counts() {
+        parts.push(format!("{id}_chat={}", n(count)));
+    }
     format!("caches {}", parts.join(" "))
 }
 
@@ -182,8 +188,15 @@ pub fn build_tree(self_pid: u32, entries: &[Entry], kinds: &HashMap<u32, Kind>) 
 }
 
 fn classify(e: &Entry, self_pid: u32, kinds: &HashMap<u32, Kind>) -> Kind {
+    // A pid the platform classified is a browser helper whatever its name:
+    // on Linux (CEF) and macOS the helpers are not called msedgewebview2
+    // (Linux's are this same executable re-run with `--type=`), and without
+    // this they fell through to Plugin/Other by their position in the tree.
+    if let Some(kind) = kinds.get(&e.pid) {
+        return *kind;
+    }
     if e.name.eq_ignore_ascii_case("msedgewebview2") {
-        return kinds.get(&e.pid).copied().unwrap_or(Kind::WebViewOther);
+        return Kind::WebViewOther;
     }
     if e.parent == self_pid {
         Kind::Plugin
@@ -427,10 +440,60 @@ mod imp {
         }
     }
 
+    /// Classify a Chromium helper by its `--type=` argument, and its parent's.
+    ///
+    /// On Linux the browser engine is CEF, and every helper is this same
+    /// executable re-run: the name says nothing, the command line everything.
+    /// Utility processes are started directly (`--type=utility`). Renderers
+    /// and the GPU process are forked from Chromium's two zygotes and keep
+    /// the zygote's own argv (`--type=zygote`), so they are told apart by the
+    /// parent: a child of the sandboxed zygote is a renderer, a child of the
+    /// unsandboxed one (`--no-zygote-sandbox`) is the GPU process. A zygote
+    /// itself (parent is the browser) is a webview process of no other kind.
+    fn kind_from_cmdline(own: &str, parent: Option<&str>) -> Option<Kind> {
+        fn type_of(cmdline: &str) -> Option<&str> {
+            cmdline.split('\0').find_map(|arg| arg.strip_prefix("--type="))
+        }
+        fn is_unsandboxed_zygote(cmdline: &str) -> bool {
+            cmdline.split('\0').any(|arg| arg == "--no-zygote-sandbox")
+        }
+        Some(match type_of(own)? {
+            "renderer" => Kind::Renderer,
+            "gpu-process" => Kind::Gpu,
+            "utility" => Kind::Utility,
+            "zygote" => match parent.and_then(type_of) {
+                Some("zygote") if parent.is_some_and(is_unsandboxed_zygote) => Kind::Gpu,
+                Some("zygote") => Kind::Renderer,
+                _ => Kind::WebViewOther,
+            },
+            _ => Kind::WebViewOther,
+        })
+    }
+
     pub fn webview_kinds(_app: &AppHandle) -> HashMap<u32, Kind> {
-        crate::platform::process::tree()
+        let procs = crate::platform::process::tree();
+        let cmdlines: HashMap<u32, String> = if cfg!(target_os = "linux") {
+            procs
+                .iter()
+                .filter_map(|p| {
+                    std::fs::read_to_string(format!("/proc/{}/cmdline", p.pid))
+                        .ok()
+                        .map(|c| (p.pid, c))
+                })
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        procs
             .into_iter()
-            .filter_map(|p| kind_from_name(&p.name).map(|k| (p.pid, k)))
+            .filter_map(|p| {
+                kind_from_name(&p.name)
+                    .or_else(|| {
+                        let own = cmdlines.get(&p.pid)?;
+                        kind_from_cmdline(own, cmdlines.get(&p.parent).map(String::as_str))
+                    })
+                    .map(|k| (p.pid, k))
+            })
             .collect()
     }
 
@@ -504,6 +567,25 @@ mod imp {
             assert_eq!(kind_from_name("com.apple.webkit.webcontent"), Some(Kind::Renderer));
             assert_eq!(kind_from_name("com.apple.webkit.gpu"), Some(Kind::Gpu));
             assert_eq!(kind_from_name("com.apple.webkit.networking"), Some(Kind::Utility));
+        }
+
+        #[test]
+        fn chromium_helpers_are_classified_by_their_type_argument() {
+            let cmd = |t: &str| format!("/opt/StreamNook/StreamNook\0--type={t}\0--field-trial\0");
+            let browser = "/opt/StreamNook/StreamNook\0";
+            let sandboxed_zygote = cmd("zygote");
+            let unsandboxed_zygote = format!("{}--no-zygote-sandbox\0", cmd("zygote"));
+            assert_eq!(kind_from_cmdline(&cmd("renderer"), Some(browser)), Some(Kind::Renderer));
+            assert_eq!(kind_from_cmdline(&cmd("gpu-process"), Some(browser)), Some(Kind::Gpu));
+            assert_eq!(kind_from_cmdline(&cmd("utility"), Some(browser)), Some(Kind::Utility));
+            // The zygotes themselves.
+            assert_eq!(kind_from_cmdline(&sandboxed_zygote, Some(browser)), Some(Kind::WebViewOther));
+            assert_eq!(kind_from_cmdline(&unsandboxed_zygote, Some(browser)), Some(Kind::WebViewOther));
+            // Forked children keep the zygote's argv; the parent tells them apart.
+            assert_eq!(kind_from_cmdline(&sandboxed_zygote, Some(&sandboxed_zygote)), Some(Kind::Renderer));
+            assert_eq!(kind_from_cmdline(&unsandboxed_zygote, Some(&unsandboxed_zygote)), Some(Kind::Gpu));
+            assert_eq!(kind_from_cmdline(&cmd("zygote"), None), Some(Kind::WebViewOther));
+            assert_eq!(kind_from_cmdline(browser, None), None);
         }
 
         #[test]

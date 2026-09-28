@@ -19,7 +19,7 @@ pub async fn get_home_snapshot() -> Result<home_snapshot::HomeSnapshot, String> 
 /// claims of a page that reloaded without unmounting are told from live ones.
 #[tauri::command]
 pub async fn set_home_mounted(
-    window: tauri::Window,
+    window: crate::rt::Window,
     mounted: bool,
     unified: Option<bool>,
     context: Option<String>,
@@ -42,7 +42,7 @@ pub async fn set_home_mounted(
 /// `set_home_mounted`.
 #[tauri::command]
 pub async fn set_home_sidebar(
-    window: tauri::Window,
+    window: crate::rt::Window,
     scope: Option<String>,
     context: Option<String>,
 ) -> Result<(), String> {

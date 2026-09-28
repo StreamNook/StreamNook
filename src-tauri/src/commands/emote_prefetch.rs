@@ -1,6 +1,7 @@
 use crate::services::emote_prefetch_service::{EmotePrefetchService, PrefetchProgress};
 use std::sync::Arc;
-use tauri::{AppHandle, State};
+use crate::rt::AppHandle;
+use tauri::State;
 
 /// Managed state wrapper for the AFK emote prefetch service.
 pub struct EmotePrefetchServiceState(pub Arc<EmotePrefetchService>);

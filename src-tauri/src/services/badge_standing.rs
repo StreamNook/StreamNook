@@ -225,8 +225,8 @@ async fn cached_for(user_id: Option<&str>) -> Option<Cached> {
 ///
 /// Twitch can list a claimed badge a little after the claim, so the same nudge
 /// repeats once, 45 s later, in case the first read was too early.
-pub fn collection_may_have_changed(app: &tauri::AppHandle) {
-    fn nudge(app: &tauri::AppHandle) {
+pub fn collection_may_have_changed(app: &crate::rt::AppHandle) {
+    fn nudge(app: &crate::rt::AppHandle) {
         if let Ok(mut slot) = COLLECTION.try_write() {
             if let Some(c) = slot.as_mut() {
                 c.fetched_at_ms = 0;
@@ -721,7 +721,7 @@ fn check_id_drift(collection: &Cached, catalogue: &[CatalogueBadge]) {
 /// The signed-in account's standing, answered from cache. A due refresh is
 /// spawned in the background and announced with `badge-standing-changed`; it
 /// also settles who is signed in when the account registry has not said.
-pub async fn get_standing(app: &tauri::AppHandle, force: bool) -> BadgeStanding {
+pub async fn get_standing(app: &crate::rt::AppHandle, force: bool) -> BadgeStanding {
     let now = now_ms();
     let primary = AccountStore::primary();
     let cached = cached_for(primary.as_ref().map(|a| a.user_id.as_str())).await;

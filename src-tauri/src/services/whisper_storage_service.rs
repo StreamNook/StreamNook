@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
-use tauri::AppHandle;
+use crate::rt::AppHandle;
 use tauri::Manager;
 
 /// Per-account whisper files live under this directory, one `<owner_id>.json`
