@@ -1,3 +1,42 @@
+## [8.8.0] - 2026-09-28
+
+![Every emote, one Tab](https://raw.githubusercontent.com/StreamNook/StreamNook/main/.github/assets/release-8.8.0-emotes-and-drops.webp)
+
+### ✨ Features
+- Tab in chat can open a list of every emote you can use, with where each one comes from. It narrows as you type and matches the middle of names too, so "love" finds a channel emote like vulpLove. A button at the top of the list switches Tab to the carousel, and one on the carousel switches it back. Typing a colon and two letters opens the same list.
+- Stream cards, the sidebar and the hover card show when a channel shares its chat with other channels, with their faces. Channels streaming together show their faces and "Together" in place of the old "+2", and one click still opens everyone in MultiNook.
+- More drops show up in the Drops center: drops that take several days, subscription rewards, and mystery rewards like the Pokémon balls. Each shows Twitch's own progress, such as the day you're on and your minutes today, and a mystery reward gets an Open button. A drop that counts in several categories finds live channels in all of them.
+- A "Claim automatically" switch sits in your drops inventory. Turn it off and finished drops wait for you to claim them.
+- In combined chat you can leave one of a streamer's linked channels out of their feed without unlinking it or switching that platform off everywhere.
+- You can build and preview an OBS overlay without signing in. Signing in is only needed for the OBS link, and your overlay is still there afterwards.
+
+### 🐛 Bug Fixes
+- Badges sit in the order Twitch shows them: role first, then subscription, then what someone earned in the channel, then global badges. That holds in chat, VOD chat replay and profile cards.
+- Messages you send keep your subscriber badge and your other channel badges.
+- A channel points redemption shows the redeemer's channel badges and name colour, the same as their chat messages.
+- On sub, gift and cheer cards, the 7TV badge lines up with the badges next to it instead of sitting lower.
+- 7TV personal emotes show for more chatters, and messages sent before someone's personal emotes loaded switch over once they arrive.
+- FrankerFaceZ badges show in their colours, and bots flagged by FrankerFaceZ wear Twitch's Chat Bot badge.
+- Hovering a StreamNook member badge names it once ("StreamNook Member", not "StreamNook StreamNook Member").
+- Hiding someone from their profile card clears the messages they already sent, not only the ones after, in that channel or everywhere depending on which you picked. Turning on "Hide known bots" clears theirs the same way.
+- Hiding someone from a popped-out profile card no longer unhides everyone else you had hidden, and the card's buttons show whether that person is already hidden.
+- Opening Global Cosmetics no longer blanks the badge grid and loads it all over again a moment after it appears.
+- Placing a prediction no longer counts your bet twice in the points shown.
+- The channel points summary lists a channel once, even when a chest claim and watch points arrive together.
+- Clicking a platform in the chat header no longer switches it off for every streamer, and platforms that got switched off that way are back on. When a streamer turns up on both Kick and YouTube, both suggestions show, and they wait behind the + in the chat header instead of opening over chat.
+- Polls, predictions and the pinned message no longer cover the chat header when a hype train makes it taller, and a pinned message sits under a live poll so you can read both.
+
+### 🔧 Maintenance
+- Your saved sign-ins are now encrypted, with the key kept in Windows Credential Manager or the macOS Keychain. Existing sign-ins move over the first time you open this version. If the keyring can't be reached, a note under Accounts says so.
+- Plugins can build full settings pages that match the rest of Settings.
+- The chat header and the Home navigation strip are restyled, with the selected tab set into the glass as a darker pill.
+
+### ⚡ Performance
+- StreamNook reuses its network connections instead of opening new ones for most requests, so streams, sign-ins, badges and panels start faster.
+- Emoji images are saved on disk and fetched once, and an emoji the server doesn't have isn't asked for again.
+- Stream titles convert emoji codes for a whole page at once, and settings are read once at startup instead of twice.
+- The Drops center loads campaigns and your inventory at the same time.
+
 ## [8.7.1] - 2026-09-24
 
 ### 🐛 Bug Fixes
