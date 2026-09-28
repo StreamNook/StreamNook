@@ -8,7 +8,8 @@ use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use crate::rt::AppHandle;
+use tauri::Emitter;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
 use uuid::Uuid;
@@ -21,7 +22,7 @@ const CLIENT_URL: &str = "https://www.twitch.tv";
 // Persisted-query hash for the Inventory GQL operation (same one the Twitch
 // web client sends). Shared by the UI inventory fetch and the monitor's
 // progress overlay.
-const INVENTORY_QUERY_HASH: &str =
+pub(crate) const INVENTORY_QUERY_HASH: &str =
     "d86775d0ef16a63a33ad52e80eaff963b2d5b72fada7c991504a57496e1d8e4b";
 
 // Your app's client ID (for reference - used for other Helix API calls)
@@ -326,7 +327,7 @@ impl DropsService {
 
     /// Builds the Android-client GQL headers from owned values, so the detached
     /// watched-channel monitor task can issue authenticated reads without `&self`.
-    fn gql_headers(token: &str, device_id: &str, session_id: &str) -> HeaderMap {
+    pub(crate) fn gql_headers(token: &str, device_id: &str, session_id: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert("Client-ID", HeaderValue::from_static(CLIENT_ID));
         headers.insert(ACCEPT, HeaderValue::from_static("*/*"));
@@ -445,23 +446,17 @@ impl DropsService {
         let now = Utc::now();
 
         for campaign_json in &campaigns_array {
-            // Parse game info
-            let game = &campaign_json["game"];
-            if game.is_null() {
+            // A campaign that runs across categories has no game; it is still a
+            // drop, grouped for display under its owner or its own name.
+            let Some(crate::services::reward_drops::DisplayGroup {
+                game_id,
+                game_name,
+                mut image_url,
+                has_category,
+            }) = crate::services::reward_drops::display_group(campaign_json)
+            else {
                 continue;
-            }
-
-            let game_id = game["id"].as_str().unwrap_or("").to_string();
-            let game_name = game["displayName"]
-                .as_str()
-                .or_else(|| game["name"].as_str())
-                .unwrap_or("")
-                .to_string();
-            let image_url = game["boxArtURL"].as_str().unwrap_or("").to_string();
-
-            if game_name.is_empty() {
-                continue;
-            }
+            };
 
             // Parse dates
             let start_at = campaign_json["startAt"]
@@ -610,6 +605,7 @@ impl DropsService {
                             is_claimed,
                             last_updated: Utc::now(),
                             drop_instance_id, // Store the dropInstanceID for claiming!
+                            twitch_progress: None,
                         });
                     } else {
                         // Check claimed_benefits to determine if claimed
@@ -642,6 +638,10 @@ impl DropsService {
                         progress,
                         // Drops with 0 required minutes are event-based/badge drops that cannot be auto-collected
                         is_collectible: required_minutes > 0,
+                        required_subs: drop_json["requiredSubs"].as_u64().unwrap_or(0) as u32,
+                        required_days: 0,
+                        random_of: None,
+                        next_reward: None,
                     });
                 }
             }
@@ -655,6 +655,10 @@ impl DropsService {
             let is_account_connected = campaign_json["self"]["isAccountConnected"]
                 .as_bool()
                 .unwrap_or(true);
+
+            if image_url.is_empty() {
+                image_url = crate::services::reward_drops::first_reward_image(&time_based_drops);
+            }
 
             let campaign = DropCampaign {
                 id: campaign_json["id"].as_str().unwrap_or("").to_string(),
@@ -674,6 +678,9 @@ impl DropsService {
                 is_acl_based,
                 details_url: None,
                 account_link: None,
+                separate_progress: false,
+                has_category,
+                category_ids: Vec::new(),
             };
 
             items.push(InventoryItem {
@@ -684,6 +691,37 @@ impl DropsService {
                 claimed_drops,
                 drops_in_progress,
             });
+        }
+
+        // The viewer's started drops from Twitch's second list, like the rest.
+        // The campaign load just fetched it (and the watch loop keeps it fresh),
+        // so reuse that rather than asking Twitch again.
+        let second_list = match crate::services::reward_drops::cached_within(
+            crate::services::reward_drops::REUSE_FOR_INVENTORY_SECS,
+        ) {
+            Some(c) => c,
+            None => match crate::services::reward_drops::fetch(
+                &self.client,
+                &token,
+                &self.device_id,
+                &self.session_id,
+            )
+            .await
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    debug!("[fetch_inventory] Twitch's second drops list: {e}");
+                    crate::services::reward_drops::cached()
+                }
+            },
+        };
+        let known: std::collections::HashSet<String> =
+            items.iter().map(|i| i.campaign.id.clone()).collect();
+        for item in crate::services::reward_drops::inventory_items(&second_list) {
+            if !known.contains(&item.campaign.id) {
+                active_count += 1;
+                items.push(item);
+            }
         }
 
         let total_campaigns = items.len() as i32;
@@ -823,6 +861,16 @@ impl DropsService {
             }
         };
 
+        // Twitch's second drops list, fetched alongside the standard one rather
+        // than after it, so it adds no wait of its own. Joined at the end.
+        let second_list = {
+            let (client, token) = (client.clone(), token.clone());
+            let (device_id, session_id) = (device_id.to_string(), session_id.to_string());
+            tokio::spawn(async move {
+                crate::services::reward_drops::fetch(&client, &token, &device_id, &session_id).await
+            })
+        };
+
         debug!("Fetching drops campaigns using Android app client ID...");
 
         // Use a full GraphQL query that includes timeBasedDrops with requiredMinutesWatched
@@ -860,11 +908,13 @@ impl DropsService {
                         id
                         name
                         requiredMinutesWatched
+                        requiredSubs
                         benefitEdges {
                             benefit {
                                 id
                                 name
                                 imageAssetURL
+                                distributionType
                             }
                         }
                         self {
@@ -955,24 +1005,17 @@ impl DropsService {
                     continue;
                 }
 
-                // Parse game info - handle null game gracefully
-                let game = &campaign_json["game"];
-                if game.is_null() {
+                // A campaign that runs across categories has no game; it is
+                // still a drop, grouped for display under its owner or name.
+                let Some(crate::services::reward_drops::DisplayGroup {
+                    game_id,
+                    game_name,
+                    mut image_url,
+                    has_category,
+                }) = crate::services::reward_drops::display_group(campaign_json)
+                else {
                     continue;
-                }
-
-                let game_id = game["id"].as_str().unwrap_or("").to_string();
-                let game_name = game["displayName"]
-                    .as_str()
-                    .or_else(|| game["name"].as_str())
-                    .unwrap_or("")
-                    .to_string();
-
-                let image_url = game["boxArtURL"].as_str().unwrap_or("").to_string();
-
-                if game_name.is_empty() {
-                    continue;
-                }
+                };
 
                 // Parse allowed channels (ACL)
                 // If allow.channels exists and is not empty, this is an ACL-restricted campaign
@@ -1077,6 +1120,7 @@ impl DropsService {
                                     is_claimed: self_data["isClaimed"].as_bool().unwrap_or(false),
                                     last_updated: Utc::now(),
                                     drop_instance_id,
+                                    twitch_progress: None,
                                 })
                             } else {
                                 None
@@ -1099,6 +1143,10 @@ impl DropsService {
                             benefit_edges,
                             progress,
                             is_collectible,
+                            required_subs: drop_json["requiredSubs"].as_u64().unwrap_or(0) as u32,
+                            required_days: 0,
+                            random_of: None,
+                            next_reward: None,
                         });
                     }
                 }
@@ -1137,6 +1185,11 @@ impl DropsService {
                     .filter(|s| !s.is_empty())
                     .map(|s| s.to_string());
 
+                if image_url.is_empty() {
+                    image_url =
+                        crate::services::reward_drops::first_reward_image(&time_based_drops);
+                }
+
                 result.push(DropCampaign {
                     id: campaign_json["id"].as_str().unwrap_or("").to_string(),
                     name: campaign_json["name"].as_str().unwrap_or("").to_string(),
@@ -1157,8 +1210,24 @@ impl DropsService {
                     is_acl_based,
                     details_url,
                     account_link,
+                    separate_progress: false,
+                    has_category,
+                    category_ids: Vec::new(),
                 });
             }
+        }
+
+        // Twitch lists its container and daily-watch drops apart from the
+        // standard list; they are drops all the same. A failure there must never
+        // cost the standard list.
+        match second_list.await {
+            Ok(Ok(more)) => {
+                let known: std::collections::HashSet<String> =
+                    result.iter().map(|c| c.id.clone()).collect();
+                result.extend(more.into_iter().filter(|c| !known.contains(&c.id)));
+            }
+            Ok(Err(e)) => debug!("[Drops] Twitch's second drops list: {e}"),
+            Err(e) => debug!("[Drops] Twitch's second drops list task: {e}"),
         }
 
         debug!("Returning {} total campaigns (unfiltered)", result.len());
@@ -1317,6 +1386,7 @@ impl DropsService {
                         drop_instance_id: self_data["dropInstanceID"]
                             .as_str()
                             .map(String::from),
+                        twitch_progress: None,
                     },
                 );
             }
@@ -1936,10 +2006,17 @@ impl DropsService {
                         progress_map
                             .values()
                             .filter(|p| {
-                                !p.is_claimed
-                                    && p.current_minutes_watched >= p.required_minutes_watched
-                                    && p.required_minutes_watched > 0 // Only collectible drops
-                                    && !attempted.contains_key(&p.drop_id) // Skip already-settled
+                                let earned = match &p.twitch_progress {
+                                    // Twitch says outright when a reward is earned
+                                    // and waiting (subscription rewards have no
+                                    // minutes to compare).
+                                    Some(t) => t.ready_to_claim && p.drop_instance_id.is_some(),
+                                    None => {
+                                        p.current_minutes_watched >= p.required_minutes_watched
+                                            && p.required_minutes_watched > 0 // Only collectible drops
+                                    }
+                                };
+                                !p.is_claimed && earned && !attempted.contains_key(&p.drop_id) // Skip already-settled
                             })
                             .cloned()
                             .collect()
@@ -2097,6 +2174,7 @@ impl DropsService {
                 is_claimed: false,
                 last_updated: Utc::now(),
                 drop_instance_id: None, // Will be populated when we fetch from API
+                twitch_progress: None,
             };
             progress_map.insert(drop_id.clone(), progress);
 
@@ -2145,11 +2223,13 @@ impl DropsService {
                         id
                         name
                         requiredMinutesWatched
+                        requiredSubs
                         benefitEdges {
                             benefit {
                                 id
                                 name
                                 imageAssetURL
+                                distributionType
                             }
                         }
                         self {
@@ -2202,6 +2282,7 @@ impl DropsService {
                             is_claimed: self_progress.is_claimed,
                             last_updated: Utc::now(),
                             drop_instance_id: None, // Internal query doesn't return dropInstanceID
+                            twitch_progress: None,
                         };
                         progress_map.insert(drop.id.clone(), progress);
                     }
@@ -2222,6 +2303,10 @@ impl DropsService {
                             .collect(),
                         progress: None,
                         is_collectible: drop.required_minutes_watched > 0,
+                        required_subs: 0,
+                        required_days: 0,
+                        random_of: None,
+                        next_reward: None,
                     }
                 })
                 .collect();
@@ -2249,6 +2334,9 @@ impl DropsService {
                 is_acl_based: false,
                 details_url: None, // Will be populated from the main fetch method
                 account_link: None,
+                separate_progress: false,
+                has_category: true,
+                category_ids: Vec::new(),
             });
         }
 

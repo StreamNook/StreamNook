@@ -139,6 +139,7 @@ export interface DropsSettings {
   auto_reserve_on_watch?: boolean; // Automatically reserve token when starting a stream (default: true)
   priority_channels?: PriorityChannel[]; // Channels to prioritize for channel points automation
   prefer_favorites?: boolean; // Collect your live favorited channels instead of the priority list (default: false)
+  prefer_missing_badges?: boolean; // Work first on campaigns that award a badge you're missing (default: true)
   // Recovery settings
   recovery_settings?: RecoverySettings;
 }
@@ -162,6 +163,8 @@ export interface CurrentDropInfo {
   required_minutes: number;
   current_minutes: number;
   game_name: string;
+  /** Extra progress wording, e.g. "Day 2 of 3 · 12/20 min today" for multi-day drops. */
+  detail?: string;
 }
 
 export interface DropsDeviceCodeInfo {
@@ -585,10 +588,16 @@ export interface ChatInputSettings {
   // still sends + clears like normal.
   quick_send?: boolean;
   // Emote tab completion in the chat input. Tab cycles forward through
-  // matching emotes/chatters, Shift+Tab cycles back.
+  // matching emotes/chatters, Shift+Tab cycles back. Match mode is read by Rust
+  // too (emote_match.rs).
   emote_tab_complete_enabled?: boolean;
   emote_tab_complete_match_mode?: 'starts_with' | 'includes';
   emote_tab_complete_include_chatters?: boolean;
+  // What Tab opens: the inline carousel (complete in place, Tab again cycles;
+  // the default) or the emote list (narrows as you type). Never both.
+  emote_tab_style?: 'carousel' | 'list';
+  // Typing ":" plus two letters opens the emote list. Defaults to on.
+  emote_colon_search_enabled?: boolean;
   // Underline misspelled words in the composer and offer corrections on
   // right-click. Replaces the webview's own spell check, which flags every
   // emote name and every login because it has never seen Twitch chat.
@@ -1063,6 +1072,7 @@ export interface Settings {
   compact_view?: CompactViewSettings; // Compact view preset settings
   custom_themes?: CustomTheme[]; // User-created custom themes
   glass_transparency?: number; // Global glassiness, 0-100 (100 = full frosted glass, 0 = solid panels). Default 100.
+  glass_blur?: boolean; // Backdrop blur behind glass. Rust supplies the default (on everywhere); the toggle is the escape hatch for a weak GPU.
   oled_accent?: string; // Accent hex (#rrggbb) for the OLED theme, which lets you pick any accent. Default DEFAULT_OLED_ACCENT.
   multi_nook_slots?: MultiNookSlot[]; // Persisted multi-nook grid configurations
   multi_nook_chat_hidden?: boolean; // Whether the chat panel is globally hidden in MultiNook
@@ -1188,6 +1198,9 @@ export interface ChannelLinkGroup {
   members: LinkMember[];
   /** `provider:channel` entries the user said are NOT this streamer. */
   dismissed?: string[];
+  /** `provider:channel` members kept linked but left out of this streamer's
+   *  combined feed (the chat header's platform marks). */
+  hidden?: string[];
 }
 
 /** Merging other platforms' chat into the normal chat panel. Mirrors
@@ -1215,11 +1228,14 @@ export interface ChatBlendSettings {
   // Which platforms may join a merged feed, keyed by provider id (see
   // CHAT_PROVIDERS). Absent means allowed; only an explicit false excludes.
   platforms?: Partial<Record<ProviderId, boolean>>;
-  // Offer a link when a channel looks like it exists on another platform.
-  // Kick only. Default on.
+  // Offer a link when a channel looks like it exists on Kick or YouTube.
+  // Default on.
   suggest_links?: boolean;
   // Mark rows from a platform other than the one being watched. Default on.
   show_platform_badge?: boolean;
+  // Set once Rust has reset the global platform switches the chat header's
+  // marks used to write. Backend bookkeeping; the page never sets it.
+  header_marks_scoped?: boolean;
 }
 
 /** A title plus its choices, remembered so the composer can offer it again. */
@@ -1375,6 +1391,13 @@ export interface Collaboration {
   members: Collaborator[];
 }
 
+/** Twitch's Shared Chat outside a Shared Viewership group (Rust
+ *  `shared_chat::SharedChat`): live channels only, the channel first, then by
+ *  their own viewers; `is_leader` marks the session's host. At least two. */
+export interface SharedChat {
+  members: Collaborator[];
+}
+
 /** Per-channel chat state owned by Rust (src-tauri/src/services/channel_state.rs). */
 export interface ChannelState {
   login: string;
@@ -1421,6 +1444,10 @@ export interface HomeSnapshot {
   /** Twitch channel id -> its Shared Viewership group, only for channels in one. */
   collaborations?: Record<string, Collaboration>;
   collab_at?: number | null;
+  /** Twitch channel id -> its Shared Chat session, only for channels in one
+   *  and not in a Shared Viewership group. */
+  shared_chats?: Record<string, SharedChat>;
+  shared_chat_at?: number | null;
   watch_streaks: Record<string, number>;
   streaks_at: number | null;
   drops_campaigns: DropCampaign[];
@@ -1481,6 +1508,7 @@ export type HomeSnapshotUpdate =
   | { section: 'recommended'; streams: TwitchStream[]; cursor: string | null; at: number }
   | { section: 'hype_trains'; statuses: HypeTrainBulkStatus[]; at: number }
   | { section: 'collaborations'; collabs: Record<string, Collaboration>; at: number }
+  | { section: 'shared_chats'; chats: Record<string, SharedChat>; at: number }
   | { section: 'watch_streaks'; streaks: Record<string, number>; at: number }
   | { section: 'drops'; campaigns: DropCampaign[]; active_game_names: string[]; at: number }
   | { section: 'continue_watching'; items: ContinueWatchingItem[]; at: number }
@@ -1510,7 +1538,6 @@ export interface TwitchStream {
   thumbnail_url: string;
   started_at: string;
   broadcaster_type?: string;
-  has_shared_chat?: boolean;
   profile_image_url?: string;
   is_live?: boolean;
   // Free-form stream tags (e.g. "English", "Speedrun"); used by the category tag filter.
@@ -1789,6 +1816,23 @@ export interface DropProgress {
   drop_instance_id?: string; // Required for claiming drops - compound ID from Twitch
   drop_name?: string; // Cached drop name from backend events
   drop_image?: string; // Cached drop image from backend events
+  /** Twitch's own progress detail for multi-day and subscription drops. */
+  twitch_progress?: TwitchProgress | null;
+}
+
+/** Progress Twitch reports beyond plain minutes (Rust `TwitchProgress`). */
+export interface TwitchProgress {
+  days_done: number;
+  /** Minutes in the current day window; 0 once that window has lapsed. */
+  minutes_today: number;
+  window_expires_at: string | null;
+  /** Minutes rose in the last few minutes: this is being earned now. */
+  accruing: boolean;
+  subs_done: number;
+  /** Earned and waiting to be claimed (Twitch's `CLAIMABLE`); for a draw, waiting to be opened. */
+  ready_to_claim: boolean;
+  /** What the viewer got or holds: for a random draw, the one that came out. */
+  earned?: DropBenefit | null;
 }
 
 export interface TimeBasedDrop {
@@ -1800,6 +1844,14 @@ export interface TimeBasedDrop {
   /** Whether this drop can be auto-collected. Drops with required_minutes_watched = 0 
    * are event-based, badge-based, or require special actions and cannot be auto-collected */
   is_collectible?: boolean;
+  /** Subscriptions (or gifted subs) the reward needs; 0 = none. */
+  required_subs?: number;
+  /** Separate days the watch time repeats on; 0 or 1 = once. `required_minutes_watched` is the total. */
+  required_days?: number;
+  /** The reward is one drawn at random from this many. */
+  random_of?: number | null;
+  /** A draw with one reward left unheld: what it will give (Twitch never repeats one). */
+  next_reward?: DropBenefit | null;
 }
 
 export interface AllowedChannel {
@@ -1821,6 +1873,13 @@ export interface DropCampaign {
   allowed_channels: AllowedChannel[];
   is_acl_based: boolean;
   account_link?: string; // URL to connect game account for drops
+  details_url?: string;
+  /** Each tier carries its own progress (multi-day and container drops), not one shared watch-time count. */
+  separate_progress?: boolean;
+  /** `game_id` is a real category; false when it only groups a cross-category campaign. */
+  has_category?: boolean;
+  /** Every category a stream can be live in to credit this drop; empty means `game_id` alone. */
+  category_ids?: string[];
 }
 
 export type CampaignStatus = 'Active' | 'Upcoming' | 'Expired';

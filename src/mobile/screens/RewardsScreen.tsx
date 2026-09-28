@@ -29,6 +29,7 @@ import { refetchDelay } from '../../services/badgeStanding';
 import { orderBadges, type BadgeSort } from '../rewards/badgeSort';
 import { gameBoxArt } from '../../utils/boxArt';
 import { openExternal } from '../../utils/openExternal';
+import { dropRequirementText, twitchProgressLine } from '../../utils/dropRequirement';
 import { Logger } from '../../utils/logger';
 import type {
   DropCampaign,
@@ -447,13 +448,14 @@ export const RewardsScreen: React.FC = () => {
     <div className="flex-1 min-h-0 flex flex-col">
       <div className="px-4 pt-3 pb-2 shrink-0">
         <h1 className="text-xl font-bold text-textPrimary mb-2.5">Rewards</h1>
-        <div className="flex gap-1">
+        {/* The tab pair wears the glaze; the open tab is the darker pill inside it. */}
+        <div className="flex w-fit gap-1 p-1 chrome-glaze chrome-glaze--flat">
           {(['drops', 'badges'] as RewardsTab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
               className={`px-3.5 py-1.5 rounded-full text-sm transition-colors ${
-                tab === t ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textPrimary font-semibold' : 'text-textMuted'
+                tab === t ? 'glaze-selected text-textPrimary font-semibold' : 'text-textMuted'
               }`}
             >
               {t === 'drops' ? 'Drops' : 'Badges'}
@@ -483,20 +485,23 @@ export const RewardsScreen: React.FC = () => {
               </div>
               <MobileMissingNow standing={standing} missing={missingNow} onOpen={openMissing} />
               {/* Sort options, mirroring the desktop gallery's set. */}
-              <div className="flex gap-1 overflow-x-auto pb-2 -mx-1 px-1">
-                {BADGE_SORTS.map((s) => (
-                  <button
-                    key={s.id}
-                    onClick={() => setBadgeSort(s.id)}
-                    className={`shrink-0 px-3 py-1 rounded-full text-[12.5px] transition-colors ${
-                      badgeSort === s.id
-                        ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textPrimary font-semibold'
-                        : 'text-textMuted'
-                    }`}
-                  >
-                    {s.label}
-                  </button>
-                ))}
+              {/* The sort row wears the glaze and the chosen sort is the darker
+                  pill inside it. The options scroll inside the glass, so its
+                  rim stays put. */}
+              <div className="mb-2 w-fit max-w-full chrome-glaze chrome-glaze--flat">
+                <div className="flex gap-1 p-1 overflow-x-auto rounded-full">
+                  {BADGE_SORTS.map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => setBadgeSort(s.id)}
+                      className={`shrink-0 px-3 py-1 rounded-full text-[12.5px] transition-colors ${
+                        badgeSort === s.id ? 'glaze-selected text-textPrimary font-semibold' : 'text-textMuted'
+                      }`}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-7 gap-2">
                 {sortedBadges.map((badge, bi) => {
@@ -1020,7 +1025,7 @@ export const RewardsScreen: React.FC = () => {
               );
             })()}
 
-            {campaignDetail.campaign.game_id && campaignDetail.campaign.game_name && (
+            {campaignDetail.campaign.game_id && campaignDetail.campaign.game_name && campaignDetail.campaign.has_category !== false && (
               <button
                 onClick={() => {
                   const c = campaignDetail.campaign;
@@ -1044,9 +1049,15 @@ export const RewardsScreen: React.FC = () => {
                 const need = drop.required_minutes_watched;
                 const have = Math.min(drop.progress?.current_minutes_watched ?? 0, need);
                 const claimed = !!drop.progress?.is_claimed;
-                const done = claimed || (need > 0 && have >= need);
+                // Twitch reports multi-day and subscription drops in detail,
+                // including when one is earned and waiting.
+                const twitch = drop.progress?.twitch_progress;
+                const done = claimed || !!twitch?.ready_to_claim || (!twitch && need > 0 && have >= need);
                 const pct = need > 0 ? Math.min(100, (have / need) * 100) : 0;
-                const benefit = drop.benefit_edges?.[0];
+                // What it turned into once Twitch says; an unopened draw's first
+                // reward is its container.
+                const benefit = twitch?.earned ?? drop.next_reward ?? drop.benefit_edges?.[0];
+                const detail = twitchProgressLine(drop.progress, drop) ?? dropRequirementText(drop);
                 return (
                   <div key={drop.id} className="flex items-center gap-2.5 py-1">
                     {benefit?.image_url ? (
@@ -1077,9 +1088,12 @@ export const RewardsScreen: React.FC = () => {
                                 : 'text-textMuted'
                           }`}
                         >
-                          {claimed ? 'Claimed' : done ? 'Ready' : `${need - have}m left`}
+                          {claimed ? 'Claimed' : done ? 'Ready' : need > 0 ? `${need - have}m left` : ''}
                         </span>
                       </div>
+                      {detail && !claimed && (
+                        <div className="text-[11px] text-textMuted truncate mt-0.5">{detail}</div>
+                      )}
                       {/* A 0-minute drop is event or action based, not something
                           watch time earns, so it gets no bar to imply otherwise. */}
                       {need > 0 && (

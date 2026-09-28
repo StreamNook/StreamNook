@@ -788,6 +788,11 @@ const TitleBar = () => {
                     <span>{dropProgress.current_drop.current_minutes} min</span>
                     <span>{dropProgress.current_drop.required_minutes} min</span>
                   </div>
+                  {dropProgress.current_drop.detail && (
+                    <div className="text-[10px] text-textSecondary mt-1 truncate">
+                      {dropProgress.current_drop.detail}
+                    </div>
+                  )}
                 </div>
 
                 {/* Click hint */}

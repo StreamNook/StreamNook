@@ -47,6 +47,7 @@ interface DropsSettings {
     reserve_token_for_current_stream?: boolean;
     auto_reserve_on_watch?: boolean;
     priority_channels?: Array<{ channel_id: string; channel_login: string; display_name: string }>;
+    prefer_missing_badges?: boolean;
 }
 
 // A campaign has something mineable if any of its drops is watch-time earnable.
@@ -343,27 +344,11 @@ export default function DropsCenter() {
         }
     };
 
+    // Sends only the changed keys: Rust applies them onto its own copy, so this
+    // window's older copy never reverts what the Autopilot page saved.
     const updateDropsSettings = async (newSettings: Partial<DropsSettings>) => {
         try {
-            const current = dropsSettings || {
-                auto_claim_drops: true,
-                auto_claim_channel_points: true,
-                notify_on_drop_available: true,
-                notify_on_drop_claimed: true,
-                notify_on_points_claimed: false,
-                check_interval_seconds: 60,
-                automation_enabled: false,
-                priority_games: [],
-                excluded_games: [],
-                priority_mode: 'PriorityOnly' as const,
-                watch_interval_seconds: 20,
-                favorite_games: [],
-                priority_channels: [],
-                prefer_favorites: false,
-            };
-            const updatedSettings = { ...current, ...newSettings };
-
-            await invoke('update_drops_settings', { settings: updatedSettings });
+            const updatedSettings = await invoke<DropsSettings>('patch_drops_settings', { patch: newSettings });
             setDropsSettings(updatedSettings);
 
             useAppStore.getState().updateSettings({
@@ -585,6 +570,12 @@ export default function DropsCenter() {
 
         // Listeners
         let isMounted = true;
+        // Any save (the Autopilot page, another window) arrives whole from Rust.
+        let unlistenSettings: (() => void) | undefined;
+        void listen<DropsSettings>('drops-settings-updated', (event) => setDropsSettings(event.payload)).then((u) => {
+            if (isMounted) unlistenSettings = u;
+            else u();
+        });
         let unlistenStatus: (() => void) | undefined;
         let unlistenProgress: (() => void) | undefined;
 
@@ -660,6 +651,7 @@ export default function DropsCenter() {
             isMounted = false;
             if (unlistenStatus) unlistenStatus();
             if (unlistenProgress) unlistenProgress();
+            if (unlistenSettings) unlistenSettings();
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [addToast]);
@@ -1159,6 +1151,8 @@ export default function DropsCenter() {
                         completedDrops={completedDrops}
                         progress={progress}
                         onClaimDrop={handleClaimDrop}
+                        autoClaim={dropsSettings?.auto_claim_drops ?? true}
+                        onAutoClaimChange={(enabled) => void updateDropsSettings({ auto_claim_drops: enabled })}
                     />
                 )}
 

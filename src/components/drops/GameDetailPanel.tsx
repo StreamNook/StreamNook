@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { X, Gift, Package, Check, Pause, Clock, Star, Ban, Link2, Tv } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
@@ -9,6 +9,7 @@ import { DROPS_CARD_ACTION_SLOT, type DropCardActionContext, type PickedDropChan
 import ChannelPickerModal, { type PickableChannel } from './ChannelPickerModal';
 
 import { Logger } from '../../utils/logger';
+import { claimLabel, dropPercent, dropRequirementText, obtainsContainer, twitchProgressLine } from '../../utils/dropRequirement';
 // Helper to check if a drop is collectible
 // Uses the is_collectible field from backend, with fallback to checking required_minutes_watched
 // Also checks inventory data as a secondary source since it has more accurate progress info
@@ -65,18 +66,20 @@ function isCampaignCollectible(campaign: DropCampaign, inventoryItems?: Inventor
 }
 
 // Get the drop type label for a campaign
-function getCampaignDropType(campaign: DropCampaign, inventoryItems?: InventoryItem[]): { type: 'time' | 'instant' | 'mixed' | 'other'; label: string } {
+function getCampaignDropType(campaign: DropCampaign, inventoryItems?: InventoryItem[]): { type: 'time' | 'instant' | 'mixed' | 'other' | 'sub'; label: string } {
     if (!campaign.time_based_drops || campaign.time_based_drops.length === 0) {
         return { type: 'other', label: 'Event/Special' };
     }
-    
+
     const collectibleCount = campaign.time_based_drops.filter(d => isDropCollectible(d, inventoryItems)).length;
     const nonCollectibleCount = campaign.time_based_drops.length - collectibleCount;
-    
+
     if (collectibleCount > 0 && nonCollectibleCount > 0) {
         return { type: 'mixed', label: 'Mixed' };
     } else if (collectibleCount > 0) {
         return { type: 'time', label: 'Watch Time' };
+    } else if (campaign.time_based_drops.every(d => (d.required_subs ?? 0) > 0)) {
+        return { type: 'sub', label: 'Subscribe' };
     } else {
         return { type: 'instant', label: 'Event/Special' };
     }
@@ -132,7 +135,7 @@ function matchesEarnedBadge(benefitName: string | undefined, earnedBadgeTitles: 
     return earnedBadgeTitles.has(bn);
 }
 
-type RewardKind = 'badge' | 'emote' | 'item';
+type RewardKind = 'badge' | 'emote' | 'item' | 'draw';
 
 // Classify a reward for display. The signals, in order of reliability:
 //  - The art's CDN path: '/emoticons/' = emote, '/badges/' = badge.
@@ -147,6 +150,8 @@ type RewardKind = 'badge' | 'emote' | 'item';
 function getRewardKind(benefit: DropBenefit | undefined, knownBadgeTitles: Set<string>): RewardKind {
     const name = (benefit?.name || '').toLowerCase().trim();
     const img = (benefit?.image_url || '').toLowerCase();
+    // A container that draws one reward from a pool (Twitch's POOL type).
+    if (benefit?.distribution_type === 'POOL') return 'draw';
     // Emote first: quest emotes share the generic quests asset bucket with badges.
     if (img.includes('/emoticons/') || name.includes('emote')) return 'emote';
     if (benefit?.distribution_type === 'BADGE') return 'badge';
@@ -156,7 +161,7 @@ function getRewardKind(benefit: DropBenefit | undefined, knownBadgeTitles: Set<s
 }
 
 function rewardKindLabel(kind: RewardKind): string {
-    return kind === 'badge' ? 'Badge' : kind === 'emote' ? 'Emote' : 'Item';
+    return kind === 'badge' ? 'Badge' : kind === 'emote' ? 'Emote' : kind === 'draw' ? 'Mystery' : 'Item';
 }
 
 interface GameDetailPanelProps {
@@ -241,6 +246,19 @@ export default function GameDetailPanel({
     // A provider (opt-in plugin) is present: only then is there anything to
     // "stop". Native watch-to-earn is stopped simply by not watching.
     const externalDropsProvider = useAppStore((s) => s.externalDropsProvider);
+    // Drops with separate per-reward progress (the Pokémon balls) are only
+    // offered to a provider that declares it works them; an older one would
+    // show a control that does nothing there.
+    const [providesSeparate, setProvidesSeparate] = useState(false);
+    useEffect(() => {
+        if (!externalDropsProvider) return;
+        let live = true;
+        invoke<string | null>('plugins_provides', { feature: 'drops.second-list' })
+            .then((id) => { if (live) setProvidesSeparate(!!id); })
+            .catch(() => {});
+        return () => { live = false; };
+    }, [externalDropsProvider]);
+    const canMineSeparate = !!externalDropsProvider && providesSeparate;
 
     // Channel picker shared by core and the automation plugin. Core picks a channel to
     // WATCH; the plugin (via pickChannel) picks one to collect. A pending resolver lets
@@ -312,6 +330,12 @@ export default function GameDetailPanel({
     // elsewhere.
     const isRewardOwned = (drop: TimeBasedDrop, dp?: DropProgress | null): boolean => {
         if (dp?.is_claimed === true) return true;
+        // Twitch reported this drop's own status (multi-day and subscription
+        // drops): that is the answer, with no cross-instance guessing.
+        if (dp?.twitch_progress) return false;
+        // A random draw is not the badge it might give: owning one of the pool
+        // says nothing about this container.
+        if ((drop.random_of ?? 0) > 1) return false;
         // is_claimed handled above; only watch-time counts as "in progress" here.
         const hasCurrentProgress = !!dp && (dp.current_minutes_watched || 0) > 0;
         if (hasCurrentProgress) return false;
@@ -328,6 +352,17 @@ export default function GameDetailPanel({
         // Badges rarely appear in completedDrops, but they show up in the user's
         // earned badge titles.
         return matchesEarnedBadge(benefit?.name, earnedBadgeTitles);
+    };
+
+    // How a reward reads in Your Collection: what it turned into once Twitch
+    // says (a draw opened), else its first reward (an unopened draw's container).
+    const collectionFace = (drop: TimeBasedDrop, dp?: DropProgress | null) => {
+        const earned = dp?.twitch_progress?.earned;
+        const first = drop.benefit_edges?.[0];
+        return {
+            benefitImage: earned?.image_url || first?.image_url || '',
+            benefitName: earned?.name || first?.name || drop.name,
+        };
     };
 
     // Union of every drop id we can prove is already earned, matching how the
@@ -350,12 +385,25 @@ export default function GameDetailPanel({
     const isDropOwned = (drop: TimeBasedDrop, dp?: DropProgress | null): boolean =>
         isRewardOwned(drop, dp) || earnedDropIds.has(drop.id);
 
+    // A campaign that only gets you containers you already hold (subscribing
+    // for Special Great Balls, all earned) has nothing left to show: each ball
+    // appears through its unlock tier. Left out of both sections, as Twitch does.
+    const listedCampaigns = campaignsWithMergedProgress.filter(c =>
+        !(c.time_based_drops.length > 0 && c.time_based_drops.every(d =>
+            obtainsContainer(d) && isDropOwned(d, d.progress || progress.find(p => p.drop_id === d.id))))
+    );
+
     // "This watch-time reward is still collectible": not owned and not yet
     // 100% watched. The Completed Campaigns section is its precise complement,
     // so a campaign always lands in exactly one section.
     const isDropEarnable = (drop: TimeBasedDrop): boolean => {
         const dp = drop.progress || progress.find(p => p.drop_id === drop.id) || null;
         if (isDropOwned(drop, dp)) return false;
+        // Twitch reports these in detail: still to do until claimed, which
+        // includes a reward earned and waiting for its Claim.
+        if (dp?.twitch_progress) return !dp.is_claimed;
+        // A subscription reward is a drop to earn too, just not by watching.
+        if ((drop.required_subs ?? 0) > 0) return true;
         const required = dp?.required_minutes_watched || drop.required_minutes_watched || 0;
         if (required <= 0) return false; // reward isn't earned by watching
         return (dp?.current_minutes_watched || 0) < required; // not yet 100% → still earnable
@@ -500,17 +548,26 @@ export default function GameDetailPanel({
                             .filter(({ drop }) => {
                                 if (seen.has(drop.id)) return false;
                                 seen.add(drop.id);
-                                return true;
+                                // Getting a ball is not a reward; its unlock tier shows it.
+                                return !obtainsContainer(drop);
                             })
                             .map(({ drop, campaignDescription }) => {
                                 const dp = drop.progress || progress.find(p => p.drop_id === drop.id);
-                                const benefit = drop.benefit_edges?.[0];
+                                // Once Twitch says what a reward turned into (a draw
+                                // opened, a container earned), show that; an unopened
+                                // draw's first reward is its container.
+                                const twitch = dp?.twitch_progress;
+                                // A draw with one badge left can only give that one.
+                                const benefit = twitch?.earned ?? drop.next_reward ?? drop.benefit_edges?.[0];
                                 const required = dp?.required_minutes_watched || drop.required_minutes_watched || 0;
                                 // "Owned" per the panel's single ownership rule, so the
                                 // tally always agrees with the sections and cards below.
                                 const isClaimed = isDropOwned(drop, dp);
                                 const current = isClaimed ? required : (dp?.current_minutes_watched || 0);
-                                const percent = required > 0 ? Math.min((current / required) * 100, 100) : 0;
+                                const percent = twitch
+                                    ? dropPercent(dp, drop)
+                                    : required > 0 ? Math.min((current / required) * 100, 100) : 0;
+                                const isReady = !isClaimed && (twitch ? twitch.ready_to_claim : percent >= 100);
                                 const isCollectible = isDropCollectible(drop, game.inventory_items);
                                 return {
                                     dropId: drop.id,
@@ -519,14 +576,16 @@ export default function GameDetailPanel({
                                     requiredMinutes: required,
                                     percent,
                                     isClaimed,
-                                    isReady: !isClaimed && percent >= 100,
-                                    isInProgress: !isClaimed && percent > 0 && percent < 100,
+                                    isReady,
+                                    isInProgress: !isClaimed && !isReady && percent > 0,
                                     isCollectible,
                                     kind: getRewardKind(benefit, knownBadgeTitles),
                                     // Only locked, unearned rewards need a "how to unlock" hint.
                                     // The reward name is the strongest signal (e.g. "Gifted Sub Drop"),
                                     // with the campaign description as the fallback source.
-                                    requirement: !isCollectible && !isClaimed ? unlockRequirementText(benefit?.name || drop.name, campaignDescription) : null,
+                                    requirement: !isCollectible && !isClaimed && !isReady
+                                        ? dropRequirementText(drop) ?? unlockRequirementText(benefit?.name || drop.name, campaignDescription)
+                                        : null,
                                 };
                             })
                             .sort((a, b) => {
@@ -596,7 +655,7 @@ export default function GameDetailPanel({
                                                         </div>
                                                     )}
 
-                                                    {!r.isCollectible && !r.isClaimed && (
+                                                    {!r.isCollectible && !r.isClaimed && !r.isReady && (
                                                         <div className="absolute top-1 left-1 text-warning">
                                                             <Ban size={11} />
                                                         </div>
@@ -892,7 +951,7 @@ export default function GameDetailPanel({
                     {/* Active Campaigns Section */}
                     {(()=> {
                         // Merge progress from inventory into campaigns for accurate status checking
-                        const mergedCampaigns = campaignsWithMergedProgress;
+                        const mergedCampaigns = listedCampaigns;
 
                         // A campaign is Active while ANY of its watch-time rewards
                         // is still earnable under the panel's single ownership rule.
@@ -924,6 +983,7 @@ export default function GameDetailPanel({
                                             onClaimDrop={onClaimDrop}
                                             onWatch={() => openWatchPicker(campaign)}
                                             pickChannel={() => requestPickChannel(campaign)}
+                                            canMineSeparate={canMineSeparate}
                                         />
                                     ))}
                                 </div>
@@ -934,7 +994,7 @@ export default function GameDetailPanel({
                     {/* Completed Campaigns Section */}
                     {(() => {
                         // Use merged campaigns for accurate status
-                        const mergedCampaigns = campaignsWithMergedProgress;
+                        const mergedCampaigns = listedCampaigns;
 
                         // A campaign is Completed when it's the exact complement of
                         // Active: it has at least one watch-time reward, and NONE of
@@ -946,7 +1006,8 @@ export default function GameDetailPanel({
                         const completedCampaigns = mergedCampaigns.filter(campaign => {
                             const hasWatchTimeReward = campaign.time_based_drops.some(drop => {
                                 const dp = drop.progress || progress.find(p => p.drop_id === drop.id);
-                                return (dp?.required_minutes_watched || drop.required_minutes_watched || 0) > 0;
+                                return (dp?.required_minutes_watched || drop.required_minutes_watched || 0) > 0
+                                    || (drop.required_subs ?? 0) > 0;
                             });
                             if (!hasWatchTimeReward) return false;
                             return !campaign.time_based_drops.some(isDropEarnable);
@@ -976,6 +1037,7 @@ export default function GameDetailPanel({
                                             onClaimDrop={onClaimDrop}
                                             onWatch={() => openWatchPicker(campaign)}
                                             pickChannel={() => requestPickChannel(campaign)}
+                                            canMineSeparate={canMineSeparate}
                                         />
                                     ))}
                                 </div>
@@ -1051,9 +1113,9 @@ export default function GameDetailPanel({
                                         localCompletedDrops.push({
                                             dropId: drop.id,
                                             dropInstanceId: dropProgress?.drop_instance_id,
-                                            benefitImage: drop.benefit_edges?.[0]?.image_url || '',
-                                            benefitName: drop.benefit_edges?.[0]?.name || drop.name,
-                                            isClaimed: isClaimed || isClaimedByIndex,
+                                            ...collectionFace(drop, dropProgress),
+                                            // Twitch's own status is exact; the index guess is for the rest.
+                                            isClaimed: dropProgress?.twitch_progress ? isClaimed : isClaimed || isClaimedByIndex,
                                             isCollectible: isDropCollectible(drop, game.inventory_items),
                                         });
                                         Logger.debug('  ✓ Added to collection, drop_instance_id:', dropProgress?.drop_instance_id);
@@ -1071,10 +1133,7 @@ export default function GameDetailPanel({
                         game.inventory_items.forEach(item => {
                             item.campaign.time_based_drops.forEach(drop => {
                                 gameDropIds.add(drop.id);
-                                dropInfoMap.set(drop.id, {
-                                    benefitImage: drop.benefit_edges?.[0]?.image_url || '',
-                                    benefitName: drop.benefit_edges?.[0]?.name || drop.name,
-                                });
+                                dropInfoMap.set(drop.id, collectionFace(drop, drop.progress));
                             });
                         });
 
@@ -1083,10 +1142,7 @@ export default function GameDetailPanel({
                             campaign.time_based_drops.forEach(drop => {
                                 gameDropIds.add(drop.id);
                                 if (!dropInfoMap.has(drop.id)) {
-                                    dropInfoMap.set(drop.id, {
-                                        benefitImage: drop.benefit_edges?.[0]?.image_url || '',
-                                        benefitName: drop.benefit_edges?.[0]?.name || drop.name,
-                                    });
+                                    dropInfoMap.set(drop.id, collectionFace(drop, drop.progress));
                                 }
                                 
                                 // If this drop is complete or claimed, add it to the collection
@@ -1102,8 +1158,7 @@ export default function GameDetailPanel({
                                             localCompletedDrops.push({
                                                 dropId: drop.id,
                                                 dropInstanceId: dropProgress.drop_instance_id,
-                                                benefitImage: drop.benefit_edges?.[0]?.image_url || '',
-                                                benefitName: drop.benefit_edges?.[0]?.name || drop.name,
+                                                ...collectionFace(drop, dropProgress),
                                                 isClaimed,
                                                 isCollectible: isDropCollectible(drop, game.inventory_items),
                                             });
@@ -1131,6 +1186,9 @@ export default function GameDetailPanel({
 
                                     return;
                                 }
+                                // Twitch reports these drops' status itself, and a random
+                                // draw is not whichever badge of its pool you already hold.
+                                if (drop.progress?.twitch_progress || (drop.random_of ?? 0) > 1) return;
                                 
 
                                 
@@ -1185,8 +1243,17 @@ export default function GameDetailPanel({
                             }
                         });
 
+                        // Getting a ball is not something collected: its unlock
+                        // tier is, as the badge that came out.
+                        const containerSources = new Set(
+                            [...game.active_campaigns, ...game.inventory_items.map(item => item.campaign)]
+                                .flatMap(c => c.time_based_drops)
+                                .filter(obtainsContainer)
+                                .map(d => d.id)
+                        );
+
                         // Sort: unclaimed first, then claimed
-                        const sortedDrops = localCompletedDrops.sort((a, b) => {
+                        const sortedDrops = localCompletedDrops.filter(d => !containerSources.has(d.dropId)).sort((a, b) => {
                             if (a.isClaimed === b.isClaimed) return 0;
                             return a.isClaimed ? 1 : -1; // Unclaimed first
                         });
@@ -1314,6 +1381,11 @@ export default function GameDetailPanel({
                 campaignName={picker.campaign.name}
                 gameName={picker.campaign.game_name}
                 gameId={picker.campaign.game_id}
+                categoryIds={
+                    picker.campaign.has_category === false || (picker.campaign.category_ids?.length ?? 0) > 1
+                        ? picker.campaign.category_ids
+                        : undefined
+                }
                 allowedChannels={picker.campaign.allowed_channels}
                 isAclBased={picker.campaign.is_acl_based}
                 actionLabel={picker.actionLabel}
@@ -1337,6 +1409,8 @@ interface CampaignCardProps {
     onClaimDrop: (dropId: string, dropInstanceId?: string) => void;
     onWatch: () => void; // native: open the channel picker to watch this campaign
     pickChannel: () => Promise<PickedDropChannel | null>; // plugin: open the picker, resolve the choice
+    /** The provider can work drops with separate per-reward progress. */
+    canMineSeparate: boolean;
 }
 
 function CampaignCard({
@@ -1348,6 +1422,7 @@ function CampaignCard({
     onClaimDrop,
     onWatch,
     pickChannel,
+    canMineSeparate,
 }: CampaignCardProps) {
     // Per-campaign controls are contributed by a provider (an opt-in plugin)
     // into a generic slot; core renders whatever is hung there and passes the
@@ -1441,6 +1516,12 @@ function CampaignCard({
                             Mixed
                         </span>
                     )}
+                    {dropType.type === 'sub' && (
+                        <span className="px-1.5 py-0.5 text-[9px] font-semibold rounded bg-highlight-purple/20 text-highlight-purple border border-highlight-purple/30 shrink-0 flex items-center gap-1">
+                            <Star size={9} />
+                            Subscribe
+                        </span>
+                    )}
                     {dropType.type === 'instant' && (
                         <span className="px-1.5 py-0.5 text-[9px] font-semibold rounded bg-warning/20 text-warning border border-warning/30 shrink-0 flex items-center gap-1">
                             <Ban size={9} />
@@ -1466,7 +1547,10 @@ function CampaignCard({
                     </span>
                 )}
                 {!isProgressingThisCampaign && isCollectible && !allEarned && (
-                    cardActions.length > 0
+                    // A drop with separate per-reward progress gets the provider's
+                    // control only from one that says it works them; otherwise
+                    // the plain Watch link, which works for every drop.
+                    cardActions.length > 0 && (!campaign.separate_progress || canMineSeparate)
                         ? cardActions.map((c) => {
                             const Control = c.Component as React.ComponentType<DropCardActionContext>;
                             return (
@@ -1484,7 +1568,16 @@ function CampaignCard({
                             );
                         })
                         : (
-                            <Tooltip content={campaign.is_acl_based ? 'Pick a participating channel to watch' : `Watch ${campaign.game_name} to earn this drop`} side="top">
+                            <Tooltip
+                                content={
+                                    campaign.is_acl_based
+                                        ? 'Pick a participating channel to watch'
+                                        : (campaign.category_ids?.length ?? 0) > 1 || campaign.has_category === false
+                                            ? 'Watch a stream in a category that counts for this drop'
+                                            : `Watch ${campaign.game_name} to earn this drop`
+                                }
+                                side="top"
+                            >
                                 <button
                                     onClick={(e) => {
                                         e.stopPropagation();
@@ -1509,10 +1602,87 @@ function CampaignCard({
                 )}
             </div>
 
+            {/* These drops keep their own progress per reward (each container
+                unlocks on its own days), so each gets its own row. */}
+            {campaign.separate_progress && (
+                <div className="space-y-3">
+                    {campaign.time_based_drops.map(drop => {
+                        const dp = resolveDropProgress(drop.id, drop.progress);
+                        const t = dp?.twitch_progress;
+                        const earned = t?.earned;
+                        const image = earned?.image_url || drop.next_reward?.image_url || drop.benefit_edges?.[0]?.image_url || '';
+                        const requirement = dropRequirementText(drop)
+                            ?? (drop.required_minutes_watched > 0 ? `${drop.required_minutes_watched} min` : null);
+                        const line = twitchProgressLine(dp, drop)
+                            ?? (dp && drop.required_minutes_watched > 0
+                                ? `${dp.current_minutes_watched}/${drop.required_minutes_watched} min`
+                                : 'Not started');
+                        const percent = dropPercent(dp, drop);
+                        const claimed = !!dp?.is_claimed;
+                        const ready = !!t?.ready_to_claim;
+                        return (
+                            <div key={drop.id} className="flex items-center gap-3">
+                                <div className="relative shrink-0">
+                                    {image ? (
+                                        <img
+                                            src={image}
+                                            alt={earned?.name || drop.name}
+                                            loading="lazy"
+                                            className={`w-10 h-10 rounded-lg object-contain p-1 bg-background border border-borderLight ${claimed ? 'opacity-60' : ''}`}
+                                        />
+                                    ) : (
+                                        <div className="w-10 h-10 rounded-lg bg-background border border-borderLight flex items-center justify-center">
+                                            <Gift size={16} className="text-textMuted" />
+                                        </div>
+                                    )}
+                                    {claimed && (
+                                        <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-success flex items-center justify-center border border-background">
+                                            <Check size={9} className="text-white" />
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex items-baseline gap-2 min-w-0">
+                                        <span className="text-xs font-semibold text-textPrimary truncate">{drop.name}</span>
+                                        {requirement && <span className="text-[10px] text-textMuted shrink-0">{requirement}</span>}
+                                    </div>
+                                    <div className="mt-1.5 h-1.5 rounded-full bg-background border border-borderLight overflow-hidden">
+                                        <div
+                                            className={`h-full rounded-full ${claimed || ready ? 'bg-success' : t?.accruing ? 'bg-accent animate-progress-shimmer' : 'bg-accent'}`}
+                                            style={{ width: `${percent}%` }}
+                                        />
+                                    </div>
+                                    <div className="mt-1 flex items-center gap-2 text-[10px] text-textMuted min-w-0">
+                                        <span className={`truncate ${ready ? 'text-success font-semibold' : ''}`}>{line}</span>
+                                        {!claimed && !earned && drop.next_reward && (
+                                            <span className="shrink-0">· gives {drop.next_reward.name}</span>
+                                        )}
+                                        {!claimed && !earned && !drop.next_reward && (drop.random_of ?? 0) > 1 && (
+                                            <span className="shrink-0">· 1 of {drop.random_of} at random</span>
+                                        )}
+                                    </div>
+                                </div>
+                                {ready && (
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            onClaimDrop(drop.id, dp?.drop_instance_id);
+                                        }}
+                                        className="px-2.5 py-1 bg-success hover:bg-success/80 text-white text-[10px] font-bold rounded transition-all shrink-0"
+                                    >
+                                        {claimLabel(drop, dp)}
+                                    </button>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+
             {/* Reward checkpoint timeline. Drops in a campaign share one cumulative
                 watch-time counter, so this is a single fill bar with a marker per
                 reward milestone, ordered low to high. */}
-            {(() => {
+            {!campaign.separate_progress && (() => {
                 const timed = dropRewards
                     .filter(r => (r.requiredMinutes || 0) > 0)
                     .slice()

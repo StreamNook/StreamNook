@@ -3,6 +3,8 @@ import { Package, Gift, Check, Clock, AlertCircle, ChevronDown, ChevronRight, Se
 import type { InventoryItem, DropProgress, CampaignStatus, CompletedDrop, TimeBasedDrop } from '../../types';
 import { Tooltip } from '../ui/Tooltip';
 import { Dropdown } from '../ui/Dropdown';
+import { Toggle } from '../ui/Toggle';
+import { claimLabel, dropRequirementText, twitchProgressLine } from '../../utils/dropRequirement';
 
 // Helper to check if a drop is collectible (time-based with watch requirement)
 // Drops with required_minutes_watched = 0 are event-based, gift-based, or sub-based
@@ -31,6 +33,9 @@ interface DropsInventoryTabProps {
     completedDrops: CompletedDrop[];
     progress: DropProgress[];
     onClaimDrop: (dropId: string, dropInstanceId?: string) => void;
+    /** The saved auto-claim setting, which the app's own claim loop follows. */
+    autoClaim: boolean;
+    onAutoClaimChange: (enabled: boolean) => void;
 }
 
 type FilterStatus = 'all' | 'claimable' | 'in_progress' | 'claimed' | 'expired';
@@ -39,7 +44,9 @@ export default function DropsInventoryTab({
     inventoryItems,
     completedDrops,
     progress,
-    onClaimDrop
+    onClaimDrop,
+    autoClaim,
+    onAutoClaimChange,
 }: DropsInventoryTabProps) {
     const [expandedGames, setExpandedGames] = useState<Set<string>>(new Set());
     const [showCompletedDrops, setShowCompletedDrops] = useState(false);
@@ -94,7 +101,17 @@ export default function DropsInventoryTab({
                 // Only count collectible (time-based) drops for claimable/in-progress stats
                 const collectible = isDropCollectible(drop);
                 
-                if (dropProgress && collectible) {
+                if (dropProgress?.twitch_progress) {
+                    // Twitch says outright when these are earned (subscription
+                    // rewards have no minutes to compare).
+                    if (dropProgress.is_claimed) {
+                        // counted with the claimed drops
+                    } else if (dropProgress.twitch_progress.ready_to_claim) {
+                        group.claimableDrops++;
+                    } else {
+                        group.inProgressDrops++;
+                    }
+                } else if (dropProgress && collectible) {
                     const requiredMins = dropProgress.required_minutes_watched || drop.required_minutes_watched;
                     const isComplete = requiredMins > 0 && dropProgress.current_minutes_watched >= requiredMins;
                     if (isComplete && !dropProgress.is_claimed) {
@@ -160,11 +177,18 @@ export default function DropsInventoryTab({
 
         group.items.forEach(item => {
             item.campaign.time_based_drops.forEach(drop => {
+                const dropProgress = drop.progress || progress.find(p => p.drop_id === drop.id);
+                // Twitch marks these earned itself, subscription rewards included.
+                if (dropProgress?.twitch_progress) {
+                    if (dropProgress.twitch_progress.ready_to_claim && !dropProgress.is_claimed) {
+                        claimableDrops.push({ dropId: drop.id, dropInstanceId: dropProgress.drop_instance_id });
+                    }
+                    return;
+                }
                 // Only include collectible (time-based) drops
                 const collectible = isDropCollectible(drop);
                 if (!collectible) return;
-                
-                const dropProgress = drop.progress || progress.find(p => p.drop_id === drop.id);
+
                 if (dropProgress) {
                     const requiredMins = dropProgress.required_minutes_watched || drop.required_minutes_watched;
                     const isComplete = requiredMins > 0 && dropProgress.current_minutes_watched >= requiredMins;
@@ -326,6 +350,21 @@ export default function DropsInventoryTab({
                             { value: 'expired', label: 'Expired Campaigns' },
                         ]}
                     />
+                    <span aria-hidden className="h-5 w-px shrink-0 bg-borderSubtle" />
+                    <Tooltip
+                        content="Claims each drop, and opens each mystery reward, as soon as it's ready. Off, finished drops wait here for you to claim."
+                        delay={300}
+                        side="bottom"
+                    >
+                        <label className="flex shrink-0 cursor-pointer items-center gap-2.5 text-[13px] text-textSecondary">
+                            Claim automatically
+                            <Toggle
+                                enabled={autoClaim}
+                                onChange={() => onAutoClaimChange(!autoClaim)}
+                                ariaLabel="Claim automatically"
+                            />
+                        </label>
+                    </Tooltip>
                 </div>
             </div>
 
@@ -597,11 +636,19 @@ function CampaignSection({ item, progress, onClaimDrop, getStatusBadge }: Campai
                     const isComplete = collectible && requiredMinutes > 0 && currentMinutes >= requiredMinutes;
                     const isClaimed = dropProgress?.is_claimed || false;
                     
+                    // Twitch's own detail for multi-day and subscription drops.
+                    const twitch = dropProgress?.twitch_progress;
+                    const twitchLine = twitchProgressLine(dropProgress, drop);
+                    const requirement = dropRequirementText(drop);
+
                     // Only claimable if: collectible, complete, and not already claimed
-                    const isClaimable = isComplete && !isClaimed && collectible;
+                    // (or, for drops Twitch reports in detail, when it says so).
+                    const isClaimable = twitch ? twitch.ready_to_claim && !isClaimed : isComplete && !isClaimed && collectible;
                     const progressPercent = requiredMinutes > 0 ? (currentMinutes / requiredMinutes) * 100 : 0;
 
-                    const benefit = drop.benefit_edges[0];
+                    // What it turned into once Twitch says; an unopened draw's
+                    // first reward is its container.
+                    const benefit = twitch?.earned ?? drop.next_reward ?? drop.benefit_edges[0];
 
                     return (
                         <div
@@ -655,7 +702,11 @@ function CampaignSection({ item, progress, onClaimDrop, getStatusBadge }: Campai
                                     </span>
                                 </Tooltip>
                                 <div className="flex items-center gap-2 mt-0.5">
-                                    {isClaimed ? (
+                                    {twitchLine ? (
+                                        <span className={`text-[10px] truncate ${isClaimed ? 'text-success font-medium' : isClaimable ? 'text-warning font-semibold' : 'text-textMuted'}`}>
+                                            {twitchLine}
+                                        </span>
+                                    ) : isClaimed ? (
                                         <span className="text-[10px] text-success font-medium">Claimed</span>
                                     ) : isClaimable ? (
                                         <span className="text-[10px] text-warning font-semibold animate-pulse">Ready to claim!</span>
@@ -663,7 +714,7 @@ function CampaignSection({ item, progress, onClaimDrop, getStatusBadge }: Campai
                                         // Non-collectible drop: show what's required
                                         <span className="text-[10px] text-highlight-purple font-medium flex items-center gap-1">
                                             <Ban size={10} />
-                                            Requires gift/sub or special action
+                                            {requirement ?? 'Requires gift/sub or special action'}
                                         </span>
                                     ) : (
                                         // Normal time-based drop progress
@@ -691,14 +742,14 @@ function CampaignSection({ item, progress, onClaimDrop, getStatusBadge }: Campai
                                     }}
                                     className="px-3 py-1.5 bg-success hover:bg-success/80 text-white text-xs font-bold rounded-lg transition-all shadow-lg animate-pulse shrink-0"
                                 >
-                                    Claim
+                                    {claimLabel(drop, dropProgress)}
                                 </button>
                             )}
 
                             {/* Event/Special Badge for non-collectible drops */}
-                            {!collectible && !isClaimed && (
+                            {!collectible && !isClaimed && !isClaimable && (
                                 <span className="px-2 py-1 text-[9px] font-semibold rounded bg-highlight-purple/20 text-highlight-purple border border-highlight-purple/30 shrink-0 whitespace-nowrap">
-                                    Event Only
+                                    {(drop.required_subs ?? 0) > 0 ? 'Subscribe' : 'Event Only'}
                                 </span>
                             )}
 

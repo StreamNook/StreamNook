@@ -355,7 +355,7 @@ pub fn diff_favorite_campaigns(
     (found, next)
 }
 
-fn seen_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+fn seen_path(app: &crate::rt::AppHandle) -> Option<PathBuf> {
     use tauri::Manager;
     app.path()
         .app_data_dir()
@@ -366,7 +366,7 @@ fn seen_path(app: &tauri::AppHandle) -> Option<PathBuf> {
 /// Announce new campaigns in favourite games (`new-favorite-drops`, one event
 /// per game), and remember what was seen.
 pub fn announce_new_favorite_campaigns(
-    app: &tauri::AppHandle,
+    app: &crate::rt::AppHandle,
     games: &[DropGame],
     favorites: &[String],
     enabled: bool,
@@ -429,6 +429,7 @@ mod tests {
             is_claimed: claimed,
             last_updated: Utc::now(),
             drop_instance_id: None,
+            twitch_progress: None,
         }
     }
 
@@ -445,6 +446,10 @@ mod tests {
             }],
             progress: None,
             is_collectible: req > 0,
+            required_subs: 0,
+            required_days: 0,
+            random_of: None,
+            next_reward: None,
         }
     }
 
@@ -464,6 +469,9 @@ mod tests {
             is_acl_based: false,
             details_url: None,
             account_link: None,
+            separate_progress: false,
+            has_category: true,
+            category_ids: Vec::new(),
         }
     }
 

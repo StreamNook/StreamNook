@@ -7,7 +7,8 @@ use crate::models::drops::*;
 use crate::models::settings::AppState;
 use crate::services::drops_auth_service::{DropsAuthService, DropsDeviceCodeInfo};
 use log::{debug, error, warn};
-use tauri::{AppHandle, Emitter, State};
+use crate::rt::AppHandle;
+use tauri::{Emitter, State};
 
 /// The Drops page model (services/drops_overview.rs): campaigns joined with
 /// live progress and the inventory, per game, with ownership worked out.
@@ -24,28 +25,39 @@ pub async fn get_drops_overview(
 ) -> Result<crate::services::drops_overview::DropsOverview, String> {
     use crate::services::drops_overview;
 
+    let started = std::time::Instant::now();
     let gather = async {
         let drops_service = state.drops_service.lock().await;
+        let locked_ms = started.elapsed().as_millis();
         let cached = if reuse_campaigns {
             drops_service.cached_campaigns_snapshot().await
         } else {
             None
         };
-        let campaigns = match cached {
-            Some(campaigns) => campaigns,
-            None => drops_service
-                .get_all_active_campaigns_cached()
-                .await
-                .unwrap_or_default(),
+        // Campaigns and inventory are independent reads; fetch them together.
+        let campaigns = async {
+            match cached {
+                Some(campaigns) => campaigns,
+                None => drops_service
+                    .get_all_active_campaigns_cached()
+                    .await
+                    .unwrap_or_default(),
+            }
         };
+        let (campaigns, inventory) = tokio::join!(campaigns, drops_service.fetch_inventory());
+        let inventory = inventory.ok();
         let statistics = Some(drops_service.get_statistics().await);
-        let inventory = drops_service.fetch_inventory().await.ok();
         let progress = drops_service.get_drop_progress().await;
         let favorites = drops_service.get_settings().await.favorite_games;
-        (campaigns, statistics, inventory, progress, favorites)
+        (campaigns, statistics, inventory, progress, favorites, locked_ms)
     };
-    let ((campaigns, statistics, inventory, progress, favorites), known) =
+    let ((campaigns, statistics, inventory, progress, favorites, locked_ms), known) =
         tokio::join!(gather, drops_overview::badge_titles());
+    log::debug!(
+        "[Drops] overview in {} ms (waited {} ms for the drops lock)",
+        started.elapsed().as_millis(),
+        locked_ms
+    );
 
     let overview = drops_overview::overview(&campaigns, progress, inventory, statistics, known);
     if !reuse_campaigns {
@@ -65,10 +77,60 @@ pub async fn get_drops_settings(state: State<'_, AppState>) -> Result<DropsSetti
     Ok(drops_service.get_settings().await)
 }
 
+/// Announced after every drops-settings save with the whole saved settings. The
+/// Drops center refreshes from it, and a drops-automation plugin forwards it to
+/// its engine, so no surface keeps acting on an older copy.
+pub const DROPS_SETTINGS_UPDATED_EVENT: &str = "drops-settings-updated";
+
+/// Serializes drops-settings saves, so a patch's read-modify-write cannot
+/// interleave with another save and lose its keys.
+static DROPS_SETTINGS_WRITE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[tauri::command]
 pub async fn update_drops_settings(
+    app: AppHandle,
     settings: DropsSettings,
     state: State<'_, AppState>,
+) -> Result<(), String> {
+    let _write = DROPS_SETTINGS_WRITE.lock().await;
+    save_drops_settings(&app, &state, settings).await
+}
+
+/// Changes only the named top-level drops settings, applied onto the copy Rust
+/// holds, and returns the result. A surface holding an older copy (the Drops
+/// center, while the Autopilot page saved something) would otherwise send it
+/// back whole and revert the other surface's change.
+#[tauri::command]
+pub async fn patch_drops_settings(
+    app: AppHandle,
+    patch: serde_json::Map<String, serde_json::Value>,
+    state: State<'_, AppState>,
+) -> Result<DropsSettings, String> {
+    let _write = DROPS_SETTINGS_WRITE.lock().await;
+    let current = state.drops_service.lock().await.get_settings().await;
+    let next = apply_drops_patch(&current, patch)?;
+    save_drops_settings(&app, &state, next.clone()).await?;
+    Ok(next)
+}
+
+fn apply_drops_patch(
+    current: &DropsSettings,
+    patch: serde_json::Map<String, serde_json::Value>,
+) -> Result<DropsSettings, String> {
+    let mut value = serde_json::to_value(current).map_err(|e| e.to_string())?;
+    let fields = value
+        .as_object_mut()
+        .ok_or_else(|| "drops settings did not serialize to an object".to_string())?;
+    for (key, v) in patch {
+        fields.insert(key, v);
+    }
+    serde_json::from_value(value).map_err(|e| format!("Invalid drops settings change: {e}"))
+}
+
+async fn save_drops_settings(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    settings: DropsSettings,
 ) -> Result<(), String> {
     // Update the in-memory drops service settings
     let drops_service = state.drops_service.lock().await;
@@ -100,6 +162,7 @@ pub async fn update_drops_settings(
         .set_automation_active(settings.auto_claim_channel_points)
         .await;
 
+    let _ = app.emit(DROPS_SETTINGS_UPDATED_EVENT, &settings);
     Ok(())
 }
 
@@ -165,7 +228,7 @@ pub async fn get_campaign_eligible_channels(
 
 #[tauri::command]
 pub async fn claim_drop(
-    app_handle: tauri::AppHandle,
+    app_handle: crate::rt::AppHandle,
     drop_id: String,
     drop_instance_id: Option<String>,
     state: State<'_, AppState>,
@@ -617,6 +680,23 @@ pub async fn validate_drops_token() -> Result<bool, String> {
     DropsAuthService::validate_token()
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Live streams in any of a drop's qualifying categories, most-watched first:
+/// where a drop that counts in several categories can be watched.
+#[tauri::command]
+pub async fn get_streams_in_categories(
+    state: State<'_, AppState>,
+    category_ids: Vec<String>,
+    limit: u32,
+) -> Result<Vec<crate::models::stream::TwitchStream>, String> {
+    crate::services::twitch_service::TwitchService::get_streams_in_categories(
+        &state,
+        &category_ids,
+        limit.clamp(1, 100),
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2207,4 +2287,30 @@ pub async fn unlock_chosen_emote(
         new_balance: None,
         unlocked_emote: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_patch_changes_only_its_keys() {
+        let current = DropsSettings {
+            priority_games: vec!["Rust".to_string()],
+            ..DropsSettings::default()
+        };
+        let mut patch = serde_json::Map::new();
+        patch.insert("auto_claim_drops".to_string(), serde_json::json!(false));
+        let next = apply_drops_patch(&current, patch).unwrap();
+        assert!(!next.auto_claim_drops);
+        assert_eq!(next.priority_games, vec!["Rust".to_string()]);
+        assert_eq!(next.auto_claim_channel_points, current.auto_claim_channel_points);
+    }
+
+    #[test]
+    fn a_patch_of_the_wrong_type_is_refused() {
+        let mut patch = serde_json::Map::new();
+        patch.insert("auto_claim_drops".to_string(), serde_json::json!("yes"));
+        assert!(apply_drops_patch(&DropsSettings::default(), patch).is_err());
+    }
 }

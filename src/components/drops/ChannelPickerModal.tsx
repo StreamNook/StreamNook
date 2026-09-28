@@ -44,6 +44,8 @@ interface ChannelPickerModalProps {
    *  is live under this category, so it is the fallback filter for ACL picks
    *  when the eligibility lookup can't be reached. */
   gameId?: string;
+  /** Every category the drop counts in, when it counts in more than its game. */
+  categoryIds?: string[];
   allowedChannels: AllowedChannel[];
   isAclBased: boolean;
   /** Verb for the action, e.g. "Watch" (core) or "Collect" (automation plugin). */
@@ -78,6 +80,7 @@ export default function ChannelPickerModal({
   campaignName,
   gameName,
   gameId,
+  categoryIds,
   allowedChannels,
   isAclBased,
   actionLabel = 'Watch',
@@ -116,6 +119,14 @@ export default function ChannelPickerModal({
         } catch (err) {
           Logger.warn('[ChannelPicker] eligibility lookup failed, using category match:', err);
         }
+      } else if (categoryIds && categoryIds.length > 0) {
+        // A drop that counts in several categories (the Pokémon balls count in
+        // 21): whoever is live in any of them, in one request.
+        const streams = await invoke<TwitchStream[]>('get_streams_in_categories', {
+          categoryIds,
+          limit: 40,
+        });
+        result = (streams || []).map(streamToChannel);
       } else {
         // Open campaign: list whoever is live in the game right now.
         const [streams] = await invoke<[TwitchStream[], string | null]>('get_streams_by_game_name', {
@@ -153,7 +164,7 @@ export default function ChannelPickerModal({
     } finally {
       setIsLoading(false);
     }
-  }, [isAclBased, allowedChannels, gameName, campaignId]);
+  }, [isAclBased, allowedChannels, gameName, campaignId, categoryIds]);
 
   useEffect(() => {
     if (isOpen) load();

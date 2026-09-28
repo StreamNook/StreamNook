@@ -13,6 +13,7 @@ import type {
     CompletedDrop,
 } from '../../types';
 import { Logger } from '../../utils/logger';
+import { twitchProgressLine } from '../../utils/dropRequirement';
 
 // The single contract id an external drops provider (e.g. an opt-in plugin)
 // registers via `plugins_provides` to take over the drop-progress display. The
@@ -472,7 +473,64 @@ export default function DropProgressController() {
                 // Counter-Strike) is not earning it, so showing it would be wrong.
                 const game = gameName.toLowerCase();
                 const rawMatched = campaigns.find((c) => c.game_name?.toLowerCase() === game) ?? null;
-                if (!rawMatched) { if (gameChanged) clearNative(); return; }
+                if (!rawMatched) {
+                    // No drop for this category, but a drop that runs across
+                    // categories (multi-day ones) may still be earning here. Rust
+                    // decides that from Twitch's own minutes going up (accruing);
+                    // this only shows it.
+                    const live = (await invoke<DropProgress[]>('get_drop_progress').catch(() => [] as DropProgress[]))
+                        .find((p) => p.twitch_progress?.accruing && !p.is_claimed);
+                    if (disposed) return;
+                    const liveCampaign = live ? campaigns.find((c) => c.id === live.campaign_id) : undefined;
+                    const liveDrop = liveCampaign?.time_based_drops.find((d) => d.id === live?.drop_id);
+                    if (live && liveCampaign && liveDrop) {
+                        const status: DropProgressStatus = {
+                            active: true,
+                            current_channel: {
+                                id: userId,
+                                name: userLogin ?? '',
+                                display_name: displayName ?? userLogin ?? '',
+                                game_name: gameName,
+                                viewer_count: 0,
+                                is_live: true,
+                                drops_enabled: true,
+                            },
+                            current_campaign: liveCampaign.id,
+                            current_drop: {
+                                campaign_id: liveCampaign.id,
+                                campaign_name: liveCampaign.name,
+                                drop_id: liveDrop.id,
+                                drop_name: liveDrop.name,
+                                drop_image: liveDrop.benefit_edges?.[0]?.image_url,
+                                required_minutes: live.required_minutes_watched,
+                                current_minutes: live.current_minutes_watched,
+                                game_name: liveCampaign.game_name,
+                                detail: twitchProgressLine(live, liveDrop) ?? undefined,
+                            },
+                            eligible_channels: [],
+                            last_update: new Date().toISOString(),
+                        };
+                        nativeActiveRef.current = true;
+                        nativeCompleteRef.current = false;
+                        emit('drop-progress', status).catch(() => {});
+                        emit('drops-progress-update', {
+                            drop_id: live.drop_id,
+                            current_minutes: live.current_minutes_watched,
+                            required_minutes: live.required_minutes_watched,
+                            timestamp: Date.now(),
+                            campaign_id: live.campaign_id,
+                        }).catch(() => {});
+                        const store = useAppStore.getState();
+                        store.setDropProgressComplete(false);
+                        store.setDropProgressActive(true);
+                        store.setLiveDropProgress(status);
+                        return;
+                    }
+                    // Nothing earning: clear a meter this branch put up, and a
+                    // stale one on a game switch.
+                    if (gameChanged || nativeActiveRef.current) clearNative();
+                    return;
+                }
 
                 // The campaign's own embedded progress reads 0; the real per-tier
                 // minutes live in the progress map + inventory. Merge them in the

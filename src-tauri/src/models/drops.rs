@@ -23,6 +23,21 @@ pub struct DropCampaign {
     pub details_url: Option<String>, // "About this drop" link
     #[serde(default)]
     pub account_link: Option<String>, // publisher "connect account" URL (Twitch accountLinkURL)
+    /// Each reward keeps its own progress instead of sharing one running
+    /// watch-time count (the container and daily-watch drops Twitch lists
+    /// apart from its standard campaign list).
+    #[serde(default)]
+    pub separate_progress: bool,
+    /// `game_id` is a real Twitch category. False for a campaign that runs
+    /// across categories, whose `game_id` only groups it for display; such an
+    /// id must never reach a category lookup.
+    #[serde(default = "default_true")]
+    pub has_category: bool,
+    /// Every category a stream can be live in for this campaign to credit:
+    /// Twitch's own list for a drop that counts in several (the Pokémon balls
+    /// count in 21). Empty means `game_id` alone.
+    #[serde(default)]
+    pub category_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +64,20 @@ pub struct TimeBasedDrop {
     /// special actions (subscriptions, purchases, etc.) and cannot be auto-collected
     #[serde(default = "default_collectible", alias = "is_mineable")]
     pub is_collectible: bool,
+    /// Subscriptions (or gifted subs) the reward needs. 0 = none.
+    #[serde(default)]
+    pub required_subs: u32,
+    /// Separate days the watch time must be met on (Twitch's rolling 24-hour
+    /// windows). 0 or 1 = once; `required_minutes_watched` is the total.
+    #[serde(default)]
+    pub required_days: u32,
+    /// The reward is one drawn at random from this many.
+    #[serde(default)]
+    pub random_of: Option<u32>,
+    /// A draw with exactly one reward left the viewer does not hold: what it
+    /// will give. Twitch never repeats a reward, so it is certain.
+    #[serde(default)]
+    pub next_reward: Option<DropBenefit>,
 }
 
 fn default_collectible() -> bool {
@@ -62,7 +91,7 @@ impl TimeBasedDrop {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DropBenefit {
     pub id: String,
     pub name: String,
@@ -87,6 +116,27 @@ pub struct DropProgress {
     /// Format is typically: "UserID#CampaignID#DropID" or a unique ID
     #[serde(default)]
     pub drop_instance_id: Option<String>,
+    /// Twitch's own progress detail for multi-day and subscription drops.
+    #[serde(default)]
+    pub twitch_progress: Option<TwitchProgress>,
+}
+
+/// Progress Twitch reports for a drop beyond plain minutes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TwitchProgress {
+    pub days_done: u32,
+    /// Minutes in the current day window; 0 once that window has lapsed.
+    pub minutes_today: u32,
+    pub window_expires_at: Option<DateTime<Utc>>,
+    /// Minutes rose within the last few minutes: this is being earned now.
+    pub accruing: bool,
+    pub subs_done: u32,
+    /// Earned and waiting to be claimed (Twitch's `CLAIMABLE`).
+    pub ready_to_claim: bool,
+    /// What the viewer got (or holds to claim): for a random draw, the one
+    /// reward that came out.
+    #[serde(default)]
+    pub earned: Option<DropBenefit>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -250,6 +300,10 @@ pub struct DropsSettings {
     /// flag, so the plugin just filters to those.
     #[serde(default, alias = "farm_from_favorites")]
     pub prefer_favorites: bool,
+    /// When true, drops automation works first on campaigns that award a
+    /// global badge the account is missing and can earn by watching now.
+    #[serde(default = "default_true")]
+    pub prefer_missing_badges: bool,
     // Recovery settings
     #[serde(default)]
     pub recovery_settings: RecoverySettings,
@@ -290,6 +344,8 @@ impl Default for DropsSettings {
             priority_channels: Vec::new(),
             // Prefer-favorites off by default (uses the priority list / all followed)
             prefer_favorites: false,
+            // Missing badges first, on by default: it only reorders campaigns
+            prefer_missing_badges: true,
             // Recovery defaults
             recovery_settings: RecoverySettings::default(),
         }
