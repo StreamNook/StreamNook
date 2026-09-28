@@ -46,6 +46,16 @@ pub async fn ffz_local_user_status() -> FfzUserStatus {
     FfzUserStatus { is_subwoofer }
 }
 
+/// The cached answer for the signed-in account, without a lookup. False until
+/// `ffz_local_user_status` has run, which is also its answer when unsure.
+pub async fn cached_is_subwoofer() -> bool {
+    let Some(account) = AccountStore::primary() else {
+        return false;
+    };
+    let login = account.login.to_lowercase();
+    matches!(cache().read().await.as_ref(), Some((l, _, true)) if *l == login)
+}
+
 async fn fetch_is_subwoofer(login: &str) -> bool {
     let url = format!("https://api.frankerfacez.com/v1/user/{}", login);
     match crate::services::http::client().get(&url).send().await {

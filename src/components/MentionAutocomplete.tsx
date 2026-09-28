@@ -118,23 +118,25 @@ const MentionAutocomplete: React.FC<MentionAutocompleteProps> = ({
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: 6, scale: 0.98 }}
       transition={{ duration: 0.15, ease: "easeOut" }}
-      className="sn-popover absolute z-[60] w-full max-h-[220px] overflow-y-auto custom-scrollbar origin-bottom"
+      // The popover itself never scrolls: its rim light is an absolutely
+      // positioned layer that scrolled away with the rows (under a sticky,
+      // separately blurred header) when it did. Only the list body scrolls.
+      className="sn-popover absolute z-[60] w-full flex flex-col overflow-hidden origin-bottom"
       style={{
         bottom: '100%',
         left: 0,
         right: 0,
         marginBottom: '8px',
       }}
-      ref={listRef as any}
     >
       {/* Header */}
-      <div className="px-3 py-1.5 border-b border-white/5 sticky top-0 z-10 bg-background/[0.5] backdrop-blur-md">
+      <div className="px-3 py-1.5 border-b border-white/5">
         <span className="text-[10px] font-medium text-white/50 uppercase tracking-wide">
           Mention User
         </span>
       </div>
       {/* User list */}
-      <div className="py-1">
+      <div ref={listRef} className="py-1 max-h-[190px] overflow-y-auto custom-scrollbar">
         {users.map((user, index) => (
           <MentionUserItem
             key={user.userId}

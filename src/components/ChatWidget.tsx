@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef, useState, useMemo, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState, useMemo, useCallback, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import ChatMessageList from './ChatMessageList';
@@ -32,7 +32,7 @@ import { useBlendedChatSource } from '../hooks/useBlendedChatSource';
 import { useBlendCompanions, type BlendCompanion } from '../hooks/useBlendCompanions';
 import { sendToSource } from '../utils/sendToSource';
 import { ProviderMark } from './ProviderLogo';
-import BlendBar from './chat/BlendBar';
+import BlendBar, { type BlendView } from './chat/BlendBar';
 import { historyKey as chatterHistoryKey } from '../utils/chatterIdentity';
 import { streamProvider } from '../utils/streamProvider';
 import { PROVIDERS, type ProviderId } from '../types/providers';
@@ -72,10 +72,7 @@ import { prefetchChannelBadges } from '../services/badgeService';
 import { parseBadges } from '../services/twitchBadges';
 import { initializeBadgeImageCache } from '../services/badgeImageCacheService';
 import { parseMessage } from '../services/twitchChat';
-import {
-  loadFavoriteEmotes,
-  getAvailableFavorites
-} from '../services/favoriteEmoteService';
+import { loadFavoriteEmotes } from '../services/favoriteEmoteService';
 import { getAppleEmojiUrl } from '../services/emojiService';
 import { useChatUserStore } from '../stores/chatUserStore';
 import { forceRefreshCosmetics } from '../services/cosmeticsCache';
@@ -83,9 +80,25 @@ import MentionAutocomplete from './MentionAutocomplete';
 import CommandAutocomplete from './chat/CommandAutocomplete';
 import CommandMenu from './chat/CommandMenu';
 import EmoteAutocomplete from './chat/EmoteAutocomplete';
+import EmoteSearchList from './chat/EmoteSearchList';
 import SendAsPicker from './SendAsPicker';
 import { useSendAccountStore } from '../stores/sendAccountStore';
-import { getWordRange, EmoteTabCandidate } from '../utils/chatInputWord';
+import {
+  getWordRange,
+  wordBeforeCaret,
+  emoteSearchTrigger,
+  withChatterCandidates,
+  wrapIndex,
+  emoteOptionId,
+  EmoteTabCandidate,
+} from '../utils/chatInputWord';
+import {
+  matchEmotes,
+  rowsToTabCandidates,
+  createRequestSeq,
+  type EmoteMatchChannel,
+  type EmoteMatchRow,
+} from '../services/emoteMatch';
 import {
   COMMAND_DEFINITIONS,
   CommandDefinition,
@@ -355,6 +368,8 @@ interface ChatMessagesPanelProps {
   filterId?: string | null;
   /** The combined-chat bar above this panel already cleared the floating header. */
   headerSpaceReserved?: boolean;
+  /** The floating header's measured height, for when nothing else cleared it. */
+  headerInset?: number;
 }
 
 /** How many consecutive untagged messages end the shared-chat indicator. */
@@ -392,6 +407,7 @@ const ChatMessagesPanel = ({
   hoveringRef,
   filterId,
   headerSpaceReserved,
+  headerInset,
 }: ChatMessagesPanelProps) => {
   const live = useChannelChat(override ? null : channelKey);
   const src: ChatMessagesPanelSource = override ?? live;
@@ -662,6 +678,7 @@ const ChatMessagesPanel = ({
             broadcasterId={broadcasterId}
             homeProvider={provider}
             headerSpaceReserved={headerSpaceReserved}
+            headerInset={headerInset}
           />
         </ErrorBoundary>
       )}
@@ -1257,7 +1274,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // Shared swapping-smiley state for the emote-picker trigger.
   const smiley = useSwappingSmiley();
   const [isLoadingEmotes, setIsLoadingEmotes] = useState(false);
-  const [favoriteEmotes, setFavoriteEmotes] = useState<Emote[]>([]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const channelPointsRef = useRef<HTMLDivElement>(null);
   // Always-latest reference to handleUsernameClick so window-event listeners
@@ -1399,6 +1415,18 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     ro.observe(blendBarEl);
     return () => ro.disconnect();
   }, [blendBarEl]);
+  // The poll / prediction column. The pinned message goes under it rather than
+  // at the same spot, so a live poll and a pin are both readable at once.
+  const [overlayStackEl, setOverlayStackEl] = useState<HTMLDivElement | null>(null);
+  const [overlayStackHeight, setOverlayStackHeight] = useState(0);
+  useEffect(() => {
+    if (!overlayStackEl) return;
+    const sync = () => setOverlayStackHeight(Math.round(overlayStackEl.getBoundingClientRect().height));
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(overlayStackEl);
+    return () => ro.disconnect();
+  }, [overlayStackEl]);
 
 
   const settings = useAppStore((s) => s.settings);
@@ -1540,6 +1568,74 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     currentLen: number;
   }
   const [emoteTabState, setEmoteTabState] = useState<EmoteTabState | null>(null);
+  // A Tab lookup still waiting on Rust: the text and caret it is for, and the
+  // Tab (+1) / Shift+Tab (-1) presses that landed meanwhile, applied on arrival.
+  const tabLookupRef = useRef<{ value: string; cursor: number; steps: number } | null>(null);
+
+  // The emote list, opened by ":" plus two letters or by Tab. `anchor` is where
+  // the text it replaces starts (the colon, or where Tab was pressed).
+  interface EmoteListState {
+    source: 'colon' | 'tab';
+    anchor: number;
+    /** What was typed since the anchor, as last asked for. */
+    query: string;
+    rows: EmoteMatchRow[];
+    total: number;
+    ready: boolean;
+    /** A reply for `query` has not arrived yet. */
+    pending: boolean;
+    selected: number;
+  }
+  const [emoteList, setEmoteList] = useState<EmoteListState | null>(null);
+  const [emoteListSeq] = useState(createRequestSeq);
+  const emoteListId = useId();
+
+  /**
+   * The channel the composer's emote matching runs against. Rust resolves it to
+   * the emote sets it already holds for this chat, the same identity
+   * `useChannelEmotes` fetched them with.
+   */
+  const emoteMatchTarget = useMemo<EmoteMatchChannel>(
+    () => ({
+      provider,
+      channel: currentStream?.user_login ?? '',
+      channelId: currentStream?.user_id ?? null,
+    }),
+    [provider, currentStream?.user_login, currentStream?.user_id],
+  );
+
+  /**
+   * Open (or re-query) the emote list for the text typed since `anchor`. The
+   * rows already showing stay until the new ones arrive, so narrowing never
+   * flickers; a reply to an older keystroke is dropped.
+   */
+  const openEmoteList = useCallback(
+    (source: 'colon' | 'tab', anchor: number, query: string) => {
+      const n = emoteListSeq.next();
+      setEmoteList((prev) =>
+        prev && prev.anchor === anchor
+          ? { ...prev, source, query, pending: true }
+          : { source, anchor, query, rows: [], total: 0, ready: true, pending: true, selected: 0 },
+      );
+      void matchEmotes(emoteMatchTarget, query, 'search', {
+        twitchFirst: source === 'colon',
+        limit: query ? 150 : 200,
+      }).then((res) => {
+        if (!emoteListSeq.isCurrent(n)) return;
+        setEmoteList((prev) =>
+          prev && prev.anchor === anchor
+            ? { ...prev, rows: res.rows, total: res.total, ready: res.ready, pending: false, selected: 0 }
+            : prev,
+        );
+      });
+    },
+    [emoteMatchTarget, emoteListSeq],
+  );
+
+  const closeEmoteList = useCallback(() => {
+    emoteListSeq.next();
+    setEmoteList(null);
+  }, [emoteListSeq]);
 
   // Sent-message history for arrow-key recall (Chatterino-style). Newest is at
   // the end. `historyIndex` is -1 when not navigating, otherwise the offset back
@@ -1908,7 +2004,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     attached: blendAttached,
     refresh: refreshBlendLinks,
     enabled: blendEnabled,
-    suggestion: blendSuggestion,
+    suggestions: blendSuggestions,
     dismissSuggestion: hideBlendSuggestion,
   } = useBlendCompanions(provider, isMainSurface ? homeChannel : null);
   // Default ON, because linking is already the deliberate act: a viewer who
@@ -1917,10 +2013,30 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // `blendActive` below, so a channel with no links combines nothing, and the
   // bar's toggle remains a quick way back to one platform.
   const [blendOn, setBlendOn] = useState(true);
-  // Opened by the plus in the chat header. Managing links is rare enough that it
-  // gets no permanent chrome; the header carries the state, this carries the
-  // editing, and only while it is asked for.
-  const [blendManageOpen, setBlendManageOpen] = useState(false);
+  // The combined-chat panel under the header: closed unless the viewer opens it
+  // from the header button. Suggestions never open it on their own, because a
+  // question pushed into chat on every stream is in the way. Stamped with the
+  // channel, so switching streams always lands closed.
+  const blendPanelKey = homeChannel ? `${provider}:${homeChannel}` : '';
+  const [blendPanelState, setBlendPanelState] = useState<{ key: string; view: BlendView }>({
+    key: '',
+    view: 'closed',
+  });
+  const blendPanelView: BlendView = blendPanelState.key === blendPanelKey ? blendPanelState.view : 'closed';
+  // Answering the last suggestion leaves nothing to show, so the panel is closed.
+  const blendPanel: BlendView =
+    blendPanelView === 'suggestions' && blendSuggestions.length === 0 ? 'closed' : blendPanelView;
+  const setBlendPanel = useCallback(
+    (view: BlendView) => setBlendPanelState({ key: blendPanelKey, view }),
+    [blendPanelKey],
+  );
+  // Which suggestions the viewer has already looked at, so the header's hint
+  // stops asking for attention once they have. Session-only on purpose.
+  const [seenBlendSuggestions, setSeenBlendSuggestions] = useState('');
+  const blendSuggestionsKey = blendSuggestions
+    .map((s) => `${s.candidate.provider}:${s.candidate.channel}`)
+    .join('|');
+  const blendSuggestionsUnseen = !!blendSuggestionsKey && blendSuggestionsKey !== seenBlendSuggestions;
   const blendActive = blendEnabled && blendOn && blendAttached.length > 0 && !!homeChannel;
   const blendSources = useMemo<BlendCompanion[]>(
     () =>
@@ -1930,6 +2046,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               provider,
               channel: homeChannel,
               channelName: currentStream?.user_name || homeChannel,
+              hidden: false,
             },
             ...blendAttached,
           ]
@@ -1942,8 +2059,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // round trip through settings.
   const editBlendLink = useCallback(
     async (
-      member: { provider: ProviderId; channel: string; display_name?: string },
-      action: 'link' | 'unlink' | 'dismiss',
+      member: { provider: ProviderId; channel: string; display_name?: string; avatar?: string },
+      action: 'link' | 'unlink' | 'dismiss' | 'hide' | 'show',
     ) => {
       if (!homeChannel) return;
       try {
@@ -1961,19 +2078,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     [homeChannel, provider, refreshBlendLinks],
   );
 
-  const handleTogglePlatform = useCallback(
-    (p: ProviderId, next: boolean) => {
-      const { settings: current, updateSettings } = useAppStore.getState();
-      void updateSettings({
-        ...current,
-        chat_blend: {
-          ...current.chat_blend,
-          platforms: { ...current.chat_blend?.platforms, [p]: next },
-        },
-      });
-    },
-    [],
-  );
   // Whatever a companion's slice is reporting, so a platform that could not
   // connect says so on its chip instead of being quietly absent from the feed.
   const blendErrors = useChatConnectionStore((st): string => {
@@ -3168,14 +3272,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         }
       }
 
-      // BACKGROUND: Load favorite emotes (non-blocking)
-      loadFavoriteEmotes().then(() => {
-        if (emoteSet) {
-          const allEmotes = [...emoteSet.twitch, ...emoteSet.bttv, ...emoteSet['7tv'], ...emoteSet.ffz, ...emoteSet.kick, ...emoteSet.youtube];
-          const availableFavorites = getAvailableFavorites(allEmotes);
-          setFavoriteEmotes(availableFavorites);
-        }
-      }).catch(err => Logger.warn('[ChatWidget] Failed to load favorites:', err));
+      // BACKGROUND: Load favorite emotes for the picker (non-blocking). Completion
+      // ranking reads favorites from Rust.
+      loadFavoriteEmotes().catch(err => Logger.warn('[ChatWidget] Failed to load favorites:', err));
 
     } catch (err) {
       Logger.error('Failed to load emotes:', err);
@@ -3573,6 +3672,39 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
+    // Emote list navigation. Skipped mid-composition so an IME keeps its keys.
+    if (emoteList && !e.nativeEvent.isComposing) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeEmoteList();
+        return;
+      }
+      if (emoteList.rows.length > 0) {
+        const move = (delta: number) =>
+          setEmoteList((prev) =>
+            prev ? { ...prev, selected: wrapIndex(prev.selected, delta, prev.rows.length) } : prev,
+          );
+        // Tab and the arrows walk the list; Enter inserts the highlighted row.
+        const plain = !e.ctrlKey && !e.altKey && !e.metaKey;
+        if (e.key === 'ArrowUp' || (e.key === 'Tab' && e.shiftKey && plain)) {
+          e.preventDefault();
+          move(-1);
+          return;
+        }
+        if (e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey && plain)) {
+          e.preventDefault();
+          move(1);
+          return;
+        }
+        if (e.key === 'Enter' && !e.shiftKey && plain) {
+          e.preventDefault();
+          insertEmoteFromList(emoteList.rows[emoteList.selected] ?? emoteList.rows[0]);
+          return;
+        }
+      }
+    }
+
     // Handle autocomplete navigation when visible
     if (showMentionAutocomplete) {
       const matchingUsers = getMatchingUsers(mentionQuery);
@@ -3709,12 +3841,31 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       }
     }
 
-    // Emote tab completion (only when no other autocomplete is active).
-    if (e.key === 'Tab') {
-      const used = handleEmoteTabPress(e.shiftKey);
-      if (used) {
-        e.preventDefault();
-        return;
+    // Emote tab completion (only when no other autocomplete is active). Ctrl,
+    // Alt and Meta+Tab are never ours (MultiChat's Ctrl+Tab switches channels).
+    // Tab is EITHER the inline carousel OR the emote list, by setting, never
+    // both: mixing them made a second Tab after a carousel insert (which ends
+    // in a space) open the list.
+    if (e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      if ((settings.chat_input?.emote_tab_style ?? 'carousel') === 'list') {
+        const ta = inputRef.current;
+        const tabOn = settings.chat_input?.emote_tab_complete_enabled ?? true;
+        // Shift+Tab is left alone so keyboard focus can still leave the field.
+        if (tabOn && ta && !e.shiftKey && ta.selectionStart === ta.selectionEnd) {
+          // Only the word being typed, up to the caret, becomes the search;
+          // nothing before it. An empty spot opens the whole list.
+          const { start, text: typed } = wordBeforeCaret(ta.value, ta.selectionStart);
+          e.preventDefault();
+          setEmoteTabState(null);
+          openEmoteList('tab', start, typed);
+          return;
+        }
+      } else {
+        const used = handleEmoteTabPress(e.shiftKey);
+        if (used) {
+          e.preventDefault();
+          return;
+        }
       }
     }
 
@@ -3726,10 +3877,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       e.key !== 'Shift' &&
       e.key !== 'Control' &&
       e.key !== 'Alt' &&
-      e.key !== 'Meta' &&
-      emoteTabState
+      e.key !== 'Meta'
     ) {
-      setEmoteTabState(null);
+      if (emoteTabState) setEmoteTabState(null);
+      tabLookupRef.current = null;
     }
 
     // Normal Enter to send message. Ctrl+Enter is "Quick Send" — sends but
@@ -3739,6 +3890,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       e.preventDefault();
       const quickSendEnabled = useAppStore.getState().settings.chat_input?.quick_send ?? false;
       const keepInput = quickSendEnabled && (e.ctrlKey || e.metaKey);
+      if (emoteList) closeEmoteList();
       handleSendMessage({ keepInput });
     }
   };
@@ -3804,7 +3956,20 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     setHistoryIndex(-1);
 
     setMessageInput(value);
-    
+
+    // Emote list: follow the word it was opened on, or open on a colon.
+    const caret = e.target.selectionStart ?? value.length;
+    if (emoteList?.source === 'tab') {
+      const typed = value.slice(emoteList.anchor, caret);
+      if (caret < emoteList.anchor || /\s/.test(typed)) closeEmoteList();
+      else openEmoteList('tab', emoteList.anchor, typed);
+    } else {
+      const colonOn = settings.chat_input?.emote_colon_search_enabled ?? true;
+      const trigger = colonOn ? emoteSearchTrigger(value, caret) : null;
+      if (trigger) openEmoteList('colon', trigger.anchor, trigger.query);
+      else if (emoteList) closeEmoteList();
+    }
+
     // Check for Command Autocomplete (slash commands)
     const isCommand = value.startsWith('/');
     if (isCommand) {
@@ -3915,7 +4080,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     setShowMentionAutocomplete(false);
     setMentionQuery('');
     setMentionStartPosition(null);
-  }, [getMatchingUsers, isModerator, isBroadcaster, settings.chat_commands?.user_commands, settings.reminders?.reminders, emoteTabState]);
+  }, [getMatchingUsers, isModerator, isBroadcaster, settings.chat_commands?.user_commands, settings.reminders?.reminders, settings.chat_input?.emote_colon_search_enabled, emoteTabState, emoteList, openEmoteList, closeEmoteList]);
 
   // Insert a command string directly from other UI elements (like UserProfileCard)
   const preFillCommand = useCallback((cmdText: string) => {
@@ -4033,212 +4198,150 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   };
 
   /**
-   * Build a ranked, deduplicated list of tab-completion candidates for the
-   * partial word the user is typing:
-   *   - All loaded emote sets feed the matcher.
-   *   - Optionally chatter display names are appended at the lowest tier.
-   *   - Match mode is prefix-only ("starts_with") or substring ("includes").
-   *   - Dedupe by case-folded name so cross-provider duplicates collapse.
-   *   - A leading ':' (':Pog') is stripped before matching and flips the
-   *     provider order to Twitch-first, so Twitch-native / sub emotes lead.
-   *     A leading '@' instead prefixes the chatter match list.
-   *
-   * Ranking is a strict (providerTier, favoriteRank, alphabetical) tuple so a
-   * favorited Twitch emote never jumps over a non-favorited 7TV match. Default
-   * provider tiers, lowest = best: 7tv (0), bttv (1), ffz (2), twitch (3),
-   * chatter (4); a colon query reorders providers to twitch (0), 7tv (1),
-   * bttv (2), ffz (3) and drops chatters. Within a provider, favorited emotes
-   * come first, then alphabetical.
+   * Put matches[index] in place of the word being completed and remember the
+   * cycle, so the next Tab moves on from here. `prevLen` is the length of what
+   * currently sits at `originalStart` (the typed word, or the last insert).
    */
-  const TAB_MATCH_LIMIT = 50;
-  const getMatchingEmoteTokens = useCallback((query: string): EmoteTabCandidate[] => {
-    if (!query) return [];
-    const mode: 'starts_with' | 'includes' = settings.chat_input?.emote_tab_complete_match_mode ?? 'starts_with';
-    const includeChatters = settings.chat_input?.emote_tab_complete_include_chatters ?? true;
-    const q = query.toLowerCase();
-    const seen = new Set<string>();
-    type Ranked = { item: EmoteTabCandidate; providerTier: number; favoriteRank: number };
-    const ranked: Ranked[] = [];
+  const applyTabMatch = useCallback(
+    (
+      matches: EmoteTabCandidate[],
+      index: number,
+      originalStart: number,
+      originalQuery: string,
+      prevLen: number,
+      value: string,
+    ) => {
+      const match = matches[index];
+      const before = value.slice(0, originalStart);
+      const after = value.slice(originalStart + prevLen);
+      // Only add a trailing space if there isn't already one immediately after.
+      const addTrailingSpace = after.length === 0 || after[0] !== ' ';
+      const replacement = (match.insertText ?? match.name) + (addTrailingSpace ? ' ' : '');
+      const newValue = before + replacement + after;
+      const newCursor = originalStart + replacement.length;
 
-    const isAtQuery = q.startsWith('@');
-    // A leading ':' is the Twitch-native trigger convention: ':Pog' should match
-    // the emote 'Pog' (no emote name contains a colon) and float Twitch emotes to
-    // the front of the carousel. A trailing ':' (':Pog:') is tolerated too. The
-    // '@' (chatter) and ':' (Twitch-first) prefixes are mutually exclusive.
-    const isColonQuery = q.startsWith(':');
-    const stripAt = isAtQuery
-      ? q.slice(1)
-      : isColonQuery
-        ? q.slice(1).replace(/:$/, '')
-        : q;
-    const test = (token: string) => {
-      const t = token.toLowerCase();
-      return mode === 'starts_with' ? t.startsWith(stripAt) : t.includes(stripAt);
-    };
+      setMessageInput(newValue);
+      setEmoteTabState({
+        matches,
+        index,
+        expectedCursor: newCursor,
+        expectedValue: newValue,
+        originalStart,
+        originalQuery,
+        currentLen: replacement.length,
+      });
 
-    if (emotes && !isAtQuery && stripAt) {
-      const favoriteIds = new Set(favoriteEmotes.map(f => f.id));
-      // Walk providers in tier order so the seen-set drops cross-provider dupes
-      // in favor of the higher-tier provider (e.g. a 7TV "Kappa" wins over the
-      // Twitch one). A colon-prefixed query flips Twitch to the front so
-      // Twitch-native / sub emotes lead, with the third-party sets as fallback.
-      // The Kick slot is appended last: it's empty for Twitch (so tier indices
-      // and ordering stay byte-identical there), and for a Kick channel its
-      // native emotes become tab-completable alongside 7TV.
-      const ordered: Array<[Emote['provider'], Emote[] | undefined]> = isColonQuery
-        ? [
-            ['twitch', emotes.twitch],
-            ['7tv', emotes['7tv']],
-            ['bttv', emotes.bttv],
-            ['ffz', emotes.ffz],
-            ['kick', emotes.kick],
-            ['youtube', emotes.youtube],
-          ]
-        : [
-            ['7tv', emotes['7tv']],
-            ['bttv', emotes.bttv],
-            ['ffz', emotes.ffz],
-            ['twitch', emotes.twitch],
-            ['kick', emotes.kick],
-            ['youtube', emotes.youtube],
-          ];
-      const tierOf = (provider: Emote['provider']) =>
-        ordered.findIndex(([p]) => p === provider);
-      for (const [provider, list] of ordered) {
-        if (!list) continue;
-        for (const e of list) {
-          const key = e.name.toLowerCase();
-          if (seen.has(key)) continue;
-          if (!test(e.name)) continue;
-          // Subscriber-only FFZ effects are not offered to non-subscribers
-          // (they still render in incoming messages).
-          if (e.ffzSubOnly && !useAppStore.getState().ffzIsSubwoofer) continue;
-          seen.add(key);
-          ranked.push({
-            providerTier: tierOf(provider),
-            favoriteRank: favoriteIds.has(e.id) ? 0 : 1,
-            item: {
-              name: e.name,
-              priority: tierOf(provider),
-              emote: {
-                id: e.id,
-                name: e.name,
-                url: e.url,
-                localUrl: e.localUrl,
-                provider: e.provider,
-                isZeroWidth: e.isZeroWidth,
-                modifierFlags: e.modifierFlags,
-                ffzSubOnly: e.ffzSubOnly,
-              },
-            },
-          });
+      setTimeout(() => {
+        const ta = inputRef.current;
+        if (ta) {
+          ta.focus({ preventScroll: true });
+          ta.setSelectionRange(newCursor, newCursor);
         }
-      }
-    }
-
-    if (includeChatters && !isColonQuery) {
-      const chatters = getMatchingUsers(stripAt);
-      for (const u of chatters) {
-        const dn = u.displayName || u.username;
-        const key = dn.toLowerCase();
-        if (seen.has(key)) continue;
-        if (!test(dn) && !test(u.username)) continue;
-        seen.add(key);
-        ranked.push({
-          providerTier: 4, // chatters always after every emote provider
-          favoriteRank: 1,
-          item: {
-            name: (isAtQuery ? '@' : '') + dn,
-            priority: 4,
-            chatter: { username: u.username, displayName: dn },
-          },
-        });
-      }
-    }
-
-    ranked.sort((a, b) => {
-      if (a.providerTier !== b.providerTier) return a.providerTier - b.providerTier;
-      if (a.favoriteRank !== b.favoriteRank) return a.favoriteRank - b.favoriteRank;
-      return a.item.name.localeCompare(b.item.name);
-    });
-
-    return ranked.slice(0, TAB_MATCH_LIMIT).map(r => r.item);
-  }, [emotes, favoriteEmotes, getMatchingUsers, settings.chat_input]);
+      }, 0);
+    },
+    [],
+  );
 
   /**
-   * Replace the word at the cursor with the next (or previous, if backwards)
-   * matching token. Maintains tab state across consecutive Tab presses so
-   * pressing Tab again cycles through the same candidate list. State invalidates
-   * when the user edits the input or moves the cursor elsewhere.
+   * Tab: replace the word at the cursor with its best match, and on the next
+   * Tab (or Shift+Tab) the next (or previous) one. Matches are ranked in Rust
+   * (`match_emote_tokens`); chatter names follow them. The cycle holds while the
+   * text and caret are exactly what the last Tab left; any edit or caret move
+   * starts a fresh lookup.
+   *
+   * Returns whether the key was used. The first press of a word is claimed
+   * before its matches arrive, and presses that land while it is out are
+   * counted and applied together.
    */
   const handleEmoteTabPress = useCallback((isBackwards: boolean) => {
     if (!(settings.chat_input?.emote_tab_complete_enabled ?? true)) return false;
     const textarea = inputRef.current;
     if (!textarea) return false;
-    const cursor = textarea.selectionStart ?? messageInput.length;
+    const value = textarea.value;
+    const cursor = textarea.selectionStart ?? value.length;
     if (textarea.selectionEnd !== cursor) return false; // active selection -> bail
 
-    let matches: EmoteTabCandidate[];
-    let nextIndex: number;
-    let originalStart: number;
-    let originalQuery: string;
-
-    const stateMatchesCurrent =
+    if (
       emoteTabState &&
-      emoteTabState.expectedValue === messageInput &&
+      emoteTabState.expectedValue === value &&
       emoteTabState.expectedCursor === cursor &&
-      emoteTabState.matches.length > 0;
-
-    if (stateMatchesCurrent) {
-      matches = emoteTabState!.matches;
-      nextIndex = isBackwards ? emoteTabState!.index - 1 : emoteTabState!.index + 1;
-      nextIndex = ((nextIndex % matches.length) + matches.length) % matches.length;
-      originalStart = emoteTabState!.originalStart;
-      originalQuery = emoteTabState!.originalQuery;
-    } else {
-      const [ws, we] = getWordRange(messageInput, cursor);
-      if (cursor === ws) return false;
-      const word = messageInput.slice(ws, we);
-      if (!word || word === ' ') return false;
-      matches = getMatchingEmoteTokens(word);
-      if (matches.length === 0) return false;
-      nextIndex = 0;
-      originalStart = ws;
-      originalQuery = word;
+      emoteTabState.matches.length > 0
+    ) {
+      applyTabMatch(
+        emoteTabState.matches,
+        wrapIndex(emoteTabState.index, isBackwards ? -1 : 1, emoteTabState.matches.length),
+        emoteTabState.originalStart,
+        emoteTabState.originalQuery,
+        emoteTabState.currentLen,
+        value,
+      );
+      return true;
     }
 
-    const match = matches[nextIndex];
-    const prevTokenLen = stateMatchesCurrent ? emoteTabState!.currentLen : originalQuery.length;
-    const before = messageInput.slice(0, originalStart);
-    const after = messageInput.slice(originalStart + prevTokenLen);
-    // Only add a trailing space if there isn't already one immediately after.
-    const addTrailingSpace = after.length === 0 || after[0] !== ' ';
-    const replacement = match.name + (addTrailingSpace ? ' ' : '');
-    const newValue = before + replacement + after;
-    const newCursor = originalStart + replacement.length;
+    const pending = tabLookupRef.current;
+    if (pending && pending.value === value && pending.cursor === cursor) {
+      pending.steps += isBackwards ? -1 : 1;
+      return true;
+    }
 
-    setMessageInput(newValue);
+    const [ws, we] = getWordRange(value, cursor);
+    // An empty spot (nothing typed yet) starts the carousel on the viewer's
+    // emotes: favorites, then this channel's, then the rest. Shift+Tab there is
+    // left alone so keyboard focus can still leave the field backwards.
+    const atGap = cursor === ws && (cursor === value.length || /\s/.test(value.charAt(cursor)));
+    if (cursor === ws && (!atGap || isBackwards)) return false;
+    const word = atGap ? '' : value.slice(ws, we);
+    if (!atGap && !word.trim()) return false;
 
-    setEmoteTabState({
-      matches,
-      index: nextIndex,
-      expectedCursor: newCursor,
-      expectedValue: newValue,
-      originalStart,
-      originalQuery,
-      currentLen: replacement.length,
-    });
-
-    setTimeout(() => {
+    const lookup = { value, cursor, steps: 0 };
+    tabLookupRef.current = lookup;
+    const chatInput = settings.chat_input;
+    const request = atGap
+      ? matchEmotes(emoteMatchTarget, '', 'search', { limit: 50 })
+      : matchEmotes(emoteMatchTarget, word, 'cycle');
+    void request.then((res) => {
+      if (tabLookupRef.current !== lookup) return;
+      tabLookupRef.current = null;
+      // Applied only to the text it was asked about.
       const ta = inputRef.current;
-      if (ta) {
-        ta.focus({ preventScroll: true });
-        ta.setSelectionRange(newCursor, newCursor);
-      }
-    }, 0);
-
+      if (!ta || ta.value !== value || ta.selectionStart !== cursor) return;
+      const includeChatters = !atGap && (chatInput?.emote_tab_complete_include_chatters ?? true);
+      const matches = withChatterCandidates(
+        rowsToTabCandidates(res.rows),
+        word,
+        includeChatters ? getMatchingUsers(word.replace(/^@/, '')) : [],
+        chatInput?.emote_tab_complete_match_mode ?? 'starts_with',
+      );
+      if (matches.length === 0) return;
+      applyTabMatch(matches, wrapIndex(0, lookup.steps, matches.length), ws, word, word.length, value);
+    });
     return true;
-  }, [emoteTabState, messageInput, getMatchingEmoteTokens, settings.chat_input]);
+  }, [emoteTabState, emoteMatchTarget, applyTabMatch, getMatchingUsers, settings.chat_input]);
+
+  /** Replace the text from the list's anchor to the caret with the picked emote. */
+  const insertEmoteFromList = useCallback(
+    (row: EmoteMatchRow) => {
+      if (!emoteList) return;
+      const ta = inputRef.current;
+      const value = ta?.value ?? messageInput;
+      const cursor = Math.max(ta?.selectionStart ?? value.length, emoteList.anchor);
+      const before = value.slice(0, emoteList.anchor);
+      const after = value.slice(cursor);
+      const addTrailingSpace = after.length === 0 || after[0] !== ' ';
+      const replacement = (row.insertText ?? row.name) + (addTrailingSpace ? ' ' : '');
+      const newCursor = before.length + replacement.length;
+      setMessageInput(before + replacement + after);
+      closeEmoteList();
+      setTimeout(() => {
+        const el = inputRef.current;
+        if (el) {
+          el.focus({ preventScroll: true });
+          el.setSelectionRange(newCursor, newCursor);
+        }
+      }, 0);
+    },
+    [emoteList, messageInput, closeEmoteList],
+  );
 
   // The handlers passed down to ChatMessageList are all useCallback'd. They feed
   // a memoized list of up to ~1150 rows, so an unstable identity here re-renders
@@ -4374,6 +4477,22 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     (panelChannelKey
       ? useChatConnectionStore.getState().channels.get(panelChannelKey)?.messages.length ?? 0
       : 0) === 0;
+  // The header row and its pin button both open and close the pinned message.
+  const togglePinned = () => {
+    const next = !isPinnedExpanded;
+    setIsPinnedExpanded(next);
+    if (next) seenPinIdRef.current = pinnedMessages[0]?.id || '';
+  };
+  // Everything floating at the top of chat stacks from where the chrome ends:
+  // the header (a hype train grows it), then the combined-chat bar, then the
+  // poll / prediction cards, then the pinned message.
+  const chromeBottom = Math.max(chromeHeight, blendBarEl ? blendBarBottom : 0);
+  const overlayTop = chromeBottom + 8;
+  const pinnedTop = overlayTop + (overlayStackHeight > 0 ? overlayStackHeight + 8 : 0);
+  // The action capsule only renders when it would hold at least one button.
+  const hasHeaderActions =
+    (!!currentStream && (!channelOverride || (isModerator && isTwitch))) || pinnedMessages.length > 0;
+
   if (showLoadingScreen) {
     return (
       <div className="h-full bg-secondary backdrop-blur-md flex items-center justify-center p-4">
@@ -4388,7 +4507,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         {/* Floating cards at the top of chat. Twitch allows a poll and a
             prediction at once, so they stack in one column rather than both
             pinning themselves to the same box. Order is the user's choice. */}
-        <ChatOverlayStack isHypeTrainActive={!!currentHypeTrain}>
+        <ChatOverlayStack top={overlayTop} stackRef={setOverlayStackEl}>
           {(settings.chat_overlay_order === 'poll-first'
             ? (['poll', 'prediction'] as const)
             : (['prediction', 'poll'] as const)
@@ -4421,7 +4540,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         {/* Chat header - transforms when Hype Train active */}
         {/* flex-col-reverse keeps the stream-info row on top while the hype bar
             (declared first below) renders underneath it */}
-        <div ref={setChromeEl} className={`absolute top-0 left-0 right-0 px-3 py-2 border-b backdrop-blur-ultra z-10 pointer-events-none shadow-lg overflow-hidden flex flex-col-reverse ${
+        <div ref={setChromeEl} className={`absolute top-0 left-0 right-0 px-3 py-1.5 border-b backdrop-blur-ultra z-10 pointer-events-none shadow-[0_8px_18px_-12px_rgba(0,0,0,0.7)] overflow-hidden flex flex-col-reverse ${
           isSharedChat && !currentHypeTrain ? 'iridescent-border' : 'border-borderSubtle'
         }`} style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 90%, transparent)' }}>
           {currentHypeTrain && (
@@ -4437,16 +4556,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
           <div className="relative z-10">
               <div
                 className={`flex items-center gap-2 ${pinnedMessages.length > 0 ? 'pointer-events-auto cursor-pointer' : ''}`}
-                onClick={pinnedMessages.length > 0 ? () => {
-                  const currentPinId = pinnedMessages[0]?.id || '';
-                  const next = !isPinnedExpanded;
-                  setIsPinnedExpanded(next);
-                  if (next) {
-                    seenPinIdRef.current = currentPinId;
-                  }
-                } : undefined}
+                onClick={pinnedMessages.length > 0 ? togglePinned : undefined}
               >
-                <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-400'}`}></div>
+                <span className={`chat-header-dot ${isConnected ? '' : 'chat-header-dot--off'}`} aria-hidden />
                 {/* MultiChat panes: show which platform this chat is from, so split
                     columns are identifiable at a glance. */}
                 {channelOverride && !isMainSurface && (
@@ -4511,41 +4623,43 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: 4 }}
                       transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-                      className={`min-w-0 truncate text-xs font-semibold leading-4 whitespace-nowrap ${isSharedChat ? 'iridescent-title' : 'text-textPrimary'}`}
+                      className={`chat-header-title min-w-0 truncate whitespace-nowrap ${isSharedChat ? 'iridescent-title' : ''}`}
                     >
                       {!isConnected
-                        ? 'DISCONNECTED'
+                        ? 'Disconnected'
                         : channelOverride && !isMainSurface
-                          ? channelOverride.user_name || channelOverride.user_login || 'STREAM CHAT'
+                          ? channelOverride.user_name || channelOverride.user_login || 'Stream chat'
                           : isSharedChat
-                            ? 'SHARED STREAM CHAT'
+                            ? 'Shared stream chat'
                             : currentMediaType === 'offline_chat'
-                              ? 'OFFLINE CHAT'
+                              ? 'Offline chat'
                               : blendActive
-                                ? 'COMBINED CHAT'
-                                : 'STREAM CHAT'}
+                                ? 'Combined chat'
+                                : 'Stream chat'}
                     </motion.p>
                   )}
                 </AnimatePresence>
                 {/* Which platforms this feed is drawing from, in the header rather
                     than on a line of their own: the label already says the chat is
                     combined, so the marks are the only thing left to say and they
-                    fit beside it. Clicking one drops that platform out of the feed,
-                    which is the only thing anyone does here often. Managing the
-                    links themselves is rare and lives in Settings. */}
-                {blendEnabled && blendLinked.length > 0 && (
-                  <span className="pointer-events-auto flex shrink-0 items-center gap-1.5">
+                    fit beside it. Clicking one drops that platform out of THIS
+                    streamer's feed, stored with the link in Rust; the global
+                    switches belong to Settings and a header click never touches
+                    them. */}
+                {blendEnabled && isMainSurface && homeChannel && activeView !== 'modroom' && (
+                  <span className="pointer-events-auto flex shrink-0 items-center gap-0.5">
                     {blendLinked.map((c) => {
-                      const included =
-                        blendOn && settings.chat_blend?.platforms?.[c.provider] !== false;
+                      const offInSettings = settings.chat_blend?.platforms?.[c.provider] === false;
+                      const included = blendOn && !offInSettings && !c.hidden;
                       const meta = PROVIDERS[c.provider];
                       const err = blendErrorMap?.[c.provider];
                       return (
                         <Tooltip
                           key={`${c.provider}:${c.channel}`}
                           content={
-                            err ??
-                            `${included ? 'Hide' : 'Show'} ${meta.label} messages (${c.channelName})`
+                            offInSettings
+                              ? `${meta.label} is off for every channel in Settings, Chat, Combined Chat`
+                              : err ?? `${included ? 'Hide' : 'Show'} ${c.channelName}'s ${meta.label} chat here`
                           }
                           side="bottom"
                         >
@@ -4553,15 +4667,23 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              if (!blendOn) setBlendOn(true);
-                              handleTogglePlatform(c.provider, !included);
+                              if (offInSettings) return;
+                              if (!blendOn) {
+                                setBlendOn(true);
+                                if (c.hidden) void editBlendLink({ provider: c.provider, channel: c.channel }, 'show');
+                                return;
+                              }
+                              void editBlendLink({ provider: c.provider, channel: c.channel }, included ? 'hide' : 'show');
                             }}
                             // The mark is drawn with an empty alt (it is
                             // decorative inside the button), so the button has to
                             // carry the name itself or it reads as nothing.
-                            aria-label={`${included ? 'Hide' : 'Show'} ${meta.label} messages`}
+                            aria-label={`${included ? 'Hide' : 'Show'} ${meta.label} chat`}
                             aria-pressed={included}
-                            className="transition-opacity hover:opacity-100"
+                            aria-disabled={offInSettings}
+                            className={`grid h-5 w-5 place-items-center rounded-full transition-colors ${
+                              offInSettings ? 'cursor-default' : 'hover:bg-white/10'
+                            }`}
                           >
                             <ProviderMark
                               provider={c.provider}
@@ -4572,17 +4694,52 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                         </Tooltip>
                       );
                     })}
-                    <Tooltip content="Link another of this streamer's channels" side="bottom">
+                    {/* The one way into combining: suggestions wait behind it
+                        rather than pushing a row into chat. With something
+                        found, it shows those platforms' marks and, until
+                        looked at, a small dot. */}
+                    <Tooltip
+                      content={
+                        blendPanel !== 'closed'
+                          ? 'Close'
+                          : blendSuggestions.length > 0
+                            ? `Also streaming on ${blendSuggestions
+                                .map((s) => PROVIDERS[s.candidate.provider].label)
+                                .join(' and ')}? Take a look`
+                            : blendLinked.length > 0
+                              ? "Link another of this streamer's channels"
+                              : 'Combine chat from another platform'
+                      }
+                      side="bottom"
+                    >
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          setBlendManageOpen(true);
+                          if (blendPanel !== 'closed') {
+                            setBlendPanel('closed');
+                            return;
+                          }
+                          if (blendSuggestions.length > 0) {
+                            setSeenBlendSuggestions(blendSuggestionsKey);
+                            setBlendPanel('suggestions');
+                          } else {
+                            setBlendPanel('editor');
+                          }
                         }}
-                        aria-label="Link another platform"
-                        className="text-textMuted transition-colors hover:text-textSecondary"
+                        aria-label={blendSuggestions.length > 0 ? 'Suggested channels' : 'Link another platform'}
+                        aria-expanded={blendPanel !== 'closed'}
+                        className={`blend-trigger ${blendSuggestions.length > 0 ? 'blend-trigger--found' : ''} ${
+                          blendPanel !== 'closed' ? 'is-open' : ''
+                        }`}
                       >
-                        <Plus size={11} weight="bold" />
+                        <Plus size={10} weight="bold" />
+                        {blendSuggestions.map((s) => (
+                          <ProviderMark key={s.candidate.provider} provider={s.candidate.provider} size={11} />
+                        ))}
+                        {blendSuggestionsUnseen && blendPanel === 'closed' && (
+                          <span className="blend-trigger-dot" aria-hidden />
+                        )}
                       </button>
                     </Tooltip>
                   </span>
@@ -4599,7 +4756,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     </p>
                   </Tooltip>
                 )}
-                <div className="flex items-center gap-3 ml-auto shrink-0">
+                <div className="flex items-center gap-2 ml-auto shrink-0">
                   {/* Compact Chat / Mod Room toggle: the active pill slides between
                       the two with a spring (magnetic). Shown for moderators, using
                       the optimistic eligibility so it appears instantly on revisit. */}
@@ -4681,23 +4838,63 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       ariaLabel="Message filter"
                     />
                   )}
+                  {viewerCount !== null && !streamerModeActive && collab && (
+                    <TogetherChip
+                      variant="header"
+                      collab={collab}
+                      // A popout or MultiChat pane has no player of its own to
+                      // switch and no grid of its own to fill.
+                      onOpenChannel={
+                        channelOverride ? undefined : (login) => void useAppStore.getState().startStream(login)
+                      }
+                      allowMultiNook={!channelOverride}
+                    />
+                  )}
+                  {/* The live numbers read as one object: viewers and uptime in a
+                      single capsule, split by a hairline. */}
+                  {((viewerCount !== null && !streamerModeActive) || currentStream?.started_at) && (
+                    <div className="chrome-glaze chrome-glaze--flat chat-header-stats">
+                      {viewerCount !== null && !streamerModeActive && (
+                        <Tooltip content="Watching now" side="bottom">
+                          <span className="chat-header-stat cursor-default pointer-events-auto">
+                            <UsersThree size={13} weight="fill" />
+                            {viewerCount.toLocaleString()}
+                          </span>
+                        </Tooltip>
+                      )}
+                      {viewerCount !== null && !streamerModeActive && currentStream?.started_at && (
+                        <span className="chat-header-rule" aria-hidden />
+                      )}
+                      {currentStream?.started_at && (
+                        <Tooltip content="Live for" side="bottom">
+                          <span className="chat-header-stat cursor-default pointer-events-auto">
+                            <Timer size={13} weight="bold" />
+                            <span id="stream-uptime-display">{streamUptimeRef.current}</span>
+                          </span>
+                        </Tooltip>
+                      )}
+                    </div>
+                  )}
+                  {hasHeaderActions && (
+                    <div className="chrome-glaze chrome-glaze--flat chat-header-cluster pointer-events-auto">
                   {/* Viewers list — the official chatters roster grouped by role.
                       Mod/broadcaster only (Helix Get Chatters requires it), so the
                       toggle is hidden on channels the user doesn't moderate.
                       Twitch-only: Helix is the only roster source, so on a
                       provider channel the id would be for a different platform. */}
                   {isModerator && isTwitch && currentStream && (
-                    <Tooltip content={activeView === 'viewers' ? 'Back to chat' : 'Viewers'} side="top">
+                    <Tooltip content={activeView === 'viewers' ? 'Back to chat' : 'Viewers'} side="bottom">
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           setActiveView(activeView === 'viewers' ? 'chat' : 'viewers');
                         }}
-                        className={`pointer-events-auto grid h-5 w-5 place-items-center rounded transition-colors hover:bg-surface-hover hover:text-textPrimary ${activeView === 'viewers' ? 'text-accent' : 'text-textSecondary'}`}
+                        className={`chat-header-btn ${activeView === 'viewers' ? 'is-active' : ''}`}
                         aria-label="Viewers list"
+                        aria-pressed={activeView === 'viewers'}
                       >
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
                           <circle cx="9" cy="7" r="4" />
                           <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
@@ -4712,7 +4909,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       Hidden when ChatWidget is already inside a popout (channelOverride
                       set) — popping out of a popout would be confusing. */}
                   {currentStream && !channelOverride && (
-                    <Tooltip content={isMultiNookActive && slots.length > 1 ? 'Pop out all chats' : 'Pop out chat'} side="top">
+                    <Tooltip content={isMultiNookActive && slots.length > 1 ? 'Pop out all chats' : 'Pop out chat'} side="bottom">
                       <button
                         type="button"
                         onClick={async (e) => {
@@ -4749,12 +4946,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                             Logger.error('[ChatWidget] Pop out chat failed:', err);
                           }
                         }}
-                        className="pointer-events-auto grid h-5 w-5 place-items-center rounded text-textSecondary transition-colors hover:bg-surface-hover hover:text-textPrimary"
+                        className="chat-header-btn"
                         aria-label="Pop out chat"
                       >
                         <svg
-                          width="12"
-                          height="12"
+                          width="13"
+                          height="13"
                           viewBox="0 0 16 16"
                           fill="none"
                           stroke="currentColor"
@@ -4770,7 +4967,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     </Tooltip>
                   )}
                   {!channelOverride && isTwitch && currentStream && (
-                    <Tooltip content="Float chat as a see-through window over other apps (its own renderer, about 150 MB)" side="top">
+                    <Tooltip content="Float chat as a see-through window over other apps (its own renderer, about 150 MB)" side="bottom">
                       <button
                         type="button"
                         onClick={async (e) => {
@@ -4786,55 +4983,42 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                             Logger.error('[ChatWidget] Open chat overlay failed:', err);
                           }
                         }}
-                        className="pointer-events-auto grid h-5 w-5 place-items-center rounded text-textSecondary transition-colors hover:bg-surface-hover hover:text-textPrimary"
+                        className="chat-header-btn"
                         aria-label="Float chat as overlay"
                       >
-                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                           <rect x="2" y="2" width="9" height="9" rx="1.5" />
                           <path d="M6 14h7.5a.5.5 0 0 0 .5-.5V6" strokeDasharray="2 1.5" />
                         </svg>
                       </button>
                     </Tooltip>
                   )}
-                  {viewerCount !== null && !streamerModeActive && collab && (
-                    <TogetherChip
-                      variant="header"
-                      collab={collab}
-                      // A popout or MultiChat pane has no player of its own to
-                      // switch and no grid of its own to fill.
-                      onOpenChannel={
-                        channelOverride ? undefined : (login) => void useAppStore.getState().startStream(login)
-                      }
-                      allowMultiNook={!channelOverride}
-                    />
-                  )}
-                  {viewerCount !== null && !streamerModeActive && (
-                    <div className="flex items-center gap-1">
-                      <UsersThree size={13} weight="fill" className="text-textSecondary" />
-                      <span className="text-xs text-textSecondary">{viewerCount.toLocaleString()}</span>
-                    </div>
-                  )}
-                  {currentStream?.started_at && (
-                    <div className="flex items-center gap-1">
-                      <Timer size={13} weight="bold" className="text-textSecondary" />
-                      <span id="stream-uptime-display" className="text-xs text-textSecondary">{streamUptimeRef.current}</span>
-                    </div>
-                  )}
-                  {/* Pin icon + chevron indicator */}
                   {pinnedMessages.length > 0 && (() => {
-                    const currentPinId = pinnedMessages[0]?.id || '';
-                    const isUnseen = currentPinId !== seenPinIdRef.current;
+                    const isUnseen = (pinnedMessages[0]?.id || '') !== seenPinIdRef.current;
                     return (
-                      <div className="flex items-center gap-1">
-                        <svg className={`w-3.5 h-3.5 text-accent ${isUnseen ? 'animate-pulse drop-shadow-[0_0_4px_var(--color-accent)]' : ''}`} fill="currentColor" viewBox="0 0 16 16">
-                          <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5a.5.5 0 0 1-1 0V10h-4A.5.5 0 0 1 3 9.5c0-.973.64-1.725 1.17-2.189A5.921 5.921 0 0 1 5 6.708V2.277a2.77 2.77 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354z"/>
-                        </svg>
-                        <svg className={`w-2.5 h-2.5 text-textSecondary transition-transform duration-200 ${isPinnedExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </div>
+                      <Tooltip content={isPinnedExpanded ? 'Hide pinned message' : 'Show pinned message'} side="bottom">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            togglePinned();
+                          }}
+                          className={`chat-header-btn chat-header-btn--pin ${isUnseen ? 'is-unseen' : ''} ${isPinnedExpanded ? 'is-open' : ''}`}
+                          aria-label="Pinned message"
+                          aria-expanded={isPinnedExpanded}
+                        >
+                          <svg width="13" height="13" fill="currentColor" viewBox="0 0 16 16">
+                            <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5a.5.5 0 0 1-1 0V10h-4A.5.5 0 0 1 3 9.5c0-.973.64-1.725 1.17-2.189A5.921 5.921 0 0 1 5 6.708V2.277a2.77 2.77 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354z"/>
+                          </svg>
+                          <svg width="9" height="9" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
+                      </Tooltip>
                     );
                   })()}
+                    </div>
+                  )}
                     </>
                   )}
                 </div>
@@ -4847,7 +5031,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         {pinnedMessages.length > 0 && (
           <div className="absolute left-3 right-3 z-[15] pointer-events-none flex flex-col items-center"
             style={{
-              top: Math.max(chromeHeight, blendBarEl ? blendBarBottom : 0) + 8,
+              top: pinnedTop,
             }}>
             <AnimatePresence>
               {isPinnedExpanded && (
@@ -5074,7 +5258,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
         {/* Viewers list - replaces chat when active */}
         {activeView === 'viewers' && currentStream && (
-          <div className={`flex-1 overflow-hidden animate-panel-slide-up ${currentHypeTrain ? 'pt-24' : 'pt-10'}`}>
+          <div className="flex-1 overflow-hidden animate-panel-slide-up" style={{ paddingTop: chromeHeight }}>
             <ViewersPanel
               key={currentStream.user_id}
               broadcasterId={currentStream.user_id}
@@ -5088,7 +5272,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
           {activeView === 'modroom' && currentStream && (
             <motion.div
               key="modroom-pane"
-              className={`flex-1 overflow-hidden ${currentHypeTrain ? 'pt-24' : 'pt-10'}`}
+              className="flex-1 overflow-hidden"
+              style={{ paddingTop: chromeHeight }}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 8 }}
@@ -5120,21 +5305,21 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         {activeView === 'chat' && blendEnabled && (
           <div ref={setBlendBarEl} style={{ paddingTop: chromeHeight }}>
           <BlendBar
+            homeProvider={provider}
             linked={blendLinked}
-            onAdd={(p, ch) => void editBlendLink({ provider: p, channel: ch }, 'link')}
+            onAdd={(p, ch, extra) => void editBlendLink({ provider: p, channel: ch, ...extra }, 'link')}
             onRemove={(c) => void editBlendLink({ provider: c.provider, channel: c.channel }, 'unlink')}
-            // A line only when there is nothing linked yet. Once there is, the
-            // header carries the state and this disappears entirely.
-            invite={blendLinked.length === 0 || blendManageOpen}
-            onInviteClose={() => setBlendManageOpen(false)}
-            suggestion={blendSuggestion}
+            view={blendPanel}
+            onViewChange={setBlendPanel}
+            suggestions={blendSuggestions}
             onAcceptSuggestion={(sug) => {
-              hideBlendSuggestion();
+              hideBlendSuggestion(sug);
               void editBlendLink(
                 {
                   provider: sug.candidate.provider,
                   channel: sug.candidate.channel,
                   display_name: sug.candidate.display_name ?? undefined,
+                  avatar: sug.candidate.avatar ?? undefined,
                 },
                 'link',
               );
@@ -5142,7 +5327,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               setBlendOn(true);
             }}
             onRefuseSuggestion={(sug) => {
-              hideBlendSuggestion();
+              hideBlendSuggestion(sug);
               // Persisted, so the same wrong answer is never offered again.
               void editBlendLink(
                 { provider: sug.candidate.provider, channel: sug.candidate.channel },
@@ -5186,6 +5371,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             broadcasterId={currentStream?.user_id}
             hoveringRef={isHoveringChatRef}
             headerSpaceReserved={blendEnabled}
+            headerInset={chromeHeight}
           />
         )}
         {/* AutoMod held-message queue (moderators, Twitch). Rust owns the
@@ -5606,9 +5792,31 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       onSelectedIndexChange={setMentionSelectedIndex}
                     />
                   )}
+                  {/* Emote list (":" plus two letters, or Tab) */}
+                  <AnimatePresence>
+                    {emoteList &&
+                      // A colon list stays out of the way until something matches;
+                      // one opened with Tab also says when nothing does.
+                      (emoteList.rows.length > 0 ||
+                        !emoteList.ready ||
+                        (emoteList.source === 'tab' && !emoteList.pending)) &&
+                      !showMentionAutocomplete &&
+                      !showCommandAutocomplete && (
+                      <EmoteSearchList
+                        id={emoteListId}
+                        query={emoteList.query}
+                        rows={emoteList.rows}
+                        total={emoteList.total}
+                        ready={emoteList.ready}
+                        selectedIndex={emoteList.selected}
+                        onSelect={insertEmoteFromList}
+                        onSelectedIndexChange={(i) => setEmoteList((prev) => (prev ? { ...prev, selected: i } : prev))}
+                      />
+                    )}
+                  </AnimatePresence>
                   {/* Emote tab completion carousel */}
                   <AnimatePresence>
-                    {emoteTabState && !showMentionAutocomplete && !showCommandAutocomplete && (
+                    {emoteTabState && !emoteList && !showMentionAutocomplete && !showCommandAutocomplete && (
                       <EmoteAutocomplete
                         current={emoteTabState.matches[emoteTabState.index]}
                         backwards={emoteTabState.matches.slice(Math.max(0, emoteTabState.index - 3), emoteTabState.index)}
@@ -5645,6 +5853,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     value={messageInput}
                     onChange={handleInputChange}
                     onKeyDown={handleKeyPress}
+                    aria-autocomplete="list"
+                    aria-expanded={!!emoteList && emoteList.rows.length > 0}
+                    aria-controls={emoteList ? emoteListId : undefined}
+                    aria-activedescendant={
+                      emoteList && emoteList.rows.length > 0 ? emoteOptionId(emoteListId, emoteList.selected) : undefined
+                    }
                     onPaste={(e) => void handlePaste(e)}
                     onFocus={warmSpellcheck}
                     // Ours replaces the webview's built-in checker entirely.
@@ -5718,6 +5932,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       setTimeout(() => setShowMentionAutocomplete(false), 150);
                       setTimeout(() => setShowCommandAutocomplete(false), 150);
                       setEmoteTabState(null);
+                      // Picking a row never blurs (rows act on mousedown), so a
+                      // blur means the viewer left the field.
+                      if (emoteList) closeEmoteList();
                     }}
                   />
                   {/* Length label and slow-mode countdown, bottom-right of the field. */}

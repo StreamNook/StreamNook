@@ -330,7 +330,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Combined Chat',
     sectionId: 'settings-section-combined-chat',
     title: 'Suggest links',
-    description: 'Offer to link a Kick or YouTube channel of the same name when you open a stream. Link channels, same streamer on another platform, connect kick to twitch channel, find youtube channel, auto detect, multistreamer.'
+    description: 'Look for a Kick or YouTube channel of the same name when you open a stream; anything found waits behind the + in the chat header. Link channels, same streamer on another platform, connect kick to twitch channel, find youtube channel, auto detect, multistreamer.'
   },
   {
     tab: 'Chat',
@@ -697,7 +697,21 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Emote Tab Completion',
     sectionId: 'settings-section-emote-tab-completion',
     title: 'Complete emote names with Tab',
-    description: 'Press Tab while typing to insert the best-matching emote, and Tab again to cycle to the next match.'
+    description: 'Press Tab to complete the emote you are typing, in a carousel or a list.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Emote Tab Completion',
+    sectionId: 'settings-section-emote-tab-completion',
+    title: 'What Tab opens',
+    description: 'Carousel completes in place and cycles; List shows every emote you can use and narrows as you type.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Emote Tab Completion',
+    sectionId: 'settings-section-emote-tab-completion',
+    title: 'Show the emote list when you type :',
+    description: 'Type a colon and two letters to see every emote you can use and where it comes from.'
   },
   {
     tab: 'Chat',

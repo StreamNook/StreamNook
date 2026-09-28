@@ -146,6 +146,10 @@ impl ChatProvider for YouTubeProvider {
         "youtube"
     }
 
+    fn open_channel_count(&self) -> Option<usize> {
+        self.conns.try_lock().ok().map(|c| c.len())
+    }
+
     async fn connect(&self, channel: &str, window: &str) -> Result<()> {
         // YouTube video + channel ids are case-sensitive, but the composite key the
         // store routes by is lowercased — so a reconnect/restore can hand us the
@@ -356,7 +360,7 @@ async fn post_innertube_authed(
         "https://www.youtube.com/youtubei/v1/live_chat/{}?key={}&prettyPrint=false",
         endpoint, api_key
     );
-    let mut req = reqwest::Client::new()
+    let mut req = crate::services::http::client_unbounded()
         .post(url)
         .header("User-Agent", USER_AGENT);
     for (k, v) in headers {
@@ -1444,6 +1448,13 @@ pub fn channel_emojis(channel: &str) -> Vec<YouTubeEmoji> {
     // available from the emoji tab anyway.
     list.sort_by_key(|e| e.is_global);
     list
+}
+
+/// A channel's emoji set, shared rather than copied. Same key rules as
+/// `channel_emojis`.
+pub fn channel_emoji_set(channel: &str) -> Option<std::sync::Arc<Vec<YouTubeEmoji>>> {
+    let key = channel.trim().to_lowercase();
+    EMOJIS.get()?.lock().ok()?.get(&key).cloned()
 }
 
 /// Forget a channel's emoji when its chat is gone.

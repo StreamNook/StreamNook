@@ -8,6 +8,7 @@ import type { ReactNode, RefObject } from 'react';
 import { motion } from 'framer-motion';
 import { Lock, Settings } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
+import EmoteProviderLogo from './EmoteProviderLogo';
 import {
   type Emote,
   type EmoteSet,
@@ -725,7 +726,7 @@ export function EmotePickerPanel({
           {isTwitch && (
             <Tooltip content={`Twitch (${emotes?.twitch.length || 0})`} side="top">
               <button onClick={() => setSelectedProvider('twitch')} className={tabClass(selectedProvider === 'twitch')} style={tabStyle(selectedProvider === 'twitch', 'twitch')}>
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z" /></svg>
+                <EmoteProviderLogo provider="twitch" className="w-4 h-4" />
                 <span className="text-[10px] opacity-70">{emotes?.twitch.length || 0}</span>
               </button>
             </Tooltip>
@@ -733,7 +734,7 @@ export function EmotePickerPanel({
           {isTwitch && (
             <Tooltip content={`BetterTTV (${emotes?.bttv.length || 0})`} side="top">
               <button onClick={() => setSelectedProvider('bttv')} className={tabClass(selectedProvider === 'bttv')} style={tabStyle(selectedProvider === 'bttv', 'bttv')}>
-                <svg className="w-4 h-4" viewBox="0 0 300 300" fill="currentColor"><path fill="transparent" d="M249.771 150A99.771 99.922 0 0 1 150 249.922 99.771 99.922 0 0 1 50.229 150 99.771 99.922 0 0 1 150 50.078 99.771 99.922 0 0 1 249.771 150Z" /><path d="M150 1.74C68.409 1.74 1.74 68.41 1.74 150S68.41 298.26 150 298.26h148.26V150.17h-.004c0-.057.004-.113.004-.17C298.26 68.409 231.59 1.74 150 1.74zm0 49c55.11 0 99.26 44.15 99.26 99.26 0 55.11-44.15 99.26-99.26 99.26-55.11 0-99.26-44.15-99.26-99.26 0-55.11 44.15-99.26 99.26-99.26z" /><path d="M161.388 70.076c-10.662 0-19.42 7.866-19.42 17.67 0 9.803 8.758 17.67 19.42 17.67 10.662 0 19.42-7.867 19.42-17.67 0-9.804-8.758-17.67-19.42-17.67zm45.346 24.554-.02.022-.004.002c-5.402 2.771-11.53 6.895-18.224 11.978l-.002.002-.004.002c-25.943 19.766-60.027 54.218-80.344 80.33h-.072l-1.352 1.768c-5.114 6.69-9.267 12.762-12.098 18.006l-.082.082.022.021v.002l.004.002.174.176.052-.053.102.053-.07.072c30.826 30.537 81.213 30.431 111.918-.273 30.783-30.784 30.8-81.352.04-112.152l-.005-.004zM87.837 142.216c-9.803 0-17.67 8.758-17.67 19.42 0 10.662 7.867 19.42 17.67 19.42 9.804 0 17.67-8.758 17.67-19.42 0-10.662-7.866-19.42-17.67-19.42z" /></svg>
+                <EmoteProviderLogo provider="bttv" className="w-4 h-4" />
                 <span className="text-[10px] opacity-70">{emotes?.bttv.length || 0}</span>
               </button>
             </Tooltip>
@@ -741,7 +742,7 @@ export function EmotePickerPanel({
           {isKick && (
             <Tooltip content={`Kick (${emotes?.kick.length || 0})`} side="top">
               <button onClick={() => setSelectedProvider('kick')} className={tabClass(selectedProvider === 'kick')} style={tabStyle(selectedProvider === 'kick', 'kick')}>
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M1.333 0h8v5.333H12V2.667h2.667V0h8v8H20v2.667h-2.667v2.666H20V16h2.667v8h-8v-2.667H12v-2.666H9.333V24h-8Z" /></svg>
+                <EmoteProviderLogo provider="kick" className="w-4 h-4" />
                 <span className="text-[10px] opacity-70">{emotes?.kick.length || 0}</span>
               </button>
             </Tooltip>
@@ -756,7 +757,7 @@ export function EmotePickerPanel({
               side="top"
             >
               <button onClick={() => setSelectedProvider('youtube')} className={tabClass(selectedProvider === 'youtube')} style={tabStyle(selectedProvider === 'youtube', 'youtube')}>
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.6 12 3.6 12 3.6s-7.5 0-9.4.5A3 3 0 0 0 .5 6.2C0 8.1 0 12 0 12s0 3.9.5 5.8a3 3 0 0 0 2.1 2.1c1.9.5 9.4.5 9.4.5s7.5 0 9.4-.5a3 3 0 0 0 2.1-2.1c.5-1.9.5-5.8.5-5.8s0-3.9-.5-5.8ZM9.6 15.6V8.4l6.2 3.6-6.2 3.6Z" /></svg>
+                <EmoteProviderLogo provider="youtube" className="w-4 h-4" />
                 <span className="text-[10px] opacity-70">{emotes?.youtube.length || 0}</span>
               </button>
             </Tooltip>
@@ -767,7 +768,7 @@ export function EmotePickerPanel({
           {(isTwitch || isKick || isYouTube) && (
             <Tooltip content={`7TV (${emotes?.['7tv'].length || 0})`} side="top">
               <button onClick={() => setSelectedProvider('7tv')} className={tabClass(selectedProvider === '7tv')} style={tabStyle(selectedProvider === '7tv', '7tv')}>
-                <svg className="w-4 h-4" viewBox="0 0 28 21" fill="currentColor"><path d="M20.7465 5.48825L21.9799 3.33745L22.646 2.20024L21.4125 0.0494437V0H14.8259L17.2928 4.3016L17.9836 5.48825H20.7465Z" /><path d="M7.15395 19.9258L14.5546 7.02104L15.4673 5.43884L13.0004 1.13724L12.3097 0.0247596H1.8995L0.666057 2.17556L0 3.31276L1.23344 5.46356V5.51301H9.12745L2.96025 16.267L2.09685 17.7998L3.33029 19.9506V20H7.15395" /><path d="M17.4655 19.9257H21.2398L26.1736 11.3225L27.037 9.83924L25.8036 7.68844V7.63899H22.0046L19.5377 11.9406L19.365 12.262L16.8981 7.96038L16.7255 7.63899L14.2586 11.9406L13.5679 13.1272L17.2682 19.5796L17.4655 19.9257Z" /></svg>
+                <EmoteProviderLogo provider="7tv" className="w-4 h-4" />
                 <span className="text-[10px] opacity-70">{emotes?.['7tv'].length || 0}</span>
               </button>
             </Tooltip>
@@ -775,7 +776,7 @@ export function EmotePickerPanel({
           {isTwitch && (
             <Tooltip content={`FrankerFaceZ (${emotes?.ffz.length || 0})`} side="top">
               <button onClick={() => setSelectedProvider('ffz')} className={tabClass(selectedProvider === 'ffz')} style={tabStyle(selectedProvider === 'ffz', 'ffz')}>
-                <svg className="w-4 h-4" viewBox="-0.5 -0.5 40 30" fill="currentColor"><path d="M 15.5,-0.5 C 17.8333,-0.5 20.1667,-0.5 22.5,-0.5C 24.6552,3.13905 26.8218,6.80572 29,10.5C 29.691,7.40943 31.5243,6.24276 34.5,7C 36.585,9.68221 38.2517,12.5155 39.5,15.5C 39.5,17.5 39.5,19.5 39.5,21.5C 34.66,25.2533 29.3267,27.92 23.5,29.5C 20.5,29.5 17.5,29.5 14.5,29.5C 9.11466,27.3005 4.11466,24.3005 -0.5,20.5C -0.5,17.5 -0.5,14.5 -0.5,11.5C 4.17691,4.45967 7.34358,5.12633 9,13.5C 10.6047,10.3522 11.6047,7.01889 12,3.5C 12.6897,1.64977 13.8564,0.316435 15.5,-0.5 Z" /></svg>
+                <EmoteProviderLogo provider="ffz" className="w-4 h-4" />
                 <span className="text-[10px] opacity-70">{emotes?.ffz.length || 0}</span>
               </button>
             </Tooltip>

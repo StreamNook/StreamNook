@@ -89,6 +89,14 @@ pub fn has_emotes(identifier: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Run `f` over a channel's 7TV emotes (name -> emote) without copying them.
+/// `None` until the channel's 7TV refresh has stored an entry.
+pub fn with_seventv<R>(identifier: &str, f: impl FnOnce(&HashMap<String, YouTubeEmote>) -> R) -> Option<R> {
+    let key = store_key(identifier);
+    let s = store().lock().ok()?;
+    s.get(&key).map(|c| f(&c.map))
+}
+
 /// The channel's 7TV emotes as an `EmoteSet` for the frontend emote picker.
 ///
 /// ASYNC, and it waits: the picker fetch fires as chat connects, while the 7TV
@@ -168,7 +176,7 @@ pub async fn refresh(identifier: &str, channel_id: &str) {
         }
     }
 
-    let client = reqwest::Client::new();
+    let client = crate::services::http::client_unbounded();
     let mut map: HashMap<String, YouTubeEmote> = HashMap::new();
     // Globals first so the channel set overrides on name collisions.
     fetch_into(&client, "https://7tv.io/v3/emote-sets/global", "/emotes", &mut map).await;

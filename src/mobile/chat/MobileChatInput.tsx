@@ -12,7 +12,7 @@
 // Channel comes in as a prop rather than being read off `currentStream`: with
 // several chat tabs open the composer must target the tab you are looking at,
 // which is not necessarily the stream playing.
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -27,8 +27,9 @@ import ChannelPointsMenu from '../../components/ChannelPointsMenu';
 import { ChannelPointsIcon } from '../../components/ChannelPointsIcon';
 import { useChannelPoints } from './useChannelPoints';
 import { MobileEmoteCarousel } from './MobileEmoteCarousel';
-import { matchEmoteTokens } from './emoteTabMatch';
-import { getWordRange } from '../../utils/chatInputWord';
+import { getWordRange, withChatterCandidates, type EmoteTabCandidate } from '../../utils/chatInputWord';
+import { matchEmotes, rowsToTabCandidates, createRequestSeq } from '../../services/emoteMatch';
+import { useChatUserStore } from '../../stores/chatUserStore';
 import { useEmoteOwnerNames } from './useEmoteOwnerNames';
 import { ComposerMenuSheet } from './ComposerMenuSheet';
 import { MobileCommandSheet } from './MobileCommandSheet';
@@ -298,20 +299,36 @@ const MobileChatInputImpl: React.FC<Props> = ({
   // few characters. Typing the first few letters and tapping is the fast path,
   // and it is the one the desktop has had all along behind a key this platform
   // does not have.
-  const suggestions = useMemo(() => {
-    // Completes the LAST word, rather than reading the caret. On a phone the
-    // caret is essentially always at the end, and the real position would not
-    // re-run this anyway: moving it changes no state. A trailing space falls out
-    // of this correctly, since the word at the end is then empty.
-    const [start, end] = getWordRange(text, text.length);
-    const word = text.slice(start, end);
+  //
+  // Completes the LAST word, rather than reading the caret. On a phone the
+  // caret is essentially always at the end, and the real position would not
+  // re-run this anyway: moving it changes no state. A trailing space falls out
+  // of this correctly, since the word at the end is then empty.
+  const [wordStart, wordEnd] = getWordRange(text, text.length);
+  const word = text.slice(wordStart, wordEnd);
+  // Ranked in Rust over the sets it already holds; each answer is kept with the
+  // word it answers, so a late reply for an older word is never shown.
+  const [answered, setAnswered] = useState<{ word: string; items: EmoteTabCandidate[] }>({ word: '', items: [] });
+  const [suggestSeq] = useState(createRequestSeq);
+  useEffect(() => {
     // One character matches most of the set and is noise, not help.
-    if (word.length < 2) return [];
-    return matchEmoteTokens(word, emotes, {
-      mode: chatInput?.emote_tab_complete_match_mode,
-      includeChatters: chatInput?.emote_tab_complete_include_chatters,
+    if (word.length < 2 || !channel) return;
+    const n = suggestSeq.next();
+    void matchEmotes({ provider, channel, channelId }, word, 'cycle').then((res) => {
+      if (!suggestSeq.isCurrent(n)) return;
+      const includeChatters = chatInput?.emote_tab_complete_include_chatters ?? true;
+      setAnswered({
+        word,
+        items: withChatterCandidates(
+          rowsToTabCandidates(res.rows),
+          word,
+          includeChatters ? useChatUserStore.getState().getMatchingUsers(word.replace(/^@/, '')) : [],
+          chatInput?.emote_tab_complete_match_mode ?? 'starts_with',
+        ),
+      });
     });
-  }, [text, emotes, chatInput]);
+  }, [word, channel, channelId, provider, chatInput, suggestSeq]);
+  const suggestions = word.length >= 2 && answered.word === word ? answered.items : [];
 
   const showSuggestions =
     (chatInput?.emote_tab_complete_enabled ?? true) &&
@@ -379,7 +396,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
           {showSuggestions && (
             <MobileEmoteCarousel
               candidates={suggestions}
-              onSelect={(tok) => completeWith(tok.name)}
+              onSelect={(tok) => completeWith(tok.insertText ?? tok.name)}
             />
           )}
         </AnimatePresence>

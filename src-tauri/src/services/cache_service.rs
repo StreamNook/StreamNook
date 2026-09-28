@@ -1,7 +1,10 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -281,6 +284,8 @@ pub fn clear_all_cache() -> Result<()> {
             }
         }
     }
+    // The favorites file lives in this folder too.
+    forget_favorite_ids();
 
     Ok(())
 }
@@ -327,6 +332,7 @@ pub fn save_favorite_emotes(data: &str) -> Result<()> {
     let cache_file = cache_dir.join("favorite_emotes.json");
 
     fs::write(&cache_file, data).context("Failed to write favorite emotes cache file")?;
+    forget_favorite_ids();
 
     Ok(())
 }
@@ -378,6 +384,7 @@ pub fn add_favorite_emote(emote_data: &str) -> Result<()> {
     // Save back to file
     let json = serde_json::to_string(&favorites)?;
     fs::write(&cache_file, json).context("Failed to write favorite emotes cache file")?;
+    forget_favorite_ids();
 
     Ok(())
 }
@@ -403,6 +410,45 @@ pub fn remove_favorite_emote(emote_id: &str) -> Result<()> {
     // Save back to file
     let json = serde_json::to_string(&favorites)?;
     fs::write(&cache_file, json).context("Failed to write favorite emotes cache file")?;
+    forget_favorite_ids();
 
     Ok(())
+}
+
+// Favorite emote ids, parsed once for completion ranking (which runs on every
+// keystroke) and dropped by every write to the file. The generation stops a
+// load that raced a write from caching the pre-write list.
+static FAVORITE_IDS: std::sync::RwLock<Option<Arc<HashSet<String>>>> = std::sync::RwLock::new(None);
+static FAVORITE_IDS_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// The ids of the user's favorite emotes.
+pub fn favorite_emote_ids() -> Arc<HashSet<String>> {
+    if let Some(ids) = FAVORITE_IDS.read().ok().and_then(|g| g.clone()) {
+        return ids;
+    }
+    let generation = FAVORITE_IDS_GEN.load(AtomicOrdering::Acquire);
+    let ids: HashSet<String> = load_favorite_emotes()
+        .ok()
+        .flatten()
+        .and_then(|data| serde_json::from_str::<Vec<serde_json::Value>>(&data).ok())
+        .map(|list| {
+            list.iter()
+                .filter_map(|e| e.get("id").and_then(|v| v.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let ids = Arc::new(ids);
+    if let Ok(mut g) = FAVORITE_IDS.write() {
+        if FAVORITE_IDS_GEN.load(AtomicOrdering::Acquire) == generation {
+            *g = Some(ids.clone());
+        }
+    }
+    ids
+}
+
+fn forget_favorite_ids() {
+    FAVORITE_IDS_GEN.fetch_add(1, AtomicOrdering::AcqRel);
+    if let Ok(mut g) = FAVORITE_IDS.write() {
+        *g = None;
+    }
 }

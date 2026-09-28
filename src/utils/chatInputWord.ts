@@ -33,6 +33,12 @@ export type EmoteTabMatchMode = 'starts_with' | 'includes';
 
 export interface EmoteTabCandidate {
   name: string;
+  /** What goes into the message when it differs from `name`. */
+  insertText?: string;
+  /** Where the emote comes from ("Twitch Global", "7TV", ...). */
+  sourceLabel?: string;
+  /** The same without the provider, shown beside its logo ("Global", "Sub"). */
+  sourceDetail?: string;
   priority: number;
   emote?: {
     id: string;
@@ -48,6 +54,85 @@ export interface EmoteTabCandidate {
   };
   /** Set for chatter completions; the value is prefixed with @ if user typed @-prefix */
   chatter?: { username: string; displayName: string };
+}
+
+/** The most candidates one Tab cycle walks through. */
+export const TAB_CYCLE_LIMIT = 50;
+
+/**
+ * Chatter names after the emote matches, as the Tab cycle offers them. The
+ * emotes arrive ranked from Rust; chatters always follow them. A `:` query is
+ * emote-only, and an `@` query completes to `@name`.
+ */
+export function withChatterCandidates(
+  emotes: EmoteTabCandidate[],
+  word: string,
+  users: ReadonlyArray<{ username: string; displayName?: string }>,
+  mode: EmoteTabMatchMode,
+): EmoteTabCandidate[] {
+  const out = emotes.slice(0, TAB_CYCLE_LIMIT);
+  if (word.startsWith(':') || out.length >= TAB_CYCLE_LIMIT) return out;
+  const isAt = word.startsWith('@');
+  const q = (isAt ? word.slice(1) : word).toLowerCase();
+  if (!q) return out;
+  const test = (s: string) => {
+    const t = s.toLowerCase();
+    return mode === 'starts_with' ? t.startsWith(q) : t.includes(q);
+  };
+  const seen = new Set(out.map((c) => c.name.toLowerCase()));
+  for (const u of users) {
+    const dn = u.displayName || u.username;
+    if (seen.has(dn.toLowerCase())) continue;
+    if (!test(dn) && !test(u.username)) continue;
+    seen.add(dn.toLowerCase());
+    out.push({
+      name: (isAt ? '@' : '') + dn,
+      priority: TAB_CYCLE_LIMIT,
+      chatter: { username: u.username, displayName: dn },
+    });
+    if (out.length >= TAB_CYCLE_LIMIT) break;
+  }
+  return out;
+}
+
+/**
+ * The part of the current word that sits before the caret. Any whitespace ends
+ * a word here (unlike `getWordRange`), so a word after a Shift+Enter newline
+ * starts at the newline.
+ */
+export function wordBeforeCaret(value: string, caret: number): { start: number; text: string } {
+  let start = caret;
+  while (start > 0 && !/\s/.test(value.charAt(start - 1))) start--;
+  return { start, text: value.slice(start, caret) };
+}
+
+/** The DOM id of one emote-list option, for the textarea's aria-activedescendant. */
+export const emoteOptionId = (listId: string, index: number) => `${listId}-opt-${index}`;
+
+/** Move `index` by `delta` through a list of `length`, wrapping both ways. */
+export function wrapIndex(index: number, delta: number, length: number): number {
+  if (length <= 0) return 0;
+  return (((index + delta) % length) + length) % length;
+}
+
+/**
+ * The emote-list query a `:` opens, or null. The colon has to start a word and
+ * be followed by at least two characters, the first a letter or digit, all
+ * before the caret. That keeps times (`12:30`), emoticons (`:)`, `:D`) and
+ * links (`https://`) from ever opening it.
+ *
+ *   "hi :lo|"  -> { anchor: 3, query: 'lo' }
+ *   "12:30|"   -> null
+ */
+export function emoteSearchTrigger(
+  value: string,
+  caret: number,
+): { anchor: number; query: string } | null {
+  const { start, text: typed } = wordBeforeCaret(value, caret);
+  if (!typed.startsWith(':')) return null;
+  const query = typed.slice(1);
+  if (query.length < 2 || !/^[\p{L}\p{N}_]/u.test(query)) return null;
+  return { anchor: start, query };
 }
 
 // --- Spell-check tokenizing ------------------------------------------------

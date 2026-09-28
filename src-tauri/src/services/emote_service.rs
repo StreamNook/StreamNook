@@ -933,6 +933,16 @@ impl EmoteService {
         None
     }
 
+    /// Run `f` over a cached channel set without cloning it, at any age.
+    pub async fn with_cached_set<R>(
+        &self,
+        channel_id: &str,
+        f: impl FnOnce(&EmoteSet) -> R,
+    ) -> Option<R> {
+        let cache = self.cache.read().await;
+        cache.peek(channel_id).map(|c| f(&c.set))
+    }
+
     /// Clear the memory cache
     pub async fn clear_cache(&self) {
         let mut cache = self.cache.write().await;
@@ -1223,7 +1233,11 @@ impl EmoteService {
             Ok(response) if response.status().is_success() => {
                 if let Ok(json) = response.json::<serde_json::Value>().await {
                     if let Some(array) = json.as_array() {
-                        emotes.extend(array.iter().filter_map(Self::parse_bttv_emote));
+                        // Marked global so a completion can say where it came from.
+                        emotes.extend(array.iter().filter_map(Self::parse_bttv_emote).map(|mut e| {
+                            e.emote_type = Some(crate::services::emote_match::GLOBAL_EMOTE_TYPE.to_string());
+                            e
+                        }));
                     }
                 }
             }
@@ -1477,7 +1491,10 @@ impl EmoteService {
                                 set_data.get("emoticons").and_then(|v| v.as_array())
                             {
                                 for item in emoticons {
-                                    if let Some(emote) = Self::parse_ffz_emoticon(item, sub_only) {
+                                    if let Some(mut emote) = Self::parse_ffz_emoticon(item, sub_only) {
+                                        // Marked global so a completion can say where it came from.
+                                        emote.emote_type =
+                                            Some(crate::services::emote_match::GLOBAL_EMOTE_TYPE.to_string());
                                         emotes.push(emote);
                                     }
                                 }
@@ -1995,12 +2012,10 @@ mod tests {
             assert!(ok, "channel document fetch was not authoritative");
 
             // Independent truth: the raw document, read with a plain client.
-            let http = reqwest::Client::builder()
-                .timeout(Duration::from_secs(60))
-                .build()
-                .expect("client");
+            let http = crate::services::http::client_unbounded();
             let truth: serde_json::Value = http
                 .get(format!("https://7tv.io/v3/users/twitch/{channel_id}"))
+                .timeout(Duration::from_secs(60))
                 .send()
                 .await
                 .expect("truth fetch")
@@ -2022,6 +2037,7 @@ mod tests {
                 .unwrap_or_default();
             let globals: serde_json::Value = http
                 .get("https://7tv.io/v3/emote-sets/global")
+                .timeout(Duration::from_secs(60))
                 .send()
                 .await
                 .expect("globals fetch")

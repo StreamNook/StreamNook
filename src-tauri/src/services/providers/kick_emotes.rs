@@ -130,6 +130,20 @@ pub fn lookup(slug: &str, word: &str) -> Option<KickEmote> {
     s.get(&slug.to_lowercase())?.map.get(word).cloned()
 }
 
+/// Run `f` over a channel's 7TV emotes (name -> emote) without copying them.
+/// `None` until the channel's set has been fetched.
+pub fn with_seventv<R>(slug: &str, f: impl FnOnce(&HashMap<String, KickEmote>) -> R) -> Option<R> {
+    let s = store().lock().ok()?;
+    s.get(&slug.to_lowercase()).map(|c| f(&c.map))
+}
+
+/// Run `f` over a channel's own Kick emotes without copying them. `None` until
+/// the resolver has reported them.
+pub fn with_native<R>(slug: &str, f: impl FnOnce(&[KickNativeEmoteEntry]) -> R) -> Option<R> {
+    let s = native_store().lock().ok()?;
+    s.get(&slug.to_lowercase()).map(|list| f(list))
+}
+
 /// The channel's emotes (Kick native sets + 7TV) as an `EmoteSet` for the
 /// frontend emote picker — parity with Twitch's `fetch_channel_emotes`. Waits for
 /// the channel resolve to populate its caches (see `wait_for_resolve`), then fills
@@ -262,7 +276,7 @@ pub async fn refresh(slug: &str, user_id: u64) {
         }
     }
 
-    let client = reqwest::Client::new();
+    let client = crate::services::http::client_unbounded();
     let mut map: HashMap<String, KickEmote> = HashMap::new();
     // Globals first so the channel set overrides on name collisions.
     fetch_into(&client, "https://7tv.io/v3/emote-sets/global", "/emotes", &mut map).await;

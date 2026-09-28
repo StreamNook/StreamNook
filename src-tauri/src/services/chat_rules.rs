@@ -889,6 +889,8 @@ impl ChatRules {
             settings.chat_design.timestamp_format == "24h",
             std::sync::atomic::Ordering::Relaxed,
         );
+        // So is the composer's emote match mode.
+        crate::services::emote_match::refresh_settings(settings);
         let hl_v = settings.extra.get("chat_highlights");
         let cf_v = settings.extra.get("chat_filters");
         let cq_v = settings.extra.get("chat_query");

@@ -8,6 +8,10 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 
 import {
+  emoteSearchTrigger,
+  withChatterCandidates,
+  wrapIndex,
+  TAB_CYCLE_LIMIT,
   tokenizeForSpellcheck,
   getSpellcheckTarget,
 } from './chatInputWord.ts';
@@ -75,4 +79,59 @@ test('a single-word selection wins over the caret', () => {
   });
   // A selection spanning several words has no single target.
   assert.equal(getSpellcheckTarget('i recieve teh', 2, 13), null);
+});
+
+// --- Emote list trigger ------------------------------------------------------
+
+test('a colon opening a word, then two characters, opens the emote list', () => {
+  assert.deepEqual(emoteSearchTrigger(':lo', 3), { anchor: 0, query: 'lo' });
+  assert.deepEqual(emoteSearchTrigger('hi :lo', 6), { anchor: 3, query: 'lo' });
+  assert.deepEqual(emoteSearchTrigger('hi\n:Pog', 7), { anchor: 3, query: 'Pog' });
+  // Only what is before the caret counts.
+  assert.deepEqual(emoteSearchTrigger(':lo world', 3), { anchor: 0, query: 'lo' });
+});
+
+test('times, emoticons, links and short queries never open it', () => {
+  assert.equal(emoteSearchTrigger('12:30', 5), null);
+  assert.equal(emoteSearchTrigger(':)', 2), null);
+  assert.equal(emoteSearchTrigger(':))', 3), null);
+  assert.equal(emoteSearchTrigger(':D', 2), null);
+  assert.equal(emoteSearchTrigger('https://x.tv', 12), null);
+  assert.equal(emoteSearchTrigger('::lo', 4), null);
+  assert.equal(emoteSearchTrigger(':l', 2), null);
+  assert.equal(emoteSearchTrigger('hi :lo', 2), null);
+});
+
+// --- Tab cycle ---------------------------------------------------------------
+
+test('wrapIndex wraps both ways', () => {
+  assert.equal(wrapIndex(0, 1, 3), 1);
+  assert.equal(wrapIndex(2, 1, 3), 0);
+  assert.equal(wrapIndex(0, -1, 3), 2);
+  assert.equal(wrapIndex(0, 7, 3), 1);
+  assert.equal(wrapIndex(0, 1, 0), 0);
+});
+
+test('chatters follow the emotes and skip names an emote already has', () => {
+  const emotes = [{ name: 'lol', priority: 0 }];
+  const users = [
+    { username: 'lol', displayName: 'LOL' },
+    { username: 'lorenzo', displayName: 'Lorenzo' },
+    { username: 'bob', displayName: 'Bob' },
+  ];
+  const out = withChatterCandidates(emotes, 'lo', users, 'starts_with');
+  assert.deepEqual(out.map((c) => c.name), ['lol', 'Lorenzo']);
+  assert.equal(out[1].chatter?.username, 'lorenzo');
+});
+
+test('an @ query completes to @name and a colon query is emote-only', () => {
+  const users = [{ username: 'lorenzo', displayName: 'Lorenzo' }];
+  assert.deepEqual(withChatterCandidates([], '@lo', users, 'starts_with').map((c) => c.name), ['@Lorenzo']);
+  assert.equal(withChatterCandidates([], ':lo', users, 'starts_with').length, 0);
+});
+
+test('the cycle never grows past its limit', () => {
+  const emotes = Array.from({ length: TAB_CYCLE_LIMIT + 5 }, (_, i) => ({ name: `e${i}`, priority: i }));
+  const out = withChatterCandidates(emotes, 'e', [{ username: 'eve' }], 'starts_with');
+  assert.equal(out.length, TAB_CYCLE_LIMIT);
 });

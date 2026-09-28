@@ -819,7 +819,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
         <SettingsRow
           title="Suggest links"
-          description="Offer to link a Kick or YouTube channel of the same name when you open a stream."
+          description="Look for a Kick or YouTube channel of the same name when you open a stream. Anything found waits behind the + in the chat header."
           help="Each platform is checked once per channel and the answer remembered, so reopening a stream asks nothing. Kick is found whether or not it is live; YouTube is found through its search, which only sees channels that are streaming right now, so an offline YouTube channel has to be added by hand. Nothing is ever linked without you saying so, and refusing a suggestion stops it being offered again."
           disabled={settings.chat_blend?.enabled !== true}
           control={
@@ -1949,7 +1949,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         description={
           IS_MOBILE
             ? 'Type part of an emote name in chat to see matching emotes above the input. Swipe the strip to see more, tap one to use it.'
-            : 'Type part of an emote name in chat and press Tab to cycle through matching emotes. Shift+Tab cycles backwards.'
+            : 'Press Tab to complete the emote you are typing, or type : and two letters to see every emote you can use.'
         }
         id="settings-section-emote-tab-completion"
       >
@@ -1958,7 +1958,12 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           description={
             IS_MOBILE
               ? 'Suggest matching emotes as you type.'
-              : 'Press Tab while typing to insert the best-matching emote, and Tab again to cycle to the next match.'
+              : 'Press Tab to complete the emote you are typing, in a carousel or a list.'
+          }
+          help={
+            IS_MOBILE
+              ? undefined
+              : 'In the carousel, Tab again moves to the next match and Shift+Tab to the previous one; on an empty spot it starts with your favorites and the emotes of this channel. In the list, Tab or the arrow keys move down it (Shift+Tab or the up arrow moves back up), Enter inserts the highlighted emote, and Esc closes it.'
           }
           control={
             <Toggle
@@ -1971,9 +1976,41 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
           }
         />
+        {!IS_MOBILE && (
+          <SettingsRow
+            title="What Tab opens"
+            help="Carousel puts the best match straight into your message, and each Tab after that swaps in the next one. List opens a list of every emote you can use, with where each one comes from; keep typing to narrow it. Pressed partway through a name, it searches for that word."
+          >
+            <SegmentedSelect<'carousel' | 'list'>
+              value={settings.chat_input?.emote_tab_style ?? 'carousel'}
+              options={[
+                { value: 'carousel', label: 'Carousel' },
+                { value: 'list', label: 'List' },
+              ]}
+              onChange={(v) => setInput({ emote_tab_style: v })}
+            />
+          </SettingsRow>
+        )}
+        {!IS_MOBILE && (
+          <SettingsRow
+            title="Show the emote list when you type :"
+            description="Type a colon and two letters to see every emote you can use and where it comes from."
+            control={
+              <Toggle
+                enabled={settings.chat_input?.emote_colon_search_enabled ?? true}
+                onChange={() =>
+                  setInput({
+                    emote_colon_search_enabled: !(settings.chat_input?.emote_colon_search_enabled ?? true),
+                  })
+                }
+              />
+            }
+          />
+        )}
         <SettingsRow
           title="How names match"
           description="Starts With needs the emote to begin with what you typed; Contains matches it anywhere in the name."
+          help={IS_MOBILE ? undefined : 'This is for Tab. The emote list always looks inside names too, so :love finds a channel emote like vulpLove, and it shows names that start with your text first.'}
         >
           <SegmentedSelect<'starts_with' | 'includes'>
             value={settings.chat_input?.emote_tab_complete_match_mode ?? 'starts_with'}
