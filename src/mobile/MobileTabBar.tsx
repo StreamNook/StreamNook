@@ -26,10 +26,10 @@ export const MobileTabBar: React.FC<{
 
   return (
     <nav
-      // Frosted glaze: the bar floats over a bright thumbnail grid, so it keeps
-      // the blur plus a milky floor for the icons to sit on. The shared classes
-      // ride the Glassiness slider.
-      className="fixed z-30 mx-auto max-w-[520px] chrome-glaze chrome-glaze--frosted px-1.5"
+      // The dock glaze: clear glass with a light blur and a thin black film,
+      // tuned on a phone over a bright thumbnail grid. It still rides the
+      // Glassiness slider.
+      className="fixed z-30 mx-auto max-w-[520px] chrome-glaze chrome-glaze--dock px-1.5"
       style={{
         visibility: hidden ? 'hidden' : undefined,
         // Capped width. Stretched across a tablet or an unfolded Fold the tabs
@@ -48,8 +48,11 @@ export const MobileTabBar: React.FC<{
             <button
               key={id}
               onClick={() => setTab(id)}
+              // Unselected icons are the theme's text colour, not muted: over
+              // bright thumbnails a muted icon disappears. The selected one takes
+              // the theme accent inside the dark pill.
               className={`sn-touch flex-1 flex items-center justify-center transition-colors ${
-                active ? 'text-textPrimary' : 'text-textMuted'
+                active ? 'text-accent' : 'text-textPrimary'
               }`}
               aria-current={active ? 'page' : undefined}
               aria-label={label}
@@ -77,7 +80,7 @@ export const MobileTabBar: React.FC<{
                       }`}
                     />
                   ) : (
-                    <Icon size={24} weight={active ? 'fill' : 'regular'} />
+                    <Icon size={25} weight={active ? 'fill' : 'regular'} />
                   )}
                 </span>
               </span>

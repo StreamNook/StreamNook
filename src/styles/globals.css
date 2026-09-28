@@ -836,6 +836,22 @@ body[data-window-blurred="true"] .glaze-inset::after {
   background-color: rgb(0 0 0 / 0.72);
 }
 
+/* The phone's floating tab bar. Clear glass with a light blur and a thin black
+   film, tuned on a phone: the frosted floor read as a grey slab over a bright
+   thumbnail grid, and a light wash glared. Still rides the Glassiness slider:
+   the opaque floor fades in as glassiness drops, the film is what is left at
+   full glass. */
+.chrome-glaze--dock {
+  background-color: color-mix(
+    in srgb,
+    var(--color-background-tertiary) calc((1 - var(--glass-strength)) * 100%),
+    rgb(0 0 0 / 0.16)
+  );
+  background-image: none;
+  -webkit-backdrop-filter: blur(calc(4px * var(--glass-strength))) saturate(110%);
+  backdrop-filter: blur(calc(4px * var(--glass-strength))) saturate(110%);
+}
+
 /* A glazed control that floats over media rather than over app chrome.
    Clear glass reads as a smudge on a busy thumbnail: there is nothing behind it
    with a consistent tone, so the icon has to fight the picture. A frosted floor
