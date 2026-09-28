@@ -149,25 +149,27 @@ export const FollowingScreen: React.FC = () => {
         </div>
       </div>
       {hasKick && (
-        <div className="flex items-center gap-1.5 px-4 pb-2 shrink-0">
-          {(['twitch', 'kick'] as const).map((p) => {
-            const on = activeFilter === p;
-            return (
-              <button
-                key={p}
-                onClick={() => toggleFilter(p)}
-                aria-pressed={on}
-                className={`flex items-center gap-1.5 pl-2.5 pr-3.5 py-1.5 rounded-full text-sm transition-colors ${
-                  on
-                    ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textPrimary font-semibold'
-                    : 'text-textMuted'
-                }`}
-              >
-                <ProviderMark provider={p} size={15} />
-                {PROVIDERS[p].label}
-              </button>
-            );
-          })}
+        <div className="flex items-center px-4 pb-2 shrink-0">
+          {/* The filter pair wears the glaze; the chosen platform is the
+              darker pill inside it. */}
+          <div className="flex items-center gap-1.5 p-1 chrome-glaze chrome-glaze--flat">
+            {(['twitch', 'kick'] as const).map((p) => {
+              const on = activeFilter === p;
+              return (
+                <button
+                  key={p}
+                  onClick={() => toggleFilter(p)}
+                  aria-pressed={on}
+                  className={`flex items-center gap-1.5 pl-2.5 pr-3.5 py-1.5 rounded-full text-sm transition-colors ${
+                    on ? 'glaze-selected text-textPrimary font-semibold' : 'text-textMuted'
+                  }`}
+                >
+                  <ProviderMark provider={p} size={15} />
+                  {PROVIDERS[p].label}
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
       <PullToRefresh

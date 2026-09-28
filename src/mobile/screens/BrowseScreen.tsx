@@ -278,7 +278,10 @@ export const BrowseScreen: React.FC = () => {
       <div className="px-4 pt-3 pb-2 shrink-0">
         <div className="flex items-center justify-between mb-3">
           <h1 className="text-xl font-bold text-textPrimary">Browse</h1>
-          <div className="flex items-center gap-1">
+          {/* The pair wears the glaze; the chosen platform is the darker pill
+              inside it, drawn smaller than the button so the touch target
+              stays full size. */}
+          <div className="flex items-center chrome-glaze chrome-glaze--flat">
             {(['twitch', 'kick'] as BrowsePlatform[]).map((p) => (
               <button
                 key={p}
@@ -286,12 +289,16 @@ export const BrowseScreen: React.FC = () => {
                 aria-label={p === 'kick' ? 'Browse Kick' : 'Browse Twitch'}
                 aria-pressed={platform === p}
                 className={`sn-touch flex items-center justify-center rounded-full transition-opacity ${
-                  platform === p
-                    ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control'
-                    : 'opacity-50'
+                  platform === p ? '' : 'opacity-50'
                 }`}
               >
-                <ProviderMark provider={p} size={18} />
+                <span
+                  className={`flex items-center justify-center w-10 h-9 rounded-full ${
+                    platform === p ? 'glaze-selected' : ''
+                  }`}
+                >
+                  <ProviderMark provider={p} size={18} />
+                </span>
               </button>
             ))}
           </div>
@@ -322,22 +329,22 @@ export const BrowseScreen: React.FC = () => {
             </button>
           )}
         </div>
-        {/* Mode segments: borderless text buttons with the sliding active pill
-            look shared with the desktop Home nav. */}
+        {/* Mode segments: the group wears the glaze and the chosen mode is the
+            darker pill inside it, the same look as the desktop Home nav. */}
         <div className="flex items-center gap-1">
-          {(['live', 'categories'] as BrowseMode[]).map((m) => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              className={`px-3.5 py-1.5 rounded-full text-sm transition-colors ${
-                mode === m
-                  ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textPrimary font-semibold'
-                  : 'text-textMuted'
-              }`}
-            >
-              {m === 'live' ? 'Live' : 'Categories'}
-            </button>
-          ))}
+          <div className="flex items-center gap-1 p-1 chrome-glaze chrome-glaze--flat">
+            {(['live', 'categories'] as BrowseMode[]).map((m) => (
+              <button
+                key={m}
+                onClick={() => setMode(m)}
+                className={`px-3.5 py-1.5 rounded-full text-sm transition-colors ${
+                  mode === m ? 'glaze-selected text-textPrimary font-semibold' : 'text-textMuted'
+                }`}
+              >
+                {m === 'live' ? 'Live' : 'Categories'}
+              </button>
+            ))}
+          </div>
           {mode === 'live' && (
             <div className="flex ml-auto">
               <button

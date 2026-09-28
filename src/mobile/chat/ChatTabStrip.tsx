@@ -61,64 +61,70 @@ const ChatTabStripImpl: React.FC = () => {
 
   return (
     <div
-      className="shrink-0 flex items-center gap-1 px-2 overflow-x-auto border-b border-borderSubtle"
+      className="shrink-0 flex items-center px-2 border-b border-borderSubtle"
       style={{ height: CHAT_TAB_STRIP_H }}
     >
-      {tabs.map((tab) => {
-        const active = tab.channel === activeChannel;
-        return (
-          <div
-            key={tab.channel}
-            className={`shrink-0 flex items-center rounded-full pl-2.5 pr-1 h-8 ${
-              active ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control' : 'glass-button-static'
-            }`}
-          >
-            <button
-              onClick={() => setActive(tab.channel)}
-              className="flex items-center gap-1.5 pr-1 max-w-[136px]"
-            >
-              {tab.avatar ? (
-                <img
-                  src={tab.avatar}
-                  alt=""
-                  className="w-5 h-5 rounded-full object-cover shrink-0"
-                  draggable={false}
-                />
-              ) : (
-                <span className="w-5 h-5 rounded-full bg-surface flex items-center justify-center text-[10px] font-semibold text-textMuted shrink-0">
-                  {tab.label.charAt(0).toUpperCase()}
-                </span>
-              )}
-              {tab.pinnedToStream && (
-                <Broadcast size={11} weight="fill" className="text-accent shrink-0" />
-              )}
-              {/* Two rooms can share a name across platforms; the mark tells them apart. */}
-              {mixedPlatforms && tab.provider !== 'twitch' && (
-                <ProviderMark provider={tab.provider} size={11} />
-              )}
-              <span
-                className={`text-[13px] truncate ${
-                  active ? 'text-textPrimary font-semibold' : 'text-textSecondary'
+      {/* The row of rooms wears the glaze and the open room is the darker pill
+          inside it. The rooms scroll inside the glass, so its rim stays put. */}
+      <div className="min-w-0 max-w-full chrome-glaze chrome-glaze--flat">
+        <div className="flex items-center gap-1 p-1 overflow-x-auto rounded-full">
+          {tabs.map((tab) => {
+            const active = tab.channel === activeChannel;
+            return (
+              <div
+                key={tab.channel}
+                className={`shrink-0 flex items-center rounded-full pl-2.5 pr-1 h-8 ${
+                  active ? 'glaze-selected' : ''
                 }`}
               >
-                {tab.label}
-              </span>
-            </button>
-            {/* The stream tab follows the player and is not closable. */}
-            {tab.pinnedToStream ? (
-              <span className="w-1.5" />
-            ) : (
-              <button
-                onClick={() => removeTab(tab.channel)}
-                className="w-6 h-6 flex items-center justify-center text-textMuted active:text-textPrimary"
-                aria-label={`Close ${tab.label} chat`}
-              >
-                <X size={12} weight="bold" />
-              </button>
-            )}
-          </div>
-        );
-      })}
+                <button
+                  onClick={() => setActive(tab.channel)}
+                  className="flex items-center gap-1.5 pr-1 max-w-[136px]"
+                >
+                  {tab.avatar ? (
+                    <img
+                      src={tab.avatar}
+                      alt=""
+                      className="w-5 h-5 rounded-full object-cover shrink-0"
+                      draggable={false}
+                    />
+                  ) : (
+                    <span className="w-5 h-5 rounded-full bg-surface flex items-center justify-center text-[10px] font-semibold text-textMuted shrink-0">
+                      {tab.label.charAt(0).toUpperCase()}
+                    </span>
+                  )}
+                  {tab.pinnedToStream && (
+                    <Broadcast size={11} weight="fill" className="text-accent shrink-0" />
+                  )}
+                  {/* Two rooms can share a name across platforms; the mark tells them apart. */}
+                  {mixedPlatforms && tab.provider !== 'twitch' && (
+                    <ProviderMark provider={tab.provider} size={11} />
+                  )}
+                  <span
+                    className={`text-[13px] truncate ${
+                      active ? 'text-textPrimary font-semibold' : 'text-textSecondary'
+                    }`}
+                  >
+                    {tab.label}
+                  </span>
+                </button>
+                {/* The stream tab follows the player and is not closable. */}
+                {tab.pinnedToStream ? (
+                  <span className="w-1.5" />
+                ) : (
+                  <button
+                    onClick={() => removeTab(tab.channel)}
+                    className="w-6 h-6 flex items-center justify-center text-textMuted active:text-textPrimary"
+                    aria-label={`Close ${tab.label} chat`}
+                  >
+                    <X size={12} weight="bold" />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 };

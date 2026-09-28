@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore, ensureHomeSnapshotSync, announceHome, clipSourceOf, HomeTab } from '../stores/AppStore';
-import { IS_MOBILE } from '../utils/platform';
+import { IS_LINUX, IS_MOBILE } from '../utils/platform';
 import { createPortal } from 'react-dom';
 import { glowThumbProps } from '../utils/mediaGlow';
 import { Search, Heart, X, Pickaxe, LayoutGrid, Flame, ArrowUpRight, Undo2, Users, User, Loader2, Clock, Play, Check, Plus } from 'lucide-react';
@@ -50,7 +50,7 @@ import { gameBoxArt } from '../utils/boxArt';
 import { CardChip } from './ui/CardChip';
 import { AutomationPulse } from './ui/AutomationPulse';
 import { TogetherChip } from './SharedViewers';
-import { collabFor } from '../utils/sharedViewers';
+import { groupFor } from '../utils/sharedViewers';
 // Types for drops data
 interface DropCampaign {
     id: string;
@@ -213,6 +213,7 @@ const Home = () => {
         activeHypeTrainChannels,
         watchStreaks,
         collaborations,
+        sharedChats,
         homeCategoryTab,
         clipsPeriod,
         videosSort,
@@ -237,6 +238,7 @@ const Home = () => {
             activeHypeTrainChannels: s.activeHypeTrainChannels,
             watchStreaks: s.watchStreaks,
             collaborations: s.collaborations,
+            sharedChats: s.sharedChats,
             homeCategoryTab: s.homeCategoryTab,
             clipsPeriod: s.clipsPeriod,
             videosSort: s.videosSort,
@@ -584,6 +586,17 @@ const Home = () => {
     const homeOpenCount = useAppStore((s) => s.homeOpenCount);
     const isReopen = homeOpenCount > 1;
     const isBooting = useAppStore((s) => s.isBooting);
+    // Linux only: cards mounted under the boot veil carry no framer-motion
+    // layout projection. With it, every commit while booting measured the
+    // whole grid (52-73 ms of layout per commit, 115 ms of scroll measurement
+    // in one boot trace) for a glide nobody can see through the veil. A
+    // projection's options are fixed when its node mounts, so the cards cannot
+    // simply be handed `layout` later: the epoch key below remounts the card
+    // group once the veil lifts, and the group's `AnimatePresence initial=
+    // {false}` keeps that remount from playing entrances. Windows and macOS:
+    // the epoch is constant, so nothing there ever remounts or loses `layout`.
+    const bootCards = IS_LINUX && isBooting;
+    const cardEpoch = bootCards ? 'boot' : 'live';
     useLayoutEffect(() => {
         if (!isReopen) return;
         const container = scrollContainerRef.current;
@@ -1839,7 +1852,9 @@ const Home = () => {
 
                                             return (
                                                 <motion.div
-                                                    layout
+                                                    // Always on, except under the boot veil on
+                                                    // Linux (see `bootCards`).
+                                                    layout={!bootCards}
                                                     // Opacity and a short lift, never scale: a
                                                     // scaling element fights `layout`'s own scale
                                                     // correction and the card's text and rounded
@@ -1865,14 +1880,16 @@ const Home = () => {
                                                     // between the Favorites grid and the follows grid, and the
                                                     // shared LayoutGroup around both makes that a glide from old
                                                     // slot to new slot instead of a fade-out/fade-in.
-                                                    layoutId={`card-${streamKey(stream)}`}
+                                                    // Withheld with `layout` under the Linux boot veil;
+                                                    // the epoch remount hands it back.
+                                                    layoutId={bootCards ? undefined : `card-${streamKey(stream)}`}
                                                     data-avatar-key={streamKey(stream)}
                                                     className={`${portraitCard ? 'p-1.5' : 'p-2.5'} transition-all duration-200 group relative ${
                                                         isQueued && !isSuckingUp
                                                             ? 'ghost-card rounded-lg cursor-default'
                                                             : isQueued && isSuckingUp
                                                                 ? `glass-panel media-card cursor-default ${isOverlayMode ? '!bg-black/40 !border-white/5' : ''}`
-                                                                : `glass-panel media-card cursor-pointer hover:bg-glass-hover ${isOverlayMode ? '!bg-black/40 !border-white/5' : ''} ${stream.has_shared_chat === true ? 'iridescent-border' : ''}`
+                                                                : `glass-panel media-card cursor-pointer hover:bg-glass-hover ${isOverlayMode ? '!bg-black/40 !border-white/5' : ''}`
                                                     }`}
                                                     onClick={(e) => !isQueued && handleStreamClick(e, stream)}
                                                     onContextMenu={(e) => !isQueued && useContextMenuStore.getState().openMenu(e, stream)}
@@ -2033,7 +2050,7 @@ const Home = () => {
                                                                         )}
                                                                     </button>
                                                                     {(() => {
-                                                                        const collab = collabFor(collaborations, stream);
+                                                                        const collab = groupFor(collaborations, sharedChats, stream);
                                                                         return collab && (
                                                                             <TogetherChip
                                                                                 variant="name"
@@ -2562,20 +2579,18 @@ const Home = () => {
                         }`}
                         style={IS_MOBILE ? { paddingTop: 'calc(0.625rem + var(--sn-safe-top))' } : undefined}
                     >
-                    <div ref={searchBarRef} // `--dark`: this floats over the grid now, and the theme tint
-                        // alone lets bright artwork wash straight through it. The
-                        // dark film keeps the labels legible while the blur still
-                        // does the glass, which is how floating chrome
-                        // works: a dark film around `rgb(40 40 40 / 50%)`.
-                        // A capsule, not a 12px rounded rect. Everything else in
-                        // this row is already a capsule (both title-bar icon
-                        // clusters, the platform pill, the selected-tab highlight),
-                        // so the strip was the one shape disagreeing with its own
-                        // contents. It shows most when a notification fills the
-                        // strip: two different corner radii on the same box means
-                        // the strip's corners peek out from behind whatever is
-                        // covering it.
-                        className="pointer-events-auto relative flex items-center glass-panel glass-panel--dark px-1.5 py-1 !rounded-full">
+                    <div ref={searchBarRef} // The strip wears the glaze across its whole length, and
+                        // the selected tab is the darker pill set into it.
+                        // `--frosted`: this floats over the grid, and clear glass
+                        // lets bright artwork wash straight through the labels.
+                        // The glaze is a capsule, like everything else in this
+                        // row (both title-bar icon clusters, the platform pill),
+                        // which matters most when a notification fills the
+                        // strip: two different corner radii on the same box
+                        // leave the strip's corners peeking out from behind it.
+                        // The notification finds this strip by `data-nav-strip`.
+                        data-nav-strip
+                        className="pointer-events-auto relative flex items-center chrome-glaze chrome-glaze--frosted px-1.5 py-1">
                         {/* Where the notification trigger lands when this strip is on
                             screen. A slot rather than the control itself, because the
                             notifications live in DynamicIsland and putting them here
@@ -2620,21 +2635,15 @@ const Home = () => {
                                     {activeTab === 'following' && (
                                         <motion.div
                                             layoutId="homeTabHighlight"
-                                            // The selected tab is lit now rather than plated.
+                                            // The selected tab is the darker pill set into the
+                                            // strip's glaze: a plain shade, unlit, so only the
+                                            // strip carries the light.
                                             //
-                                            // `--flat`: this pill sits inside the strip's own
-                                            // `glass-panel`, so its backdrop is that panel's
-                                            // near-uniform fill. A second blur of an
-                                            // already-blurred surface is indistinguishable
-                                            // (compared side by side) and costs a nested
-                                            // compositing layer in a header that sits over
-                                            // scrolling content.
-                                            //
-                                            // No `rounded-lg`: the glaze is a capsule, and a
-                                            // capsule gliding between tabs reads far better than
-                                            // a rounded rectangle sliding. All four tabs share
-                                            // one `layoutId`, so they must stay identical.
-                                            className="absolute inset-0 chrome-glaze chrome-glaze--flat chrome-glaze--control"
+                                            // A capsule, not `rounded-lg`: a capsule gliding
+                                            // between tabs reads far better than a rounded
+                                            // rectangle sliding. All four tabs share one
+                                            // `layoutId`, so they must stay identical.
+                                            className="absolute inset-0 glaze-selected"
                                             transition={{ type: "spring", stiffness: 350, damping: 30 }}
                                         />
                                     )}
@@ -2661,9 +2670,9 @@ const Home = () => {
                                 {activeTab === 'recommended' && (
                                     <motion.div
                                         layoutId="homeTabHighlight"
-                                        // Same lit pill as the Following tab; all four share one
-                                        // `layoutId`, so they cannot diverge.
-                                        className="absolute inset-0 chrome-glaze chrome-glaze--flat chrome-glaze--control"
+                                        // Same darker pill as the Following tab; all four share
+                                        // one `layoutId`, so they cannot diverge.
+                                        className="absolute inset-0 glaze-selected"
                                         transition={{ type: "spring", stiffness: 350, damping: 30 }}
                                     />
                                 )}
@@ -2680,9 +2689,9 @@ const Home = () => {
                                 {activeTab === 'browse' && (
                                     <motion.div
                                         layoutId="homeTabHighlight"
-                                        // Same lit pill as the Following tab; all four share one
-                                        // `layoutId`, so they cannot diverge.
-                                        className="absolute inset-0 chrome-glaze chrome-glaze--flat chrome-glaze--control"
+                                        // Same darker pill as the Following tab; all four share
+                                        // one `layoutId`, so they cannot diverge.
+                                        className="absolute inset-0 glaze-selected"
                                         transition={{ type: "spring", stiffness: 350, damping: 30 }}
                                     />
                                 )}
@@ -2700,9 +2709,9 @@ const Home = () => {
                                     {activeTab === 'search' && (
                                         <motion.div
                                             layoutId="homeTabHighlight"
-                                            // Same lit pill as the Following tab; all four share one
-                                        // `layoutId`, so they cannot diverge.
-                                        className="absolute inset-0 chrome-glaze chrome-glaze--flat chrome-glaze--control"
+                                            // Same darker pill as the Following tab; all four share
+                                            // one `layoutId`, so they cannot diverge.
+                                            className="absolute inset-0 glaze-selected"
                                             transition={{ type: "spring", stiffness: 350, damping: 30 }}
                                         />
                                     )}
@@ -3446,7 +3455,7 @@ const Home = () => {
                                                                         <StreamTitleWithEmojis title={stream.title} />
                                                                     </h3>
                                                                     <div className="flex items-center justify-between">
-                                                                        <div className="flex items-center gap-1">
+                                                                        <div className="flex items-center gap-1 min-w-0">
                                                                             {(stream.profile_image_url || cardAvatars[streamKey(stream)]) && (
                                                                                 <img
                                                                                     loading="lazy"
@@ -3455,14 +3464,14 @@ const Home = () => {
                                                                                     className="w-4 h-4 rounded-full object-cover flex-shrink-0 ring-1 ring-borderSubtle"
                                                                                 />
                                                                             )}
-                                                                            <p className="text-textSecondary text-[11px] font-medium">{stream.user_name}</p>
+                                                                            <p className="text-textSecondary text-[11px] font-medium truncate">{stream.user_name}</p>
                                                                             {stream.broadcaster_type === 'partner' && (
                                                                                 <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 16 16" fill="#9146FF">
                                                                                     <path fillRule="evenodd" d="M12.5 3.5 8 2 3.5 3.5 2 8l1.5 4.5L8 14l4.5-1.5L14 8l-1.5-4.5ZM7 11l4.5-4.5L10 5 7 8 5.5 6.5 4 8l3 3Z" clipRule="evenodd"></path>
                                                                                 </svg>
                                                                             )}
                                                                             {(() => {
-                                                                                const collab = collabFor(collaborations, stream);
+                                                                                const collab = groupFor(collaborations, sharedChats, stream);
                                                                                 return collab && (
                                                                                     <span className="ml-0.5 flex">
                                                                                         <TogetherChip
@@ -3828,7 +3837,10 @@ const Home = () => {
                                     never pushes live channels down the page, and
                                     self-hiding when there is nothing to resume. */}
                                 {activeTab === 'following' && <ContinueWatchingRow />}
-                                <LayoutGroup>
+                                {/* Keyed by the card epoch: constant everywhere but Linux,
+                                    where it flips once when the boot veil lifts (see
+                                    `bootCards`). */}
+                                <LayoutGroup key={cardEpoch}>
                                 {favoritesTab && favoritesSectionCount > 0 && (
                                     <div className="mb-6 relative isolate rounded-2xl px-2 pt-2 -mx-2">
                                         {/* Film grain, and nothing else: the shelf is marked by

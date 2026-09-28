@@ -1,7 +1,7 @@
 // Floating glass pill tab bar: detached from the bottom edge, riding above the
-// gesture inset. The same object as desktop Home's floating strip: a dark
-// glass capsule over the grid, with the selected tab a lit capsule that glides
-// between tabs. The You tab becomes your avatar once signed in.
+// gesture inset. The same object as desktop Home's floating strip: the whole
+// bar wears the glaze, and the selected tab is a darker pill set into it that
+// glides between tabs. The You tab becomes your avatar once signed in.
 import React from 'react';
 import { motion } from 'framer-motion';
 import { Compass, Heart, Package, UserCircle } from 'phosphor-react';
@@ -26,10 +26,10 @@ export const MobileTabBar: React.FC<{
 
   return (
     <nav
-      // glass-panel--dark exists for exactly this contrast problem (chrome over
-      // a bright thumbnail grid), and the shared classes ride the Glassiness
-      // slider, which the old hand-rolled blur ignored.
-      className="fixed z-30 mx-auto max-w-[520px] glass-panel glass-panel--dark !rounded-full px-1.5"
+      // Frosted glaze: the bar floats over a bright thumbnail grid, so it keeps
+      // the blur plus a milky floor for the icons to sit on. The shared classes
+      // ride the Glassiness slider.
+      className="fixed z-30 mx-auto max-w-[520px] chrome-glaze chrome-glaze--frosted px-1.5"
       style={{
         visibility: hidden ? 'hidden' : undefined,
         // Capped width. Stretched across a tablet or an unfolded Fold the tabs
@@ -54,14 +54,15 @@ export const MobileTabBar: React.FC<{
               aria-current={active ? 'page' : undefined}
               aria-label={label}
             >
-              {/* The lit capsule hugs the glyph, not the whole tab column, and
+              {/* The selected pill hugs the glyph, not the whole tab column,
+                  leaves the same strip of glass above and below it, and
                   glides between tabs on one shared layoutId, the way the
                   desktop strip's highlight does. */}
-              <span className="relative flex items-center justify-center w-14 h-10">
+              <span className="relative flex items-center justify-center w-[62px] h-11">
                 {active && (
                   <motion.span
                     layoutId="mobileTabHighlight"
-                    className="absolute inset-0 chrome-glaze chrome-glaze--flat chrome-glaze--control"
+                    className="absolute inset-0 glaze-selected"
                     transition={{ type: 'spring', stiffness: 350, damping: 30 }}
                   />
                 )}

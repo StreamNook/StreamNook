@@ -326,7 +326,7 @@ const DynamicIsland = () => {
             //
             // Standalone (no strip on screen) there is nothing to fill: it keeps
             // its own box, `cover` is 0, and the surface grows from its centre.
-            const pill = slot.closest('.glass-panel') as HTMLElement | null;
+            const pill = slot.closest('[data-nav-strip]') as HTMLElement | null;
             const pillR = pill?.getBoundingClientRect();
             if (pillR && pillR.width > 0) {
                 setAnchor({
@@ -357,7 +357,7 @@ const DynamicIsland = () => {
         // search field focusing open. Both move the edge the surface fills to.
         const navEl = document.getElementById('sn-nav-slot');
         if (navEl) ro.observe(navEl);
-        const pillEl = slot.closest('.glass-panel');
+        const pillEl = slot.closest('[data-nav-strip]');
         if (pillEl) ro.observe(pillEl);
         window.addEventListener('resize', measure);
         return () => {
