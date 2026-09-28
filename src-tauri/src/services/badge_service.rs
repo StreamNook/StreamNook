@@ -209,6 +209,133 @@ struct FFZBadge {
     urls: HashMap<String, String>,
 }
 
+/// FFZ's own name for its bot badge. Its holders are chat bots, and they get
+/// Twitch's native `bot-badge` instead (see `add_ffz_bot_badge`), so this one
+/// is never drawn.
+const FFZ_BOT_BADGE_NAME: &str = "bot";
+
+impl FFZBadge {
+    fn is_bot(&self) -> bool {
+        self.name.as_deref() == Some(FFZ_BOT_BADGE_NAME)
+    }
+
+    /// (1x, 2x, 4x) URLs of the finished badge, with a missing larger size
+    /// falling back to the next smaller one.
+    fn image_urls(&self) -> (String, String, String) {
+        let x1 = self.urls.get("1").map(|u| ffz_colored_badge_url(u)).unwrap_or_default();
+        let x2 = self.urls.get("2").map(|u| ffz_colored_badge_url(u)).unwrap_or_else(|| x1.clone());
+        let x4 = self.urls.get("4").map(|u| ffz_colored_badge_url(u)).unwrap_or_else(|| x2.clone());
+        (x1, x2, x4)
+    }
+}
+
+/// An FFZ badge image is a white glyph on a transparent canvas; the feed's
+/// `color` is meant to be painted behind it. FFZ's CDN serves that finished
+/// badge (colour plus rounded corners) at `<url>/rounded`, so every surface
+/// that draws the URL gets the coloured badge. Any other URL, including one
+/// that already names a variant, comes back unchanged.
+fn ffz_colored_badge_url(url: &str) -> String {
+    match url.strip_prefix(FFZ_BADGE_CDN) {
+        Some(rest) if rest.split('/').count() == 2 && !rest.ends_with('/') => format!("{url}/rounded"),
+        _ => url.to_string(),
+    }
+}
+
+const FFZ_BADGE_CDN: &str = "https://cdn.frankerfacez.com/badge/";
+
+fn is_ffz_cdn_badge(url: &str) -> bool {
+    url.starts_with(FFZ_BADGE_CDN)
+}
+
+/// A glyph badge image is refused past this size; FFZ:AP's are ~3 KB.
+const BACKDROP_SOURCE_MAX_BYTES: usize = 256 * 1024;
+
+/// A glyph PNG with `color` (`#RRGGBB`) behind it as a rounded square, the
+/// shape FFZ's own finished badges have (corner radius side / 9, which is what
+/// FFZ's `/rounded` images use at 72 px), as an SVG data URI. The webview
+/// composites the glyph over the square, so nothing is decoded here and this
+/// builds on every platform. `None` for a colour that isn't `#RRGGBB` or
+/// bytes that aren't a PNG.
+fn badge_with_backdrop(png: &[u8], color: &str) -> Option<String> {
+    let hex = color.strip_prefix('#')?;
+    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let (w, h) = png_dimensions(png)?;
+    let radius = w.min(h) as f32 / 9.0;
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\">\
+         <rect width=\"{w}\" height=\"{h}\" rx=\"{radius}\" fill=\"#{hex}\"/>\
+         <image width=\"{w}\" height=\"{h}\" href=\"data:image/png;base64,{glyph}\"/></svg>",
+        glyph = b64.encode(png),
+    );
+    Some(format!("data:image/svg+xml;base64,{}", b64.encode(svg)))
+}
+
+/// Width and height from a PNG's header (IHDR is always the first chunk), or
+/// `None` when the bytes aren't a PNG.
+fn png_dimensions(png: &[u8]) -> Option<(u32, u32)> {
+    const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+    if png.len() < 24 || !png.starts_with(SIGNATURE) || &png[12..16] != b"IHDR" {
+        return None;
+    }
+    let w = u32::from_be_bytes(png[16..20].try_into().ok()?);
+    let h = u32::from_be_bytes(png[20..24].try_into().ok()?);
+    (w > 0 && h > 0).then_some((w, h))
+}
+
+fn backdrop_key(url: &str, color: &str) -> String {
+    format!("{color}|{url}")
+}
+
+/// Twitch user ids FFZ flags as bots, republished on every FFZ feed refresh.
+/// Read from the synchronous IRC parse, hence a std lock and not the async
+/// badge cache.
+static FFZ_BOT_IDS: once_cell::sync::Lazy<std::sync::RwLock<std::collections::HashSet<String>>> =
+    once_cell::sync::Lazy::new(Default::default);
+
+/// Give an FFZ-flagged bot Twitch's native Chat Bot badge (`bot-badge/1`,
+/// drawn from the global badge set like any other Twitch badge) when Twitch
+/// did not already send it. Called on the Twitch badge list of every chat
+/// row, before it is put in chat order.
+pub fn add_ffz_bot_badge(user_id: &str, badges: &mut Vec<crate::models::chat_layout::Badge>) {
+    const TWITCH_BOT_BADGE: &str = "bot-badge";
+    if user_id.is_empty() || badges.iter().any(|b| b.name == TWITCH_BOT_BADGE) {
+        return;
+    }
+    let is_bot = FFZ_BOT_IDS.read().map(|ids| ids.contains(user_id)).unwrap_or(false);
+    if is_bot {
+        badges.push(crate::models::chat_layout::Badge {
+            name: TWITCH_BOT_BADGE.to_string(),
+            version: "1".to_string(),
+            image_url_1x: None,
+            image_url_2x: None,
+            image_url_4x: None,
+            title: None,
+            description: None,
+        });
+    }
+}
+
+fn publish_ffz_bot_ids(ffz: Option<&FFZBadgesResponse>) {
+    let ids: std::collections::HashSet<String> = ffz
+        .into_iter()
+        .flat_map(|feed| {
+            feed.badges
+                .iter()
+                .filter(|b| b.is_bot())
+                .filter_map(|b| feed.users.get(&b.id.to_string()))
+                .flatten()
+                .map(|uid| uid.to_string())
+        })
+        .collect();
+    if let Ok(mut current) = FFZ_BOT_IDS.write() {
+        *current = ids;
+    }
+}
+
 // BetterTTV: GET https://api.betterttv.net/3/cached/badges (bare JSON array).
 // One entry PER USER (not per distinct badge): `provider_id` is the holder's
 // Twitch user id, and the nested `badge` carries the single SVG image plus its
@@ -287,6 +414,37 @@ struct ChattyBadge {
     meta_url: Option<String>,
     #[serde(default)]
     userids: Vec<String>,
+    /// The colour painted behind the image. Null when the image is already
+    /// coloured (an FFZ:AP supporter who picked a coloured badge).
+    #[serde(default)]
+    color: Option<String>,
+}
+
+impl ChattyBadge {
+    /// Chatty's re-host of FFZ's bot badge, dropped for the same reason.
+    fn is_ffz_bot(&self) -> bool {
+        self.id == "ffz" && self.version.as_deref() == Some(FFZ_BOT_BADGE_NAME)
+    }
+
+    /// The largest image and the colour to paint behind it, when this badge
+    /// needs one drawn for it. FFZ's own CDN draws its badges finished (see
+    /// `ffz_colored_badge_url`); the rest of the feed (FFZ:AP) is a white
+    /// glyph with no finished variant anywhere, so we paint it ourselves.
+    fn backdrop(&self) -> Option<(String, String)> {
+        let color = self.color.as_deref()?.trim();
+        if color.is_empty() || is_ffz_cdn_badge(&self.image_url) {
+            return None;
+        }
+        Some((self.image_urls().2, color.to_string()))
+    }
+
+    /// (1x, 2x, 4x) URLs; re-hosted FFZ badges get their coloured variant.
+    fn image_urls(&self) -> (String, String, String) {
+        let x1 = self.image_url.as_str();
+        let x2 = self.image_url_2.as_deref().unwrap_or(x1);
+        let x4 = self.image_url_4.as_deref().unwrap_or(x2);
+        (ffz_colored_badge_url(x1), ffz_colored_badge_url(x2), ffz_colored_badge_url(x4))
+    }
 }
 
 // DankChat (flex3r): GET https://flxrs.com/api/badges (bare JSON array). Single image
@@ -472,6 +630,14 @@ struct ThirdPartyCache {
     /// single HashMap get instead of a scan over every holder list. One
     /// Arc<UserBadge> exists per distinct badge, shared across its holders.
     by_user: HashMap<String, Vec<Arc<UserBadge>>>,
+    /// Badge images that need a colour painted behind them (FFZ:AP via
+    /// Chatty): largest raw image URL -> `#RRGGBB`. Rebuilt per refresh.
+    backdrops: HashMap<String, String>,
+    /// Finished images built so far, `backdrop_key(url, colour)` -> SVG
+    /// data URI (`badge_with_backdrop`). Filled on first lookup of a holder, so only chatters who are
+    /// actually seen cost a download; kept across refreshes while the
+    /// feed still lists that image and colour.
+    painted: HashMap<String, String>,
     last_updated: SystemTime,
 }
 
@@ -506,14 +672,8 @@ impl ThirdPartyCache {
         // FFZ. `users` is keyed by badge_id (as a string) -> [numeric user_id],
         // so the holder key is each numeric id rendered back to a String.
         if let Some(ffz) = &self.ffz {
-            for badge in &ffz.badges {
-                let image_url = badge
-                    .urls
-                    .get("4")
-                    .or_else(|| badge.urls.get("2"))
-                    .or_else(|| badge.urls.get("1"))
-                    .cloned()
-                    .unwrap_or_default();
+            for badge in ffz.badges.iter().filter(|b| !b.is_bot()) {
+                let (image_1x, image_2x, image_4x) = badge.image_urls();
                 let arc = Arc::new(UserBadge {
                     badge_info: BadgeInfo {
                         id: format!("ffz-{}", badge.id),
@@ -525,9 +685,9 @@ impl ThirdPartyCache {
                             .or_else(|| badge.name.clone())
                             .unwrap_or_else(|| format!("FFZ Badge {}", badge.id)),
                         description: String::new(),
-                        image_1x: badge.urls.get("1").cloned().unwrap_or_default(),
-                        image_2x: badge.urls.get("2").cloned().unwrap_or_default(),
-                        image_4x: image_url,
+                        image_1x,
+                        image_2x,
+                        image_4x,
                         click_action: None,
                         click_url: Some("https://www.frankerfacez.com/badges".to_string()),
                     },
@@ -694,12 +854,8 @@ impl ThirdPartyCache {
 
         // Chatty (tduva) badges
         if let Some(chatty) = &self.chatty {
-            for badge in chatty {
-                let image_4x = badge
-                    .image_url_4
-                    .clone()
-                    .or_else(|| badge.image_url_2.clone())
-                    .unwrap_or_else(|| badge.image_url.clone());
+            for badge in chatty.iter().filter(|b| !b.is_ffz_bot()) {
+                let (image_1x, image_2x, image_4x) = badge.image_urls();
                 let arc = Arc::new(UserBadge {
                     badge_info: BadgeInfo {
                         id: format!(
@@ -711,11 +867,8 @@ impl ThirdPartyCache {
                         version: badge.version.clone().unwrap_or_else(|| "1".to_string()),
                         title: badge.meta_title.clone().unwrap_or_else(|| badge.id.clone()),
                         description: String::new(),
-                        image_1x: badge.image_url.clone(),
-                        image_2x: badge
-                            .image_url_2
-                            .clone()
-                            .unwrap_or_else(|| badge.image_url.clone()),
+                        image_1x,
+                        image_2x,
                         image_4x,
                         click_action: None,
                         click_url: badge
@@ -785,6 +938,8 @@ impl BadgeCache {
                 moltorino: None,
                 moltorino_last_updated: UNIX_EPOCH,
                 by_user: HashMap::new(),
+                backdrops: HashMap::new(),
+                painted: HashMap::new(),
                 last_updated: UNIX_EPOCH,
             },
             // Cache last badge string for up to 1000 users
@@ -1112,6 +1267,7 @@ impl BadgeService {
             };
         }
         keep_last_good!(ffz, ffz_badges, "ffz");
+        publish_ffz_bot_ids(cache.third_party.ffz.as_ref());
         keep_last_good!(bttv, bttv_badges, "bttv");
         keep_last_good!(chatterino, chatterino_badges, "chatterino");
         keep_last_good!(homies, homies_badges, "homies");
@@ -1149,6 +1305,17 @@ impl BadgeService {
         // per-chatter lookups never scan the full holder lists.
         let by_user = cache.third_party.build_by_user_index();
         cache.third_party.by_user = by_user;
+        let backdrops: HashMap<String, String> = cache
+            .third_party
+            .chatty
+            .iter()
+            .flatten()
+            .filter_map(ChattyBadge::backdrop)
+            .collect();
+        let current: std::collections::HashSet<String> =
+            backdrops.iter().map(|(url, color)| backdrop_key(url, color)).collect();
+        cache.third_party.painted.retain(|key, _| current.contains(key));
+        cache.third_party.backdrops = backdrops;
         if failed.is_empty() {
             cache.third_party.last_updated = SystemTime::now();
         } else {
@@ -1725,9 +1892,11 @@ impl BadgeService {
     }
 
     /// Resolve ONLY a user's real chat-client (third-party) badges from the
-    /// already-prefetched provider databases. Pure in-memory cache lookup: no
-    /// Twitch GQL, no token, no network round-trip, so it is safe to call once
-    /// per chatter in the live chat path. Display/earned are left empty (chat
+    /// already-prefetched provider databases. In-memory cache lookup: no
+    /// Twitch GQL, no token, and no network round-trip except the first
+    /// sighting of an FFZ:AP holder, whose ~3 KB glyph is fetched once to
+    /// put its colour behind it (`painted_badge_image`). Safe to call once per
+    /// chatter in the live chat path. Display/earned are left empty (chat
     /// renders Twitch badges straight from IRC tags). BTTV *Pro* loyalty badges
     /// are intentionally NOT included here: they live behind a per-user live
     /// socket lookup, the one thing that would reintroduce a per-chatter network
@@ -1745,13 +1914,59 @@ impl BadgeService {
         // ThirdPartyCache::build_by_user_index). Provider order and the
         // duplicate-title collapse are baked into the index, so this is just a
         // clone-out of the user's shared Arc entries.
-        let cache = self.cache.read().await;
-        cache
-            .third_party
-            .by_user
-            .get(user_id)
-            .map(|arcs| arcs.iter().map(|arc| (**arc).clone()).collect())
-            .unwrap_or_default()
+        let mut badges: Vec<UserBadge> = {
+            let cache = self.cache.read().await;
+            cache
+                .third_party
+                .by_user
+                .get(user_id)
+                .map(|arcs| arcs.iter().map(|arc| (**arc).clone()).collect())
+                .unwrap_or_default()
+        };
+        for badge in badges.iter_mut().filter(|b| b.provider == BadgeProvider::Chatty) {
+            if let Some(painted) = self.painted_badge_image(&badge.badge_info.image_4x).await {
+                let info = &mut badge.badge_info;
+                info.image_1x = painted.clone();
+                info.image_2x = painted.clone();
+                info.image_4x = painted;
+            }
+        }
+        badges
+    }
+
+    /// The finished image for a badge whose raw image needs a colour painted
+    /// behind it, as an SVG data URI: built on first use, then served from
+    /// memory. `None` when the image needs no backdrop, or could not be
+    /// fetched or read (the raw image is drawn instead, and the next lookup
+    /// tries again). One image serves every size: at 72 px it scales down
+    /// cleanly to the chat row.
+    async fn painted_badge_image(&self, url: &str) -> Option<String> {
+        let (key, color) = {
+            let cache = self.cache.read().await;
+            let color = cache.third_party.backdrops.get(url)?;
+            let key = backdrop_key(url, color);
+            if let Some(done) = cache.third_party.painted.get(&key) {
+                return Some(done.clone());
+            }
+            (key, color.clone())
+        };
+
+        let response = self.http_client.get(url).send().await.ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        let bytes = response.bytes().await.ok()?;
+        if bytes.len() > BACKDROP_SOURCE_MAX_BYTES {
+            return None;
+        }
+        let data_uri = badge_with_backdrop(&bytes, &color)?;
+
+        let mut cache = self.cache.write().await;
+        // Only keep it while the feed still asks for this image and colour.
+        if cache.third_party.backdrops.get(url).map(String::as_str) == Some(color.as_str()) {
+            cache.third_party.painted.insert(key, data_uri.clone());
+        }
+        Some(data_uri)
     }
 
     /// Build the full distinct badge set for every third-party provider, for the
@@ -1768,24 +1983,14 @@ impl BadgeService {
         // FFZ. `users` is keyed by badge_id (as a string) -> [numeric user_id].
         if let Some(ffz) = &cache.third_party.ffz {
             let viewer_num = viewer_user_id.and_then(|uid| uid.parse::<u32>().ok());
-            for badge in &ffz.badges {
+            for badge in ffz.badges.iter().filter(|b| !b.is_bot()) {
                 let holders = ffz.users.get(&badge.id.to_string());
                 let user_count = holders.map(|h| h.len()).unwrap_or(0);
                 let owned = match (viewer_num, holders) {
                     (Some(n), Some(h)) => h.contains(&n),
                     _ => false,
                 };
-                let img_1x = badge.urls.get("1").cloned().unwrap_or_default();
-                let img_2x = badge
-                    .urls
-                    .get("2")
-                    .cloned()
-                    .unwrap_or_else(|| img_1x.clone());
-                let img_4x = badge
-                    .urls
-                    .get("4")
-                    .cloned()
-                    .unwrap_or_else(|| img_2x.clone());
+                let (img_1x, img_2x, img_4x) = badge.image_urls();
                 out.push(ThirdPartyGalleryBadge {
                     id: format!("ffz-{}", badge.id),
                     provider: BadgeProvider::FFZ,
@@ -1902,15 +2107,11 @@ impl BadgeService {
 
         // Chatty (tduva)
         if let Some(chatty) = &cache.third_party.chatty {
-            for badge in chatty {
+            for badge in chatty.iter().filter(|b| !b.is_ffz_bot()) {
                 let owned = viewer_user_id
                     .map(|uid| badge.userids.iter().any(|u| u == uid))
                     .unwrap_or(false);
-                let img_4x = badge
-                    .image_url_4
-                    .clone()
-                    .or_else(|| badge.image_url_2.clone())
-                    .unwrap_or_else(|| badge.image_url.clone());
+                let (img_1x, img_2x, img_4x) = badge.image_urls();
                 out.push(ThirdPartyGalleryBadge {
                     id: format!(
                         "chatty-{}-{}",
@@ -1919,11 +2120,8 @@ impl BadgeService {
                     ),
                     provider: BadgeProvider::Chatty,
                     title: badge.meta_title.clone().unwrap_or_else(|| badge.id.clone()),
-                    image_1x: badge.image_url.clone(),
-                    image_2x: badge
-                        .image_url_2
-                        .clone()
-                        .unwrap_or_else(|| badge.image_url.clone()),
+                    image_1x: img_1x,
+                    image_2x: img_2x,
                     image_4x: img_4x,
                     user_count: badge.userids.len(),
                     owned,
@@ -1976,6 +2174,16 @@ impl BadgeService {
                 deduped.push(badge);
             }
         }
+        drop(cache);
+
+        // A Chatty tile drawn from a glyph image gets its backdrop painted.
+        for tile in deduped.iter_mut().filter(|t| t.provider == BadgeProvider::Chatty) {
+            if let Some(painted) = self.painted_badge_image(&tile.image_4x).await {
+                tile.image_1x = painted.clone();
+                tile.image_2x = painted.clone();
+                tile.image_4x = painted;
+            }
+        }
 
         deduped
     }
@@ -2018,6 +2226,8 @@ impl BadgeService {
         cache.third_party.chatty = None;
         cache.third_party.dankchat = None;
         cache.third_party.by_user.clear();
+        cache.third_party.backdrops.clear();
+        cache.third_party.painted.clear();
         cache.third_party.last_updated = UNIX_EPOCH;
         cache.user_badge_strings.clear();
     }
@@ -2060,6 +2270,8 @@ mod tests {
             moltorino: None,
             moltorino_last_updated: UNIX_EPOCH,
             by_user: HashMap::new(),
+            backdrops: HashMap::new(),
+            painted: HashMap::new(),
             last_updated: UNIX_EPOCH,
         };
 
@@ -2072,6 +2284,136 @@ mod tests {
         assert_eq!(held[0].provider, BadgeProvider::FFZ);
 
         assert!(index.get("99999").is_none());
+    }
+
+    #[test]
+    fn ffz_badges_draw_the_coloured_variant() {
+        assert_eq!(
+            ffz_colored_badge_url("https://cdn.frankerfacez.com/badge/3/4"),
+            "https://cdn.frankerfacez.com/badge/3/4/rounded"
+        );
+        // Already a variant, or not FFZ's badge CDN: untouched.
+        assert_eq!(
+            ffz_colored_badge_url("https://cdn.frankerfacez.com/badge/3/4/rounded"),
+            "https://cdn.frankerfacez.com/badge/3/4/rounded"
+        );
+        assert_eq!(
+            ffz_colored_badge_url("https://api.ffzap.com/v1/user/badge/123/3"),
+            "https://api.ffzap.com/v1/user/badge/123/3"
+        );
+        assert_eq!(
+            ffz_colored_badge_url("https://cdn.frankerfacez.com/room-badge/mod/x/2"),
+            "https://cdn.frankerfacez.com/room-badge/mod/x/2"
+        );
+    }
+
+    #[test]
+    fn a_glyph_gets_ffzs_rounded_backdrop_behind_it() {
+        // The header of a 72 px PNG, which is all the backdrop reads.
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        png.extend_from_slice(&72u32.to_be_bytes());
+        png.extend_from_slice(&72u32.to_be_bytes());
+        png.extend_from_slice(&[8, 6, 0, 0, 0]);
+
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let uri = badge_with_backdrop(&png, "#755000").expect("builds");
+        let body = uri.strip_prefix("data:image/svg+xml;base64,").expect("an SVG data URI");
+        let svg = String::from_utf8(b64.decode(body).unwrap()).unwrap();
+        // FFZ's rounded square in the badge colour, the glyph drawn over it.
+        assert!(svg.contains(r#"viewBox="0 0 72 72""#));
+        let square = r##"<rect width="72" height="72" rx="8" fill="#755000"/>"##;
+        let glyph = format!(r#"href="data:image/png;base64,{}""#, b64.encode(&png));
+        assert!(svg.find(square).expect("the square") < svg.find(&glyph).expect("the glyph"));
+
+        assert!(badge_with_backdrop(&png, "755000").is_none());
+        assert!(badge_with_backdrop(&png, "#75500").is_none());
+        assert!(badge_with_backdrop(&png, "#75500g").is_none());
+        assert!(badge_with_backdrop(b"not a png", "#755000").is_none());
+    }
+
+    #[test]
+    fn only_glyph_images_outside_ffzs_cdn_get_a_painted_backdrop() {
+        let feed: Vec<ChattyBadge> = serde_json::from_str(
+            r##"[
+              {"id":"ffzap","version":"1","image_url":"https://api.ffzap.com/v1/user/badge/1/1",
+               "image_url_2":"https://api.ffzap.com/v1/user/badge/1/2","image_url_4":"https://api.ffzap.com/v1/user/badge/1/3",
+               "color":"#E60C7B","userids":["1"]},
+              {"id":"ffzap","version":"2","image_url":"https://api.ffzap.com/v1/user/badge/2/1","color":null,"userids":["2"]},
+              {"id":"ffz","version":"supporter","image_url":"https://cdn.frankerfacez.com/badge/3/1","color":"#755000","userids":["3"]}
+            ]"##,
+        )
+        .unwrap();
+        assert_eq!(
+            feed[0].backdrop(),
+            Some(("https://api.ffzap.com/v1/user/badge/1/3".to_string(), "#E60C7B".to_string()))
+        );
+        // Already coloured, and FFZ's own CDN (drawn finished via /rounded).
+        assert_eq!(feed[1].backdrop(), None);
+        assert_eq!(feed[2].backdrop(), None);
+    }
+
+    /// The live FFZ feed's shape (2026-09): the bot badge plus a coloured one.
+    const FFZ_FIXTURE: &str = r##"{
+      "badges": [
+        {"id": 2, "name": "bot", "title": "Bot", "color": "#595959",
+         "urls": {"1": "https://cdn.frankerfacez.com/badge/2/1", "2": "https://cdn.frankerfacez.com/badge/2/2", "4": "https://cdn.frankerfacez.com/badge/2/4"}},
+        {"id": 3, "name": "supporter", "title": "FFZ Supporter", "color": "#755000",
+         "urls": {"1": "https://cdn.frankerfacez.com/badge/3/1", "2": "https://cdn.frankerfacez.com/badge/3/2", "4": "https://cdn.frankerfacez.com/badge/3/4"}}
+      ],
+      "users": {"2": [19264788, 11111], "3": [11111]}
+    }"##;
+
+    #[test]
+    fn ffz_bots_get_twitchs_bot_badge_and_never_the_ffz_cog() {
+        let feed: FFZBadgesResponse = serde_json::from_str(FFZ_FIXTURE).unwrap();
+        let third_party = ThirdPartyCache {
+            ffz: Some(feed),
+            bttv: None,
+            chatterino: None,
+            homies: None,
+            chatsen: None,
+            chatty: None,
+            dankchat: None,
+            moltorino: None,
+            moltorino_last_updated: UNIX_EPOCH,
+            by_user: HashMap::new(),
+            backdrops: HashMap::new(),
+            painted: HashMap::new(),
+            last_updated: UNIX_EPOCH,
+        };
+
+        // The third-party index carries the supporter badge, coloured, and no bot badge.
+        let index = third_party.build_by_user_index();
+        assert!(index.get("19264788").is_none());
+        let held = index.get("11111").expect("supporter should resolve");
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].badge_info.title, "FFZ Supporter");
+        assert_eq!(held[0].badge_info.image_2x, "https://cdn.frankerfacez.com/badge/3/2/rounded");
+
+        // The bot's Twitch row gains Twitch's own bot badge, once.
+        publish_ffz_bot_ids(third_party.ffz.as_ref());
+        let badge = |name: &str| crate::models::chat_layout::Badge {
+            name: name.to_string(),
+            version: "1".to_string(),
+            image_url_1x: None,
+            image_url_2x: None,
+            image_url_4x: None,
+            title: None,
+            description: None,
+        };
+        let mut row = vec![badge("moderator")];
+        add_ffz_bot_badge("19264788", &mut row);
+        let names: Vec<&str> = row.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, ["moderator", "bot-badge"]);
+
+        let mut sent_by_twitch = vec![badge("bot-badge")];
+        add_ffz_bot_badge("19264788", &mut sent_by_twitch);
+        assert_eq!(sent_by_twitch.len(), 1);
+
+        let mut not_a_bot = vec![badge("subscriber")];
+        add_ffz_bot_badge("55555", &mut not_a_bot);
+        assert_eq!(not_a_bot.len(), 1);
     }
 
     /// A trimmed copy of the live feed (version 369, 2026-09-07) with the
@@ -2129,6 +2471,8 @@ mod tests {
             moltorino: Some(feed),
             moltorino_last_updated: UNIX_EPOCH,
             by_user: HashMap::new(),
+            backdrops: HashMap::new(),
+            painted: HashMap::new(),
             last_updated: UNIX_EPOCH,
         }
     }

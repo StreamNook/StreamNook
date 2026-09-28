@@ -237,8 +237,9 @@ function mapResolvedBadges(badges: ResolvedBadge[]): ThirdPartyBadge[] {
 //
 // Everyone else: their REAL provider badges (BTTV / FFZ / Chatterino / Homies /
 // Chatsen / Chatty / DankChat), looked up from the prefetched provider databases
-// in Rust. That call is a pure in-memory cache hit (no per-user network round
-// trip), so it is safe in this once-per-chatter path. We skip the store write
+// in Rust. That call is an in-memory cache hit (the one per-user fetch is an
+// FFZ:AP holder's small badge image, once per session), so it is safe in this
+// once-per-chatter path. We skip the store write
 // when the chatter carries no third-party badges (the common case) to avoid
 // needless churn. BTTV Pro is intentionally NOT resolved for non-members: it
 // needs a per-user live socket lookup, the one thing that would bring back the

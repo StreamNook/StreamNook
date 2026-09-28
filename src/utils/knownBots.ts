@@ -15,10 +15,10 @@ export const KNOWN_BOTS = new Set([
   'own3dpro_bot', 'playwithviewersbot', 'thepixelbot', 'cloudbot', '9gag',
 ]);
 
-// A bot badge. FrankerFaceZ (badge id 2), Chatterino, and Homies all label bot
-// accounts with a badge titled exactly "Bot"; some Twitch/other sets say "Chat
-// Bot". Match either, exact (not substring) so cosmetics like "Robot" or
-// "Botany" don't trip it.
+// A bot badge. Chatterino and Homies label bot accounts with a badge titled
+// exactly "Bot"; Twitch's own bot badge, which FrankerFaceZ-flagged bots also
+// carry, says "Chat Bot". Match either, exact (not substring) so cosmetics like
+// "Robot" or "Botany" don't trip it.
 export const isChatBotBadge = (s?: string): boolean => {
   const v = (s || '').trim().toLowerCase();
   return v === 'bot' || v === 'chat bot';
