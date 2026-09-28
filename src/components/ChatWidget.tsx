@@ -1456,6 +1456,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       redemption_id: string;
       image_url: string;
       background_color: string;
+      /** `name/version,...` the redeemer last showed in this chat, if any. */
+      badges?: string;
+      color?: string;
     }>('channel-points-community-redemption', (event) => {
       const p = event.payload;
       if (p.channel_id !== channelId || p.is_input_required) return;
@@ -1471,6 +1474,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         pointsIconUrl: customPointsIconRef.current,
         rewardImageUrl: p.image_url || undefined,
         rewardBackground: p.background_color || undefined,
+        badges: p.badges || undefined,
+        color: p.color || undefined,
       });
     });
     return () => {

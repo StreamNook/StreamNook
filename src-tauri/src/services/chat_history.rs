@@ -69,6 +69,25 @@ fn rings() -> &'static Mutex<HashMap<String, VecDeque<HistEntry>>> {
     RINGS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// A channel's Twitch id (`room-id`) to its ring key, learned from the
+/// messages pushed, so events that know a channel only by id find its ring.
+static ROOM_KEYS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+fn room_keys() -> &'static Mutex<HashMap<String, String>> {
+    ROOM_KEYS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The newest look (badges, colour) a user showed in one ring. Shared-chat
+/// rows are skipped: they wear the badges of the channel they came from.
+fn newest_look<'a>(
+    ring: impl DoubleEndedIterator<Item = &'a HistEntry>,
+    user_id: &str,
+) -> Option<(Vec<String>, Option<String>)> {
+    ring.rev()
+        .find(|e| e.user_id == user_id && e.flags & F_SHARED == 0)
+        .map(|e| (e.badge_keys.clone(), e.color.clone()))
+}
+
 pub struct ChatHistory;
 
 impl ChatHistory {
@@ -118,13 +137,36 @@ impl ChatHistory {
         };
         let cap = Self::cap();
         let Ok(mut map) = rings().lock() else { return };
-        let ring = map
-            .entry(facts.channel_key.clone())
-            .or_insert_with(|| VecDeque::with_capacity(64));
+        let ring = match map.entry(facts.channel_key.clone()) {
+            std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
+            std::collections::hash_map::Entry::Vacant(v) => {
+                // A channel's id is learned once, when its ring is made; the
+                // messages after that add nothing here.
+                if let Some(room) = msg.tags.get("room-id").filter(|r| !r.is_empty()) {
+                    if let Ok(mut rooms) = room_keys().lock() {
+                        rooms.insert(room.clone(), facts.channel_key.clone());
+                    }
+                }
+                v.insert(VecDeque::with_capacity(64))
+            }
+        };
         if ring.len() >= cap {
             ring.pop_front();
         }
         ring.push_back(entry);
+    }
+
+    /// The badges (`name/version`, in chat order) and name colour a user last
+    /// showed in a channel, found by the channel's Twitch id. For events that
+    /// name a user but carry no chat badges, such as a channel points
+    /// redemption, so their row wears what the user's chat rows wear.
+    pub fn last_look(room_id: &str, user_id: &str) -> Option<(Vec<String>, Option<String>)> {
+        if room_id.is_empty() || user_id.is_empty() {
+            return None;
+        }
+        let key = room_keys().lock().ok()?.get(room_id)?.clone();
+        let map = rings().lock().ok()?;
+        newest_look(map.get(&key)?.iter(), user_id)
     }
 
     /// Mark a message deleted (CLEARMSG) so `is:deleted` can find it.
@@ -384,6 +426,23 @@ mod tests {
             flags,
             msg_type: None,
         }
+    }
+
+    #[test]
+    fn a_users_newest_own_row_gives_their_look() {
+        let mut older = entry("bob", "hi", 0);
+        older.badge_keys = vec!["subscriber/12".into()];
+        older.color = Some("#111111".into());
+        let mut newer = entry("bob", "hello", 0);
+        newer.badge_keys = vec!["subscriber/12".into(), "sub-gifter/25".into()];
+        newer.color = Some("#222222".into());
+        let mut shared = entry("bob", "from elsewhere", F_SHARED);
+        shared.badge_keys = vec!["vip/1".into()];
+        let ring = vec![older, newer, shared];
+        let (badges, color) = newest_look(ring.iter(), "1").expect("a look");
+        assert_eq!(badges, vec!["subscriber/12".to_string(), "sub-gifter/25".to_string()]);
+        assert_eq!(color.as_deref(), Some("#222222"));
+        assert!(newest_look(ring.iter(), "2").is_none());
     }
 
     #[test]

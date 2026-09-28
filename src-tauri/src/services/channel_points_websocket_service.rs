@@ -1264,6 +1264,14 @@ impl ChannelPointsWebSocketService {
             channel_id, user_name, reward_title, reward_cost
         );
 
+        // The event names the redeemer but carries no chat badges; wear the
+        // ones they last showed in this channel's chat, and their name colour.
+        let (badges, color) = channel_id
+            .as_deref()
+            .and_then(|cid| crate::services::chat_history::ChatHistory::last_look(cid, user_id))
+            .map(|(badges, color)| (badges.join(","), color.unwrap_or_default()))
+            .unwrap_or_default();
+
         let _ = app_handle.emit(
             "channel-points-community-redemption",
             json!({
@@ -1280,6 +1288,8 @@ impl ChannelPointsWebSocketService {
                 "user_input": user_input,
                 "background_color": background_color,
                 "image_url": image_url,
+                "badges": badges,
+                "color": color,
             }),
         );
     }

@@ -3463,6 +3463,8 @@ export function injectRedemptionMessage(
     pointsIconUrl?: string | null;
     rewardImageUrl?: string;
     rewardBackground?: string;
+    /** `name/version,...` in chat order, from Rust's chat history. */
+    badges?: string;
   },
 ): void {
   // A stable id from Twitch's redemption id (when present) makes this idempotent:
@@ -3500,7 +3502,13 @@ export function injectRedemptionMessage(
       username: login,
       display_name: name,
       color: r.color || '#9147ff',
-      badges: [],
+      badges: (r.badges ?? '')
+        .split(',')
+        .filter(Boolean)
+        .map((b) => {
+          const [name, version = ''] = b.split('/');
+          return { name, version };
+        }),
       content: body,
       segments: tokenizeLocalBody(body, getChannelEmotes(channel)),
       is_action: false,
