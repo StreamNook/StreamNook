@@ -94,6 +94,10 @@ impl ChatProvider for TikTokProvider {
         "tiktok"
     }
 
+    fn open_channel_count(&self) -> Option<usize> {
+        self.conns.try_lock().ok().map(|c| c.len())
+    }
+
     async fn connect(&self, channel: &str, window: &str) -> Result<()> {
         let handle = clean_handle(channel);
         let id_lc = handle.to_lowercase();
