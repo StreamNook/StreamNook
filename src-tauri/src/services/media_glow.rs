@@ -3,9 +3,13 @@
 //! Cider tints its chrome from the artwork of the current track. StreamNook has
 //! no artwork, so the nearest thing is the card's thumbnail: decoded once, never
 //! changing, and the same answer for every surface that shows that stream. The
-//! page scales it to 16x9 and sends 576 bytes; choosing the colour and caching
-//! it lives here, so scrolling a card out of a grid and back does not resample
-//! and two surfaces showing one stream cannot disagree about its colour.
+//! page hands over the thumbnail's URL; fetching it, scaling it to 16x9,
+//! choosing the colour and caching it all live here, so scrolling a card out
+//! of a grid and back does not resample and two surfaces showing one stream
+//! cannot disagree about its colour. It used to be the page that fetched a
+//! second CORS copy, decoded it, drew it to a canvas and read the pixels back:
+//! about 130 ms of main-thread work per page of cards, spent while the page
+//! was still booting.
 //!
 //! This is the STILL path, and deliberately the only one. The immersive light
 //! that tracks a playing frame does NOT come through here: it has to resample
@@ -101,6 +105,119 @@ fn ease(prev: Option<Rgb>, target: Option<Rgb>) -> Option<Rgb> {
             b: p.b + (t.b - p.b) * SMOOTHING,
         }),
     }
+}
+
+/// The thumbnail is scaled to this before it is read. 16x9 is 144 pixels:
+/// enough to tell a stream's colour, small enough that choosing it is measured
+/// in microseconds. Going bigger buys nothing; the answer is one colour either
+/// way.
+const SAMPLE_W: u32 = 16;
+const SAMPLE_H: u32 = 9;
+
+/// Hosts a thumbnail is fetched from for its colour. The page keeps the same
+/// list and does not ask about anything else, so an unlisted host costs no
+/// round trip; this copy is the guard on the fetch itself. The list is what
+/// it was when the page did the sampling, so which cards carry a tint has
+/// not changed.
+const TINTED_THUMB_HOSTS: &[&str] = &["static-cdn.jtvnw.net", "i.ytimg.com"];
+
+/// A thumbnail bigger than this is not a thumbnail; nothing is decoded past it.
+const MAX_THUMB_BYTES: usize = 4 << 20;
+
+/// How many thumbnails are in flight at once. A page of cards asks for all of
+/// its colours in the same idle period, and a colour is decoration: the
+/// pictures the person is actually waiting for keep the bandwidth.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+static FETCHES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+
+/// The colour already chosen for a key, without sampling anything. `Some`
+/// whenever the key has been seen; its `overall` is still `None` for a
+/// thumbnail that had no colour to borrow, which is remembered too, so a grey
+/// thumbnail is not fetched again for a card that scrolls back in.
+pub async fn cached(key: &str) -> Option<Glow> {
+    LIVE.lock()
+        .await
+        .get(key)
+        .map(|bands| Glow { overall: bands.overall.map(hex) })
+}
+
+/// Fetch a thumbnail, scale it down and choose its colour. `None` where the
+/// host is not one thumbnails come from, the fetch or decode fails, or the
+/// picture carried no colour; every one of those leaves the card on the theme
+/// accent, which is the same outcome the page-side sampler had for them.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub async fn sample_url(url: &str) -> Option<Glow> {
+    if let Some(glow) = cached(url).await {
+        return Some(glow);
+    }
+    let parsed = reqwest::Url::parse(url).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") || !TINTED_THUMB_HOSTS.contains(&parsed.host_str()?) {
+        return None;
+    }
+    let bytes = {
+        let _slot = FETCHES.acquire().await.ok()?;
+        let response = crate::services::http::client().get(parsed).send().await.ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        if response.content_length().is_some_and(|len| len as usize > MAX_THUMB_BYTES) {
+            return None;
+        }
+        response.bytes().await.ok()?
+    };
+    if bytes.len() > MAX_THUMB_BYTES {
+        return None;
+    }
+    // Decoding a JPEG is CPU work; it is small, but the async runtime is
+    // shared with everything else the app is doing at boot.
+    let rgba = tokio::task::spawn_blocking(move || downscale(&bytes)).await.ok()??;
+    submit(url, &rgba, SAMPLE_W as usize, SAMPLE_H as usize).await
+}
+
+/// Decode and scale to the sample size, RGBA.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn downscale(bytes: &[u8]) -> Option<Vec<u8>> {
+    let image = image::load_from_memory(bytes).ok()?;
+    if image.width() < SAMPLE_W || image.height() < SAMPLE_H {
+        return None;
+    }
+    Some(box_downscale(&image.to_rgba8()))
+}
+
+/// Area average: each sample pixel is the mean of the source rectangle it
+/// covers, so every source pixel counts exactly once. Of the resamplings tried
+/// against the 16x9 canvas the page used to draw (bilinear, mip-then-bilinear,
+/// tent, box), this tracks it most closely; none reproduces it exactly, because
+/// the colour is a modal bucket and a near-tie can land either way from a
+/// pixel's difference, which the canvas itself did between two refreshes of the
+/// same thumbnail.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn box_downscale(image: &image::RgbaImage) -> Vec<u8> {
+    let (w, h) = (image.width() as usize, image.height() as usize);
+    let src = image.as_raw();
+    let mut out = Vec::with_capacity((SAMPLE_W * SAMPLE_H * 4) as usize);
+    for y in 0..SAMPLE_H as usize {
+        let y0 = y * h / SAMPLE_H as usize;
+        let y1 = ((y + 1) * h / SAMPLE_H as usize).max(y0 + 1);
+        for x in 0..SAMPLE_W as usize {
+            let x0 = x * w / SAMPLE_W as usize;
+            let x1 = ((x + 1) * w / SAMPLE_W as usize).max(x0 + 1);
+            let mut sum = [0u64; 4];
+            for yy in y0..y1 {
+                for xx in x0..x1 {
+                    let i = (yy * w + xx) * 4;
+                    for c in 0..4 {
+                        sum[c] += src[i + c] as u64;
+                    }
+                }
+            }
+            let n = ((y1 - y0) * (x1 - x0)) as u64;
+            for total in sum {
+                out.push(((total + n / 2) / n) as u8);
+            }
+        }
+    }
+    out
 }
 
 /// Feed one downscaled image, RGBA. Returns the smoothed colour, `None` where
@@ -309,6 +426,34 @@ mod tests {
         let (_, dull_s, _) = to_hsl(dull.r, dull.g, dull.b);
         let (_, vivid_s, _) = to_hsl(vivid.r, vivid.g, vivid.b);
         assert!(dull_s < vivid_s, "dull={dull_s} vivid={vivid_s}");
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn box_downscale_averages_each_pixels_own_area() {
+        // 32x18, left half red, right half blue: each sample pixel covers a
+        // 2x2 block that is entirely one colour, so the halves come through
+        // untouched and no colour bleeds across the middle.
+        let mut img = image::RgbaImage::new(32, 18);
+        for (x, _, px) in img.enumerate_pixels_mut() {
+            *px = if x < 16 { image::Rgba([200, 10, 10, 255]) } else { image::Rgba([10, 10, 200, 255]) };
+        }
+        let out = box_downscale(&img);
+        assert_eq!(out.len(), (SAMPLE_W * SAMPLE_H * 4) as usize);
+        for y in 0..SAMPLE_H as usize {
+            for x in 0..SAMPLE_W as usize {
+                let i = (y * SAMPLE_W as usize + x) * 4;
+                let expect = if x < 8 { [200, 10, 10, 255] } else { [10, 10, 200, 255] };
+                assert_eq!(&out[i..i + 4], &expect, "at {x},{y}");
+            }
+        }
+        // A 3x1 span averaged into one pixel rounds to nearest.
+        let mut strip = image::RgbaImage::new(48, 9);
+        for (x, _, px) in strip.enumerate_pixels_mut() {
+            *px = image::Rgba([if x % 3 == 0 { 255 } else { 0 }, 0, 0, 255]);
+        }
+        let out = box_downscale(&strip);
+        assert_eq!(out[0], 85);
     }
 
     #[tokio::test]

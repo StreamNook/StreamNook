@@ -3,7 +3,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useAppStore, ensureHomeSnapshotSync, announceSidebar, refreshDiscover } from '../stores/AppStore';
 import { ChevronLeft, ChevronRight, Users, Sparkles, Radio, Heart, Flame, Star } from 'lucide-react';
 import { Package } from 'phosphor-react';
-import type { Collaboration, TwitchStream } from '../types';
+import type { TwitchStream } from '../types';
 import { getSidebarSettings, type SidebarMode } from './settings/InterfaceSettings';
 import { providerLabel, type ProviderId } from '../types/providers';
 
@@ -11,7 +11,7 @@ import { useContextMenuStore } from '../stores/contextMenuStore';
 import { usemultiNookStore } from '../stores/multiNookStore';
 import { Tooltip } from './ui/Tooltip';
 import { TogetherTag } from './SharedViewers';
-import { collabFor } from '../utils/sharedViewers';
+import { groupFor, type ChannelGroup } from '../utils/sharedViewers';
 import StreamHoverCard, { STREAM_HOVER_CARD_CLASS } from './StreamHoverCard';
 import { ProviderLogo } from './ProviderLogo';
 import { useFollowsStore } from '../stores/followsStore';
@@ -20,6 +20,7 @@ import { streamProvider, streamKey } from '../utils/streamProvider';
 import { useStreamAvatars } from '../hooks/useStreamAvatars';
 
 import { Logger } from '../utils/logger';
+import { IS_LINUX, IS_WEBKITGTK } from '../utils/platform';
 import { formatViewerCount } from '../utils/streamStats';
 // Width constants
 const COMPACT_WIDTH = 56;
@@ -31,6 +32,15 @@ const SIDEBAR_CLOSE_DELAY = 150; // milliseconds delay before closing in hidden 
 const SIDEBAR_EXPAND_MS = 200; // width-animation duration for compact / expand-on-hover
 const SIDEBAR_BLUR_SETTLE_DELAY = SIDEBAR_EXPAND_MS + 40; // fade the glass in just after the expand settles
 const SIDEBAR_WIDTH_STORAGE_KEY = 'sidebar-expanded-width';
+// Row and avatar transitions. On Linux only colours animate, under either
+// engine: WebKitGTK re-lays out every row on every frame of a layout
+// transition, and the embedded Chromium there spends ~120 ms of its first frame
+// restyling every row's transitions when the panel expands (541 layout
+// transitions plus one fade-in per revealed block, per open). Windows and macOS
+// keep the full transition and the fade-in.
+const ROW_TRANSITION = IS_LINUX ? 'transition-colors duration-200' : 'transition-all duration-200';
+const AVATAR_TRANSITION = IS_LINUX ? '' : 'transition-all duration-200';
+const ROW_REVEAL = IS_LINUX ? '' : 'animate-fade-in';
 /** One empty list, so "nothing for this scope yet" keeps a stable identity. */
 const NO_STREAMS: TwitchStream[] = [];
 
@@ -107,8 +117,9 @@ interface StreamItemProps {
     hasDrops: boolean;
     hypeTrainStatus: HypeTrainStatus | undefined;
     watchStreak: number;
-    /** Twitch's Shared Viewership group, when the channel is in one. */
-    collab: Collaboration | undefined;
+    /** Twitch's Shared Viewership group or Shared Chat session, when the
+     *  channel is in one. */
+    collab: ChannelGroup | undefined;
     isHeartAnimating: boolean;
     profileImage: string;
     onStreamClick: (e: React.MouseEvent, stream: TwitchStream) => void;
@@ -146,8 +157,11 @@ const StreamItem = memo(({
         >
             <div
                 aria-label={`${stream.user_name} - ${stream.title}`}
-                className={`group
-                    flex items-center px-2 py-1.5 cursor-pointer rounded transition-all duration-200
+                // On Linux only colours transition: the gap and the avatar size
+                // snap when the panel expands, because transitioning them
+                // re-laid out every row on every frame of the expand.
+                className={`group sn-sidebar-row
+                    flex items-center px-2 py-1.5 cursor-pointer rounded ${ROW_TRANSITION}
                     ${isCurrentStream
                         ? 'border-l-2 border-accent hover:bg-surface-hover'
                         : 'hover:bg-surface-hover border-l-2 border-transparent'
@@ -158,11 +172,11 @@ const StreamItem = memo(({
                 onContextMenu={(e) => useContextMenuStore.getState().openMenu(e, stream)}
             >
             {/* Avatar with live indicator */}
-            <div className="relative flex-shrink-0 transition-all duration-200">
+            <div className={`relative flex-shrink-0 ${AVATAR_TRANSITION}`}>
                 <img
                     src={profileImage}
                     alt={stream.user_name}
-                    className={`rounded-full object-cover transition-all duration-200 ${showExpanded ? 'w-8 h-8' : 'w-9 h-9'}`}
+                    className={`rounded-full object-cover ${AVATAR_TRANSITION} ${showExpanded ? 'w-8 h-8' : 'w-9 h-9'}`}
                     onError={(e) => {
                         (e.target as HTMLImageElement).src = 'https://static-cdn.jtvnw.net/user-default-pictures-uv/75305d54-c7cc-40d1-bb9c-91c46bf27829-profile_image-70x70.png';
                     }}
@@ -214,7 +228,7 @@ const StreamItem = memo(({
 
             {/* Stream info - only show when expanded */}
             {showExpanded && (
-                <div className="flex-1 min-w-0 overflow-hidden animate-fade-in">
+                <div className={`flex-1 min-w-0 overflow-hidden ${ROW_REVEAL}`}>
                     <div className="flex items-center gap-1">
                         <span className="text-textPrimary text-sm font-medium truncate">
                             {stream.user_name}
@@ -224,9 +238,10 @@ const StreamItem = memo(({
                                 <path fillRule="evenodd" d="M12.5 3.5 8 2 3.5 3.5 2 8l1.5 4.5L8 14l4.5-1.5L14 8l-1.5-4.5ZM7 11l4.5-4.5L10 5 7 8 5.5 6.5 4 8l3 3Z" clipRule="evenodd" />
                             </svg>
                         )}
-                        {/* Streaming with others: "+2" beside the name. Who they
-                            are is on the hover card this row already opens. */}
-                        {collab && <TogetherTag collab={collab} />}
+                        {/* Streaming or sharing chat with others: their faces
+                            beside the name, no word, so the name keeps its room.
+                            Who they are is on the hover card this row opens. */}
+                        {collab && <TogetherTag collab={collab} compact />}
                         {watchStreak > 0 && (
                             <Tooltip content={`${watchStreak} Watch Streak`} delay={200} side="top">
                                 <div className="flex items-center gap-[2px] ml-0.5 text-orange-400 opacity-90 transition-opacity hover:opacity-100 cursor-default">
@@ -262,7 +277,7 @@ const StreamItem = memo(({
 
             {/* Viewer count and favorite button */}
             {showExpanded && (
-                <div className="flex items-center gap-1 flex-shrink-0 animate-fade-in">
+                <div className={`flex items-center gap-1 flex-shrink-0 ${ROW_REVEAL}`}>
                     <div className="flex items-center gap-1 text-xs text-textSecondary">
                         <Radio size={10} className="text-live" />
                         <span>{formatViewerCount(stream.viewer_count)}</span>
@@ -316,6 +331,7 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
         activeHypeTrainChannels,
         watchStreaks,
         collaborations,
+        sharedChats,
     } = useAppStore(
         useShallow((s) => ({
             followedStreams: s.followedStreams,
@@ -327,6 +343,7 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
             activeHypeTrainChannels: s.activeHypeTrainChannels,
             watchStreaks: s.watchStreaks,
             collaborations: s.collaborations,
+            sharedChats: s.sharedChats,
             // Not destructured, and still load-bearing: `isFavoriteStreamer` is
             // called during render (the Favorites section, the heart on each
             // row) and reads settings.favorite_streamers, which is not itself
@@ -737,6 +754,8 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
     }, []);
 
     const { visible, width, showExpanded, isOverlay } = calculateSidebarState();
+    // Linux only: hidden mode slides a full-width panel instead of growing it.
+    const slidesIn = IS_WEBKITGTK && sidebarMode === 'hidden';
 
     // Publish how the sidebar is laid out, so the layering can be pure CSS.
     //
@@ -859,7 +878,7 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
             hasDrops={stream.game_name ? dropsGameNames.has(stream.game_name.toLowerCase()) : false}
             hypeTrainStatus={activeHypeTrainChannels.get(stream.user_id)}
             watchStreak={watchStreaks[stream.user_id] ?? 0}
-            collab={collabFor(collaborations, stream)}
+            collab={groupFor(collaborations, sharedChats, stream)}
             isHeartAnimating={(() => { const id = favoriteIdOf(stream); return !!id && animatingHearts.has(id); })()}
             profileImage={getProfileImage(stream)}
             onStreamClick={handleStreamClick}
@@ -907,7 +926,7 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
                 className={`
                     sn-sidebar-panel
                     ${onRight ? 'border-l' : 'border-r'} border-borderSubtle flex flex-col flex-shrink-0
-                    transition-[width,min-width,opacity,transform] duration-200 ease-[cubic-bezier(0.4,0,0.2,1)]
+                    ${slidesIn ? 'transition-[width,min-width,opacity,transform,visibility]' : 'transition-[width,min-width,opacity,transform]'} duration-200 ease-[cubic-bezier(0.4,0,0.2,1)]
                     ${isOverlay
                         // Overlay panels are position:fixed, so a percentage height
                         // resolves against the viewport. Anchoring top (below the
@@ -927,12 +946,22 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
                         : 'relative h-full pt-10'
                     }
                 `}
+                // On Linux, hidden mode slides a full-width panel in and out
+                // instead of growing it from zero: a width change re-lays out
+                // every row on every frame, a translate only moves a layer.
+                // Hidden (not just transparent) once the slide-out ends, so an
+                // off-screen panel is neither painted nor hit.
                 style={{
-                    width: width,
+                    width: slidesIn ? expandedWidth : width,
                     minWidth: isOverlay ? 0 : width,
                     opacity: visible ? 1 : 0,
+                    ...(slidesIn ? { visibility: visible ? 'visible' : 'hidden' } : {}),
                     pointerEvents: visible ? 'auto' : 'none',
-                    transform: visible ? 'translateX(0)' : `translateX(${onRight ? '10px' : '-10px'})`,
+                    transform: visible
+                        ? 'translateX(0)'
+                        : slidesIn
+                            ? `translateX(${onRight ? '100%' : '-100%'})`
+                            : `translateX(${onRight ? '10px' : '-10px'})`,
                     order: onRight ? 1 : 0,
                 }}
                 onMouseEnter={() => {
@@ -1039,10 +1068,11 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
                     </div>
                 )}
 
-                {/* Scrollable stream list */}
+                {/* Scrollable stream list. `sn-sidebar-list` is for the Linux
+                    containment rule in globals.css; nothing styles it elsewhere. */}
                 <div
                     ref={scrollContainerRef}
-                    className={`relative z-10 flex-1 min-h-0 overflow-x-hidden py-1 ${
+                    className={`sn-sidebar-list relative z-10 flex-1 min-h-0 overflow-x-hidden py-1 ${
                         // Hide scrollbar in compact mode with expand-on-hover when not expanded
                         sidebarMode === 'compact' && expandOnHover && !showExpanded
                             ? 'overflow-y-hidden'

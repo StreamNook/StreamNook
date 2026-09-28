@@ -7,9 +7,11 @@ import { useEffect } from 'react';
 import { useAppStore } from '../stores/AppStore';
 import {
   applyFont,
+  applyGlassBlur,
   applyGlassStrength,
   applyTheme,
   DEFAULT_FONT_ID,
+  DEFAULT_GLASS_BLUR,
   DEFAULT_GLASS_TRANSPARENCY,
   DEFAULT_THEME_ID,
   getOledTheme,
@@ -38,8 +40,9 @@ export function useThemeBoot(): void {
     }
     // Global glassiness is independent of the palette, so re-assert it whenever
     // the theme is (re)applied as well as when the slider itself changes.
+    applyGlassBlur(settings.glass_blur ?? DEFAULT_GLASS_BLUR);
     applyGlassStrength(settings.glass_transparency ?? DEFAULT_GLASS_TRANSPARENCY);
     // Interface font is also palette-independent; re-assert alongside the theme.
     applyFont(settings.font ?? DEFAULT_FONT_ID, settings.font_custom);
-  }, [settings.theme, settings.custom_themes, settings.glass_transparency, settings.font, settings.font_custom, settings.oled_accent]);
+  }, [settings.theme, settings.custom_themes, settings.glass_transparency, settings.glass_blur, settings.font, settings.font_custom, settings.oled_accent]);
 }

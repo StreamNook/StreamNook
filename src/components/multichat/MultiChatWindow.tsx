@@ -76,12 +76,14 @@ import {
 import { useAppStore } from '../../stores/AppStore';
 import {
   applyTheme,
+  applyGlassBlur,
   applyGlassStrength,
   applyFont,
   getThemeById,
   getThemeByIdWithCustom,
   getOledTheme,
   DEFAULT_THEME_ID,
+  DEFAULT_GLASS_BLUR,
   DEFAULT_GLASS_TRANSPARENCY,
   DEFAULT_FONT_ID,
   OLED_THEME_ID,
@@ -807,12 +809,14 @@ export default function MultiChatWindow() {
         : getThemeByIdWithCustom(themeId, settings.custom_themes || []) ||
           getThemeById(DEFAULT_THEME_ID);
     if (theme) applyTheme(theme);
+    applyGlassBlur(settings.glass_blur ?? DEFAULT_GLASS_BLUR);
     applyGlassStrength(settings.glass_transparency ?? DEFAULT_GLASS_TRANSPARENCY);
     applyFont(settings.font ?? DEFAULT_FONT_ID, settings.font_custom);
   }, [
     settings.theme,
     settings.custom_themes,
     settings.glass_transparency,
+    settings.glass_blur,
     settings.font,
     settings.font_custom,
     settings.oled_accent,
@@ -1253,7 +1257,7 @@ export default function MultiChatWindow() {
         // channel is streaming (offline chat is the same room). This gives us the
         // broadcaster id + properly-cased name AND confirms the channel exists — a
         // failure here is the "that channel isn't real" gate. (An offline-but-valid
-        // channel still adds; the pane header shows "OFFLINE CHAT" on its own.)
+        // channel still adds; the pane header shows "Offline chat" on its own.)
         let channelId: string | null = null;
         let channelName = providedDisplayName ?? login;
         try {

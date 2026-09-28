@@ -1,12 +1,15 @@
 import { useState, type CSSProperties } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../stores/AppStore';
+import { IS_MOBILE } from '../utils/platform';
 
 /**
- * Mobile Twitch login. Desktop opens a WebView popup for the device-code
- * verification; mobile has no secondary window, so we show the code + verify URL
- * here and let the user authorize in their browser. The backend keeps polling
- * and emits `twitch-login-complete`, which clears `deviceCodeInfo`.
+ * Twitch sign-in by code: approve on any device where you are signed in to
+ * Twitch. Mobile falls back to it when the in-app WebView is unavailable;
+ * desktop reaches it from the sign-in overlay's "Sign in on another device",
+ * the way out when Twitch refuses the sign-in page on this machine. The backend
+ * keeps polling for the same code and emits `twitch-login-complete`, which
+ * clears `deviceCodeInfo`.
  */
 export default function DeviceLoginOverlay() {
   const info = useAppStore((s) => s.deviceCodeInfo);
@@ -85,18 +88,22 @@ export default function DeviceLoginOverlay() {
           Log in to Twitch
         </div>
         <div style={{ fontSize: 13.5, color: 'rgba(255,255,255,0.55)', lineHeight: 1.5, marginBottom: 16 }}>
-          Open the link below and enter this code to authorize StreamNook.
+          {IS_MOBILE
+            ? 'Open the link below and enter this code to authorize StreamNook.'
+            : 'On your phone or any browser where you’re signed in to Twitch, go to twitch.tv/activate and enter this code.'}
         </div>
 
-        <div style={codeBox} onClick={copyCode} title="Tap to copy">
+        <div style={codeBox} onClick={copyCode} title={IS_MOBILE ? 'Tap to copy' : 'Click to copy'}>
           {info.userCode}
         </div>
         <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', minHeight: 16 }}>
-          {copied ? 'Copied' : 'Tap the code to copy'}
+          {copied ? 'Copied' : IS_MOBILE ? 'Tap the code to copy' : 'Click the code to copy'}
         </div>
 
         <button style={primaryBtn} onClick={openBrowser}>
-          Open {info.verificationUri.replace(/^https?:\/\//, '')}
+          {IS_MOBILE
+            ? `Open ${info.verificationUri.replace(/^https?:\/\//, '')}`
+            : 'Open in this computer’s browser'}
         </button>
 
         <div style={{ fontSize: 12.5, color: 'rgba(255,255,255,0.45)', marginTop: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>

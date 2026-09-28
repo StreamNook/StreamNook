@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAppStore } from '../../stores/AppStore';
-import { themes, themeCategories, getThemeById, applyTheme, customThemeToTheme, getThemeByIdWithCustom, applyGlassStrength, DEFAULT_GLASS_TRANSPARENCY, applyFont, FONT_OPTIONS, DEFAULT_FONT_ID, CUSTOM_FONT_ID, SUGGESTED_FONTS, customFontStack, sanitizeFontFamily, loadSuggestionPreviews, Theme, OLED_THEME_ID, DEFAULT_OLED_ACCENT, OLED_ACCENT_PRESETS, getOledTheme } from '../../themes';
+import { themes, themeCategories, getThemeById, applyTheme, customThemeToTheme, getThemeByIdWithCustom, applyGlassStrength, DEFAULT_GLASS_TRANSPARENCY, DEFAULT_GLASS_BLUR, applyFont, FONT_OPTIONS, DEFAULT_FONT_ID, CUSTOM_FONT_ID, SUGGESTED_FONTS, customFontStack, sanitizeFontFamily, loadSuggestionPreviews, Theme, OLED_THEME_ID, DEFAULT_OLED_ACCENT, OLED_ACCENT_PRESETS, getOledTheme } from '../../themes';
 import { Check, Palette, Sparkles, Moon, Leaf, Code, Star, Plus, Edit2, PaintBucket, Droplets, Type } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
+import { Toggle } from '../ui/Toggle';
+import { IS_LINUX } from '../../utils/platform';
 import ThemeCreator from './ThemeCreator';
 import ThemeColorPicker from '../ThemeColorPicker';
 import type { CustomTheme } from '../../types';
@@ -148,6 +150,7 @@ const ThemeSettings = () => {
     const [editingTheme, setEditingTheme] = useState<CustomTheme | undefined>(undefined);
 
     const glassTransparency = settings.glass_transparency ?? DEFAULT_GLASS_TRANSPARENCY;
+    const glassBlur = settings.glass_blur ?? DEFAULT_GLASS_BLUR;
 
     // Track the slider locally so the thumb follows the cursor instantly. The
     // persisted value only catches up on release, so we mirror it here for the
@@ -409,6 +412,24 @@ const ThemeSettings = () => {
                 <p className="text-xs text-textMuted">
                     How see-through and frosted every surface is, for every theme. 100% is the signature glass; 0% removes all transparency and blur for a completely flat, solid look.
                 </p>
+                {/* Linux only: blur stays on everywhere else, where it costs
+                    nothing noticeable. */}
+                {IS_LINUX && (
+                    <div className="flex items-center justify-between gap-3 pt-1">
+                        <div className="min-w-0">
+                            <p className="text-sm text-textPrimary">Blur behind glass</p>
+                            <p className="text-xs text-textMuted">
+                                Frosts whatever shows through your glass. Turn it off if the app feels slow.
+                            </p>
+                        </div>
+                        <Toggle
+                            enabled={glassBlur}
+                            onChange={() => updateSettings({ ...settings, glass_blur: !glassBlur })}
+                            ariaLabel="Blur behind glass"
+                            disabled={liveGlass === 0}
+                        />
+                    </div>
+                )}
             </div>
 
             {/* Interface Font — palette-independent, like glassiness. Compact

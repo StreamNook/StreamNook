@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { Logger } from './logger';
+import { IS_LINUX } from './platform';
 import { historyKey } from './chatterIdentity';
 import { memberIdFor } from './memberIdentity';
 import { getStreamNookUserNumber } from '../services/supabaseService';
@@ -218,7 +219,9 @@ export async function openProfilePopup(opts: {
       decorations: false,
       alwaysOnTop: true,
       skipTaskbar: true,
-      transparent: true,
+      // Linux: the runtime cannot paint a transparent window; the card sits
+      // on the app's own dark ground instead.
+      ...(IS_LINUX ? { backgroundColor: '#0c0c0d' } : { transparent: true }),
       // Created hidden and shown after it is positioned, so the corrective move
       // can't flash the card at the wrong spot (or on the wrong monitor).
       visible: false,

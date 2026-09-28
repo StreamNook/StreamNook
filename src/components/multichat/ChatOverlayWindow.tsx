@@ -12,8 +12,13 @@
 //
 // Same Rust core as every other surface: the channel is acquired on the
 // shared IRC connection and rows carry the rule-engine stamps.
+//
+// Linux: the window is opaque (the runtime cannot paint a transparent one),
+// so the slab fills it and the slider fades the whole window through the
+// window manager (`set_window_opacity`) instead of the slab's alpha.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { MousePointer2, MousePointerBan, X } from 'lucide-react';
@@ -23,12 +28,14 @@ import { useAppStore } from '../../stores/AppStore';
 import { acquireChannel, releaseChannel } from '../../stores/chatConnectionStore';
 import {
   applyTheme,
+  applyGlassBlur,
   applyGlassStrength,
   applyFont,
   getThemeById,
   getThemeByIdWithCustom,
   getOledTheme,
   DEFAULT_THEME_ID,
+  DEFAULT_GLASS_BLUR,
   DEFAULT_GLASS_TRANSPARENCY,
   DEFAULT_FONT_ID,
   OLED_THEME_ID,
@@ -36,6 +43,7 @@ import {
 import { listenForSettingsUpdates } from '../../utils/settingsBroadcast';
 import { OVERLAY_GEOMETRY_KEY } from '../../utils/chatOverlayWindow';
 import { Logger } from '../../utils/logger';
+import { IS_LINUX } from '../../utils/platform';
 
 function readParams() {
   const hash = window.location.hash;
@@ -62,9 +70,14 @@ export default function ChatOverlayWindow() {
   const chromeTimer = useRef<number | null>(null);
   const opacityTimer = useRef<number | null>(null);
 
-  // Transparent ground: document and React root must not paint.
+  // Transparent ground: document and React root must not paint. Not on
+  // Linux, where the window is opaque and the slab fills it.
   useEffect(() => {
     const html = document.documentElement;
+    if (IS_LINUX) {
+      html.classList.add('sn-chat-overlay');
+      return () => html.classList.remove('sn-chat-overlay');
+    }
     const body = document.body;
     const root = document.getElementById('root');
     const prev = [html.style.background, body.style.background, root?.style.background ?? ''];
@@ -106,9 +119,10 @@ export default function ChatOverlayWindow() {
         ? getOledTheme(settings.oled_accent)
         : getThemeByIdWithCustom(themeId, settings.custom_themes || []) || getThemeById(DEFAULT_THEME_ID);
     if (theme) applyTheme(theme);
+    applyGlassBlur(settings.glass_blur ?? DEFAULT_GLASS_BLUR);
     applyGlassStrength(settings.glass_transparency ?? DEFAULT_GLASS_TRANSPARENCY);
     applyFont(settings.font ?? DEFAULT_FONT_ID, settings.font_custom);
-  }, [settings.theme, settings.custom_themes, settings.glass_transparency, settings.font, settings.font_custom, settings.oled_accent]);
+  }, [settings.theme, settings.custom_themes, settings.glass_transparency, settings.glass_blur, settings.font, settings.font_custom, settings.oled_accent]);
 
   // Join through the shared Rust connection; release on close.
   useEffect(() => {
@@ -202,6 +216,14 @@ export default function ChatOverlayWindow() {
     }, 300);
   };
 
+  // Linux: the slider is the whole window's opacity.
+  useEffect(() => {
+    if (!IS_LINUX) return;
+    invoke('set_window_opacity', { opacity: Math.max(0, Math.min(100, opacity)) / 100 }).catch((err) =>
+      Logger.warn('[ChatOverlay] set_window_opacity failed:', err),
+    );
+  }, [opacity]);
+
   const channels = useMemo(
     () => [{ channel, channelId: channelId || null, channelName: channelName || channel, provider: 'twitch' as const }],
     [channel, channelId, channelName],
@@ -219,7 +241,7 @@ export default function ChatOverlayWindow() {
       onMouseEnter={showChrome}
       onMouseMove={showChrome}
       onMouseLeave={hideChromeSoon}
-      style={{ ['--sn-overlay-alpha' as string]: String(Math.max(0, Math.min(100, opacity)) / 100) }}
+      style={{ ['--sn-overlay-alpha' as string]: IS_LINUX ? '1' : String(Math.max(0, Math.min(100, opacity)) / 100) }}
     >
       {/* Control strip: drag handle + opacity + click-through + close. Hidden
           at rest; the whole strip is the drag region except its controls. */}

@@ -27,6 +27,64 @@ export const IS_ANDROID = /android/i.test(ua);
 export const IS_MAC = !IS_MOBILE && /Macintosh|Mac OS X/.test(ua);
 
 /**
+ * The desktop Linux engine, WebKitGTK. It re-walks the whole compositing layer
+ * tree on every frame any animation runs, which Chromium (Windows) and WebKit
+ * on macOS do far more cheaply, so a few always-on effects are held back there
+ * (html[data-engine="webkitgtk"] in globals.css). A synchronous UA test for the
+ * same first-paint reason as IS_MAC.
+ */
+export const IS_WEBKITGTK =
+  !IS_MOBILE && !IS_MAC && /Linux/.test(ua) && /AppleWebKit/.test(ua) && !/Chrome\//.test(ua);
+
+/**
+ * Desktop Linux, whichever engine. The Linux build embeds Chromium (a Chrome
+ * UA, so IS_WEBKITGTK is false there), and a few things are about the window
+ * system rather than the engine: an undecorated X11 window has no resize
+ * border of its own (LinuxResizeEdges draws one), and the setup wizard's drag
+ * strip has to sit above its content. Synchronous for the same first-paint
+ * reason as IS_MAC.
+ */
+export const IS_LINUX = !IS_MOBILE && !IS_MAC && /Linux/.test(ua);
+
+/**
+ * Who draws the main window's frame. `rounded`: Linux on a floating desktop,
+ * where the main window is transparent and its page rounds and borders its own
+ * body. `compositor`: Linux on a tiling compositor, which frames every window
+ * itself. `native`: Windows and macOS, where the OS draws it. Decided in Rust
+ * (src-tauri/src/linux_window_frame.rs) and handed over by an init script that
+ * runs before any page script, so it is known on the first paint. It is the
+ * process-wide decision: `ensureMainWindow` reads it from a popout to build a
+ * matching main window.
+ */
+export type WindowFrame = 'rounded' | 'compositor' | 'native';
+
+type TauriWindowGlobals = Window & {
+  __SN_WINDOW_FRAME__?: string;
+  __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } };
+};
+
+export const WINDOW_FRAME: WindowFrame = (() => {
+  const value =
+    typeof window === 'undefined' ? undefined : (window as TauriWindowGlobals).__SN_WINDOW_FRAME__;
+  return value === 'rounded' || value === 'compositor' ? value : 'native';
+})();
+
+/**
+ * The frame THIS page draws. Only the main window is created transparent, so
+ * only its page may round itself; a popout drawing the frame would show its
+ * window's opaque background in the corners. Read synchronously from the
+ * metadata Tauri injects, for the same first-paint reason as WINDOW_FRAME.
+ */
+const THIS_WINDOW_FRAME: WindowFrame = (() => {
+  if (WINDOW_FRAME !== 'rounded' || typeof window === 'undefined') return WINDOW_FRAME;
+  const label = (window as TauriWindowGlobals).__TAURI_INTERNALS__?.metadata?.currentWindow?.label;
+  return label === 'main' ? 'rounded' : 'native';
+})();
+
+/** True when this page rounds and borders itself (see WINDOW_FRAME). */
+export const DRAWS_OWN_FRAME = THIS_WINDOW_FRAME === 'rounded';
+
+/**
  * Publish the platform to CSS, for the handful of rules that genuinely differ
  * rather than merely looking different. Set at module load, which runs during
  * the initial import graph and therefore before the first paint, for the same
@@ -34,6 +92,12 @@ export const IS_MAC = !IS_MOBILE && /Macintosh|Mac OS X/.test(ua);
  */
 if (typeof document !== 'undefined') {
   document.documentElement.dataset.platform = IS_MAC ? 'mac' : IS_MOBILE ? 'mobile' : 'desktop';
+  document.documentElement.dataset.windowFrame = THIS_WINDOW_FRAME;
+  if (IS_WEBKITGTK) document.documentElement.dataset.engine = 'webkitgtk';
+  // The OS, for the rules that hold on desktop Linux under either engine
+  // (html[data-os="linux"] in globals.css). Absent everywhere else, so Windows
+  // and macOS stylesheets cannot match it by accident.
+  if (IS_LINUX) document.documentElement.dataset.os = 'linux';
 }
 
 /**

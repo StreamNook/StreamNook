@@ -1563,6 +1563,16 @@ let activeSurfaceTints: {
 // user's chosen level instead of flashing full glass on a theme switch.
 let lastGlassStrength = 1;
 
+// Blur behind glass (Theme > Glassiness). Without the frost, a panel at full
+// glassiness would show the content behind it sharp enough to fight the text on
+// it, so with blur off the tint never gets more see-through than this. The
+// cap matches the member card's pinned strength, the app's existing "glass
+// that still reads" level.
+let glassBlurEnabled = true;
+const BLUR_OFF_MAX_STRENGTH = 0.45;
+const effectiveGlassStrength = (): number =>
+    glassBlurEnabled ? lastGlassStrength : Math.min(lastGlassStrength, BLUR_OFF_MAX_STRENGTH);
+
 // Blend a translucent surface tint toward a solid colour as glassiness drops.
 // At strength 1 the original tint is returned (signature glass); at strength 0
 // the tint is composited over the theme's opaque tertiary surface (source-over)
@@ -1614,7 +1624,7 @@ export const applyTheme = (theme: Theme): void => {
         surfaceActive: palette.surfaceActive,
         tertiary: palette.backgroundTertiary,
     };
-    writeSurfaceGlass(lastGlassStrength);
+    writeSurfaceGlass(effectiveGlassStrength());
 
     // Text colors
     root.style.setProperty('--color-text-primary', palette.textPrimary);
@@ -1703,9 +1713,26 @@ export const applyGlassStrength = (transparency: number): void => {
     const clamped = Math.max(0, Math.min(100, transparency)) / 100;
     lastGlassStrength = clamped;
     const root = document.documentElement;
-    root.style.setProperty('--glass-strength', String(clamped));
-    writeSurfaceGlass(clamped);
+    const strength = effectiveGlassStrength();
+    root.style.setProperty('--glass-strength', String(strength));
+    writeSurfaceGlass(strength);
     root.setAttribute('data-glass', clamped === 0 ? 'off' : 'on');
+};
+
+// The default when a settings object carries no `glass_blur`. Rust fills the
+// field with the same default (on, every platform) on every load, so this only
+// covers a caller holding a settings object built without it.
+export const DEFAULT_GLASS_BLUR = true;
+
+// Turn the backdrop blur behind glass on or off. Off flags data-blur="off",
+// which strips every backdrop-filter in globals.css, and repaints the surfaces
+// at the capped strength so the glass stays readable without frost.
+export const applyGlassBlur = (enabled: boolean): void => {
+    document.documentElement.setAttribute('data-blur', enabled ? 'on' : 'off');
+    // Blur starts on, and stays on everywhere but Linux: repaint only on a change.
+    if (enabled === glassBlurEnabled) return;
+    glassBlurEnabled = enabled;
+    applyGlassStrength(lastGlassStrength * 100);
 };
 
 // ─── App font ───────────────────────────────────────────────────────────────

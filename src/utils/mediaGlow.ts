@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { isWindowHidden, onWindowVisibility } from './windowVisibility';
 import { Logger } from './logger';
+import { IS_LINUX } from './platform';
 import {
   ATTACK_MS,
   CALM_ATTACK_MS,
@@ -115,6 +116,30 @@ export async function sampleImageGlow(url: string, target: HTMLElement): Promise
 }
 
 /**
+ * The Linux build's version of the above: Rust fetches the thumbnail, scales it
+ * down and chooses the colour (services/media_glow.rs, `sample_media_glow`),
+ * and the page only sets the variable. The canvas path stays byte for byte on
+ * Windows and macOS, where its result is the one users have; Rust's resample of
+ * the same thumbnail is not pixel-identical, and a near-tie in the colour's
+ * modal bucket can land differently, which would be a visible change there.
+ * On Linux it moves ~130 ms of fetch, decode and readback per page of cards
+ * off the page's thread while it is still booting. Same host list, so which
+ * cards carry a tint does not differ between the two paths.
+ *
+ * Silently does nothing on any failure, and the card keeps the theme colour.
+ */
+async function sampleImageGlowInRust(url: string, target: HTMLElement): Promise<void> {
+  if (!canTryCors(url)) return;
+  try {
+    const glow = await invoke<Glow | null>('sample_media_glow', { url });
+    if (glow?.overall) target.style.setProperty('--stream-glow', glow.overall);
+  } catch {
+    // The fetch failed, or the element went away mid-sample. Either way the
+    // card keeps the theme colour and nothing is broken.
+  }
+}
+
+/**
  * Props to spread onto any card thumbnail so its card takes the image's colour.
  *
  * The image finds its own card with `closest('.media-card')` rather than being
@@ -145,10 +170,12 @@ export function glowThumbProps(url: string | undefined) {
     const card = el.closest<HTMLElement>('.media-card');
     if (!card || card.dataset.snGlow === url) return;
     card.dataset.snGlow = url;
+    // The canvas sampler everywhere but Linux, where Rust does the fetch and
+    // readback instead (see sampleImageGlowInRust).
     // Idle, so the second fetch never competes with thumbnails someone is
     // waiting on. The timeout stops it being starved forever on a busy page: a
     // colour that arrives late is fine, one that never arrives is not.
-    const go = () => void sampleImageGlow(url, card);
+    const go = () => void (IS_LINUX ? sampleImageGlowInRust(url, card) : sampleImageGlow(url, card));
     if (typeof requestIdleCallback === 'function') requestIdleCallback(go, { timeout: 4000 });
     else setTimeout(go, 250);
   };

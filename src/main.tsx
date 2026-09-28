@@ -18,6 +18,8 @@ const ProfileCardPage = lazy(() => import('./pages/ProfileCardPage.tsx'));
 const MultiChatWindow = lazy(() => import('./components/multichat/MultiChatWindow.tsx'));
 const ChatOverlayWindow = lazy(() => import('./components/multichat/ChatOverlayWindow'));
 const PluginWindowHost = lazy(() => import('./plugins-ui/PluginWindowHost.tsx'));
+// Linux only (see the mount below); lazy so the other desktops never load it.
+const LinuxResizeEdges = lazy(() => import('./components/LinuxResizeEdges.tsx'));
 // Popout-window and tray plumbing. These used to be unconditional side-effect
 // imports, so they registered at module load on Android too, where there is no
 // tray and WebviewWindow.create() throws. Desktop-only now; the microtask delay
@@ -27,6 +29,11 @@ if (!IS_MOBILE) {
   import('./utils/multichatWindow');
   // listens for the tray's "Open MultiChat" menu event
   import('./utils/multichatTrayBridge');
+}
+// Linux on a floating desktop: the page draws the window's rounded frame, which
+// comes off when the window is maximized or full screen.
+if (DRAWS_OWN_FRAME) {
+  void import('./utils/windowFrameState').then((m) => m.trackWindowFrameState());
 }
 // Fraunces (variable serif). The upright axis backs the "Serif" choice in
 // Theme > Font, so its @font-face must exist at boot for users who chose it
@@ -41,7 +48,7 @@ import './styles/theme-prism.css';
 // which is set just below, so importing it on desktop is inert.
 import './styles/mobile.css';
 import { initLogCapture } from './services/logService';
-import { IS_MOBILE, isPortrait, onOrientationChange } from './utils/platform';
+import { DRAWS_OWN_FRAME, IS_LINUX, IS_MOBILE, isPortrait, onOrientationChange } from './utils/platform';
 
 // Drive the mobile CSS off the document element. Orientation is tracked here
 // rather than with a CSS media query because the layout branch also needs it in
@@ -180,6 +187,10 @@ root.render(
     <MotionScope>
       <Suspense fallback={null}>
         {isChatOverlay ? <ChatOverlayWindow /> : isMultiChat ? <MultiChatWindow /> : isPluginWindow ? <PluginWindowHost /> : isProfileCard ? <ProfileCardPage /> : useNextMobileShell ? <MobileApp /> : <App />}
+        {/* Linux: the borderless windows' resize border, which the X11
+            window has none of (LinuxResizeEdges says why). Every window page
+            gets it; a window that cannot be resized renders nothing. */}
+        {IS_LINUX && <LinuxResizeEdges />}
       </Suspense>
     </MotionScope>
   </React.StrictMode>,

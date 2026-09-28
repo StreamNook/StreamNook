@@ -9,6 +9,7 @@
 // overlay only floats over borderless-windowed games.
 
 import { Logger } from './logger';
+import { IS_LINUX } from './platform';
 
 export interface OpenChatOverlayOptions {
   channel: string;
@@ -92,7 +93,9 @@ export async function openChatOverlayWindow(options: OpenChatOverlayOptions): Pr
       y,
       resizable: true,
       decorations: false,
-      transparent: true,
+      // Linux: the runtime cannot paint a transparent window, so the overlay
+      // is opaque there and its slider fades the whole window instead.
+      ...(IS_LINUX ? { backgroundColor: '#0c0c0d' } : { transparent: true }),
       alwaysOnTop: true,
       skipTaskbar: true,
       // Windows draws a 1px DWM frame line as part of the window shadow, even

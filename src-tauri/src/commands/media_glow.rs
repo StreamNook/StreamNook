@@ -31,3 +31,26 @@ pub async fn submit_media_frame(
         .map_err(|e| format!("bad frame sample: {e}"))?;
     Ok(media_glow::submit(&key, &rgba, width, height).await)
 }
+
+/// The Linux build's still path: the colour a card should glow, from its
+/// thumbnail's URL. Rust fetches the thumbnail, scales it down and chooses the
+/// colour (`services::media_glow::sample_url`), cached by URL so every surface
+/// showing that stream gets the same answer without a second fetch; the page
+/// only sets one CSS variable from the answer. Everywhere else the page keeps
+/// the canvas sampler above, whose result is the one users have: Rust's
+/// resample of the same thumbnail is not pixel-identical, and a near-tie in
+/// the colour's modal bucket can land differently. On Linux it moves the
+/// fetch, decode and readback off the page's thread while it is still booting.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tauri::command]
+pub async fn sample_media_glow(url: String) -> Result<Option<media_glow::Glow>, String> {
+    Ok(media_glow::sample_url(&url).await)
+}
+
+/// The phone has no `image` decoder in its build; a card there keeps the
+/// theme accent unless the colour is already cached.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+#[tauri::command]
+pub async fn sample_media_glow(url: String) -> Result<Option<media_glow::Glow>, String> {
+    Ok(media_glow::cached(&url).await)
+}

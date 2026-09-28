@@ -12,7 +12,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { LogicalPosition } from '@tauri-apps/api/dpi';
 import { Logger } from './logger';
-import { IS_MAC } from './platform';
+import { IS_MAC, WINDOW_FRAME } from './platform';
 
 // Generous cold-start ceiling: recreating main boots the whole app shell. The
 // fallback only exists so a missed/late `main-ready` can't deadlock the action.
@@ -87,7 +87,12 @@ export async function ensureMainAlive(): Promise<void> {
           // App's mount effect restores saved geometry and reveals, so the
           // recreated main appears painted instead of as a blank shell.
           visible: false,
-          backgroundColor: '#0c0c0d',
+          // Linux on a floating desktop draws its own rounded frame, which
+          // needs a transparent window; the Rust builders make the same call
+          // (src-tauri/src/linux_window_frame.rs).
+          ...(WINDOW_FRAME === 'rounded'
+            ? { transparent: true, backgroundColor: '#00000000' }
+            : { backgroundColor: '#0c0c0d' }),
         });
         win.once('tauri://error', (e) => {
           Logger.error('[ensureMain] create main failed:', e);

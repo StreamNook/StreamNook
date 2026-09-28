@@ -19,12 +19,14 @@ import { Tooltip } from '../components/ui/Tooltip';
 import { Logger } from '../utils/logger';
 import {
   applyTheme,
+  applyGlassBlur,
   applyGlassStrength,
   applyFont,
   getThemeById,
   getThemeByIdWithCustom,
   getOledTheme,
   DEFAULT_THEME_ID,
+  DEFAULT_GLASS_BLUR,
   DEFAULT_GLASS_TRANSPARENCY,
   DEFAULT_FONT_ID,
   OLED_THEME_ID,
@@ -90,12 +92,14 @@ export const PluginWindowHost = () => {
         : getThemeByIdWithCustom(themeId, settings.custom_themes || []) ||
           getThemeById(DEFAULT_THEME_ID);
     if (theme) applyTheme(theme);
+    applyGlassBlur(settings.glass_blur ?? DEFAULT_GLASS_BLUR);
     applyGlassStrength(settings.glass_transparency ?? DEFAULT_GLASS_TRANSPARENCY);
     applyFont(settings.font ?? DEFAULT_FONT_ID, settings.font_custom);
   }, [
     settings.theme,
     settings.custom_themes,
     settings.glass_transparency,
+    settings.glass_blur,
     settings.font,
     settings.font_custom,
     settings.oled_accent,

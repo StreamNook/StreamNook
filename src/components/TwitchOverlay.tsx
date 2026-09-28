@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Lock, X } from 'lucide-react';
 import { Logger } from '../utils/logger';
+import { IS_WEBKITGTK } from '../utils/platform';
 import { useAppStore } from '../stores/AppStore';
 import { useFollowsStore } from '../stores/followsStore';
 
@@ -96,6 +97,7 @@ function computeLayout(mode: OverlayMode): Layout {
 export default function TwitchOverlay() {
   const [overlay, setOverlay] = useState<OverlayState | null>(null);
   const [displayUrl, setDisplayUrl] = useState('');
+  const switchToAnotherDevice = useAppStore((s) => s.switchTwitchLoginToAnotherDevice);
   // Bumped on window resize so the layout recomputes and the webview re-syncs.
   const [tick, setTick] = useState(0);
   const mountedLabelRef = useRef<string | null>(null);
@@ -270,6 +272,18 @@ export default function TwitchOverlay() {
           <span className="text-white/90">{host}</span>
           {rest && <span className="text-white/45">{rest}</span>}
         </span>
+        {/* Linux only: Twitch can refuse its sign-in page inside WebKitGTK
+            ("browser not supported"); the same code can be approved from a
+            phone instead. */}
+        {IS_WEBKITGTK && overlay.label === 'twitch-login' && (
+          <button
+            type="button"
+            onClick={switchToAnotherDevice}
+            className="shrink-0 rounded px-2 py-1 text-[12px] leading-none text-white/60 transition-colors hover:bg-white/10 hover:text-white/90"
+          >
+            Sign in on another device
+          </button>
+        )}
         {withClose && (
           <button
             type="button"
