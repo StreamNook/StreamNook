@@ -300,6 +300,14 @@ impl MultiNookServer {
         Some((upstream, promotion))
     }
 
+    /// The quality menu this tile's resolve discovered. `None` for a tile that
+    /// is not in the registry or has not finished resolving.
+    pub async fn tile_qualities(stream_id: &str) -> Option<Vec<String>> {
+        let registry = STREAM_REGISTRY.lock().await;
+        let promotion = registry.get(stream_id)?.promotion.as_ref()?;
+        Some(promotion.available.clone())
+    }
+
     /// Get the port for a specific stream
     pub async fn get_port(stream_id: &str) -> Option<u16> {
         let registry = STREAM_REGISTRY.lock().await;

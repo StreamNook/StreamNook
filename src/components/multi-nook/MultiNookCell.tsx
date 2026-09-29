@@ -25,7 +25,7 @@ import StreamTitleWithEmojis from '../StreamTitleWithEmojis';
 import { Tooltip } from '../ui/Tooltip';
 import { TwitchVerifiedMark } from '../ui/TwitchGlyph';
 import { ProviderLogo } from '../ProviderLogo';
-import { GripHorizontal, Undo2, Loader2, RefreshCcw, EyeOff, WifiOff, Maximize2, Minimize2 } from 'lucide-react';
+import { GripHorizontal, Undo2, Loader2, RefreshCcw, EyeOff, WifiOff, Maximize2, Minimize2, Plus, Check, Radio } from 'lucide-react';
 import { Heart, HeartBreak, X as XIcon } from 'phosphor-react';
 import { Logger } from '../../utils/logger';
 import { canGridProvider, PROVIDER_WATCH, type ProviderId } from '../../types/providers';
@@ -52,13 +52,24 @@ const clearPendingFocusToggle = () => {
 };
 
 const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, gridSpanClass = '', customStyle = {}, isMaximized = false }) => {
-  const { id, provider, channelLogin, channelName, channelId, volume, muted, isFocused, streamUrl, isMinimized = false, loadError, profileImageUrl, title, broadcasterType } = slot;
+  const { id, provider, channelLogin, channelName, channelId, volume, muted, isFocused, streamUrl, isMinimized = false, loadError, profileImageUrl, title, broadcasterType, raid } = slot;
   // Actions only, so read them without subscribing. A bare `usemultiNookStore()`
   // here subscribed this tile to the WHOLE store, which meant any mutation
   // (including a volume drag on a sibling tile) re-rendered every tile in the
   // grid. Zustand actions keep the same identity for the store's lifetime.
-  const { toggleFocusSlot, toggleMaximizeSlot, dockSlot, removeSlot, changeSlotQuality, retrySlot } =
+  const { toggleFocusSlot, toggleMaximizeSlot, dockSlot, removeSlot, changeSlotQuality, retrySlot, addSlot, dismissSlotRaid } =
     usemultiNookStore.getState();
+
+  // The raid card offers the raided channel as a new tile, never in place of
+  // this one, so it only needs to know whether that channel is already here.
+  const raidTargetInGrid = usemultiNookStore(
+    (s) =>
+      !!raid &&
+      s.slots.some(
+        (t) => (t.provider ?? 'twitch') === 'twitch' && t.channelLogin.toLowerCase() === raid.target_login.toLowerCase(),
+      ),
+  );
+  const [addingRaidTarget, setAddingRaidTarget] = useState(false);
 
   // Offline tiles show the offline overlay instead of an endless loading spinner.
   const isLoading = !streamUrl && !loadError;
@@ -140,23 +151,22 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
   const showSubscribeButton =
     socialEnabled && offersMembership && playerOverlayButtonOn(playerOverlayButtons, 'subscribe');
 
-  // Available stream qualities for the focused tile's gear menu
+  // This tile's own quality menu. Every tile offers one, not just the focused
+  // tile: the relay kept the list its resolve discovered, so asking for it
+  // costs no network call and is keyed by this tile's stream id. Re-read when
+  // the tile restarts on a new url (a quality change, a retry).
   const [availableQualities, setAvailableQualities] = useState<string[]>([]);
   useEffect(() => {
-    if (!socialEnabled) return;
+    if (!streamUrl) return;
     // A tile the grid refuses should never exist, so this is belt and braces
-    // for any provider added to GRID_BLOCKED later: get_stream_qualities
-    // resolves playback, and resolving is the expensive, side-effectful half of
-    // an adapter. Cheap to keep, and it means a refused provider can never reach
-    // the backend from here.
-    //
-    // Note this is a FRONTEND guard on purpose. The solo player calls the very
-    // same command (AppStore.getStreamQualities), where resolving is correct and
-    // expected, so refusing inside the Rust command would break the solo quality
-    // menu to protect the grid.
+    // for any provider added to GRID_BLOCKED later.
     if (!canGridProvider(provider ?? 'twitch')) return;
     let cancelled = false;
-    invoke<string[]>('get_stream_qualities', { url: buildProviderUrl(provider ?? 'twitch', channelLogin) })
+    invoke<string[]>('get_multi_nook_tile_qualities', {
+      streamId: id,
+      url: buildProviderUrl(provider ?? 'twitch', channelLogin),
+      provider: provider ?? 'twitch',
+    })
       .then((qs) => {
         if (!cancelled && qs?.length) setAvailableQualities(qs);
       })
@@ -164,7 +174,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
     return () => {
       cancelled = true;
     };
-  }, [socialEnabled, channelLogin, provider]);
+  }, [streamUrl, id, channelLogin, provider]);
 
   // Inject a Quality submenu into this tile's Plyr settings gear — mirrors the
   // single player. Selecting a quality restarts only this tile's proxy via
@@ -262,27 +272,14 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
     });
   }, [availableQualities, slot.quality, id, changeSlotQuality, playerRef]);
 
-  // Add the quality submenu when focused; strip it back out when not (so
-  // non-focused tiles keep just the default playback gear).
+  // Add the quality submenu once this tile knows its qualities.
   useEffect(() => {
-    const player = playerRef.current as unknown as { elements?: { container?: HTMLElement } } | null;
-    const container = player?.elements?.container;
-    if (!container) return;
-
-    let timer: number | undefined;
-    if (socialEnabled && availableQualities.length > 0) {
-      // Defer so Plyr has finished rendering its menu DOM
-      timer = window.setTimeout(() => updateQualityMenu(), 200);
-    } else {
-      const menu = container.querySelector('.plyr__menu');
-      menu?.querySelector('[data-quality-menu]')?.remove();
-      menu?.querySelector('[data-plyr="quality"]')?.remove();
-    }
-    return () => {
-      if (timer) window.clearTimeout(timer);
-    };
+    if (availableQualities.length === 0) return;
+    // Defer so Plyr has finished rendering its menu DOM
+    const timer = window.setTimeout(() => updateQualityMenu(), 200);
+    return () => window.clearTimeout(timer);
     // isPlaying/streamUrl re-trigger after the player (re)initialises
-  }, [socialEnabled, availableQualities, updateQualityMenu, isPlaying, streamUrl, playerRef]);
+  }, [availableQualities, updateQualityMenu, isPlaying, streamUrl]);
 
   const {
     attributes,
@@ -486,7 +483,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
       />
 
       {/* Loading & Error States */}
-      {(isLoading || isBuffering) && !error && !loadError && (
+      {(isLoading || isBuffering) && !error && !loadError && !raid && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/50 backdrop-blur-sm z-10 pointer-events-none">
           <i className="ri-loader-4-line text-4xl text-white animate-spin"></i>
         </div>
@@ -495,7 +492,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
       {/* Offline / unreachable: the proxy could not start (e.g. the streamer is
           offline). Lets the user retry or hide the tile so it stops eating grid
           space while the others play. */}
-      {loadError && (
+      {loadError && !raid && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/85 backdrop-blur-sm z-30 px-4 text-center">
           {profileImageUrl ? (
             <img
@@ -535,10 +532,67 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
         </div>
       )}
 
-      {error && (
+      {error && !raid && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 z-10 text-rose-500 pointer-events-none">
           <i className="ri-error-warning-fill text-4xl mb-2"></i>
           <p className="text-sm font-medium">{error}</p>
+        </div>
+      )}
+
+      {/* Raided: the streamer sent their viewers on, and the stream is ending
+          or has ended. The card says where they went instead of the player's
+          network error, and offers that channel as a tile of its own. */}
+      {raid && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/85 backdrop-blur-sm z-30 px-4 text-center">
+          {raid.target_image ? (
+            <img
+              src={raid.target_image}
+              alt=""
+              className="w-14 h-14 rounded-full object-cover ring-2 ring-accent/60"
+            />
+          ) : (
+            <div className="w-14 h-14 rounded-full bg-white/[0.06] flex items-center justify-center">
+              <Radio className="w-5 h-5 text-textMuted" />
+            </div>
+          )}
+          <div className="min-w-0 max-w-[240px]">
+            <p className="text-xs text-textMuted truncate">{channelName || channelLogin} raided</p>
+            <p className="text-sm font-semibold text-white/95 truncate">{raid.target_name}</p>
+            {raid.target_title && (
+              <p className="text-xs text-textSecondary truncate mt-0.5">{raid.target_title}</p>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {raidTargetInGrid ? (
+              <span className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-textMuted">
+                <Check className="w-3.5 h-3.5" /> In MultiNook
+              </span>
+            ) : (
+              <button
+                onClick={async () => {
+                  setAddingRaidTarget(true);
+                  try {
+                    await addSlot(raid.target_login);
+                  } finally {
+                    setAddingRaidTarget(false);
+                  }
+                }}
+                disabled={addingRaidTarget}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg glass-button text-accent hover:text-white text-xs font-semibold disabled:opacity-60"
+              >
+                {addingRaidTarget ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                Add to MultiNook
+              </button>
+            )}
+            <Tooltip content="Show this tile's stream again" delay={300} side="bottom">
+              <button
+                onClick={() => dismissSlotRaid(id)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg glass-button text-textSecondary hover:text-white text-xs font-semibold"
+              >
+                Dismiss
+              </button>
+            </Tooltip>
+          </div>
         </div>
       )}
 

@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { patchSettings } from '../utils/settingsBroadcast';
 import { helixGet } from '../services/helix';
 import { useAppStore, type StreamStartResult } from './AppStore';
-import { MultiNookSlot, MultiNookPresetChannel, TwitchStream } from '../types';
+import { MultiNookSlot, MultiNookPresetChannel, MultiNookRaid, TwitchStream } from '../types';
 import type { ProviderId } from '../types/providers';
 import { makeKey, parseKey } from '../utils/providerKey';
 import { canGridProvider, gridRefusal } from '../types/providers';
@@ -183,6 +183,11 @@ interface MultiNookState {
   updateSlot: (id: string, updates: Partial<MultiNookSlot>) => void;
   changeSlotQuality: (id: string, quality: string) => Promise<void>;
   retrySlot: (id: string) => void;
+  /** Cover every Twitch tile of the raiding channel with the raid card. The
+   *  tile itself is never replaced: the user put that channel in the grid. */
+  markSlotsRaided: (raid: MultiNookRaid) => void;
+  /** Take the raid card off a tile, back to whatever the player shows. */
+  dismissSlotRaid: (id: string) => void;
   reorderSlots: (newSlots: MultiNookSlot[]) => void;
   toggleFocusSlot: (id: string) => void;
   /** Toggle a tile filling the whole grid area. Maximizing also focuses the tile
@@ -692,6 +697,22 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
         loadError: false,     // Give previously-offline tiles another chance
       }))
     }));
+  },
+
+  markSlotsRaided: (raid: MultiNookRaid) => {
+    const { slots } = get();
+    if (!slots.some((s) => (s.provider ?? 'twitch') === 'twitch' && s.channelId === raid.source_id)) return;
+    set({
+      slots: slots.map((s) =>
+        (s.provider ?? 'twitch') === 'twitch' && s.channelId === raid.source_id ? { ...s, raid } : s,
+      ),
+    });
+  },
+
+  dismissSlotRaid: (id: string) => {
+    const { slots } = get();
+    if (!slots.some((s) => s.id === id && s.raid)) return;
+    set({ slots: slots.map((s) => (s.id === id ? { ...s, raid: undefined } : s)) });
   },
 
   retrySlot: (id: string) => {
@@ -1268,6 +1289,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       delete cleaned.loadError;
       delete cleaned.title;
       delete cleaned.broadcasterType;
+      delete cleaned.raid;
       return cleaned as MultiNookSlot;
     });
     

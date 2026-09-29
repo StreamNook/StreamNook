@@ -29,6 +29,9 @@ import { usemultiNookStore } from '../../stores/multiNookStore';
 import { useTutorialStore } from '../../stores/tutorialStore';
 import { acquireChannel, releaseChannel } from '../../stores/chatConnectionStore';
 import { Logger } from '../../utils/logger';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import type { MultiNookRaid } from '../../types';
 import { useVisibleInterval } from '../../utils/useVisibleInterval';
 import { useMultiNookSync } from './useMultiNookSync';
 
@@ -121,6 +124,35 @@ export const MultiNookView: React.FC = () => {
         void releaseChannel(entry.channel, entry.provider).catch(() => {});
       }
       held.clear();
+    };
+  }, []);
+
+  // Raids out of the grid's Twitch tiles. Rust holds one socket on their raid
+  // topics (services/multi_nook_raids.rs); this only declares which channels,
+  // keyed on the id set so a volume drag never re-sends it. Docked tiles are
+  // included: the card is waiting when the tile comes back.
+  const raidChannelKey = useMemo(
+    () =>
+      slots
+        .filter((s) => (s.provider ?? 'twitch') === 'twitch' && s.channelId)
+        .map((s) => s.channelId as string)
+        .sort()
+        .join(','),
+    [slots],
+  );
+  useEffect(() => {
+    invoke('set_multi_nook_raid_channels', {
+      channelIds: raidChannelKey ? raidChannelKey.split(',') : [],
+    }).catch((err) => Logger.warn('[MultiNook] raid channels update failed:', err));
+  }, [raidChannelKey]);
+  useEffect(() => {
+    const unlisten = listen<MultiNookRaid>('multi-nook://raid', (e) => {
+      usemultiNookStore.getState().markSlotsRaided(e.payload);
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+      // Leaving MultiNook closes the socket.
+      invoke('set_multi_nook_raid_channels', { channelIds: [] }).catch(() => {});
     };
   }, []);
 

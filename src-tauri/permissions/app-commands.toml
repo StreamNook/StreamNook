@@ -149,6 +149,8 @@ allow = [
   "stop_all_multi_nooks",
   "get_active_multi_nooks",
   "promote_multi_nook_tile",
+  "get_multi_nook_tile_qualities",
+  "set_multi_nook_raid_channels",
   "register_active_channel",
   "unregister_active_channel",
   "start_chat",

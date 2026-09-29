@@ -307,7 +307,7 @@ export const useMultiNookPlayer = ({
         if (!playerRef.current) {
           playerRef.current = new Plyr(video, {
             controls: ['play', 'progress', 'current-time', 'volume', 'settings', 'fullscreen'],
-            settings: ['speed'], // Quality submenu is injected manually by MultiNookCell (focused tile)
+            settings: ['speed'], // Quality submenu is injected manually by MultiNookCell (every tile)
             autoplay: false, // Wait for buffer gate
             muted: muted,
             clickToPlay: false, // Disabled so we can capture clicks for focus
@@ -485,7 +485,7 @@ export const useMultiNookPlayer = ({
         if (!playerRef.current) {
           playerRef.current = new Plyr(video, {
             controls: ['play', 'progress', 'current-time', 'volume', 'settings', 'fullscreen'],
-            settings: ['speed'], // Quality submenu is injected manually by MultiNookCell (focused tile)
+            settings: ['speed'], // Quality submenu is injected manually by MultiNookCell (every tile)
             autoplay: false,
             muted: muted,
             clickToPlay: false, // Disabled so we can capture clicks for focus

@@ -1,5 +1,6 @@
 use crate::commands::streaming::StreamStartResult;
 use crate::models::settings::AppState;
+use crate::rt::AppHandle;
 use crate::services::multi_nook_server::{
     MultiNookServer, TileProfile, TilePromotion, TileRefresher,
 };
@@ -441,4 +442,48 @@ pub async fn promote_multi_nook_tile(
 #[tauri::command]
 pub async fn get_active_multi_nooks() -> Result<Vec<String>, String> {
     Ok(MultiNookServer::get_active_streams().await)
+}
+
+/// Declare the grid's Twitch channels, by user id, so a raid out of any of them
+/// reaches its tile as `multi-nook://raid`. An empty list closes the socket.
+#[tauri::command]
+pub fn set_multi_nook_raid_channels(app: AppHandle, channel_ids: Vec<String>) {
+    crate::services::multi_nook_raids::set_channels(&app, channel_ids);
+}
+
+/// The quality menu for one tile, so every tile in the grid can offer its own
+/// selector without resolving the channel again.
+///
+/// A tile's relay keeps the menu its resolve discovered, which answers every
+/// Twitch and Kick tile for free. A YouTube tile serves its own relay and never
+/// registers, so it asks its platform adapter instead, whose parsed master is
+/// already cached from starting the tile. A Twitch tile still resolving answers
+/// empty rather than paying for a second resolve.
+#[tauri::command]
+pub async fn get_multi_nook_tile_qualities(
+    stream_id: String,
+    url: String,
+    provider: Option<String>,
+) -> Result<Vec<String>, String> {
+    if let Some(qualities) = MultiNookServer::tile_qualities(&stream_id).await {
+        return Ok(qualities);
+    }
+    let provider = provider.unwrap_or_else(|| "twitch".to_string());
+    if provider == "twitch" {
+        return Ok(Vec::new());
+    }
+    let Some(channel) = provider_channel_from_url(&provider, &url) else {
+        return Ok(Vec::new());
+    };
+    let Some(source) = crate::services::providers::registry()
+        .await
+        .get_source(&provider)
+    else {
+        return Ok(Vec::new());
+    };
+    source
+        .qualities(&channel)
+        .await
+        .map(|q| crate::services::providers::hls_master::quality_names(&q))
+        .map_err(|e| e.to_string())
 }
