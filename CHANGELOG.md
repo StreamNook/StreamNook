@@ -1,3 +1,34 @@
+## [8.8.1] - 2026-09-29
+
+## 🎉 New: Twitch Recap hours on your profile, and raids in MultiNook
+> Your profile now counts the hours Twitch Recap recorded before you joined
+> StreamNook, with nothing to set up. MultiNook tiles show where a streamer
+> raided and add that channel in one click, and full screen while watching
+> shows only the stream and chat.
+
+---
+
+### ✨ Features
+- **Twitch Recap hours on your profile.** The hours Twitch Recap recorded before you joined StreamNook count toward your hours watched. They fill in on their own a few minutes after you open the app, and a switch in your profile settings takes them back off.
+- **Raids in MultiNook.** When a streamer in your grid raids someone, their tile shows who they raided, with a button to add that channel.
+- **A quality menu on every tile.** Every MultiNook tile has its own quality menu. Before, only the focused tile had one.
+- **Stream-only full screen.** Full screen while watching shows only the stream and chat. Move your cursor to the top edge to bring the title bar back, or turn this off in Interface settings.
+- **Keep your atmosphere out of chat.** Your atmosphere can stay on your profile and hover card without showing behind your chat messages. The switch sits under your atmospheres.
+- **Frames around the whole card.** An equipped frame now borders your whole profile card.
+- **Chat beside the video on phones.** In landscape, chat can sit beside the video in a column you can resize, and the system bars stay hidden while you watch.
+
+### 🐛 Bug Fixes
+- The GIF picker loads GIFs and can send them. It was asking Twitch with a sign-in Twitch rejects, so the grid stayed empty.
+- Drops that Twitch accepts but never grants, such as rewards that need a linked game account, are no longer shown as claimed. StreamNook tries them again every hour.
+- The StreamNook badge sits after your other badges on your profile card and on the phone profile, the same as in chat.
+- Hiding the line about your hours now hides it on your public profile too.
+- Profile cards no longer repeat "StreamNook Member" under your rank when you wear the default badge.
+- Home's tabs and the notification island no longer slide under the title bar buttons in a narrow window. The tabs switch to icons when space runs out.
+- Glassiness at 0% gives a solid background over a playing stream.
+- Clicking the chat header no longer clicks names under it, and scrolling over it still scrolls chat.
+- Opening or switching a MultiChat pane no longer strips paints and badges from the other panes.
+- Profile visibility and atmosphere changes made in the app show on your public page right away.
+
 ## [8.8.0] - 2026-09-28
 
 ![Every emote, one Tab](https://raw.githubusercontent.com/StreamNook/StreamNook/main/.github/assets/release-8.8.0-emotes-and-drops.webp)
