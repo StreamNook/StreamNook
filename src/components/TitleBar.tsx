@@ -30,6 +30,7 @@ import { Tooltip } from './ui/Tooltip';
 import { AutomationPulse, type AutomationTone } from './ui/AutomationPulse';
 import PluginTitleBarButtons from '../plugins-ui/PluginTitleBarButtons';
 import { usePluginUpdates } from '../stores/pluginUpdatesStore';
+import { useStreamOnlyFullscreen } from '../hooks/useStreamOnlyFullscreen';
 
 /** Maps a bundle-update-progress payload to a 0–100 fill. The download stage
  *  carries a real byte percentage ("Downloading 47%"); the quick post-download
@@ -543,13 +544,47 @@ const TitleBar = () => {
     [isMaximized],
   );
 
+  // Stream-only full screen: the bar tucks up out of sight and a thin strip at
+  // the top edge brings it back. It stays while the cursor is over it (menus it
+  // portals count, React tracks enter/leave through the component tree) and
+  // tucks again a moment after the cursor leaves. The leave handler runs in
+  // every mode, so a bar revealed when full screen ends never comes back
+  // pre-revealed the next time.
+  const streamOnlyFullscreen = useStreamOnlyFullscreen();
+  const [barRevealed, setBarRevealed] = useState(false);
+  const tuckTimerRef = useRef<number | null>(null);
+  const cancelTuck = useCallback(() => {
+    if (tuckTimerRef.current !== null) {
+      window.clearTimeout(tuckTimerRef.current);
+      tuckTimerRef.current = null;
+    }
+  }, []);
+  const revealBar = useCallback(() => {
+    cancelTuck();
+    setBarRevealed(true);
+  }, [cancelTuck]);
+  const scheduleTuck = useCallback(() => {
+    cancelTuck();
+    tuckTimerRef.current = window.setTimeout(() => {
+      tuckTimerRef.current = null;
+      setBarRevealed(false);
+    }, 400);
+  }, [cancelTuck]);
+  useEffect(() => cancelTuck, [cancelTuck]);
+  const barTucked = streamOnlyFullscreen && !barRevealed;
+
   return (
     <>
+      {barTucked && (
+        <div aria-hidden className="fixed inset-x-0 top-0 h-1 z-[51]" onMouseEnter={revealBar} />
+      )}
       {/* macOS decorates this window with an Overlay title bar, so AppKit
           draws real traffic lights at the leading edge. Reserve their footprint
           rather than drawing anything underneath them. */}
       <div
         onMouseDown={IS_MAC ? undefined : onTitleBarMouseDown}
+        onMouseEnter={cancelTuck}
+        onMouseLeave={scheduleTuck}
         data-tauri-drag-region={IS_MAC ? true : undefined}
         // Paints nothing: no fill, no blur, no rule under it. Everything in
         // here is already a floating glazed pill, so with the plate gone the
@@ -571,7 +606,20 @@ const TitleBar = () => {
         // layout changes. Surfaces that must not slide under it (the sidebar,
         // the chat column) clear it themselves. The main content column
         // deliberately does not.
-        className="absolute inset-x-0 top-0 flex items-center justify-between h-[40px] px-3 select-none z-50"
+        //
+        // A three-column grid, `1fr auto 1fr`: the side columns share whatever
+        // the centre leaves, so the centre sits at true centre while both
+        // clusters fit their half. A side column never shrinks below its
+        // cluster, though, so when the left cluster outgrows its half the centre
+        // is pushed right instead of sliding underneath it. Home keeps its strip
+        // inside that room by drawing the tabs denser (useTitleBarNavDensity).
+        // The centre track's floor is 0 rather than its content, so if even the
+        // densest strip cannot fit, the centre gives way and the window controls
+        // are never pushed off the edge.
+        data-titlebar
+        className={`absolute inset-x-0 top-0 grid grid-cols-[1fr_minmax(0,auto)_1fr] gap-x-3 items-center h-[40px] px-3 select-none z-50 transition-[transform,opacity] duration-200 ease-out ${
+          barTucked ? '-translate-y-full opacity-0 pointer-events-none' : ''
+        }`}
         style={IS_MAC ? { paddingLeft: MAC_TRAFFIC_LIGHT_INSET_PX } : undefined}
       >
         {/* The centre of the bar, as two slots other components portal into.
@@ -581,29 +629,28 @@ const TitleBar = () => {
             counts. Portaling lets them stay where they are and still render
             here.
 
-            Absolutely centred so neither slot can push the left or right
-            clusters around as its contents change width. `pointer-events-none`
-            on the wrapper with `auto` on the slots, so the empty space between
-            and around them stays draggable window chrome.
+            `pointer-events-none` on the wrapper with `auto` on the slots, so the
+            empty space between and around them stays draggable window chrome.
 
             The Island's SURFACE is still rendered at the app root (App.tsx) so
             it can lift above the Settings blur overlay; only its door sits
             here, and the surface grows out of that door rightward over the nav
             and collapses back into it. */}
-        <div className="pointer-events-none absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center">
-          {/* The NAV is what gets centred, not the pair. Sitting them side by
-              side in one centred row pushes the tabs right of true centre by
-              half the trigger plus the gap, which is visible against the window
-              — so the trigger is taken out of flow and hung off the nav's left
-              edge instead. The wrapper then measures the nav alone. */}
-          <div
-            id="sn-island-slot"
-            className="pointer-events-auto absolute right-full mr-2 flex items-center"
-          />
-          <div id="sn-nav-slot" className="pointer-events-auto flex items-center" />
+        <div className="pointer-events-none col-start-2 row-start-1 flex items-center gap-2">
+          {/* Only one of the two is ever filled. With Home's strip in the bar
+              the Island door joins the strip (its inline slot) and this one
+              stays empty; with no strip the door stands alone here. So each slot
+              drops out of layout while empty, and whichever is filled is what
+              gets centred, with no stray gap beside it. */}
+          <div id="sn-island-slot" className="pointer-events-auto flex items-center empty:hidden" />
+          <div id="sn-nav-slot" className="pointer-events-auto flex items-center empty:hidden" />
         </div>
 
-        <div className="flex items-center gap-2.5" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+        <div
+          data-titlebar-left
+          className="col-start-1 row-start-1 justify-self-start flex items-center gap-2.5"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        >
           {/* Penrose Logo. On macOS the leading edge belongs to the traffic
               lights, so About moves to the trailing edge instead — into the slot
               the full-screen button vacates there. */}
@@ -930,7 +977,11 @@ const TitleBar = () => {
           </AnimatePresence>
         </div>
 
-        <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+        <div
+          data-titlebar-right
+          className="col-start-3 row-start-1 justify-self-end flex items-center gap-2"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        >
           {/* Buttons contributed by ui plugins (rendered in native style) */}
           <PluginTitleBarButtons />
 

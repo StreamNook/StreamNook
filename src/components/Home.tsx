@@ -4,7 +4,7 @@ import { useAppStore, ensureHomeSnapshotSync, announceHome, clipSourceOf, HomeTa
 import { IS_LINUX, IS_MOBILE } from '../utils/platform';
 import { createPortal } from 'react-dom';
 import { glowThumbProps } from '../utils/mediaGlow';
-import { Search, Heart, X, Pickaxe, LayoutGrid, Flame, ArrowUpRight, Undo2, Users, User, Loader2, Clock, Play, Check, Plus } from 'lucide-react';
+import { Search, Heart, X, Pickaxe, LayoutGrid, Flame, ArrowUpRight, Undo2, Users, User, Loader2, Clock, Play, Check, Plus, Compass, List } from 'lucide-react';
 import { Package, UsersThree } from 'phosphor-react';
 import { MediaCard } from './MediaCard';
 import ContinueWatchingRow from './ContinueWatchingRow';
@@ -44,6 +44,7 @@ import {
 import { formatViewerCount } from '../utils/streamStats';
 import { useStreamAvatars } from '../hooks/useStreamAvatars';
 import { useVisibleAvatarKeys } from '../hooks/useVisibleAvatarKeys';
+import { useTitleBarNavDensity } from '../hooks/useTitleBarNavDensity';
 import { Logger } from '../utils/logger';
 import { useVisibleInterval } from '../utils/useVisibleInterval';
 import { gameBoxArt } from '../utils/boxArt';
@@ -2512,6 +2513,18 @@ const Home = () => {
         setNavSlot(IS_MOBILE ? null : document.getElementById('sn-nav-slot'));
     }, []);
 
+    // How dense the tabs draw so the strip fits between the title bar's two
+    // icon clusters in one row: full, then tighter with no count, then icons
+    // named by their tooltips.
+    const [navStrip, setNavStrip] = useState<HTMLDivElement | null>(null);
+    const navStripRef = useCallback((el: HTMLDivElement | null) => {
+        searchBarRef.current = el;
+        setNavStrip(el);
+    }, []);
+    const navDensity = useTitleBarNavDensity(navSlot, navStrip);
+    const navIcons = navDensity === 2;
+    const tabPad = navDensity === 0 ? 'px-3' : 'px-2';
+
     // The floating nav and the padding that clears it must agree: the category
     // drill-down hides the nav, and a fixed inset there would leave a gap with
     // nothing in it.
@@ -2579,7 +2592,7 @@ const Home = () => {
                         }`}
                         style={IS_MOBILE ? { paddingTop: 'calc(0.625rem + var(--sn-safe-top))' } : undefined}
                     >
-                    <div ref={searchBarRef} // The strip wears the glaze across its whole length, and
+                    <div ref={navStripRef} // The strip wears the glaze across its whole length, and
                         // the selected tab is the darker pill set into it.
                         // `--frosted`: this floats over the grid, and clear glass
                         // lets bright artwork wash straight through the labels.
@@ -2625,9 +2638,11 @@ const Home = () => {
                                 here they were unreachable most of the time. They live in
                                 the title bar now, which is mounted in every view. */}
                             {isAuthenticated && (
+                                <Tooltip content="Following" delay={200} disabled={!navIcons}>
                                 <button
+                                    aria-label={navIcons ? 'Following' : undefined}
                                     onClick={() => { setActiveTab('following'); setIsSearchExpanded(false); }}
-                                    className={`group relative px-3 py-1 text-sm font-medium rounded-lg transition-all duration-300 whitespace-nowrap ${activeTab === 'following'
+                                    className={`group relative ${tabPad} py-1 text-sm font-medium rounded-lg transition-colors duration-300 whitespace-nowrap ${activeTab === 'following'
                                         ? 'text-textPrimary'
                                         : 'text-textSecondary hover:text-textPrimary'
                                         }`}
@@ -2648,21 +2663,24 @@ const Home = () => {
                                         />
                                     )}
                                     <span className={`relative z-10 flex items-center transition-all duration-300 ${activeTab !== 'following' ? 'group-hover:drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]' : ''}`}>
-                                        Following
+                                        {navIcons ? <Users size={16} className="my-0.5" /> : 'Following'}
                                         {/* Counts what this tab will actually show, which
                                             changes with the platform — the Twitch number
                                             beside a Kick list was just wrong. */}
-                                        {followingCount > 0 && (
+                                        {navDensity === 0 && followingCount > 0 && (
                                             <span className="ml-1.5 text-xs opacity-80">
                                                 {followingCount}
                                             </span>
                                         )}
                                     </span>
                                 </button>
+                                </Tooltip>
                             )}
+                            <Tooltip content="Discover" delay={200} disabled={!navIcons}>
                             <button
+                                aria-label={navIcons ? 'Discover' : undefined}
                                 onClick={() => { setActiveTab('recommended'); setIsSearchExpanded(false); }}
-                                className={`group relative px-3 py-1 text-sm font-medium rounded-lg transition-all duration-300 whitespace-nowrap ${activeTab === 'recommended'
+                                className={`group relative ${tabPad} py-1 text-sm font-medium rounded-lg transition-colors duration-300 whitespace-nowrap ${activeTab === 'recommended'
                                     ? 'text-textPrimary'
                                     : 'text-textSecondary hover:text-textPrimary'
                                     }`}
@@ -2676,12 +2694,15 @@ const Home = () => {
                                         transition={{ type: "spring", stiffness: 350, damping: 30 }}
                                     />
                                 )}
-                                <span className={`relative z-10 inline-block transition-all duration-300 ${activeTab !== 'recommended' ? 'group-hover:drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]' : ''}`}>Discover</span>
+                                <span className={`relative z-10 inline-block transition-all duration-300 ${activeTab !== 'recommended' ? 'group-hover:drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]' : ''}`}>{navIcons ? <Compass size={16} className="my-0.5" /> : 'Discover'}</span>
                             </button>
+                            </Tooltip>
                             {showsCategoriesTab && (
+                            <Tooltip content="Categories" delay={200} disabled={!navIcons}>
                             <button
+                                aria-label={navIcons ? 'Categories' : undefined}
                                 onClick={handleBrowseClick}
-                                className={`group relative px-3 py-1 text-sm font-medium rounded-lg transition-all duration-300 whitespace-nowrap ${activeTab === 'browse'
+                                className={`group relative ${tabPad} py-1 text-sm font-medium rounded-lg transition-colors duration-300 whitespace-nowrap ${activeTab === 'browse'
                                     ? 'text-textPrimary'
                                     : 'text-textSecondary hover:text-textPrimary'
                                     }`}
@@ -2695,13 +2716,16 @@ const Home = () => {
                                         transition={{ type: "spring", stiffness: 350, damping: 30 }}
                                     />
                                 )}
-                                <span className={`relative z-10 inline-block transition-all duration-300 ${activeTab !== 'browse' ? 'group-hover:drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]' : ''}`}>Categories</span>
+                                <span className={`relative z-10 inline-block transition-all duration-300 ${activeTab !== 'browse' ? 'group-hover:drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]' : ''}`}>{navIcons ? <LayoutGrid size={16} className="my-0.5" /> : 'Categories'}</span>
                             </button>
+                            </Tooltip>
                             )}
                             {(searchResults.length > 0 || categorySearchResults.length > 0) && (
+                                <Tooltip content="Results" delay={200} disabled={!navIcons}>
                                 <button
+                                    aria-label={navIcons ? 'Results' : undefined}
                                     onClick={() => setActiveTab('search')}
-                                    className={`group relative px-3 py-1 text-sm font-medium rounded-lg transition-all duration-300 whitespace-nowrap ${activeTab === 'search'
+                                    className={`group relative ${tabPad} py-1 text-sm font-medium rounded-lg transition-colors duration-300 whitespace-nowrap ${activeTab === 'search'
                                         ? 'text-textPrimary'
                                         : 'text-textSecondary hover:text-textPrimary'
                                         }`}
@@ -2716,10 +2740,11 @@ const Home = () => {
                                         />
                                     )}
                                     <span className={`relative z-10 flex items-center transition-all duration-300 ${activeTab !== 'search' ? 'group-hover:drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]' : ''}`}>
-                                        Results
+                                        {navIcons ? <List size={16} className="my-0.5" /> : 'Results'}
                                         <span className="ml-1 text-xs opacity-80">{searchMode === 'categories' ? categorySearchResults.length : searchResults.length}</span>
                                     </span>
                                 </button>
+                                </Tooltip>
                             )}
                             <div className="border-l border-borderSubtle h-6 ml-1" />
                             {/* Search button - opens search */}

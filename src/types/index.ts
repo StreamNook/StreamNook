@@ -804,6 +804,18 @@ export interface MultiNookSlot {
   loadError?: boolean;       // Ephemeral: the proxy failed to start (offline/unreachable). Not persisted.
   title?: string;            // Ephemeral: current stream title, refreshed from Helix while the grid is open. Not persisted, since a saved title goes stale the moment the streamer edits it.
   broadcasterType?: string;  // Ephemeral: 'partner' | 'affiliate' | ''. Drives the verified mark on the tile. Resolved from helix/users, which every slot-creating path already calls.
+  raid?: MultiNookRaid;      // Ephemeral: the channel this tile's streamer raided. Covers the tile with a card until dismissed. Not persisted.
+}
+
+/** A raid out of a MultiNook tile, as Rust emits it on `multi-nook://raid`
+ *  (services/multi_nook_raids.rs). `source_id` is the tile's channel. */
+export interface MultiNookRaid {
+  source_id: string;
+  target_id: string;
+  target_login: string;
+  target_name: string;
+  target_image?: string | null;
+  target_title?: string | null;
 }
 
 /** A single channel stored inside a MultiNook preset. Deliberately a lean subset
@@ -1113,6 +1125,11 @@ export interface Settings {
   // purpose: a full-size window glued in front of everything is overbearing.
   // Only the frontend reads it, so it rides Rust's `extra` catch-all.
   keep_on_top_in_compact?: boolean;
+  // Full screen (F11) while watching tucks the title bar and sidebar away so
+  // only the stream and chat show; each comes back when the cursor reaches its
+  // edge. Frontend-only, so it rides Rust's `extra` catch-all. Default ON,
+  // hence every read is `!== false`.
+  fullscreen_stream_only?: boolean;
   // Tint a stream's container from the colour of what is playing in it. Only
   // the frontend reads it (Rust is handed frames, it does not decide whether to
   // ask for them), so it rides Rust's `extra` catch-all exactly like

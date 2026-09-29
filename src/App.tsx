@@ -24,6 +24,7 @@ import Home from './components/Home';
 import { useCommandPaletteHotkey } from './hooks/useCommandPaletteHotkey';
 import { usePlatformSessionCheck } from './hooks/usePlatformSessionCheck';
 import { usePlatformAccountSync } from './hooks/usePlatformAccountSync';
+import { useStreamOnlyFullscreen } from './hooks/useStreamOnlyFullscreen';
 import { useKeybindings } from './keybindings';
 import { useCurrentStreamStats } from './utils/useCurrentStreamStats';
 import { startSnippetSync } from './stores/snippetStore';
@@ -402,6 +403,7 @@ function App() {
     return () => { if (chatRevealTimer.current) window.clearTimeout(chatRevealTimer.current); };
   }, [autoHideActive]);
   const isMultiNookActive = usemultiNookStore((s) => s.isMultiNookActive);
+  const streamOnlyFullscreen = useStreamOnlyFullscreen();
   // Which tile the grid's chat pane is showing. Only read to decide WHICH chat
   // surface renders; ChatWidget still synthesizes the Twitch case itself.
   const multiNookSlots = usemultiNookStore((s) => s.slots);
@@ -2068,7 +2070,7 @@ function App() {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.2, ease: "easeInOut" }}
-                className={`absolute inset-0 z-40 ${streamUrl || isMultiNookActive ? 'bg-background/85 sn-glass-veil' : 'bg-background'}`}
+                className={`absolute inset-0 z-40 ${streamUrl || isMultiNookActive ? 'sn-glass-veil' : 'bg-background'}`}
               >
                 <ErrorBoundary componentName="Home" reportToLogService resetKeys={[isHomeActive]}>
                   <Home />
@@ -2116,7 +2118,10 @@ function App() {
                 // It also keeps the aspect-ratio lock honest: measureAspectChrome
                 // counts TITLE_BAR_HEIGHT as chrome outside the video box, which
                 // is only true while something actually reserves it.
-                className={`flex flex-1 h-full overflow-hidden ${IS_MOBILE ? '' : 'pt-10'} ${
+                //
+                // Stream-only full screen tucks the bar away, so nothing is
+                // reserved and the player and chat run to the top edge.
+                className={`flex flex-1 h-full overflow-hidden ${IS_MOBILE || streamOnlyFullscreen ? '' : 'pt-10'} ${
                   settings.show_mod_logs && chatPlacement !== 'hidden'
                     ? (isSideChat ? 'flex-col' : 'flex-row')
                     : (chatPlacement === 'bottom' ? 'flex-col' : 'flex-row')
@@ -2393,7 +2398,7 @@ function App() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.45, ease: 'easeInOut' }}
-            className="fixed inset-x-0 bottom-0 top-[40px] z-[55] flex items-center justify-center bg-background/90 sn-glass-veil"
+            className="fixed inset-x-0 bottom-0 top-[40px] z-[55] flex items-center justify-center sn-glass-veil [--veil-clear:10%]"
           >
             <LoadingWidget fullScreen={false} message="Loading StreamNook" />
           </motion.div>

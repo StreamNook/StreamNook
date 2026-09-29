@@ -1509,6 +1509,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Interface',
+    section: 'Full Screen',
+    sectionId: 'settings-section-window-fullscreen',
+    title: 'Show only the stream and chat',
+    description: 'The title bar and sidebar tuck away while you watch in full screen. Move your cursor to the top edge to bring the title bar back, or to the side edge for the sidebar.'
+  },
+  {
+    tab: 'Interface',
     section: 'Keep on Top',
     sectionId: 'settings-section-window-on-top',
     title: 'Keep on top in Compact View',

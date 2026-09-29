@@ -5,6 +5,7 @@ import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
 import { GlassMultiSelect } from '../ui/GlassMultiSelect';
 import { DISCOVERY_LANGUAGES } from '../../utils/discoveryLanguages';
 import { useAppStore } from '../../stores/AppStore';
+import { IS_MAC } from '../../utils/platform';
 import type { MotionMode, CloseToTrayMode } from '../../types';
 
 export type SidebarMode = 'expanded' | 'compact' | 'hidden' | 'disabled';
@@ -85,6 +86,7 @@ const InterfaceSettings = () => {
     })();
 
     const keepOnTopInCompact = settings.keep_on_top_in_compact === true;
+    const fullscreenStreamOnly = settings.fullscreen_stream_only !== false;
 
     const motionMode: MotionMode = settings.motion_mode ?? 'full';
     const handleMotionModeChange = (mode: MotionMode) => {
@@ -310,6 +312,24 @@ const InterfaceSettings = () => {
                         <Toggle
                             enabled={compactSettingsWindow}
                             onChange={() => handleCompactSettingsWindowChange(!compactSettingsWindow)}
+                        />
+                    }
+                />
+            </SettingsSection>
+
+            <SettingsSection
+                id="settings-section-window-fullscreen"
+                label="Full Screen"
+                description={`What stays on screen when you go full screen (${IS_MAC ? 'Ctrl+Cmd+F' : 'F11'}) while watching.`}
+            >
+                <SettingsRow
+                    title="Show only the stream and chat"
+                    description="The title bar and sidebar tuck away while you watch in full screen. Move your cursor to the top edge to bring the title bar back, or to the side edge for the sidebar."
+                    help="Home keeps its title bar in full screen, since its tabs and search live there."
+                    control={
+                        <Toggle
+                            enabled={fullscreenStreamOnly}
+                            onChange={() => void updateSettings({ ...settings, fullscreen_stream_only: !fullscreenStreamOnly })}
                         />
                     }
                 />

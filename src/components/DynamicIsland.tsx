@@ -263,7 +263,13 @@ const DynamicIsland = () => {
     // Where the surface grows FROM. Null until measured, and on mobile (no
     // title bar, so no slot) it stays null and the old centred behaviour holds.
     const [anchor, setAnchor] = useState<
-        { left: number; top: number; width: number; height: number; cover: number; radius: number } | null
+        {
+            left: number; top: number; width: number; height: number; cover: number; radius: number;
+            // The stretch of the bar the surface may use: from the left icon
+            // cluster's right edge to the right cluster's left edge, less the
+            // bar's gap on each side.
+            roomLeft: number; roomRight: number;
+        } | null
     >(null);
     const previewTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -311,8 +317,14 @@ const DynamicIsland = () => {
     // watch the parent too.
     useLayoutEffect(() => {
         if (!slot) return;
+        const leftCluster = document.querySelector<HTMLElement>('[data-titlebar-left]');
+        const rightCluster = document.querySelector<HTMLElement>('[data-titlebar-right]');
         const measure = () => {
             const r = slot.getBoundingClientRect();
+            const bar = leftCluster?.parentElement;
+            const gap = bar ? parseFloat(getComputedStyle(bar).columnGap) || 0 : 0;
+            const roomLeft = leftCluster ? leftCluster.getBoundingClientRect().right + gap : 8;
+            const roomRight = rightCluster ? rightCluster.getBoundingClientRect().left - gap : window.innerWidth - 8;
             // Joined into the strip, the thing being filled is the STRIP, so the
             // geometry is the strip's pill and not the trigger's own box: same
             // top, same height, and `cover` is its full width. Anchoring to the
@@ -339,6 +351,7 @@ const DynamicIsland = () => {
                     // on the same box is what left the strip's corners visible
                     // around the notification filling it.
                     radius: parseFloat(getComputedStyle(pill!).borderTopLeftRadius) || 0,
+                    roomLeft, roomRight,
                 });
                 return;
             }
@@ -347,6 +360,7 @@ const DynamicIsland = () => {
                 width: r.width || 72, height: r.height || 34,
                 cover: 0,
                 radius: 0,
+                roomLeft, roomRight,
             });
         };
         measure();
@@ -359,6 +373,11 @@ const DynamicIsland = () => {
         if (navEl) ro.observe(navEl);
         const pillEl = slot.closest('[data-nav-strip]');
         if (pillEl) ro.observe(pillEl);
+        // When the left cluster outgrows its half of the bar it pushes the
+        // centre right, so its width moves the slot too. Both clusters also
+        // bound the room the surface may grow into.
+        if (leftCluster) ro.observe(leftCluster);
+        if (rightCluster) ro.observe(rightCluster);
         window.addEventListener('resize', measure);
         return () => {
             ro.disconnect();
@@ -1459,6 +1478,27 @@ const DynamicIsland = () => {
         const t = setTimeout(() => setSurfaceShown(false), 340);
         return () => clearTimeout(t);
     }, [wantsSurface]);
+    // The surface never runs over the title bar's icon clusters. Covering the
+    // strip it already has the strip's bounds. Standalone it grows from the
+    // door's centre, so its width is capped at the room between the clusters,
+    // and when the door sits off-centre in that room (a wide left cluster
+    // pushes it right) the surface slides back inside rather than shrinking to
+    // twice the short side.
+    const surfaceTargetWidth = isExpanded
+        ? (anchor?.cover || expandedWidth)
+        : wantsSurface
+            ? getCollapsedWidth()
+            : (anchor?.width ?? 72);
+    let surfaceWidth = surfaceTargetWidth;
+    let surfaceShift = 0;
+    if (anchor && !anchor.cover) {
+        const room = Math.max(anchor.width, anchor.roomRight - anchor.roomLeft);
+        surfaceWidth = Math.min(surfaceTargetWidth, room);
+        const centredLeft = anchor.left + anchor.width / 2 - surfaceWidth / 2;
+        const left = Math.max(anchor.roomLeft, Math.min(centredLeft, anchor.roomRight - surfaceWidth));
+        surfaceShift = left - centredLeft;
+    }
+
     const shown = notifications.slice(0, 3);
     const hasSeveralDays = new Set(notifications.map((n) => groupLabel(n.timestamp))).size > 1;
     const overflow = notifications.length - shown.length;
@@ -1579,11 +1619,11 @@ const DynamicIsland = () => {
                     animate={{
                         // Idle is the trigger's own box, so the surface visibly
                         // shrinks back INTO it rather than blinking out.
-                        width: isExpanded
-                            ? (anchor?.cover || expandedWidth)
-                            : wantsSurface
-                                ? getCollapsedWidth()
-                                : (anchor?.width ?? 72),
+                        width: surfaceWidth,
+                        // Only ever non-zero standalone, where the surface is
+                        // held inside the room between the clusters. The same
+                        // spring as the width, so the two travel as one.
+                        x: surfaceShift,
                         // Collapsed pill sits centered in the title bar. The bar is
                         // h-[40px] (less a 1px bottom border); container at top-1.5 (6px)
                         // + a 28px pill leaves an even gap above and below.

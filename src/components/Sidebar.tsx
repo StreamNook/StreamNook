@@ -18,6 +18,7 @@ import { useFollowsStore } from '../stores/followsStore';
 import { favoriteIdOf, favoriteMetaOf } from '../utils/favorites';
 import { streamProvider, streamKey } from '../utils/streamProvider';
 import { useStreamAvatars } from '../hooks/useStreamAvatars';
+import { useStreamOnlyFullscreen } from '../hooks/useStreamOnlyFullscreen';
 
 import { Logger } from '../utils/logger';
 import { IS_LINUX, IS_WEBKITGTK } from '../utils/platform';
@@ -357,10 +358,16 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
 
 
     // Sidebar mode from settings
-    const [sidebarMode, setSidebarMode] = useState<SidebarMode>(() => {
+    const [chosenSidebarMode, setSidebarMode] = useState<SidebarMode>(() => {
         const settings = getSidebarSettings();
         return settings.mode;
     });
+    // Stream-only full screen overrides whatever mode is chosen with hidden, so
+    // the stream and chat get the screen and the list still slides in from the
+    // edge. Disabled stays disabled: that viewer never wants the list.
+    const streamOnlyFullscreen = useStreamOnlyFullscreen();
+    const sidebarMode: SidebarMode =
+        streamOnlyFullscreen && chosenSidebarMode !== 'disabled' ? 'hidden' : chosenSidebarMode;
     const [expandOnHover, setExpandOnHover] = useState(() => {
         const settings = getSidebarSettings();
         return settings.expandOnHover;
@@ -937,7 +944,9 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
                         // MUST track the title bar height (h-[40px] in TitleBar.tsx);
                         // when it lagged at top-8 the panel rode up under the bar and
                         // its frosted backing clipped the title-bar action icons.
-                        ? `fixed ${onRight ? 'right-0' : 'left-0'} top-10 bottom-0 z-50`
+                        // Stream-only full screen tucks the bar away, so the
+                        // panel runs the full height there.
+                        ? `fixed ${onRight ? 'right-0' : 'left-0'} ${streamOnlyFullscreen ? 'top-0' : 'top-10'} bottom-0 z-50`
                         // pt-10 clears the floating title bar, which no longer
                         // reserves those 40px for anyone. Padding rather than a
                         // margin so the panel's own backing still reaches the top

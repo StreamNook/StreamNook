@@ -143,8 +143,8 @@ function build(): BindableCommand[] {
       id: 'window.toggleFullscreen',
       label: 'Toggle full screen',
       description: IS_MAC
-        ? 'Fill the whole screen with the app, chat and all. The green window button does this too.'
-        : 'Fill the whole screen (over the taskbar) with the app, chat and all.',
+        ? 'Fill the whole screen with the app. While you watch, only the stream and chat show.'
+        : 'Fill the whole screen (over the taskbar) with the app. While you watch, only the stream and chat show.',
       category: 'Application',
       context: 'global',
       // F11 is taken on macOS: the system binds it to Show Desktop / Mission
