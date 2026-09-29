@@ -4231,10 +4231,20 @@ body[data-player-covered="true"] .video-player-container[data-immersive="true"] 
    blur is what turns it into ambience rather than a readable picture. The
    radius follows the Glassiness slider like every other glass surface, so the
    slider is the one compute knob for browsing over a stream: at the default it
-   is the same 40 px frost as before (Tailwind backdrop-blur-2xl), at 0 the
-   stream shows dimmed and sharp. Measured 2026-09-06: this layer is about a
-   quarter of a core of GPU-process time at full strength over 1080p60. */
+   is the same 40 px frost as before (Tailwind backdrop-blur-2xl), at 0 there
+   is no frost at all. Measured 2026-09-06: this layer is about a
+   quarter of a core of GPU-process time at full strength over 1080p60.
+
+   The tint follows the slider too. `--veil-clear` (15% unless a veil sets
+   its own) is how much of the stream shows through at full glass. It scales
+   down with --glass-strength, so at 0% the veil is the solid background the
+   slider promises rather than a dimmed, sharp picture of the stream. */
 .sn-glass-veil {
+  background-color: color-mix(
+    in srgb,
+    var(--color-background) calc(100% - var(--veil-clear, 15%) * var(--glass-strength, 1)),
+    transparent
+  );
   -webkit-backdrop-filter: blur(calc(40px * var(--glass-strength)));
   backdrop-filter: blur(calc(40px * var(--glass-strength)));
 }

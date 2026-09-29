@@ -1401,6 +1401,33 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     ro.observe(chromeEl);
     return () => ro.disconnect();
   }, [chromeEl]);
+  // Rows scroll beneath the floating header, so the header takes pointer input
+  // itself: a click on it must never land on a name hidden underneath. The
+  // wheel is the one input that should still reach what it covers, so it is
+  // handed to the list below, both to scroll it and so the list's own wheel
+  // handler still reads the pause-on-scroll-up intent.
+  const forwardHeaderWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    const header = e.currentTarget;
+    const beneath = document
+      .elementsFromPoint(e.clientX, e.clientY)
+      .find((el) => !header.contains(el));
+    if (!beneath) return;
+    let scroller: Element | null = beneath;
+    while (scroller && !(scroller.scrollHeight > scroller.clientHeight && /(auto|scroll)/.test(getComputedStyle(scroller).overflowY))) {
+      scroller = scroller.parentElement;
+    }
+    if (!scroller) return;
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? scroller.clientHeight : 1;
+    beneath.dispatchEvent(new WheelEvent('wheel', {
+      deltaX: e.deltaX,
+      deltaY: e.deltaY,
+      deltaMode: e.deltaMode,
+      clientX: e.clientX,
+      clientY: e.clientY,
+      bubbles: true,
+    }));
+    scroller.scrollBy({ top: e.deltaY * unit });
+  };
   // Where the combined-chat bar ends. It sits in flow under the header and its
   // height moves too (an invite, a suggestion, the link editor), so the floating
   // pinned message is placed below whichever of the two reaches lower instead of
@@ -2308,13 +2335,25 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     return () => clearInterval(intervalId);
   }, [currentStream?.started_at]);
 
-
-
-
+  // Only the main surface empties the chatter store on a channel switch. The
+  // store is one per window, so in MultiChat every pane shares it, and a pane
+  // that mounted or changed channel used to wipe the paints, 7TV badges and
+  // third-party badges off every message on screen in every pane until each
+  // chatter spoke again. A layout effect, because the message effect that
+  // re-adds the backlog lives in ChatMessagesPanel, and a child's passive
+  // effects run before this component's: clearing in a passive effect wiped
+  // the backlog right after it was added, and nothing added it back.
+  const usersClearedForRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const login = currentStream?.user_login;
+    if (!isMainSurface || !login || usersClearedForRef.current === login) return;
+    usersClearedForRef.current = login;
+    clearUsers();
+  }, [isMainSurface, currentStream?.user_login, clearUsers]);
 
   useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    
+
     // Late-arriving room id: same login, but user_id changed from empty to
     // populated. Re-call connectChat so chatConnectionStore can register the
     // real broadcaster_id (which it needs to populate the Twitch badge cache).
@@ -2356,7 +2395,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       userMessageHistory.current.clear();
       sharedRoomsSeenRef.current.clear();
       setIsSharedChat(false);
-      clearUsers(); // Clear mention autocomplete user list
       // PHASE 3: Clear Rust user message history when switching channels
       invoke('clear_user_message_history').catch(err => 
         Logger.warn('[ChatWidget] Failed to clear Rust user history:', err)
@@ -4582,9 +4620,11 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         {/* Chat header - transforms when Hype Train active */}
         {/* flex-col-reverse keeps the stream-info row on top while the hype bar
             (declared first below) renders underneath it */}
-        <div ref={setChromeEl} className={`absolute top-0 left-0 right-0 px-3 py-1.5 border-b backdrop-blur-ultra z-10 pointer-events-none shadow-[0_8px_18px_-12px_rgba(0,0,0,0.7)] overflow-hidden flex flex-col-reverse ${
+        {/* The tint follows Glassiness: 10% of the rows show through at full
+            glass, none at 0%, where the blur is stripped too. */}
+        <div ref={setChromeEl} onWheel={forwardHeaderWheel} className={`absolute top-0 left-0 right-0 px-3 py-1.5 border-b backdrop-blur-ultra z-10 shadow-[0_8px_18px_-12px_rgba(0,0,0,0.7)] overflow-hidden flex flex-col-reverse ${
           isSharedChat && !currentHypeTrain ? 'iridescent-border' : 'border-borderSubtle'
-        }`} style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 90%, transparent)' }}>
+        }`} style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(100% - 10% * var(--glass-strength, 1)), transparent)' }}>
           {currentHypeTrain && (
             <HypeTrainBanner
               train={currentHypeTrain}
