@@ -15,15 +15,24 @@
 //! 2. Eligibility (`isAllowlisted`, the server-side Tier 2/3 gate) is a fact
 //!    about the channel + account, so it is cached per channel and answered
 //!    once rather than rediscovered by every window that opens a picker.
+//!
+//! Every GQL call carries the twitch.tv web session the app's own sign-in
+//! creates (`TwitchAuthService`), the same credential the Turbo and
+//! subscription checks use. Twitch's GQL refuses StreamNook's own client ids,
+//! and refuses the StreamNook login token under the web client id ("The
+//! Authorization token is invalid"), so that token cannot be used here.
 
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
+use tauri::State;
 use tokio::sync::RwLock;
 
+use crate::models::settings::AppState;
 use crate::services::auth_proxy::TWITCH_WEB_CLIENT_ID;
-use crate::services::twitch_service::{gql_device_id, TwitchService};
+use crate::services::twitch_auth_service::TwitchAuthService;
+use crate::services::twitch_service::gql_device_id;
 
 const GQL_URL: &str = "https://gql.twitch.tv/gql";
 const GIPHY_BASE: &str = "https://api.giphy.com/v1/gifs";
@@ -96,7 +105,20 @@ pub async fn clear_config_cache() {
     config_cache().write().await.clear();
 }
 
-/// POST an inline GQL operation with the viewer's token.
+/// Bound on reading the web session. On a phone it waits on the UI thread, and
+/// a backgrounded webview must not hang a picker or a send.
+const TOKEN_BUDGET: Duration = Duration::from_secs(30);
+
+/// The twitch.tv session token, or the same "not signed in" error the picker
+/// has always shown. Never prompts: the session comes from the app's sign-in.
+async fn web_session_token(auth: &TwitchAuthService) -> Result<String, String> {
+    match tokio::time::timeout(TOKEN_BUDGET, auth.get_token()).await {
+        Ok(Ok(token)) => Ok(token),
+        _ => Err("not signed in to Twitch".to_string()),
+    }
+}
+
+/// POST an inline GQL operation with the viewer's web session token.
 async fn gql(token: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
     let resp = crate::services::http::client()
         .post(GQL_URL)
@@ -132,16 +154,14 @@ const CONFIG_QUERY: &str = r#"query getGifPickerConfig($channelID: ID!) {
 }"#;
 
 /// Fetch (or serve cached) the GIF picker config for a channel.
-async fn load_config(channel_id: &str) -> Result<GifConfig, String> {
+async fn load_config(channel_id: &str, auth: &TwitchAuthService) -> Result<GifConfig, String> {
     if let Some((at, cfg)) = config_cache().read().await.get(channel_id) {
         if at.elapsed() < CONFIG_TTL {
             return Ok(cfg.clone());
         }
     }
 
-    let token = TwitchService::get_token()
-        .await
-        .map_err(|_| "not signed in to Twitch".to_string())?;
+    let token = web_session_token(auth).await?;
     let json = gql(
         &token,
         serde_json::json!({
@@ -183,8 +203,11 @@ async fn load_config(channel_id: &str) -> Result<GifConfig, String> {
 
 /// Can this account use the GIF picker in this channel, and under what rating?
 #[tauri::command]
-pub async fn get_gif_picker_status(channel_id: String) -> Result<GifPickerStatus, String> {
-    let cfg = load_config(&channel_id).await?;
+pub async fn get_gif_picker_status(
+    state: State<'_, AppState>,
+    channel_id: String,
+) -> Result<GifPickerStatus, String> {
+    let cfg = load_config(&channel_id, &state.twitch_auth).await?;
     Ok(GifPickerStatus {
         is_enabled: cfg.is_enabled,
         is_allowlisted: cfg.is_allowlisted,
@@ -234,11 +257,12 @@ fn parse_gif(item: &serde_json::Value) -> Option<GifItem> {
 /// matching what the web picker shows when it opens.
 #[tauri::command]
 pub async fn search_gifs(
+    state: State<'_, AppState>,
     channel_id: String,
     query: Option<String>,
     offset: Option<u32>,
 ) -> Result<Vec<GifItem>, String> {
-    let cfg = load_config(&channel_id).await?;
+    let cfg = load_config(&channel_id, &state.twitch_auth).await?;
     let Some(api_key) = cfg.api_key.as_deref() else {
         return Err("GIFs are not available in this channel".to_string());
     };
@@ -300,6 +324,7 @@ const SEND_MUTATION: &str = r#"mutation sendGifMessage($input: SendGifMessageInp
 /// the caller shows both and does NOT retry on its own.
 #[tauri::command]
 pub async fn send_gif_message(
+    state: State<'_, AppState>,
     channel_id: String,
     gif_id: String,
     gif_url: String,
@@ -308,9 +333,7 @@ pub async fn send_gif_message(
     if channel_id.is_empty() || gif_id.is_empty() || gif_url.is_empty() {
         return Err("missing channel or GIF".to_string());
     }
-    let token = TwitchService::get_token()
-        .await
-        .map_err(|_| "not signed in to Twitch".to_string())?;
+    let token = web_session_token(&state.twitch_auth).await?;
 
     let mut input = serde_json::json!({
         "channelID": channel_id,
