@@ -68,6 +68,35 @@ fn claim_outcome_from_status(status: Option<&str>) -> Option<ClaimOutcome> {
     }
 }
 
+/// Whether a drop is earned and waiting to be claimed: Twitch says so outright
+/// for multi-day and subscription rewards (no minutes to compare), otherwise
+/// the watched minutes reached a non-zero requirement.
+fn drop_earned(p: &DropProgress) -> bool {
+    match &p.twitch_progress {
+        Some(t) => t.ready_to_claim && p.drop_instance_id.is_some(),
+        None => p.current_minutes_watched >= p.required_minutes_watched && p.required_minutes_watched > 0,
+    }
+}
+
+/// Whether Twitch really granted a drop it answered `ELIGIBLE_FOR_ALL` for,
+/// judged from progress refreshed after the claim.
+///
+/// That answer alone is not a grant: for a drop whose game account is not
+/// linked (nopixel V's GTA$ rewards, Rockstar unlinked) Twitch says eligible
+/// and then keeps the drop unclaimed in the inventory, earned and holding its
+/// instance id, however often it is claimed. Nothing on the campaign tells
+/// the two apart ahead of time (badge campaigns report `isAccountConnected:
+/// false` too), so the inventory is the judge. Anything else counts as
+/// granted: marked claimed, or gone from the inventory (Twitch evicts a
+/// campaign once its last drop is claimed, and the campaign list then shows
+/// the tier at 0 minutes with no instance).
+fn claim_confirmed(after: Option<&DropProgress>) -> bool {
+    match after {
+        Some(p) => p.is_claimed || p.drop_instance_id.is_none() || !drop_earned(p),
+        None => true,
+    }
+}
+
 
 #[derive(Debug, Deserialize)]
 struct DropCampaignsData {
@@ -1546,25 +1575,19 @@ impl DropsService {
             return Err(anyhow::anyhow!("GraphQL errors: {:?}", errors));
         }
 
-        // Check claimDropRewards response status
-        if let Some(data) = response_json.get("data") {
-            if let Some(claim_result) = data.get("claimDropRewards") {
-                let result_status = claim_result
-                    .get("status")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("UNKNOWN");
-
-                debug!("Claim result status: {}", result_status);
-
-                match result_status {
-                    "ELIGIBLE_FOR_ALL" | "DROP_INSTANCE_ALREADY_CLAIMED" => {
-                        debug!("Drop claimed successfully!");
-                    }
-                    _ => {
-                        debug!("Unexpected claim status: {}", result_status);
-                    }
-                }
-            }
+        // Only a status Twitch uses for a settled claim counts. A 200 with a
+        // null payload (an instance that did not resolve) or an unknown status
+        // used to fall through to "claimed", so the button reported a claim
+        // that never happened.
+        let result_status = response_json
+            .pointer("/data/claimDropRewards/status")
+            .and_then(|s| s.as_str());
+        debug!("Claim result status: {:?}", result_status);
+        if claim_outcome_from_status(result_status).is_none() {
+            return Err(anyhow::anyhow!(
+                "Twitch did not claim this drop ({})",
+                result_status.unwrap_or("no result")
+            ));
         }
 
         // Update progress to mark as claimed
@@ -1927,6 +1950,15 @@ impl DropsService {
             // once per drop instead of on every check tick.
             let mut notified_ready: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
+            // Claims Twitch answered ELIGIBLE_FOR_ALL for, waiting for a
+            // refreshed inventory to show whether the drop was really granted
+            // before anything is announced or settled (see `claim_confirmed`).
+            let mut unconfirmed: HashMap<String, (DateTime<Utc>, ClaimedDrop)> = HashMap::new();
+            // Drops Twitch called eligible but did not grant (a game account
+            // not linked): retried hourly, so linking the account later lets
+            // the next try through, and never announced until one is granted.
+            const UNGRANTED_RETRY_SECS: i64 = 3600;
+            let mut ungranted: HashMap<String, DateTime<Utc>> = HashMap::new();
 
             loop {
                 // Check if monitoring should continue
@@ -1960,6 +1992,7 @@ impl DropsService {
                                 >= PROGRESS_REFRESH_SECS
                         })
                         .unwrap_or(true);
+                    let mut inventory_fresh = false;
                     if refresh_due {
                         let campaign_snapshot =
                             match Self::fetch_active_campaigns(&client, &device_id, &session_id)
@@ -1984,6 +2017,7 @@ impl DropsService {
                                     None
                                 }
                             };
+                        inventory_fresh = inventory_overlay.is_some();
                         if campaign_snapshot.is_some() || inventory_overlay.is_some() {
                             let mut progress_map = drop_progress.write().await;
                             if let Some(snapshot) = campaign_snapshot {
@@ -1996,6 +2030,46 @@ impl DropsService {
                         }
                     }
 
+                    // Settle claims awaiting confirmation, once an inventory read
+                    // taken after the claim says whether Twitch granted them.
+                    if inventory_fresh && !unconfirmed.is_empty() {
+                        let now = Utc::now();
+                        let verdicts: Vec<(String, bool)> = {
+                            let progress_map = drop_progress.read().await;
+                            unconfirmed
+                                .iter()
+                                .filter(|(_, (claimed_at, _))| {
+                                    now.signed_duration_since(*claimed_at).num_seconds() >= 30
+                                })
+                                .map(|(id, _)| (id.clone(), claim_confirmed(progress_map.get(id))))
+                                .collect()
+                        };
+                        for (drop_id, granted) in verdicts {
+                            let Some((_, claimed)) = unconfirmed.remove(&drop_id) else { continue };
+                            if !granted {
+                                info!(
+                                    "[Auto] Twitch accepted the claim for {} ({}) but has not granted it; the game account is probably not linked. Retrying hourly.",
+                                    claimed.drop_name, drop_id
+                                );
+                                ungranted.insert(drop_id, now);
+                                continue;
+                            }
+                            ungranted.remove(&drop_id);
+                            {
+                                let mut settled = attempted_claims.write().await;
+                                settled.insert(drop_id.clone(), now);
+                                save_attempted_claims(&settled);
+                            }
+                            claimed_drops.write().await.push(claimed.clone());
+                            // A claimed reward can be a badge; the
+                            // missing-badges list should drop it now.
+                            crate::services::badge_standing::collection_may_have_changed(&app_handle);
+                            if current_settings.notify_on_drop_claimed {
+                                let _ = app_handle.emit("drop-claimed", &claimed);
+                            }
+                        }
+                    }
+
                     // Check for claimable drops from the refreshed progress map.
                     // attempted_claims holds drops already SETTLED with Twitch and
                     // survives restarts; failures live in failed_claims with a
@@ -2003,20 +2077,18 @@ impl DropsService {
                     let claimable_drops: Vec<DropProgress> = {
                         let progress_map = drop_progress.read().await;
                         let attempted = attempted_claims.read().await;
+                        let now = Utc::now();
                         progress_map
                             .values()
                             .filter(|p| {
-                                let earned = match &p.twitch_progress {
-                                    // Twitch says outright when a reward is earned
-                                    // and waiting (subscription rewards have no
-                                    // minutes to compare).
-                                    Some(t) => t.ready_to_claim && p.drop_instance_id.is_some(),
-                                    None => {
-                                        p.current_minutes_watched >= p.required_minutes_watched
-                                            && p.required_minutes_watched > 0 // Only collectible drops
-                                    }
-                                };
-                                !p.is_claimed && earned && !attempted.contains_key(&p.drop_id) // Skip already-settled
+                                let resting = unconfirmed.contains_key(&p.drop_id)
+                                    || ungranted.get(&p.drop_id).is_some_and(|at| {
+                                        now.signed_duration_since(*at).num_seconds() < UNGRANTED_RETRY_SECS
+                                    });
+                                !p.is_claimed
+                                    && drop_earned(p)
+                                    && !attempted.contains_key(&p.drop_id) // Skip already-settled
+                                    && !resting
                             })
                             .cloned()
                             .collect()
@@ -2056,17 +2128,23 @@ impl DropsService {
                                         progress.drop_id, outcome
                                     );
                                     failed_claims.remove(&progress.drop_id);
-                                    {
+
+                                    // Already granted: settled, and not news. It
+                                    // still reaches here whenever the settled set
+                                    // does not cover it: a fresh install, a
+                                    // cleared profile, or a drop claimed on
+                                    // another device.
+                                    if outcome == ClaimOutcome::AlreadyClaimed {
+                                        ungranted.remove(&progress.drop_id);
                                         let mut settled = attempted_claims.write().await;
                                         settled.insert(progress.drop_id.clone(), Utc::now());
                                         save_attempted_claims(&settled);
                                     }
 
-                                    // Only a reward granted by THIS call is
-                                    // news. An already-claimed one still reaches
-                                    // here whenever the settled set does not cover
-                                    // it: a fresh install, a cleared profile, or a
-                                    // drop claimed on another device.
+                                    // Granted by THIS call as far as Twitch's
+                                    // answer goes: held until a refreshed
+                                    // inventory confirms it, then announced and
+                                    // settled above.
                                     if outcome == ClaimOutcome::Claimed {
                                         let described = Self::describe_drop(
                                             &*cached_campaigns.read().await,
@@ -2099,15 +2177,10 @@ impl DropsService {
                                             claimed_at: Utc::now(),
                                         };
 
-                                        claimed_drops.write().await.push(claimed.clone());
-
-                                        // A claimed reward can be a badge; the
-                                        // missing-badges list should drop it now.
-                                        crate::services::badge_standing::collection_may_have_changed(&app_handle);
-
-                                        if current_settings.notify_on_drop_claimed {
-                                            let _ = app_handle.emit("drop-claimed", &claimed);
-                                        }
+                                        unconfirmed.insert(progress.drop_id.clone(), (Utc::now(), claimed));
+                                        // Read the inventory again on the next
+                                        // pass rather than a full refresh later.
+                                        last_progress_refresh = None;
                                     }
                                 }
                                 Err(e) => {
@@ -2545,6 +2618,45 @@ mod claim_outcome_tests {
     #[test]
     fn an_unknown_status_is_not_assumed_good() {
         assert_eq!(claim_outcome_from_status(Some("SOMETHING_NEW")), None);
+    }
+
+    fn progress(current: i32, required: i32, claimed: bool, instance: Option<&str>) -> DropProgress {
+        DropProgress {
+            campaign_id: "c".into(),
+            drop_id: "d".into(),
+            current_minutes_watched: current,
+            required_minutes_watched: required,
+            is_claimed: claimed,
+            last_updated: Utc::now(),
+            drop_instance_id: instance.map(String::from),
+            twitch_progress: None,
+        }
+    }
+
+    /// nopixel V's GTA$ drop with Rockstar unlinked: after an ELIGIBLE_FOR_ALL
+    /// answer the inventory still holds it earned, unclaimed, with its instance.
+    #[test]
+    fn an_eligible_claim_the_inventory_still_holds_was_not_granted() {
+        assert!(!claim_confirmed(Some(&progress(60, 60, false, Some("u#c#d")))));
+    }
+
+    #[test]
+    fn a_claim_the_inventory_marks_claimed_was_granted() {
+        assert!(claim_confirmed(Some(&progress(60, 60, true, Some("u#c#d")))));
+    }
+
+    /// Twitch evicts a campaign from the inventory once its last drop is
+    /// claimed; the campaign list then reports the tier at 0 with no instance.
+    #[test]
+    fn a_drop_gone_from_the_inventory_was_granted() {
+        assert!(claim_confirmed(Some(&progress(0, 60, false, None))));
+        assert!(claim_confirmed(None));
+    }
+
+    #[test]
+    fn a_zero_minute_drop_is_never_earned_by_watching() {
+        assert!(!drop_earned(&progress(0, 0, false, Some("u#c#d"))));
+        assert!(drop_earned(&progress(30, 30, false, Some("u#c#d"))));
     }
 }
 
