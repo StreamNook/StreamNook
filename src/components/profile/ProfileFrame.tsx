@@ -1,19 +1,20 @@
-// The member's equipped Frame, rendered as an overlay that borders its
-// positioned parent (the profile hero band). Reuses the Cologne nine-slice
-// border-image styling (see MajorCologneChrome.css .cologne-frame). Reads the
-// equipped frame from the equipment model; renders nothing when none is equipped.
-// The frame art is a wide rectangular nine-slice, so it belongs on the hero band,
-// not the circular avatar.
+// The member's equipped Frame. It is the profile card's border: the overlay
+// fills the whole card, and a framed card drops its own rounded corners and
+// outline so the frame's square corners are the card's (the website profile
+// does the same). Reuses the Cologne nine-slice border-image styling (see
+// MajorCologneChrome.css .cologne-frame). Renders nothing when none is equipped.
 
 import { useEffect, useState } from 'react';
 import { getActiveEquipment, getCosmeticBySlug } from '../../services/supabaseService';
 import { resolveCosmeticAsset } from '../cosmeticAssets';
 import type { ActiveEquipment } from '../../services/cosmetics/types';
 
-export function ProfileFrame({ userId }: { userId: string | null | undefined }) {
+/** The member's equipped frame art, or null when none is equipped. */
+export function useProfileFrameUrl(userId: string | null | undefined): string | null {
   const [equipment, setEquipment] = useState<ActiveEquipment>({});
 
   useEffect(() => {
+    setEquipment({});
     if (!userId) return;
     let alive = true;
     getActiveEquipment(userId)
@@ -28,20 +29,20 @@ export function ProfileFrame({ userId }: { userId: string | null | undefined }) 
 
   const frameSlug = equipment.frame;
   const cosmetic = frameSlug ? getCosmeticBySlug(frameSlug) : null;
-  const frameUrl = cosmetic ? resolveCosmeticAsset(cosmetic) : null;
-  if (!frameUrl) return null;
+  return cosmetic ? resolveCosmeticAsset(cosmetic) : null;
+}
 
+/** The frame over its positioned parent, the whole profile card. */
+export function ProfileFrame({ url }: { url: string | null }) {
+  if (!url) return null;
   return (
     <div
       aria-hidden="true"
-      // Inset from the edges so the square gothic corners clear the window's
-      // rounded corners (the panel is rounded-xl overflow-hidden), instead of
-      // being sliced by them.
-      className="pointer-events-none absolute inset-2 z-[3]"
+      className="pointer-events-none absolute inset-0 z-[30]"
       style={{
         borderStyle: 'solid',
         borderWidth: '18px 14px',
-        borderImageSource: `url(${frameUrl})`,
+        borderImageSource: `url(${url})`,
         borderImageSlice: '199 159 199 159',
         borderImageWidth: '18px 14px',
         borderImageRepeat: 'stretch',

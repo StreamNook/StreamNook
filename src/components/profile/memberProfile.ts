@@ -11,7 +11,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { helixGet } from '../../services/helix';
 import { useAppStore } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
-import { getTierAccent } from '../StreamNookBadge';
+import { getTierAccent, getWornBadgeCaption } from '../StreamNookBadge';
 import { getFullProfileWithFallback } from '../../services/cosmeticsCache';
 import { computePaintStyle } from '../../services/seventvService';
 import { getAtmosphere, type Atmosphere } from '../../services/atmospheres';
@@ -21,7 +21,6 @@ import {
   getStreamNookUserNumber,
   getOwnedCosmeticSlugs,
   getActiveCosmeticSlug,
-  getCosmeticBySlug,
   getProfilePrefs,
   subscribeStreamNookRegistryVersion,
   getStreamNookRegistryVersion,
@@ -441,8 +440,7 @@ export function useMemberProfile(
   }, [userId, preview?.badgeRevision]);
 
   const memberNumber = userId ? getStreamNookUserNumber(userId) : null;
-  const cosmeticSlug = userId ? getActiveCosmeticSlug(userId) : null;
-  const cosmeticName = cosmeticSlug ? getCosmeticBySlug(cosmeticSlug)?.name ?? null : null;
+  const cosmeticName = getWornBadgeCaption(userId);
 
   // The overlay background is the member's premium theme (7TV paint or a
   // StreamNook Atmosphere) when set, else the free tier aura. The premium theme

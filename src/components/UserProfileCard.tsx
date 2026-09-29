@@ -36,11 +36,12 @@ import {
   getCosmeticsVersion,
   subscribeCosmeticsVersion,
 } from '../services/supabaseService';
-import { resolveCosmeticAsset } from './cosmeticAssets';
+import { resolveCosmeticAsset, DEFAULT_COSMETIC_SLUG } from './cosmeticAssets';
 import { SLOT_FOR_TYPE, type CosmeticType } from '../services/cosmetics/types';
 import { useMemberProfile, type MemberProfilePreview } from './profile/memberProfile';
 import { MemberProfileBackdrop } from './profile/MemberProfileBackdrop';
 import { MemberProfileHero } from './profile/MemberProfileHero';
+import { ProfileFrame, useProfileFrameUrl } from './profile/ProfileFrame';
 import { MemberProfileSections } from './profile/MemberProfileSections';
 import { PaintChip, SevenTvProfileButton } from './profile/IdentityChips';
 import { StreamNookBadge } from './StreamNookBadge';
@@ -389,7 +390,6 @@ interface NicknameEditorProps {
 // StreamNookBadge renders this as its fallback when a member has no cosmetic
 // explicitly equipped, so the inactive-thumbnail list must exclude it to avoid
 // rendering the same Member badge twice.
-const DEFAULT_COSMETIC_SLUG = 'streamnook-default';
 
 /** The in-app card's width, and a StreamNook member's wider card. Must match
  *  the `w-[440px]` / `w-[760px]` on the card root and the popout window sizes
@@ -880,6 +880,9 @@ const UserProfileCard = ({
   // number (MemberReveal); clicking it opens this.
   const isMemberCard = isStreamNookMember && !!cardMemberId;
   const memberView = useMemberProfile(isMemberCard ? cardMemberId : null, profilePreview, !!profilePreview);
+  // An equipped frame is the member card's border (see ProfileFrame).
+  const frameUrl = useProfileFrameUrl(isMemberCard ? cardMemberId : null);
+  const framed = isMemberCard && !!frameUrl;
   // The <StreamNookBadge> slot below always renders the member's PRIMARY mark:
   // their active cosmetic when it has art (bundled or cloud-served, the same
   // resolution StreamNookBadge uses), otherwise the default "StreamNook Member"
@@ -1940,10 +1943,11 @@ const UserProfileCard = ({
       )}
       <div
         ref={cardRef}
-        className={`${isStandaloneWindow ? 'w-full h-full' : `fixed z-50 ${isMemberCard ? 'w-[760px]' : 'w-[440px]'} max-h-[88vh]`} sn-light-off user-profile-card backdrop-blur-xl shadow-2xl border border-borderSubtle rounded-lg overflow-hidden flex flex-col`}
+        className={`${isStandaloneWindow ? 'relative w-full h-full' : `fixed z-50 ${isMemberCard ? 'w-[760px]' : 'w-[440px]'} max-h-[88vh]`} sn-light-off user-profile-card backdrop-blur-xl shadow-2xl ${framed ? '' : 'border border-borderSubtle rounded-lg'} overflow-hidden flex flex-col`}
         style={isStandaloneWindow ? { backgroundColor: 'rgba(0, 0, 0, 0.75)' } : cardStyle}
         onMouseDown={isStandaloneWindow ? undefined : handleMouseDown}
       >
+        {framed && <ProfileFrame url={frameUrl} />}
         {isMemberCard && <MemberProfileBackdrop view={memberView} />}
         {isMemberCard && cardMemberId ? (
           <div className="relative z-10 profile-card-header cursor-grab active:cursor-grabbing flex-shrink-0">

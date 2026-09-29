@@ -12,7 +12,7 @@ import {
   getAtmospheresVersion,
   subscribeAtmospheresVersion,
 } from '../services/supabaseService';
-import { resolveCosmeticAsset } from './cosmeticAssets';
+import { resolveCosmeticAsset, DEFAULT_COSMETIC_SLUG } from './cosmeticAssets';
 import { useChatUserStore } from '../stores/chatUserStore';
 import { AtmosphereBackground } from './AtmosphereBackground';
 import { MajorCologneChrome } from './MajorCologneChrome';
@@ -385,6 +385,17 @@ const useActiveCosmeticAsset = (userId: string | null | undefined): string | nul
 };
 
 /**
+ * The name of the badge a member chose to wear, for the caption under their
+ * rank. Null for the default badge: its name ("StreamNook Member") only
+ * repeats the rank label above it.
+ */
+export const getWornBadgeCaption = (userId: string | null | undefined): string | null => {
+  const slug = getActiveCosmeticSlug(userId);
+  if (!slug || slug === DEFAULT_COSMETIC_SLUG) return null;
+  return getCosmeticBySlug(slug)?.name ?? null;
+};
+
+/**
  * A member's decode card: their number resolving out of the cipher, tinted by
  * rank tier and themed by their atmosphere (or Cologne chrome). Shown when you
  * hover a member's NAME in chat, the one place it lives; clicking the name
@@ -399,8 +410,7 @@ export function MemberReveal({
   chatKey?: string;
   userNumber: number;
 }) {
-  const cosmeticSlug = getActiveCosmeticSlug(userId);
-  const cosmeticName = cosmeticSlug ? getCosmeticBySlug(cosmeticSlug)?.name ?? null : null;
+  const cosmeticName = getWornBadgeCaption(userId);
 
   // The member's StreamNook Atmosphere, if chat has resolved it for this user, so
   // the card adopts their profile theme. Reads the already-resolved value (no

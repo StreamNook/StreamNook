@@ -11,6 +11,9 @@ import subscriberBadge from '../assets/streamnook-badge-gold-animated.webp';
 import subscriberBadgeChat from '../assets/streamnook-badge-gold-animated-64.webp';
 import { resolveManifestAsset, type AssetManifest } from '../services/cosmetics/types';
 
+/** The badge every member wears until they equip another. */
+export const DEFAULT_COSMETIC_SLUG = 'streamnook-default';
+
 export const COSMETIC_ASSET_BY_SLUG: Record<string, string> = {
   'streamnook-default': defaultBadge,
   'streamnook-supporter': supporterBadge,
