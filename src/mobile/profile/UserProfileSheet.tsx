@@ -268,7 +268,12 @@ const ProfileBody: React.FC<{
           </div>
         )}
 
-        {/* Its OWN group, and gated on membership. StreamNookBadge carries no
+        <BadgeGrid title="Twitch" badges={badges.twitch} onPick={setPicked} />
+        <BadgeGrid title="7TV" badges={badges.seventv} onPick={setPicked} />
+        <BadgeGrid title="Chat clients" badges={badges.thirdParty} onPick={setPicked} />
+
+        {/* Last, as on the desktop card and in chat (utils/badgeOrder). Its OWN
+            group, and gated on membership. StreamNookBadge carries no
             membership guard of its own — the desktop card gates the call site on
             `streamNookUserNumber !== null`, and its internal comment says as
             much ("shouldn't happen given isSN was true"). Rendered
@@ -282,10 +287,6 @@ const ProfileBody: React.FC<{
             <StreamNookBadge userId={user.userId} side="bottom" />
           </div>
         )}
-
-        <BadgeGrid title="Twitch" badges={badges.twitch} onPick={setPicked} />
-        <BadgeGrid title="7TV" badges={badges.seventv} onPick={setPicked} />
-        <BadgeGrid title="Chat clients" badges={badges.thirdParty} onPick={setPicked} />
 
         {badges.total === 0 && userNumber === null && (
           <div className="mt-4 text-[12.5px] text-textMuted text-center">

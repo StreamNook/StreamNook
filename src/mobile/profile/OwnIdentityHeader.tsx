@@ -216,15 +216,9 @@ export const OwnIdentityHeader: React.FC<Props> = ({ userId, displayName, login 
       )}
 
       {(badges.length > 0 || userNumber !== null) && (
+        // Canonical badge order (utils/badgeOrder): Twitch, 7TV, the other chat
+        // apps, then StreamNook last.
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-          {userNumber !== null && (
-            // Gated on membership: StreamNookBadge has no guard of its own and
-            // falls back to a plain "StreamNook Member" label, which would hand
-            // a badge to everyone who is not one.
-            // `side="bottom"` because this sits at the top of the viewport and
-            // a popover growing upward clips off screen.
-            <StreamNookBadge userId={userId} side="bottom" />
-          )}
           {badges.map((b, i) => (
             <FallbackImage
               key={`${b.id}-${i}`}
@@ -236,6 +230,14 @@ export const OwnIdentityHeader: React.FC<Props> = ({ userId, displayName, login 
               className="w-[18px] h-[18px] object-contain shrink-0"
             />
           ))}
+          {userNumber !== null && (
+            // Gated on membership: StreamNookBadge has no guard of its own and
+            // falls back to a plain "StreamNook Member" label, which would hand
+            // a badge to everyone who is not one.
+            // `side="bottom"` because this sits at the top of the viewport and
+            // a popover growing upward clips off screen.
+            <StreamNookBadge userId={userId} side="bottom" />
+          )}
         </div>
       )}
     </div>
