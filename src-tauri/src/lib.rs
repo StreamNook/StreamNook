@@ -1137,6 +1137,11 @@ pub fn run() {
             // the same staleness problem and no devtools to notice it with.
             services::version_report::start(app_handle.clone());
 
+            // Twitch Recap hours for the signed-in member, published so the profile
+            // can count the watching they did before joining. Daily, and a no-op
+            // until a week has passed or an answer is still unpublished.
+            services::twitch_recap::start(app_handle.clone());
+
             // Keep the Kick OAuth pair perpetually fresh (single-flight refresh
             // on a clock), and the YouTube cookie harvest young. Both are what
             // makes those logins behave like the Twitch one: renewed as a matter
@@ -1538,6 +1543,10 @@ pub fn run() {
             get_active_multi_nooks,
             #[cfg(desktop)]
             promote_multi_nook_tile,
+            #[cfg(desktop)]
+            get_multi_nook_tile_qualities,
+            #[cfg(desktop)]
+            set_multi_nook_raid_channels,
             register_active_channel,
             unregister_active_channel,
             // Chat commands

@@ -126,7 +126,8 @@ function adapt(m: BackendChatMessage, users: UsersMap): OverlayMessage {
   // falls back to the default logo when there's none.
   const snSlug = memberId && streamNookUserNumber != null ? getActiveCosmeticSlug(memberId) : null;
   const streamNookBadgeUrl = snSlug ? (COSMETIC_ASSET_BY_SLUG[snSlug] ?? null) : null;
-  const atmosphere = user?.atmosphereId ? toOverlayAtmosphere(getAtmosphere(user.atmosphereId)) : null;
+  const atmosphere =
+    user?.atmosphereId && !user.themeHiddenInChat ? toOverlayAtmosphere(getAtmosphere(user.atmosphereId)) : null;
 
   return {
     ...m,

@@ -32,6 +32,7 @@ pub mod chat_service;
 pub mod client_config;
 pub mod client_identity;
 pub mod version_report;
+pub mod twitch_recap;
 pub mod pronouns;
 pub mod streamer_mode;
 pub mod suspicious_users;
@@ -90,6 +91,8 @@ pub mod mod_log_storage_service;
 // Desktop-only: MultiNook multi-stream tiling is not part of the phone app.
 #[cfg(desktop)]
 pub mod multi_nook_server;
+#[cfg(desktop)]
+pub mod multi_nook_raids;
 pub mod profile_cache_service;
 pub mod providers;
 pub mod quality;

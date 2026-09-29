@@ -71,7 +71,7 @@ pub(crate) fn clear_entitlement_caches() {
 }
 
 /// POST an inline GQL query with the viewer's web cookie; return the JSON body.
-async fn gql_query(oauth_token: &str, body: serde_json::Value) -> Result<serde_json::Value> {
+pub(crate) async fn gql_query(oauth_token: &str, body: serde_json::Value) -> Result<serde_json::Value> {
     let client = web_client();
     let resp: serde_json::Value = client
         .post("https://gql.twitch.tv/gql")

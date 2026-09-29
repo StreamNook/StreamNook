@@ -104,7 +104,7 @@ const MessageRow = memo(function MessageRow({
     const u = s.users.get(userId);
     // Cologne rows carry the same animated composited wash as an Atmosphere, so
     // they need the same always-paint treatment to dodge the ghost bug.
-    return !!(u?.atmosphereId || u?.cologne);
+    return !u?.themeHiddenInChat && !!(u?.atmosphereId || u?.cologne);
   });
   const style = useMemo(
     () => ({

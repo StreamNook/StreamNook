@@ -18,6 +18,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { ArrowLeft, CaretRight, Check, Lock } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
+import { setOwnThemeHiddenInChat } from '../../stores/chatUserStore';
 import { useMobileNavStore } from '../navStore';
 import { DrillInScreen } from '../ui/DrillInScreen';
 import { FallbackImage } from '../../components/FallbackImage';
@@ -95,8 +96,9 @@ import {
   getProfilePrefs,
   setActiveCosmetic,
   setProfileTheme,
+  setChatAtmosphere,
 } from '../../services/supabaseService';
-import { listAtmospheres, type Atmosphere } from '../../services/atmospheres';
+import { getAtmosphere, listAtmospheres, type Atmosphere } from '../../services/atmospheres';
 import { isSubscriber } from '../../services/subscriberService';
 import { resolveCosmeticAsset } from '../../components/cosmeticAssets';
 import { Logger } from '../../utils/logger';
@@ -111,6 +113,8 @@ export const CosmeticsScreen: React.FC = () => {
   const [ownedSlugs, setOwnedSlugs] = useState<Set<string>>(new Set());
   const [activeBadge, setActiveBadge] = useState<string | null>(null);
   const [profileTheme, setProfileThemeState] = useState<string>('tier');
+  // Whether our atmosphere also paints behind our chat messages.
+  const [chatAtmosphere, setChatAtmosphereState] = useState(true);
   const [subscribed, setSubscribed] = useState(false);
   const [earnedAccolades, setEarnedAccolades] = useState<Set<string>>(new Set());
 
@@ -135,8 +139,11 @@ export const CosmeticsScreen: React.FC = () => {
     const owned = getOwnedCosmeticSlugs(userId);
     const active = getActiveCosmeticSlug(userId);
     let theme = 'tier';
+    let inChat = true;
     try {
-      theme = (await getProfilePrefs(userId)).profileTheme || 'tier';
+      const prefs = await getProfilePrefs(userId);
+      theme = prefs.profileTheme || 'tier';
+      inChat = prefs.chatAtmosphere;
     } catch (err) {
       Logger.warn('[Cosmetics] prefs read failed:', err);
     }
@@ -158,6 +165,7 @@ export const CosmeticsScreen: React.FC = () => {
     setOwnedSlugs(owned);
     setActiveBadge(active);
     setProfileThemeState(theme);
+    setChatAtmosphereState(inChat);
     setSubscribed(sub);
     setEarnedAccolades(accolades);
   }, [userId]);
@@ -278,6 +286,18 @@ export const CosmeticsScreen: React.FC = () => {
       Logger.error('[Cosmetics] theme write failed:', err);
       setProfileThemeState(prev);
       addToast('Could not apply that atmosphere.', 'error');
+    }
+  };
+
+  const toggleChatAtmosphere = async () => {
+    const next = !chatAtmosphere;
+    setChatAtmosphereState(next);
+    // Repaint our own rows now rather than waiting for the realtime echo.
+    setOwnThemeHiddenInChat(userId, !next);
+    if (!(await setChatAtmosphere(userId, next))) {
+      setChatAtmosphereState(!next);
+      setOwnThemeHiddenInChat(userId, next);
+      addToast('Could not save that. Try again in a moment.', 'error');
     }
   };
 
@@ -526,6 +546,29 @@ export const CosmeticsScreen: React.FC = () => {
             );
           })}
         </div>
+        {/* Only while an atmosphere (or the Cologne look) is worn, as on desktop. */}
+        {getAtmosphere(profileTheme) && (
+          <div className="glass-panel mt-2 flex items-center justify-between gap-3 px-3 py-2.5">
+            <div className="min-w-0">
+              <div className="text-[13.5px] text-textPrimary">Show in my chat messages</div>
+              <div className="text-[12px] text-textMuted">Off keeps it on your profile only.</div>
+            </div>
+            <button
+              onClick={() => void toggleChatAtmosphere()}
+              role="switch"
+              aria-checked={chatAtmosphere}
+              aria-label={`${chatAtmosphere ? 'Hide' : 'Show'} your atmosphere in chat`}
+              className={`shrink-0 w-11 h-6 rounded-full relative transition-colors ${
+                chatAtmosphere ? 'bg-accent' : 'bg-surface'
+              }`}
+            >
+              <span
+                className="absolute top-0.5 w-5 h-5 rounded-full bg-white transition-[left] duration-200 ease-out"
+                style={{ left: chatAtmosphere ? 22 : 2 }}
+              />
+            </button>
+          </div>
+        )}
 
         {(paints.length > 0 || sevenTvBadgeTiles.length > 0) && (
           <div className="flex items-baseline gap-2 mt-5">

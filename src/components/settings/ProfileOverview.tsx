@@ -358,12 +358,15 @@ const ProfileOverview = ({
   const [roast, setRoast] = useState<PickedRoast | null>(null);
   const [showAllAccolades, setShowAllAccolades] = useState(false);
 
-  const hours = stats?.hours_watched ?? 0;
+  // Twitch Recap hours from before joining, as the server counted them, ride
+  // along with the tracked hours everywhere hours are used (accolades too).
+  const recapHours = Number(stats?.recap_hours ?? 0);
+  const hours = (stats?.hours_watched ?? 0) + recapHours;
   const animatedHours = useCountUp(Math.round(hours));
 
   const rerollRoast = () => setRoast(pickHoursRoast(hours));
   useEffect(() => {
-    if (stats) setRoast(pickHoursRoast(stats.hours_watched ?? 0));
+    if (stats) setRoast(pickHoursRoast((stats.hours_watched ?? 0) + Number(stats.recap_hours ?? 0)));
   }, [stats]);
 
   useEffect(() => {
@@ -653,7 +656,12 @@ const ProfileOverview = ({
         </span>
         <span className="text-sm text-textMuted">hrs</span>
       </div>
-      {roast && (
+      {recapHours > 0 && (
+        <p className="mt-1 text-[11px] text-textMuted">
+          Includes {Math.round(recapHours).toLocaleString()} hrs from Twitch Recap, before StreamNook
+        </p>
+      )}
+      {roast && !statHidden('roast_line') && (
         <div className={`flex items-start justify-between gap-3 ${compact ? 'mt-2' : 'mt-3'}`}>
           <p className={`leading-relaxed text-textSecondary ${compact ? 'text-[12px]' : 'text-[15px]'}`}>
             {roast.text}

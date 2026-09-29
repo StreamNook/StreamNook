@@ -270,8 +270,10 @@ const ModRoomMessageRow = ({
   useSyncExternalStore(subscribeStreamNookRegistryVersion, getStreamNookRegistryVersion, getStreamNookRegistryVersion);
   const paint = useChatUserStore((s) => s.users.get(m.userId)?.paint);
   const storeColor = useChatUserStore((s) => s.users.get(m.userId)?.color);
-  const atmosphereId = useChatUserStore((s) => s.users.get(m.userId)?.atmosphereId ?? null);
-  const cologne = useChatUserStore((s) => s.users.get(m.userId)?.cologne ?? null);
+  // A member can keep their theme on their profile but off their chat rows.
+  const themeInChat = useChatUserStore((s) => !s.users.get(m.userId)?.themeHiddenInChat);
+  const atmosphereId = useChatUserStore((s) => (themeInChat ? s.users.get(m.userId)?.atmosphereId ?? null : null));
+  const cologne = useChatUserStore((s) => (themeInChat ? s.users.get(m.userId)?.cologne ?? null : null));
   const paintShadowMode = useAppStore((s) => s.settings.cosmetics?.paint_shadows) ?? 'all';
 
   const isSN = isStreamNookUser(m.userId);

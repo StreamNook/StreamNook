@@ -68,6 +68,10 @@ export interface ChatUser {
   /** CS2 Major Cologne event cosmetics this member has APPLIED (the background
    *  plus which add-ons). Undefined until resolved; null = resolved, none. */
   cologne?: CologneCosmetics | null;
+  /** True when the member keeps their atmosphere / Cologne look off their chat
+   *  rows. `atmosphereId` and `cologne` still hold it, because the hover card
+   *  and profile keep showing it. Chat-row surfaces read this, nothing else. */
+  themeHiddenInChat?: boolean;
 }
 
 interface ChatUserStore {
@@ -340,6 +344,10 @@ let pendingAtmosphereFlushScheduled = false;
 // read can't race the just-fired write.
 const atmosphereCache = new Map<string, string | null>();
 const atmosphereInFlight = new Set<string>();
+// Whether each member keeps their theme off their chat rows, per MEMBER, and the
+// per-CHAT-key writes waiting for the atmosphere flush.
+const chatThemeHiddenCache = new Map<string, boolean>();
+const pendingChatThemeHidden = new Map<string, boolean>();
 // Last time we resolved each member's live theme. Cross-user theme changes are
 // PUSHED live by the realtime bridge at the bottom of this file, so the cache
 // stays fresh without re-fetching. This TTL is only a backstop: if a viewer
@@ -434,14 +442,20 @@ function scheduleAtmosphereFlush() {
   pendingAtmosphereFlushScheduled = true;
   queueMicrotask(() => {
     pendingAtmosphereFlushScheduled = false;
-    if (pendingAtmosphereUpdates.size === 0) return;
+    if (pendingAtmosphereUpdates.size === 0 && pendingChatThemeHidden.size === 0) return;
     const updates = new Map(pendingAtmosphereUpdates);
+    const hiddenUpdates = new Map(pendingChatThemeHidden);
     pendingAtmosphereUpdates.clear();
+    pendingChatThemeHidden.clear();
     useChatUserStore.setState((state) => {
       const newUsers = new Map(state.users);
       for (const [uid, id] of updates) {
         const current = newUsers.get(uid);
         if (current) newUsers.set(uid, { ...current, atmosphereId: id });
+      }
+      for (const [uid, hidden] of hiddenUpdates) {
+        const current = newUsers.get(uid);
+        if (current && !!current.themeHiddenInChat !== hidden) newUsers.set(uid, { ...current, themeHiddenInChat: hidden });
       }
       return { users: newUsers };
     });
@@ -506,7 +520,30 @@ function pushAtmosphere(memberId: string, chatKey: string, id: string | null) {
 // linked account), so the wash behind our messages paints on frame one of a cold
 // launch instead of after the per-sighting prefs fetch. Keyed by account id.
 const OWN_ATMOSPHERE_KEY = 'streamnook_own_atmosphere_v1';
+// Our own accounts that keep their theme off chat, persisted beside the id so a
+// cold launch does not flash the wash behind our rows before the prefs fetch.
+const OWN_CHAT_THEME_HIDDEN_KEY = 'streamnook_own_chat_theme_hidden_v1';
 const ownAtmosphereAccounts = new Set<string>();
+
+function readOwnChatThemeHidden(): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(OWN_CHAT_THEME_HIDDEN_KEY) ?? '[]');
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistOwnChatThemeHidden(userId: string, hidden: boolean): void {
+  try {
+    const next = new Set(readOwnChatThemeHidden());
+    if (hidden) next.add(userId);
+    else next.delete(userId);
+    localStorage.setItem(OWN_CHAT_THEME_HIDDEN_KEY, JSON.stringify([...next]));
+  } catch {
+    /* ignore (private mode / unavailable storage) */
+  }
+}
 
 function readPersistedAtmospheres(): Record<string, string | null> {
   try {
@@ -539,9 +576,11 @@ function persistOwnAtmosphere(userId: string): void {
  */
 export function registerOwnAtmospheres(userIds: string[]): void {
   const store = readPersistedAtmospheres();
+  const hiddenInChat = new Set(readOwnChatThemeHidden());
   for (const userId of userIds) {
     if (!userId || ownAtmosphereAccounts.has(userId)) continue; // already registered/seeded
     ownAtmosphereAccounts.add(userId);
+    if (hiddenInChat.has(userId)) chatThemeHiddenCache.set(userId, true);
     // Seeded under our own Twitch key, which is both the member id and the chat
     // key for a Twitch row. Our rows on other platforms have no alias yet at
     // cold launch; the cache this fills is per member, so the first Kick message
@@ -555,11 +594,20 @@ export function registerOwnAtmospheres(userIds: string[]): void {
 // live cross-user theme bridge, so all three stay consistent. Cologne is its own
 // custom chrome (its add-ons are read from the theme id), not a gradient
 // Atmosphere, so it clears atmosphereId and vice-versa.
+/** `hiddenInChat` undefined keeps whatever is already known for the member: the
+ *  self-change path knows only the theme, and a prefs row that predates the
+ *  column carries no value. */
 function applyResolvedTheme(
   memberId: string,
   chatKey: string,
   profileTheme: string | null | undefined,
+  hiddenInChat?: boolean,
 ) {
+  if (hiddenInChat !== undefined) {
+    chatThemeHiddenCache.set(memberId, hiddenInChat);
+    if (ownAtmosphereAccounts.has(memberId)) persistOwnChatThemeHidden(memberId, hiddenInChat);
+  }
+  pendingChatThemeHidden.set(chatKey, chatThemeHiddenCache.get(memberId) ?? false);
   const cologne = parseCologneTheme(profileTheme);
   if (cologne) {
     pushAtmosphere(memberId, chatKey, null);
@@ -575,9 +623,13 @@ function applyResolvedTheme(
 /** Paint a member's theme onto every platform they are currently on screen as.
  *  Live theme changes arrive keyed by Twitch id, so without this they would look
  *  for a row under that id and miss a member visible only as `kick:12345`. */
-function applyResolvedThemeForMember(memberId: string, profileTheme: string | null | undefined) {
+function applyResolvedThemeForMember(
+  memberId: string,
+  profileTheme: string | null | undefined,
+  hiddenInChat?: boolean,
+) {
   for (const chatKey of chatTargetsFor(memberId)) {
-    applyResolvedTheme(memberId, chatKey, profileTheme);
+    applyResolvedTheme(memberId, chatKey, profileTheme, hiddenInChat);
   }
 }
 
@@ -595,6 +647,7 @@ export function ensureAtmosphereResolved(chatKey: string) {
     // per MEMBER and the row is per CHAT IDENTITY, so a member already resolved
     // on Twitch paints instantly the first time they speak on Kick.
     pendingAtmosphereUpdates.set(chatKey, atmosphereCache.get(userId)!);
+    pendingChatThemeHidden.set(chatKey, chatThemeHiddenCache.get(userId) ?? false);
     scheduleAtmosphereFlush();
     pendingCologneUpdates.set(chatKey, cologneCache.get(userId) ?? null);
     scheduleCologneFlush();
@@ -612,7 +665,7 @@ export function ensureAtmosphereResolved(chatKey: string) {
       // Wait for the atmosphere catalog so we never resolve a real theme to null
       // just because the catalog had not loaded yet.
       await whenAtmospheresReady();
-      applyResolvedTheme(userId, chatKey, prefs.profileTheme);
+      applyResolvedTheme(userId, chatKey, prefs.profileTheme, !prefs.chatAtmosphere);
     } catch {
       /* leave cached so a later sighting retries */
     } finally {
@@ -629,6 +682,15 @@ export function refreshAtmosphere(memberId: string, atmosphereId: string | null)
   // Kick that is `kick:<id>`, so painting only the Twitch id would leave our own
   // Kick messages showing the atmosphere we just changed away from.
   applyResolvedThemeForMember(memberId, atmosphereId);
+}
+
+/** Show or hide one of OUR accounts' theme on its chat rows now, the same way
+ *  refreshAtmosphere applies a theme pick: no Supabase read to race the write. */
+export function setOwnThemeHiddenInChat(memberId: string, hidden: boolean) {
+  chatThemeHiddenCache.set(memberId, hidden);
+  if (ownAtmosphereAccounts.has(memberId)) persistOwnChatThemeHidden(memberId, hidden);
+  for (const chatKey of chatTargetsFor(memberId)) pendingChatThemeHidden.set(chatKey, hidden);
+  scheduleAtmosphereFlush();
 }
 
 // ── CS2 Major Cologne event chrome ───────────────────────────────────────────
@@ -668,7 +730,8 @@ function pushCologne(memberId: string, chatKey: string, cosmetics: CologneCosmet
 
 
 // The tracked-user map is a session-long singleton shared by every chat surface
-// (main app + each MultiChat pane), and clearUsers only fires on channel switch.
+// (main app + each MultiChat pane), and clearUsers only fires on a main-surface
+// channel switch.
 // Without a cap it accumulated every chatter ever seen (tens of MB of paint/badge
 // data over an evening). The cap sits far above any rendered message buffer (the
 // per-channel message cap tops out at ~1150), so the least-recently-seen users
@@ -732,6 +795,7 @@ function evictStaleUsers(
         atmosphereCache.delete(victimMember);
         lastResolvedAt.delete(victimMember);
         cologneCache.delete(victimMember);
+        chatThemeHiddenCache.delete(victimMember);
       }
     }
   }
@@ -785,6 +849,7 @@ export const useChatUserStore = create<ChatUserStore>((set, get) => ({
         thirdPartyBadges: existingUser?.thirdPartyBadges,
         atmosphereId: existingUser?.atmosphereId,
         cologne: existingUser?.cologne,
+        themeHiddenInChat: existingUser?.themeHiddenInChat,
       });
       newUsernameToId.set(usernameKey(user.userId, user.username), user.userId);
       // First-sight is the only path that grows the map, so cap it here.
@@ -942,7 +1007,7 @@ subscribeAtmospheresVersion(() => {
 // switch. Only members we track (or have cached this session) are touched; the
 // rest of the change stream is ignored. Wait for the catalog so a real theme
 // never resolves to null.
-subscribeToProfileThemeChanges((userId, profileTheme) => {
+subscribeToProfileThemeChanges((userId, profileTheme, chatAtmosphere) => {
   if (!userId || !isStreamNookUser(userId)) return;
   const state = useChatUserStore.getState();
   // `userId` here is a TWITCH id, but the member may be on screen only under a
@@ -950,7 +1015,8 @@ subscribeToProfileThemeChanges((userId, profileTheme) => {
   // than looking for one filed under their Twitch id.
   const onScreen = chatTargetsFor(userId).some((k) => state.users.has(k));
   if (!onScreen && !atmosphereCache.has(userId)) return;
-  void whenAtmospheresReady().then(() => applyResolvedThemeForMember(userId, profileTheme));
+  const hiddenInChat = chatAtmosphere === undefined ? undefined : !chatAtmosphere;
+  void whenAtmospheresReady().then(() => applyResolvedThemeForMember(userId, profileTheme, hiddenInChat));
 });
 
 // Reactive bridge from the shared cosmetics cache into the per-user chat

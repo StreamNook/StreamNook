@@ -1109,6 +1109,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   } = useChatUserStore(
     useShallow((s) => {
       const u = cosmeticsKey ? s.users.get(cosmeticsKey) : undefined;
+      // A member can keep their theme on their profile but off their chat rows.
+      const themeInChat = !u?.themeHiddenInChat;
       return {
         paint: u?.paint,
         seventvBadge: u?.seventvBadge,
@@ -1120,10 +1122,10 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         thirdPartyBadges: u?.thirdPartyBadges ?? EMPTY_THIRD_PARTY,
         // The member's StreamNook Atmosphere -> the SAME animated wash as their
         // profile backdrop, rendered behind their message.
-        atmosphereId: u?.atmosphereId ?? null,
+        atmosphereId: themeInChat ? (u?.atmosphereId ?? null) : null,
         // CS2 Major Cologne event cosmetics (null = none). Takes precedence
         // over the Atmosphere wash when present.
-        cologne: u?.cologne ?? null,
+        cologne: themeInChat ? (u?.cologne ?? null) : null,
       };
     }),
   );

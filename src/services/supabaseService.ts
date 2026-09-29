@@ -572,6 +572,10 @@ export interface UserStats {
     // Bumped by the `increment_profile_view` RPC; optional so older rows / a
     // pre-migration DB don't break the read.
     profile_views?: number;
+    // Twitch Recap hours from before the member joined, as counted by the
+    // server (0 when they took them off). Added to hours_watched for display;
+    // optional so a pre-migration DB does not break the read.
+    recap_hours?: number;
     updated_at: string;
 }
 
@@ -1268,30 +1272,46 @@ export interface ProfilePrefs {
     // members see). Empty = all visible. Keys: roast, twitch, lifetime, emotes,
     // accolades.
     hiddenSections: string[];
+    // Whether the member's atmosphere (or Cologne look) also paints behind their
+    // chat messages. False keeps it on the profile and hover card only.
+    chatAtmosphere: boolean;
+    // Whether the member's Twitch Recap hours count toward the hours watched on
+    // their profile.
+    includeTwitchRecap: boolean;
 }
 
+const defaultProfilePrefs = (): ProfilePrefs => ({
+    paintTheme: false,
+    profileTheme: 'tier',
+    hiddenSections: [],
+    chatAtmosphere: true,
+    includeTwitchRecap: true,
+});
+
 export const getProfilePrefs = async (userId: string): Promise<ProfilePrefs> => {
-    if (!supabase || !userId) return { paintTheme: false, profileTheme: 'tier', hiddenSections: [] };
+    if (!supabase || !userId) return defaultProfilePrefs();
     try {
         const { data, error } = await supabase
             .from('user_profile_prefs')
-            .select('paint_theme, profile_theme, hidden_sections')
+            .select('paint_theme, profile_theme, hidden_sections, chat_atmosphere, include_twitch_recap')
             .eq('twitch_user_id', userId)
             .maybeSingle();
         if (error) {
             Logger.error('[Supabase] Failed to get profile prefs:', error.message);
-            return { paintTheme: false, profileTheme: 'tier', hiddenSections: [] };
+            return defaultProfilePrefs();
         }
-        const row = data as { paint_theme?: boolean; profile_theme?: string; hidden_sections?: string[] } | null;
+        const row = data as { paint_theme?: boolean; profile_theme?: string; hidden_sections?: string[]; chat_atmosphere?: boolean; include_twitch_recap?: boolean } | null;
         const profileTheme = row?.profile_theme || (row?.paint_theme ? 'paint' : 'tier');
         return {
             paintTheme: profileTheme === 'paint',
             profileTheme,
             hiddenSections: Array.isArray(row?.hidden_sections) ? row!.hidden_sections! : [],
+            chatAtmosphere: row?.chat_atmosphere !== false,
+            includeTwitchRecap: row?.include_twitch_recap !== false,
         };
     } catch (error) {
         Logger.error('[Supabase] Failed to get profile prefs:', error);
-        return { paintTheme: false, profileTheme: 'tier', hiddenSections: [] };
+        return defaultProfilePrefs();
     }
 };
 
@@ -1385,6 +1405,39 @@ export const setProfileTheme = async (userId: string, theme: string): Promise<vo
     } catch (error) {
         Logger.warn('[Supabase] setProfileTheme failed:', error);
     }
+};
+
+/** Returns whether the change was saved, so the switch can undo itself. */
+export const setChatAtmosphere = async (userId: string, show: boolean): Promise<boolean> => {
+    if (!userId) return false;
+    // Through the API first; the direct write is only for when it is unreachable.
+    const api = await postToApi('/api/v1/profile/prefs', { chat_atmosphere: show });
+    if (api.handled) return api.ok;
+    if (!supabase) return false;
+    try {
+        const { error } = await supabase.from('user_profile_prefs').upsert(
+            { twitch_user_id: userId, chat_atmosphere: show, updated_at: new Date().toISOString() },
+            { onConflict: 'twitch_user_id' },
+        );
+        if (error) {
+            Logger.error('[Supabase] Failed to set chat atmosphere:', error.message);
+            return false;
+        }
+        return true;
+    } catch (error) {
+        Logger.warn('[Supabase] setChatAtmosphere failed:', error);
+        return false;
+    }
+};
+
+/**
+ * Count (or stop counting) the member's Twitch Recap hours on their profile.
+ * Through the API, because the server owns the counted total. Returns whether
+ * the server took the change.
+ */
+export const setIncludeTwitchRecap = async (include: boolean): Promise<boolean> => {
+    const res = await postToApi('/api/v1/stats/recap', { include });
+    return res.handled && res.ok;
 };
 
 export const setHiddenSections = async (userId: string, sections: string[]): Promise<void> => {
@@ -2155,11 +2208,13 @@ export const subscribeToAtmospheresRegistry = (
 // later re-sighting. Theme changes are rare, so one global subscription is cheap;
 // the consumer filters to members it actually tracks. Requires the table to be in
 // the `supabase_realtime` publication (see the migration).
-const profileThemeSubscribers = new Set<(userId: string, profileTheme: string | null) => void>();
+// `chatAtmosphere` is undefined when the row predates the column.
+type ProfileThemeSubscriber = (userId: string, profileTheme: string | null, chatAtmosphere?: boolean) => void;
+const profileThemeSubscribers = new Set<ProfileThemeSubscriber>();
 let profilePrefsChannel: RealtimeChannel | null = null;
 
 export const subscribeToProfileThemeChanges = (
-    callback: (userId: string, profileTheme: string | null) => void,
+    callback: ProfileThemeSubscriber,
 ): (() => void) | null => {
     if (!supabase) return null;
     profileThemeSubscribers.add(callback);
@@ -2172,10 +2227,10 @@ export const subscribeToProfileThemeChanges = (
                 schema: 'public',
                 table: 'user_profile_prefs',
             }, (payload) => {
-                const row = (payload.new ?? null) as { twitch_user_id?: string; profile_theme?: string | null } | null;
+                const row = (payload.new ?? null) as { twitch_user_id?: string; profile_theme?: string | null; chat_atmosphere?: boolean } | null;
                 if (!row?.twitch_user_id) return; // DELETE / malformed: nothing to apply
                 for (const fn of profileThemeSubscribers) {
-                    try { fn(row.twitch_user_id, row.profile_theme ?? null); }
+                    try { fn(row.twitch_user_id, row.profile_theme ?? null, row.chat_atmosphere); }
                     catch (e) { Logger.error('[Supabase] profile theme subscriber error:', e); }
                 }
             })
