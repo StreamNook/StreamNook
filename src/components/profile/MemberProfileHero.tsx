@@ -11,6 +11,7 @@ import { FallbackImage } from '../FallbackImage';
 import { Tooltip } from '../ui/Tooltip';
 import { AtmosphereChip, PaintChip, SevenTvProfileButton } from './IdentityChips';
 import type { MemberProfileView } from './memberProfile';
+import { isStatHidden } from '../../services/profileVisibility';
 
 export function MemberProfileHero({
   userId,
@@ -176,7 +177,7 @@ export function MemberProfileHero({
               {/* Profile views — a subtle public counter. Hideable via the
                   'views' visibility toggle (honored here so the live preview
                   reflects what others see). */}
-              {profileViews != null && !effectiveHiddenSections.includes('views') && (
+              {profileViews != null && !isStatHidden(effectiveHiddenSections, 'views') && (
                 <Tooltip content="Profile views" side="bottom">
                   <span className="flex items-center gap-1 text-[11px] leading-none text-textMuted">
                     <Eye size={13} className="opacity-80" />

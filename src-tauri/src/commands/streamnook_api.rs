@@ -43,6 +43,9 @@ const ALLOWED_PATHS: &[&str] = &[
     // token to a request that does not need one, and would make cosmetics fail
     // outright for a member who is signed into Kick or YouTube but not Twitch.
     "/api/v1/accounts/link",
+    // Which sections the member hides from their public profile. The member
+    // comes from the token; the server refreshes their public page on save.
+    "/api/v1/profile/prefs",
 ];
 
 #[derive(Debug, Serialize)]

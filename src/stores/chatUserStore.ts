@@ -26,6 +26,7 @@ import {
   BTTV_PRO_BADGE_ID,
   buildBttvProBadge,
   resolveBttvProUrl,
+  withBttvPro,
 } from '../services/bttvProBadge';
 import { snapshotOverrides } from '../utils/userChatOverrides';
 import { IS_MOBILE } from '../utils/platform';
@@ -309,7 +310,7 @@ function mergeBttvPro(userId: string, badge: ThirdPartyBadge) {
     const existing = u.thirdPartyBadges ?? [];
     if (existing.some((b) => b.id === badge.id)) return {}; // already present
     const newUsers = new Map(state.users);
-    newUsers.set(userId, { ...u, thirdPartyBadges: [...existing, badge] });
+    newUsers.set(userId, { ...u, thirdPartyBadges: withBttvPro(existing, badge) });
     return { users: newUsers };
   });
 }

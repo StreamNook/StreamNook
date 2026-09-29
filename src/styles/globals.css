@@ -2634,8 +2634,10 @@ body {
    filters on menus, popovers, badges and media chrome that aren't individually
    scaled — so the interface is genuinely flat and glass-free, not just less
    frosted. Surfaces are already made opaque via the live --color-surface* vars
-   and the per-class tint fades, so only the blur needs this global override. */
-html[data-glass="off"] *,
+   and the per-class tint fades, so only the blur needs this global override.
+   The chat frost (.atm-frost) is exempt: it belongs to a member's atmosphere,
+   not to the interface, and without its blur a busy wash drowns the text. */
+html[data-glass="off"] *:not(.atm-frost),
 html[data-glass="off"] *::before,
 html[data-glass="off"] *::after,
 /* Blur behind glass switched off (Linux only): same strip, but the
@@ -2646,6 +2648,25 @@ html[data-blur="off"] *::before,
 html[data-blur="off"] *::after {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
+}
+
+/* Chat frost: the readability block behind a member's text when their
+   atmosphere's wash is busy (the atmosphere's chat_frost). The tint carries
+   the readability; the blur softens what shows through. It is part of the
+   atmosphere, so the Glassiness slider leaves it alone (see the glassiness
+   floor above). Where there is no blur (Linux blur off, and phones, which skip
+   a backdrop-filter per chat row for the GPU's sake: `--flat`) the tint deepens
+   to make up for it. */
+.atm-frost {
+  background-color: rgba(5, 6, 13, 0.45);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+.atm-frost.atm-frost--flat,
+html[data-blur="off"] .atm-frost {
+  background-color: rgba(5, 6, 13, 0.66);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 /* ===== Motion preferences (Interface > Motion) =====

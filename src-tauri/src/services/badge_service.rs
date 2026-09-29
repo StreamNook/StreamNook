@@ -162,6 +162,18 @@ impl BadgeProvider {
     }
 }
 
+/// The one order every surface draws third-party badges in, by provider key:
+/// the order the chat index below walks its feeds in. A member's loadout
+/// chooses which badges show, never where they sit, so every chatter's badges
+/// line up alike. The site's `PROVIDER_ORDER` is the same list.
+pub const THIRD_PARTY_ORDER: [&str; 8] = ["ffz", "bttv", "chatterino", "homies", "moltorino", "chatsen", "chatty", "dankchat"];
+
+/// A provider key's place in `THIRD_PARTY_ORDER`; an unknown provider sorts
+/// last and is never dropped on that account.
+pub fn third_party_rank(provider_key: &str) -> usize {
+    THIRD_PARTY_ORDER.iter().position(|p| *p == provider_key).unwrap_or(THIRD_PARTY_ORDER.len())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserBadgesResponse {
     pub display_badges: Vec<UserBadge>,

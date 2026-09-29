@@ -152,9 +152,12 @@ pub async fn set_streamnook_identity(
         return Err(format!("Identity write failed ({}): {}", status, body));
     }
 
-    resp.json::<SetIdentityResult>()
+    let mut result = resp
+        .json::<SetIdentityResult>()
         .await
-        .map_err(|e| format!("Bad response: {}", e))
+        .map_err(|e| format!("Bad response: {}", e))?;
+    result.resolved = result.resolved.map(ResolvedIdentity::in_provider_order);
+    Ok(result)
 }
 
 // ── Resolved (all-in-one) identity ──────────────────────────────────────────
@@ -183,6 +186,16 @@ pub struct ResolvedIdentity {
     pub updated_at: Option<String>,
 }
 
+impl ResolvedIdentity {
+    /// The chosen badges in the fixed provider order, whatever order the server
+    /// sent (older deployments sent them in the order they were switched on).
+    /// Stable, so badges of one provider keep the server's feed order.
+    fn in_provider_order(mut self) -> Self {
+        self.badges.sort_by_key(|b| crate::services::badge_service::third_party_rank(&b.provider));
+        self
+    }
+}
+
 fn default_resolved(user_id: &str) -> ResolvedIdentity {
     ResolvedIdentity {
         twitch_user_id: user_id.to_string(),
@@ -200,10 +213,11 @@ pub async fn get_streamnook_identity_resolved(user_id: String) -> Result<Resolve
     let client = crate::services::http::client();
     let url = format!("{}/{}?resolve=1", IDENTITY_API, user_id);
     match client.get(&url).send().await {
-        Ok(resp) if resp.status().is_success() => resp
+        Ok(resp) if resp.status().is_success() => Ok(resp
             .json::<ResolvedIdentity>()
             .await
-            .or_else(|_| Ok(default_resolved(&user_id))),
+            .map(ResolvedIdentity::in_provider_order)
+            .unwrap_or_else(|_| default_resolved(&user_id))),
         _ => Ok(default_resolved(&user_id)),
     }
 }

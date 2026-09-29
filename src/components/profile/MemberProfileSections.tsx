@@ -7,6 +7,7 @@ import { RelicStrip } from './RelicStrip';
 import ProfileOverview from '../settings/ProfileOverview';
 import { ProfileAccentContext, ProfileCompactContext } from '../settings/profileAccentContext';
 import type { MemberProfileView } from './memberProfile';
+import { isStatHidden } from '../../services/profileVisibility';
 
 export function MemberProfileSections({
   userId,
@@ -15,7 +16,8 @@ export function MemberProfileSections({
 }: {
   userId: string;
   view: MemberProfileView;
-  /** Placed between the relics and the overview (the chat card's badges). */
+  /** Placed between the relics and the overview (the chat card's badges);
+   *  left out when the member hides their badge collection. */
   afterRelics?: ReactNode;
 }) {
   const { info, memberNumber, counts, effectiveHiddenSections, themeRgb } = view;
@@ -23,8 +25,10 @@ export function MemberProfileSections({
   return (
     <ProfileCompactContext.Provider value={true}>
     <ProfileAccentContext.Provider value={themeRgb}>
-      <RelicStrip userId={userId} />
-      {afterRelics && <div className="mb-3">{afterRelics}</div>}
+      {!isStatHidden(effectiveHiddenSections, 'relics') && <RelicStrip userId={userId} />}
+      {afterRelics && !isStatHidden(effectiveHiddenSections, 'badge_collection') && (
+        <div className="mb-3">{afterRelics}</div>
+      )}
       <ProfileOverview
         isOwnProfile={false}
         userId={userId}

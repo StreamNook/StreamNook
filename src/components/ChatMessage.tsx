@@ -1146,9 +1146,10 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   const atmosphere = atmosphereId ? getAtmosphere(atmosphereId) : null;
   // Frost behind the text only when the atmosphere declares it needs it (busy
   // washes); subtle ones render the text bare. A backdrop-filter per message row
-  // is the single most expensive thing in the list on phone GPUs, so the wash
-  // still renders there but the frost pass does not.
-  const atmosphereFrost = features.richAtmospheres && !!atmosphere?.chatFrost;
+  // is the single most expensive thing in the list on phone GPUs, so phones get
+  // the frost's tint without its blur (`--flat`, a deeper tint in its place).
+  const atmosphereFrost = !!atmosphere?.chatFrost;
+  const frostClass = features.richAtmospheres ? 'atm-frost' : 'atm-frost atm-frost--flat';
   const cologneAtm = cologne ? getAtmosphere(MAJOR_COLOGNE_THEME_ID) : null;
   const [broadcasterType] = useState<string | null>(null);
   // Hover-action DOM (copy/pin cluster + mod menu) mounts on the row's FIRST
@@ -3426,7 +3427,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           <div
             className={`text-[10px] leading-tight mb-0.5 text-textSecondary ${
               atmosphereFrost
-                ? 'block w-fit rounded-sm bg-[rgba(5,6,13,0.2)] px-1 opacity-70 backdrop-blur-[4px]'
+                ? `block w-fit rounded-sm px-1 opacity-80 ${frostClass}`
                 : 'opacity-50'
             }`}
           >
@@ -3438,7 +3439,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             block hugging the badges + name + message (the timestamp gets its
             own separate frost above), so the text/badges stay readable over a
             busy wash. */}
-        <div className={atmosphereFrost ? 'inline-block max-w-full rounded-md bg-[rgba(5,6,13,0.22)] px-1.5 py-0.5 backdrop-blur-[4px]' : 'min-w-0'}>
+        <div className={atmosphereFrost ? `inline-block max-w-full rounded-md px-1.5 py-0.5 ${frostClass}` : 'min-w-0'}>
           {/* Where this row came from, when it is not the platform being watched.
               FIRST, ahead of the avatar and every badge, because it answers
               "which community is this" before anything about who they are in

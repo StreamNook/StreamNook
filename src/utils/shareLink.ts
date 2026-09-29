@@ -21,6 +21,11 @@ export function buildShareUrl(channelLogin: string): string {
   return `${SHARE_BASE}/${encodeURIComponent(normalizeLogin(channelLogin))}?d=${tag}`;
 }
 
+/** A StreamNook member's public profile page on the web. */
+export function buildProfileUrl(login: string): string {
+  return `https://streamnook.app/u/${encodeURIComponent(normalizeLogin(login))}`;
+}
+
 /** The direct app-protocol link the landing page hands off to. */
 export function buildDeepLink(channelLogin: string): string {
   return `streamnook://watch/${encodeURIComponent(normalizeLogin(channelLogin))}`;

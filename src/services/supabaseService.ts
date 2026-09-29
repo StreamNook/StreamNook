@@ -1388,7 +1388,11 @@ export const setProfileTheme = async (userId: string, theme: string): Promise<vo
 };
 
 export const setHiddenSections = async (userId: string, sections: string[]): Promise<void> => {
-    if (!supabase || !userId) return;
+    if (!userId) return;
+    // Through the API first: the server writes the verified caller's row and
+    // refreshes their public page at streamnook.app/u/<login>.
+    if ((await postToApi('/api/v1/profile/prefs', { hidden_sections: sections })).handled) return;
+    if (!supabase) return;
     try {
         const { error } = await supabase.from('user_profile_prefs').upsert(
             { twitch_user_id: userId, hidden_sections: sections, updated_at: new Date().toISOString() },

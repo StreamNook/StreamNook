@@ -1265,7 +1265,8 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
           </div>
         )}
         {atmosphereFrost ? (
-          <span style={{ display: 'inline-block', maxWidth: '100%', borderRadius: 6, backgroundColor: 'rgba(5,6,13,0.22)', padding: '0.5px 6px', backdropFilter: 'blur(4px)' }}>
+          // The app's .atm-frost, inline: the overlay page has no app stylesheet.
+          <span style={{ display: 'inline-block', maxWidth: '100%', borderRadius: 6, backgroundColor: 'rgba(5,6,13,0.45)', padding: '0.5px 6px', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}>
             {line}
           </span>
         ) : (

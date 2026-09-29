@@ -75,6 +75,7 @@ import SubscriptionsSection from './SubscriptionsSection';
 import MembershipSection from './MembershipSection';
 import TopEmotesSection from './TopEmotesSection';
 import { ProfileAccentContext, ProfileCompactContext } from './profileAccentContext';
+import { isStatHidden, type ProfileStatKey } from '../../services/profileVisibility';
 
 interface ProfileOverviewProps {
   userId: string;
@@ -599,9 +600,19 @@ const ProfileOverview = ({
 
   const accentRgb = useContext(ProfileAccentContext);
   const compact = useContext(ProfileCompactContext);
-  // A member can hide sections from their PUBLIC profile; honored only when
-  // viewing someone else (the self settings view always shows everything).
-  const sectionHidden = (key: string) => !isOwnProfile && hiddenSections.includes(key);
+  // A member can hide stats from their PUBLIC profile, one by one; honored only
+  // when viewing someone else (the self settings view always shows everything).
+  const statHidden = (key: ProfileStatKey) => !isOwnProfile && isStatHidden(hiddenSections, key);
+  const twitchShown = !(statHidden('twitch_age') && statHidden('followers') && statHidden('account_type'));
+  const lifetimeShown =
+    isOwnProfile ||
+    !(
+      statHidden('messages') &&
+      statHidden('streams') &&
+      statHidden('cosmetics') &&
+      statHidden('favorite_channel') &&
+      statHidden('member_rank')
+    );
   const sectionStyle = accentRgb ? { borderColor: `rgba(${accentRgb}, 0.3)` } : undefined;
   const sectionPad = compact ? 'p-3.5' : 'p-4';
   const gridGap = compact ? 'gap-2' : 'gap-3';
@@ -618,7 +629,7 @@ const ProfileOverview = ({
   // original vertical stack. Sections keep their own hide guards.
 
   // Hours-watched roast hero. The whole card is a re-roll button (pressable).
-  const heroEl = sectionHidden('roast') ? null : (
+  const heroEl = statHidden('hours') ? null : (
     <motion.button
       type="button"
       onClick={compact ? undefined : rerollRoast}
@@ -657,7 +668,7 @@ const ProfileOverview = ({
     </motion.button>
   );
 
-  const twitchEl = sectionHidden('twitch') ? null : (
+  const twitchEl = !twitchShown ? null : (
     <div className={`settings-card ${sectionPad}`} style={sectionStyle}>
       <h4 className={`${headMb} flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-[0.14em] text-textPrimary`}>
         <TwitchGlyph size={14} className="text-[#9146FF]" /> {twitchLabel}
@@ -668,19 +679,22 @@ const ProfileOverview = ({
         animate="show"
         className={`grid grid-cols-2 ${gridGap} ${compact ? '' : 'sm:grid-cols-3'}`}
       >
-        {age ? (
+        {statHidden('twitch_age') ? null : age ? (
           <StatTile icon={Cake} label="Twitch age" value={age.ageLabel} caption={age.caption} color={ICON_COLOR.rose} tooltip={`Joined ${age.exact}`} />
         ) : (
           <StatTile icon={Cake} label="Twitch age" value="Unknown" color={ICON_COLOR.rose} />
         )}
-        <StatTile
-          icon={Users}
-          label="Followers"
-          count={followers ?? undefined}
-          value={followers === null ? 'Unknown' : undefined}
-          color={ICON_COLOR.sky}
-        />
+        {!statHidden('followers') && (
+          <StatTile
+            icon={Users}
+            label="Followers"
+            count={followers ?? undefined}
+            value={followers === null ? 'Unknown' : undefined}
+            color={ICON_COLOR.sky}
+          />
+        )}
         {/* Account type spans the row in the compact 2-col grid so it fills. */}
+        {!statHidden('account_type') && (
         <div className={compact ? 'col-span-2' : undefined}>
           <StatTile
             glyph={
@@ -696,11 +710,12 @@ const ProfileOverview = ({
             value={accountType}
           />
         </div>
+        )}
       </motion.div>
     </div>
   );
 
-  const lifetimeEl = sectionHidden('lifetime') ? null : (
+  const lifetimeEl = !lifetimeShown ? null : (
     <div className={`settings-card ${sectionPad}`} style={sectionStyle}>
       <h4 className={`${headMb} flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-[0.14em] text-textPrimary`}>
         <Tv size={14} className="text-textMuted" /> Lifetime in StreamNook
@@ -721,14 +736,16 @@ const ProfileOverview = ({
             color={ICON_COLOR.amber}
           />
         )}
-        <StatTile
-          icon={MessageSquare}
-          label="Messages sent"
-          count={messages}
-          caption="into the void"
-          color={ICON_COLOR.green}
-        />
-        <StatTile icon={Tv} label="Streams watched" count={streams} color={ICON_COLOR.sky} />
+        {!statHidden('messages') && (
+          <StatTile
+            icon={MessageSquare}
+            label="Messages sent"
+            count={messages}
+            caption="into the void"
+            color={ICON_COLOR.green}
+          />
+        )}
+        {!statHidden('streams') && <StatTile icon={Tv} label="Streams watched" count={streams} color={ICON_COLOR.sky} />}
         {isOwnProfile && (
           <StatTile
             icon={Gift}
@@ -738,14 +755,16 @@ const ProfileOverview = ({
             color={ICON_COLOR.violet}
           />
         )}
-        <StatTile
-          icon={Palette}
-          label="Cosmetics"
-          count={cosmeticsTotal}
-          caption={`${seventvPaintCount} paints, ${seventvBadgeCount} badges, ${ownedCosmeticsCount} StreamNook`}
-          color={ICON_COLOR.rose}
-        />
-        {favoriteChannel && (
+        {!statHidden('cosmetics') && (
+          <StatTile
+            icon={Palette}
+            label="Cosmetics"
+            count={cosmeticsTotal}
+            caption={`${seventvPaintCount} paints, ${seventvBadgeCount} badges, ${ownedCosmeticsCount} StreamNook`}
+            color={ICON_COLOR.rose}
+          />
+        )}
+        {favoriteChannel && !statHidden('favorite_channel') && (
           <StatTile
             icon={Heart}
             label="Favorite channel"
@@ -763,7 +782,7 @@ const ProfileOverview = ({
             color={ICON_COLOR.amber}
           />
         )}
-        {streamNookUserNumber !== null && (
+        {streamNookUserNumber !== null && !statHidden('member_rank') && (
           <StatTile
             icon={Sparkles}
             label="Member rank"
@@ -780,10 +799,10 @@ const ProfileOverview = ({
 
   const subsEl = isOwnProfile ? <SubscriptionsSection login={login} /> : null;
 
-  const emotesEl = sectionHidden('emotes') ? null : <TopEmotesSection userId={userId} />;
+  const emotesEl = statHidden('emotes') ? null : <TopEmotesSection userId={userId} />;
 
   // Accolades - collectible medallions. A big wall, so it anchors the bottom.
-  const accoladesEl = sectionHidden('accolades') ? null : (
+  const accoladesEl = statHidden('accolades') ? null : (
     <div className={`settings-card ${sectionPad}`} style={sectionStyle}>
       <div className={`flex items-center gap-1.5 ${compact ? 'mb-2.5' : 'mb-5'}`}>
         <Trophy size={14} className="text-textMuted" />

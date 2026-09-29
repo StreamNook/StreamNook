@@ -37,6 +37,19 @@ export function buildBttvProBadge(url: string): ThirdPartyBadge {
   };
 }
 
+/** Adds the Pro badge to a third-party list that is already in the fixed
+ *  provider order (Rust's THIRD_PARTY_ORDER: FFZ, then BetterTTV, then the
+ *  rest). Pro is the one badge placed here rather than in Rust, because it
+ *  arrives after the list does; it goes after the FFZ and BetterTTV badges. */
+export function withBttvPro<T extends { provider?: string }>(list: T[], pro: T): T[] {
+  let at = 0;
+  list.forEach((b, i) => {
+    const p = (b.provider ?? '').toLowerCase();
+    if (p === 'ffz' || p === 'bttv') at = i + 1;
+  });
+  return [...list.slice(0, at), pro, ...list.slice(at)];
+}
+
 /** Resolve a user's CURRENT BTTV Pro badge URL (it progresses with tenure), or
  *  null if they don't have Pro. Backed by the BTTV socket the app already keeps
  *  open; failures resolve to null so a hiccup never breaks badge rendering. */
