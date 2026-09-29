@@ -623,7 +623,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
             <SettingsRow
               title="Overlay opacity"
-              description="How much of the video shows through the chat column."
+              description="How solid the chat column's background is. Lower lets more of the video show through."
               control={
                 <div className="flex items-center gap-2">
                   <input
@@ -713,7 +713,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         >
           <SettingsRow
             title="Chat in landscape"
-            description="Turn the phone sideways and tap the chat button on the player. Chat can float over the video, or take a column beside it. Floating chat is read-only: drag its edge to resize it, tap the edge for the see-through slider."
+            description="Turn the phone sideways and tap the chat button on the player. Chat can float over the video, or take a column beside it while the video fills the rest. Drag the column's edge to resize it either way. Floating chat is read-only; tap its edge for the background slider."
           >
             <SegmentedSelect<'overlay' | 'beside'>
               value={settings.fullscreen_chat?.phone_layout ?? 'overlay'}
@@ -730,71 +730,69 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             />
           </SettingsRow>
           {(settings.fullscreen_chat?.phone_layout ?? 'overlay') === 'overlay' && (
-            <>
-              <SettingsRow
-                title="How much video shows through"
-                description="Lower is clearer video behind the chat; higher is easier reading."
-                control={
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      step={5}
-                      value={settings.fullscreen_chat?.opacity ?? 55}
-                      onChange={(e) =>
-                        updateSettings({
-                          ...settings,
-                          fullscreen_chat: { ...settings.fullscreen_chat, opacity: Number(e.target.value) },
-                        })
-                      }
-                      className="w-32 accent-accent"
-                    />
-                    <span className="text-[12px] text-textMuted tabular-nums w-9 text-right">
-                      {settings.fullscreen_chat?.opacity ?? 55}%
-                    </span>
-                  </div>
-                }
-              />
-              <SettingsRow
-                title="How wide"
-                description="Never more than half the screen, whatever you pick here."
-                control={
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="range"
-                      min={240}
-                      max={480}
-                      step={20}
-                      value={Math.min(480, settings.fullscreen_chat?.width ?? 340)}
-                      onChange={(e) =>
-                        updateSettings({
-                          ...settings,
-                          fullscreen_chat: { ...settings.fullscreen_chat, width: Number(e.target.value) },
-                        })
-                      }
-                      className="w-32 accent-accent"
-                    />
-                    <span className="text-[12px] text-textMuted tabular-nums w-12 text-right">
-                      {Math.min(480, settings.fullscreen_chat?.width ?? 340)}px
-                    </span>
-                  </div>
-                }
-              />
-              <SettingsRow title="Which side" description="Where the chat column floats.">
-                <SegmentedSelect<'left' | 'right'>
-                  value={settings.fullscreen_chat?.side === 'left' ? 'left' : 'right'}
-                  onChange={(side) =>
-                    updateSettings({ ...settings, fullscreen_chat: { ...settings.fullscreen_chat, side } })
-                  }
-                  options={[
-                    { value: 'left', label: 'Left' },
-                    { value: 'right', label: 'Right' },
-                  ]}
-                />
-              </SettingsRow>
-            </>
+            <SettingsRow
+              title="Chat background"
+              description="Lower lets more of the video show through; higher is easier reading."
+              control={
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={5}
+                    value={settings.fullscreen_chat?.opacity ?? 55}
+                    onChange={(e) =>
+                      updateSettings({
+                        ...settings,
+                        fullscreen_chat: { ...settings.fullscreen_chat, opacity: Number(e.target.value) },
+                      })
+                    }
+                    className="w-32 accent-accent"
+                  />
+                  <span className="text-[12px] text-textMuted tabular-nums w-9 text-right">
+                    {settings.fullscreen_chat?.opacity ?? 55}%
+                  </span>
+                </div>
+              }
+            />
           )}
+          <SettingsRow
+            title="How wide"
+            description="Never more than half the screen, whatever you pick here."
+            control={
+              <div className="flex items-center gap-2">
+                <input
+                  type="range"
+                  min={240}
+                  max={480}
+                  step={20}
+                  value={Math.min(480, settings.fullscreen_chat?.width ?? 340)}
+                  onChange={(e) =>
+                    updateSettings({
+                      ...settings,
+                      fullscreen_chat: { ...settings.fullscreen_chat, width: Number(e.target.value) },
+                    })
+                  }
+                  className="w-32 accent-accent"
+                />
+                <span className="text-[12px] text-textMuted tabular-nums w-12 text-right">
+                  {Math.min(480, settings.fullscreen_chat?.width ?? 340)}px
+                </span>
+              </div>
+            }
+          />
+          <SettingsRow title="Which side" description="The screen edge chat sits against.">
+            <SegmentedSelect<'left' | 'right'>
+              value={settings.fullscreen_chat?.side === 'left' ? 'left' : 'right'}
+              onChange={(side) =>
+                updateSettings({ ...settings, fullscreen_chat: { ...settings.fullscreen_chat, side } })
+              }
+              options={[
+                { value: 'left', label: 'Left' },
+                { value: 'right', label: 'Right' },
+              ]}
+            />
+          </SettingsRow>
           <SettingsRow
             title="Buzz when someone mentions you"
             description="A short vibration when a message says your name, on top of the highlight."

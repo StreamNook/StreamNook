@@ -324,6 +324,11 @@ export const WatchScreen: React.FC = () => {
   const sideBySide = !tabletop && shape.twoPane && !mini && !pip && (twoColumns || immersiveLandscape);
   const chatBeside = sideBySide && twoColumns;
   const chatOverlay = sideBySide && immersiveLandscape && landscapeChat && phoneOverlayChat;
+  // A phone's "Beside the video" is the overlay column taken out of the
+  // picture: same edge, same width and the same drag handle, still immersive,
+  // but the video gets the rest of the screen to itself instead of sitting
+  // centred under an opaque column with bars at its far edge.
+  const phoneBeside = chatBeside && !shape.largeScreen;
   const overlaySide: 'left' | 'right' = fsChat?.side === 'left' ? 'left' : 'right';
   // The overlay's own controls change width and see-through IN PLACE (a drag on
   // its edge, a slider on its strip). The live value leads while the finger is
@@ -361,8 +366,9 @@ export const WatchScreen: React.FC = () => {
     ? Math.max(MIN_PLAYER, Math.min(axisLen - MIN_CHAT, desiredPlayer))
     : naturalPlayer;
   // Where the seam falls. On a Fold this is the hinge itself, so neither pane is
-  // bisected by the crease; elsewhere the split the viewer chose.
-  const playerWidth = chatBeside ? playerMain : shape.w;
+  // bisected by the crease; elsewhere the split the viewer chose. On a phone it
+  // is the chat column's width, which the column's own handle drags live.
+  const playerWidth = phoneBeside ? shape.w - overlayWidth : chatBeside ? playerMain : shape.w;
 
   useEffect(() => {
     const onResize = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
@@ -457,12 +463,21 @@ export const WatchScreen: React.FC = () => {
     };
   }, [watching, backgroundMode]);
 
+  // Landscape is a viewing posture, never a browsing one: while the full watch
+  // layer is up on a screen wider than it is tall, the status bar and the
+  // navigation bar are gone whatever the arrangement (video alone, chat over
+  // it, chat beside it, or a large screen's stacked layout). A swipe from the
+  // edge still brings them back for a moment. The mini box is browsing and PiP
+  // is the OS's own window, so both keep the bars.
+  //
+  // One call per flip, and the bars handed back only when the layer goes away.
+  // A per-change cleanup sent "show" straight before every "hide", which is a
+  // bar flash and an inset re-layout the viewer can see.
+  const immersive = show && !mini && !pip && shape.landscape;
   useEffect(() => {
-    // Hide the system bars only when video actually fills the screen. With chat
-    // beside it on a tablet or an unfolded Fold the bars are wanted.
-    setImmersive(watching && sideBySide && !chatBeside);
-    return () => setImmersive(false);
-  }, [watching, sideBySide, chatBeside]);
+    setImmersive(immersive);
+  }, [immersive]);
+  useEffect(() => () => setImmersive(false), []);
 
   // Tell the OS which rectangle to animate PiP from. Without this it crops and
   // scales the WHOLE activity, so the frames before React repaints show
@@ -488,7 +503,9 @@ export const WatchScreen: React.FC = () => {
     report();
     const t = setTimeout(report, 420);
     return () => clearTimeout(t);
-  }, [watching, mini, pip, sideBySide, viewport.w, viewport.h, playerMain]);
+    // The saved chat width, not the live one: the column's handle moves the
+    // band every frame of a drag, and one report after the save lands is enough.
+  }, [watching, mini, pip, sideBySide, viewport.w, viewport.h, playerMain, chatBeside, fsChat?.width]);
 
   // A newly started stream always opens full (external store sync).
   useEffect(() => {
@@ -917,7 +934,11 @@ export const WatchScreen: React.FC = () => {
     >
       <div
         // relative: the landscape chat overlay positions against this box.
-        className={`w-full h-full flex relative ${sideBySide ? 'flex-row' : 'flex-col'}`}
+        // A phone's beside column honours the overlay's side preference; the
+        // reverse is a class, so the player keeps its tree position.
+        className={`w-full h-full flex relative ${
+          sideBySide ? (phoneBeside && overlaySide === 'left' ? 'flex-row-reverse' : 'flex-row') : 'flex-col'
+        }`}
         style={{
           // Only portrait-full needs to clear the status bar; landscape draws
           // under it deliberately and mini/PiP have no bar over them.
@@ -1067,7 +1088,14 @@ export const WatchScreen: React.FC = () => {
             // Side by side, the row deliberately carries no top padding so the
             // video runs edge to edge under the status bar. Chat is not video:
             // without its own inset the first message renders behind the clock.
-            sideBySide && chatBeside
+            phoneBeside
+              ? // Immersive, so no status bar to clear; only a camera cutout
+                // on the column's outer edge.
+                {
+                  [overlaySide === 'left' ? 'paddingLeft' : 'paddingRight']:
+                    `var(--sn-safe-${overlaySide === 'left' ? 'l' : 'r'}, 0px)`,
+                }
+              : sideBySide && chatBeside
               ? { paddingTop: 'var(--sn-safe-t, 0px)' }
               : chatOverlay
                 ? ({
@@ -1161,12 +1189,26 @@ export const WatchScreen: React.FC = () => {
               width={overlayWidth}
               minWidth={240}
               maxWidth={overlayMaxWidth}
-              opacity={overlayOpacity}
               onWidthChange={setOverlayWidthLive}
               onWidthCommit={(w) => void writeOverlay({ width: w })}
-              onOpacityChange={setOverlayOpacityLive}
-              onOpacityCommit={(o) => void writeOverlay({ opacity: o })}
-              onHide={() => setLandscapeChat(false)}
+              strip={{
+                opacity: overlayOpacity,
+                onOpacityChange: setOverlayOpacityLive,
+                onOpacityCommit: (o) => void writeOverlay({ opacity: o }),
+                onHide: () => setLandscapeChat(false),
+              }}
+            />
+          )}
+          {/* Beside the picture there is nothing to see through, so only the
+              width handle: dragging it hands the picture the difference. */}
+          {phoneBeside && (
+            <ChatOverlayChrome
+              side={overlaySide}
+              width={overlayWidth}
+              minWidth={240}
+              maxWidth={overlayMaxWidth}
+              onWidthChange={setOverlayWidthLive}
+              onWidthCommit={(w) => void writeOverlay({ width: w })}
             />
           )}
         </div>

@@ -6,6 +6,10 @@
 // hide chat, and puts itself away after a few seconds of being ignored. Both
 // changes apply live and are saved on release, so a swipe reads as one motion
 // rather than a stutter of settings writes.
+//
+// The phone's beside-the-video column reuses the handle alone: with no picture
+// behind it there is nothing to see through, so it passes no opacity and gets
+// no strip.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Drop, X } from 'phosphor-react';
@@ -17,13 +21,16 @@ interface Props {
   width: number;
   minWidth: number;
   maxWidth: number;
-  /** 0..100 */
-  opacity: number;
   onWidthChange: (w: number) => void;
   onWidthCommit: (w: number) => void;
-  onOpacityChange: (o: number) => void;
-  onOpacityCommit: (o: number) => void;
-  onHide: () => void;
+  /** The see-through strip. Omitted, the handle only resizes. */
+  strip?: {
+    /** 0..100 */
+    opacity: number;
+    onOpacityChange: (o: number) => void;
+    onOpacityCommit: (o: number) => void;
+    onHide: () => void;
+  };
 }
 
 const TAP_SLOP_PX = 5;
@@ -35,17 +42,15 @@ export const ChatOverlayChrome: React.FC<Props> = ({
   width,
   minWidth,
   maxWidth,
-  opacity,
   onWidthChange,
   onWidthCommit,
-  onOpacityChange,
-  onOpacityCommit,
-  onHide,
+  strip,
 }) => {
   // Open on arrival: the strip is the only sign the slider exists, and a
   // control nobody has been shown is a control nobody finds. It puts itself
   // away on the same idle timer as always.
-  const [stripOpen, setStripOpen] = useState(true);
+  const hasStrip = strip != null;
+  const [stripOpen, setStripOpen] = useState(hasStrip);
   const idle = useRef<ReturnType<typeof setTimeout> | null>(null);
   const commit = useRef<ReturnType<typeof setTimeout> | null>(null);
   const drag = useRef<{ id: number; startX: number; startW: number; lastW: number; moved: boolean } | null>(null);
@@ -100,7 +105,8 @@ export const ChatOverlayChrome: React.FC<Props> = ({
       onWidthCommit(d.lastW);
       return;
     }
-    // A tap: the strip.
+    // A tap: the strip, where there is one.
+    if (!hasStrip) return;
     hapticTick();
     setStripOpen((v) => !v);
   };
@@ -114,10 +120,11 @@ export const ChatOverlayChrome: React.FC<Props> = ({
   };
 
   const onOpacityInput = (v: number) => {
-    onOpacityChange(v);
+    if (!strip) return;
+    strip.onOpacityChange(v);
     armIdle();
     if (commit.current) clearTimeout(commit.current);
-    commit.current = setTimeout(() => onOpacityCommit(v), OPACITY_COMMIT_MS);
+    commit.current = setTimeout(() => strip.onOpacityCommit(v), OPACITY_COMMIT_MS);
   };
 
   return (
@@ -147,7 +154,7 @@ export const ChatOverlayChrome: React.FC<Props> = ({
       </div>
 
       <AnimatePresence>
-        {stripOpen && (
+        {strip && stripOpen && (
           <motion.div
             className="absolute bottom-0 left-0 right-0 z-40 p-2"
             initial={{ opacity: 0, y: 8 }}
@@ -163,15 +170,15 @@ export const ChatOverlayChrome: React.FC<Props> = ({
                 min={0}
                 max={100}
                 step={5}
-                value={opacity}
+                value={strip.opacity}
                 onChange={(e) => onOpacityInput(Number(e.target.value))}
-                aria-label="How much video shows through"
+                aria-label="Chat background"
                 className="flex-1 min-w-0 accent-accent"
                 style={{ touchAction: 'none' }}
               />
-              <span className="text-[12px] font-semibold tabular-nums w-9 text-right">{opacity}%</span>
+              <span className="text-[12px] font-semibold tabular-nums w-9 text-right">{strip.opacity}%</span>
               <button
-                onClick={onHide}
+                onClick={strip.onHide}
                 aria-label="Hide chat"
                 className="sn-touch -mr-2 flex items-center justify-center w-9 h-9 rounded-full active:bg-white/10"
               >
