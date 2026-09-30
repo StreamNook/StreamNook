@@ -1,3 +1,21 @@
+## [8.8.2] - 2026-09-30
+
+### ✨ Features
+- Subs you've gifted now show on your profile, with their own switch in profile visibility.
+- Messages sent and channel points on your profile now include your Twitch history from before you joined, as hours watched already did. There's no longer a switch to leave it out.
+- The BetterTTV tab shows all 25 BetterTTV Pro badge designs.
+
+### 🐛 Bug Fixes
+- Profile cards show the Twitch badge someone is wearing now. They could show one that person had already swapped out.
+- Replying to your own chat message works again. Twitch was refusing those replies.
+- Full screen stays on through a raid, an auto-switch, a quality change or switching platforms. It used to get stuck.
+- Chat overlays, MultiChat and plugin windows open at the right size and position on scaled displays. They could open as a thin sliver at the edge of the screen.
+- Glassiness at 0% makes every surface solid. Some panels and hover states stayed see-through.
+- The channel search in plugin settings no longer gets cut off at the bottom of its card, and opens upward when there's more room above.
+
+### 🔧 Maintenance
+- The badge gallery gets badge details from a daily shared copy again, so it doesn't look up each new badge one at a time.
+
 ## [8.8.1] - 2026-09-29
 
 ## 🎉 New: Twitch Recap hours on your profile, and raids in MultiNook
