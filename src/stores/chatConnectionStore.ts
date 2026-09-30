@@ -3374,7 +3374,11 @@ export async function sendChannelMessage(
       const realId = result.message_id;
       const idx = slice.messages.findIndex((m) => isOwnOptimistic(m) && m.id === tempId);
       if (idx !== -1) {
-        replaceMessageAt(slice, idx, { ...(slice.messages[idx] as BackendChatMessage), id: realId });
+        const own = slice.messages[idx] as BackendChatMessage;
+        // The id lives in the row's tags too, and that copy is the one reply,
+        // delete and pin read (parseMessage builds tags from them). Stamping
+        // only `id` left replies to your own message pointing at the local id.
+        replaceMessageAt(slice, idx, { ...own, id: realId, tags: { ...own.tags, id: realId } });
         slice.seenMessageIds.delete(tempId);
         // Arm the echo-upgrade fast path for this id. Defensive cap: a stamped
         // row whose echo never arrives costs one stale entry, never growth.

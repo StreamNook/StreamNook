@@ -40,6 +40,11 @@ impl ChatService {
         sender_id: Option<&str>,
         sender_account_id: Option<&str>,
     ) -> Result<SendResult> {
+        // Our own rows carry a local id until Twitch's id is stamped onto them.
+        // Twitch refuses a reply to a parent id it never issued ("Message
+        // cannot be replied to"), so such a reply goes out as a plain message.
+        let reply_parent_msg_id = reply_parent_msg_id.filter(|id| !id.starts_with("local-"));
+
         // Slash-commands (/ban, /me, /timeout, ...) MUST go over IRC so Twitch
         // executes them. Helix Send Chat Message would post them as literal text.
         let is_command = message.trim_start().starts_with('/');

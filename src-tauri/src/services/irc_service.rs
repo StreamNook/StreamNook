@@ -4791,6 +4791,9 @@ impl IrcService {
     /// is recorded: the echo is what goes into history.
     pub async fn build_own_message(mut m: OwnMessage) -> Option<ChatMessage> {
         let key = m.channel.trim_start_matches('#').to_lowercase();
+        // A reply to a row still carrying its local id is sent as a plain
+        // message (ChatService::send_message), so the row shows none either.
+        m.reply_to = m.reply_to.filter(|r| !r.id.starts_with("local-"));
         // The IRC-connected account's badges for this channel, as USERSTATE
         // reported them on JOIN. Messages go out over Helix, which triggers no
         // USERSTATE, so a page that missed the JOIN one (its slice did not exist
