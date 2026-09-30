@@ -46,7 +46,7 @@ use commands::{
 // Desktop-only feature modules, excluded from the phone app (watch/earn/chat
 // only): MultiNook tiling, Discord RPC, and profile-card screen capture.
 #[cfg(desktop)]
-use commands::{discord::*, multi_nook::*, screen_capture::*};
+use commands::{discord::*, multi_nook::*, popout_window::*, screen_capture::*};
 use log::{debug, error, info, warn};
 use models::settings::{AppState, CloseToTrayMode, Settings};
 use services::background_service::BackgroundService;
@@ -786,8 +786,9 @@ pub fn run() {
             // The generated-label utility webviews (profile-<user>-<ts>,
             // kick-resolve-*, identity-fetch-*, seventv-login-*) accrete one
             // entry per unique label forever - the state file had grown to
-            // 176 windows - so they are excluded too. multichat-default and
-            // plugin-* keep stable labels and wanted geometry, so they stay.
+            // 176 windows - so they are excluded too. Popouts (overlay-*,
+            // multichat-*, plugin-*) are placed and remembered by
+            // commands/popout_window.rs in physical pixels instead.
             .with_filter(|label| {
                 !(label == "twitch-login"
                     || label == "drops-login"
@@ -795,7 +796,10 @@ pub fn run() {
                     || label.starts_with("profile-")
                     || label.starts_with("kick-resolve-")
                     || label.starts_with("identity-fetch-")
-                    || label.starts_with("seventv-login-"))
+                    || label.starts_with("seventv-login-")
+                    || label.starts_with("overlay-")
+                    || label.starts_with("multichat-")
+                    || label.starts_with("plugin-"))
             })
             // The main window is created hidden and revealed on first paint;
             // the plugin's ready-time MAXIMIZED restore would force-show it
@@ -1397,6 +1401,16 @@ pub fn run() {
             reveal_main_window,
             #[cfg(desktop)]
             ensure_main_window,
+            #[cfg(desktop)]
+            open_chat_overlay,
+            #[cfg(desktop)]
+            open_multichat_window,
+            #[cfg(desktop)]
+            grow_popout_width,
+            #[cfg(desktop)]
+            fit_popout_on_screen,
+            #[cfg(desktop)]
+            open_plugin_window,
             #[cfg(desktop)]
             close_main_window,
             calculate_aspect_ratio_size,
@@ -2085,6 +2099,11 @@ pub fn run() {
             let label = window.label().to_string();
             let app_handle = window.app_handle().clone();
 
+            // Popouts: keep the rect each one reopens at current.
+            if commands::popout_window::is_placed_label(&label) {
+                commands::popout_window::note_geometry(window, event);
+            }
+
             if let WindowEvent::Destroyed = event {
                 // A destroyed webview never runs its React cleanup, so any
                 // chat consumer claims it still holds would pin those channels
@@ -2242,6 +2261,8 @@ pub fn run() {
                 let _ = services::mod_log_storage_service::ModLogStorageService::flush_now();
                 let _ = services::whisper_storage_service::WhisperStorageService::flush_now();
                 let _ = services::vod_progress_service::flush_now();
+                #[cfg(desktop)]
+                let _ = commands::popout_window::flush_now();
                 let _ = services::activity_history_service::flush_now();
             let _ = services::chat_logger_service::ChatLoggerService::flush_all();
                 // Ask running plugin processes to shut down before the app

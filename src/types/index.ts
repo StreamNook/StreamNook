@@ -1006,8 +1006,6 @@ export interface StreamerModeSettings {
 
 export interface ChatOverlaySettings {
   opacity?: number; // 10-100, default 70
-  width?: number;
-  height?: number;
 }
 
 export interface FullscreenChatSettings {
@@ -1040,7 +1038,7 @@ export interface Settings {
   // layer as a translucent column.
   fullscreen_chat?: FullscreenChatSettings;
   // Transparent always-on-top chat overlay window (#/chat-overlay). Its
-  // opacity and last size; the window itself is opened by the user.
+  // opacity; the window itself is opened by the user and placed by Rust.
   chat_overlay?: ChatOverlaySettings;
   // Streamer mode: hide viewer counts, link previews, restricted users' rows
   // and mute highlight sounds while broadcasting. Detection runs in Rust.

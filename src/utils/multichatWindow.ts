@@ -36,8 +36,6 @@ export interface OpenMultiChatOptions {
   /** Display title (defaults to `StreamNook MultiChat` or includes the channel
    *  name when one is pre-loaded). */
   title?: string;
-  width?: number;
-  height?: number;
 }
 
 // Defaults tuned to feel comparable to Twitch's stock popout chat window.
@@ -48,10 +46,9 @@ export interface OpenMultiChatOptions {
 // Width of a single chat column. Split layouts (2–4 columns) size the window to
 // a multiple of this so each chat keeps a comfortable single-chat width instead
 // of being squeezed into a fraction of one. Exported so MultiChatWindow's
-// column-aware resize uses the exact same base.
+// column-aware resize uses the exact same base. Rust opens new windows at this
+// width (commands/popout_window.rs); keep the two in step.
 export const MULTICHAT_BASE_WIDTH = 402;
-const DEFAULT_WIDTH = MULTICHAT_BASE_WIDTH;
-const DEFAULT_HEIGHT = 620;
 
 const WINDOW_ID = 'default';
 const WINDOW_LABEL = `multichat-${WINDOW_ID}`;
@@ -60,11 +57,6 @@ const KEEP_STORAGE_KEY = `${STORAGE_PREFIX}${WINDOW_ID}`;
 /** Extra windows are `multichat-w2`, `multichat-w3`, ... (first free id). */
 const EXTRA_ID_PREFIX = 'w';
 const MAX_EXTRA_WINDOWS = 8;
-// Last window position + size (physical px), so a reopen lands on the same monitor in
-// the same spot. Deliberately uses a hyphen (not the `streamnook.multichat.` dot
-// prefix) so the orphan-storage sweep below doesn't wipe it. The popout writes it on
-// move/resize; this spawner reads it at creation.
-export const MULTICHAT_GEOMETRY_KEY = 'streamnook.multichat-geometry';
 
 /** Sweep orphan `streamnook.multichat.<id>` keys: the pre-stable-id random
  *  ids, and extra windows (`w2`, `w3`, ...) that are no longer open. The
@@ -91,7 +83,7 @@ function cleanupOrphanStorage(openIds: Set<string>): void {
 export async function openMultiChatWindow(options: OpenMultiChatOptions = {}): Promise<void> {
   try {
     const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    const { invoke } = await import('@tauri-apps/api/core');
     const { emit } = await import('@tauri-apps/api/event');
 
     // Which MultiChat windows exist right now (labels `multichat-<id>`).
@@ -168,77 +160,6 @@ export async function openMultiChatWindow(options: OpenMultiChatOptions = {}): P
       return;
     }
 
-    const params = new URLSearchParams({ id: windowId });
-    if (options.replace) params.set('replace', '1');
-    if (channelList.length === 1) {
-      // Single channel: use the discrete params (keeps the URL readable).
-      params.set('channel', channelList[0].channel);
-      if (channelList[0].channelId) params.set('channelId', channelList[0].channelId);
-      if (channelList[0].channelName) params.set('channelName', channelList[0].channelName);
-    } else if (channelList.length > 1) {
-      // Multiple channels: seed them all on first mount via a JSON param, so a
-      // brand-new window doesn't race an event listener that isn't up yet.
-      params.set('channels', JSON.stringify(channelList));
-    }
-
-    // Restore the last saved position + size if we have one and it still falls on a
-    // connected monitor (so a since-disconnected second screen doesn't strand the
-    // window off-screen). Otherwise land it next to the main window.
-    let x: number | undefined;
-    let y: number | undefined;
-    let width = options.width ?? DEFAULT_WIDTH;
-    let height = options.height ?? DEFAULT_HEIGHT;
-    let placed = false;
-    try {
-      // Extra windows cascade off the saved spot instead of covering it.
-      const geo = JSON.parse(localStorage.getItem(MULTICHAT_GEOMETRY_KEY) || 'null');
-      if (geo && isExtra && typeof geo.x === 'number' && typeof geo.y === 'number') {
-        const step = 36 * Math.max(1, openIds.size);
-        geo.x += step;
-        geo.y += step;
-      }
-      if (geo && ['x', 'y', 'width', 'height'].every((k) => typeof geo[k] === 'number')) {
-        const { availableMonitors } = await import('@tauri-apps/api/window');
-        const monitors = await availableMonitors().catch(() => []);
-        const onScreen =
-          monitors.length === 0 ||
-          monitors.some((m) => {
-            const right = m.position.x + m.size.width;
-            const bottom = m.position.y + m.size.height;
-            // The window's top-left should land inside a monitor (with a margin so a
-            // slightly-overhanging window still counts as on-screen).
-            return (
-              geo.x >= m.position.x - 64 &&
-              geo.x < right - 64 &&
-              geo.y >= m.position.y - 32 &&
-              geo.y < bottom - 32
-            );
-          });
-        if (onScreen) {
-          x = geo.x;
-          y = geo.y;
-          width = geo.width;
-          height = geo.height;
-          placed = true;
-        }
-      }
-    } catch (err) {
-      Logger.debug('[MultiChat] geometry restore failed:', err);
-    }
-    if (!placed) {
-      try {
-        const mainWindow = getCurrentWindow();
-        const pos = await mainWindow.outerPosition();
-        const size = await mainWindow.outerSize();
-        // Prefer right side of main; if that would render off-screen we'll just
-        // let Tauri decide (omit x/y → uses OS defaults).
-        x = pos.x + size.width + 10;
-        y = pos.y;
-      } catch (err) {
-        Logger.debug('[MultiChat] Could not derive main window position:', err);
-      }
-    }
-
     const title =
       options.title ??
       (channelList.length > 1
@@ -247,29 +168,15 @@ export async function openMultiChatWindow(options: OpenMultiChatOptions = {}): P
           ? `StreamNook MultiChat — ${channelList[0].channelName}`
           : 'StreamNook MultiChat');
 
-    const win = new WebviewWindow(windowLabel, {
-      url: `${window.location.origin}/#/multichat?${params.toString()}`,
+    // Rust builds and places the window (commands/popout_window.rs): the spot
+    // this window had last time, or beside this one, always wholly on screen.
+    // The seeded channels ride its URL, so a new window never races a listener
+    // that is not up yet.
+    await invoke('open_multichat_window', {
+      id: windowId,
+      channels: channelList,
+      replace: !!options.replace,
       title,
-      width,
-      height,
-      x,
-      y,
-      resizable: true,
-      decorations: false,
-      transparent: false,
-      minimizable: true,
-      maximizable: true,
-      focus: true,
-      // Disable Tauri's native drag-and-drop interception. With it enabled
-      // (the default), the OS captures drag gestures before HTML5 `dragstart`
-      // can fire — which silently breaks the tab-strip drag-to-reorder. The
-      // popout has no need for OS-level file-drop targeting, so turning this
-      // off is safe and re-enables web-level DnD throughout the window.
-      dragDropEnabled: false,
-    });
-
-    win.once('tauri://error', (e) => {
-      Logger.error('[MultiChat] Failed to open MultiChat window:', e);
     });
 
     Logger.debug(`[MultiChat] Opened window ${windowLabel} for channel ${options.channel ?? '(empty)'}`);

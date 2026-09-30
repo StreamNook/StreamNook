@@ -89,7 +89,7 @@ import {
   OLED_THEME_ID,
 } from '../../themes';
 import { listenForSettingsUpdates } from '../../utils/settingsBroadcast';
-import { MULTICHAT_BASE_WIDTH, MULTICHAT_GEOMETRY_KEY, openMultiChatWindow } from '../../utils/multichatWindow';
+import { MULTICHAT_BASE_WIDTH, openMultiChatWindow } from '../../utils/multichatWindow';
 import { Tooltip } from '../ui/Tooltip';
 import { Logger } from '../../utils/logger';
 import type { TwitchStream } from '../../types';
@@ -851,53 +851,11 @@ export default function MultiChatWindow() {
     focusedLeafId,
   ]);
 
-  // Persist the window's position + size (debounced) so a reopen lands on the same
-  // monitor in the same spot. Written to a shared key the spawner reads at creation.
-  useEffect(() => {
-    let unMoved: (() => void) | undefined;
-    let unResized: (() => void) | undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    (async () => {
-      try {
-        const { getCurrentWindow } = await import('@tauri-apps/api/window');
-        const win = getCurrentWindow();
-        // Only the default window owns the shared geometry slot; extra
-        // windows cascade off it at spawn and never overwrite it.
-        if (params.id && params.id !== 'default') return;
-        const save = () => {
-          if (timer) clearTimeout(timer);
-          timer = setTimeout(async () => {
-            try {
-              if (await win.isMinimized()) return;
-              const pos = await win.outerPosition();
-              const size = await win.outerSize();
-              localStorage.setItem(
-                MULTICHAT_GEOMETRY_KEY,
-                JSON.stringify({ x: pos.x, y: pos.y, width: size.width, height: size.height }),
-              );
-            } catch {
-              /* ignore */
-            }
-          }, 400);
-        };
-        unMoved = await win.onMoved(save);
-        unResized = await win.onResized(save);
-      } catch (err) {
-        Logger.debug('[MultiChatWindow] geometry listeners failed:', err);
-      }
-    })();
-    return () => {
-      unMoved?.();
-      unResized?.();
-      if (timer) clearTimeout(timer);
-    };
-  }, []);
-
   // Size the window to the number of side-by-side chat columns so a split
   // layout doesn't squeeze N chats into one chat's width. Tabs mode = 1 column;
-  // split modes render min(channels, layoutMode) columns. We only ever GROW the
-  // window (and clamp to the monitor) — never shrink it out from under a user
-  // who manually narrowed it, and never fight a maximized window.
+  // split modes render min(channels, layoutMode) columns. Rust only ever GROWS
+  // the window and keeps it on screen (grow_popout_width): it never shrinks it
+  // out from under a user who narrowed it, and never fights a maximized window.
   // Blended mode is a single merged feed, not N side-by-side columns, so it must not
   // grow the window one base-width per channel (that's what pushed the composer off a
   // narrow/vertical monitor).
@@ -909,110 +867,34 @@ export default function MultiChatWindow() {
         : Math.min(channels.length, layoutMode);
   useEffect(() => {
     if (visibleColumns < 1) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const { getCurrentWindow, LogicalSize, LogicalPosition, currentMonitor } = await import(
-          '@tauri-apps/api/window'
-        );
-        const win = getCurrentWindow();
-        if (cancelled || (await win.isMaximized())) return;
-
-        const scale = await win.scaleFactor();
-        const monitor = await currentMonitor();
-
-        let targetWidth = MULTICHAT_BASE_WIDTH * visibleColumns;
-        if (monitor) {
-          const monitorWidth = monitor.size.width / monitor.scaleFactor;
-          // Leave a margin so the window never butts flush against the screen edge
-          targetWidth = Math.min(targetWidth, Math.max(MULTICHAT_BASE_WIDTH, monitorWidth - 40));
-        }
-
-        const inner = await win.innerSize();
-        const currentWidth = inner.width / scale;
-        const currentHeight = inner.height / scale;
-
-        // Grow only — leave manually-narrowed windows and already-wide windows alone.
-        if (currentWidth >= targetWidth - 2) return;
-
-        await win.setSize(new LogicalSize(Math.round(targetWidth), Math.round(currentHeight)));
-
-        // The popout spawns at the main window's right edge, so a wider window can
-        // spill off-screen. Nudge it left if its right edge passes the monitor.
-        if (monitor) {
-          const pos = await win.outerPosition();
-          const monitorLeft = monitor.position.x / monitor.scaleFactor;
-          const monitorWidth = monitor.size.width / monitor.scaleFactor;
-          const winLeft = pos.x / scale;
-          if (winLeft + targetWidth > monitorLeft + monitorWidth) {
-            const newLeft = Math.max(monitorLeft, monitorLeft + monitorWidth - targetWidth - 10);
-            await win.setPosition(new LogicalPosition(Math.round(newLeft), Math.round(pos.y / scale)));
-          }
-        }
-      } catch (err) {
-        Logger.warn('[MultiChatWindow] column-aware resize failed:', err);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    invoke('grow_popout_width', { width: MULTICHAT_BASE_WIDTH * visibleColumns }).catch((err) =>
+      Logger.warn('[MultiChatWindow] column-aware resize failed:', err),
+    );
   }, [visibleColumns]);
 
-  // Safety net: keep the window inside the monitor it's on. After moving to a smaller
-  // monitor, or restoring a size saved on a larger one, the window can be wider/taller
-  // than the current screen, pushing the composer + send button off the edge. Shrink
-  // to fit and nudge back into view on mount and (debounced) on move. Never touches a
-  // maximized window.
+  // Safety net: after the viewer moves the window (say onto a smaller monitor)
+  // Rust keeps it wholly inside that monitor, so the composer and send button
+  // never end up off the edge. Rust already fitted it when it opened.
   useEffect(() => {
     let unMoved: (() => void) | undefined;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    (async () => {
-      try {
-        const { getCurrentWindow, currentMonitor, LogicalSize, LogicalPosition } = await import(
-          '@tauri-apps/api/window'
-        );
-        const win = getCurrentWindow();
-        const fit = async () => {
-          try {
-            if (await win.isMaximized()) return;
-            const monitor = await currentMonitor();
-            if (!monitor) return;
-            const scale = await win.scaleFactor();
-            const monLeft = monitor.position.x / monitor.scaleFactor;
-            const monTop = monitor.position.y / monitor.scaleFactor;
-            const monW = monitor.size.width / monitor.scaleFactor;
-            const monH = monitor.size.height / monitor.scaleFactor;
-            const inner = await win.innerSize();
-            let w = inner.width / scale;
-            let h = inner.height / scale;
-            if (w > monW + 2 || h > monH + 2) {
-              w = Math.min(w, monW);
-              h = Math.min(h, monH);
-              await win.setSize(new LogicalSize(Math.round(w), Math.round(h)));
-            }
-            const pos = await win.outerPosition();
-            const x = pos.x / scale;
-            const y = pos.y / scale;
-            const cx = Math.min(Math.max(x, monLeft), monLeft + monW - w);
-            const cy = Math.min(Math.max(y, monTop), monTop + monH - h);
-            if (Math.abs(cx - x) > 2 || Math.abs(cy - y) > 2) {
-              await win.setPosition(new LogicalPosition(Math.round(cx), Math.round(cy)));
-            }
-          } catch {
-            /* ignore */
-          }
-        };
-        await fit();
-        if (cancelled) return;
-        unMoved = await win.onMoved(() => {
+    void import('@tauri-apps/api/window')
+      .then(({ getCurrentWindow }) =>
+        getCurrentWindow().onMoved(() => {
           if (timer) clearTimeout(timer);
-          timer = setTimeout(() => void fit(), 300);
-        });
-      } catch (err) {
-        Logger.debug('[MultiChatWindow] fit-to-monitor failed:', err);
-      }
-    })();
+          timer = setTimeout(() => {
+            invoke('fit_popout_on_screen').catch((err) =>
+              Logger.debug('[MultiChatWindow] fit-to-monitor failed:', err),
+            );
+          }, 300);
+        }),
+      )
+      .then((u) => {
+        if (cancelled) u();
+        else unMoved = u;
+      })
+      .catch((err) => Logger.debug('[MultiChatWindow] move listener failed:', err));
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);

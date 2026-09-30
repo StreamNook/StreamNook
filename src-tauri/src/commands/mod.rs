@@ -46,6 +46,9 @@ pub mod multi_nook;
 pub mod plugins;
 pub mod profile_cache;
 pub mod provider_browse;
+// Opening and placing the chat popouts (desktop windows only).
+#[cfg(desktop)]
+pub mod popout_window;
 pub mod resub;
 #[cfg(desktop)]
 pub mod screen_capture;

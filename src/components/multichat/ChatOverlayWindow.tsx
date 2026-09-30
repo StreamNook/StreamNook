@@ -11,7 +11,9 @@
 // `chat-overlay-toggle-interactive`.
 //
 // Same Rust core as every other surface: the channel is acquired on the
-// shared IRC connection and rows carry the rule-engine stamps.
+// shared IRC connection and rows carry the rule-engine stamps. Rust opens and
+// places the window and remembers where each channel's overlay was
+// (commands/popout_window.rs).
 //
 // Linux: the window is opaque (the runtime cannot paint a transparent one),
 // so the slab fills it and the slider fades the whole window through the
@@ -41,7 +43,6 @@ import {
   OLED_THEME_ID,
 } from '../../themes';
 import { listenForSettingsUpdates } from '../../utils/settingsBroadcast';
-import { OVERLAY_GEOMETRY_KEY } from '../../utils/chatOverlayWindow';
 import { Logger } from '../../utils/logger';
 import { IS_LINUX } from '../../utils/platform';
 
@@ -134,41 +135,6 @@ export default function ChatOverlayWindow() {
       void releaseChannel(channel, 'twitch').catch(() => {});
     };
   }, [channel, channelId]);
-
-  // Persist geometry (debounced) so the next overlay lands in the same spot.
-  useEffect(() => {
-    let timer: number | null = null;
-    let unlistenMove: (() => void) | undefined;
-    let unlistenResize: (() => void) | undefined;
-    const win = getCurrentWindow();
-    const save = () => {
-      if (timer) window.clearTimeout(timer);
-      timer = window.setTimeout(async () => {
-        try {
-          const pos = await win.outerPosition();
-          const size = await win.outerSize();
-          localStorage.setItem(
-            OVERLAY_GEOMETRY_KEY,
-            JSON.stringify({ x: pos.x, y: pos.y, width: size.width, height: size.height }),
-          );
-          const cur = useAppStore.getState().settings;
-          updateSettings({
-            ...cur,
-            chat_overlay: { ...cur.chat_overlay, width: size.width, height: size.height },
-          });
-        } catch {
-          /* ignore */
-        }
-      }, 400);
-    };
-    void win.onMoved(save).then((u) => (unlistenMove = u));
-    void win.onResized(save).then((u) => (unlistenResize = u));
-    return () => {
-      if (timer) window.clearTimeout(timer);
-      unlistenMove?.();
-      unlistenResize?.();
-    };
-  }, [updateSettings]);
 
   const applyClickThrough = useCallback(async (on: boolean) => {
     try {
