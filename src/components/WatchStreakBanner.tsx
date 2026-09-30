@@ -32,6 +32,7 @@ const WatchStreakBanner: React.FC<WatchStreakBannerProps> = ({
   // Active mode: user is composing their streak share message
   if (isStreakMode) {
     return (
+      /* glass-exempt: a tint banner on the chat column's own ground. */
       <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-amber-500/5 backdrop-blur-md rounded-lg border border-amber-500/20">
         <Reply size={14} className="text-amber-400 flex-shrink-0" />
         <span className="text-xs text-textSecondary flex-1 flex items-center gap-1.5">
@@ -60,6 +61,7 @@ const WatchStreakBanner: React.FC<WatchStreakBannerProps> = ({
 
   // Collapsed mode: notification banner
   return (
+    /* glass-exempt: a tint banner on the chat column's own ground. */
     <div className="mb-2 flex items-center gap-3 px-3 py-2 bg-amber-500/5 backdrop-blur-md rounded-lg border border-amber-500/20 hover:border-amber-500/40 hover:bg-amber-500/10 transition-colors duration-200">
       <div className="flex items-center justify-center w-6 h-6 rounded bg-amber-500/10 flex-shrink-0 shadow-[0_0_8px_color-mix(in_srgb,var(--color-warning)_20%,transparent)]">
         <Flame size={14} className="text-amber-400 stroke-[2.5]" />

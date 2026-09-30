@@ -504,7 +504,7 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
             </span>
           </span>
           {typeof preview.duration === 'number' && preview.duration > 0 && (
-            <span className="absolute bottom-1.5 right-1.5 rounded bg-black/75 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-white">
+            <span className="absolute bottom-1.5 right-1.5 rounded bg-glass-ink/75 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-white">
               {formatMediaDuration(preview.duration)}
             </span>
           )}
@@ -620,7 +620,7 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
               onError={() => setImageFailed(true)}
             />
             {preview.author && (
-              <span className="absolute bottom-1.5 right-1.5 rounded bg-black/75 px-1.5 py-0.5 text-[11px] font-semibold text-white">
+              <span className="absolute bottom-1.5 right-1.5 rounded bg-glass-ink/75 px-1.5 py-0.5 text-[11px] font-semibold text-white">
                 {preview.author}
               </span>
             )}

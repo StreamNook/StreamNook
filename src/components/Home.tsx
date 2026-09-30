@@ -2248,6 +2248,7 @@ const Home = () => {
                                                                 <Tooltip content={offlineIsFavorite ? 'Remove from favorites' : 'Add to favorites'} side="top">
                                                                     <button
                                                                         onClick={(e) => { void handleFavoriteClick(e, user); }}
+                                                                        // glass-exempt: an icon button over the card art, with no surface of its own.
                                                                         className="absolute top-1 right-1 z-20 p-1 flex items-center justify-center bg-transparent transition-transform duration-300 hover:scale-110 active:scale-95"
                                                                     >
                                                                         <Heart
@@ -2838,7 +2839,7 @@ const Home = () => {
                                     exit={{ opacity: 0, y: -4 }}
                                     transition={{ duration: 0.12 }}
                                     style={{ position: 'fixed', top: historyRect.top, left: historyRect.left, width: historyRect.width }}
-                                    className="z-[1000] rounded-xl overflow-hidden py-1 shadow-xl border border-borderSubtle bg-background/95 backdrop-blur-md"
+                                    className="z-[1000] rounded-xl overflow-hidden py-1 shadow-xl border border-borderSubtle bg-glass-base/95 backdrop-blur-md"
                                 >
                                     <div className="flex items-center justify-between px-3 py-1">
                                         <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-textSecondary">

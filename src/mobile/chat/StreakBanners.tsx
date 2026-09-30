@@ -190,6 +190,7 @@ export const StreakBanners: React.FC<Props> = ({ channel, channelId, message, on
           amber-500/5 ground, amber-500/20 border, the flame in its own amber
           chip with the warning-token glow, and a solid amber share button. */}
       {showStreak && streak && (
+        /* glass-exempt: a tint banner on the chat column's own ground. */
         <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-amber-500/5 border border-amber-500/20 backdrop-blur-md">
           <div className="flex items-center justify-center w-6 h-6 rounded bg-amber-500/10 shrink-0 shadow-[0_0_8px_color-mix(in_srgb,var(--color-warning)_20%,transparent)]">
             <Flame size={13} className="text-amber-400 stroke-[2.5]" />

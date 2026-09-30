@@ -4539,7 +4539,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
   if (!currentStream) {
     return (
-      <div className="h-full bg-secondary backdrop-blur-md flex items-center justify-center p-4">
+      <div className="h-full bg-glass-raised/0 backdrop-blur-md flex items-center justify-center p-4">
         <p className="text-textSecondary">No stream selected</p>
       </div>
     );
@@ -4575,7 +4575,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
   if (showLoadingScreen) {
     return (
-      <div className="h-full bg-secondary backdrop-blur-md flex items-center justify-center p-4">
+      <div className="h-full bg-glass-raised/0 backdrop-blur-md flex items-center justify-center p-4">
         <p className="text-textSecondary">Connecting to chat...</p>
       </div>
     );
@@ -5964,6 +5964,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       }
                     }}
                     placeholder={visiblePlaceholder}
+                    // glass-exempt: the input is clear on purpose; the highlight layer under it carries the surface.
                     className={`relative w-full text-sm placeholder-textSecondary resize-none overflow-hidden scrollbar-thin leading-[1.4] self-center transition-all duration-300 ${remindOverlayActive ? '' : 'glass-input'} ${
                       isWatchStreakMode 
                         ? 'ring-2 ring-amber-500/50 bg-amber-500/5 shadow-[0_0_15px_color-mix(in_srgb,var(--color-warning)_15%,transparent)] placeholder-amber-500/60 text-textPrimary'

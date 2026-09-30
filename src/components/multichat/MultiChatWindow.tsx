@@ -2135,7 +2135,7 @@ export default function MultiChatWindow() {
                     <div className="fixed inset-0 z-40" onClick={() => setPickerOpen(false)} />
                     <div
                       className="absolute left-0 top-full z-50 mt-1 min-w-[180px] overflow-hidden rounded-lg border border-borderSubtle py-1 shadow-lg"
-                      style={{ background: 'rgba(18,18,20,0.98)' }}
+                      style={{ background: 'color-mix(in srgb, rgb(18 18 20) calc(98% + (1 - var(--glass-strength, 1)) * 2%), transparent)' }}
                     >
                       {moderatedTwitch.map((c) => {
                         const active = c.channel === modChannelEntry?.channel;
@@ -3649,7 +3649,7 @@ function AddChannelPanel({
     // Only Twitch shows the (tall, scrollable) live-following list, so cap + grow
     // there. The other providers are add-by-name: the panel sizes to its input row
     // + hint, instead of leaving a big blank area where the list would be.
-    <div className={`flex flex-col border-b border-borderSubtle bg-secondary/40 backdrop-blur-sm ${isTwitch ? 'max-h-[60%]' : ''}`}>
+    <div className={`flex flex-col border-b border-borderSubtle bg-glass-raised/0 backdrop-blur-sm ${isTwitch ? 'max-h-[60%]' : ''}`}>
       <div className="flex items-center gap-2 px-3 py-2">
         <div className="relative">
           <button

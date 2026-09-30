@@ -438,7 +438,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     <div
       ref={menuRef}
       className="glass-panel absolute bottom-full left-0 right-0 mb-2 flex flex-col max-h-[400px] overflow-hidden z-50"
-      style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, transparent)', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)' }}
+      style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, var(--glass-under, transparent))', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)' }}
     >
       {/* Header with balance */}
       <div className="px-4 py-3 border-b border-borderSubtle bg-black/20">
@@ -585,7 +585,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
       {showHighlightModal && highlightReward && (
         <div 
           className="glass-panel animate-scale-in absolute inset-0 flex flex-col overflow-hidden z-50"
-          style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, transparent)', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)' }}
+          style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, var(--glass-under, transparent))', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)' }}
         >
           {/* Modal Header */}
           <div className="px-4 py-3 border-b border-borderSubtle bg-black/20">
@@ -658,7 +658,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
       {showEmoteReveal && revealedEmote && (
         <div 
           className="glass-panel animate-scale-in absolute inset-0 flex flex-col items-center justify-center overflow-hidden z-50"
-          style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, transparent)', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)' }}
+          style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, var(--glass-under, transparent))', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)' }}
           onClick={() => {
             setShowEmoteReveal(false);
             setRevealedEmote(null);
@@ -707,7 +707,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
       {showConfirmModal && pendingReward && (
         <div 
           className="glass-panel animate-scale-in absolute inset-0 flex flex-col items-center justify-center overflow-hidden z-50"
-          style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, transparent)', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)' }}
+          style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, var(--glass-under, transparent))', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)' }}
         >
           {/* Header */}
           <div className="text-lg font-bold text-textPrimary mb-2">
@@ -785,7 +785,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
       {showModifyEmoteModal && modifyEmoteReward && (
         <div 
           className="glass-panel animate-scale-in absolute inset-0 z-50 flex flex-col overflow-hidden"
-          style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, transparent)', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)' }}
+          style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, var(--glass-under, transparent))', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)' }}
         >
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b border-borderSubtle">
@@ -1008,7 +1008,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
       {showChooseEmoteModal && chooseEmoteReward && (
         <div 
           className="glass-panel animate-scale-in absolute inset-0 z-50 flex flex-col overflow-hidden"
-          style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, transparent)', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)' }}
+          style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, var(--glass-under, transparent))', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)' }}
         >
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b border-borderSubtle">

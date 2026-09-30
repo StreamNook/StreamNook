@@ -465,7 +465,7 @@ export const MobilePlayer: React.FC<{
         {/* Center play/pause */}
         <button
           onClick={togglePlay}
-          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full bg-black/45 flex items-center justify-center text-white active:scale-95 transition-transform"
+          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full bg-glass-ink/45 flex items-center justify-center text-white active:scale-95 transition-transform"
           aria-label={paused ? 'Play' : 'Pause'}
         >
           {paused ? <Play size={30} weight="fill" /> : <Pause size={30} weight="fill" />}

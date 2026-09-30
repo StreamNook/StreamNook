@@ -58,7 +58,7 @@ export const GlassSelect = ({ value, onChange, options, className = '', placemen
                         animate={{ opacity: 1, scale: 1, y: 0 }}
                         exit={{ opacity: 0, scale: 0.95, y: placement === 'top' ? 5 : -5 }}
                         transition={{ duration: 0.15, ease: 'easeOut' }}
-                        className={`absolute right-0 z-[100] w-full min-w-[150px] rounded-lg bg-[#09090b]/90 backdrop-blur-3xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] border border-white/10 overflow-hidden ${
+                        className={`absolute right-0 z-[100] w-full min-w-[150px] rounded-lg bg-glass-ink/90 backdrop-blur-3xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] border border-white/10 overflow-hidden ${
                             placement === 'top' ? 'bottom-full mb-1 origin-bottom-right' : 'mt-1 origin-top-right'
                         }`}
                     >

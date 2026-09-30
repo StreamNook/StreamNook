@@ -947,7 +947,7 @@ const WhispersWidget = ({ isOpen, onClose }: WhispersWidgetProps) => {
                             )}
 
                             {/* Input Area */}
-                            <div className="shrink-0 p-4 relative bg-surface-hover/20 backdrop-blur-md border-t border-borderSubtle">
+                            <div className="shrink-0 p-4 relative bg-glass-hover/20 backdrop-blur-md border-t border-borderSubtle">
                                 {/* Emoji Picker */}
                                 {showEmojiPicker && (
                                     <div ref={emojiPickerRef} className="absolute bottom-full left-4 right-4 mb-2 glass-panel shadow-xl overflow-hidden" style={{ height: '320px' }}>

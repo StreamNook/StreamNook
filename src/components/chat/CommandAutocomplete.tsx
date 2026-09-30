@@ -125,7 +125,7 @@ const CommandAutocomplete: React.FC<CommandAutocompleteProps> = ({
       ref={listRef as any}
     >
       {/* Header */}
-      <div className="px-4 py-3 border-b border-white/5 flex justify-between items-center bg-background/[0.5] backdrop-blur-md shadow-sm z-10 relative">
+      <div className="px-4 py-3 border-b border-white/5 flex justify-between items-center bg-glass-base/50 backdrop-blur-md shadow-sm z-10 relative">
         <span className="text-[11px] font-semibold text-white/50 uppercase tracking-wider">
           Chat Commands
         </span>

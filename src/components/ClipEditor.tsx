@@ -284,12 +284,14 @@ function ClipEditorInner({
               onClick={onTrackClick}
               className="relative h-14 w-full cursor-pointer select-none overflow-hidden rounded-lg border border-white/5 bg-black/40"
             >
+              {/* glass-exempt: the trim veils and the selected span are marks on the timeline, not surfaces. */}
               <div className="absolute inset-y-0 left-0 bg-black/45" style={{ width: `${pct(start)}%` }} />
               <div
                 className="absolute inset-y-0 right-0 bg-black/45"
                 style={{ width: `${pct(duration - end)}%` }}
               />
               <div
+                // glass-exempt: the selected span is a mark on the timeline, not a surface.
                 onPointerDown={onHandleDown('region')}
                 onPointerMove={onHandleMove}
                 onPointerUp={onHandleUp}

@@ -32,7 +32,7 @@ export default function MultiChatToasts() {
             transition={{ duration: 0.16 }}
             className={`glass-panel pointer-events-auto flex items-start gap-2 rounded-lg border ${
               TYPE_BORDER[t.type] ?? 'border-borderSubtle'
-            } px-3 py-2 shadow-lg backdrop-blur-lg`}
+            } px-3 py-2 shadow-lg`}
           >
             <div className="min-w-0 flex-1 text-xs leading-relaxed text-textPrimary">{t.message}</div>
             <button

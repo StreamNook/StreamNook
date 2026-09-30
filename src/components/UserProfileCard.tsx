@@ -1944,7 +1944,7 @@ const UserProfileCard = ({
       <div
         ref={cardRef}
         className={`${isStandaloneWindow ? 'relative w-full h-full' : `fixed z-50 ${isMemberCard ? 'w-[760px]' : 'w-[440px]'} max-h-[88vh]`} sn-light-off user-profile-card backdrop-blur-xl shadow-2xl ${framed ? '' : 'border border-borderSubtle rounded-lg'} overflow-hidden flex flex-col`}
-        style={isStandaloneWindow ? { backgroundColor: 'rgba(0, 0, 0, 0.75)' } : cardStyle}
+        style={isStandaloneWindow ? { backgroundColor: 'color-mix(in srgb, #000 calc(75% + (1 - var(--glass-strength, 1)) * 25%), transparent)' } : cardStyle}
         onMouseDown={isStandaloneWindow ? undefined : handleMouseDown}
       >
         {framed && <ProfileFrame url={frameUrl} />}
@@ -1967,7 +1967,7 @@ const UserProfileCard = ({
             )}
           </motion.div>
           <motion.div
-            className="absolute -bottom-10 left-4 w-20 h-20 rounded-full border-2 border-secondary bg-secondary overflow-hidden shadow-lg"
+            className="absolute -bottom-10 left-4 w-20 h-20 rounded-full border-2 border-secondary bg-tertiary overflow-hidden shadow-lg"
             style={prefersReducedMotion ? undefined : { scale: avatarScale, y: avatarLift, transformOrigin: 'left bottom' }}
           >
             {avatarUrl ? (
@@ -2025,6 +2025,7 @@ const UserProfileCard = ({
 
         {/* Single scroll body. One padded container, vertical rhythm via space-y, no section dividers. */}
         <div
+          // glass-exempt: the atmosphere card body; an atmosphere keeps its own glass.
           ref={scrollBodyRef}
           className={`relative z-[1] flex-1 overflow-y-auto min-h-0 scrollbar-thin ${isMemberCard && memberView.hasAtmosphere ? 'bg-[rgba(10,10,14,0.58)] backdrop-blur-[44px]' : ''}`}
           style={isMemberCard && memberView.hasAtmosphere ? ({ '--glass-strength': '0.45' } as React.CSSProperties) : undefined}
@@ -2056,7 +2057,7 @@ const UserProfileCard = ({
                   >
                     {/* Sticky so "Back to profile" stays reachable once the
                         timeline auto-scrolls to the newest message. */}
-                    <div className="sticky top-0 z-20 flex items-center justify-between px-2 py-2 -mt-2 bg-secondary/95 backdrop-blur-sm">
+                    <div className="sticky top-0 z-20 flex items-center justify-between px-2 py-2 -mt-2 bg-glass-ink/0 backdrop-blur-sm">
                       <button
                         type="button"
                         onClick={() => setShowMessages(false)}

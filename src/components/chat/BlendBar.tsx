@@ -37,7 +37,7 @@ import type { BlendCompanion, LinkSuggestion } from '../../hooks/useBlendCompani
 /** The platforms whose chat can be combined, in the order the picker lists them. */
 const COMBINABLE: ProviderId[] = ['kick', 'youtube', 'twitch'];
 
-const BAR_BG = { backgroundColor: 'color-mix(in srgb, var(--color-background) 90%, transparent)' };
+const BAR_BG = { backgroundColor: 'color-mix(in srgb, var(--color-background) calc(90% + (1 - var(--glass-strength, 1)) * 10%), transparent)' };
 
 /** What the channel typed into the box turned out to be. */
 type Preview =

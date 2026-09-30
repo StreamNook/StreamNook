@@ -1654,6 +1654,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
                   return (
                     <Tooltip key={`${badge.set_id}-${badge.id}-${index}`} content={hasCollected ? `${badge.title} (Collected!)` : badge.title} side="bottom">
                       <button
+                        // glass-exempt: a badge tile in the overlay's solid grid; its gradient is the fill.
                         onClick={() => onBadgeClick(badge, badge.set_id)}
                         className={`flex flex-col items-center gap-2 p-3 transition-all duration-300 group relative ${
                           hasCollected ? 'rounded-xl bg-gradient-to-br from-[#d4a84b]/15 to-[#b8860b]/5 border border-[#d4a84b]/30 shadow-[inset_0_1px_1px_rgba(255,255,255,0.1),0_4px_20px_rgba(212,168,75,0.15)] backdrop-blur-md hover:bg-[#d4a84b]/20 hover:border-[#d4a84b]/50' :
@@ -1675,7 +1676,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
                       </div>
                       {/* Collected indicator - takes priority over other indicators */}
                       {hasCollected && (
-                        <div className="absolute -top-1 -right-1 w-6 h-6 rounded-full flex items-center justify-center bg-black/40 backdrop-blur-md border border-[#d4a84b]/60 shadow-[0_0_15px_rgba(212,168,75,0.4)] overflow-hidden">
+                        <div className="absolute -top-1 -right-1 w-6 h-6 rounded-full flex items-center justify-center bg-glass-ink/40 backdrop-blur-md border border-[#d4a84b]/60 shadow-[0_0_15px_rgba(212,168,75,0.4)] overflow-hidden">
                           <div className="absolute inset-0 bg-gradient-to-br from-[#d4a84b]/30 to-transparent pointer-events-none" />
                           <Check size={13} className="text-[#f0d78c] drop-shadow-[0_0_3px_rgba(212,168,75,0.8)] z-10" strokeWidth={2.5} />
                         </div>
@@ -2077,6 +2078,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
                           side="bottom"
                         >
                           <button
+                            // glass-exempt: a cosmetic tile in the overlay's solid grid; its gradient is the fill.
                             onClick={() => setSelectedCosmetic(cosmetic)}
                             className={`flex flex-col items-center gap-2 p-3 transition-all duration-300 group relative ${
                               isActive ? 'rounded-xl bg-gradient-to-br from-[#d4a84b]/20 to-[#b8860b]/10 border border-[#d4a84b]/50 shadow-[inset_0_1px_1px_rgba(255,255,255,0.1),0_4px_20px_rgba(212,168,75,0.2)] backdrop-blur-md ring-2 ring-accent/50 hover:bg-[#d4a84b]/25 hover:border-[#d4a84b]/60' :
@@ -2095,7 +2097,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
                               />
                             </div>
                             {owned && (
-                              <div className="absolute -top-1 -right-1 w-6 h-6 rounded-full flex items-center justify-center bg-black/40 backdrop-blur-md border border-[#d4a84b]/60 shadow-[0_0_15px_rgba(212,168,75,0.4)] overflow-hidden">
+                              <div className="absolute -top-1 -right-1 w-6 h-6 rounded-full flex items-center justify-center bg-glass-ink/40 backdrop-blur-md border border-[#d4a84b]/60 shadow-[0_0_15px_rgba(212,168,75,0.4)] overflow-hidden">
                                 <div className="absolute inset-0 bg-gradient-to-br from-[#d4a84b]/30 to-transparent pointer-events-none" />
                                 <Check size={13} className="text-[#f0d78c] drop-shadow-[0_0_3px_rgba(212,168,75,0.8)] z-10" strokeWidth={2.5} />
                               </div>

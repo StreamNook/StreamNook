@@ -164,7 +164,7 @@ export default function ChatSearchBar({ channelKey, onJumpTo, onClose }: ChatSea
       role="search"
     >
       {/* Header: label, scope, kbd hints, close */}
-      <div className="relative z-10 flex items-center justify-between border-b border-white/5 bg-background/[0.5] px-3 py-2 backdrop-blur-md">
+      <div className="relative z-10 flex items-center justify-between border-b border-white/5 bg-glass-base/50 px-3 py-2 backdrop-blur-md">
         <div className="flex min-w-0 items-baseline gap-2">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-white/50">Search chat</span>
           <span className="truncate text-[10px] text-white/35">{scopeLabel}</span>

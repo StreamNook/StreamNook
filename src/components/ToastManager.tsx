@@ -315,14 +315,16 @@ const ToastManager = () => {
     }
   };
 
+  // Border only. The fill is .glass-panel's, which follows the Glassiness
+  // slider down to solid at 0%; a background utility here replaces it.
   const getToastColor = (type: string) => {
     switch (type) {
-      case 'success': return 'border-green-500/30 bg-green-500/5';
-      case 'error': return 'border-red-500/30 bg-red-500/5';
-      case 'warning': return 'border-yellow-500/30 bg-yellow-500/5';
-      case 'live': return 'border-accent/40 bg-accent/5';
-      case 'channel_points': return 'border-orange-500/30 bg-orange-500/5';
-      default: return 'border-accent/30 bg-accent/5';
+      case 'success': return 'border-green-500/30';
+      case 'error': return 'border-red-500/30';
+      case 'warning': return 'border-yellow-500/30';
+      case 'live': return 'border-accent/40';
+      case 'channel_points': return 'border-orange-500/30';
+      default: return 'border-accent/30';
     }
   };
 
@@ -442,7 +444,7 @@ const ToastItem = ({ toast, removeToast, getToastIcon, getToastColor, enter }: T
       } : undefined}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      className={`glass-panel backdrop-blur-lg p-4 rounded-lg shadow-lg border ${getToastColor(toast.type)} w-[min(380px,calc(100vw-24px))] pointer-events-auto ${isClickable ? 'cursor-pointer hover:bg-accent/20 transition-colors' : ''} ${isPaused && isClickable ? 'shimmer-border' : ''}`}
+      className={`glass-panel p-4 rounded-lg shadow-lg border ${getToastColor(toast.type)} w-[min(380px,calc(100vw-24px))] pointer-events-auto ${isClickable ? 'cursor-pointer' : ''} ${isPaused && isClickable ? 'shimmer-border' : ''}`}
     >
       <div className="flex items-start gap-3">
         {getToastIcon(toast.type) && (

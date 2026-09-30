@@ -184,7 +184,7 @@ const MultiNookPresets: React.FC = () => {
         >
           <div
             className="liquid-glass-panel overflow-hidden"
-            style={{ backgroundColor: 'rgba(16, 16, 20, 0.92)' }}
+            style={{ backgroundColor: 'color-mix(in srgb, rgb(16 16 20) 92%, var(--glass-under, transparent))' }}
           >
             {view.mode === 'list' ? (
               <PresetListView

@@ -3741,7 +3741,7 @@ const VideoPlayer = () => {
           <button
             onClick={() => exitStream()}
             className="flex items-center justify-center p-2 glass-button rounded-lg"
-            style={{ backgroundColor: 'rgba(239, 68, 68, 0.25)', backdropFilter: 'blur(16px)' }}
+            style={{ backgroundColor: 'color-mix(in srgb, rgb(239 68 68) 25%, var(--glass-under, transparent))', backdropFilter: 'blur(16px)' }}
           >
             <XIcon weight="bold" className="w-4 h-4 text-red-400" />
           </button>

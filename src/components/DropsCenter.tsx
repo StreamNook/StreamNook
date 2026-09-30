@@ -1062,7 +1062,7 @@ export default function DropsCenter() {
                                                         // expand and collapse mirror each other.
                                                         transition={{ type: 'spring', stiffness: 360, damping: 32, mass: 0.9, opacity: { duration: 0.15 } }}
                                                         className="pointer-events-auto glass-panel border border-success/30 overflow-hidden rounded-lg origin-bottom"
-                                                        style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 92%, transparent)' }}
+                                                        style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 92%, var(--glass-under, transparent))' }}
                                                     >
                                                         <button
                                                             onClick={() => setShowCompletedGames(false)}

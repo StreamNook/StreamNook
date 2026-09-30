@@ -264,7 +264,7 @@ export default function ChannelAboutReveal({ enabled, channelLogin, children }: 
               type="button"
               onClick={() => setShowAbout(true)}
               aria-hidden={open}
-              className={`absolute left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border border-transparent bg-black/40 shadow-[inset_1px_1px_0_0_rgba(255,255,255,0.10),inset_-1px_-1px_0_0_rgba(0,0,0,0.18)] px-2.5 py-0.5 text-[11px] font-medium text-white/60 backdrop-blur-sm transition-all duration-300 hover:bg-black/60 hover:text-white ${
+              className={`absolute left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border border-transparent bg-glass-ink/40 shadow-[inset_1px_1px_0_0_rgba(255,255,255,0.10),inset_-1px_-1px_0_0_rgba(0,0,0,0.18)] px-2.5 py-0.5 text-[11px] font-medium text-white/60 backdrop-blur-sm transition-all duration-300 hover:bg-black/60 hover:text-white ${
                 plainScrollReveals
                   // A plain scroll opens the About, so this is only a hint. It
                   // fades out on hover so it never collides with the controls.

@@ -7,7 +7,7 @@ import { useState, useCallback } from "react";
 // containerClassName prop on <Tooltip>; when set, this default is replaced
 // entirely so e.g. StreamNookBadge can render a pill-shaped popover.
 const DEFAULT_TOOLTIP_CONTAINER_CLASS =
-  "rounded-md bg-black/80 px-2.5 py-1.5 text-xs font-medium text-textPrimary shadow-xl backdrop-blur-xl border border-white/10 max-w-xs break-words pointer-events-none text-center leading-tight";
+  "rounded-md bg-glass-ink/80 px-2.5 py-1.5 text-xs font-medium text-textPrimary shadow-xl backdrop-blur-xl border border-white/10 max-w-xs break-words pointer-events-none text-center leading-tight";
 
 export const TooltipManager = () => {
   const { isVisible, content, rect, side: initialSide, containerClassName } = useTooltipStore();

@@ -2262,7 +2262,8 @@ body {
    same no-glow inset bevel as glass-panel. Theme-aware, so it tracks light/dark
    themes alongside the textPrimary/textSecondary it carries. */
 .stats-hud {
-  background-color: color-mix(in srgb, var(--color-background-tertiary) 94%, transparent);
+  /* Near-opaque at every slider position, and fully opaque at 0%. */
+  background-color: color-mix(in srgb, var(--color-background-tertiary) calc(94% + (1 - var(--glass-strength, 1)) * 6%), transparent);
   backdrop-filter: blur(16px);
   border: 1px solid transparent;
   border-radius: 10px;
@@ -2493,7 +2494,8 @@ body {
 
 /* User Profile Card specific styling with black transparency */
 .user-profile-card {
-  background-color: rgba(0, 0, 0, 0.65);
+  /* 65% black at full glass, solid at 0%: it pops over chat and video. */
+  background-color: color-mix(in srgb, #000 calc(65% + (1 - var(--glass-strength, 1)) * 35%), transparent);
   border-radius: 8px;
   backdrop-filter: blur(10px);
   border: 1px solid var(--color-border-subtle);
@@ -2594,7 +2596,7 @@ body {
      out with the slider is exactly what left it a ghost over a bright stream.
      So the base stays a near-opaque theme surface at every slider position and
      the frost, the tint and the top light are what make it read as glass. */
-  background-color: color-mix(in srgb, var(--color-background-tertiary) 92%, transparent);
+  background-color: color-mix(in srgb, var(--color-background-tertiary) calc(92% + (1 - var(--glass-strength, 1)) * 8%), transparent);
   background-image:
     linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012) 45%, transparent),
     linear-gradient(var(--color-background-secondary), var(--color-background-secondary));
@@ -2627,6 +2629,43 @@ body {
     inset 0 1px 0 0 rgba(255, 255, 255, 0.10),
     var(--hairline-contour),
     0 0 20px rgba(0, 0, 0, 0.5);
+}
+
+/* Glass under. Every Tailwind background modifier (bg-white/10, hover:bg-accent/20,
+   !bg-red-500/15) mixes its tint over --glass-under instead of over transparent
+   (tailwind.config.js). A glass class sets it to its own opaque base, faded in as
+   the slider drops, so a tint on a glass element sits on a solid base at 0%
+   instead of replacing it and leaving the element see-through. At full glass the
+   base is transparent, so nothing changes there. Descendants get transparent
+   again (zero specificity, so a nested glass class still sets its own), because
+   a tint on a child already sits on its parent's base.
+
+   The same rule for a hand-written fill on a glass element (an inline style):
+   color-mix(in srgb, <tint> <alpha>, var(--glass-under, transparent)).
+   For a fill that is not on a glass element, ride the slider directly:
+   color-mix(in srgb, <colour> calc(A% + (1 - var(--glass-strength, 1)) * (100% - A%)), transparent)
+   which is A% at full glass and opaque at 0%. glassiness.test.ts holds both. */
+:where(.glass-panel, .glass-modal, .liquid-glass-panel, .glass-flyout, .sn-popover,
+  .glass-button, .glass-button-static, .glass-button-active, .glass-button-secondary,
+  .glass-badge, .glass-input) * {
+  --glass-under: transparent;
+}
+.glass-panel,
+.glass-modal,
+.liquid-glass-panel,
+.glass-flyout {
+  --glass-under: color-mix(in srgb, var(--color-background-tertiary) calc((1 - var(--glass-strength, 1)) * 100%), transparent);
+}
+.sn-popover {
+  --glass-under: color-mix(in srgb, var(--color-background) calc((1 - var(--glass-strength, 1)) * 100%), transparent);
+}
+.glass-button,
+.glass-button-static,
+.glass-button-active,
+.glass-button-secondary,
+.glass-badge,
+.glass-input {
+  --glass-under: color-mix(in srgb, var(--color-surface) calc((1 - var(--glass-strength, 1)) * 100%), transparent);
 }
 
 /* Glassiness floor. At 0% the slider sets html[data-glass="off"]; strip every
@@ -3440,7 +3479,7 @@ html[data-motion="reduced"] .animate-shimmer {
    background rather than a literal colour, so a light theme gets a light frost
    instead of a dark hole punched through it. */
 .hype-train-track {
-  background: color-mix(in srgb, var(--color-background) 62%, transparent);
+  background: color-mix(in srgb, var(--color-background) calc(62% + (1 - var(--glass-strength, 1)) * 38%), transparent);
   -webkit-backdrop-filter: blur(12px) saturate(115%);
   backdrop-filter: blur(12px) saturate(115%);
   border: 1px solid var(--color-border-subtle);
@@ -3895,11 +3934,11 @@ html[data-motion="reduced"] .animate-shimmer {
   --plyr-video-control-color: var(--color-text-primary);
   --plyr-video-control-color-hover: var(--color-accent);
   --plyr-video-control-background-hover: var(--color-surface);
-  --plyr-menu-background: rgba(0, 0, 0, 0.85);
+  --plyr-menu-background: color-mix(in srgb, #000 calc(85% + (1 - var(--glass-strength, 1)) * 15%), transparent);
   --plyr-menu-color: var(--color-text-primary);
   --plyr-menu-border-color: var(--color-border-light);
   --plyr-menu-radius: 4px;
-  --plyr-tooltip-background: rgba(0, 0, 0, 0.85);
+  --plyr-tooltip-background: color-mix(in srgb, #000 calc(85% + (1 - var(--glass-strength, 1)) * 15%), transparent);
   --plyr-tooltip-color: var(--color-text-primary);
   --plyr-tooltip-radius: 4px;
   --plyr-font-family: "Satoshi", -apple-system, BlinkMacSystemFont, sans-serif;
@@ -4293,7 +4332,7 @@ html[data-watching] .drops-progress-inline {
 
 /* Tooltip */
 .video-player-container .plyr__tooltip {
-  background: rgba(0, 0, 0, 0.85);
+  background: color-mix(in srgb, #000 calc(85% + (1 - var(--glass-strength, 1)) * 15%), transparent);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--color-border-light);
@@ -4304,7 +4343,7 @@ html[data-watching] .drops-progress-inline {
 
 /* Menu styling */
 .video-player-container .plyr__menu__container {
-  background: rgba(0, 0, 0, 0.85);
+  background: color-mix(in srgb, #000 calc(85% + (1 - var(--glass-strength, 1)) * 15%), transparent);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--color-border-light);
@@ -5100,7 +5139,7 @@ html[data-watching] .drops-progress-inline {
      work: blurred, a little more saturated, a little dimmer, so the chip takes
      on the colour of the thumbnail behind it, softly, the way frosted glass
      does, while white text still holds on a bright frame. */
-  background-color: rgba(16, 16, 22, 0.22);
+  background-color: color-mix(in srgb, rgb(16 16 22) calc(22% + (1 - var(--glass-strength, 1)) * 78%), transparent);
   -webkit-backdrop-filter: blur(10px) saturate(175%) brightness(0.82);
   backdrop-filter: blur(10px) saturate(175%) brightness(0.82);
   font-size: 11px;
@@ -5126,7 +5165,7 @@ html[data-watching] .drops-progress-inline {
 .card-chip--neutral {
   /* A little more veil than the coloured kinds: no colour of its own to
      separate it, and the number has to read on anything. */
-  background-color: rgba(16, 16, 22, 0.34);
+  background-color: color-mix(in srgb, rgb(16 16 22) calc(34% + (1 - var(--glass-strength, 1)) * 66%), transparent);
   color: #fff;
   font-variant-numeric: tabular-nums;
 }
@@ -5685,7 +5724,7 @@ html[data-os="linux"] .sn-sidebar-list {
   left: 0;
   width: 220px;
   padding: 12px;
-  background: rgba(20, 20, 22, 0.95);
+  background: color-mix(in srgb, rgb(20 20 22) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--color-border-light);
@@ -5703,7 +5742,7 @@ html[data-os="linux"] .sn-sidebar-list {
   left: 12px;
   width: 12px;
   height: 12px;
-  background: rgba(20, 20, 22, 0.95);
+  background: color-mix(in srgb, rgb(20 20 22) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent);
   border-left: 1px solid var(--color-border-light);
   border-top: 1px solid var(--color-border-light);
   transform: rotate(45deg);
@@ -5789,7 +5828,7 @@ html[data-os="linux"] .sn-sidebar-list {
    the hand-rolled bordered-chip recipe: fill + inset bevel carry the shape,
    border stays transparent per the no-chip-border rule. */
 .glass-button-secondary {
-  background-color: color-mix(in srgb, var(--color-surface) 60%, transparent);
+  background-color: color-mix(in srgb, var(--color-surface) calc(60% + (1 - var(--glass-strength, 1)) * 40%), transparent);
   border: 1px solid transparent;
   border-radius: 6px;
   box-shadow:
@@ -6464,7 +6503,7 @@ html[data-motion="reduced"] .sn-ffz-anim-leave {
   padding: 4px 8px;
   white-space: nowrap;
   pointer-events: none;
-  background: var(--plyr-tooltip-background, rgba(0, 0, 0, 0.85));
+  background: var(--plyr-tooltip-background, color-mix(in srgb, #000 calc(85% + (1 - var(--glass-strength, 1)) * 15%), transparent));
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--color-border-light);
@@ -6677,7 +6716,7 @@ html[data-os="linux"] .sn-chat-overlay-frame {
    here so Plyr keeps the sheet's frame height instead of a quarter of the
    player; skinned like .plyr__tooltip. */
 .video-player-container .plyr__preview-thumb {
-  background: rgba(0, 0, 0, 0.85);
+  background: color-mix(in srgb, #000 calc(85% + (1 - var(--glass-strength, 1)) * 15%), transparent);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--color-border-light);
@@ -6686,7 +6725,7 @@ html[data-os="linux"] .sn-chat-overlay-frame {
   z-index: 3;
 }
 .video-player-container .plyr__preview-thumb::before {
-  border-top-color: rgba(0, 0, 0, 0.85);
+  border-top-color: color-mix(in srgb, #000 calc(85% + (1 - var(--glass-strength, 1)) * 15%), transparent);
 }
 .video-player-container .plyr__preview-thumb__image-container {
   width: 220px;
@@ -6762,7 +6801,7 @@ html[data-os="linux"] .sn-chat-overlay-frame {
   white-space: nowrap;
   text-align: center;
   pointer-events: none;
-  background: rgba(0, 0, 0, 0.85);
+  background: color-mix(in srgb, #000 calc(85% + (1 - var(--glass-strength, 1)) * 15%), transparent);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--color-border-light);

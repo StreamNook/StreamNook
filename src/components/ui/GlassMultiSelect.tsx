@@ -120,7 +120,7 @@ export const GlassMultiSelect = ({
                             animate={{ opacity: 1, y: 0, scale: 1 }}
                             exit={{ opacity: 0, y: -4, scale: 0.97 }}
                             transition={{ duration: 0.14, ease: 'easeOut' }}
-                            className="rounded-lg bg-[#09090b]/90 backdrop-blur-3xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] border border-white/10 overflow-hidden"
+                            className="rounded-lg bg-glass-ink/90 backdrop-blur-3xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] border border-white/10 overflow-hidden"
                         >
                             <div className="py-1 flex flex-col w-full max-h-72 overflow-y-auto scrollbar-thin">
                                 <button

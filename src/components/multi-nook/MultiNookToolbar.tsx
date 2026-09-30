@@ -343,7 +343,7 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
                     tint alone reads as see-through. */}
                 <div
                   className="liquid-glass-panel overflow-hidden"
-                  style={{ backgroundColor: 'rgba(16, 16, 20, 0.92)' }}
+                  style={{ backgroundColor: 'color-mix(in srgb, rgb(16 16 20) 92%, var(--glass-under, transparent))' }}
                 >
                   <div ref={listRef} className="max-h-80 overflow-y-auto custom-scrollbar p-1.5">
 

@@ -157,6 +157,7 @@ const SupportSettings = () => {
                                 of the icon then rest on a plain frosted blur (no color bleed); an
                                 opaque square icon simply covers it. */}
                             <div
+                                // glass-exempt: an icon frame on the solid settings page; the icon covers it.
                                 className={`relative h-[68px] w-[68px] overflow-hidden rounded-2xl border ${
                                     iconUrl ? 'bg-white/[0.04] backdrop-blur-md' : ''
                                 }`}

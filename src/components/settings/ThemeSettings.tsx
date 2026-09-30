@@ -125,6 +125,7 @@ const ThemeCard = ({ theme, isSelected, onSelect, isCustom, onEdit }: ThemeCardP
 
             {/* Custom Badge */}
             {isCustom && (
+                /* glass-exempt: a label on the theme's own preview swatch. */
                 <div className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-medium bg-accent/20 text-accent">
                     Custom
                 </div>

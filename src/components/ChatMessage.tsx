@@ -3738,7 +3738,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       {hoverArmed && (onMessageCopy || showInlinePin) && broadcasterId && (
         <div
           data-no-drag="true"
-          className="absolute top-1 right-2 z-[50] opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 p-0.5 rounded-lg bg-tertiary/90 backdrop-blur-sm border border-white/10 shadow-[0_4px_12px_rgba(0,0,0,0.4)]"
+          className="absolute top-1 right-2 z-[50] opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 p-0.5 rounded-lg bg-glass-raised/90 backdrop-blur-sm border border-white/10 shadow-[0_4px_12px_rgba(0,0,0,0.4)]"
         >
           {showInlinePin && thisMessageId && parsed.provider === 'twitch' && (
             <Tooltip content={isThisPinned ? 'Unpin message' : 'Pin message'} side="left">
@@ -3793,7 +3793,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           className="absolute bottom-full right-2 mb-0.5 opacity-0 group-hover:opacity-100 transition-[opacity,transform] duration-200 flex items-center gap-0.5 p-0.5 backdrop-blur-md border border-white/10 shadow-[0_8px_24px_rgba(0,0,0,0.55)] rounded-xl overflow-visible z-[50] translate-y-1 group-hover:translate-y-0"
           // Themed (was hardcoded zinc-900); transition stays scoped so the
           // backdrop-filter itself is never animated.
-          style={{ backgroundColor: 'color-mix(in srgb, var(--color-background-tertiary) 95%, transparent)' }}
+          style={{ backgroundColor: 'color-mix(in srgb, var(--color-background-tertiary) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}
         >
               {/* Delete Message (Twitch + Kick). */}
               <Tooltip content="Delete Message" side="top">

@@ -660,7 +660,7 @@ export function EmotePickerPanel({
       }}
       className={className || DEFAULT_PANEL_CLASS}
       style={{
-        backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, transparent)',
+        backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)',
         display: !open && fullyClosed ? 'none' : undefined,
         pointerEvents: open ? 'auto' : 'none',
       }}
@@ -854,7 +854,7 @@ export function EmotePickerPanel({
                 if (filteredCategoryEmojis.length === 0) return null;
                 return (
                   <div key={category} className="flex flex-col">
-                    <h3 className="text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-white/[0.03] z-10 backdrop-blur-ultra" style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, transparent)' }}>{category}</h3>
+                    <h3 className="text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-white/[0.03] z-10 backdrop-blur-ultra" style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>{category}</h3>
                     <div className="grid grid-cols-8 gap-1 px-1">
                       {filteredCategoryEmojis.map((emoji, idx) => (
                         <Tooltip key={`${category}-${idx}`} content={emoji}>
@@ -902,7 +902,7 @@ export function EmotePickerPanel({
           <div className="flex flex-col gap-4 pt-2">
             {Array.from((selectedProvider === 'kick' ? groupedKickEmotes : selectedProvider === 'youtube' ? groupedYouTubeEmotes : groupedTwitchEmotes).entries()).map(([groupKey, group]) => (
               <div key={groupKey} className="flex flex-col">
-                <h3 className="text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra" style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, transparent)' }}>
+                <h3 className="text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra" style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>
                   <span className="text-textPrimary">{group.name}</span> <span className="opacity-50">({group.emotes.length})</span>
                 </h3>
                 {chunkArray(group.emotes, TWITCH_COLS * TWITCH_BLOCK_ROWS).map((block, bi) => {
@@ -972,7 +972,7 @@ export function EmotePickerPanel({
               .filter((g) => g.emotes.length > 0)
               .map((group) => (
                 <div key={group.label} className="flex flex-col">
-                  <h3 className="text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra" style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, transparent)' }}>
+                  <h3 className="text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-borderSubtle z-10 backdrop-blur-ultra" style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>
                     <span className="text-textPrimary">{group.label}</span> <span className="opacity-50">({group.emotes.length})</span>
                   </h3>
                   {chunkArray(group.emotes, group.cols * WIDTH_BLOCK_ROWS).map((block, bi) => {

@@ -454,7 +454,7 @@ const NotificationsSettings = () => {
                   // (transition: none), then the glass-button's own transition
                   // fades it back to the surface color.
                   className="glass-button flex items-center gap-2 px-4 py-2 rounded-lg text-textPrimary text-sm font-medium"
-                  style={testFlash ? { backgroundColor: 'color-mix(in srgb, var(--color-success) 50%, transparent)', transition: 'none' } : undefined}
+                  style={testFlash ? { backgroundColor: 'color-mix(in srgb, var(--color-success) 50%, var(--glass-under, transparent))', transition: 'none' } : undefined}
                 >
                   <Bell size={16} />
                   Test

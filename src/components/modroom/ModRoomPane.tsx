@@ -385,7 +385,7 @@ const ModRoomMessageRow = ({
       {!locked && !pending && (
         <div
           className="absolute right-1 top-0 z-20 hidden items-center gap-0.5 rounded-md group-hover:flex"
-          style={{ background: 'rgba(20,20,22,0.92)', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.06)' }}
+          style={{ background: 'color-mix(in srgb, rgb(20 20 22) calc(92% + (1 - var(--glass-strength, 1)) * 8%), transparent)', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.06)' }}
         >
           <button
             onClick={onReply}
@@ -878,7 +878,7 @@ const ModRoomPane = ({ channelId, channelLogin, emotes, onStatus, onUsernameClic
               setShowJump(false);
             }}
             className="absolute bottom-2 right-3 z-20 rounded-full px-2.5 py-1 text-[11px] font-medium text-textPrimary transition-colors hover:text-accent"
-            style={{ background: 'rgba(24,24,26,0.92)', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.08)' }}
+            style={{ background: 'color-mix(in srgb, rgb(24 24 26) calc(92% + (1 - var(--glass-strength, 1)) * 8%), transparent)', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.08)' }}
           >
             Jump to latest
           </button>
@@ -908,7 +908,7 @@ const ModRoomPane = ({ channelId, channelLogin, emotes, onStatus, onUsernameClic
         {mentionOpen && (
           <div
             className="absolute bottom-full left-2 z-30 mb-1 min-w-[160px] overflow-hidden rounded-lg py-1"
-            style={{ background: 'rgba(18,18,20,0.98)', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.08)' }}
+            style={{ background: 'color-mix(in srgb, rgb(18 18 20) calc(98% + (1 - var(--glass-strength, 1)) * 2%), transparent)', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.08)' }}
           >
             {mentionCandidates.map((c, i) => (
               <button

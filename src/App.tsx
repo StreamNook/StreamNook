@@ -2000,7 +2000,7 @@ function App() {
       <ErrorBoundary
         componentName="TitleBar"
         fallback={
-          <div className="h-[40px] bg-secondary backdrop-blur-md border-b border-borderSubtle flex items-center justify-center">
+          <div className="h-[40px] bg-glass-raised/0 backdrop-blur-md border-b border-borderSubtle flex items-center justify-center">
             <span className="text-textSecondary text-xs">Title bar error - restart app</span>
           </div>
         }
@@ -2235,7 +2235,7 @@ function App() {
                         {!chatRevealed && (
                           <div
                             aria-hidden="true"
-                            className={`pointer-events-none absolute top-1/2 z-20 flex -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-black/40 p-1 text-white/70 backdrop-blur-sm ${chatPlacement === 'left' ? 'left-1.5' : 'right-1.5'}`}
+                            className={`pointer-events-none absolute top-1/2 z-20 flex -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-glass-ink/40 p-1 text-white/70 backdrop-blur-sm ${chatPlacement === 'left' ? 'left-1.5' : 'right-1.5'}`}
                           >
                             {chatPlacement === 'left' ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
                           </div>

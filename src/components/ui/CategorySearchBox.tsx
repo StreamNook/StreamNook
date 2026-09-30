@@ -120,7 +120,7 @@ export const CategorySearchBox = ({
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -4 }}
                         transition={{ duration: 0.12, ease: 'easeOut' }}
-                        className="absolute left-0 right-0 z-[100] rounded-b-lg bg-[#09090b]/95 backdrop-blur-3xl shadow-[0_12px_32px_rgba(0,0,0,0.6)] border-x border-b border-white/10 overflow-hidden"
+                        className="absolute left-0 right-0 z-[100] rounded-b-lg bg-glass-ink/95 backdrop-blur-3xl shadow-[0_12px_32px_rgba(0,0,0,0.6)] border-x border-b border-white/10 overflow-hidden"
                     >
                         <div className="px-3 pt-2 pb-1 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-textSecondary/50">
                             <TagIcon size={11} />

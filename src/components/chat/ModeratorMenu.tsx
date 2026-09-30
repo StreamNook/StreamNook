@@ -188,7 +188,7 @@ const ModeratorMenu: React.FC<ModeratorMenuProps> = ({
             transition={{ duration: 0.15, ease: "easeOut" }}
             className="sn-popover absolute z-[60] bottom-full left-0 right-0 mb-2 h-[520px] max-h-[calc(100vh-120px)] flex flex-col overflow-hidden origin-bottom"
           >
-            <div className="px-4 py-3 border-b border-white/5 flex items-center bg-background/[0.5] backdrop-blur-md shadow-sm z-10 relative">
+            <div className="px-4 py-3 border-b border-white/5 flex items-center bg-glass-base/50 backdrop-blur-md shadow-sm z-10 relative">
               <span className="text-[11px] font-semibold text-white/50 tracking-wider uppercase">Stream Moderator Settings</span>
             </div>
 

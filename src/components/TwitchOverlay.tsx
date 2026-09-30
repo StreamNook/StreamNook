@@ -302,6 +302,7 @@ export default function TwitchOverlay() {
     return (
       <>
         <div
+          // glass-exempt: the dimmer behind the panel, not a surface.
           className="fixed z-[1000] bg-black/55"
           style={{ left: 0, right: 0, top: TITLE_BAR_HEIGHT, bottom: 0 }}
           onMouseDown={close}

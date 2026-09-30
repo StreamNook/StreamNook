@@ -6,6 +6,82 @@ const varColor = (cssVar) => ({ opacityValue }) =>
     ? `var(${cssVar})`
     : `color-mix(in srgb, var(${cssVar}) calc(${opacityValue} * 100%), transparent)`;
 
+// Glassiness 0% must leave no surface see-through. Two helpers carry that:
+//
+// underColor is every BACKGROUND colour's modifier form. It mixes the tint over
+// `--glass-under` instead of over transparent. Only a glass class sets that
+// variable, to its own opaque base faded in as the slider drops (globals.css,
+// "Glass under"). So a hover:bg-white/10 or !bg-red-500/15 on a glass button
+// tints the solid base at 0% instead of replacing it, and everywhere else, and
+// at full glass, the result is exactly the old one. Backgrounds only: a text,
+// border, ring or shadow colour paints over something else, where an opaque
+// base would show as a halo.
+//
+// glassColor is the `glass` family (bg-glass-ink/90, bg-glass-raised/95...):
+// the modifier is the alpha at full glass, ramping to fully opaque at 0%. A
+// floating surface that is not a glass class takes its fill from here; `/0`
+// is clear at full glass and solid at 0%.
+const underColor = (color) => ({ opacityValue }) =>
+  opacityValue === undefined
+    ? color
+    : `color-mix(in srgb, ${color} calc(${opacityValue} * 100%), var(--glass-under, transparent))`;
+const glassColor = (color) => ({ opacityValue }) =>
+  opacityValue === undefined
+    ? color
+    : `color-mix(in srgb, ${color} calc((${opacityValue} + (1 - ${opacityValue}) * (1 - var(--glass-strength, 1))) * 100%), transparent)`;
+
+// Theme colours by name, so the text/border family (varColor) and the
+// background family (underColor) are built from one list.
+const THEME_COLORS = {
+  background: 'var(--color-background)',
+  secondary: 'var(--color-background-secondary)',
+  tertiary: 'var(--color-background-tertiary)',
+  accent: 'var(--color-accent)',
+  'accent-hover': 'var(--color-accent-hover)',
+  'accent-muted': 'var(--color-accent-muted)',
+  'accent-neon': 'var(--color-accent-neon)',
+  textPrimary: 'var(--color-text-primary)',
+  textSecondary: 'var(--color-text-secondary)',
+  textMuted: 'var(--color-text-muted)',
+  border: 'var(--color-border)',
+  borderLight: 'var(--color-border-light)',
+  borderSubtle: 'var(--color-border-subtle)',
+  surface: 'var(--color-surface)',
+  'surface-hover': 'var(--color-surface-hover)',
+  'surface-active': 'var(--color-surface-active)',
+  success: 'var(--color-success)',
+  warning: 'var(--color-warning)',
+  error: 'var(--color-error)',
+  info: 'var(--color-info)',
+  live: 'var(--color-live)',
+};
+const HIGHLIGHT_COLORS = ['pink', 'purple', 'blue', 'cyan', 'green', 'yellow', 'orange', 'red'];
+const GLASS_COLORS = {
+  DEFAULT: 'var(--color-surface)',
+  hover: 'var(--color-surface-hover)',
+  active: 'var(--color-surface-active)',
+  base: 'var(--color-background)',
+  raised: 'var(--color-background-tertiary)',
+  ink: '#09090b',
+};
+
+// Tailwind's own palette, for backgrounds. The deprecated names are getters
+// that print a warning when read, so they are skipped.
+const DEPRECATED = new Set(['lightBlue', 'warmGray', 'trueGray', 'coolGray', 'blueGray']);
+const KEYWORDS = new Set(['inherit', 'current', 'transparent']);
+const palette = require('tailwindcss/colors');
+const underPalette = {};
+for (const name of Object.keys(palette)) {
+  if (DEPRECATED.has(name) || KEYWORDS.has(name)) continue;
+  const value = palette[name];
+  underPalette[name] =
+    typeof value === 'string'
+      ? underColor(value)
+      : Object.fromEntries(Object.entries(value).map(([shade, hex]) => [shade, underColor(hex)]));
+}
+
+const mapValues = (obj, fn) => Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, fn(v)]));
+
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   content: [
@@ -16,48 +92,23 @@ module.exports = {
       screens: {
         '3xl': '1920px',
       },
+      // Theme-aware colors using CSS variables. `live` is the LIVE indicator
+      // red, pinned in globals.css and deliberately not themed.
       colors: {
-        // Theme-aware colors using CSS variables
-        background: varColor('--color-background'),
-        secondary: varColor('--color-background-secondary'),
-        tertiary: varColor('--color-background-tertiary'),
-        accent: varColor('--color-accent'),
-        'accent-hover': varColor('--color-accent-hover'),
-        'accent-muted': varColor('--color-accent-muted'),
-        'accent-neon': varColor('--color-accent-neon'),
-        textPrimary: varColor('--color-text-primary'),
-        textSecondary: varColor('--color-text-secondary'),
-        textMuted: varColor('--color-text-muted'),
-        border: varColor('--color-border'),
-        borderLight: varColor('--color-border-light'),
-        borderSubtle: varColor('--color-border-subtle'),
-        surface: varColor('--color-surface'),
-        'surface-hover': varColor('--color-surface-hover'),
-        'surface-active': varColor('--color-surface-active'),
-        // Semantic colors
-        success: varColor('--color-success'),
-        warning: varColor('--color-warning'),
-        error: varColor('--color-error'),
-        info: varColor('--color-info'),
-        // LIVE indicator red: pinned in globals.css, deliberately not themed
-        live: varColor('--color-live'),
-        // Glass utility
-        glass: {
-          DEFAULT: varColor('--color-surface'),
-          hover: varColor('--color-surface-hover'),
-          active: varColor('--color-surface-active'),
-        },
-        // Highlight colors
-        highlight: {
-          pink: varColor('--color-highlight-pink'),
-          purple: varColor('--color-highlight-purple'),
-          blue: varColor('--color-highlight-blue'),
-          cyan: varColor('--color-highlight-cyan'),
-          green: varColor('--color-highlight-green'),
-          yellow: varColor('--color-highlight-yellow'),
-          orange: varColor('--color-highlight-orange'),
-          red: varColor('--color-highlight-red'),
-        },
+        ...mapValues(THEME_COLORS, (v) => varColor(v.slice(4, -1))),
+        glass: mapValues(GLASS_COLORS, glassColor),
+        highlight: Object.fromEntries(
+          HIGHLIGHT_COLORS.map((h) => [h, varColor(`--color-highlight-${h}`)]),
+        ),
+      },
+      // The same names for backgrounds, mixed over --glass-under (see above).
+      backgroundColor: {
+        ...underPalette,
+        ...mapValues(THEME_COLORS, underColor),
+        glass: mapValues(GLASS_COLORS, glassColor),
+        highlight: Object.fromEntries(
+          HIGHLIGHT_COLORS.map((h) => [h, underColor(`var(--color-highlight-${h})`)]),
+        ),
       },
       fontFamily: {
         // Driven by --app-font (set by applyFont in themes/index.ts) so the
