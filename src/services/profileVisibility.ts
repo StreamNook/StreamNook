@@ -19,6 +19,7 @@ export type ProfileStatKey =
   | 'messages'
   | 'streams'
   | 'favorite_channel'
+  | 'subs_gifted'
   | 'cosmetics'
   | 'member_rank'
   | 'emotes'
@@ -61,6 +62,7 @@ export const PROFILE_VISIBILITY_GROUPS: ProfileVisibilityGroup[] = [
       { key: 'messages', label: 'Messages sent' },
       { key: 'streams', label: 'Streams watched' },
       { key: 'favorite_channel', label: 'Favorite channel' },
+      { key: 'subs_gifted', label: 'Subs gifted' },
       { key: 'cosmetics', label: 'Cosmetics count' },
       { key: 'member_rank', label: 'Member rank' },
     ],

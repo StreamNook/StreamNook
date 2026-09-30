@@ -572,10 +572,14 @@ export interface UserStats {
     // Bumped by the `increment_profile_view` RPC; optional so older rows / a
     // pre-migration DB don't break the read.
     profile_views?: number;
-    // Twitch Recap hours from before the member joined, as counted by the
-    // server (0 when they took them off). Added to hours_watched for display;
-    // optional so a pre-migration DB does not break the read.
+    // Twitch Recap from before the member joined, as counted by the server:
+    // hours, chats sent, channel points earned in their top channels, and subs
+    // gifted. Added to the tracked stats for display; optional so a
+    // pre-migration DB does not break the read.
     recap_hours?: number;
+    recap_messages?: number;
+    recap_points?: number;
+    recap_subs_gifted?: number;
     updated_at: string;
 }
 
@@ -1275,9 +1279,6 @@ export interface ProfilePrefs {
     // Whether the member's atmosphere (or Cologne look) also paints behind their
     // chat messages. False keeps it on the profile and hover card only.
     chatAtmosphere: boolean;
-    // Whether the member's Twitch Recap hours count toward the hours watched on
-    // their profile.
-    includeTwitchRecap: boolean;
 }
 
 const defaultProfilePrefs = (): ProfilePrefs => ({
@@ -1285,7 +1286,6 @@ const defaultProfilePrefs = (): ProfilePrefs => ({
     profileTheme: 'tier',
     hiddenSections: [],
     chatAtmosphere: true,
-    includeTwitchRecap: true,
 });
 
 export const getProfilePrefs = async (userId: string): Promise<ProfilePrefs> => {
@@ -1293,21 +1293,20 @@ export const getProfilePrefs = async (userId: string): Promise<ProfilePrefs> => 
     try {
         const { data, error } = await supabase
             .from('user_profile_prefs')
-            .select('paint_theme, profile_theme, hidden_sections, chat_atmosphere, include_twitch_recap')
+            .select('paint_theme, profile_theme, hidden_sections, chat_atmosphere')
             .eq('twitch_user_id', userId)
             .maybeSingle();
         if (error) {
             Logger.error('[Supabase] Failed to get profile prefs:', error.message);
             return defaultProfilePrefs();
         }
-        const row = data as { paint_theme?: boolean; profile_theme?: string; hidden_sections?: string[]; chat_atmosphere?: boolean; include_twitch_recap?: boolean } | null;
+        const row = data as { paint_theme?: boolean; profile_theme?: string; hidden_sections?: string[]; chat_atmosphere?: boolean } | null;
         const profileTheme = row?.profile_theme || (row?.paint_theme ? 'paint' : 'tier');
         return {
             paintTheme: profileTheme === 'paint',
             profileTheme,
             hiddenSections: Array.isArray(row?.hidden_sections) ? row!.hidden_sections! : [],
             chatAtmosphere: row?.chat_atmosphere !== false,
-            includeTwitchRecap: row?.include_twitch_recap !== false,
         };
     } catch (error) {
         Logger.error('[Supabase] Failed to get profile prefs:', error);
@@ -1428,16 +1427,6 @@ export const setChatAtmosphere = async (userId: string, show: boolean): Promise<
         Logger.warn('[Supabase] setChatAtmosphere failed:', error);
         return false;
     }
-};
-
-/**
- * Count (or stop counting) the member's Twitch Recap hours on their profile.
- * Through the API, because the server owns the counted total. Returns whether
- * the server took the change.
- */
-export const setIncludeTwitchRecap = async (include: boolean): Promise<boolean> => {
-    const res = await postToApi('/api/v1/stats/recap', { include });
-    return res.handled && res.ok;
 };
 
 export const setHiddenSections = async (userId: string, sections: string[]): Promise<void> => {

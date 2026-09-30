@@ -16,7 +16,9 @@ const fs = require('fs');
 const path = require('path');
 
 // Configuration
-const CACHE_DIR = path.join(__dirname, '..', 'universal-cache', 'main');
+// UNIVERSAL_CACHE_DIR points at a checkout of the badge-cache branch in CI
+// (releases force-push main, which used to erase every cache commit).
+const CACHE_DIR = process.env.UNIVERSAL_CACHE_DIR || path.join(__dirname, '..', 'universal-cache', 'main');
 const MANIFEST_PATH = path.join(CACHE_DIR, 'manifest.json');
 
 const TWITCH_CLIENT_ID = process.env.TWITCH_CLIENT_ID;

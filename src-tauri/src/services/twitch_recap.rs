@@ -65,11 +65,26 @@ const TOKEN_BUDGET: Duration = Duration::from_secs(30);
 
 const CACHE_FILE: &str = "twitch_recap.json";
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct YearRecap {
     pub hours: i64,
     pub days: i64,
+    /// Absent from caches written before these fields; `CACHE_SCHEMA` makes
+    /// those entries fetch again.
+    #[serde(default)]
+    pub chats: i64,
+    /// Channel points earned in the year's top channels: Recap has no yearly
+    /// points total, only one per top channel.
+    #[serde(default)]
+    pub points: i64,
+    #[serde(default)]
+    pub subs_gifted: i64,
 }
+
+/// Bumped whenever `YearRecap` gains a field, so every account fetches its
+/// years again and re-publishes them. Re-publishing is safe: the server stores
+/// each year once and recounts, so nothing is ever counted twice.
+const CACHE_SCHEMA: u32 = 2;
 
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
 struct AccountRecap {
@@ -79,6 +94,9 @@ struct AccountRecap {
     last_probe_ms: i64,
     /// Whether the server has the current `years`.
     published: bool,
+    /// The `CACHE_SCHEMA` these years were fetched under (0 before it existed).
+    #[serde(default)]
+    schema: u32,
 }
 
 /// Per Twitch user id.
@@ -109,7 +127,9 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     };
     let due = cache.get(&primary).is_none_or(|a| {
-        now - a.last_probe_ms >= PROBE_TTL_MS || (!a.published && !a.years.is_empty())
+        now - a.last_probe_ms >= PROBE_TTL_MS
+            || a.schema < CACHE_SCHEMA
+            || (!a.published && !a.years.is_empty())
     });
     if !due {
         return Ok(());
@@ -123,13 +143,14 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
     let user_id = current_user_id(&token).await?;
     let entry = cache.entry(user_id.clone()).or_default();
 
-    if now - entry.last_probe_ms >= PROBE_TTL_MS {
+    if now - entry.last_probe_ms >= PROBE_TTL_MS || entry.schema < CACHE_SCHEMA {
         let fetched = fetch_all_years(&token, &user_id).await?;
-        if fetched != entry.years {
+        if fetched != entry.years || entry.schema < CACHE_SCHEMA {
             entry.years = fetched;
             entry.published = false;
         }
         entry.last_probe_ms = now;
+        entry.schema = CACHE_SCHEMA;
         write_cache(&cache);
     }
 
@@ -196,7 +217,7 @@ async fn fetch_all_years(token: &str, user_id: &str) -> Result<BTreeMap<i32, Yea
 fn year_query(user_id: &str, year: i32) -> String {
     let id = serde_json::to_string(user_id).expect("a string serializes");
     format!(
-        "query {{ annualRecap(channelID: {id}, options: {{year: YEAR_{year}}}) {{ error viewerRecap {{ ... on ViewerRecap{year} {{ totalHoursWatched distinctDaysWatched }} }} }} }}"
+        "query {{ annualRecap(channelID: {id}, options: {{year: YEAR_{year}}}) {{ error viewerRecap {{ ... on ViewerRecap{year} {{ totalHoursWatched distinctDaysWatched totalChatsSent totalSubsGifted topViewedChannels {{ totalChannelPointsEarned }} }} }} }} }}"
     )
 }
 
@@ -234,13 +255,33 @@ fn classify(resp: &Value, year: i32) -> YearAnswer {
         return YearAnswer::Empty;
     }
     let days = viewer["distinctDaysWatched"].as_i64().unwrap_or(0);
-    YearAnswer::Recap(YearRecap { hours, days })
+    let chats = viewer["totalChatsSent"].as_i64().unwrap_or(0);
+    let subs_gifted = viewer["totalSubsGifted"].as_i64().unwrap_or(0);
+    let points = viewer["topViewedChannels"]
+        .as_array()
+        .map(|channels| {
+            channels
+                .iter()
+                .map(|c| c["totalChannelPointsEarned"].as_i64().unwrap_or(0))
+                .sum()
+        })
+        .unwrap_or(0);
+    YearAnswer::Recap(YearRecap { hours, days, chats, points, subs_gifted })
 }
 
 async fn publish(user_id: &str, years: &BTreeMap<i32, YearRecap>) -> Result<(), String> {
     let rows: Vec<Value> = years
         .iter()
-        .map(|(year, r)| json!({ "year": year, "hours": r.hours, "days": r.days }))
+        .map(|(year, r)| {
+            json!({
+                "year": year,
+                "hours": r.hours,
+                "days": r.days,
+                "chats": r.chats,
+                "points": r.points,
+                "subs_gifted": r.subs_gifted,
+            })
+        })
         .collect();
     let body = json!({ "years": rows });
     let resp = crate::commands::streamnook_api::post_json("/api/v1/stats/recap", &body, Some(user_id)).await?;
@@ -316,7 +357,10 @@ mod tests {
             "error": null,
             "viewerRecap": { "totalHoursWatched": 812, "distinctDaysWatched": 240 }
         } } });
-        assert_eq!(classify(&resp, 2024), YearAnswer::Recap(YearRecap { hours: 812, days: 240 }));
+        assert_eq!(
+            classify(&resp, 2024),
+            YearAnswer::Recap(YearRecap { hours: 812, days: 240, ..Default::default() })
+        );
     }
 
     #[test]
@@ -326,10 +370,43 @@ mod tests {
     }
 
     #[test]
+    fn chats_gifts_and_top_channel_points_are_read() {
+        let resp = json!({ "data": { "annualRecap": {
+            "error": null,
+            "viewerRecap": {
+                "totalHoursWatched": 900,
+                "distinctDaysWatched": 300,
+                "totalChatsSent": 4521,
+                "totalSubsGifted": 12,
+                "topViewedChannels": [
+                    { "totalChannelPointsEarned": 150000 },
+                    { "totalChannelPointsEarned": 42000 },
+                    { "totalChannelPointsEarned": null }
+                ]
+            }
+        } } });
+        assert_eq!(
+            classify(&resp, 2025),
+            YearAnswer::Recap(YearRecap { hours: 900, days: 300, chats: 4521, points: 192000, subs_gifted: 12 })
+        );
+    }
+
+    #[test]
+    fn a_cache_written_before_the_new_fields_still_loads() {
+        let old = r#"{"123":{"years":{"2024":{"hours":10,"days":5}},"last_probe_ms":1,"published":true}}"#;
+        let cache: Cache = serde_json::from_str(old).expect("old cache parses");
+        let entry = &cache["123"];
+        assert_eq!(entry.schema, 0, "an old cache is due for a fresh fetch");
+        assert!(entry.schema < CACHE_SCHEMA);
+        assert_eq!(entry.years[&2024], YearRecap { hours: 10, days: 5, ..Default::default() });
+    }
+
+    #[test]
     fn the_query_names_the_year_type_and_quotes_the_id() {
         let q = year_query("12345", 2025);
         assert!(q.contains("channelID: \"12345\""));
         assert!(q.contains("year: YEAR_2025"));
         assert!(q.contains("... on ViewerRecap2025"));
+        assert!(q.contains("totalChatsSent") && q.contains("totalChannelPointsEarned"));
     }
 }

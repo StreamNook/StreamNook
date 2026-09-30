@@ -1,4 +1,6 @@
-use crate::services::badge_service::{BadgeService, ThirdPartyGalleryBadge, UserBadgesResponse};
+use crate::services::badge_service::{
+    BadgeService, SelectedTwitchBadge, ThirdPartyGalleryBadge, UserBadgesResponse,
+};
 use crate::services::twitch_service::TwitchService;
 use log::debug;
 use std::sync::Arc;
@@ -27,6 +29,25 @@ pub async fn initialize_badge_service() {
 
 pub async fn get_service() -> Result<Arc<RwLock<Option<BadgeService>>>, String> {
     Ok(BADGE_SERVICE.clone())
+}
+
+/// The global badge a Twitch user selected, the one chat shows for them in
+/// every channel; `None` when they wear none. Profile cards show this.
+#[tauri::command]
+pub async fn get_selected_twitch_badge(user_id: String) -> Result<Option<SelectedTwitchBadge>, String> {
+    let service_lock = get_service().await?;
+    {
+        let service_guard = service_lock.read().await;
+        if service_guard.is_none() {
+            drop(service_guard);
+            initialize_badge_service().await;
+        }
+    }
+    let service_guard = service_lock.read().await;
+    let service = service_guard
+        .as_ref()
+        .ok_or_else(|| "Badge service failed to initialize".to_string())?;
+    service.selected_badge(&user_id).await
 }
 
 /// Get user badges for a specific channel (for normal chat - display badges only)
@@ -287,13 +308,14 @@ pub async fn get_bttv_pro_badge(
     Ok(crate::services::bttv_pro_service::resolve_bttv_pro_badge(&user_id).await)
 }
 
-/// Every distinct BetterTTV Pro loyalty badge image URL StreamNook has resolved
-/// so far, across all users (persisted). The BetterTTV gallery tab renders one
-/// tile per URL so discovered loyalty tiers are visible to everyone, not just
-/// the account that owns them.
+/// Every distinct BetterTTV Pro loyalty badge design StreamNook knows: the ones
+/// this install resolved (persisted), then the shared list streamnook.app
+/// builds from every profile lookup. The BetterTTV gallery tab renders one tile
+/// per URL so discovered loyalty tiers are visible to everyone, not just the
+/// account that owns them.
 #[tauri::command]
 pub async fn get_discovered_bttv_pro_badges() -> Result<Vec<String>, String> {
-    Ok(crate::services::bttv_pro_service::get_discovered_bttv_pro_badges())
+    Ok(crate::services::bttv_pro_service::all_known_bttv_pro_badges().await)
 }
 
 /// The primary account's badge standing: what it owns, every badge's earn

@@ -45,7 +45,6 @@ import {
   patchProfileSnapshotTheme,
   setHiddenSections,
   setChatAtmosphere,
-  setIncludeTwitchRecap,
   getAccolades,
 } from '../../services/supabaseService';
 import type { CosmeticCatalogEntry } from '../../services/supabaseService';
@@ -223,8 +222,6 @@ const ProfileSettings = () => {
   const [hiddenSecs, setHiddenSecs] = useState<string[]>(() => seededProfile?.hiddenSections ?? []);
   // Whether our atmosphere also paints behind our chat messages.
   const [chatAtmosphere, setChatAtmosphereState] = useState(true);
-  // Whether our Twitch Recap hours count toward the hours on our profile.
-  const [includeRecap, setIncludeRecap] = useState(true);
   const [loadoutLoaded, setLoadoutLoaded] = useState(false);
   const [subscribed, setSubscribed] = useState(false);
   // Accolades the member has earned (persisted in user_accolades). Used to
@@ -421,7 +418,6 @@ const ProfileSettings = () => {
           setProfileThemeState(p.profileTheme);
           setHiddenSecs(p.hiddenSections);
           setChatAtmosphereState(p.chatAtmosphere);
-          setIncludeRecap(p.includeTwitchRecap);
         }
       })
       .catch(() => {});
@@ -490,14 +486,6 @@ const ProfileSettings = () => {
       if (ok) return;
       setOwnThemeHiddenInChat(userId, next);
       if (mountedRef.current) setChatAtmosphereState(!next);
-    });
-  };
-
-  const toggleIncludeRecap = () => {
-    const next = !includeRecap;
-    setIncludeRecap(next);
-    void setIncludeTwitchRecap(next).then((ok) => {
-      if (!ok && mountedRef.current) setIncludeRecap(!next);
     });
   };
 
@@ -1861,30 +1849,6 @@ const ProfileSettings = () => {
             );
             }),
           ])}
-        </div>
-        <div className="mt-3 flex items-center justify-between gap-3 border-t border-white/[0.06] px-1 pt-3">
-          <div className="min-w-0">
-            <div className="text-sm text-textPrimary">Add my Twitch Recap hours</div>
-            <div className="text-[12px] leading-relaxed text-textSecondary">
-              Counts the hours Twitch Recap recorded before you joined StreamNook toward your hours watched.
-            </div>
-          </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={includeRecap}
-            onClick={toggleIncludeRecap}
-            className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${
-              includeRecap ? 'bg-accent' : 'bg-white/[0.12]'
-            }`}
-            aria-label={`${includeRecap ? 'Remove' : 'Add'} your Twitch Recap hours`}
-          >
-            <span
-              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                includeRecap ? 'translate-x-[18px]' : 'translate-x-0.5'
-              }`}
-            />
-          </button>
         </div>
       </div>
 

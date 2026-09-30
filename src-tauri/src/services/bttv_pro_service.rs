@@ -172,6 +172,69 @@ pub fn get_discovered_bttv_pro_badges() -> Vec<String> {
     }
 }
 
+/// The shared list every StreamNook profile lookup adds to (streamnook.app
+/// keeps it, since BetterTTV publishes no catalogue).
+const SHARED_PRO_BADGES_URL: &str = "https://streamnook.app/api/v1/bttv-pro/badges";
+const SHARED_PRO_BADGES_TTL: Duration = Duration::from_secs(600);
+
+static SHARED_PRO_BADGES: Lazy<std::sync::Mutex<Option<(std::time::Instant, Vec<String>)>>> =
+    Lazy::new(|| std::sync::Mutex::new(None));
+
+/// The design id in a Pro badge URL (`.../badges/pro/<id>.png|webp`).
+fn pro_design_id(url: &str) -> Option<&str> {
+    let rest = url.split("/badges/pro/").nth(1)?;
+    let id = rest.split('.').next()?;
+    (id.len() == 36).then_some(id)
+}
+
+/// Design ids from the shared list, reused for a few minutes; empty when
+/// streamnook.app cannot be reached (the tab then shows this install's own).
+async fn shared_pro_design_ids() -> Vec<String> {
+    if let Ok(guard) = SHARED_PRO_BADGES.lock() {
+        if let Some((at, ids)) = guard.as_ref() {
+            if at.elapsed() < SHARED_PRO_BADGES_TTL {
+                return ids.clone();
+            }
+        }
+    }
+    let fetched = async {
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(6)).build().ok()?;
+        let body: serde_json::Value = client.get(SHARED_PRO_BADGES_URL).send().await.ok()?.json().await.ok()?;
+        Some(
+            body.get("badges")?
+                .as_array()?
+                .iter()
+                .filter_map(|b| b.get("id")?.as_str().map(str::to_string))
+                .collect::<Vec<_>>(),
+        )
+    }
+    .await;
+    match fetched {
+        Some(ids) => {
+            if let Ok(mut guard) = SHARED_PRO_BADGES.lock() {
+                *guard = Some((std::time::Instant::now(), ids.clone()));
+            }
+            ids
+        }
+        None => Vec::new(),
+    }
+}
+
+/// Every Pro design this install has seen, then every other one on the shared
+/// list, one URL per design. Shared designs use the `.png` form the socket
+/// returns, so the tab's "you own this" check (an exact URL match) still holds.
+pub async fn all_known_bttv_pro_badges() -> Vec<String> {
+    let mut urls = get_discovered_bttv_pro_badges();
+    let mut seen: std::collections::HashSet<String> =
+        urls.iter().filter_map(|u| pro_design_id(u).map(str::to_string)).collect();
+    for id in shared_pro_design_ids().await {
+        if seen.insert(id.clone()) {
+            urls.push(format!("https://cdn.betterttv.net/badges/pro/{id}.png"));
+        }
+    }
+    urls
+}
+
 async fn lookup_over_socket(user_id: &str) -> Option<BttvProBadge> {
     let lookup = async {
         let (ws, _) = connect_async(BTTV_WS_URL).await.ok()?;

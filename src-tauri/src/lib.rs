@@ -1735,6 +1735,7 @@ pub fn run() {
             streamnook_api_request,
             get_user_badges,
             // Unified Badge Service commands
+            get_selected_twitch_badge,
             get_user_badges_unified,
             get_user_badges_with_earned_unified,
             get_third_party_badges_for_user_unified,

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
 // ============================================================================
@@ -26,6 +26,22 @@ query StreamNookBadgeLookup($id: ID!, $login: String!, $channelID: ID!, $channel
     }
 }
 "#;
+
+// The global badge a user chose on Twitch, the one chat shows in every channel.
+// Not `displayBadges` on some channel: Twitch's own channel swaps in its event
+// badges (GlitchCon for someone who wears another badge everywhere else).
+const SELECTED_BADGE_QUERY: &str =
+    "query StreamNookSelectedBadge($id: ID!) { user(id: $id) { selectedBadge { title imageURL(size: QUADRUPLE) } } }";
+
+/// How long a user's selected badge is reused before Twitch is asked again.
+const SELECTED_BADGE_TTL: Duration = Duration::from_secs(300);
+
+/// A user's selected Twitch badge, as a profile card draws it.
+#[derive(Debug, Clone, Serialize)]
+pub struct SelectedTwitchBadge {
+    pub src: String,
+    pub title: String,
+}
 
 #[derive(Debug, Serialize)]
 struct BadgeLookupRequest {
@@ -974,6 +990,9 @@ pub struct BadgeService {
     /// confirm the profile is that user. Cached per token: one validate call
     /// per login, not one per profile open.
     drops_identity: RwLock<Option<(String, String)>>,
+    /// Selected Twitch badge per user id, with when it was read (see
+    /// `selected_badge`). Bounded: profile cards open for many chatters.
+    selected_badges: tokio::sync::Mutex<LruCache<String, (Option<SelectedTwitchBadge>, Instant)>>,
 }
 
 impl BadgeService {
@@ -992,6 +1011,7 @@ impl BadgeService {
             cache: Arc::new(RwLock::new(BadgeCache::new())),
             client_id,
             drops_identity: RwLock::new(None),
+            selected_badges: tokio::sync::Mutex::new(LruCache::new(NonZeroUsize::new(256).unwrap())),
             http_client: reqwest::Client::builder()
                 .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
                 .timeout(Duration::from_secs(30))
@@ -1438,6 +1458,55 @@ impl BadgeService {
     ) -> Result<Vec<String>, String> {
         let (_, earned) = self.lookup_badges(user_id, login, user_id, login).await?;
         earned.ok_or_else(|| "Twitch returned no earnedBadges for this user".to_string())
+    }
+
+    /// The global badge `user_id` selected on Twitch: the one chat shows for
+    /// them in every channel, as its image and title. `Ok(None)` when they wear
+    /// none. Profile cards read this rather than the identity loadout's
+    /// `twitch:` key, which is only a copy taken when that member last opened
+    /// Profile settings. Anonymous (a public field), cached per user briefly.
+    pub async fn selected_badge(&self, user_id: &str) -> Result<Option<SelectedTwitchBadge>, String> {
+        if let Some((badge, at)) = self.selected_badges.lock().await.get(user_id) {
+            if at.elapsed() < SELECTED_BADGE_TTL {
+                return Ok(badge.clone());
+            }
+        }
+        let body = serde_json::json!({ "query": SELECTED_BADGE_QUERY, "variables": { "id": user_id } });
+        let response = self
+            .http_client
+            .post("https://gql.twitch.tv/gql")
+            .header("Accept-Language", "en-US")
+            .header("Client-ID", env!("TWITCH_WEB_CLIENT_ID"))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to send GQL request: {}", e))?;
+        if !response.status().is_success() {
+            return Err(format!("GQL request failed with status: {}", response.status()));
+        }
+        let value: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse GQL response: {}", e))?;
+        let user = value
+            .pointer("/data/user")
+            .filter(|u| !u.is_null())
+            .ok_or_else(|| "Twitch returned no user for this id".to_string())?;
+        let badge = user.get("selectedBadge").filter(|b| !b.is_null()).and_then(|b| {
+            let src = b.get("imageURL")?.as_str()?.to_string();
+            let title = b
+                .get("title")
+                .and_then(|t| t.as_str())
+                .filter(|t| !t.is_empty())
+                .unwrap_or("Twitch")
+                .to_string();
+            Some(SelectedTwitchBadge { src, title })
+        });
+        self.selected_badges
+            .lock()
+            .await
+            .put(user_id.to_string(), (badge.clone(), Instant::now()));
+        Ok(badge)
     }
 
     /// The badge lookup with each field's absence kept: `None` means Twitch did

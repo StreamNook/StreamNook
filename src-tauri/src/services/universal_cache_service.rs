@@ -188,8 +188,25 @@ pub struct UniversalCacheManifest {
 }
 
 const CACHE_VERSION: u32 = 1;
+// The daily cache job commits to its own branch: releases force-push main,
+// which erased every cache commit made there and froze main's copy.
 const UNIVERSAL_CACHE_URL: &str =
+    "https://raw.githubusercontent.com/StreamNook/StreamNook/refs/heads/badge-cache/universal-cache/main";
+/// main's copy, which stands in when the branch has no such file: before the
+/// cache job has first run there (the branch does not exist yet), and for
+/// per-item files only main carries.
+const UNIVERSAL_CACHE_FALLBACK_URL: &str =
     "https://raw.githubusercontent.com/StreamNook/StreamNook/refs/heads/main/universal-cache/main";
+
+/// GETs `path` under the universal cache, from the badge-cache branch, or from
+/// main when the branch answers 404.
+async fn fetch_cache_file(client: &reqwest::Client, path: &str) -> reqwest::Result<reqwest::Response> {
+    let primary = client.get(format!("{UNIVERSAL_CACHE_URL}/{path}")).send().await?;
+    if primary.status() == reqwest::StatusCode::NOT_FOUND {
+        return client.get(format!("{UNIVERSAL_CACHE_FALLBACK_URL}/{path}")).send().await;
+    }
+    Ok(primary)
+}
 
 /// Get the universal cache directory
 pub fn get_universal_cache_dir() -> Result<PathBuf> {
@@ -404,7 +421,7 @@ pub async fn fetch_universal_cache_data(
 
     let client = &*META_CLIENT_5S;
 
-    match client.get(&url).send().await {
+    match fetch_cache_file(client, &format!("{}/{}.json", type_str, id)).await {
         Ok(response) if response.status().is_success() => {
             let entry: UniversalCacheEntry = response.json().await?;
             debug!(
@@ -454,7 +471,7 @@ async fn download_universal_manifest() -> Result<bool> {
 
     let client = &*META_CLIENT_30S;
 
-    match client.get(&url).send().await {
+    match fetch_cache_file(client, "manifest.json").await {
         Ok(response) if response.status().is_success() => {
             let remote_manifest: UniversalCacheManifest = response.json().await?;
             debug!(
@@ -815,7 +832,7 @@ pub async fn sync_universal_cache(item_types: Vec<CacheType>) -> Result<usize> {
 
         let client = &*META_CLIENT_10S;
 
-        match client.get(&index_url).send().await {
+        match fetch_cache_file(client, &format!("{}/index.json", type_str)).await {
             Ok(response) if response.status().is_success() => {
                 let index: Vec<String> = response.json().await?;
                 debug!(
@@ -1619,7 +1636,7 @@ async fn fetch_remote_manifest_timestamp() -> Result<Option<u64>> {
 
     let client = &*META_CLIENT_10S;
 
-    match client.get(&url).send().await {
+    match fetch_cache_file(client, "manifest.json").await {
         Ok(response) if response.status().is_success() => {
             let remote_manifest: UniversalCacheManifest = response.json().await?;
             Ok(remote_manifest.last_sync)

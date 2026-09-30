@@ -23,7 +23,7 @@ jobs:
     # Ports inherit this file on sync merges; only run it in the desktop repo.
     if: github.repository == 'StreamNook/StreamNook' || github.repository == 'winters27/StreamNook'
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -33,30 +33,40 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Create universal-cache directory
-        run: mkdir -p universal-cache/main/badges
+      # The cache lives on its own branch. Releases force-push main, which
+      # erased every cache commit made there, so main's copy froze. The app and
+      # streamnook.app read universal-cache/main/ from this branch.
+      - name: Check out the badge-cache branch
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          if git fetch --depth 1 origin badge-cache; then
+            git worktree add cache-branch FETCH_HEAD
+            git -C cache-branch switch -c badge-cache
+          else
+            # First run: start the branch from main's last copy.
+            git worktree add --detach cache-branch
+            git -C cache-branch switch --orphan badge-cache
+            mkdir -p cache-branch/universal-cache/main
+            cp universal-cache/main/manifest.json cache-branch/universal-cache/main/ 2>/dev/null || true
+          fi
+          mkdir -p cache-branch/universal-cache/main/badges
 
       - name: Update Universal Cache
         env:
           TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
           TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
           FORCE_REFRESH_ALL: ${{ github.event.inputs.force_refresh || 'false' }}
+          UNIVERSAL_CACHE_DIR: ${{ github.workspace }}/cache-branch/universal-cache/main
         run: node scripts/update-universal-cache.js
 
-      - name: Check for changes
-        id: check_changes
+      - name: Commit and push to badge-cache
+        working-directory: cache-branch
         run: |
           git add universal-cache/
           if git diff --cached --quiet; then
-            echo "changes=false" >> $GITHUB_OUTPUT
-          else
-            echo "changes=true" >> $GITHUB_OUTPUT
+            echo "No cache changes."
+            exit 0
           fi
-
-      - name: Commit and push changes
-        if: steps.check_changes.outputs.changes == 'true'
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
           git commit -m "chore: Update universal badge cache [automated]"
-          git push
+          git push origin badge-cache

@@ -8,6 +8,7 @@ import {
   MessageSquare,
   Tv,
   Gift,
+  HandHeart,
   Coins,
   Palette,
   Award,
@@ -358,8 +359,9 @@ const ProfileOverview = ({
   const [roast, setRoast] = useState<PickedRoast | null>(null);
   const [showAllAccolades, setShowAllAccolades] = useState(false);
 
-  // Twitch Recap hours from before joining, as the server counted them, ride
-  // along with the tracked hours everywhere hours are used (accolades too).
+  // Twitch Recap from before joining, as the server counted it, simply counts:
+  // it rides along with the tracked stats everywhere they are used (accolades
+  // too), with no mark of where it came from.
   const recapHours = Number(stats?.recap_hours ?? 0);
   const hours = (stats?.hours_watched ?? 0) + recapHours;
   const animatedHours = useCountUp(Math.round(hours));
@@ -479,7 +481,9 @@ const ProfileOverview = ({
         : 'Viewer';
 
   const cosmeticsTotal = seventvPaintCount + seventvBadgeCount + ownedCosmeticsCount;
-  const messages = stats?.messages_sent ?? 0;
+  const messages = (stats?.messages_sent ?? 0) + Number(stats?.recap_messages ?? 0);
+  const subsGifted = Number(stats?.recap_subs_gifted ?? 0);
+  const recapPoints = Number(stats?.recap_points ?? 0);
   const streams = stats?.streams_watched ?? 0;
 
   const pts = pointsHeld ?? 0;
@@ -614,6 +618,7 @@ const ProfileOverview = ({
       statHidden('streams') &&
       statHidden('cosmetics') &&
       statHidden('favorite_channel') &&
+      statHidden('subs_gifted') &&
       statHidden('member_rank')
     );
   const sectionStyle = accentRgb ? { borderColor: `rgba(${accentRgb}, 0.3)` } : undefined;
@@ -656,11 +661,6 @@ const ProfileOverview = ({
         </span>
         <span className="text-sm text-textMuted">hrs</span>
       </div>
-      {recapHours > 0 && (
-        <p className="mt-1 text-[11px] text-textMuted">
-          Includes {Math.round(recapHours).toLocaleString()} hrs from Twitch Recap, before StreamNook
-        </p>
-      )}
       {roast && !statHidden('roast_line') && (
         <div className={`flex items-start justify-between gap-3 ${compact ? 'mt-2' : 'mt-3'}`}>
           <p className={`leading-relaxed text-textSecondary ${compact ? 'text-[12px]' : 'text-[15px]'}`}>
@@ -738,9 +738,9 @@ const ProfileOverview = ({
           <StatTile
             icon={Coins}
             label="Channel points"
-            count={pointsHeld ?? undefined}
-            value={pointsHeld === null ? 'Unknown' : undefined}
-            caption={pointsChannels > 0 ? `held across ${pointsChannels} channels` : 'watch a stream to start tracking'}
+            count={pointsHeld === null && recapPoints === 0 ? undefined : (pointsHeld ?? 0) + recapPoints}
+            value={pointsHeld === null && recapPoints === 0 ? 'Unknown' : undefined}
+            caption={pointsChannels > 0 ? `across ${pointsChannels} channels` : 'watch a stream to start tracking'}
             color={ICON_COLOR.amber}
           />
         )}
@@ -754,6 +754,9 @@ const ProfileOverview = ({
           />
         )}
         {!statHidden('streams') && <StatTile icon={Tv} label="Streams watched" count={streams} color={ICON_COLOR.sky} />}
+        {subsGifted > 0 && !statHidden('subs_gifted') && (
+          <StatTile icon={HandHeart} label="Subs gifted" count={subsGifted} color={ICON_COLOR.violet} />
+        )}
         {isOwnProfile && (
           <StatTile
             icon={Gift}

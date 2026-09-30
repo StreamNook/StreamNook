@@ -131,16 +131,26 @@ export const resolveWornBadges = async (userId: string, profile: any): Promise<W
   let thirdParty: any[] = [];
   let bttvPro: { src: string; title: string } | null = null;
   try {
-    const [resolved, rawLoadout] = await Promise.all([
+    const [resolved, rawLoadout, liveTwitch] = await Promise.all([
       getResolvedIdentity(userId).catch(() => null),
       getIdentityWithCache(userId).catch(() => null),
+      // The badge they wear on Twitch now, as chat shows it (Rust asks
+      // Twitch). Undefined when Twitch did not answer.
+      invoke<{ src: string; title: string } | null>('get_selected_twitch_badge', { userId }).catch(
+        () => undefined,
+      ),
     ]);
     thirdParty = (resolved?.badges ?? [])
       .filter((b: any) => b.provider !== 'twitch')
       .map((b: any) => ({ key: b.key, provider: b.provider, title: b.title, src: b.image_url }));
     const keys: string[] = rawLoadout?.badges ?? [];
+    // The loadout's `twitch:` key is only the copy the app took when that
+    // member last opened Profile settings, so it stands in only when Twitch
+    // did not answer.
     const twitchKey = keys.find((k) => k.startsWith('twitch:'));
-    if (twitchKey) {
+    if (liveTwitch !== undefined) {
+      twitch = liveTwitch;
+    } else if (twitchKey) {
       const v = twitchKey.slice('twitch:'.length);
       if (v.includes('/')) {
         // Legacy set/version key — resolve via the global-badge cache.
