@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { Users, Plus, X, Loader2 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
@@ -38,6 +39,9 @@ const PanelChannelList = ({
   const [open, setOpen] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuStyle, setMenuStyle] = useState<CSSProperties>({});
+  const menuOpen = open && input.trim() !== '';
 
   useEffect(() => {
     if (followedStreams.length === 0) loadFollowedStreams();
@@ -45,11 +49,52 @@ const PanelChannelList = ({
 
   useEffect(() => {
     const onClickOutside = (e: MouseEvent) => {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (boxRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
     };
     document.addEventListener('mousedown', onClickOutside);
     return () => document.removeEventListener('mousedown', onClickOutside);
   }, []);
+
+  // The results menu is portalled to <body> with fixed coordinates: the row
+  // this field sits in lives inside a settings card that clips its overflow,
+  // so an in-place dropdown was cut off at the card's bottom edge. It opens
+  // upward when the window has more room above the field than below it.
+  useLayoutEffect(() => {
+    if (!menuOpen) return;
+    const reposition = () => {
+      const el = boxRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const below = window.innerHeight - r.bottom - 16;
+      const above = r.top - 16;
+      const up = below < 224 && above > below;
+      setMenuStyle({
+        position: 'fixed',
+        left: Math.round(r.left),
+        width: Math.round(r.width),
+        zIndex: 9999,
+        maxHeight: Math.max(120, Math.min(280, up ? above : below)),
+        ...(up
+          ? { bottom: Math.round(window.innerHeight - r.top + 8) }
+          : { top: Math.round(r.bottom + 8) }),
+      });
+    };
+    reposition();
+    // Follow the field as the page scrolls; a scroll inside the menu itself
+    // leaves it where it is.
+    const onScroll = (e: Event) => {
+      if (menuRef.current?.contains(e.target as Node)) return;
+      reposition();
+    };
+    window.addEventListener('resize', reposition);
+    window.addEventListener('scroll', onScroll, true);
+    return () => {
+      window.removeEventListener('resize', reposition);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [menuOpen]);
 
   useEffect(() => {
     if (!input.trim()) {
@@ -130,12 +175,12 @@ const PanelChannelList = ({
             <Loader2 size={15} className="animate-spin text-accent" />
           </div>
         )}
-        {open && input.trim() && (
-          <div className="glass-panel absolute left-0 right-0 z-50 mt-2 overflow-hidden">
+        {menuOpen && createPortal(
+          <div ref={menuRef} style={menuStyle} className="glass-panel flex flex-col overflow-hidden">
             {searching && results.length === 0 ? (
               <div className="p-3 text-center text-[12px] italic text-textSecondary">Searching...</div>
             ) : results.length > 0 ? (
-              <div className="max-h-56 overflow-y-auto">
+              <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
                 {results.map((r) => {
                   const login = r.user_login || r.broadcaster_login || '';
                   const name = r.user_name || r.display_name || login;
@@ -169,7 +214,8 @@ const PanelChannelList = ({
             ) : (
               <div className="p-3 text-center text-[12px] italic text-textSecondary">No channels found.</div>
             )}
-          </div>
+          </div>,
+          document.body,
         )}
       </div>
     </div>
