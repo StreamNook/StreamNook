@@ -39,7 +39,7 @@ import { registerPlayerControls, type PlayerControls } from '../keybindings';
 import { qualitiesEquivalent } from '../utils/quality';
 
 import { Logger } from '../utils/logger';
-import { syncTauriWindowFullscreen } from '../utils/windowFullscreen';
+import { claimPlayerFullscreen, handOffPlayerFullscreen, syncTauriWindowFullscreen } from '../utils/windowFullscreen';
 import { startLatencyGovernor, DEFAULT_LATENCY_BAND } from '../utils/liveLatencyGovernor';
 import { behindLiveFromEdge, edgeTargetForGap, resolveLiveEdgeGap, type LivePath } from '../utils/latency';
 import { startLLDiagnostics, stopLLDiagnostics, llDiagNote, isLLDiagEnabled } from '../utils/llDiagnostics';
@@ -1051,6 +1051,8 @@ const VideoPlayer = () => {
     // different control layouts (progress bars vs none). Reusing instances breaks the UI
     // and can cause phantom black overlays.
     if (playerRef.current) {
+      // A new player follows right below unless the stream is offline.
+      handOffPlayerFullscreen(playerRef.current, { nextPlayerComing: streamUrl !== 'offline' });
       try {
         // CRITICAL: Clear video source BEFORE destroying Plyr.
         // Plyr.destroy() moves the <video> element out of its wrapper back to its
@@ -1685,6 +1687,7 @@ const VideoPlayer = () => {
 
           player.on('enterfullscreen', () => syncTauriWindowFullscreen(true));
           player.on('exitfullscreen', () => syncTauriWindowFullscreen(false));
+          claimPlayerFullscreen(player);
 
           // Set up live stream overrides
           isLiveRef.current = useAppStore.getState().currentMediaType === 'live' && !isVodPlayback;
@@ -2325,6 +2328,7 @@ const VideoPlayer = () => {
 
       player.on('enterfullscreen', () => syncTauriWindowFullscreen(true));
       player.on('exitfullscreen', () => syncTauriWindowFullscreen(false));
+      claimPlayerFullscreen(player);
 
       // Persist volume/muted changes back to settings (Safari path)
       player.on('volumechange', () => {
@@ -2471,6 +2475,11 @@ const VideoPlayer = () => {
       // actively decoding when Plyr moves it in the DOM, WebView2's hardware decoder loses its
       // DirectComposition surface — resulting in audio-only playback (black/frozen frame).
       if (playerRef.current) {
+        // A switch to another stream builds the next player right after this
+        // cleanup (the player is keyed on its URL); stopping the stream (no
+        // URL) or going offline does not.
+        const nextUrl = useAppStore.getState().streamUrl;
+        handOffPlayerFullscreen(playerRef.current, { nextPlayerComing: !!nextUrl && nextUrl !== 'offline' });
         if (videoElement) {
           videoElement.pause();
           videoElement.removeAttribute('src');

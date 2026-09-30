@@ -11,7 +11,7 @@ import Plyr from 'plyr';
 import { usemultiNookStore } from '../../stores/multiNookStore';
 import { useAppStore } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
-import { syncTauriWindowFullscreen } from '../../utils/windowFullscreen';
+import { claimPlayerFullscreen, handOffPlayerFullscreen, syncTauriWindowFullscreen } from '../../utils/windowFullscreen';
 import { startLatencyGovernor } from '../../utils/liveLatencyGovernor';
 import { createLiveEdgeTracker } from '../../utils/liveEdge';
 import { multiNookHlsRegistry } from './useMultiNookSync';
@@ -153,6 +153,7 @@ export const useMultiNookPlayer = ({
   useEffect(() => {
     return () => {
       if (playerRef.current) {
+        handOffPlayerFullscreen(playerRef.current, { nextPlayerComing: true });
         playerRef.current.destroy();
         playerRef.current = null;
       }
@@ -320,6 +321,7 @@ export const useMultiNookPlayer = ({
 
           playerRef.current.on('enterfullscreen', () => syncTauriWindowFullscreen(true));
           playerRef.current.on('exitfullscreen', () => syncTauriWindowFullscreen(false));
+          claimPlayerFullscreen(playerRef.current);
 
           // Override duration for live stream progress bar
           Object.defineProperty(video, 'duration', {
@@ -498,6 +500,7 @@ export const useMultiNookPlayer = ({
 
           playerRef.current.on('enterfullscreen', () => syncTauriWindowFullscreen(true));
           playerRef.current.on('exitfullscreen', () => syncTauriWindowFullscreen(false));
+          claimPlayerFullscreen(playerRef.current);
 
           Object.defineProperty(video, 'duration', {
             get: function () {
