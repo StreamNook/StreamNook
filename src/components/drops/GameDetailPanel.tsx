@@ -1460,6 +1460,7 @@ function CampaignCard({
             dropId: drop.id,
             dropName: drop.name,
             requiredMinutes: drop.required_minutes_watched,
+            requiredSubs: drop.required_subs ?? 0,
             imageUrl: benefit?.image_url || '',
             benefitName: benefit?.name || drop.name,
             isClaimed: dropProgress?.is_claimed || false, // Only trust actual claim status, not benefit ID matching
@@ -1478,6 +1479,11 @@ function CampaignCard({
     // "Completed" tag instead of prompting the user to go watch it again.
     const watchTimeRewards = dropRewards.filter(r => (r.requiredMinutes || 0) > 0);
     const allEarned = watchTimeRewards.length > 0 && watchTimeRewards.every(r => r.isEarned);
+
+    // A subscription drop is earned by subscribing on a channel that offers it,
+    // so it gets the same channel picker as a watch drop: pick a live one, go
+    // there, subscribe.
+    const subToEarn = !isCollectible && dropRewards.some(r => r.requiredSubs > 0 && !r.isEarned);
 
     // Something is still left to earn here (unclaimed, below 100%), so an
     // "Earning" badge is meaningful. A campaign whose rewards are all earned or
@@ -1590,6 +1596,27 @@ function CampaignCard({
                                 </button>
                             </Tooltip>
                         )
+                )}
+                {subToEarn && (
+                    <Tooltip
+                        content={
+                            campaign.is_acl_based
+                                ? 'See which participating channels are live, then subscribe on one'
+                                : `See who is live in ${campaign.game_name}, then subscribe on one`
+                        }
+                        side="top"
+                    >
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                onWatch();
+                            }}
+                            className="glass-button px-3 py-1.5 text-xs font-semibold text-accent flex items-center gap-1.5"
+                        >
+                            <Tv size={12} />
+                            Channels
+                        </button>
+                    </Tooltip>
                 )}
                 {isProgressingThisCampaign && (
                     <span className="text-xs text-success font-semibold flex items-center gap-1.5 bg-success/10 px-2 py-1 rounded">
