@@ -630,6 +630,41 @@ pub(crate) mod window {
 
     static SEQ: AtomicU64 = AtomicU64::new(1);
 
+    /// WKWebView's URL is optional until navigation starts, and can stay absent
+    /// when a network filter blocks the page. Wry 0.55.1 unwraps that value in
+    /// `WebviewWindow::url()`, so use WebKit directly on macOS and let callers
+    /// keep waiting (or time out) when there is no URL.
+    async fn current_url(win: &crate::rt::WebviewWindow) -> Option<url::Url> {
+        #[cfg(target_os = "macos")]
+        {
+            use objc2_web_kit::WKWebView;
+
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            win.with_webview(move |platform_webview| {
+                // SAFETY: Tauri runs this closure on the main thread with a
+                // live WKWebView, as in platform::cookies.
+                let url = unsafe {
+                    let wk: &WKWebView = &*(platform_webview.inner() as *const WKWebView);
+                    wk.URL()
+                        .and_then(|url| url.absoluteString())
+                        .map(|url| url.to_string())
+                };
+                let _ = tx.send(url);
+            })
+            .ok()?;
+
+            let url = tokio::time::timeout(Duration::from_secs(1), rx)
+                .await
+                .ok()?
+                .ok()?;
+            url?.parse().ok()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            win.url().ok()
+        }
+    }
+
     /// A hidden tiktok.com page, opened on first use, asked one question at a
     /// time through its URL fragment, and destroyed once nothing has asked for a
     /// while. The injected script answers each question in the fragment.
@@ -742,7 +777,7 @@ pub(crate) mod window {
             // that is about to be replaced, so wait for the page itself.
             let started = Instant::now();
             while started.elapsed() < Duration::from_secs(15) {
-                if let Ok(u) = win.url() {
+                if let Some(u) = current_url(&win).await {
                     if u.host_str().map(|h| h.ends_with("tiktok.com")).unwrap_or(false) {
                         return Ok(win);
                     }
@@ -785,7 +820,9 @@ pub(crate) mod window {
             let started = Instant::now();
             while started.elapsed() < timeout {
                 tokio::time::sleep(Duration::from_millis(150)).await;
-                let fragment = win.url().ok().and_then(|u| u.fragment().map(|f| f.to_string()));
+                let fragment = current_url(&win)
+                    .await
+                    .and_then(|u| u.fragment().map(|f| f.to_string()));
                 if let Some(answer) = read_answer(fragment.as_deref(), id) {
                     self.touch();
                     return answer;
@@ -871,9 +908,8 @@ pub(crate) mod window {
             .map_err(|e| anyhow!("could not open the TikTok page: {e}"))?;
         let result = async {
             let started = Instant::now();
-            while !win
-                .url()
-                .ok()
+            while !current_url(&win)
+                .await
                 .and_then(|u| u.host_str().map(|h| h.ends_with("tiktok.com")))
                 .unwrap_or(false)
             {
@@ -895,7 +931,9 @@ pub(crate) mod window {
             let started = Instant::now();
             while started.elapsed() < REQUEST_TIMEOUT {
                 tokio::time::sleep(Duration::from_millis(200)).await;
-                let fragment = win.url().ok().and_then(|u| u.fragment().map(|f| f.to_string()));
+                let fragment = current_url(&win)
+                    .await
+                    .and_then(|u| u.fragment().map(|f| f.to_string()));
                 if let Some(answer) = read_answer::<SignAnswer>(fragment.as_deref(), id) {
                     let answer = answer?;
                     if !answer.ok {
