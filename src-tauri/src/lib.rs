@@ -1333,11 +1333,7 @@ pub fn run() {
                 .on_menu_event(|app_handle, event| match event.id.as_ref() {
                     "show" => show_main_window(app_handle),
                     "overlay_clickable" => {
-                        // Every overlay window listens; payload forces interactive.
-                        let _ = app_handle.emit(
-                            "chat-overlay-toggle-interactive",
-                            serde_json::json!({ "interactive": true }),
-                        );
+                        commands::popout_window::make_chat_overlays_clickable(app_handle);
                     }
                     "open_multichat" => {
                         // Recreate/show main first (going live may have CLOSED it),
@@ -1409,6 +1405,8 @@ pub fn run() {
             grow_popout_width,
             #[cfg(desktop)]
             fit_popout_on_screen,
+            #[cfg(desktop)]
+            set_chat_overlay_click_through,
             #[cfg(desktop)]
             open_plugin_window,
             #[cfg(desktop)]

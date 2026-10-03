@@ -14,6 +14,12 @@
 //! scaled differently. Here every rect is physical, a window with nothing
 //! saved opens beside the one that asked for it, and every open is fitted
 //! wholly inside one monitor's work area while the window is still hidden.
+//!
+//! The overlay's click-through lives here too. A window that ignores the mouse
+//! can never be clicked to turn itself back, so its control buttons stay live:
+//! while click-through is on, a poll watches the cursor and lets the overlay
+//! take the mouse only while the cursor is over those buttons. Everywhere else
+//! clicks fall through to the app underneath.
 
 use crate::rt::{AppHandle, WebviewWindow, WebviewWindowBuilder, Window};
 use once_cell::sync::Lazy;
@@ -23,7 +29,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::{Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WindowEvent};
+use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WindowEvent};
 
 /// Chat overlays open at once. Each is its own renderer (about 150 MB).
 const MAX_CHAT_OVERLAYS: usize = 4;
@@ -796,6 +802,183 @@ fn is_multichat_id(id: &str) -> bool {
         || matches!(id.strip_prefix('w').and_then(|n| n.parse::<u8>().ok()), Some(2..=9))
 }
 
+// ---------------------------------------------------------------------------
+// Overlay click-through
+// ---------------------------------------------------------------------------
+
+/// How often the cursor is checked while any overlay is click-through.
+const CLICK_THROUGH_POLL: Duration = Duration::from_millis(60);
+/// Sent to one overlay whenever its click-through state changes.
+const CLICK_THROUGH_EVENT: &str = "chat-overlay-click-through";
+/// Logical pixels of slack around the buttons, so they are easy to land on.
+const CONTROLS_SLACK: f64 = 6.0;
+
+/// The overlay's control buttons, in logical pixels, measured from the
+/// window's top right corner so a resize does not move them.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlsZone {
+    right: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+}
+
+struct ClickThrough {
+    controls: ControlsZone,
+    /// The cursor is over the buttons and the window is taking the mouse.
+    over_controls: bool,
+}
+
+#[derive(Serialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+struct ClickThroughState {
+    on: bool,
+    over_controls: bool,
+}
+
+/// Overlays with click-through on, by label. The window setters below run
+/// while this is held, so the poll can never re-ignore a window that was just
+/// turned back. They only queue a message, and nothing that waits on the main
+/// thread runs under it, so the tray may take it on the main thread.
+static CLICK_THROUGH: Lazy<Mutex<HashMap<String, ClickThrough>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+static CLICK_THROUGH_POLLING: AtomicBool = AtomicBool::new(false);
+
+/// Turn the calling overlay's click-through on or off. On needs the place of
+/// its control buttons, which stay clickable.
+#[tauri::command]
+pub async fn set_chat_overlay_click_through(
+    window: Window,
+    on: bool,
+    controls: Option<ControlsZone>,
+) -> Result<(), String> {
+    let app = window.app_handle().clone();
+    let label = window.label().to_string();
+    if !label.starts_with(Kind::ChatOverlay.prefix()) {
+        return Err(format!("not a chat overlay: {label}"));
+    }
+    if on {
+        let controls = controls.ok_or("click-through needs the controls' place")?;
+        let mut map = CLICK_THROUGH.lock().map_err(|e| e.to_string())?;
+        window.set_ignore_cursor_events(true).map_err(|e| e.to_string())?;
+        map.insert(label.clone(), ClickThrough { controls, over_controls: false });
+        drop(map);
+        start_click_through_poll(&app);
+    } else {
+        let mut map = CLICK_THROUGH.lock().map_err(|e| e.to_string())?;
+        map.remove(&label);
+        window.set_ignore_cursor_events(false).map_err(|e| e.to_string())?;
+    }
+    send_click_through_state(&app, &label, ClickThroughState { on, over_controls: false });
+    Ok(())
+}
+
+/// Make every overlay clickable again. The tray's way back.
+pub fn make_chat_overlays_clickable(app: &AppHandle) {
+    let labels: Vec<String> = match CLICK_THROUGH.lock() {
+        Ok(mut map) => {
+            let labels: Vec<String> = map.keys().cloned().collect();
+            for label in &labels {
+                if let Some(win) = app.get_webview_window(label) {
+                    let _ = win.set_ignore_cursor_events(false);
+                }
+            }
+            map.clear();
+            labels
+        }
+        Err(_) => return,
+    };
+    for label in labels {
+        send_click_through_state(app, &label, ClickThroughState { on: false, over_controls: false });
+    }
+}
+
+fn send_click_through_state(app: &AppHandle, label: &str, state: ClickThroughState) {
+    let _ = app.emit_to(label, CLICK_THROUGH_EVENT, state);
+}
+
+fn start_click_through_poll(app: &AppHandle) {
+    if CLICK_THROUGH_POLLING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(CLICK_THROUGH_POLL).await;
+            let watched: Vec<(String, ControlsZone)> = match CLICK_THROUGH.lock() {
+                Ok(map) => map.iter().map(|(l, c)| (l.clone(), c.controls)).collect(),
+                Err(_) => break,
+            };
+            if watched.is_empty() {
+                CLICK_THROUGH_POLLING.store(false, Ordering::Release);
+                // An overlay turned on between the check and the store would
+                // otherwise go unwatched.
+                let again = CLICK_THROUGH.lock().map(|m| !m.is_empty()).unwrap_or(false);
+                if again && !CLICK_THROUGH_POLLING.swap(true, Ordering::AcqRel) {
+                    continue;
+                }
+                break;
+            }
+            // The cursor and window geometry wait on the main thread, so they
+            // are read before the map is locked.
+            let Ok(cursor) = app.cursor_position() else { continue };
+            for (label, controls) in watched {
+                let Some(win) = app.get_webview_window(&label) else {
+                    if let Ok(mut map) = CLICK_THROUGH.lock() {
+                        map.remove(&label);
+                    }
+                    continue;
+                };
+                let over = match (win.inner_position(), win.inner_size(), win.scale_factor()) {
+                    (Ok(pos), Ok(size), Ok(scale)) => {
+                        let r = controls_rect(pos.x, pos.y, size.width, controls, scale);
+                        r.contains(cursor.x, cursor.y)
+                    }
+                    _ => continue,
+                };
+                let Ok(mut map) = CLICK_THROUGH.lock() else { break };
+                let Some(entry) = map.get_mut(&label) else { continue };
+                if entry.over_controls == over {
+                    continue;
+                }
+                if win.set_ignore_cursor_events(!over).is_ok() {
+                    entry.over_controls = over;
+                    drop(map);
+                    send_click_through_state(&app, &label, ClickThroughState { on: true, over_controls: over });
+                }
+            }
+        }
+    });
+}
+
+/// The physical rect of an overlay's control buttons, with slack.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct FRect {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+impl FRect {
+    fn contains(&self, x: f64, y: f64) -> bool {
+        x >= self.x && x < self.x + self.w && y >= self.y && y < self.y + self.h
+    }
+}
+
+fn controls_rect(win_x: i32, win_y: i32, win_w: u32, c: ControlsZone, scale: f64) -> FRect {
+    let right_edge = f64::from(win_x) + f64::from(win_w);
+    let x = right_edge - (c.right + c.width + CONTROLS_SLACK) * scale;
+    let y = f64::from(win_y) + (c.top - CONTROLS_SLACK) * scale;
+    FRect {
+        x,
+        y,
+        w: (c.width + 2.0 * CONTROLS_SLACK) * scale,
+        h: (c.height + 2.0 * CONTROLS_SLACK) * scale,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -903,6 +1086,17 @@ mod tests {
         assert!(!is_twitch_login("Rainy"));
         assert!(!is_twitch_login("a/b"));
         assert!(!is_twitch_login(&"a".repeat(26)));
+    }
+
+    #[test]
+    fn the_overlay_controls_follow_the_right_edge_in_physical_pixels() {
+        let c = ControlsZone { right: 10.0, top: 4.0, width: 120.0, height: 22.0 };
+        // A 400 px wide window at (1000, 200) on a 1.5x display.
+        let r = controls_rect(1000, 200, 600, c, 1.5);
+        assert_eq!(r, FRect { x: 1600.0 - 136.0 * 1.5, y: 200.0 - 2.0 * 1.5, w: 132.0 * 1.5, h: 34.0 * 1.5 });
+        assert!(r.contains(1590.0, 210.0));
+        assert!(!r.contains(1590.0, 300.0), "the chat below the strip stays click-through");
+        assert!(!r.contains(1100.0, 210.0), "the channel name stays click-through");
     }
 
     #[test]

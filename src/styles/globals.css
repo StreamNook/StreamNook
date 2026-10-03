@@ -6590,6 +6590,21 @@ html[data-motion="reduced"] .sn-ffz-anim-leave {
   opacity: 1;
   transform: none;
 }
+/* Click-through at rest: only the button that turns it off stays on screen,
+   faint, so the way back is always in sight. Pointing at it brings the whole
+   strip back (Rust lets the controls take the mouse). */
+.sn-chat-overlay-frame[data-clickthrough="on"][data-chrome="off"] .sn-chat-overlay-chrome {
+  opacity: 1;
+  transform: none;
+  background-color: transparent;
+  border-bottom-color: transparent;
+}
+.sn-chat-overlay-frame[data-clickthrough="on"][data-chrome="off"] :is(.sn-overlay-title, .sn-overlay-slider, .sn-overlay-close) {
+  opacity: 0;
+}
+.sn-chat-overlay-frame[data-clickthrough="on"][data-chrome="off"] .sn-overlay-clickthrough {
+  opacity: 0.55;
+}
 /* Rows: legible over anything, and every piece of chrome inside the feed
    follows the slider. */
 .sn-overlay-feed {

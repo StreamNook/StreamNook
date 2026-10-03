@@ -4,11 +4,11 @@
 // slab over a borderless game or any other app. No composer, no header
 // chrome at rest. Hovering reveals a slim control strip (drag, opacity,
 // click-through, close); leaving hides it again so only the messages float.
-// "Click-through" hands every mouse event to the window underneath; since
-// the overlay can then no longer be clicked, it is turned back from outside:
-// the tray item "Make chat overlays clickable", Ctrl+Alt+N in the main
-// window, or the palette entry. The window listens for
-// `chat-overlay-toggle-interactive`.
+// "Click-through" hands mouse events to the window underneath. Rust owns it
+// (set_chat_overlay_click_through): the control buttons stay clickable, so
+// the button that turned it on turns it off, and it stays faintly on screen
+// meanwhile. The tray item "Make chat overlays clickable" and Ctrl+Alt+N in
+// the main window (`chat-overlay-toggle-interactive`) turn it off too.
 //
 // Same Rust core as every other surface: the channel is acquired on the
 // shared IRC connection and rows carry the rule-engine stamps. Rust opens and
@@ -65,6 +65,10 @@ export default function ChatOverlayWindow() {
   const updateSettings = useAppStore((s) => s.updateSettings);
   const [opacity, setOpacity] = useState<number>(() => settings.chat_overlay?.opacity ?? 70);
   const [clickThrough, setClickThrough] = useState(false);
+  // While click-through is on, the page gets no pointer events away from the
+  // controls, so Rust says when the cursor is over them.
+  const [overControls, setOverControls] = useState(false);
+  const controlsRef = useRef<HTMLDivElement | null>(null);
   // Control strip visibility: shown while the pointer is over the window and
   // for a moment after it leaves, so the strip never pops in and out.
   const [chrome, setChrome] = useState(false);
@@ -137,20 +141,42 @@ export default function ChatOverlayWindow() {
   }, [channel, channelId]);
 
   const applyClickThrough = useCallback(async (on: boolean) => {
+    // The controls' place, from the window's top right corner.
+    const r = controlsRef.current?.getBoundingClientRect();
+    const controls = r
+      ? { right: window.innerWidth - r.right, top: r.top, width: r.width, height: r.height }
+      : null;
     try {
-      await getCurrentWindow().setIgnoreCursorEvents(on);
-      setClickThrough(on);
+      await invoke('set_chat_overlay_click_through', { on, controls });
     } catch (err) {
-      Logger.warn('[ChatOverlay] setIgnoreCursorEvents failed:', err);
+      Logger.warn('[ChatOverlay] set_chat_overlay_click_through failed:', err);
     }
+  }, []);
+
+  // Rust's word on this window's click-through, whoever changed it.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void getCurrentWindow()
+      .listen<{ on: boolean; overControls: boolean }>('chat-overlay-click-through', (e) => {
+        setClickThrough(e.payload.on);
+        setOverControls(e.payload.overControls);
+      })
+      .then((u) => {
+        if (cancelled) u();
+        else unlisten = u;
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, []);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    void listen<{ interactive?: boolean } | null>('chat-overlay-toggle-interactive', (e) => {
-      const want = e.payload && typeof e.payload.interactive === 'boolean' ? !e.payload.interactive : !clickThrough;
-      void applyClickThrough(want);
+    void listen('chat-overlay-toggle-interactive', () => {
+      void applyClickThrough(!clickThrough);
     }).then((u) => {
       if (cancelled) u();
       else unlisten = u;
@@ -202,7 +228,7 @@ export default function ChatOverlayWindow() {
   return (
     <div
       className="sn-chat-overlay-frame flex h-screen w-screen flex-col overflow-hidden"
-      data-chrome={chrome ? 'on' : 'off'}
+      data-chrome={(clickThrough ? overControls : chrome) ? 'on' : 'off'}
       data-clickthrough={clickThrough ? 'on' : 'off'}
       onMouseEnter={showChrome}
       onMouseMove={showChrome}
@@ -212,12 +238,12 @@ export default function ChatOverlayWindow() {
       {/* Control strip: drag handle + opacity + click-through + close. Hidden
           at rest; the whole strip is the drag region except its controls. */}
       <div data-tauri-drag-region className="sn-chat-overlay-chrome flex h-[30px] flex-shrink-0 select-none items-center gap-2 px-2.5">
-        <span data-tauri-drag-region className="pointer-events-none flex min-w-0 items-center gap-1.5">
+        <span data-tauri-drag-region className="sn-overlay-title pointer-events-none flex min-w-0 items-center gap-1.5">
           <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-error/90 shadow-[0_0_6px_var(--color-error)]" />
           <span className="truncate text-[11px] font-semibold tracking-wide text-textPrimary/85">{channelName}</span>
         </span>
         <span data-tauri-drag-region className="flex-1" />
-        <div className="flex items-center gap-1" data-tauri-drag-region="false">
+        <div ref={controlsRef} className="flex items-center gap-1" data-tauri-drag-region="false">
           <Tooltip content={`Glass ${opacity}%`} side="bottom">
             <input
               type="range"
@@ -231,13 +257,13 @@ export default function ChatOverlayWindow() {
             />
           </Tooltip>
           <Tooltip
-            content={clickThrough ? 'Click-through is on. Tray: Make chat overlays clickable' : 'Click-through: send clicks to the window underneath'}
+            content={clickThrough ? 'Clicks pass through to the app behind. Click to stop' : 'Let clicks pass through to the app behind'}
             side="bottom"
           >
             <button
               type="button"
               onClick={() => void applyClickThrough(!clickThrough)}
-              className={`glass-button grid h-[22px] w-[22px] place-items-center ${clickThrough ? 'text-accent' : 'text-textSecondary hover:text-textPrimary'}`}
+              className={`sn-overlay-clickthrough glass-button grid h-[22px] w-[22px] place-items-center ${clickThrough ? 'text-accent' : 'text-textSecondary hover:text-textPrimary'}`}
               aria-label="Toggle click-through"
             >
               {clickThrough ? <MousePointerBan size={12} /> : <MousePointer2 size={12} />}
@@ -247,7 +273,7 @@ export default function ChatOverlayWindow() {
             <button
               type="button"
               onClick={() => void getCurrentWindow().close()}
-              className="glass-button grid h-[22px] w-[22px] place-items-center text-textSecondary hover:text-error"
+              className="sn-overlay-close glass-button grid h-[22px] w-[22px] place-items-center text-textSecondary hover:text-error"
               aria-label="Close overlay"
             >
               <X size={12} />

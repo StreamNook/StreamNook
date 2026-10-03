@@ -36,6 +36,7 @@ allow = [
   "open_multichat_window",
   "grow_popout_width",
   "fit_popout_on_screen",
+  "set_chat_overlay_click_through",
   "open_plugin_window",
   "close_main_window",
   "calculate_aspect_ratio_size",
