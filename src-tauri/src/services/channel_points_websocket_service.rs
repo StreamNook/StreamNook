@@ -164,6 +164,12 @@ impl ChannelPointsWebSocketService {
         );
     }
 
+    /// Whether the viewer is actively watching this channel (the solo stream
+    /// or a MultiNook tile).
+    pub async fn is_active_channel(&self, channel_id: &str) -> bool {
+        self.active_viewing_channels.read().await.contains(channel_id)
+    }
+
     /// Unregister a channel that is no longer being watched
     pub async fn unregister_active_channel(&self, channel_id: &str) {
         let mut active = self.active_viewing_channels.write().await;
@@ -740,6 +746,9 @@ impl ChannelPointsWebSocketService {
                             "claim_id": claim_id
                         }),
                     );
+                    if let Some(cid) = claim_channel_id {
+                        crate::services::watched_chest::offer(app_handle, cid, claim_id.to_string());
+                    }
                 }
                 "points-spent" => {
                     let points = message_data["data"]["point_cost"]["cost"]

@@ -262,41 +262,10 @@ pub async fn claim_channel_points(
     channel_name: String,
     claim_id: String,
     app: AppHandle,
-    state: State<'_, AppState>,
 ) -> Result<BonusClaimResult, String> {
-    let result = {
-        let drops_service = state.drops_service.lock().await;
-        drops_service
-            .claim_channel_points(&channel_id, &channel_name, &claim_id)
-            .await
-            .map_err(|e| e.to_string())?
-    };
-
-    // Report the watched channel's claim as a channel-points notification unless
-    // the realtime socket already did: Twitch pushes the same claim as a
-    // points-earned (reason CLAIM) on community-points-user-v1, and either can
-    // land first. Keeping this emit, deduped, means the claim is still reported
-    // when the socket is down or mid-reconnect. DynamicIsland's listener (gated
-    // by show_channel_points_notifications) and the lifetime/history accumulator
-    // in background_service consume the event either way. Background-collected
-    // channels are covered separately by the GQL balance poll in background_service.
-    if result.points_earned > 0
-        && crate::services::channel_points_websocket_service::claim_emit_is_first(&channel_id)
-    {
-        let _ = app.emit(
-            "channel-points-earned",
-            serde_json::json!({
-                "channel_id": channel_id,
-                "channel_login": channel_name,
-                "channel_display_name": channel_name,
-                "points": result.points_earned,
-                "reason": "claim",
-                "balance": result.new_balance,
-            }),
-        );
-    }
-
-    Ok(result)
+    // A click on the chest button. Automatic claims take the same path from
+    // services::watched_chest, which also reports the claim.
+    crate::services::watched_chest::claim(&app, &channel_id, &channel_name, &claim_id).await
 }
 
 #[tauri::command]

@@ -49,6 +49,7 @@ pub mod discord_ipc_macos;
 pub mod drops_auth_service;
 pub mod drops_overview;
 pub mod drops_service;
+pub mod watched_chest;
 pub mod reward_drops;
 pub mod emoji_service;
 pub mod spellcheck;

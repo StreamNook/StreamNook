@@ -1975,9 +1975,9 @@ impl DropsService {
                 // Get current channel info
                 let channel_info = current_channel.read().await.clone();
                 if channel_info.is_some() {
-                    // The watched channel's bonus chest is claimed by the
-                    // frontend (ChatWidget, `auto_claim_points_watching`), the
-                    // single user-present surface. The background multi-channel
+                    // The watched channel's bonus chest is claimed by
+                    // services::watched_chest (`auto_claim_points_watching`),
+                    // whichever chat is on screen. The background multi-channel
                     // sweep lives in the opt-in automation plugin. This loop only
                     // keeps drop progress fresh and claims finished drops below.
 

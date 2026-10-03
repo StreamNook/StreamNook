@@ -392,6 +392,10 @@ async fn refresh_points(inner: &Inner, login: &str) {
             .update_channel_points_balance(&channel_id, login, balance.clamp(0, i32::MAX as i64) as i32)
             .await;
     }
+    // The minute fallback for a chest the socket did not push.
+    if let Some(claim_id) = points.available_claim_id.clone() {
+        crate::services::watched_chest::offer(&inner.app, channel_id.clone(), claim_id);
+    }
     let at = now_secs();
     let changed = {
         let mut state = inner.state.write().await;

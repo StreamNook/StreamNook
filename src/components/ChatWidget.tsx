@@ -1773,7 +1773,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const channelPointsBalanceRef = useRef<number | null>(null);
   const [channelPointsHovered, setChannelPointsHovered] = useState(false);
   // Bonus-chest claim for the actively watched channel. When auto-claim is on
-  // it is collected silently; when off a clickable chest surfaces on the
+  // Rust collects it silently; when off a clickable chest surfaces on the
   // points button. Background automation of channels you are not watching is a
   // separate opt-in plugin, not this.
   const [availableClaim, setAvailableClaim] = useState<{ id: string; channelId: string } | null>(null);
@@ -2573,50 +2573,56 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     channelPointsBalanceRef.current = channelPoints;
   }, [channelPoints]);
 
-  // Claim the watched channel's bonus chest (manual click or auto). The
-  // command returns the exact credited amount (multipliers included) and the
-  // new balance; the "+N" pop uses the credited amount.
+  // A click on the chest button (auto-claim off). Rust claims it and reports
+  // the claim; the `watched-chest-claimed` listener below shows the "+N".
   const claimWatchedChest = useCallback(async (claimId: string, channelId: string) => {
     if (!isTwitch) return; // channel-points claim is Twitch-only
     if (claimingChestRef.current) return;
     claimingChestRef.current = true;
     setClaimingChest(true);
     try {
-      const result = await invoke<{ new_balance: number; points_earned: number }>('claim_channel_points', {
+      await invoke('claim_channel_points', {
         channelId,
         channelName: currentStream?.user_login ?? '',
         claimId,
       });
-      setAvailableClaim(null);
-      // Show the true credited amount (multipliers included): prefer the claim
-      // response's exact figure, fall back to the balance delta, never a
-      // fabricated preset. This matches the points-claimed notification, which
-      // reflects the same Twitch-credited amount.
-      const prevBalance = channelPointsBalanceRef.current;
-      const earned = result.points_earned > 0
-        ? result.points_earned
-        : (prevBalance !== null && result.new_balance > prevBalance ? result.new_balance - prevBalance : 0);
-      if (result.new_balance > 0) setChannelPoints(result.new_balance);
-      if (earned > 0) {
-        setClaimCelebration(earned);
-        if (claimCelebrationTimer.current) window.clearTimeout(claimCelebrationTimer.current);
-        claimCelebrationTimer.current = window.setTimeout(() => setClaimCelebration(null), 1800);
-        // Keep the profile stat the old backend auto-claim used to feed; the
-        // "+N" pop above is the only on-screen feedback (no toast).
-        if (currentUser?.user_id) {
-          incrementStat(currentUser.user_id, 'channel_points_collected', earned).catch(err => {
-            Logger.warn('[ChatWidget] Failed to track channel points stat:', err);
-          });
-        }
-      }
-      fetchChannelPoints();
     } catch (err) {
       Logger.warn('[ChatWidget] bonus chest claim failed:', err);
     } finally {
       claimingChestRef.current = false;
       setClaimingChest(false);
     }
-  }, [currentStream?.user_login, currentUser?.user_id, fetchChannelPoints]);
+  }, [isTwitch, currentStream?.user_login]);
+
+  // Every chest Rust collects on this channel, automatic or clicked: clear the
+  // chest, take the new balance, pop the credited amount (multipliers
+  // included; the balance delta only when Twitch did not say).
+  useEffect(() => {
+    const channelId = currentStream?.user_id;
+    if (!isTwitch || !channelId) return;
+    const unlisten = listen<{ channel_id: string; points_earned: number; new_balance: number }>(
+      'watched-chest-claimed',
+      (event) => {
+        if (event.payload.channel_id !== channelId) return;
+        setAvailableClaim(null);
+        const { points_earned, new_balance } = event.payload;
+        const prevBalance = channelPointsBalanceRef.current;
+        const earned = points_earned > 0
+          ? points_earned
+          : (prevBalance !== null && new_balance > prevBalance ? new_balance - prevBalance : 0);
+        if (new_balance > 0) setChannelPoints(new_balance);
+        if (earned > 0) {
+          setClaimCelebration(earned);
+          if (claimCelebrationTimer.current) window.clearTimeout(claimCelebrationTimer.current);
+          claimCelebrationTimer.current = window.setTimeout(() => setClaimCelebration(null), 1800);
+        }
+        void fetchChannelPoints();
+      },
+    );
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [isTwitch, currentStream?.user_id, fetchChannelPoints]);
 
   // Instant chest detection: PubSub pushes claim-available the moment Twitch
   // offers the bonus. Detection only — sets availableClaim; the auto-claim
@@ -2637,17 +2643,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     };
   }, [currentStream?.user_id]);
 
-  // (The minute poll for a mid-stream chest now runs in Rust: channel_state
-  // polls points every 60 s for every watched channel and emits on change.)
-
-  // Single auto-collect point: every detection path only sets availableClaim;
-  // when auto-claim is on, this grabs it. Keeping the claim in one place means
-  // detection paths can't double-fire and don't each need claim logic.
-  useEffect(() => {
-    if (availableClaim && autoClaimWatching && !claimingChestRef.current) {
-      claimWatchedChest(availableClaim.id, availableClaim.channelId);
-    }
-  }, [availableClaim, autoClaimWatching, claimWatchedChest]);
+  // (The minute poll for a mid-stream chest runs in Rust: channel_state polls
+  // points every 60 s for every watched channel and emits on change. With
+  // auto-claim on, Rust collects the chest itself (services/watched_chest.rs),
+  // whichever chat is on screen; detection here only drives the chest button.)
 
   // Fetch resub notification when entering a new channel
   useEffect(() => {

@@ -24,6 +24,7 @@ import Home from './components/Home';
 import { useCommandPaletteHotkey } from './hooks/useCommandPaletteHotkey';
 import { usePlatformSessionCheck } from './hooks/usePlatformSessionCheck';
 import { usePlatformAccountSync } from './hooks/usePlatformAccountSync';
+import { useWatchedChestStat } from './hooks/useWatchedChestStat';
 import { useStreamOnlyFullscreen } from './hooks/useStreamOnlyFullscreen';
 import { useKeybindings } from './keybindings';
 import { useCurrentStreamStats } from './utils/useCurrentStreamStats';
@@ -198,6 +199,8 @@ function App() {
   // rather than each running a check of their own.
   usePlatformSessionCheck();
   usePlatformAccountSync();
+  // Main window only: one listener, or each collected chest counts twice.
+  useWatchedChestStat();
   // A YouTube account can own several channels, and a brand channel has its OWN
   // subscriptions. When Rust notices the active one changed (at launch, or after
   // the user switched channel inside an in-app YouTube window), the imported follow
