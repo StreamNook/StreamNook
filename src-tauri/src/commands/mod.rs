@@ -12,6 +12,9 @@ pub mod channel_links;
 pub mod channel_panels;
 pub mod channel_state;
 pub mod chat;
+// The chat pinned in the main window (desktop only).
+#[cfg(desktop)]
+pub mod chat_pin;
 pub mod chat_identity;
 pub mod chat_query;
 pub mod moderation_tools;

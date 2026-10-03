@@ -3,6 +3,8 @@
 // (shortcut hints), and the Keybindings settings tab.
 
 import { useAppStore } from '../stores/AppStore';
+import { usemultiNookStore } from '../stores/multiNookStore';
+import { showChatPinSide, useChatPinStore } from '../stores/chatPinStore';
 import { WATCHABLE_PROVIDERS, type ProviderId } from '../types/providers';
 import { getPlayerControls, isPlayerControllable } from './playerControls';
 import { getChatModController } from './chatModController';
@@ -574,6 +576,26 @@ function build(): BindableCommand[] {
       keywords: 'overlay click through transparent floating chat window',
       run: () => {
         void import('@tauri-apps/api/event').then(({ emit }) => emit('chat-overlay-toggle-interactive', null));
+      },
+    },
+
+    // ---------------- Pinned chat ----------------
+    // Flips the main chat between the pinned chat and the watched stream's.
+    {
+      id: 'chat.togglePinnedChat',
+      label: 'Switch between pinned and live chat',
+      description: 'With a chat pinned, show the pinned chat or the chat of the stream you are watching.',
+      category: 'Chat',
+      context: 'global',
+      defaultBindings: ['Ctrl+Alt+P'],
+      keywords: 'pin pinned chat keep switch live stream toggle',
+      isAvailable: () => {
+        const { pin } = useChatPinStore.getState();
+        return !!pin && !usemultiNookStore.getState().isMultiNookActive;
+      },
+      run: () => {
+        const { view } = useChatPinStore.getState();
+        void showChatPinSide(view === 'pinned' ? 'live' : 'pinned');
       },
     },
 

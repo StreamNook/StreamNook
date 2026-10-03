@@ -1408,6 +1408,12 @@ pub fn run() {
             #[cfg(desktop)]
             set_chat_overlay_click_through,
             #[cfg(desktop)]
+            commands::chat_pin::get_chat_pin,
+            #[cfg(desktop)]
+            commands::chat_pin::set_chat_pin,
+            #[cfg(desktop)]
+            commands::chat_pin::set_chat_pin_view,
+            #[cfg(desktop)]
             open_plugin_window,
             #[cfg(desktop)]
             close_main_window,

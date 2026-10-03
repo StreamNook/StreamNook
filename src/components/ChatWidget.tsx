@@ -36,7 +36,11 @@ import BlendBar, { type BlendView } from './chat/BlendBar';
 import { historyKey as chatterHistoryKey } from '../utils/chatterIdentity';
 import { streamProvider } from '../utils/streamProvider';
 import { PROVIDERS, type ProviderId } from '../types/providers';
-import { Plus, Timer, UsersThree } from 'phosphor-react';
+import { Plus, PushPin, Timer, UsersThree } from 'phosphor-react';
+import ChatPinSwitch from './chat/ChatPinSwitch';
+import ChatHeaderMenu, { type ChatHeaderMenuItem } from './chat/ChatHeaderMenu';
+import { pinChat, unpinChat, useChatPinStore } from '../stores/chatPinStore';
+import { usePinPair } from '../hooks/useChatPin';
 import { PlatformAccountChip } from './PlatformAccountChip';
 import { ProviderLogo } from './ProviderLogo';
 import { TogetherChip } from './SharedViewers';
@@ -945,6 +949,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // and level-up logic below all work per-pane with no further changes.
   const currentHypeTrain = channelOverride ? (hypeTrainOverride ?? null) : globalHypeTrain;
   const isMultiNookActive = usemultiNookStore((s) => s.isMultiNookActive);
+  // Chat pinning, main window only (MultiNook picks its chat among tiles).
+  // While a pin is held the window keeps two chats, so nothing here may treat
+  // a flip between them as leaving a channel.
+  const chatPin = useChatPinStore((s) => s.pin);
+  const { split: pinSplit } = usePinPair();
+  const pinHeld = isMainSurface && !!chatPin && !isMultiNookActive;
   const activeChatChannelId = usemultiNookStore((s) => s.activeChatChannelId);
   const slots = usemultiNookStore((s) => s.slots);
 
@@ -2361,10 +2371,13 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const usersClearedForRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     const login = currentStream?.user_login;
-    if (!isMainSurface || !login || usersClearedForRef.current === login) return;
+    // With a chat pinned the window shows two chats in turn; emptying the
+    // store on each flip would strip paints and badges off the other's
+    // backlog. Its LRU cap bounds it instead.
+    if (!isMainSurface || pinHeld || !login || usersClearedForRef.current === login) return;
     usersClearedForRef.current = login;
     clearUsers();
-  }, [isMainSurface, currentStream?.user_login, clearUsers]);
+  }, [isMainSurface, pinHeld, currentStream?.user_login, clearUsers]);
 
   useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -2410,10 +2423,14 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       userMessageHistory.current.clear();
       sharedRoomsSeenRef.current.clear();
       setIsSharedChat(false);
-      // PHASE 3: Clear Rust user message history when switching channels
-      invoke('clear_user_message_history').catch(err => 
-        Logger.warn('[ChatWidget] Failed to clear Rust user history:', err)
-      );
+      // Clear Rust user message history when switching channels; not while a
+      // pin is held, where a flip between the two chats is not leaving one
+      // (the history's LRU cap bounds it).
+      if (!(isMainSurface && !isMultiNookActive && useChatPinStore.getState().pin)) {
+        invoke('clear_user_message_history').catch(err =>
+          Logger.warn('[ChatWidget] Failed to clear Rust user history:', err)
+        );
+      }
       // Reset channel points when switching channels
       setChannelPoints(null);
       setCustomPointsName(null);
@@ -4584,8 +4601,122 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const overlayTop = chromeBottom + 8;
   const pinnedTop = overlayTop + (overlayStackHeight > 0 ? overlayStackHeight + 8 : 0);
   // The action capsule only renders when it would hold at least one button.
+  // Pin or unpin this chat. `provider` is this widget's own platform, so the
+  // pinned pane (an override on the pin's platform) reads as pinned too.
+  const canPinChat = isMainSurface && !isMultiNookActive && !!currentStream?.user_login;
+  const thisChatPinned =
+    !!chatPin && !!currentStream?.user_login &&
+    makeKey(chatPin.provider, chatPin.login) === makeKey(provider, currentStream.user_login);
   const hasHeaderActions =
-    (!!currentStream && (!channelOverride || (isModerator && isTwitch))) || pinnedMessages.length > 0;
+    (!!currentStream && (!channelOverride || (isModerator && isTwitch))) || pinnedMessages.length > 0 || canPinChat;
+
+  // The header's "more" menu. Pop out opens a MultiChat window with this
+  // channel (every tile's chat in MultiNook) and survives the main window;
+  // float opens the see-through overlay. Neither is offered inside a popout or
+  // the pinned pane, where they would open a second copy of what is on screen.
+  const headerMenuItems: ChatHeaderMenuItem[] = [];
+  if (canPinChat && currentStream) {
+    const stream = currentStream;
+    headerMenuItems.push({
+      key: 'pin',
+      icon: <PushPin size={15} weight={thisChatPinned ? 'fill' : 'regular'} />,
+      label: thisChatPinned ? 'Unpin chat' : chatPin ? 'Pin this chat instead' : 'Pin chat',
+      detail: thisChatPinned
+        ? 'Back to following the stream you watch'
+        : chatPin
+          ? `Replaces ${chatPin.display_name || chatPin.login} as your pinned chat`
+          : 'Keep it when you switch streams',
+      active: thisChatPinned,
+      onSelect: () => {
+        if (thisChatPinned) {
+          void unpinChat();
+          return;
+        }
+        void pinChat({
+          provider,
+          login: stream.user_login,
+          channel_id: stream.user_id || '',
+          display_name: stream.user_name || stream.user_login,
+          avatar_url: stream.profile_image_url || null,
+        });
+      },
+    });
+  }
+  if (currentStream && !channelOverride) {
+    const stream = currentStream;
+    const popAll = isMultiNookActive && slots.length > 1;
+    headerMenuItems.push({
+      key: 'popout',
+      icon: (
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M9 2h5v5" />
+          <path d="M14 2L7 9" />
+          <path d="M13 9v4a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h4" />
+        </svg>
+      ),
+      label: popAll ? 'Pop out all chats' : 'Pop out chat',
+      detail: 'In a window of its own',
+      onSelect: async () => {
+        try {
+          const { openMultiChatWindow } = await import('../utils/multichatWindow');
+          const mn = usemultiNookStore.getState();
+          if (mn.isMultiNookActive && mn.slots.length > 1) {
+            // In MultiNook with multiple streams: pop out ALL of them into a
+            // FRESH MultiChat window (replace any tabs that were open). The IRC
+            // bridge is shared and these channels are already joined (MultiNook
+            // keeps every tile connected), so the popout attaches to the live
+            // session instead of reloading it.
+            await openMultiChatWindow({
+              replace: true,
+              channels: mn.slots.map((s) => ({
+                channel: s.channelLogin,
+                channelId: s.channelId ?? null,
+                channelName: s.channelName ?? s.channelLogin,
+              })),
+            });
+            // Chat now lives in the popout: hide the in-grid chat panel to
+            // reclaim space. (Re-show any time via the toolbar chat toggle.)
+            const after = usemultiNookStore.getState();
+            if (!after.isChatHidden) after.toggleChatHidden();
+          } else {
+            await openMultiChatWindow({
+              channel: stream.user_login,
+              channelId: stream.user_id || undefined,
+              channelName: stream.user_name || undefined,
+            });
+          }
+        } catch (err) {
+          Logger.error('[ChatWidget] Pop out chat failed:', err);
+        }
+      },
+    });
+  }
+  if (currentStream && !channelOverride && isTwitch) {
+    const stream = currentStream;
+    headerMenuItems.push({
+      key: 'float',
+      icon: (
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2" y="2" width="9" height="9" rx="1.5" />
+          <path d="M6 14h7.5a.5.5 0 0 0 .5-.5V6" strokeDasharray="2 1.5" />
+        </svg>
+      ),
+      label: 'Float chat',
+      detail: 'See-through, over other apps (its own window, about 150 MB)',
+      onSelect: async () => {
+        try {
+          const { openChatOverlayWindow } = await import('../utils/chatOverlayWindow');
+          await openChatOverlayWindow({
+            channel: stream.user_login,
+            channelId: stream.user_id || undefined,
+            channelName: stream.user_name || undefined,
+          });
+        } catch (err) {
+          Logger.error('[ChatWidget] Open chat overlay failed:', err);
+        }
+      },
+    });
+  }
 
   if (showLoadingScreen) {
     return (
@@ -4712,6 +4843,17 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                         <span className="text-xs text-textSecondary">Connecting...</span>
                       )}
                     </motion.div>
+                  ) : isMainSurface && pinSplit ? (
+                    <motion.div
+                      key="chat-pin-switch"
+                      initial={{ opacity: 0, y: -4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 4 }}
+                      transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                      className="flex min-w-0 items-center"
+                    >
+                      <ChatPinSwitch />
+                    </motion.div>
                   ) : (
                     <motion.p
                       key="chat-header"
@@ -4731,7 +4873,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                               ? 'Offline chat'
                               : blendActive
                                 ? 'Combined chat'
-                                : 'Stream chat'}
+                                : thisChatPinned && isMainSurface
+                                  ? 'Pinned chat'
+                                  : 'Stream chat'}
                     </motion.p>
                   )}
                 </AnimatePresence>
@@ -4999,96 +5143,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       </button>
                     </Tooltip>
                   )}
-                  {/* Pop out chat — opens a separate StreamNook MultiChat window
-                      pre-loaded with the currently watched channel. The window
-                      survives the main app's lifecycle inside one Tauri process.
-                      Hidden when ChatWidget is already inside a popout (channelOverride
-                      set) — popping out of a popout would be confusing. */}
-                  {currentStream && !channelOverride && (
-                    <Tooltip content={isMultiNookActive && slots.length > 1 ? 'Pop out all chats' : 'Pop out chat'} side="bottom">
-                      <button
-                        type="button"
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          try {
-                            const { openMultiChatWindow } = await import('../utils/multichatWindow');
-                            const mn = usemultiNookStore.getState();
-                            if (mn.isMultiNookActive && mn.slots.length > 1) {
-                              // In MultiNook with multiple streams: pop out ALL of them into
-                              // a FRESH MultiChat window (replace any tabs that were open).
-                              // The IRC bridge is shared and these channels are already
-                              // joined (MultiNook keeps every tile connected), so the popout
-                              // attaches to the live session instead of reloading it.
-                              await openMultiChatWindow({
-                                replace: true,
-                                channels: mn.slots.map((s) => ({
-                                  channel: s.channelLogin,
-                                  channelId: s.channelId ?? null,
-                                  channelName: s.channelName ?? s.channelLogin,
-                                })),
-                              });
-                              // Chat now lives in the popout — hide the in-grid chat panel to
-                              // reclaim space. (Re-show any time via the toolbar chat toggle.)
-                              const after = usemultiNookStore.getState();
-                              if (!after.isChatHidden) after.toggleChatHidden();
-                            } else {
-                              await openMultiChatWindow({
-                                channel: currentStream.user_login,
-                                channelId: currentStream.user_id || undefined,
-                                channelName: currentStream.user_name || undefined,
-                              });
-                            }
-                          } catch (err) {
-                            Logger.error('[ChatWidget] Pop out chat failed:', err);
-                          }
-                        }}
-                        className="chat-header-btn"
-                        aria-label="Pop out chat"
-                      >
-                        <svg
-                          width="13"
-                          height="13"
-                          viewBox="0 0 16 16"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <path d="M9 2h5v5" />
-                          <path d="M14 2L7 9" />
-                          <path d="M13 9v4a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h4" />
-                        </svg>
-                      </button>
-                    </Tooltip>
-                  )}
-                  {!channelOverride && isTwitch && currentStream && (
-                    <Tooltip content="Float chat as a see-through window over other apps (its own renderer, about 150 MB)" side="bottom">
-                      <button
-                        type="button"
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          try {
-                            const { openChatOverlayWindow } = await import('../utils/chatOverlayWindow');
-                            await openChatOverlayWindow({
-                              channel: currentStream.user_login,
-                              channelId: currentStream.user_id || undefined,
-                              channelName: currentStream.user_name || undefined,
-                            });
-                          } catch (err) {
-                            Logger.error('[ChatWidget] Open chat overlay failed:', err);
-                          }
-                        }}
-                        className="chat-header-btn"
-                        aria-label="Float chat as overlay"
-                      >
-                        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="2" y="2" width="9" height="9" rx="1.5" />
-                          <path d="M6 14h7.5a.5.5 0 0 0 .5-.5V6" strokeDasharray="2 1.5" />
-                        </svg>
-                      </button>
-                    </Tooltip>
-                  )}
                   {pinnedMessages.length > 0 && (() => {
                     const isUnseen = (pinnedMessages[0]?.id || '') !== seenPinIdRef.current;
                     return (
@@ -5113,6 +5167,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       </Tooltip>
                     );
                   })()}
+                  {/* Pin, pop out and float: occasional actions, in words. */}
+                  <ChatHeaderMenu items={headerMenuItems} />
                     </div>
                   )}
                     </>
