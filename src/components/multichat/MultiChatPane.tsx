@@ -5,21 +5,21 @@
 // popout reaches feature parity with the in-app chat: copy, reply, pinned
 // messages, emote picker, mod menu, profile clicks, badge interactions —
 // AND the stream-view chrome (viewer count, uptime, About panel, etc.) reads
-// real values because this pane polls Helix for the live stream metadata.
-//
-// Polling cadence: check_stream_online every 30s. Cheaper than EventSub and
-// good enough for the popout's at-a-glance "what's happening" use case.
-// Hype train / raid events still require EventSub (which is single-broadcaster
-// today); those remain main-app-only until EventSub is made multi-broadcaster.
+// real values: a Twitch pane takes them from Rust's channel state (one Helix
+// batch for every watched channel), a Kick or YouTube pane polls its
+// platform's channel metadata every 30 s.
+// Raid events still require EventSub (which is single-broadcaster today); the
+// hype train comes from the shared Rust watch.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import ChatWidget, { type ChatWidgetChannelOverride } from '../ChatWidget';
-import type { TwitchStream, HypeTrainData } from '../../types';
+import type { HypeTrainData } from '../../types';
 import type { ProviderId } from '../../types/providers';
 import { Logger } from '../../utils/logger';
 import { useVisibleInterval } from '../../utils/useVisibleInterval';
 import { ensureChannelHistory } from '../../stores/chatConnectionStore';
+import { useChannelState } from '../../stores/channelStateStore';
 import { recordHypeTrainActivity, watchHypeTrains } from '../../services/hypeTrainWatch';
 
 export interface MultiChatPaneProps {
@@ -50,11 +50,14 @@ interface ChannelUserInfo {
 function TwitchChatPane({ channel, channelId, channelName, isActive, filterId, onFilterIdChange }: MultiChatPaneProps) {
   const channelKey = channel.toLowerCase();
 
-  const [stream, setStream] = useState<TwitchStream | null>(null);
   const [userInfo, setUserInfo] = useState<ChannelUserInfo | null>(null);
-  // Consecutive null `check_stream_online` results — debounces transient poll
-  // glitches so a live stream's uptime doesn't flicker (see fetchStream).
-  const offlineStreakRef = useRef(0);
+  // The live broadcast (viewers, start, title, category) comes from Rust's
+  // channel state, which this pane's ChatWidget watches: one Helix batch for
+  // every channel any window shows, a live channel only reading offline after
+  // two missed polls. Until Rust answers, the channel reads offline, as it did
+  // before the first poll here.
+  const live = useChannelState(channelKey);
+  const isLive = !!live?.started_at;
 
   // Resolve channel-level metadata (display name, avatar, broadcaster type)
   // once per channel. Doesn't change between live/offline.
@@ -79,90 +82,32 @@ function TwitchChatPane({ channel, channelId, channelName, isActive, filterId, o
     };
   }, [channelKey, channelId]);
 
-  // Poll live stream metadata so viewer count, uptime, title, and game stay
-  // current. check_stream_online returns the full TwitchStream when online
-  // and null when offline. Visibility-gated so a hidden window stops polling.
-  const fetchStream = useCallback(async () => {
-    try {
-      const s = await invoke<TwitchStream | null>('check_stream_online', {
-        userLogin: channelKey,
-      });
-      if (s) {
-        offlineStreakRef.current = 0;
-        setStream(s);
-      } else {
-        // A single null is often a transient poll glitch (several panes poll at
-        // once), so don't drop a live stream's uptime on one miss — require two
-        // consecutive nulls before treating it as genuinely offline. Keeps the
-        // uptime ticking steadily instead of flickering.
-        offlineStreakRef.current += 1;
-        if (offlineStreakRef.current >= 2) setStream(null);
-      }
-    } catch (err) {
-      Logger.warn('[MultiChatPane] check_stream_online failed:', err);
-    }
-  }, [channelKey]);
-  // Initial fetch on mount / channel change. Inline async (setState only AFTER the
-  // await, inside a callback) so it doesn't trip the cascading-render guard.
-  useEffect(() => {
-    let active = true;
-    offlineStreakRef.current = 0; // fresh channel
-    void (async () => {
-      try {
-        const s = await invoke<TwitchStream | null>('check_stream_online', {
-          userLogin: channelKey,
-        });
-        if (!active) return;
-        if (s) {
-          offlineStreakRef.current = 0;
-          setStream(s);
-        } else {
-          offlineStreakRef.current += 1;
-          if (offlineStreakRef.current >= 2) setStream(null);
-        }
-      } catch (err) {
-        Logger.warn('[MultiChatPane] check_stream_online failed:', err);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [channelKey]);
-  useVisibleInterval(fetchStream, STREAM_POLL_INTERVAL_MS);
-
   const channelOverride = useMemo<ChatWidgetChannelOverride>(() => {
-    const liveUserId = stream?.user_id || channelId || userInfo?.id || '';
-    const liveLogin = stream?.user_login || channelKey;
-    const liveName =
-      stream?.user_name ||
-      userInfo?.display_name ||
-      channelName ||
-      channelKey;
+    const liveUserId = channelId || userInfo?.id || '';
+    const liveName = userInfo?.display_name || channelName || channelKey;
 
     return {
       provider: 'twitch',
-      user_login: liveLogin,
+      user_login: channelKey,
       user_id: liveUserId,
       user_name: liveName,
-      title: stream?.title,
-      game_name: stream?.game_name,
-      viewer_count: stream?.viewer_count,
-      started_at: stream?.started_at,
-      thumbnail_url: stream?.thumbnail_url,
-      profile_image_url: userInfo?.profile_image_url ?? stream?.profile_image_url,
-      broadcaster_type: userInfo?.broadcaster_type ?? stream?.broadcaster_type,
-      is_live: stream !== null,
+      title: live?.title ?? undefined,
+      game_name: live?.game_name ?? undefined,
+      viewer_count: live?.viewer_count ?? undefined,
+      started_at: live?.started_at ?? undefined,
+      profile_image_url: userInfo?.profile_image_url,
+      broadcaster_type: userInfo?.broadcaster_type,
+      is_live: isLive,
       is_active: isActive,
     };
-  }, [stream, userInfo, channelKey, channelId, channelName, isActive]);
+  }, [live?.title, live?.game_name, live?.viewer_count, live?.started_at, isLive, userInfo, channelKey, channelId, channelName, isActive]);
 
   // Hype Train: show this channel's train (Rust polls it once for every surface
   // showing it) and surface its start + each level-up in the combined activity
   // panel, Golden Kappa flagged. Only while the channel is live, since trains
   // only run on live channels. The per-train+level event id dedups, so a restart
   // (e.g. on go-live) never double-posts a level already seen.
-  const hypeChannelId = stream?.user_id || channelId || userInfo?.id || '';
-  const isLive = stream !== null;
+  const hypeChannelId = channelId || userInfo?.id || '';
   // Per-pane hype train: drives both the in-pane progress banner (passed to
   // ChatWidget) and the combined activity-panel start/level-up rows.
   const [paneHypeTrain, setPaneHypeTrain] = useState<HypeTrainData | null>(null);

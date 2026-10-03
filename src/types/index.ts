@@ -1420,6 +1420,9 @@ export interface ChannelState {
   viewer_count: number | null;
   /** When the current broadcast began (RFC 3339); null while offline. */
   started_at: string | null;
+  /** The live broadcast's title and category; null while offline. */
+  title: string | null;
+  game_name: string | null;
   viewers_at: number | null;
   points: ChannelPoints | null;
   points_at: number | null;
@@ -1431,7 +1434,15 @@ export interface ChannelState {
 
 /** One changed section, the payload of the `channel-state` event. */
 export type ChannelStateUpdate =
-  | { section: 'viewers'; login: string; viewer_count: number | null; started_at: string | null; at: number }
+  | {
+      section: 'viewers';
+      login: string;
+      viewer_count: number | null;
+      started_at: string | null;
+      title: string | null;
+      game_name: string | null;
+      at: number;
+    }
   | { section: 'points'; login: string; points: ChannelPoints | null; at: number }
   | { section: 'pinned'; login: string; pinned: unknown[]; at: number }
   | { section: 'collab'; login: string; collab: Collaboration | null; at: number };

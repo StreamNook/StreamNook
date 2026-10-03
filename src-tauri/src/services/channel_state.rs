@@ -1,5 +1,5 @@
-//! Rust-owned per-channel chat state: viewer count and live start, channel
-//! points (balance,
+//! Rust-owned per-channel chat state: the live broadcast (viewer count, start,
+//! title, category), channel points (balance,
 //! custom name and icon, an available bonus claim) and pinned messages, for
 //! every Twitch channel some window has a chat open on.
 //!
@@ -55,6 +55,10 @@ pub struct ChannelState {
     /// When the current broadcast began (Helix RFC 3339), from the same poll
     /// as the viewer count. `None` while offline.
     pub started_at: Option<String>,
+    /// The live broadcast's title and category, from the same poll. `None`
+    /// while offline.
+    pub title: Option<String>,
+    pub game_name: Option<String>,
     pub viewers_at: Option<u64>,
     pub points: Option<ChannelPoints>,
     pub points_at: Option<u64>,
@@ -62,6 +66,10 @@ pub struct ChannelState {
     pub pinned_at: Option<u64>,
     pub collab: Option<Collaboration>,
     pub collab_at: Option<u64>,
+    /// Polls in a row a live channel was missing from Helix's answer. One miss
+    /// is often a glitch, so a live channel only reads offline after two.
+    #[serde(skip)]
+    offline_misses: u8,
 }
 
 #[derive(Serialize, Clone)]
@@ -71,6 +79,8 @@ pub enum ChannelUpdate {
         login: String,
         viewer_count: Option<u64>,
         started_at: Option<String>,
+        title: Option<String>,
+        game_name: Option<String>,
         at: u64,
     },
     Points {
@@ -243,6 +253,27 @@ pub async fn refresh(login: &str, section: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// One channel's live broadcast as the viewer poll read it; all `None` while
+/// offline.
+#[derive(Clone, Default, PartialEq)]
+struct Live {
+    viewer_count: Option<u64>,
+    started_at: Option<String>,
+    title: Option<String>,
+    game_name: Option<String>,
+}
+
+/// Whether to keep showing a channel as live although this poll missed it,
+/// and the miss count to carry. A live channel reads offline only after two
+/// polls in a row leave it out.
+fn hold_live(was_live: bool, live_now: bool, misses: u8) -> (bool, u8) {
+    if !live_now && was_live && misses == 0 {
+        (true, 1)
+    } else {
+        (false, 0)
+    }
+}
+
 async fn refresh_viewers(inner: &Inner) {
     let by_login: HashMap<String, String> = inner
         .watched
@@ -255,10 +286,19 @@ async fn refresh_viewers(inner: &Inner) {
         return;
     }
     let ids: Vec<String> = by_login.values().cloned().collect();
-    let live: HashMap<String, (u64, String)> = match TwitchService::get_streams_by_user_ids(&ids).await {
+    let live: HashMap<String, Live> = match TwitchService::get_streams_by_user_ids(&ids).await {
         Ok(streams) => streams
             .into_iter()
-            .map(|s| (s.user_id, (s.viewer_count as u64, s.started_at)))
+            .map(|s| {
+                let some = |v: String| Some(v).filter(|v| !v.is_empty());
+                let live = Live {
+                    viewer_count: Some(s.viewer_count as u64),
+                    started_at: some(s.started_at),
+                    title: some(s.title),
+                    game_name: some(s.game_name),
+                };
+                (s.user_id, live)
+            })
             .collect(),
         Err(e) => {
             debug!("[ChannelState] viewers: {e}");
@@ -266,24 +306,47 @@ async fn refresh_viewers(inner: &Inner) {
         }
     };
     let at = now_secs();
-    let mut changed: Vec<(String, Option<u64>, Option<String>)> = Vec::new();
+    let mut changed: Vec<(String, Live)> = Vec::new();
     {
         let mut state = inner.state.write().await;
         for (login, id) in &by_login {
-            let count = live.get(id).map(|(c, _)| *c);
-            let started_at = live.get(id).map(|(_, t)| t.clone()).filter(|t| !t.is_empty());
+            let now = live.get(id).cloned().unwrap_or_default();
             if let Some(s) = state.get_mut(login) {
-                if s.viewer_count != count || s.started_at != started_at {
-                    changed.push((login.clone(), count, started_at.clone()));
+                let (hold, misses) = hold_live(s.viewer_count.is_some(), now.viewer_count.is_some(), s.offline_misses);
+                s.offline_misses = misses;
+                if hold {
+                    s.viewers_at = Some(at);
+                    continue;
                 }
-                s.viewer_count = count;
-                s.started_at = started_at;
+                let before = Live {
+                    viewer_count: s.viewer_count,
+                    started_at: s.started_at.clone(),
+                    title: s.title.clone(),
+                    game_name: s.game_name.clone(),
+                };
+                if before != now {
+                    changed.push((login.clone(), now.clone()));
+                }
+                s.viewer_count = now.viewer_count;
+                s.started_at = now.started_at;
+                s.title = now.title;
+                s.game_name = now.game_name;
                 s.viewers_at = Some(at);
             }
         }
     }
-    for (login, viewer_count, started_at) in changed {
-        emit(&inner.app, ChannelUpdate::Viewers { login, viewer_count, started_at, at });
+    for (login, l) in changed {
+        emit(
+            &inner.app,
+            ChannelUpdate::Viewers {
+                login,
+                viewer_count: l.viewer_count,
+                started_at: l.started_at,
+                title: l.title,
+                game_name: l.game_name,
+                at,
+            },
+        );
     }
     let live_logins: Vec<String> = by_login
         .iter()
@@ -443,6 +506,15 @@ async fn refresh_pinned(inner: &Inner, login: &str) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_live_channel_reads_offline_only_after_two_misses() {
+        assert_eq!(hold_live(true, false, 0), (true, 1), "one miss is held");
+        assert_eq!(hold_live(true, false, 1), (false, 0), "the second miss goes offline");
+        assert_eq!(hold_live(true, true, 1), (false, 0), "back in the answer resets");
+        assert_eq!(hold_live(false, false, 0), (false, 0), "an offline channel stays offline");
+        assert_eq!(hold_live(false, true, 0), (false, 0), "going live shows at once");
+    }
 
     #[test]
     fn parses_community_shape() {
