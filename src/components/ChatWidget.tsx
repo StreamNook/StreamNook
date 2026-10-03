@@ -134,7 +134,7 @@ import { Logger } from '../utils/logger';
 // Unsent composer text per channel key, for the per-channel draft restore.
 const chatDrafts = new Map<string, string>();
 import { useVisibleInterval } from '../utils/useVisibleInterval';
-import { formatUptimeClock } from '../utils/streamStats';
+import { formatUptimeClock, pickLiveStartedAt } from '../utils/streamStats';
 import { kickAppliedSeconds, kickTimeoutMinutes } from '../utils/kickTimeout';
 
 // Channel Points hover tooltip — portalled to document.body to escape overflow-hidden
@@ -996,7 +996,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
           type: 'live',
           title: `multi-nook: ${activeSlot.channelName || activeSlot.channelLogin}`,
           viewer_count: 0,
-          started_at: new Date().toISOString(),
+          // Unknown here; the header's uptime reads Rust's channel state for
+          // Twitch. Faking "now" restarted the clock on every chat switch.
+          started_at: '',
           language: 'en',
           thumbnail_url: '',
           tag_ids: [],
@@ -2293,6 +2295,19 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     }
     setViewerCount(channelState?.viewer_count ?? null);
   }, [isTwitch, currentStream?.viewer_count, channelState?.viewer_count]);
+  // When the broadcast began. For Twitch, Rust's channel state (polled with the
+  // viewer count) is the source, so a MultiNook chat switch, whose synthesized
+  // stream has no start time, keeps the real uptime. The stream's own value is
+  // the fallback until Rust answers, but not under a VOD, clip or offline
+  // chat: there it is the video's date, not a live start.
+  const playingRecording =
+    !channelOverride &&
+    (currentMediaType === 'video' || currentMediaType === 'clip' || currentMediaType === 'offline_chat');
+  const liveStartedAt = pickLiveStartedAt(
+    isTwitch ? channelState?.started_at : null,
+    currentStream?.started_at,
+    playingRecording,
+  );
   // Shared Viewership: while the channel streams with others, the header shows
   // a Together chip beside the channel's own count.
   const collab = isTwitch ? (channelState?.collab ?? null) : null;
@@ -2325,7 +2340,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       // Same clock the Compact View chips use, so the two never drift apart.
       // Empty string when there is no start time, which is what the old inline
       // version wrote too.
-      const uptimeString = formatUptimeClock(currentStream?.started_at);
+      const uptimeString = formatUptimeClock(liveStartedAt);
       streamUptimeRef.current = uptimeString;
       if (!headerElement) headerElement = document.getElementById('stream-uptime-display');
       if (headerElement) headerElement.textContent = uptimeString;
@@ -2333,7 +2348,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     updateUptime();
     const intervalId = setInterval(updateUptime, 1000);
     return () => clearInterval(intervalId);
-  }, [currentStream?.started_at]);
+  }, [liveStartedAt]);
 
   // Only the main surface empties the chatter store on a channel switch. The
   // store is one per window, so in MultiChat every pane shares it, and a pane
@@ -4934,7 +4949,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   )}
                   {/* The live numbers read as one object: viewers and uptime in a
                       single capsule, split by a hairline. */}
-                  {((viewerCount !== null && !streamerModeActive) || currentStream?.started_at) && (
+                  {((viewerCount !== null && !streamerModeActive) || liveStartedAt) && (
                     <div className="chrome-glaze chrome-glaze--flat chat-header-stats">
                       {viewerCount !== null && !streamerModeActive && (
                         <Tooltip content="Watching now" side="bottom">
@@ -4944,10 +4959,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                           </span>
                         </Tooltip>
                       )}
-                      {viewerCount !== null && !streamerModeActive && currentStream?.started_at && (
+                      {viewerCount !== null && !streamerModeActive && liveStartedAt && (
                         <span className="chat-header-rule" aria-hidden />
                       )}
-                      {currentStream?.started_at && (
+                      {liveStartedAt && (
                         <Tooltip content="Live for" side="bottom">
                           <span className="chat-header-stat cursor-default pointer-events-auto">
                             <Timer size={13} weight="bold" />

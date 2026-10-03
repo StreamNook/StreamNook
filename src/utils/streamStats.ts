@@ -12,6 +12,21 @@ export function formatViewerCount(count: number): string {
 }
 
 /**
+ * The start time a chat header's uptime counts from. Rust's channel state
+ * (`rustStartedAt`, Twitch only, polled with the viewer count) wins. The
+ * stream's own value covers the wait for Rust's first answer, except while a
+ * recording plays, where it is the video's date rather than a live start.
+ * '' means no uptime is shown.
+ */
+export function pickLiveStartedAt(
+    rustStartedAt: string | null | undefined,
+    streamStartedAt: string | null | undefined,
+    playingRecording: boolean,
+): string {
+    return rustStartedAt || (playingRecording ? '' : streamStartedAt) || '';
+}
+
+/**
  * A ticking stream clock: "H:MM:SS" once past the first hour, "M:SS" before it.
  * Returns '' when there is no usable start time, and clamps a start time in the
  * future to "0:00" rather than counting backwards on a skewed clock.

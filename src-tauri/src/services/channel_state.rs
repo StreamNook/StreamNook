@@ -1,4 +1,5 @@
-//! Rust-owned per-channel chat state: viewer count, channel points (balance,
+//! Rust-owned per-channel chat state: viewer count and live start, channel
+//! points (balance,
 //! custom name and icon, an available bonus claim) and pinned messages, for
 //! every Twitch channel some window has a chat open on.
 //!
@@ -51,6 +52,9 @@ pub struct ChannelState {
     pub login: String,
     pub channel_id: String,
     pub viewer_count: Option<u64>,
+    /// When the current broadcast began (Helix RFC 3339), from the same poll
+    /// as the viewer count. `None` while offline.
+    pub started_at: Option<String>,
     pub viewers_at: Option<u64>,
     pub points: Option<ChannelPoints>,
     pub points_at: Option<u64>,
@@ -66,6 +70,7 @@ pub enum ChannelUpdate {
     Viewers {
         login: String,
         viewer_count: Option<u64>,
+        started_at: Option<String>,
         at: u64,
     },
     Points {
@@ -250,10 +255,10 @@ async fn refresh_viewers(inner: &Inner) {
         return;
     }
     let ids: Vec<String> = by_login.values().cloned().collect();
-    let live: HashMap<String, u64> = match TwitchService::get_streams_by_user_ids(&ids).await {
+    let live: HashMap<String, (u64, String)> = match TwitchService::get_streams_by_user_ids(&ids).await {
         Ok(streams) => streams
             .into_iter()
-            .map(|s| (s.user_id, s.viewer_count as u64))
+            .map(|s| (s.user_id, (s.viewer_count as u64, s.started_at)))
             .collect(),
         Err(e) => {
             debug!("[ChannelState] viewers: {e}");
@@ -261,22 +266,24 @@ async fn refresh_viewers(inner: &Inner) {
         }
     };
     let at = now_secs();
-    let mut changed: Vec<(String, Option<u64>)> = Vec::new();
+    let mut changed: Vec<(String, Option<u64>, Option<String>)> = Vec::new();
     {
         let mut state = inner.state.write().await;
         for (login, id) in &by_login {
-            let count = live.get(id).copied();
+            let count = live.get(id).map(|(c, _)| *c);
+            let started_at = live.get(id).map(|(_, t)| t.clone()).filter(|t| !t.is_empty());
             if let Some(s) = state.get_mut(login) {
-                if s.viewer_count != count {
-                    changed.push((login.clone(), count));
+                if s.viewer_count != count || s.started_at != started_at {
+                    changed.push((login.clone(), count, started_at.clone()));
                 }
                 s.viewer_count = count;
+                s.started_at = started_at;
                 s.viewers_at = Some(at);
             }
         }
     }
-    for (login, viewer_count) in changed {
-        emit(&inner.app, ChannelUpdate::Viewers { login, viewer_count, at });
+    for (login, viewer_count, started_at) in changed {
+        emit(&inner.app, ChannelUpdate::Viewers { login, viewer_count, started_at, at });
     }
     let live_logins: Vec<String> = by_login
         .iter()

@@ -1,5 +1,5 @@
 // Per-channel chat state owned by Rust (src-tauri/src/services/channel_state.rs):
-// viewer count, Shared Viewership (who the channel is streaming with and the
+// viewer count and live start, Shared Viewership (who the channel is streaming with and the
 // combined count), channel points (balance, custom name/icon, an available
 // bonus claim) and pinned messages for every Twitch channel some window has chat
 // open on. A window registers a watch per channel; Rust polls each section on
@@ -29,6 +29,7 @@ export const useChannelStateStore = create<ChannelStateStore>((set, get) => ({
     switch (update.section) {
       case 'viewers':
         next.viewer_count = update.viewer_count;
+        next.started_at = update.started_at;
         next.viewers_at = update.at;
         break;
       case 'points':
