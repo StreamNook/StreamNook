@@ -1558,6 +1558,7 @@ let snRegistry: Map<string, number> = new Map();
 let snRegistryChannel: RealtimeChannel | null = null;
 let snRegistryLoaded = false;
 let snRegistryLoading: Promise<void> | null = null;
+let snRegistryReloadQueued = false;
 let snRegistryVersion = 0;
 const snRegistryVersionSubscribers = new Set<() => void>();
 
@@ -1603,7 +1604,7 @@ async function selectAll<T>(
 
 const loadStreamNookRegistry = async (): Promise<void> => {
     if (!supabase) return;
-    if (snRegistryLoading) return snRegistryLoading;
+    if (snRegistryLoading) { snRegistryReloadQueued = true; return snRegistryLoading; }
     snRegistryLoading = (async () => {
         try {
             const { data, error } = await selectAll<{ id: string; user_number: number }>((from, to) =>
@@ -1621,6 +1622,7 @@ const loadStreamNookRegistry = async (): Promise<void> => {
             Logger.error('[Supabase] loadStreamNookRegistry exception:', e);
         } finally {
             snRegistryLoading = null;
+            if (snRegistryReloadQueued) { snRegistryReloadQueued = false; void loadStreamNookRegistry(); }
         }
     })();
     return snRegistryLoading;
@@ -1734,6 +1736,7 @@ let cosmeticsActive: Map<string, string> = new Map();            // twitch_user_
 let cosmeticsChannel: RealtimeChannel | null = null;
 let cosmeticsLoaded = false;
 let cosmeticsLoading: Promise<void> | null = null;
+let cosmeticsReloadQueued = false;
 let cosmeticsVersion = 0;
 const cosmeticsVersionSubscribers = new Set<() => void>();
 
@@ -1790,7 +1793,9 @@ const announceMembershipGift = async (userId: string): Promise<void> => {
 
 const loadCosmetics = async (): Promise<void> => {
     if (!supabase) return;
-    if (cosmeticsLoading) return cosmeticsLoading;
+    // A change that lands mid-load may postdate the rows this load already read,
+    // so it queues one more pass instead of joining the stale one.
+    if (cosmeticsLoading) { cosmeticsReloadQueued = true; return cosmeticsLoading; }
     cosmeticsLoading = (async () => {
         try {
             const [catalogRes, entRes, activeRes] = await Promise.all([
@@ -1867,6 +1872,7 @@ const loadCosmetics = async (): Promise<void> => {
             Logger.error('[Supabase] loadCosmetics exception:', e);
         } finally {
             cosmeticsLoading = null;
+            if (cosmeticsReloadQueued) { cosmeticsReloadQueued = false; void loadCosmetics(); }
         }
     })();
     return cosmeticsLoading;
@@ -2041,6 +2047,7 @@ let atmospheresCatalog: Map<string, Atmosphere> = new Map();
 let atmospheresChannel: RealtimeChannel | null = null;
 let atmospheresLoaded = false;
 let atmospheresLoading: Promise<void> | null = null;
+let atmospheresReloadQueued = false;
 let atmospheresVersion = 0;
 const atmospheresVersionSubscribers = new Set<() => void>();
 
@@ -2103,7 +2110,7 @@ const rowToAtmosphere = (row: AtmosphereRow): Atmosphere => ({
 
 const loadAtmospheres = async (): Promise<void> => {
     if (!supabase) return;
-    if (atmospheresLoading) return atmospheresLoading;
+    if (atmospheresLoading) { atmospheresReloadQueued = true; return atmospheresLoading; }
     atmospheresLoading = (async () => {
         try {
             const res = await supabase!
@@ -2136,6 +2143,7 @@ const loadAtmospheres = async (): Promise<void> => {
             Logger.error('[Supabase] loadAtmospheres exception:', e);
         } finally {
             atmospheresLoading = null;
+            if (atmospheresReloadQueued) { atmospheresReloadQueued = false; void loadAtmospheres(); }
         }
     })();
     return atmospheresLoading;

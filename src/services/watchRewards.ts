@@ -6,7 +6,7 @@
 // tracker (App.tsx) on stream start, once a minute while watching, and the moment
 // the watched channel's category changes.
 import { invoke } from '@tauri-apps/api/core';
-import { claimReward, listActiveEventRewards, listActiveMilestoneRewards } from './supabaseService';
+import { claimReward, listActiveEventRewards, listActiveMilestoneRewards, refreshEntitlementRegistries } from './supabaseService';
 import { useAppStore } from '../stores/AppStore';
 import { Logger } from '../utils/logger';
 
@@ -96,6 +96,9 @@ async function claimEventRewards(
     grantedThisSession.add(sessionKey);
 
     if (res.granted) {
+      // This claim just wrote the grant, so re-pull now rather than wait for a
+      // realtime event: at sign-in the channel may not be subscribed yet.
+      refreshEntitlementRegistries();
       // alwaysShow so a genuinely new earn lands even when routine toasts are
       // muted. Granting only UNLOCKS the look; the member applies it themselves.
       useAppStore.getState().addToast(
