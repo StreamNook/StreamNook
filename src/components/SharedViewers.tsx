@@ -344,16 +344,17 @@ export function TogetherChip({
       }
     : null;
 
-  const lit = anchor ? ' bg-white/[0.14]' : '';
   const trigger =
     variant === 'name' ? (
       <NameCredit collab={collab} lit={` transition-colors hover:bg-white/[0.18]${anchor ? ' !bg-white/[0.18]' : ''}`} />
     ) : (
+      // The chat header's scale: a 26px capsule of the flat glaze, 18px faces,
+      // 11.5px semibold, like every other object in that row.
       <span
-        className={`glaze-inset flex items-center gap-1.5 rounded-full bg-white/[0.08] py-0.5 pl-0.5 pr-2 text-xs text-textPrimary transition-colors hover:bg-white/[0.14]${lit}`}
+        className={`chrome-glaze chrome-glaze--flat chat-header-capsule gap-1.5 pl-1 pr-2.5 font-semibold text-textPrimary transition-[filter] hover:brightness-125${anchor ? ' brightness-125' : ''}`}
       >
-        <CollabAvatarStack collab={collab} size={16} />
-        <span>Together</span>
+        <CollabAvatarStack collab={collab} size={18} />
+        <span className="chat-header-badge-label">Together</span>
       </span>
     );
 

@@ -1020,6 +1020,24 @@ body[data-window-blurred="true"] .glaze-inset::after {
 .chat-header-stat > svg {
   color: var(--color-text-muted);
 }
+/* The viewer count opens the viewers list. */
+.chat-header-stat--button {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+.chat-header-stat--button:hover,
+.chat-header-stat--button[aria-pressed='true'] {
+  color: var(--color-text-primary);
+}
+.chat-header-stat--button:hover > svg,
+.chat-header-stat--button[aria-pressed='true'] > svg {
+  color: var(--color-accent);
+}
 .chat-header-rule {
   width: 1px;
   height: 12px;
@@ -1069,6 +1087,90 @@ body[data-window-blurred="true"] .glaze-inset::after {
     inset 2px 2px 5px -2px rgba(0, 0, 0, 0.55),
     inset -2px -2px 5px -2px rgba(255, 255, 255, 0.09);
 }
+/* One scale for everything in the chat header row. Each object is a 26px
+   capsule of the flat glaze (the live numbers and the action buttons are two
+   of them), a control inside a capsule is a 22px pill, text is 11.5px and
+   faces are 18px. Anything new in the row takes these, so nothing reads as a
+   different size from its neighbour. */
+.chat-header-capsule {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  height: 26px;
+  padding: 0 2px;
+  border-radius: 9999px;
+  font-size: 11.5px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.chat-header-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 9999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* The moderator's Chat / Mods switch. Words at rest, icons when the header is
+   at its narrowest. */
+.chat-header-seg {
+  padding-inline: 14px;
+}
+.chat-header-seg-icon {
+  display: none;
+}
+
+/* Density steps, set on the row by ChatWidget when it runs out of width. Each
+   step gives up less than the next, so nothing ever leaves past the edge. */
+.chat-header-row:is([data-density='1'], [data-density='2'], [data-density='3'], [data-density='4'], [data-density='5']),
+.chat-header-row:is([data-density='1'], [data-density='2'], [data-density='3'], [data-density='4'], [data-density='5']) .chat-header-actions {
+  gap: 5px;
+}
+.chat-header-row:is([data-density='1'], [data-density='2'], [data-density='3'], [data-density='4'], [data-density='5']) .chat-header-seg {
+  padding-inline: 9px;
+}
+/* The viewer count opens the same list. */
+.chat-header-row:is([data-density='1'], [data-density='2'], [data-density='3'], [data-density='4'], [data-density='5']) .chat-header-btn--dup {
+  display: none;
+}
+.chat-header-row:is([data-density='2'], [data-density='3'], [data-density='4'], [data-density='5']) .chat-header-seg {
+  padding-inline: 8px;
+}
+.chat-header-row:is([data-density='2'], [data-density='3'], [data-density='4'], [data-density='5']) .chat-header-seg-icon {
+  display: block;
+}
+.chat-header-row:is([data-density='2'], [data-density='3'], [data-density='4'], [data-density='5']) .chat-header-seg-label,
+.chat-header-row:is([data-density='2'], [data-density='3'], [data-density='4'], [data-density='5']) .chat-header-badge-label,
+.chat-header-row:is([data-density='2'], [data-density='3'], [data-density='4'], [data-density='5']) .chat-header-filter .dropdown-label {
+  display: none;
+}
+.chat-header-row:is([data-density='3'], [data-density='4'], [data-density='5']) .chat-header-uptime,
+.chat-header-row:is([data-density='3'], [data-density='4'], [data-density='5']) .chat-header-rule,
+.chat-header-row:is([data-density='3'], [data-density='4'], [data-density='5']) .chat-header-stats--uptime-only {
+  display: none;
+}
+/* Last: the count goes and the viewers button takes its place. */
+.chat-header-row:is([data-density='4'], [data-density='5']) .chat-header-stats {
+  display: none;
+}
+.chat-header-row:is([data-density='4'], [data-density='5']) .chat-header-btn--dup {
+  display: inline-grid;
+}
+/* Past the live numbers: the pin switch keeps its pictures (the pinned one
+   wears its pin) and drops the name, which its tooltip still gives, and the
+   way into combining waits for room. */
+.chat-header-row[data-density='5'] .chat-pin-name,
+.chat-header-row[data-density='5'] .blend-trigger {
+  display: none;
+}
+
 /* The pin toggle carries a caret, so it is wider than an icon button. */
 .chat-header-btn--pin {
   display: inline-flex;
@@ -1318,8 +1420,8 @@ body[data-window-blurred="true"] .glaze-inset::after {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  height: 20px;
-  min-width: 20px;
+  height: 22px;
+  min-width: 22px;
   justify-content: center;
   padding: 0 5px;
   border-radius: 9999px;
@@ -2444,6 +2546,47 @@ body {
    flush, which starved the hype-train/confetti animations of main-thread time. */
 .chat-striped > .chat-message-row:nth-child(even) {
   background-color: var(--color-surface);
+}
+
+/* What happened to a removed message, in the Italic style: an upright pill
+   after the slanted text, toned by what the moderator did. Sized in em so it
+   follows the chat text size. The label shares the message's baseline: items
+   align on baseline and the icon opts out (align-self: center), so the pill's
+   own baseline is the label text rather than the icon's bottom edge. */
+.sn-mod-tag {
+  --sn-mod-tone: var(--color-text-secondary);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3em;
+  padding: 0.12em 0.55em 0.12em 0.42em;
+  border-radius: 999px;
+  font-size: 0.78em;
+  font-style: normal;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  vertical-align: baseline;
+  color: var(--sn-mod-tone);
+  background-color: color-mix(in srgb, var(--sn-mod-tone) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sn-mod-tone) 24%, transparent);
+}
+.sn-mod-tag svg {
+  align-self: center;
+  width: 1.1em;
+  height: 1.1em;
+  flex: none;
+}
+.sn-mod-tag--timeout { --sn-mod-tone: var(--color-warning); }
+.sn-mod-tag--ban { --sn-mod-tone: var(--color-error); }
+.sn-mod-tag__detail {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+.sn-mod-tag__detail::before {
+  content: '\B7';
+  margin-right: 0.3em;
 }
 
 /* Keyboard-moderation focus ring on a chat message row. Winters' Glass: a solid

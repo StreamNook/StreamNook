@@ -24,6 +24,14 @@ interface DropdownProps<T extends string | number> {
     align?: 'left' | 'right';
     disabled?: boolean;
     ariaLabel?: string;
+    /** Drop the trigger's own surface (fill, rim, padding, text size) so it
+     *  can sit inside a container that draws one, like the chat header's
+     *  capsules. `className` then styles the trigger alone. */
+    bare?: boolean;
+    /** Called with the option under the pointer while the menu is open, and
+     *  null when it leaves or the menu closes, so a preview beside the control
+     *  can show an option before it is picked. */
+    onPreview?: (value: T | null) => void;
 }
 
 /**
@@ -43,6 +51,8 @@ export function Dropdown<T extends string | number>({
     align = 'left',
     disabled = false,
     ariaLabel,
+    bare = false,
+    onPreview,
 }: DropdownProps<T>) {
     const [open, setOpen] = useState(false);
     const triggerRef = useRef<HTMLButtonElement>(null);
@@ -74,7 +84,10 @@ export function Dropdown<T extends string | number>({
     }, [open]);
 
     useEffect(() => {
-        if (!open) return;
+        if (!open) {
+            onPreview?.(null);
+            return;
+        }
         const onDown = (e: MouseEvent) => {
             const t = e.target as Node;
             if (triggerRef.current?.contains(t) || menuRef.current?.contains(t)) return;
@@ -114,12 +127,12 @@ export function Dropdown<T extends string | number>({
                 aria-expanded={open}
                 aria-label={ariaLabel}
                 onClick={() => !disabled && setOpen(o => !o)}
-                className={`flex items-center gap-2 rounded-lg bg-glass hover:bg-glass-hover border border-transparent shadow-[inset_1px_1px_0_0_rgba(255,255,255,0.08),inset_-1px_-1px_0_0_rgba(0,0,0,0.14)] px-2.5 py-1.5 text-sm font-medium text-textPrimary transition-colors focus:outline-none focus:border-accent/60 disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
+                className={`${bare ? 'flex items-center gap-1.5 transition-colors focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed' : 'flex items-center gap-2 rounded-lg bg-glass hover:bg-glass-hover border border-transparent shadow-[inset_1px_1px_0_0_rgba(255,255,255,0.08),inset_-1px_-1px_0_0_rgba(0,0,0,0.14)] px-2.5 py-1.5 text-sm font-medium text-textPrimary transition-colors focus:outline-none focus:border-accent/60 disabled:opacity-50 disabled:cursor-not-allowed'} ${className}`}
             >
                 {leadingIcon && (
                     <span className="shrink-0 flex items-center text-accent">{leadingIcon}</span>
                 )}
-                <span className="flex-1 truncate text-left">
+                <span className="dropdown-label flex-1 truncate text-left">
                     {triggerPrefix ? `${triggerPrefix}: ${selectedLabel}` : selectedLabel}
                 </span>
                 <ChevronDown
@@ -134,6 +147,7 @@ export function Dropdown<T extends string | number>({
                         ref={menuRef}
                         role="listbox"
                         style={menuStyle}
+                        onMouseLeave={onPreview ? () => onPreview(null) : undefined}
                         initial={{ opacity: 0, y: -4, scale: 0.97 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: -4, scale: 0.97 }}
@@ -148,6 +162,7 @@ export function Dropdown<T extends string | number>({
                                     type="button"
                                     role="option"
                                     aria-selected={active}
+                                    onMouseEnter={onPreview ? () => onPreview(opt.value) : undefined}
                                     onClick={() => {
                                         onChange(opt.value);
                                         setOpen(false);

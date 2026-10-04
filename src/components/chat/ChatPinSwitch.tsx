@@ -1,65 +1,40 @@
 // The main chat header's two-sided switch while a chat is pinned: the pinned
 // chat and the stream being watched. It takes the title's place rather than a
 // row of its own, and uses the header's segmented-control look and density
-// steps. Only the side on screen carries its channel's name; the other side is
-// its icon, named by its tooltip. The name keeps a floor of width, so when the
-// row runs short the header's density steps drop the uptime and the viewer
-// capsule before the name of the chat you are typing into.
-//
-// A dot on the side not shown says it has new messages since the viewer left
-// it. The count is the slice's own live-message counter, so this re-renders
-// only when that dot appears or goes.
+// steps. Each side is its streamer's picture, the pinned one wearing a small
+// pin. Only the side on screen adds its name, cut short (6.5rem) so a long name
+// never crowds the header; the other side is named by its tooltip. The name
+// keeps a floor of width, so when the row runs short the header's density
+// steps drop the uptime and the viewer capsule before the name of the chat you
+// are typing into.
 import { motion } from 'framer-motion';
-import { MonitorPlay, PushPin } from 'phosphor-react';
+import { PushPin } from 'phosphor-react';
 import { Tooltip } from '../ui/Tooltip';
 import { useAppStore } from '../../stores/AppStore';
-import { useChatConnectionStore } from '../../stores/chatConnectionStore';
-import { chatKey, showChatPinSide, type ChatChannel, type ChatPinView } from '../../stores/chatPinStore';
+import { showChatPinSide, type ChatPinView } from '../../stores/chatPinStore';
 import { usePinPair } from '../../hooks/useChatPin';
-import { sliceLookupKey } from '../../utils/providerKey';
-
-// Live-message count of each chat when the viewer last left it, by chat key.
-// Transient view state: the chat widget remounts on every flip, so it cannot
-// hold this itself.
-const leftAt = new Map<string, number>();
-
-function liveCount(c: ChatChannel): number {
-  return useChatConnectionStore.getState().channels.get(sliceLookupKey(c.provider, c.login))?.liveMessageCount ?? 0;
-}
-
-function useUnread(c: ChatChannel | null, shown: boolean): boolean {
-  return useChatConnectionStore((st) => {
-    if (!c || shown) return false;
-    const n = st.channels.get(sliceLookupKey(c.provider, c.login))?.liveMessageCount ?? 0;
-    return n > (leftAt.get(chatKey(c)) ?? 0);
-  });
-}
 
 export default function ChatPinSwitch() {
   const { pin, live, split, showPinned } = usePinPair();
   const liveName = useAppStore((s) => s.currentStream?.user_name || s.currentStream?.user_login || '');
-  const pinnedUnread = useUnread(pin, showPinned);
-  const liveUnread = useUnread(live, !showPinned);
+  const liveAvatar = useAppStore((s) => s.currentStream?.profile_image_url || null);
   if (!split || !pin || !live) return null;
 
   const flip = (to: ChatPinView) => {
     if ((to === 'pinned') === showPinned) return;
-    const leaving = showPinned ? pin : live;
-    leftAt.set(chatKey(leaving), liveCount(leaving));
     void showChatPinSide(to);
   };
 
   const sides = [
-    { key: 'pinned' as const, name: pin.display_name || pin.login, Icon: PushPin, active: showPinned, unread: pinnedUnread, hint: 'Pinned chat' },
-    { key: 'live' as const, name: liveName || live.login, Icon: MonitorPlay, active: !showPinned, unread: liveUnread, hint: 'Chat of the stream you are watching' },
+    { key: 'pinned' as const, name: pin.display_name || pin.login, avatar: pin.avatar_url, active: showPinned, hint: 'Pinned chat' },
+    { key: 'live' as const, name: liveName || live.login, avatar: liveAvatar, active: !showPinned, hint: 'Chat of the stream you are watching' },
   ];
 
   return (
     <div
-      // Never narrower than the name's floor: running short must show up as
-      // row overflow, so the header's density steps give way first.
-      className="pointer-events-auto relative flex min-w-min items-center rounded-full p-0.5"
-      style={{ background: 'rgba(255,255,255,0.06)', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.07)' }}
+      // Shrinks with its wrapper, whose min width is this switch's floor (two
+      // pictures and the name's 3.5rem); the name truncates down to that.
+      className="chrome-glaze chrome-glaze--flat chat-header-capsule pointer-events-auto min-w-0 max-w-full"
     >
       {sides.map((side) => (
         <Tooltip key={side.key} content={`${side.hint}: ${side.name}`} side="bottom">
@@ -71,7 +46,7 @@ export default function ChatPinSwitch() {
             }}
             aria-label={`${side.hint}: ${side.name}`}
             aria-pressed={side.active}
-            className={`relative inline-flex items-center gap-1.5 rounded-full py-1 text-xs font-semibold transition-colors ${side.active ? 'min-w-0 pl-2 pr-2.5 text-textPrimary' : 'flex-shrink-0 px-2 text-textSecondary hover:text-textPrimary'}`}
+            className={`chat-header-pill transition-colors ${side.active ? 'min-w-0 !pl-0.5 !pr-2.5 text-textPrimary' : 'flex-shrink-0 !px-0.5 text-textSecondary opacity-80 hover:text-textPrimary hover:opacity-100'}`}
           >
             {side.active && (
               <motion.span
@@ -81,19 +56,32 @@ export default function ChatPinSwitch() {
                 transition={{ type: 'spring', stiffness: 480, damping: 28 }}
               />
             )}
-            <side.Icon
-              size={12}
-              weight={side.active ? 'fill' : 'regular'}
-              className={`relative z-10 flex-shrink-0 ${side.key === 'pinned' && side.active ? 'text-accent' : ''}`}
-              aria-hidden
-            />
+            <span className="relative z-10 grid h-[18px] w-[18px] flex-shrink-0 place-items-center">
+              <span className="grid h-[18px] w-[18px] place-items-center overflow-hidden rounded-full bg-white/15 text-[9px] font-bold text-white">
+                {side.avatar ? (
+                  <img
+                    src={side.avatar}
+                    alt=""
+                    draggable={false}
+                    className="h-full w-full object-cover"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).style.display = 'none';
+                    }}
+                  />
+                ) : (
+                  side.name.charAt(0).toUpperCase()
+                )}
+              </span>
+              {side.key === 'pinned' && (
+                <span className="absolute -bottom-1 -right-1 grid h-[11px] w-[11px] place-items-center rounded-full bg-accent text-background">
+                  <PushPin size={7} weight="fill" aria-hidden />
+                </span>
+              )}
+            </span>
             {side.active && (
-              <span data-fit-label className="relative z-10 min-w-[3.5rem] max-w-[10rem] truncate">
+              <span data-fit-label className="chat-pin-name relative z-10 min-w-[3.5rem] max-w-[6.5rem] truncate">
                 {side.name}
               </span>
-            )}
-            {side.unread && (
-              <span className="relative z-10 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-accent" aria-label="New messages" />
             )}
           </button>
         </Tooltip>

@@ -8,6 +8,7 @@ import { listen } from '@tauri-apps/api/event';
 import { openProfilePopup } from '../utils/openProfilePopup';
 import { Pickaxe, Zap, BarChart3, Filter, SquareSlash } from 'lucide-react';
 import ChatSearchBar from './chat/ChatSearchBar';
+import { fitHeaderDensity } from './chat/fitHeaderDensity';
 import AutomodQueueStrip from './chat/AutomodQueueStrip';
 import { useStreamerMode } from '../utils/streamerMode';
 import { resolveUploadTarget, encodeExtraFields } from '../utils/imageUploadHosts';
@@ -36,7 +37,7 @@ import BlendBar, { type BlendView } from './chat/BlendBar';
 import { historyKey as chatterHistoryKey } from '../utils/chatterIdentity';
 import { streamProvider } from '../utils/streamProvider';
 import { PROVIDERS, type ProviderId } from '../types/providers';
-import { Plus, PushPin, Timer, UsersThree } from 'phosphor-react';
+import { ChatCircle, Plus, PushPin, ShieldCheck, Timer, UsersThree } from 'phosphor-react';
 import ChatPinSwitch from './chat/ChatPinSwitch';
 import ChatHeaderMenu, { type ChatHeaderMenuItem } from './chat/ChatHeaderMenu';
 import { pinChat, unpinChat, useChatPinStore } from '../stores/chatPinStore';
@@ -1149,13 +1150,13 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     return subscribeModeratedChannels(() => setCachedMod(isCachedModerator(currentStream?.user_id)));
   }, [currentStream?.user_id]);
 
-  // The viewers list is mod-only (Helix Get Chatters needs mod/broadcaster auth).
-  // If mod status drops while it's open, fall back to the chat view. The mod-room
-  // tab uses the optimistic eligibility so it isn't yanked before USERSTATE lands.
+  // The viewers list is Twitch-only (anyone gets the public list; moderators the
+  // full roster). The mod-room tab uses the optimistic eligibility so it isn't
+  // yanked before USERSTATE lands.
   useEffect(() => {
-    if (activeView === 'viewers' && (!isModerator || !isTwitch)) setActiveView('chat');
+    if (activeView === 'viewers' && !isTwitch) setActiveView('chat');
     if (activeView === 'modroom' && !modRoomEligible) setActiveView('chat');
-  }, [activeView, isModerator, modRoomEligible, isTwitch]);
+  }, [activeView, modRoomEligible, isTwitch]);
   const [showEmotePicker, setShowEmotePicker] = useState(false);
   // Browsable command menu (button left of the emote picker). Mutually
   // exclusive with the emote picker: they share the space above the box.
@@ -1413,6 +1414,18 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     ro.observe(chromeEl);
     return () => ro.disconnect();
   }, [chromeEl]);
+  // The header row compacts in place instead of pushing its last controls past
+  // the edge, where the header clips them (a moderator's Chat / Mods switch is
+  // wide enough to do that at an ordinary chat width). Five steps, each giving
+  // up less than the next: tighter spacing and the duplicate viewers button;
+  // the switch's words, the filter's label and the word "Together" become
+  // their icons; the uptime goes; the viewer count goes; the pin switch keeps
+  // only its pictures and the combine button waits.
+  // The first also runs to keep the title whole; the switch's words matter
+  // more than the title, so the rest wait for a real overflow. Written straight
+  // to the element, so a resize never re-renders the chat.
+  const [headerRowEl, setHeaderRowEl] = useState<HTMLDivElement | null>(null);
+  useEffect(() => (headerRowEl ? fitHeaderDensity(headerRowEl, 5, 1) : undefined), [headerRowEl]);
   // Rows scroll beneath the floating header, so the header takes pointer input
   // itself: a click on it must never land on a name hidden underneath. The
   // wheel is the one input that should still reach what it covers, so it is
@@ -3021,8 +3034,13 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     // Use container-aware scrolling instead of scrollIntoView
     // scrollIntoView can cause the entire document to scroll in WebViews,
     // which makes the title bar disappear in Tauri apps with custom decorations
+    // Scoped to this widget: a MultiChat split can show the same channel in two
+    // panes, and a document-wide lookup would scroll whichever came first.
+    // Escaped because provider message ids are not guaranteed selector-safe.
     requestAnimationFrame(() => {
-      const element = document.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement | null;
+      const element = (chatContainerEl ?? document).querySelector(
+        `[data-message-id="${CSS.escape(messageId)}"]`,
+      ) as HTMLElement | null;
       if (element) {
         // Find the scrollable chat container (ChatMessageList's container)
         const container = element.closest('.overflow-y-auto') as HTMLElement | null;
@@ -3085,7 +3103,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     }
 
     return true;
-  }, [getMessageId, setChatPaused]);
+  }, [getMessageId, setChatPaused, chatContainerEl]);
 
   const handleReplyClick = useCallback((parentMsgId: string) => {
     Logger.debug('[ChatWidget] handleReplyClick called for parentMsgId:', parentMsgId);
@@ -4589,8 +4607,11 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       ? useChatConnectionStore.getState().channels.get(panelChannelKey)?.messages.length ?? 0
       : 0) === 0;
   // The header row and its pin button both open and close the pinned message.
+  // Pins float over chat only, so from the viewers list or the mod room the
+  // pin button returns to chat with the pin open.
   const togglePinned = () => {
-    const next = !isPinnedExpanded;
+    const next = activeView !== 'chat' || !isPinnedExpanded;
+    if (activeView !== 'chat') setActiveView('chat');
     setIsPinnedExpanded(next);
     if (next) seenPinIdRef.current = pinnedMessages[0]?.id || '';
   };
@@ -4608,7 +4629,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     !!chatPin && !!currentStream?.user_login &&
     makeKey(chatPin.provider, chatPin.login) === makeKey(provider, currentStream.user_login);
   const hasHeaderActions =
-    (!!currentStream && (!channelOverride || (isModerator && isTwitch))) || pinnedMessages.length > 0 || canPinChat;
+    (!!currentStream && (!channelOverride || isTwitch)) || pinnedMessages.length > 0 || canPinChat;
 
   // The header's "more" menu. Pop out opens a MultiChat window with this
   // channel (every tile's chat in MultiNook) and survives the main window;
@@ -4732,7 +4753,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         {/* Floating cards at the top of chat. Twitch allows a poll and a
             prediction at once, so they stack in one column rather than both
             pinning themselves to the same box. Order is the user's choice. */}
-        <ChatOverlayStack top={overlayTop} stackRef={setOverlayStackEl}>
+        <ChatOverlayStack top={overlayTop} stackRef={setOverlayStackEl} hidden={activeView !== 'chat'}>
           {(settings.chat_overlay_order === 'poll-first'
             ? (['poll', 'prediction'] as const)
             : (['prediction', 'poll'] as const)
@@ -4782,7 +4803,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
           {/* Stream-info header, always visible; sits as the top row, above the hype bar */}
           <div className="relative z-10">
               <div
-                className={`flex items-center gap-2 ${pinnedMessages.length > 0 ? 'pointer-events-auto cursor-pointer' : ''}`}
+                ref={setHeaderRowEl}
+                className={`chat-header-row flex items-center gap-2 ${pinnedMessages.length > 0 ? 'pointer-events-auto cursor-pointer' : ''}`}
                 onClick={pinnedMessages.length > 0 ? togglePinned : undefined}
               >
                 <span className={`chat-header-dot ${isConnected ? '' : 'chat-header-dot--off'}`} aria-hidden />
@@ -4802,7 +4824,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: 4 }}
                       transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-                      className="flex min-w-0 items-center gap-2 whitespace-nowrap"
+                      data-fit-label
+                      className="flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap"
                     >
                       {modRoomStatus.connected ? (
                         <Tooltip
@@ -4850,7 +4873,13 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: 4 }}
                       transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-                      className="flex min-w-0 items-center"
+                      // The switch's floor (two pictures and the name's
+                      // 3.5rem). Squeezed below it, the switch spilled
+                      // over the platform marks beside it instead of the row
+                      // reporting overflow, so the header never compacted.
+                      // Not min-w-min: that is the full name's width, so a
+                      // long name would refuse to truncate.
+                      className="flex min-w-[8rem] items-center"
                     >
                       <ChatPinSwitch />
                     </motion.div>
@@ -4861,6 +4890,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: 4 }}
                       transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                      data-fit-label
                       className={`chat-header-title min-w-0 truncate whitespace-nowrap ${isSharedChat ? 'iridescent-title' : ''}`}
                     >
                       {!isConnected
@@ -4887,7 +4917,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     switches belong to Settings and a header click never touches
                     them. */}
                 {blendEnabled && isMainSurface && homeChannel && activeView !== 'modroom' && (
-                  <span className="pointer-events-auto flex shrink-0 items-center gap-0.5">
+                  <span className="chrome-glaze chrome-glaze--flat chat-header-capsule pointer-events-auto shrink-0">
                     {blendLinked.map((c) => {
                       const offInSettings = settings.chat_blend?.platforms?.[c.provider] === false;
                       const included = blendOn && !offInSettings && !c.hidden;
@@ -4921,13 +4951,13 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                             aria-label={`${included ? 'Hide' : 'Show'} ${meta.label} chat`}
                             aria-pressed={included}
                             aria-disabled={offInSettings}
-                            className={`grid h-5 w-5 place-items-center rounded-full transition-colors ${
+                            className={`grid h-[22px] w-[22px] place-items-center rounded-full transition-colors ${
                               offInSettings ? 'cursor-default' : 'hover:bg-white/10'
                             }`}
                           >
                             <ProviderMark
                               provider={c.provider}
-                              size={12}
+                              size={13}
                               className={included ? '' : 'opacity-40 grayscale'}
                             />
                           </button>
@@ -4996,19 +5026,16 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     </p>
                   </Tooltip>
                 )}
-                <div className="flex items-center gap-2 ml-auto shrink-0">
+                <div className="chat-header-actions flex items-center gap-2 ml-auto shrink-0">
                   {/* Compact Chat / Mod Room toggle: the active pill slides between
                       the two with a spring (magnetic). Shown for moderators, using
                       the optimistic eligibility so it appears instantly on revisit. */}
                   {modRoomEligible && currentStream && (
-                    <div
-                      className="pointer-events-auto relative order-last flex items-center rounded-full p-0.5"
-                      style={{ background: 'rgba(255,255,255,0.06)', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.07)' }}
-                    >
+                    <div className="chrome-glaze chrome-glaze--flat chat-header-capsule pointer-events-auto order-last">
                       {(
                         [
-                          { key: 'chat', label: 'Chat', active: activeView !== 'modroom' },
-                          { key: 'modroom', label: 'Mods', active: activeView === 'modroom' },
+                          { key: 'chat', label: 'Chat', Icon: ChatCircle, active: activeView !== 'modroom' },
+                          { key: 'modroom', label: 'Mods', Icon: ShieldCheck, active: activeView === 'modroom' },
                         ] as const
                       ).map((seg) => (
                         <button
@@ -5018,8 +5045,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                             e.stopPropagation();
                             setActiveView(seg.key);
                           }}
-                          className={`relative rounded-full px-3.5 py-1 text-xs font-semibold transition-colors ${seg.active ? 'text-textPrimary' : 'text-textSecondary hover:text-textPrimary'}`}
+                          aria-label={seg.label}
+                          aria-pressed={seg.active}
+                          className={`chat-header-pill chat-header-seg transition-colors ${seg.active ? 'text-textPrimary' : 'text-textSecondary hover:text-textPrimary'}`}
                         >
+                          {/* The narrowest header swaps the words for icons. */}
+                          <seg.Icon size={13} weight={seg.active ? 'fill' : 'regular'} className="chat-header-seg-icon relative z-10" aria-hidden />
                           {seg.active && (
                             <motion.span
                               layoutId="modroom-toggle-pill"
@@ -5028,7 +5059,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                               transition={{ type: 'spring', stiffness: 480, damping: 28 }}
                             />
                           )}
-                          <span className="relative z-10">{seg.label}</span>
+                          <span className="chat-header-seg-label relative z-10">{seg.label}</span>
                           {/* Unread chip: mentions turn it red so a ping is
                               visible from the Chat view without opening the room. */}
                           {seg.key === 'modroom' && !seg.active && modRoomUnread > 0 && (
@@ -5051,7 +5082,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       initial={{ opacity: 0, scale: 0.9 }}
                       animate={{ opacity: 1, scale: 1 }}
                       transition={{ type: 'spring', stiffness: 520, damping: 30 }}
-                      className="inline-flex select-none items-center gap-1 rounded-full px-2 py-[3px] text-[11px] font-semibold tracking-tight text-emerald-300"
+                      className="chat-header-capsule select-none gap-1.5 px-2.5 font-semibold tracking-tight text-emerald-300"
                       style={{
                         background: 'linear-gradient(180deg, rgba(16,185,129,0.16), rgba(16,185,129,0.08))',
                         boxShadow: 'inset 0 0 0 1px rgba(16,185,129,0.28), inset 0 1px 0 rgba(255,255,255,0.06)',
@@ -5061,22 +5092,25 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                         <rect x="3" y="11" width="18" height="11" rx="2" />
                         <path d="M7 11V7a5 5 0 0 1 10 0v4" />
                       </svg>
-                      Encrypted
+                      <span className="chat-header-badge-label">Encrypted</span>
                     </motion.span>
                   )}
                   {activeView !== 'modroom' && (
                     <>
                   {/* Saved message filter for this pane (Chat settings). */}
                   {filterOptions.length > 1 && (
+                    <div className="chrome-glaze chrome-glaze--flat chat-header-capsule chat-header-filter pointer-events-auto">
                     <Dropdown
+                      bare
                       value={filterId ?? ''}
                       options={filterOptions}
                       onChange={(v) => setFilterId(v ? String(v) : null)}
                       leadingIcon={<Filter size={11} />}
-                      className={`pointer-events-auto h-5 px-1.5 text-[11px] ${filterId ? 'text-accent' : 'text-textSecondary'}`}
+                      className={`chat-header-pill !px-2 ${filterId ? 'text-accent' : 'text-textSecondary hover:text-textPrimary'}`}
                       align="right"
                       ariaLabel="Message filter"
                     />
+                    </div>
                   )}
                   {viewerCount !== null && !streamerModeActive && collab && (
                     <TogetherChip
@@ -5093,21 +5127,44 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   {/* The live numbers read as one object: viewers and uptime in a
                       single capsule, split by a hairline. */}
                   {((viewerCount !== null && !streamerModeActive) || liveStartedAt) && (
-                    <div className="chrome-glaze chrome-glaze--flat chat-header-stats">
+                    <div
+                      className={`chrome-glaze chrome-glaze--flat chat-header-stats ${
+                        viewerCount !== null && !streamerModeActive ? '' : 'chat-header-stats--uptime-only'
+                      }`}
+                    >
                       {viewerCount !== null && !streamerModeActive && (
-                        <Tooltip content="Watching now" side="bottom">
-                          <span className="chat-header-stat cursor-default pointer-events-auto">
-                            <UsersThree size={13} weight="fill" />
-                            {viewerCount.toLocaleString()}
-                          </span>
-                        </Tooltip>
+                        isTwitch && currentStream ? (
+                          // The count opens the viewers list, as on twitch.tv.
+                          <Tooltip content={activeView === 'viewers' ? 'Back to chat' : 'See who is watching'} side="bottom">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveView(activeView === 'viewers' ? 'chat' : 'viewers');
+                              }}
+                              className="chat-header-stat chat-header-stat--button pointer-events-auto"
+                              aria-label="Viewers list"
+                              aria-pressed={activeView === 'viewers'}
+                            >
+                              <UsersThree size={13} weight="fill" />
+                              {viewerCount.toLocaleString()}
+                            </button>
+                          </Tooltip>
+                        ) : (
+                          <Tooltip content="Watching now" side="bottom">
+                            <span className="chat-header-stat cursor-default pointer-events-auto">
+                              <UsersThree size={13} weight="fill" />
+                              {viewerCount.toLocaleString()}
+                            </span>
+                          </Tooltip>
+                        )
                       )}
                       {viewerCount !== null && !streamerModeActive && liveStartedAt && (
                         <span className="chat-header-rule" aria-hidden />
                       )}
                       {liveStartedAt && (
                         <Tooltip content="Live for" side="bottom">
-                          <span className="chat-header-stat cursor-default pointer-events-auto">
+                          <span className="chat-header-stat chat-header-uptime cursor-default pointer-events-auto">
                             <Timer size={13} weight="bold" />
                             <span id="stream-uptime-display">{streamUptimeRef.current}</span>
                           </span>
@@ -5117,12 +5174,11 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   )}
                   {hasHeaderActions && (
                     <div className="chrome-glaze chrome-glaze--flat chat-header-cluster pointer-events-auto">
-                  {/* Viewers list — the official chatters roster grouped by role.
-                      Mod/broadcaster only (Helix Get Chatters requires it), so the
-                      toggle is hidden on channels the user doesn't moderate.
-                      Twitch-only: Helix is the only roster source, so on a
-                      provider channel the id would be for a different platform. */}
-                  {isModerator && isTwitch && currentStream && (
+                  {/* Viewers list, grouped by role: the full roster where the
+                      user moderates, Twitch's public list everywhere else (Rust
+                      picks). Twitch-only: on a provider channel the id would be
+                      for a different platform. */}
+                  {isTwitch && currentStream && (
                     <Tooltip content={activeView === 'viewers' ? 'Back to chat' : 'Viewers'} side="bottom">
                       <button
                         type="button"
@@ -5130,7 +5186,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                           e.stopPropagation();
                           setActiveView(activeView === 'viewers' ? 'chat' : 'viewers');
                         }}
-                        className={`chat-header-btn ${activeView === 'viewers' ? 'is-active' : ''}`}
+                        className={`chat-header-btn ${activeView === 'viewers' ? 'is-active' : ''} ${
+                          viewerCount !== null && !streamerModeActive ? 'chat-header-btn--dup' : ''
+                        }`}
                         aria-label="Viewers list"
                         aria-pressed={activeView === 'viewers'}
                       >
@@ -5181,7 +5239,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
         {/* Free Floating Pinned Message Modal */}
         {pinnedMessages.length > 0 && (
-          <div className="absolute left-3 right-3 z-[15] pointer-events-none flex flex-col items-center"
+          <div className={`absolute left-3 right-3 z-[15] pointer-events-none flex flex-col items-center ${activeView !== 'chat' ? 'hidden' : ''}`}
             style={{
               top: pinnedTop,
             }}>
@@ -5416,6 +5474,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               broadcasterId={currentStream.user_id}
               channelLogin={currentStream.user_login}
               onUsernameClick={handleUsernameClick}
+              onClose={() => setActiveView('chat')}
             />
           </div>
         )}
