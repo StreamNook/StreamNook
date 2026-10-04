@@ -199,13 +199,46 @@ export default function ChatOverlayWindow() {
     if (chromeTimer.current) window.clearTimeout(chromeTimer.current);
   }, []);
 
+  // Settings arrive after the first render (the store boots empty), and
+  // reload whenever another window saves, so the slider adopts the stored
+  // value whenever it changes, unless a drag here is still waiting to save.
+  const savedOpacity = settings.chat_overlay?.opacity;
+  useEffect(() => {
+    if (savedOpacity == null || opacityTimer.current) return;
+    setOpacity(savedOpacity);
+  }, [savedOpacity]);
+
+  const pendingOpacity = useRef<number | null>(null);
+  const saveOpacity = useCallback(async () => {
+    if (opacityTimer.current) window.clearTimeout(opacityTimer.current);
+    opacityTimer.current = null;
+    const v = pendingOpacity.current;
+    pendingOpacity.current = null;
+    if (v == null) return;
+    const cur = useAppStore.getState().settings;
+    await updateSettings({ ...cur, chat_overlay: { ...cur.chat_overlay, opacity: v } });
+  }, [updateSettings]);
+
   const onOpacity = (v: number) => {
     setOpacity(v);
+    pendingOpacity.current = v;
     if (opacityTimer.current) window.clearTimeout(opacityTimer.current);
-    opacityTimer.current = window.setTimeout(() => {
-      const cur = useAppStore.getState().settings;
-      updateSettings({ ...cur, chat_overlay: { ...cur.chat_overlay, opacity: v } });
-    }, 300);
+    opacityTimer.current = window.setTimeout(() => void saveOpacity(), 300);
+  };
+
+  // A close inside the debounce window still saves the last value.
+  useEffect(() => {
+    const flush = () => void saveOpacity();
+    window.addEventListener('pagehide', flush);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      flush();
+    };
+  }, [saveOpacity]);
+
+  const closeOverlay = async () => {
+    await saveOpacity().catch((err) => Logger.warn('[ChatOverlay] saving opacity failed:', err));
+    void getCurrentWindow().close();
   };
 
   // Linux: the slider is the whole window's opacity.
@@ -272,7 +305,7 @@ export default function ChatOverlayWindow() {
           <Tooltip content="Close overlay" side="bottom">
             <button
               type="button"
-              onClick={() => void getCurrentWindow().close()}
+              onClick={() => void closeOverlay()}
               className="sn-overlay-close glass-button grid h-[22px] w-[22px] place-items-center text-textSecondary hover:text-error"
               aria-label="Close overlay"
             >

@@ -1035,7 +1035,7 @@ export interface StreamerModeSettings {
 }
 
 export interface ChatOverlaySettings {
-  opacity?: number; // 10-100, default 70
+  opacity?: number; // 0-100, default 70
 }
 
 export interface FullscreenChatSettings {
