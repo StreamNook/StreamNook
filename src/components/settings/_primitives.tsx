@@ -156,6 +156,10 @@ interface SegmentedSelectProps<T extends string> {
   /** Stretch to fill the row. Off by default so the control sizes to its labels
    *  instead of spanning the whole width as detached full-width buttons. */
   fullWidth?: boolean;
+  /** Called with the option under the pointer (or keyboard focus), and null
+   *  when it leaves, so a preview beside the control can show an option
+   *  before it is picked. */
+  onPreview?: (value: T | null) => void;
 }
 
 // A unified segmented control: one recessed track with the segments packed
@@ -167,6 +171,7 @@ export const SegmentedSelect = <T extends string>({
   options,
   onChange,
   fullWidth = false,
+  onPreview,
 }: SegmentedSelectProps<T>) => {
   const trackRef = useRef<HTMLDivElement>(null);
   const btnRefs = useRef<Record<string, HTMLButtonElement | null>>({});
@@ -202,6 +207,8 @@ export const SegmentedSelect = <T extends string>({
   return (
     <div
       ref={trackRef}
+      onMouseLeave={onPreview ? () => onPreview(null) : undefined}
+      onBlur={onPreview ? () => onPreview(null) : undefined}
       className={`${fullWidth ? 'flex w-full' : 'inline-flex'} relative gap-0.5 p-0.5 rounded-lg`}
       style={{
         background: 'rgba(151,177,185,0.06)',
@@ -234,6 +241,8 @@ export const SegmentedSelect = <T extends string>({
             key={opt.value}
             ref={(el) => { btnRefs.current[opt.value] = el; }}
             onClick={() => onChange(opt.value)}
+            onMouseEnter={onPreview ? () => onPreview(opt.value) : undefined}
+            onFocus={onPreview ? () => onPreview(opt.value) : undefined}
             className={`${fullWidth ? 'flex-1' : ''} relative z-[1] px-3 py-1 text-[13px] font-medium rounded-md transition-colors ${
               isActive ? 'text-textPrimary' : 'text-textMuted hover:text-textSecondary'
             }`}

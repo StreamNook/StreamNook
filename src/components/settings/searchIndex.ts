@@ -737,7 +737,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Chat',
     section: 'Chat Behavior',
     title: 'Deleted messages',
-    description: 'What happens to a message once it is deleted or its sender is timed out or banned: crossed out, dimmed, left as is, or removed.'
+    description: 'How a message looks once a moderator deletes it or times out or bans its sender: crossed out, dimmed, in italics with a reason tag, left as is, or removed.'
   },
   {
     tab: 'Chat',

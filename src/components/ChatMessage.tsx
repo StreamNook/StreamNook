@@ -6,6 +6,13 @@ import { parseMessage } from '../services/twitchChat';
 import { queueEmoteForDisplayCaching, getCachedEmoteUrl, getEmoteLookup, inlineEmoteTier, sevenTvTierUrl, EmoteSet } from '../services/emoteService';
 import { getCachedEmojiUrl, parseEmojisSync } from '../services/emojiService';
 import { calculateHalfPadding } from '../utils/chatLayoutUtils';
+import { deletedBodyStyle, deletedRowDimmed, DEFAULT_DELETED_STYLE } from './chat/deletedMessage';
+import { ModerationTag } from './chat/ModerationTag';
+import { eventCardClass as eventCardClassFor, eventCardStyle as eventCardStyleFor } from './chat/eventCard';
+
+// Emote previews open almost at once: a quick pass over an emote should still
+// show it (the shared tooltip default waits 250 ms).
+const EMOTE_TOOLTIP_DELAY_MS = 60;
 import { computePaintStyle, getBadgeImageUrl, getBadgeFallbackUrls, pickPaintLayerImage, queueCosmeticForCaching } from '../services/seventvService';
 import { StyledChatName } from './chat/StyledChatName';
 import { useDragModerationStore } from '../stores/dragModerationStore';
@@ -1579,9 +1586,15 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         : emoteUrl.includes('frankerfacez') ? 'FrankerFaceZ'
         : emoteUrl.includes('jtvnw.net') ? 'Twitch'
         : 'Emote';
-      const previewUrl = is7TVEmote && segment.emoteId
+      // The 4x preview is disk-cached like chat emotes (the emote prefetch
+      // pulls it for followed channels; a first hover saves it), so a
+      // repeat hover draws a local file instead of waiting on 7TV.
+      const cachedPreviewUrl = is7TVEmote && segment.emoteId
+        ? getCachedEmoteUrl(segment.emoteId, '7tv', '4x')
+        : undefined;
+      const previewUrl = cachedPreviewUrl ?? (is7TVEmote && segment.emoteId
         ? `https://cdn.7tv.app/emote/${segment.emoteId}/4x.avif`
-        : emoteUrl;
+        : emoteUrl);
       // User-configurable hover-preview height. Defaults to 96px (one step up
       // from the original fixed 64px preview). maxWidth scales with it so wide
       // 7TV emotes aren't clipped in the card.
@@ -1596,6 +1609,11 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               className="w-auto object-contain mx-auto drop-shadow-md"
               style={{ height: hoverPreviewSize, maxWidth: hoverPreviewSize * 2 }}
               referrerPolicy="no-referrer"
+              onLoad={() => {
+                if (!cachedPreviewUrl && is7TVEmote && segment.emoteId) {
+                  queueEmoteForDisplayCaching(segment.emoteId, '7tv', previewUrl, '4x');
+                }
+              }}
               onError={(e) => {
                 const t = e.currentTarget;
                 // Some emotes have no working 4x (or a flaky avif), which is why
@@ -1649,7 +1667,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           </div>
         );
       return (
-        <Tooltip key={key} content={tooltipContent} side="top">
+        <Tooltip key={key} content={tooltipContent} side="top" delay={EMOTE_TOOLTIP_DELAY_MS}>
           {isOverlay && !inGrid ? (
             // Fallback for standalone zero-width emote (e.g., at the start of a message)
             <span className="inline-block w-0 align-middle pointer-events-none" style={gridStyle}>
@@ -1676,7 +1694,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           ? getCachedEmojiUrl(segment.content, segment.emojiUrl)
           : (vendorEmojiUrl(segment.content, emojiStyle) ?? segment.emojiUrl ?? '');
       return (
-        <Tooltip key={key} content={segment.content} side="top">
+        <Tooltip key={key} content={segment.content} side="top" delay={EMOTE_TOOLTIP_DELAY_MS}>
           <img
             src={emojiSrc}
             alt={segment.content}
@@ -2149,22 +2167,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // in which case the row falls through with its cheermotes inline.
   const isBitsCheer = bitsAmount && parseInt(bitsAmount, 10) > 0 && (chatEvents?.cheer_display ?? 'card') !== 'message';
 
-  // How event rows dress: the tinted cards, a ring, or nothing. The glint
-  // classes are the same ones first-time rows use (see globals.css sn-ft-*).
-  const eventStyle = chatEvents?.event_style ?? 'cards';
-  const eventAnim =
-    chatEvents?.event_animation && chatEvents.event_animation !== 'none' ? chatEvents.event_animation : null;
-  const eventCardClass = (gradient: string) => {
-    const base = eventStyle === 'plain' ? '' : eventStyle === 'outline' ? 'sn-event-outline' : gradient;
-    const anim = eventAnim
-      ? ` ${eventStyle === 'outline' ? 'sn-ft-anim-ring' : 'sn-ft-anim-bar'} sn-ft-t-${eventAnim}${chatEvents?.event_animate_repeat ? ' sn-ft-loop' : ''}`
-      : '';
-    return `relative ${base}${anim}`;
-  };
-  const eventCardStyle =
-    eventStyle === 'outline' && chatEvents?.event_outline_color
-      ? ({ '--sn-event-outline': chatEvents.event_outline_color } as React.CSSProperties)
-      : undefined;
+  // How event rows dress (cards, ring or plain, plus the glint).
+  const eventCardClass = (gradient: string) => eventCardClassFor(chatEvents, gradient);
+  const eventCardStyle = eventCardStyleFor(chatEvents);
   // Custom wording for an event category, or null to keep the platform's.
   const eventTemplateFor = (category: 'subscription' | 'gift' | 'cheer' | 'milestone' | 'raid'): string | null => {
     const template = chatEvents?.event_templates?.[category];
@@ -3183,6 +3188,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
 
   // Build dynamic styles based on chat design settings
   // Use consistent padding on container - spacing between messages is handled via py classes
+  const deletedStyle = chatDesign?.deleted_message_style ?? DEFAULT_DELETED_STYLE;
   const messageSpacing = chatDesign?.message_spacing ?? 8;
   const messageStyle: React.CSSProperties = {
     paddingTop: `${Math.max(4, messageSpacing / 2)}px`,
@@ -3275,7 +3281,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       className={`group relative isolate px-3 hover:bg-glass transition-colors ${borderClass} ${animationClass
         }${ftClass} ${isRedemption ? 'highlight-message-gradient' : ''
         } ${isFromSharedChat ? 'border-l-2 border-l-accent/50 bg-accent/5' : ''
-        } ${moderationContext && (chatDesign?.deleted_message_style ?? 'strikethrough') !== 'keep' ? 'opacity-50' : ''} ${bodyDragEnabled ? 'select-none cursor-grab' : ''} ${isBeingDragged ? 'overflow-hidden' : ''}`}
+        } ${moderationContext && deletedRowDimmed(deletedStyle) ? 'opacity-50' : ''} ${bodyDragEnabled ? 'select-none cursor-grab' : ''} ${isBeingDragged ? 'overflow-hidden' : ''}`}
       style={{
         ...messageStyle,
         ...(builtInEventBg ? { backgroundImage: builtInEventBg } : {}),
@@ -3659,13 +3665,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                   tooltipClassName={MEMBER_REVEAL_CARD_CLASS}
                 />
                 <span style={{ fontWeight: 'var(--chat-body-weight, 300)' }} className="text-textPrimary break-words">
-                  <span
-                    style={
-                      moderationContext && (chatDesign?.deleted_message_style ?? 'strikethrough') === 'strikethrough'
-                        ? { textDecoration: 'line-through' }
-                        : undefined
-                    }
-                  >
+                  <span style={moderationContext ? deletedBodyStyle(deletedStyle) : undefined}>
                     {' '}{replyMentionNode}{giantPluck ? giantPluck.inline : renderContent(contentWithEmotes)}
                   </span>
                   {redemptionCost && (
@@ -3683,15 +3683,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                       {Number(redemptionCost).toLocaleString()}
                     </span>
                   )}
-                  {moderationContext && (chatDesign?.deleted_message_style ?? 'strikethrough') === 'strikethrough' && (
-                    <span className="ml-1.5 text-xs text-error/70 font-medium">
-                      {moderationContext.type === 'timeout'
-                        ? `[timed out for ${moderationContext.duration}s]`
-                        : moderationContext.type === 'ban'
-                          ? '[banned]'
-                          : '[deleted by mod]'}
-                    </span>
-                  )}
+                  {moderationContext && <ModerationTag context={moderationContext} style={deletedStyle} />}
                   {showRepeatCount && (
                     <Tooltip content={repeatTooltip} side="top">
                       <span

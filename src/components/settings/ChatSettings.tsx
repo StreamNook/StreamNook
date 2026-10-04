@@ -71,6 +71,8 @@ const USER_CARD_ROWS: { key: keyof UserCardSettings; title: string; description:
 import { useChatUserStore } from '../../stores/chatUserStore';
 import { getUserCosmetics, computePaintStyle } from '../../services/seventvService';
 import { StyledChatName, type NameSeparator, type NameStyle } from '../chat/StyledChatName';
+import type { DeletedMessageStyle } from '../chat/deletedMessage';
+import { DeletedMessagePreview, EventRowPreview, MessageLayoutPreview, SettingPreview } from './ChatPreview';
 
 // Native color swatch matching the mod-log Log Highlights control: clicking it
 // opens the OS picker (always on top, unlike an in-app popover that can render
@@ -375,6 +377,12 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     setEvents({
       hidden_provider_events: hiddenEvents.includes(key) ? hiddenEvents.filter((k) => k !== key) : [...hiddenEvents, key],
     });
+  // The option under the pointer in a visual setting, shown in its preview
+  // before it is picked; null falls back to the saved value.
+  const [deletedHover, setDeletedHover] = useState<DeletedMessageStyle | null>(null);
+  const [entranceHover, setEntranceHover] = useState<'none' | 'fade' | 'slide' | 'rise' | null>(null);
+  const [eventStyleHover, setEventStyleHover] = useState<'cards' | 'outline' | 'plain' | null>(null);
+  const [glintHover, setGlintHover] = useState<'none' | 'sheen' | 'pulse' | 'chase' | null>(null);
   const [commandDraft, setCommandDraft] = useState('');
   const [commandMode, setCommandMode] = useState<'prefix' | 'exact'>('prefix');
   const commandFilters: CommandFilter[] = settings.chat_filters?.command_filters ?? [];
@@ -1017,15 +1025,26 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           title="How event rows look"
           description="Subs, gifts, bits and milestones as tinted cards, as a plain row with a ring, or as a plain row."
         >
-          <SegmentedSelect<'cards' | 'outline' | 'plain'>
-            value={chatEvents.event_style ?? 'cards'}
-            onChange={(event_style) => setEvents({ event_style })}
-            options={[
-              { value: 'cards', label: 'Cards' },
-              { value: 'outline', label: 'Outline' },
-              { value: 'plain', label: 'Plain' },
-            ]}
-          />
+          <div className="space-y-3">
+            <SegmentedSelect<'cards' | 'outline' | 'plain'>
+              value={chatEvents.event_style ?? 'cards'}
+              onChange={(event_style) => setEvents({ event_style })}
+              onPreview={setEventStyleHover}
+              options={[
+                { value: 'cards', label: 'Cards' },
+                { value: 'outline', label: 'Outline' },
+                { value: 'plain', label: 'Plain' },
+              ]}
+            />
+            <EventRowPreview
+              design={cd}
+              events={{
+                ...chatEvents,
+                event_style: eventStyleHover ?? chatEvents.event_style,
+                event_animation: glintHover ?? chatEvents.event_animation,
+              }}
+            />
+          </div>
         </SettingsRow>
 
         {(chatEvents.event_style ?? 'cards') === 'outline' && (
@@ -1046,6 +1065,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           <Dropdown<'none' | 'sheen' | 'pulse' | 'chase'>
             value={chatEvents.event_animation ?? 'none'}
             onChange={(event_animation) => setEvents({ event_animation })}
+            onPreview={setGlintHover}
             className="w-full"
             ariaLabel="Event glint"
             options={[
@@ -1178,6 +1198,10 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         label="Message Layout"
         description="Spacing, text size, timestamps, and how a new message arrives."
       >
+        <div className="pt-3">
+          <MessageLayoutPreview design={cd} entrance={entranceHover ?? cd.message_entrance} />
+        </div>
+
         <SettingsRow
           title="Lines between messages"
           description="Draws a thin line between messages so a fast chat is easier to scan."
@@ -1276,6 +1300,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           <SegmentedSelect<'none' | 'fade' | 'slide' | 'rise'>
             value={cd.message_entrance}
             onChange={(message_entrance) => setDesign({ message_entrance })}
+            onPreview={setEntranceHover}
             options={[
               { value: 'none', label: 'Instant' },
               { value: 'fade', label: 'Fade' },
@@ -1341,17 +1366,13 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         label="Names & Badges"
         description="How chatter names, badges and 7TV paints look."
       >
-        <div className="space-y-2">
-          <div className="flex items-baseline gap-2">
-            <span className="text-xs font-medium text-textSecondary uppercase tracking-wider">Preview</span>
-            <span className="text-[11px] text-textMuted">how your name looks in chat</span>
-          </div>
+        <SettingPreview caption="how your name looks in chat">
           <NamePrefixPreview
             separator={cd.username_separator ?? 'none'}
             nameStyle={cd.username_style ?? 'plain'}
             accentSource={cd.username_accent_source ?? 'user'}
           />
-        </div>
+        </SettingPreview>
 
         <SettingsRow
           title="Name separator"
@@ -2071,18 +2092,26 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       >
         <SettingsRow
           title="Deleted messages"
-          description="What happens to a message once it is deleted or its sender is timed out or banned: crossed out, dimmed, left as is, or removed."
+          description="How a message looks once a moderator deletes it or times out or bans its sender."
         >
-          <SegmentedSelect<'strikethrough' | 'dimmed' | 'keep' | 'hidden'>
-            value={cd.deleted_message_style as 'strikethrough' | 'dimmed' | 'keep' | 'hidden'}
-            onChange={(value) => setDesign({ deleted_message_style: value })}
-            options={[
-              { value: 'strikethrough', label: 'Strikethrough' },
-              { value: 'dimmed', label: 'Dimmed' },
-              { value: 'keep', label: 'Keep' },
-              { value: 'hidden', label: 'Hidden' },
-            ]}
-          />
+          <div className="space-y-3">
+            <SegmentedSelect<DeletedMessageStyle>
+              value={cd.deleted_message_style as DeletedMessageStyle}
+              onChange={(value) => setDesign({ deleted_message_style: value })}
+              onPreview={setDeletedHover}
+              options={[
+                { value: 'strikethrough', label: 'Strikethrough' },
+                { value: 'dimmed', label: 'Dimmed' },
+                { value: 'italic', label: 'Italic' },
+                { value: 'keep', label: 'Keep' },
+                { value: 'hidden', label: 'Hidden' },
+              ]}
+            />
+            <DeletedMessagePreview
+              design={cd}
+              style={deletedHover ?? (cd.deleted_message_style as DeletedMessageStyle)}
+            />
+          </div>
         </SettingsRow>
 
         <SettingsRow
