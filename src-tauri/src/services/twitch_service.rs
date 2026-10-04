@@ -2028,6 +2028,36 @@ impl TwitchService {
                     }
                 }
 
+                // Append exact match if query looks like a username, to patch Twitch's search algo filtering out inactive direct matches
+                let trimmed_query = query.trim();
+                if !trimmed_query.contains(' ')
+                    && !streams
+                        .iter()
+                        .any(|s| s.user_login.eq_ignore_ascii_case(trimmed_query))
+                {
+                    if let Ok(exact_user) = Self::get_user_by_login(trimmed_query).await {
+                        let synthesize = TwitchStream {
+                            id: exact_user.id.clone(),
+                            user_id: exact_user.id,
+                            user_name: exact_user.display_name,
+                            user_login: exact_user.login,
+                            title: String::new(),
+                            viewer_count: 0,
+                            game_id: String::new(),
+                            game_name: String::new(),
+                            thumbnail_url: exact_user.profile_image_url.clone().unwrap_or_default(),
+                            started_at: String::new(),
+                            broadcaster_type: exact_user.broadcaster_type,
+                            profile_image_url: exact_user.profile_image_url,
+                            is_live: Some(false),
+                            tags: None,
+                            language: None,
+                        };
+                        user_ids.push(synthesize.user_id.clone());
+                        streams.insert(0, synthesize);
+                    }
+                }
+
                 // Fetch actual stream data to get viewer counts and accurate info
                 if !user_ids.is_empty() {
                     // Map of user_id -> live stream data, filled across chunks.
@@ -2080,6 +2110,7 @@ impl TwitchService {
                     // Update our streams with actual stream data
                     for stream in &mut streams {
                         if let Some(stream_data) = stream_data_map.get(&stream.user_id) {
+                            stream.is_live = Some(true);
                             // Update viewer count
                             if let Some(viewer_count) =
                                 stream_data.get("viewer_count").and_then(|v| v.as_u64())
@@ -2110,35 +2141,8 @@ impl TwitchService {
                     }
                 }
 
-                // Append exact match if query looks like a username, to patch Twitch's search algo filtering out inactive direct matches
-                let trimmed_query = query.trim();
-                if !trimmed_query.contains(' ')
-                    && !streams
-                        .iter()
-                        .any(|s| s.user_login.eq_ignore_ascii_case(trimmed_query))
-                {
-                    if let Ok(exact_user) = Self::get_user_by_login(trimmed_query).await {
-                        let synthesize = TwitchStream {
-                            id: exact_user.id.clone(),
-                            user_id: exact_user.id,
-                            user_name: exact_user.display_name,
-                            user_login: exact_user.login,
-                            title: String::new(),
-                            viewer_count: 0,
-                            game_id: String::new(),
-                            game_name: String::new(),
-                            thumbnail_url: exact_user.profile_image_url.clone().unwrap_or_default(),
-                            started_at: String::new(),
-                            broadcaster_type: exact_user.broadcaster_type,
-                            profile_image_url: exact_user.profile_image_url,
-                            is_live: Some(false),
-                            tags: None,
-                            language: None,
-                        };
-                        streams.insert(0, synthesize);
-                    }
-                }
 
+                rank_search_results(query, &mut streams);
                 Ok(streams)
             }
             None => Ok(Vec::new()),
@@ -6098,5 +6102,90 @@ mod resolve_stream_tests {
         assert!(!TwitchService::valid_login("Mixed"));
         assert!(!TwitchService::valid_login(""));
         assert!(!TwitchService::valid_login("abcdefghijklmnopqrstuvwxyz"));
+    }
+}
+
+/// Order Twitch channel-search rows by how well they answer what was typed.
+///
+/// Helix returns its own order, which is not "best match first": a live
+/// channel whose login IS the query can come back fifteenth, and every picker
+/// shows only the first few rows, so typing a streamer's exact name could fail
+/// to show them. Tiers: exact login, login starting with the query, display
+/// name starting with it, contains it, anything else; live before offline
+/// inside a tier, then more viewers. Stable, so Twitch's order breaks ties.
+pub fn rank_search_results(query: &str, rows: &mut [TwitchStream]) {
+    let q = query.trim().trim_start_matches('@').to_lowercase();
+    if q.is_empty() {
+        return;
+    }
+    let tier = |s: &TwitchStream| -> u8 {
+        let login = s.user_login.to_lowercase();
+        let name = s.user_name.to_lowercase();
+        if login == q {
+            0
+        } else if login.starts_with(&q) {
+            1
+        } else if name.starts_with(&q) {
+            2
+        } else if login.contains(&q) || name.contains(&q) {
+            3
+        } else {
+            4
+        }
+    };
+    rows.sort_by(|a, b| {
+        tier(a)
+            .cmp(&tier(b))
+            .then_with(|| b.is_live.unwrap_or(false).cmp(&a.is_live.unwrap_or(false)))
+            .then_with(|| b.viewer_count.cmp(&a.viewer_count))
+    });
+}
+
+#[cfg(test)]
+mod search_rank_tests {
+    use super::{rank_search_results, TwitchStream};
+
+    fn row(login: &str, live: bool, viewers: u32) -> TwitchStream {
+        TwitchStream {
+            id: login.into(),
+            user_id: login.into(),
+            user_name: login.into(),
+            user_login: login.into(),
+            title: String::new(),
+            viewer_count: viewers,
+            game_id: String::new(),
+            game_name: String::new(),
+            thumbnail_url: String::new(),
+            started_at: String::new(),
+            broadcaster_type: None,
+            profile_image_url: None,
+            is_live: Some(live),
+            tags: None,
+            language: None,
+        }
+    }
+
+    fn logins(rows: &[TwitchStream]) -> Vec<&str> {
+        rows.iter().map(|r| r.user_login.as_str()).collect()
+    }
+
+    #[test]
+    fn the_exact_login_leads_wherever_twitch_put_it() {
+        let mut rows: Vec<_> = (0..20).map(|i| row(&format!("other{i}"), true, 5000)).collect();
+        rows.push(row("loostzao", true, 300));
+        rank_search_results("Loostzao", &mut rows);
+        assert_eq!(rows[0].user_login, "loostzao");
+    }
+
+    #[test]
+    fn prefix_beats_contains_and_live_leads_its_tier() {
+        let mut rows = vec![
+            row("themoonfan", true, 9000),
+            row("moonoffline", false, 0),
+            row("moonlive", true, 40),
+            row("moonbig", true, 900),
+        ];
+        rank_search_results("moon", &mut rows);
+        assert_eq!(logins(&rows), ["moonbig", "moonlive", "moonoffline", "themoonfan"]);
     }
 }
