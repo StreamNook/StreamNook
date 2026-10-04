@@ -19,6 +19,8 @@ const CLIENT_ID: &str = env!("TWITCH_APP_CLIENT_ID");
 const CLIENT_SECRET: &str = env!("TWITCH_APP_CLIENT_SECRET");
 const TWITCH_GQL_CLIENT_ID: &str = "kimne78kx3ncx6brgo4mv6wki5h1ko";
 const REDIRECT_URI: &str = "http://localhost:3000/callback";
+/// How recently someone must have chatted to count as present in a viewers list.
+const CHATTED_RECENTLY_MS: i64 = 30 * 60 * 1000;
 // Adding ANY scope here invalidates every stored token at once (see the
 // missing-scopes branch in check_token_health, which calls AccountStore::
 // reset_all). That makes a scope change a one-time, whole-user-base re-auth, so
@@ -5189,6 +5191,133 @@ impl TwitchService {
         }))
     }
 
+    /// The chatters list any viewer can see, grouped by role: Twitch's public
+    /// `channel.chatters` (the same `ChatViewers` query twitch.tv's own viewer
+    /// list sends), read with the Android client id (the web client id
+    /// fails Twitch's integrity check on it) and no token. It lists every
+    /// broadcaster, moderator, VIP and staff member present, but at most 100
+    /// viewers (it takes no paging arguments), with the full `count`. Chatters
+    /// come back as logins only, so their ids and display names are looked up in
+    /// one batch per 100. Anyone seen chatting in the channel in the last
+    /// half hour is added to the viewers.
+    pub async fn get_public_chatters(channel_login: &str) -> Result<serde_json::Value> {
+        use std::collections::HashMap;
+
+        let client = crate::services::http::client().clone();
+        let android_id = env!("TWITCH_ANDROID_CLIENT_ID");
+        let login = serde_json::to_string(&channel_login.to_lowercase())?;
+        let query = format!(
+            "query {{ channel(name: {login}) {{ chatters {{ count broadcasters {{ login }} moderators {{ login }} vips {{ login }} staff {{ login }} chatbots {{ login }} viewers {{ login }} }} }} }}"
+        );
+        let json: serde_json::Value = client
+            .post("https://gql.twitch.tv/gql")
+            .header("Client-Id", android_id)
+            .json(&serde_json::json!({ "query": query }))
+            .send()
+            .await?
+            .json()
+            .await?;
+        let chatters = json
+            .pointer("/data/channel/chatters")
+            .filter(|c| !c.is_null())
+            .ok_or_else(|| anyhow::anyhow!("Twitch returned no chatters for {channel_login}"))?;
+        let logins_of = |group: &str| -> Vec<String> {
+            chatters
+                .get(group)
+                .and_then(|g| g.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|c| c.get("login").and_then(|l| l.as_str()).map(str::to_lowercase))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let broadcaster = logins_of("broadcasters");
+        let mut moderators = logins_of("moderators");
+        moderators.extend(logins_of("staff"));
+        let vips = logins_of("vips");
+        // Chat bots (Twitch lists them on their own) are present like viewers.
+        let mut viewers = logins_of("viewers");
+        viewers.extend(logins_of("chatbots"));
+
+        // Ids and display names for everyone listed, 100 logins per lookup.
+        let mut names: HashMap<String, (String, String)> = HashMap::new();
+        let all: Vec<&String> = broadcaster.iter().chain(&moderators).chain(&vips).chain(&viewers).collect();
+        for chunk in all.chunks(100) {
+            let logins = serde_json::to_string(&chunk)?;
+            let q = format!("query {{ users(logins: {logins}) {{ id login displayName }} }}");
+            let resp: serde_json::Value = match client
+                .post("https://gql.twitch.tv/gql")
+                .header("Client-Id", android_id)
+                .json(&serde_json::json!({ "query": q }))
+                .send()
+                .await
+            {
+                Ok(r) => r.json().await.unwrap_or_default(),
+                Err(_) => continue,
+            };
+            for u in resp.pointer("/data/users").and_then(|u| u.as_array()).into_iter().flatten() {
+                if let (Some(id), Some(login)) = (u.get("id").and_then(|v| v.as_str()), u.get("login").and_then(|v| v.as_str())) {
+                    let display = u.get("displayName").and_then(|v| v.as_str()).unwrap_or(login);
+                    names.insert(login.to_lowercase(), (id.to_string(), display.to_string()));
+                }
+            }
+        }
+        // Twitch lists at most 100 viewers, so everyone seen chatting here in
+        // the last half hour joins them, with the id and name their messages
+        // carried.
+        let since_ms = chrono::Utc::now().timestamp_millis() - CHATTED_RECENTLY_MS;
+        let listed_logins: std::collections::HashSet<String> =
+            broadcaster.iter().chain(&moderators).chain(&vips).chain(&viewers).cloned().collect();
+        for (login, id, display) in
+            crate::services::chat_history::ChatHistory::recent_chatters(channel_login, since_ms)
+        {
+            if listed_logins.contains(&login) {
+                continue;
+            }
+            names.entry(login.clone()).or_insert((id, if display.is_empty() { login.clone() } else { display }));
+            viewers.push(login);
+        }
+
+        let entry = |login: &String| {
+            let (id, display) = names.get(login).cloned().unwrap_or_else(|| (String::new(), login.clone()));
+            serde_json::json!({ "user_id": id, "user_login": login, "user_name": display })
+        };
+        let sorted = |mut v: Vec<String>| {
+            v.sort();
+            v.dedup();
+            v
+        };
+        let listed = broadcaster.len() + moderators.len() + vips.len() + viewers.len();
+        let total = chatters.get("count").and_then(|c| c.as_u64()).unwrap_or(listed as u64) as usize;
+        Ok(serde_json::json!({
+            "broadcaster": broadcaster.iter().map(entry).collect::<Vec<_>>(),
+            "moderators": sorted(moderators).iter().map(entry).collect::<Vec<_>>(),
+            "vips": sorted(vips).iter().map(entry).collect::<Vec<_>>(),
+            "viewers": sorted(viewers).iter().map(entry).collect::<Vec<_>>(),
+            "total": total.max(listed),
+            "truncated": listed < total,
+        }))
+    }
+
+    /// The chatters list for a channel, grouped by role: the full roster when
+    /// the signed-in user moderates or owns the channel, otherwise the public
+    /// list every viewer can see (`get_public_chatters`).
+    pub async fn get_channel_chatters(
+        broadcaster_id: &str,
+        channel_login: &str,
+    ) -> Result<serde_json::Value> {
+        match Self::get_moderator_chatters(broadcaster_id, channel_login).await {
+            Ok(full) => Ok(full),
+            // Not a moderator here, signed out, or a token without the roster
+            // scope: everyone can still have the public list.
+            Err(e) => {
+                debug!("[TwitchService] Full chatters roster unavailable ({e}); using the public list");
+                Self::get_public_chatters(channel_login).await
+            }
+        }
+    }
+
     /// Get the full official chatters roster for a channel, grouped by role.
     ///
     /// Uses Helix Get Chatters, which requires the caller to be a moderator or the
@@ -5196,7 +5325,7 @@ impl TwitchService {
     /// That endpoint returns logins only, so we compose it with the GQL Mods/VIPs
     /// lookup (`get_chatters_by_role`, which works for any authenticated user) to
     /// bucket each chatter into broadcaster / moderators / vips / viewers.
-    pub async fn get_channel_chatters(
+    async fn get_moderator_chatters(
         broadcaster_id: &str,
         channel_login: &str,
     ) -> Result<serde_json::Value> {

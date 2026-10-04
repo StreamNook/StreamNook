@@ -209,6 +209,26 @@ impl ChatHistory {
         out
     }
 
+    /// Everyone who chatted in a channel at or after `since_ms`, newest first,
+    /// one `(login, user_id, display_name)` per person. Shared-chat rows are
+    /// skipped (their senders are in the other channel) and so are system rows.
+    pub fn recent_chatters(channel: &str, since_ms: i64) -> Vec<(String, String, String)> {
+        let key = channel.trim_start_matches('#').to_lowercase();
+        let Ok(map) = rings().lock() else { return Vec::new() };
+        let Some(ring) = map.get(&key) else { return Vec::new() };
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for e in ring.iter().rev() {
+            if e.ts_ms < since_ms || e.login.is_empty() || e.flags & (F_SHARED | F_SYSTEM) != 0 {
+                continue;
+            }
+            if seen.insert(e.login.clone()) {
+                out.push((e.login.clone(), e.user_id.clone(), e.display.clone()));
+            }
+        }
+        out
+    }
+
     /// Drop a channel's ring. Called when its last consumer parts.
     pub fn clear_channel(channel: &str) {
         let key = channel.trim_start_matches('#').to_lowercase();
@@ -426,6 +446,32 @@ mod tests {
             flags,
             msg_type: None,
         }
+    }
+
+    #[test]
+    fn recent_chatters_are_distinct_recent_and_local() {
+        let mut old = entry("carol", "earlier", 0);
+        old.ts_ms = 10;
+        let mut a = entry("alice", "hi", 0);
+        a.ts_ms = 100;
+        let mut b = entry("bob", "yo", 0);
+        b.ts_ms = 110;
+        let mut a2 = entry("alice", "again", 0);
+        a2.ts_ms = 120;
+        let mut shared = entry("dave", "from elsewhere", F_SHARED);
+        shared.ts_ms = 130;
+        let mut system = entry("eve", "subscribed", F_SYSTEM);
+        system.ts_ms = 140;
+        rings().lock().unwrap().insert(
+            "recentchatterstest".into(),
+            VecDeque::from(vec![old, a, b, a2, shared, system]),
+        );
+        let logins: Vec<String> = ChatHistory::recent_chatters("#RecentChattersTest", 50)
+            .into_iter()
+            .map(|(login, _, _)| login)
+            .collect();
+        assert_eq!(logins, vec!["alice", "bob"]);
+        assert!(ChatHistory::recent_chatters("nosuchchannel", 0).is_empty());
     }
 
     #[test]

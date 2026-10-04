@@ -18,14 +18,16 @@ interface ChatOverlayStackProps {
   top: number;
   /** Receives the column, so the host can place the pinned message under it. */
   stackRef?: (el: HTMLDivElement | null) => void;
+  /** Hide the cards (they stay mounted) while another view replaces chat. */
+  hidden?: boolean;
   children: ReactNode;
 }
 
-export function ChatOverlayStack({ top, stackRef, children }: ChatOverlayStackProps) {
+export function ChatOverlayStack({ top, stackRef, hidden = false, children }: ChatOverlayStackProps) {
   return (
     <div
       ref={stackRef}
-      className="absolute left-2 right-2 z-40 flex flex-col gap-2 transition-[top] duration-300 ease-in-out"
+      className={`absolute left-2 right-2 z-40 flex-col gap-2 transition-[top] duration-300 ease-in-out ${hidden ? 'hidden' : 'flex'}`}
       style={{ top }}
     >
       {children}
