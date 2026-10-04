@@ -10,14 +10,15 @@ use crate::services::user_message_history_service::UserMessageHistoryService;
 pub async fn watch_channel_state(
     login: String,
     channel_id: String,
+    live_only: Option<bool>,
 ) -> Result<channel_state::ChannelState, String> {
-    Ok(channel_state::watch(&login, &channel_id).await)
+    Ok(channel_state::watch(&login, &channel_id, live_only.unwrap_or(false)).await)
 }
 
 /// A window stopped showing chat for `login`.
 #[tauri::command]
-pub async fn unwatch_channel_state(login: String) -> Result<(), String> {
-    channel_state::unwatch(&login).await;
+pub async fn unwatch_channel_state(login: String, live_only: Option<bool>) -> Result<(), String> {
+    channel_state::unwatch(&login, live_only.unwrap_or(false)).await;
     Ok(())
 }
 

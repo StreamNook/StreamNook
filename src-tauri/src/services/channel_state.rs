@@ -103,6 +103,10 @@ pub enum ChannelUpdate {
 struct Watched {
     channel_id: String,
     refs: usize,
+    /// How many of `refs` want points and pinned messages too. A live-only
+    /// watch (a docked chat's row in the chat list) rides the batched viewer
+    /// poll alone, so twenty docked chats add no per-channel requests.
+    full_refs: usize,
 }
 
 struct Inner {
@@ -147,7 +151,7 @@ pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(POINTS_PERIOD).await;
-            for login in watched_logins(&points).await {
+            for login in fully_watched_logins(&points).await {
                 refresh_points(&points, &login).await;
             }
         }
@@ -156,38 +160,41 @@ pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(PINNED_PERIOD).await;
-            for login in watched_logins(&pinned).await {
+            for login in fully_watched_logins(&pinned).await {
                 refresh_pinned(&pinned, &login).await;
             }
         }
     });
 }
 
-async fn watched_logins(inner: &Inner) -> Vec<String> {
-    inner.watched.read().await.keys().cloned().collect()
+async fn fully_watched_logins(inner: &Inner) -> Vec<String> {
+    inner.watched.read().await.iter().filter(|(_, w)| w.full_refs > 0).map(|(k, _)| k.clone()).collect()
 }
 
 /// A window started showing chat for `login`. The first watcher triggers an
-/// immediate refresh of every section; the current state is returned so the
-/// caller can paint without waiting for the events.
-pub async fn watch(login: &str, channel_id: &str) -> ChannelState {
+/// immediate refresh of every section it wants; the current state is returned
+/// so the caller can paint without waiting for the events. `live_only` asks
+/// for the live section (viewers, start, title, category) and nothing else.
+pub async fn watch(login: &str, channel_id: &str, live_only: bool) -> ChannelState {
     let login = login.to_lowercase();
     let Some(inner) = SERVICE.get() else {
         return ChannelState { login, channel_id: channel_id.to_string(), ..Default::default() };
     };
-    let first = {
+    let full = usize::from(!live_only);
+    let (first, first_full) = {
         let mut watched = inner.watched.write().await;
         match watched.get_mut(&login) {
             Some(w) => {
                 w.refs += 1;
-                false
+                w.full_refs += full;
+                (false, full == 1 && w.full_refs == 1)
             }
             None => {
                 watched.insert(
                     login.clone(),
-                    Watched { channel_id: channel_id.to_string(), refs: 1 },
+                    Watched { channel_id: channel_id.to_string(), refs: 1, full_refs: full },
                 );
-                true
+                (true, full == 1)
             }
         }
     };
@@ -196,19 +203,26 @@ pub async fn watch(login: &str, channel_id: &str) -> ChannelState {
             login.clone(),
             ChannelState { login: login.clone(), channel_id: channel_id.to_string(), ..Default::default() },
         );
+    }
+    if first || first_full {
         let inner = inner.clone();
         let l = login.clone();
         tauri::async_runtime::spawn(async move {
-            refresh_viewers(&inner).await;
-            refresh_points(&inner, &l).await;
-            refresh_pinned(&inner, &l).await;
+            if first {
+                refresh_viewers(&inner).await;
+            }
+            if first_full {
+                refresh_points(&inner, &l).await;
+                refresh_pinned(&inner, &l).await;
+            }
         });
     }
     inner.state.read().await.get(&login).cloned().unwrap_or_default()
 }
 
 /// A window stopped showing chat for `login`. The last watcher drops the state.
-pub async fn unwatch(login: &str) {
+/// `live_only` matches the watch it ends.
+pub async fn unwatch(login: &str, live_only: bool) {
     let login = login.to_lowercase();
     let Some(inner) = SERVICE.get() else { return };
     let gone = {
@@ -216,6 +230,9 @@ pub async fn unwatch(login: &str) {
         match watched.get_mut(&login) {
             Some(w) if w.refs > 1 => {
                 w.refs -= 1;
+                if !live_only {
+                    w.full_refs = w.full_refs.saturating_sub(1);
+                }
                 false
             }
             Some(_) => {
