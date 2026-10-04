@@ -12,7 +12,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import type { MouseEvent, ReactNode } from 'react';
-import { FixedSizeList as List, type ListChildComponentProps } from 'react-window';
+import { VariableSizeList as List, type ListChildComponentProps } from 'react-window';
 import { invoke } from '@tauri-apps/api/core';
 import { ChevronDown, Gem, RefreshCw, Search, Sword, Users, Video, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -35,6 +35,9 @@ export interface ChannelChatters {
   viewers: Chatter[];
   total: number;
   truncated: boolean;
+  /** Twitch's own badge art per group (Rust, from the global badge set);
+   *  null keeps the generic icon. */
+  role_badges?: Partial<Record<RoleKey, string | null>>;
 }
 
 type RoleKey = 'broadcaster' | 'moderators' | 'vips' | 'viewers';
@@ -65,6 +68,8 @@ interface ViewersPanelProps {
 const CACHE_TTL_MS = 30_000;
 const AUTO_REFRESH_MS = 45_000;
 const ROW_HEIGHT = 30;
+// A group header after the first carries the divider above it, so it is taller.
+const DIVIDED_HEADER_HEIGHT = 40;
 
 const SECTIONS: { role: RoleKey; label: string; icon: LucideIcon }[] = [
   { role: 'broadcaster', label: 'Broadcaster', icon: Video },
@@ -96,8 +101,10 @@ function errorToState(err: unknown): LoadState {
 }
 
 type FlatRow =
-  | { kind: 'header'; role: RoleKey; label: string; icon: LucideIcon; count: number }
+  | { kind: 'header'; role: RoleKey; label: string; icon: LucideIcon; badge: string | null; count: number; first: boolean }
   | { kind: 'chatter'; role: RoleKey; chatter: Chatter };
+
+const rowHeight = (row: FlatRow) => (row.kind === 'header' && !row.first ? DIVIDED_HEADER_HEIGHT : ROW_HEIGHT);
 
 interface RowData {
   rows: FlatRow[];
@@ -114,15 +121,21 @@ function PanelRow({ index, style, data }: ListChildComponentProps<RowData>) {
     const open = data.searching || !data.collapsed[row.role];
     const Icon = row.icon;
     return (
-      <div style={style} className="px-1.5 pt-1">
+      <div style={style} className="relative flex flex-col justify-end px-1.5">
+        {/* Groups part on a hairline across the list, not on empty space. */}
+        {!row.first && <span aria-hidden className="absolute left-3 right-3 top-[6px] h-px bg-white/[0.08]" />}
         <button
           type="button"
           onClick={() => data.onToggle(row.role)}
           disabled={data.searching}
           aria-expanded={open}
-          className="group flex h-full w-full items-center gap-2 rounded-lg px-2 text-left transition-colors hover:bg-white/[0.03] disabled:cursor-default disabled:hover:bg-transparent"
+          className="group flex h-[28px] w-full items-center gap-2 rounded-md px-2 text-left transition-colors hover:bg-white/[0.03] disabled:cursor-default disabled:hover:bg-transparent"
         >
-          <Icon size={12} className="flex-shrink-0 text-white/40" />
+          {row.badge ? (
+            <img src={row.badge} alt="" draggable={false} className="h-[14px] w-[14px] flex-shrink-0 object-contain" />
+          ) : (
+            <Icon size={12} className="flex-shrink-0 text-white/40" />
+          )}
           <span className="text-[10px] font-semibold uppercase tracking-wider text-white/50">{row.label}</span>
           <span className="rounded-full bg-white/[0.06] px-1.5 py-px text-[10px] tabular-nums text-white/45">
             {row.count.toLocaleString()}
@@ -151,7 +164,7 @@ function PanelRow({ index, style, data }: ListChildComponentProps<RowData>) {
       <button
         type="button"
         onClick={(e) => data.onRow(row.chatter, e)}
-        className="flex h-full w-full items-center gap-1.5 rounded-lg border border-transparent pl-7 pr-2 text-left transition-colors hover:border-white/5 hover:bg-white/[0.04]"
+        className="flex h-full w-full items-center gap-1.5 rounded-md pl-7 pr-2 text-left transition-colors hover:bg-white/[0.04]"
       >
         <span className="truncate text-[13px] font-semibold text-textPrimary" style={color ? { color } : undefined}>
           {name}
@@ -262,7 +275,15 @@ export default function ViewersPanel({ broadcasterId, channelLogin, onUsernameCl
         : all;
       if (items.length === 0) continue;
       found += items.length;
-      out.push({ kind: 'header', role: section.role, label: section.label, icon: section.icon, count: items.length });
+      out.push({
+        kind: 'header',
+        role: section.role,
+        label: section.label,
+        icon: section.icon,
+        badge: data.role_badges?.[section.role] ?? null,
+        count: items.length,
+        first: out.length === 0,
+      });
       // A search overrides collapse so matches are never hidden.
       if (q || !collapsed[section.role]) {
         for (const chatter of items) out.push({ kind: 'chatter', role: section.role, chatter });
@@ -270,6 +291,14 @@ export default function ViewersPanel({ broadcasterId, channelLogin, onUsernameCl
     }
     return { rows: out, matches: found };
   }, [data, q, collapsed]);
+
+  // Row heights vary (divided headers), so cached offsets go stale whenever
+  // the row list changes.
+  const listRef = useRef<List<RowData>>(null);
+  useEffect(() => {
+    listRef.current?.resetAfterIndex(0);
+  }, [rows]);
+  const itemSize = useCallback((index: number) => rowHeight(rows[index]), [rows]);
 
   const rowData = useMemo<RowData>(
     () => ({ rows, collapsed, searching: !!q, onToggle, onRow }),
@@ -382,11 +411,13 @@ export default function ViewersPanel({ broadcasterId, channelLogin, onUsernameCl
           ) : (
             listHeight > 0 && (
               <List
+                ref={listRef}
                 className="custom-scrollbar"
                 height={listHeight}
                 width="100%"
                 itemCount={rows.length}
-                itemSize={ROW_HEIGHT}
+                itemSize={itemSize}
+                estimatedItemSize={ROW_HEIGHT}
                 itemData={rowData}
                 overscanCount={8}
               >

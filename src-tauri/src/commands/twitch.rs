@@ -2433,9 +2433,156 @@ pub async fn get_channel_chatters(
     broadcaster_id: String,
     channel_login: String,
 ) -> Result<serde_json::Value, String> {
-    TwitchService::get_channel_chatters(&broadcaster_id, &channel_login)
+    let mut chatters = TwitchService::get_channel_chatters(&broadcaster_id, &channel_login)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Twitch leaves the broadcaster out whenever they are not connected to
+    // their own chat (streaming from software that never joins it), but the
+    // list is "who is here", and the channel owner always is.
+    if needs_broadcaster(&chatters) {
+        let display = TwitchService::get_user_by_login(&channel_login)
+            .await
+            .map(|u| u.display_name)
+            .unwrap_or_default();
+        add_broadcaster(&mut chatters, &broadcaster_id, &channel_login, &display);
+    }
+    if let Some(obj) = chatters.as_object_mut() {
+        obj.insert("role_badges".into(), role_badge_art().await);
+    }
+    Ok(chatters)
+}
+
+fn needs_broadcaster(chatters: &serde_json::Value) -> bool {
+    chatters
+        .get("broadcaster")
+        .and_then(|b| b.as_array())
+        .is_none_or(|b| b.is_empty())
+}
+
+/// Put the channel owner in the broadcaster group, out of any other group a
+/// role lookup miss left them in.
+fn add_broadcaster(chatters: &mut serde_json::Value, id: &str, login: &str, display: &str) {
+    let Some(obj) = chatters.as_object_mut() else { return };
+    let login = login.to_lowercase();
+    let mut found: Option<serde_json::Value> = None;
+    for group in ["moderators", "vips", "viewers"] {
+        if let Some(list) = obj.get_mut(group).and_then(|g| g.as_array_mut()) {
+            if let Some(i) = list.iter().position(|c| {
+                c.get("user_login").and_then(|l| l.as_str()).is_some_and(|l| l.eq_ignore_ascii_case(&login))
+            }) {
+                found = Some(list.remove(i));
+            }
+        }
+    }
+    let entry = found.unwrap_or_else(|| {
+        let name = if display.trim().is_empty() { login.as_str() } else { display };
+        serde_json::json!({ "user_id": id, "user_login": login, "user_name": name })
+    });
+    obj.insert("broadcaster".into(), serde_json::json!([entry]));
+    // Not in chat means not in Twitch's count either.
+    let listed: usize = ["broadcaster", "moderators", "vips", "viewers"]
+        .iter()
+        .filter_map(|g| obj.get(*g).and_then(|v| v.as_array()).map(|a| a.len()))
+        .sum();
+    let total = obj.get("total").and_then(|t| t.as_u64()).unwrap_or(0) as usize;
+    obj.insert("total".into(), serde_json::json!(total.max(listed)));
+}
+
+#[cfg(test)]
+mod broadcaster_tests {
+    use super::{add_broadcaster, needs_broadcaster};
+
+    #[test]
+    fn an_absent_broadcaster_is_added() {
+        let mut c = serde_json::json!({ "broadcaster": [], "moderators": [], "vips": [], "viewers": [
+            { "user_id": "2", "user_login": "someone", "user_name": "someone" }
+        ], "total": 1, "truncated": false });
+        assert!(needs_broadcaster(&c));
+        add_broadcaster(&mut c, "1", "Caedrel", "Caedrel");
+        assert_eq!(c["broadcaster"][0]["user_login"], "caedrel");
+        assert_eq!(c["broadcaster"][0]["user_name"], "Caedrel");
+        assert_eq!(c["total"], 2);
+    }
+
+    #[test]
+    fn a_broadcaster_filed_elsewhere_moves_up() {
+        let mut c = serde_json::json!({ "broadcaster": [], "moderators": [], "vips": [], "viewers": [
+            { "user_id": "1", "user_login": "caedrel", "user_name": "Caedrel" }
+        ], "total": 1, "truncated": false });
+        add_broadcaster(&mut c, "1", "caedrel", "");
+        assert_eq!(c["viewers"].as_array().unwrap().len(), 0);
+        assert_eq!(c["broadcaster"][0]["user_id"], "1");
+        assert_eq!(c["total"], 1);
+    }
+
+    #[test]
+    fn a_listed_broadcaster_is_left_alone() {
+        let c = serde_json::json!({ "broadcaster": [{ "user_login": "caedrel" }] });
+        assert!(!needs_broadcaster(&c));
+    }
+}
+
+/// The real Twitch badge art for each viewers-list group header (broadcaster,
+/// moderator, VIP), from the global badge set. A role whose art cannot be
+/// read is null and the list keeps its generic icon.
+async fn role_badge_art() -> serde_json::Value {
+    let badges = match crate::commands::badges::get_cached_global_badges().await {
+        Ok(Some(b)) => Some(b),
+        _ => crate::commands::badges::fetch_global_badges().await.ok(),
+    };
+    role_badge_art_from(badges.as_ref())
+}
+
+fn role_badge_art_from(badges: Option<&crate::commands::badges::HelixBadgesResponse>) -> serde_json::Value {
+    let art = |set_id: &str| -> Option<String> {
+        let set = badges?.data.iter().find(|s| s.set_id == set_id)?;
+        let version = set.versions.iter().find(|v| v.id == "1").or(set.versions.first())?;
+        Some(version.image_url_2x.clone()).filter(|u| !u.is_empty())
+    };
+    serde_json::json!({
+        "broadcaster": art("broadcaster"),
+        "moderators": art("moderator"),
+        "vips": art("vip"),
+    })
+}
+
+#[cfg(test)]
+mod role_badge_art_tests {
+    use super::role_badge_art_from;
+    use crate::commands::badges::{HelixBadgeSet, HelixBadgeVersion, HelixBadgesResponse};
+
+    fn set(id: &str, url: &str) -> HelixBadgeSet {
+        HelixBadgeSet {
+            set_id: id.into(),
+            versions: vec![HelixBadgeVersion {
+                id: "1".into(),
+                image_url_1x: String::new(),
+                image_url_2x: url.into(),
+                image_url_4x: String::new(),
+                title: id.into(),
+                description: String::new(),
+                click_action: None,
+                click_url: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn maps_role_sets_to_group_keys() {
+        let badges = HelixBadgesResponse {
+            data: vec![set("moderator", "m.png"), set("vip", "v.png"), set("broadcaster", "b.png")],
+        };
+        let out = role_badge_art_from(Some(&badges));
+        assert_eq!(out["moderators"], "m.png");
+        assert_eq!(out["vips"], "v.png");
+        assert_eq!(out["broadcaster"], "b.png");
+    }
+
+    #[test]
+    fn missing_art_is_null() {
+        let out = role_badge_art_from(None);
+        assert!(out["moderators"].is_null());
+    }
 }
 
 #[tauri::command]
