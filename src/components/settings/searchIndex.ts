@@ -94,8 +94,8 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Player',
-    section: 'Mouse Controls',
-    sectionId: 'settings-section-mouse-controls',
+    section: 'Video Player',
+    sectionId: 'settings-section-video-player',
     title: 'Resume VODs where you left off',
     description: 'Reopening a past broadcast picks up at your last position, and Home keeps a Continue Watching row.'
   },

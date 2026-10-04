@@ -305,6 +305,9 @@ const PlayerSettings = () => {
         </SettingsRow>
       </SettingsSection>
 
+      {/* Desktop only: a phone has no wheel and no middle button, so every
+          row here was a setting for hardware the phone does not have. */}
+      {!IS_MOBILE && (
       <SettingsSection
         id="settings-section-mouse-controls"
         label="Mouse Controls"
@@ -353,24 +356,6 @@ const PlayerSettings = () => {
         />
 
         <SettingsRow
-          title="Resume VODs where you left off"
-          description="Reopening a past broadcast picks up at your last position, and Home keeps a Continue Watching row."
-          help="Off starts every VOD from the beginning and hides the Continue Watching row; positions are still remembered for the video cards. Only VODs you open yourself are remembered, never a live stream you were watching."
-          control={
-            <Toggle
-              enabled={resumeVodPlayback}
-              onChange={() => {
-                setVideoPlayer({ resume_vod_playback: !resumeVodPlayback });
-                // The row is gated on this setting, and Home is mounted behind
-                // this dialog, so ask Rust to rebuild it rather than waiting
-                // for a remount.
-                void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
-              }}
-            />
-          }
-        />
-
-        <SettingsRow
           title="Volume Step"
           description="How far one wheel notch moves the volume."
           disabled={!scrollVolume}
@@ -391,6 +376,7 @@ const PlayerSettings = () => {
           </div>
         </SettingsRow>
       </SettingsSection>
+      )}
 
       <SettingsSection
         id="settings-section-video-player"
@@ -623,6 +609,27 @@ const PlayerSettings = () => {
             className="w-full accent-accent cursor-pointer"
           />
         </SettingsRow>
+
+        {/* Desktop only: the phone app has no past broadcasts to resume. */}
+        {!IS_MOBILE && (
+          <SettingsRow
+            title="Resume VODs where you left off"
+            description="Reopening a past broadcast picks up at your last position, and Home keeps a Continue Watching row."
+            help="Off starts every VOD from the beginning and hides the Continue Watching row; positions are still remembered for the video cards. Only VODs you open yourself are remembered, never a live stream you were watching."
+            control={
+              <Toggle
+                enabled={resumeVodPlayback}
+                onChange={() => {
+                  setVideoPlayer({ resume_vod_playback: !resumeVodPlayback });
+                  // The row is gated on this setting, and Home is mounted behind
+                  // this dialog, so ask Rust to rebuild it rather than waiting
+                  // for a remount.
+                  void invoke('refresh_home_section', { section: 'continue_watching' }).catch(() => {});
+                }}
+              />
+            }
+          />
+        )}
       </SettingsSection>
 
       {/* Desktop only, for now. `applyAudioBoost` is called from exactly one

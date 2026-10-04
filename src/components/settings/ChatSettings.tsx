@@ -1710,23 +1710,41 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
         <SettingsRow
           title="Animate emotes"
-          description="Play animated emotes always, only while you hover a message, or never (first frame). Never is the lightest on the GPU in a fast chat."
+          description={
+            IS_MOBILE
+              ? 'Play animated emotes, or show only their first frame. Never is the lightest on the GPU in a fast chat.'
+              : 'Play animated emotes always, only while you hover a message, or never (first frame). Never is the lightest on the GPU in a fast chat.'
+          }
         >
+          {/* No hover on a touch screen: a saved "On hover" already behaves as
+              Never there (ChatMessage skips touch pointers), so the phone shows
+              it as Never and only writes when the viewer picks something. */}
           <SegmentedSelect<'always' | 'hover' | 'never'>
-            value={cd.animate_emotes ?? 'always'}
+            value={IS_MOBILE && cd.animate_emotes === 'hover' ? 'never' : (cd.animate_emotes ?? 'always')}
             onChange={(animate_emotes) => setDesign({ animate_emotes })}
-            options={[
-              { value: 'always', label: 'Always' },
-              { value: 'hover', label: 'On hover' },
-              { value: 'never', label: 'Never' },
-            ]}
+            options={
+              IS_MOBILE
+                ? [
+                    { value: 'always', label: 'Always' },
+                    { value: 'never', label: 'Never' },
+                  ]
+                : [
+                    { value: 'always', label: 'Always' },
+                    { value: 'hover', label: 'On hover' },
+                    { value: 'never', label: 'Never' },
+                  ]
+            }
           />
         </SettingsRow>
 
         <SettingsRow
           title="Show GIFs in chat"
           description="Twitch lets Tier 2 and Tier 3 subscribers post GIFs. Off swaps each one for a small chip you can click to reveal."
-          help="GIFs also follow Animate emotes: Never shows the chip, On hover plays them while you hover the message."
+          help={
+            IS_MOBILE
+              ? 'GIFs also follow Animate emotes: Never shows the chip instead.'
+              : 'GIFs also follow Animate emotes: Never shows the chip, On hover plays them while you hover the message.'
+          }
           control={
             <Toggle
               enabled={cd.show_chat_gifs ?? true}
@@ -1750,28 +1768,32 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           />
         </SettingsRow>
 
-        <SettingsRow
-          title={`Emote hover size: ${(HOVER_SIZE_OPTIONS.find((o) => o.px === cd.emote_hover_size) ?? HOVER_SIZE_OPTIONS[1]).label}`}
-          description={
-            cd.compact_emote_tooltips
-              ? 'Off while Compact emote tooltips is on, since that replaces the hover card with just the emote name.'
-              : 'How large an emote grows when you hover it, in chat and in the emote menu.'
-          }
-          help="Hover the sample below to try the chosen size. The size of emotes in the message still follows Emote size above."
-          disabled={cd.compact_emote_tooltips}
-        >
-          <div className="space-y-3">
-            <SegmentedSelect<HoverSizeKey>
-              value={(HOVER_SIZE_OPTIONS.find((o) => o.px === cd.emote_hover_size) ?? HOVER_SIZE_OPTIONS[1]).value}
-              options={HOVER_SIZE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-              onChange={(v) => {
-                const opt = HOVER_SIZE_OPTIONS.find((o) => o.value === v) ?? HOVER_SIZE_OPTIONS[1];
-                setDesign({ emote_hover_size: opt.px });
-              }}
-            />
-            <EmoteHoverDemo hoverSize={cd.emote_hover_size} emoteScale={cd.emote_scale} />
-          </div>
-        </SettingsRow>
+        {/* Desktop only, with Compact emote tooltips below: a phone never
+            shows emote tooltips (Tooltip.tsx returns early on IS_MOBILE). */}
+        {!IS_MOBILE && (
+          <SettingsRow
+            title={`Emote hover size: ${(HOVER_SIZE_OPTIONS.find((o) => o.px === cd.emote_hover_size) ?? HOVER_SIZE_OPTIONS[1]).label}`}
+            description={
+              cd.compact_emote_tooltips
+                ? 'Off while Compact emote tooltips is on, since that replaces the hover card with just the emote name.'
+                : 'How large an emote grows when you hover it, in chat and in the emote menu.'
+            }
+            help="Hover the sample below to try the chosen size. The size of emotes in the message still follows Emote size above."
+            disabled={cd.compact_emote_tooltips}
+          >
+            <div className="space-y-3">
+              <SegmentedSelect<HoverSizeKey>
+                value={(HOVER_SIZE_OPTIONS.find((o) => o.px === cd.emote_hover_size) ?? HOVER_SIZE_OPTIONS[1]).value}
+                options={HOVER_SIZE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                onChange={(v) => {
+                  const opt = HOVER_SIZE_OPTIONS.find((o) => o.value === v) ?? HOVER_SIZE_OPTIONS[1];
+                  setDesign({ emote_hover_size: opt.px });
+                }}
+              />
+              <EmoteHoverDemo hoverSize={cd.emote_hover_size} emoteScale={cd.emote_scale} />
+            </div>
+          </SettingsRow>
+        )}
 
         <SettingsRow
           title={`Emote spacing: ${(cd.emote_margin ?? 0.125).toFixed(3)}rem`}
@@ -1788,16 +1810,18 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           />
         </SettingsRow>
 
-        <SettingsRow
-          title="Compact emote tooltips"
-          description='Show just the emote name on hover instead of the full "Right-click to copy" hint.'
-          control={
-            <Toggle
-              enabled={cd.compact_emote_tooltips}
-              onChange={() => setDesign({ compact_emote_tooltips: !cd.compact_emote_tooltips })}
-            />
-          }
-        />
+        {!IS_MOBILE && (
+          <SettingsRow
+            title="Compact emote tooltips"
+            description='Show just the emote name on hover instead of the full "Right-click to copy" hint.'
+            control={
+              <Toggle
+                enabled={cd.compact_emote_tooltips}
+                onChange={() => setDesign({ compact_emote_tooltips: !cd.compact_emote_tooltips })}
+              />
+            }
+          />
+        )}
 
         <SettingsRow
           title="FFZ emote effects"
