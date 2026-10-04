@@ -1163,10 +1163,10 @@ body[data-window-blurred="true"] .glaze-inset::after {
 .chat-header-row:is([data-density='4'], [data-density='5']) .chat-header-btn--dup {
   display: inline-grid;
 }
-/* Past the live numbers: the pin switch keeps its pictures (the pinned one
-   wears its pin) and drops the name, which its tooltip still gives, and the
-   way into combining waits for room. */
-.chat-header-row[data-density='5'] .chat-pin-name,
+/* Past the live numbers: the chat list capsule keeps its picture and count
+   and drops the name, which its tooltip still gives, and the way into
+   combining waits for room. */
+.chat-header-row[data-density='5'] .chat-dock-name,
 .chat-header-row[data-density='5'] .blend-trigger {
   display: none;
 }

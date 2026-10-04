@@ -74,6 +74,7 @@ pub mod modroom_auth_service;
 pub mod tiktok_auth_service;
 pub mod youtube_auth_service;
 pub mod favorite_live_service;
+pub mod chat_dock_live;
 pub mod live_announce;
 pub mod live_notification_service;
 pub mod onsite_notifications;

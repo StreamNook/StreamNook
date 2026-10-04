@@ -1203,6 +1203,10 @@ pub fn run() {
             // cards. Replaces three JS timers per mounted chat and a 2.5 s poll
             // per open card. See services::channel_state.
             services::channel_state::start(app_handle.clone());
+            // Live line for the chat dock's Kick / YouTube / TikTok chats;
+            // Twitch ones ride channel_state. See services::chat_dock_live.
+            #[cfg(desktop)]
+            services::chat_dock_live::start(app_handle.clone());
             // Minimized-window signal: the page cannot see it (native occlusion
             // detection is off), Rust can. See services::window_visibility.
             // Desktop only: on Android the activity pause already drives
@@ -1409,11 +1413,19 @@ pub fn run() {
             #[cfg(desktop)]
             set_chat_overlay_click_through,
             #[cfg(desktop)]
-            commands::chat_pin::get_chat_pin,
+            commands::chat_dock::get_chat_dock,
             #[cfg(desktop)]
-            commands::chat_pin::set_chat_pin,
+            commands::chat_dock::dock_chat,
             #[cfg(desktop)]
-            commands::chat_pin::set_chat_pin_view,
+            commands::chat_dock::undock_chat,
+            #[cfg(desktop)]
+            commands::chat_dock::show_docked_chat,
+            #[cfg(desktop)]
+            commands::chat_dock::reorder_chat_dock,
+            #[cfg(desktop)]
+            commands::chat_dock::set_docked_chat_light,
+            #[cfg(desktop)]
+            services::chat_dock_live::get_chat_dock_live,
             #[cfg(desktop)]
             open_plugin_window,
             #[cfg(desktop)]

@@ -25,9 +25,9 @@ import { useCommandPaletteHotkey } from './hooks/useCommandPaletteHotkey';
 import { usePlatformSessionCheck } from './hooks/usePlatformSessionCheck';
 import { usePlatformAccountSync } from './hooks/usePlatformAccountSync';
 import { useWatchedChestStat } from './hooks/useWatchedChestStat';
-import { useChatPinHold, usePinPair } from './hooks/useChatPin';
-import { chatKey } from './stores/chatPinStore';
-import ChatPinPane from './components/chat/ChatPinPane';
+import { useChatDockHold, useDockView } from './hooks/useChatDock';
+import { chatKey } from './stores/chatDockStore';
+import ChatDockPane from './components/chat/ChatDockPane';
 import { useStreamOnlyFullscreen } from './hooks/useStreamOnlyFullscreen';
 import { useKeybindings } from './keybindings';
 import { useCurrentStreamStats } from './utils/useCurrentStreamStats';
@@ -204,8 +204,8 @@ function App() {
   usePlatformAccountSync();
   // Main window only: one listener, or each collected chest counts twice.
   useWatchedChestStat();
-  // The pinned chat: loads the pin from Rust and keeps both chats joined.
-  useChatPinHold();
+  // The chat dock: loads the docked chats from Rust and keeps them joined.
+  useChatDockHold();
   // A YouTube account can own several channels, and a brand channel has its OWN
   // subscriptions. When Rust notices the active one changed (at launch, or after
   // the user switched channel inside an in-app YouTube window), the imported follow
@@ -1979,9 +1979,9 @@ function App() {
     ? activeChatSlot(multiNookSlots, activeChatChannelId)
     : null;
   const activeTileProvider = activeTile?.provider ?? 'twitch';
-  // A pinned chat on screen takes the pane; MultiNook never sees it (the pin
-  // sleeps there, see pinPair).
-  const { pin: chatPin, showPinned } = usePinPair();
+  // A docked chat on screen takes the pane; MultiNook never sees it (the dock
+  // sleeps there, see dockView).
+  const { shown: dockedChat } = useDockView();
   const chatPane =
     activeTile && activeTileProvider !== 'twitch' ? (
       <MainProviderChat
@@ -1995,8 +1995,8 @@ function App() {
           game_name: activeTile.gameName,
         }}
       />
-    ) : showPinned && chatPin ? (
-      <ChatPinPane key={chatKey(chatPin)} pin={chatPin} />
+    ) : dockedChat ? (
+      <ChatDockPane key={chatKey(dockedChat)} chat={dockedChat} />
     ) : currentStream && streamProvider(currentStream) !== 'twitch' ? (
       <MainProviderChat
         provider={streamProvider(currentStream)}

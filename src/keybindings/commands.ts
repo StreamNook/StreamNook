@@ -4,7 +4,8 @@
 
 import { useAppStore } from '../stores/AppStore';
 import { usemultiNookStore } from '../stores/multiNookStore';
-import { showChatPinSide, useChatPinStore } from '../stores/chatPinStore';
+import { chatKey, dockView, setDockPanelOpen, showDockedChat, useChatDockStore } from '../stores/chatDockStore';
+import { streamProvider } from '../utils/streamProvider';
 import { WATCHABLE_PROVIDERS, type ProviderId } from '../types/providers';
 import { getPlayerControls, isPlayerControllable } from './playerControls';
 import { getChatModController } from './chatModController';
@@ -579,23 +580,46 @@ function build(): BindableCommand[] {
       },
     },
 
-    // ---------------- Pinned chat ----------------
-    // Flips the main chat between the pinned chat and the watched stream's.
+    // ---------------- Chat dock ----------------
+    // The chats docked beside the stream: open the list, or step through the
+    // watched stream's chat and every docked chat in the list's order.
     {
-      id: 'chat.togglePinnedChat',
-      label: 'Switch between pinned and live chat',
-      description: 'With a chat pinned, show the pinned chat or the chat of the stream you are watching.',
+      id: 'chat.toggleDockList',
+      label: 'Open the chat list',
+      description: 'Show or hide the list of the chats docked beside the stream you are watching.',
       category: 'Chat',
       context: 'global',
       defaultBindings: ['Ctrl+Alt+P'],
-      keywords: 'pin pinned chat keep switch live stream toggle',
-      isAvailable: () => {
-        const { pin } = useChatPinStore.getState();
-        return !!pin && !usemultiNookStore.getState().isMultiNookActive;
-      },
+      keywords: 'dock docked chats list switch chat tabs multiple',
+      isAvailable: () => !usemultiNookStore.getState().isMultiNookActive,
+      run: () => setDockPanelOpen(!useChatDockStore.getState().panelOpen),
+    },
+    {
+      id: 'chat.nextDockedChat',
+      label: 'Next docked chat',
+      description: 'Show the next chat in the chat list.',
+      category: 'Chat',
+      context: 'global',
+      defaultBindings: ['Ctrl+Alt+ArrowDown'],
+      keywords: 'dock docked chat next cycle switch',
+      isAvailable: () => dockCycle(1) !== undefined,
       run: () => {
-        const { view } = useChatPinStore.getState();
-        void showChatPinSide(view === 'pinned' ? 'live' : 'pinned');
+        const next = dockCycle(1);
+        if (next !== undefined) void showDockedChat(next);
+      },
+    },
+    {
+      id: 'chat.prevDockedChat',
+      label: 'Previous docked chat',
+      description: 'Show the previous chat in the chat list.',
+      category: 'Chat',
+      context: 'global',
+      defaultBindings: ['Ctrl+Alt+ArrowUp'],
+      keywords: 'dock docked chat previous cycle switch',
+      isAvailable: () => dockCycle(-1) !== undefined,
+      run: () => {
+        const prev = dockCycle(-1);
+        if (prev !== undefined) void showDockedChat(prev);
       },
     },
 
@@ -684,4 +708,23 @@ function build(): BindableCommand[] {
       reserved: true,
     },
   ];
+}
+
+/**
+ * The chat `step` places along from the one on screen, in the chat list's
+ * order (the watched stream's chat, then the docked chats), as the key
+ * `showDockedChat` takes (null = the watched stream's). Undefined when there
+ * is nothing to step to.
+ */
+function dockCycle(step: 1 | -1): string | null | undefined {
+  const { chats, active } = useChatDockStore.getState();
+  const stream = useAppStore.getState().currentStream;
+  const live = stream ? { provider: streamProvider(stream), login: stream.user_login } : null;
+  const view = dockView(chats, active, live, usemultiNookStore.getState().isMultiNookActive);
+  if (!view.held) return undefined;
+  const order: (string | null)[] = [...(live ? [null] : []), ...view.others.map(chatKey)];
+  if (order.length < 2) return undefined;
+  const here = view.shown ? chatKey(view.shown) : null;
+  const i = Math.max(0, order.indexOf(here));
+  return order[(i + step + order.length) % order.length];
 }

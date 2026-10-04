@@ -37,11 +37,11 @@ import BlendBar, { type BlendView } from './chat/BlendBar';
 import { historyKey as chatterHistoryKey } from '../utils/chatterIdentity';
 import { streamProvider } from '../utils/streamProvider';
 import { PROVIDERS, type ProviderId } from '../types/providers';
-import { ChatCircle, Plus, PushPin, ShieldCheck, Timer, UsersThree } from 'phosphor-react';
-import ChatPinSwitch from './chat/ChatPinSwitch';
+import { ChatCircle, Chats, Plus, PushPin, ShieldCheck, Timer, UsersThree } from 'phosphor-react';
+import { ChatDockPanel, ChatDockSwitcher } from './chat/ChatDock';
+import { useDockSwitcherFloor } from '../hooks/useChatDock';
 import ChatHeaderMenu, { type ChatHeaderMenuItem } from './chat/ChatHeaderMenu';
-import { pinChat, unpinChat, useChatPinStore } from '../stores/chatPinStore';
-import { usePinPair } from '../hooks/useChatPin';
+import { dockChat, setDockPanelOpen, undockChat, useChatDockStore } from '../stores/chatDockStore';
 import { PlatformAccountChip } from './PlatformAccountChip';
 import { ProviderLogo } from './ProviderLogo';
 import { TogetherChip } from './SharedViewers';
@@ -950,12 +950,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // and level-up logic below all work per-pane with no further changes.
   const currentHypeTrain = channelOverride ? (hypeTrainOverride ?? null) : globalHypeTrain;
   const isMultiNookActive = usemultiNookStore((s) => s.isMultiNookActive);
-  // Chat pinning, main window only (MultiNook picks its chat among tiles).
-  // While a pin is held the window keeps two chats, so nothing here may treat
-  // a flip between them as leaving a channel.
-  const chatPin = useChatPinStore((s) => s.pin);
-  const { split: pinSplit } = usePinPair();
-  const pinHeld = isMainSurface && !!chatPin && !isMultiNookActive;
+  // The chat dock, main window only (MultiNook picks its chat among tiles).
+  // While anything is docked the window keeps several chats, so nothing here
+  // may treat a switch between them as leaving a channel.
+  const dockChats = useChatDockStore((s) => s.chats);
+  const dockHeld = isMainSurface && dockChats.length > 0 && !isMultiNookActive;
+  const dockSwitcherFloor = useDockSwitcherFloor();
   const activeChatChannelId = usemultiNookStore((s) => s.activeChatChannelId);
   const slots = usemultiNookStore((s) => s.slots);
 
@@ -2384,13 +2384,13 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const usersClearedForRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     const login = currentStream?.user_login;
-    // With a chat pinned the window shows two chats in turn; emptying the
-    // store on each flip would strip paints and badges off the other's
-    // backlog. Its LRU cap bounds it instead.
-    if (!isMainSurface || pinHeld || !login || usersClearedForRef.current === login) return;
+    // With chats docked the window shows several chats in turn; emptying the
+    // store on each switch would strip paints and badges off the others'
+    // backlogs. Its LRU cap bounds it instead.
+    if (!isMainSurface || dockHeld || !login || usersClearedForRef.current === login) return;
     usersClearedForRef.current = login;
     clearUsers();
-  }, [isMainSurface, pinHeld, currentStream?.user_login, clearUsers]);
+  }, [isMainSurface, dockHeld, currentStream?.user_login, clearUsers]);
 
   useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -2436,10 +2436,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       userMessageHistory.current.clear();
       sharedRoomsSeenRef.current.clear();
       setIsSharedChat(false);
-      // Clear Rust user message history when switching channels; not while a
-      // pin is held, where a flip between the two chats is not leaving one
+      // Clear Rust user message history when switching channels; not while
+      // chats are docked, where a switch between them is not leaving one
       // (the history's LRU cap bounds it).
-      if (!(isMainSurface && !isMultiNookActive && useChatPinStore.getState().pin)) {
+      if (!(isMainSurface && !isMultiNookActive && useChatDockStore.getState().chats.length > 0)) {
         invoke('clear_user_message_history').catch(err =>
           Logger.warn('[ChatWidget] Failed to clear Rust user history:', err)
         );
@@ -4622,45 +4622,56 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const overlayTop = chromeBottom + 8;
   const pinnedTop = overlayTop + (overlayStackHeight > 0 ? overlayStackHeight + 8 : 0);
   // The action capsule only renders when it would hold at least one button.
-  // Pin or unpin this chat. `provider` is this widget's own platform, so the
-  // pinned pane (an override on the pin's platform) reads as pinned too.
-  const canPinChat = isMainSurface && !isMultiNookActive && !!currentStream?.user_login;
-  const thisChatPinned =
-    !!chatPin && !!currentStream?.user_login &&
-    makeKey(chatPin.provider, chatPin.login) === makeKey(provider, currentStream.user_login);
+  // Dock this chat (keep it open beside whatever stream plays), or close it
+  // when it is a docked chat. `provider` is this widget's own platform, so a
+  // docked pane (an override on its platform) reads as docked too.
+  const canDockChat = isMainSurface && !isMultiNookActive && !!currentStream?.user_login;
+  const thisChatKey = currentStream?.user_login ? makeKey(provider, currentStream.user_login) : null;
+  const thisChatDocked = !!thisChatKey && dockChats.some((c) => makeKey(c.provider, c.login) === thisChatKey);
   const hasHeaderActions =
-    (!!currentStream && (!channelOverride || isTwitch)) || pinnedMessages.length > 0 || canPinChat;
+    (!!currentStream && (!channelOverride || isTwitch)) || pinnedMessages.length > 0 || canDockChat;
 
   // The header's "more" menu. Pop out opens a MultiChat window with this
   // channel (every tile's chat in MultiNook) and survives the main window;
   // float opens the see-through overlay. Neither is offered inside a popout or
-  // the pinned pane, where they would open a second copy of what is on screen.
+  // a docked pane, where they would open a second copy of what is on screen.
   const headerMenuItems: ChatHeaderMenuItem[] = [];
-  if (canPinChat && currentStream) {
+  if (canDockChat && currentStream && thisChatKey) {
     const stream = currentStream;
+    const key = thisChatKey;
     headerMenuItems.push({
-      key: 'pin',
-      icon: <PushPin size={15} weight={thisChatPinned ? 'fill' : 'regular'} />,
-      label: thisChatPinned ? 'Unpin chat' : chatPin ? 'Pin this chat instead' : 'Pin chat',
-      detail: thisChatPinned
-        ? 'Back to following the stream you watch'
-        : chatPin
-          ? `Replaces ${chatPin.display_name || chatPin.login} as your pinned chat`
-          : 'Keep it when you switch streams',
-      active: thisChatPinned,
+      key: 'dock',
+      icon: <PushPin size={15} weight={thisChatDocked ? 'fill' : 'regular'} />,
+      label: thisChatDocked ? 'Close this docked chat' : 'Dock this chat',
+      detail: thisChatDocked ? 'Remove it from your chat list' : 'Keep it open when you switch streams',
+      active: thisChatDocked,
       onSelect: () => {
-        if (thisChatPinned) {
-          void unpinChat();
+        if (thisChatDocked) {
+          void undockChat(key);
           return;
         }
-        void pinChat({
-          provider,
-          login: stream.user_login,
-          channel_id: stream.user_id || '',
-          display_name: stream.user_name || stream.user_login,
-          avatar_url: stream.profile_image_url || null,
-        });
+        // Shown on dock: while it is the stream being watched it simply is
+        // that stream's chat, and after a stream switch it stays on screen.
+        void dockChat(
+          {
+            provider,
+            login: stream.user_login,
+            channel_id: stream.user_id || '',
+            display_name: stream.user_name || stream.user_login,
+            avatar_url: stream.profile_image_url || null,
+          },
+          true,
+        );
       },
+    });
+  }
+  if (canDockChat) {
+    headerMenuItems.push({
+      key: 'dock-list',
+      icon: <Chats size={15} />,
+      label: dockChats.length > 0 ? 'Chat list' : 'Dock another chat',
+      detail: dockChats.length > 0 ? 'Switch between your open chats' : 'Keep other channels\' chats beside this stream',
+      onSelect: () => setDockPanelOpen(true),
     });
   }
   if (currentStream && !channelOverride) {
@@ -4750,6 +4761,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   return (
     <>
       <div ref={setChatContainerEl} className="h-full bg-secondary overflow-hidden flex flex-col relative">
+        {isMainSurface && !isMultiNookActive && <ChatDockPanel top={chromeHeight} />}
         {/* Floating cards at the top of chat. Twitch allows a poll and a
             prediction at once, so they stack in one column rather than both
             pinning themselves to the same box. Order is the user's choice. */}
@@ -4866,22 +4878,23 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                         <span className="text-xs text-textSecondary">Connecting...</span>
                       )}
                     </motion.div>
-                  ) : isMainSurface && pinSplit ? (
+                  ) : dockHeld ? (
                     <motion.div
-                      key="chat-pin-switch"
+                      key="chat-dock-switch"
                       initial={{ opacity: 0, y: -4 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: 4 }}
                       transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-                      // The switch's floor (two pictures and the name's
-                      // 3.5rem). Squeezed below it, the switch spilled
-                      // over the platform marks beside it instead of the row
-                      // reporting overflow, so the header never compacted.
-                      // Not min-w-min: that is the full name's width, so a
-                      // long name would refuse to truncate.
-                      className="flex min-w-[8rem] items-center"
+                      // The capsule's floor, sized to the name it shows
+                      // (useDockSwitcherFloor). Squeezed below it, the capsule
+                      // spilled over the platform marks beside it instead of
+                      // the row reporting overflow, so the header never
+                      // compacted. Not min-w-min: that is the full name's
+                      // width, so a long name would refuse to truncate.
+                      className="flex items-center"
+                      style={{ minWidth: dockSwitcherFloor }}
                     >
-                      <ChatPinSwitch />
+                      <ChatDockSwitcher />
                     </motion.div>
                   ) : (
                     <motion.p
@@ -4903,9 +4916,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                               ? 'Offline chat'
                               : blendActive
                                 ? 'Combined chat'
-                                : thisChatPinned && isMainSurface
-                                  ? 'Pinned chat'
-                                  : 'Stream chat'}
+                                : 'Stream chat'}
                     </motion.p>
                   )}
                 </AnimatePresence>
