@@ -1,3 +1,25 @@
+## [8.8.4] - 2026-10-03
+
+### ✨ Features
+- Dock chats beside the stream you're watching, as many as you like, without opening MultiNook. The chat header shows which chat is on screen and opens a list of the rest, with each channel's category and viewers. A chat that mentioned you shows a count, and one with new messages shows a dot.
+- The chat list's search finds any channel on Twitch, Kick or YouTube, followed or not.
+- Your pinned chat becomes your first docked chat.
+- The viewers list uses Twitch's own broadcaster, moderator and VIP badges, and always lists the broadcaster.
+- Ctrl+Alt+P opens the chat list, and Ctrl+Alt+Down and Up move between chats.
+
+### 🐛 Bug Fixes
+- Streamer About panels show their formatting. Bold text, links, lists, headings and images render instead of showing as raw text.
+- Badges in chat and on profiles are one size, with even spacing.
+- A profile card's recent messages keep the Back to profile button in reach.
+- The floating chat remembers its opacity.
+- Searching a streamer's exact name puts them first, and live channels show as live.
+- Viewer counts and categories show up as soon as a chat opens. They could stay blank until the numbers changed.
+- The sidebar's favorite heart sits under the viewer count, so the counts line up.
+
+### ⚡ Performance
+- Opening many chats at once stays under Twitch's join limit.
+- A chat you haven't looked at for a few minutes frees its emotes.
+
 ## [8.8.3] - 2026-10-03
 
 ![One main stage](https://raw.githubusercontent.com/StreamNook/StreamNook/main/.github/assets/release-8.8.3-multinook-main-stage.webp)
