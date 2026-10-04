@@ -11,8 +11,8 @@
 //! - `PARK:<cap>:<key>` holds a channel back: the window keeps it but shows it
 //!   nowhere. Its frames wait here, in order, up to `cap` (the window's own
 //!   buffer size), and when any of them mention the viewer the window gets a
-//!   count each second instead (`PARKED_TICK:<mentions>:<key>`) so tab badges
-//!   keep counting.
+//!   count each second instead (`PARKED_TICK:<mentions>:<rows>:<key>`, sent
+//!   whenever either moved) so tab badges and "new messages" marks keep up.
 //! - `UNPARK:<key>` sends what waited, in order, then `PARK_END:<key>`, then
 //!   live frames again. If more arrived than were kept, `PARK_GAP:<key>` goes
 //!   first so the window drops its older rows instead of showing a hole.
@@ -79,6 +79,7 @@ struct Held {
     ring: VecDeque<Arc<str>>,
     dropped: bool,
     mentions: u32,
+    rows: u32,
 }
 
 /// One socket's route. Pure: the socket task feeds it frames and the window's
@@ -139,8 +140,11 @@ impl SocketRoute {
                 h.dropped = true;
             }
             h.ring.push_back(f.text.clone());
-            if f.row && f.mention {
-                h.mentions = h.mentions.saturating_add(1);
+            if f.row {
+                h.rows = h.rows.saturating_add(1);
+                if f.mention {
+                    h.mentions = h.mentions.saturating_add(1);
+                }
             }
             return None;
         }
@@ -150,13 +154,14 @@ impl SocketRoute {
         None
     }
 
-    /// The mentions in held-back channels since the last call, as lines.
+    /// The rows and mentions in held-back channels since the last call, as lines.
     pub fn take_ticks(&mut self) -> Vec<Arc<str>> {
         let mut out = Vec::new();
         for (k, h) in self.held.iter_mut() {
-            if h.mentions > 0 {
-                out.push(Arc::from(format!("PARKED_TICK:{}:{}", h.mentions, k)));
+            if h.mentions > 0 || h.rows > 0 {
+                out.push(Arc::from(format!("PARKED_TICK:{}:{}:{}", h.mentions, h.rows, k)));
                 h.mentions = 0;
+                h.rows = 0;
             }
         }
         out
@@ -207,7 +212,7 @@ mod tests {
         assert!(r.on_frame(&BridgeFrame::channel("xqc", "del")).is_none());
         assert!(r.on_frame(&BridgeFrame::row("xqc", "2", true)).is_none());
         assert!(r.on_frame(&BridgeFrame::row("shroud", "s", false)).is_some(), "other chats flow");
-        assert_eq!(texts(r.take_ticks()), vec!["PARKED_TICK:1:xqc"]);
+        assert_eq!(texts(r.take_ticks()), vec!["PARKED_TICK:1:2:xqc"]);
         assert!(r.take_ticks().is_empty(), "counts reset");
         assert_eq!(texts(r.on_line("UNPARK:xqc")), vec!["1", "del", "2", "PARK_END:xqc"]);
         assert!(r.on_frame(&BridgeFrame::row("xqc", "3", false)).is_some(), "live again");

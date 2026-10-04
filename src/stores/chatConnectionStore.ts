@@ -133,6 +133,9 @@ interface ChannelSlice {
    *  from `liveMentionCount` because the backlog counts those same rows again
    *  when it replays; `PARK_END` clears this in the flush that counts them. */
   heldMentions: number;
+  /** Rows that arrived while held back, counted by the same tick; cleared by
+   *  `PARK_END`. Nonzero means "new messages you have not seen". */
+  heldRows: number;
   isPausedForBuffer: boolean;
   /** Rows above the cap still allowed after a resume; set by setChannelPaused,
    *  released RESUME_DECAY_PER_FLUSH per flush by flushPending. */
@@ -930,6 +933,7 @@ function emptySlice(
     backgroundRefs: 0,
     heldBack: false,
     heldMentions: 0,
+    heldRows: 0,
     isPausedForBuffer: false,
     resumeOverflow: 0,
     liveMessageCount: 0,
@@ -2086,12 +2090,14 @@ function handleWsMessage(raw: string) {
     }
     return;
   }
-  // A held-back channel's mentions, once a second: its tab badge keeps counting.
+  // A held-back channel's mentions and rows, once a second while either moved:
+  // tab badges and "new messages" marks keep counting.
   if (raw.startsWith('PARKED_TICK:')) {
-    const m = /^PARKED_TICK:(\d+):(.+)$/.exec(raw);
+    const m = /^PARKED_TICK:(\d+):(\d+):(.+)$/.exec(raw);
     if (m) {
-      withSlice(m[2], (slice) => {
+      withSlice(m[3], (slice) => {
         slice.heldMentions += Number(m[1]);
+        slice.heldRows += Number(m[2]);
       });
     }
     return;
@@ -2103,6 +2109,7 @@ function handleWsMessage(raw: string) {
     if (slice) {
       runFlush();
       slice.heldMentions = 0;
+      slice.heldRows = 0;
       bumpRevisionFor([slice.channel]);
     }
     return;
@@ -3098,6 +3105,37 @@ function reviewHold(key: string): void {
   if (hold === slice.heldBack) return;
   slice.heldBack = hold;
   sendRoute(hold ? `PARK:${holdCap(slice)}:${key}` : `UNPARK:${key}`);
+  scheduleParkedEmoteRelease(key, hold);
+}
+
+/** A chat held back this long gives up its emote set. */
+const PARKED_EMOTE_RELEASE_MS = 3 * 60_000;
+const parkedEmoteTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * A hidden chat's rows already carry Rust's emote stamps, so its 1-3 MB emote
+ * set only serves a picker nobody can open. Held back long enough, the set is
+ * dropped; showing the chat again fetches it from Rust's cache. Without this
+ * every chat ever looked at kept its set until it was closed, which made the
+ * chat dock (no cap on docked chats) linear in memory. The cache lives in this
+ * page, so the page decides when it goes.
+ */
+function scheduleParkedEmoteRelease(key: string, held: boolean): void {
+  const pending = parkedEmoteTimers.get(key);
+  if (pending) {
+    clearTimeout(pending);
+    parkedEmoteTimers.delete(key);
+  }
+  if (!held) return;
+  parkedEmoteTimers.set(
+    key,
+    setTimeout(() => {
+      parkedEmoteTimers.delete(key);
+      const slice = getSlice(key);
+      if (!slice?.heldBack || (emoteSubscribers.get(key)?.size ?? 0) > 0) return;
+      emoteCache.delete(key);
+    }, PARKED_EMOTE_RELEASE_MS),
+  );
 }
 
 /** The whole route, for a socket that just opened. */
@@ -3753,6 +3791,58 @@ export function useChannelMentionCount(
   return useChatConnectionStore((state) => {
     const slice = key ? state.channels.get(key) : undefined;
     return slice ? slice.liveMentionCount + slice.heldMentions : 0;
+  });
+}
+
+/** What happened in a held-back (hidden) channel since it was last shown:
+ *  0 nothing, 1 new messages, 2 a mention. Both clear when it is shown. Read
+ *  from Rust's parked tick, so a hidden chat costs the page nothing per row. */
+export type HeldActivity = 0 | 1 | 2;
+export function useChannelHeldActivity(provider: ProviderId, channel: string | null | undefined): HeldActivity {
+  const key = channel ? sliceLookupKey(provider, channel) : null;
+  return useChatConnectionStore((state) => {
+    const slice = key ? state.channels.get(key) : undefined;
+    if (!slice?.heldBack) return 0;
+    return slice.heldMentions > 0 ? 2 : slice.heldRows > 0 ? 1 : 0;
+  });
+}
+
+/** A hidden chat a summary looks at; `light` counts its new messages too. */
+export interface HeldEntry {
+  provider: ProviderId;
+  channel: string;
+  light: boolean;
+}
+
+/** Mentions collected across these hidden chats since each was last shown. */
+export function useHeldMentionTotal(entries: readonly HeldEntry[]): number {
+  return useChatConnectionStore((state) => {
+    let n = 0;
+    for (const e of entries) {
+      const slice = state.channels.get(sliceLookupKey(e.provider, e.channel));
+      if (slice?.heldBack) n += slice.heldMentions;
+    }
+    return n;
+  });
+}
+
+/** Whether any of these hidden chats that mark new messages has some. */
+export function useAnyHeldNew(entries: readonly HeldEntry[]): boolean {
+  return useChatConnectionStore((state) =>
+    entries.some((e) => {
+      if (!e.light) return false;
+      const slice = state.channels.get(sliceLookupKey(e.provider, e.channel));
+      return !!slice?.heldBack && slice.heldRows > 0;
+    }),
+  );
+}
+
+/** The mentions a held-back channel collected since it was last shown. */
+export function useChannelHeldMentions(provider: ProviderId, channel: string | null | undefined): number {
+  const key = channel ? sliceLookupKey(provider, channel) : null;
+  return useChatConnectionStore((state) => {
+    const slice = key ? state.channels.get(key) : undefined;
+    return slice?.heldBack ? slice.heldMentions : 0;
   });
 }
 

@@ -147,6 +147,66 @@ const SESSION_FLAP_THRESHOLD_MS: u64 = 10_000;
 // JOINs from user actions.
 const JOIN_BURST_BUDGET: usize = 15;
 const JOIN_PACE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(12_500);
+// Every JOIN this process writes, whoever writes it (handshake burst, paced
+// batches, user-driven ensure_joined, the unconfirmed re-issue), counts against
+// one rolling window, a little inside Twitch's 20 per 10 s. Opening many chats
+// at once (a restored chat dock) used to write every JOIN immediately.
+const JOIN_WINDOW_MAX: usize = 18;
+const JOIN_WINDOW_MS: u64 = 10_500;
+
+/// The JOINs written in the last `JOIN_WINDOW_MS`, by send time.
+#[derive(Default)]
+struct JoinWindow {
+    sent: std::collections::VecDeque<u64>,
+}
+
+impl JoinWindow {
+    fn prune(&mut self, now: u64) {
+        while self.sent.front().is_some_and(|&t| now.saturating_sub(t) >= JOIN_WINDOW_MS) {
+            self.sent.pop_front();
+        }
+    }
+
+    /// Claim a slot at `now`, or say how long until one frees.
+    fn claim(&mut self, now: u64) -> Result<(), u64> {
+        self.prune(now);
+        if self.sent.len() < JOIN_WINDOW_MAX {
+            self.sent.push_back(now);
+            return Ok(());
+        }
+        let oldest = *self.sent.front().unwrap_or(&now);
+        Err((oldest + JOIN_WINDOW_MS).saturating_sub(now).max(1))
+    }
+
+    /// Count JOINs written by a path that paces itself.
+    fn note(&mut self, now: u64, n: usize) {
+        self.prune(now);
+        self.sent.extend(std::iter::repeat_n(now, n));
+    }
+}
+
+static JOIN_WINDOW: once_cell::sync::Lazy<std::sync::Mutex<JoinWindow>> =
+    once_cell::sync::Lazy::new(Default::default);
+
+/// Wait for room in the JOIN window, then claim it.
+async fn take_join_slot() {
+    loop {
+        let wait = match JOIN_WINDOW.lock() {
+            Ok(mut w) => match w.claim(mono_ms()) {
+                Ok(()) => return,
+                Err(ms) => ms,
+            },
+            Err(_) => return,
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+    }
+}
+
+fn note_joins_sent(n: usize) {
+    if let Ok(mut w) = JOIN_WINDOW.lock() {
+        w.note(mono_ms(), n);
+    }
+}
 // A JOIN Twitch never acknowledged (no ROOMSTATE/USERSTATE/JOIN echo, no channel
 // message) is re-issued after this window. Twitch can silently drop JOINs (rate
 // limits, room-server hiccups); before this tracker existed such a channel stayed
@@ -1433,6 +1493,7 @@ impl IrcService {
                     w.send_line(&format!("JOIN #{}\r\n", ch)).await?;
                 }
             }
+            note_joins_sent(channels.len());
             {
                 // Everything this session will JOIN goes into the ack tracker up
                 // front. Paced channels get their deadline pushed out by their
@@ -1470,6 +1531,7 @@ impl IrcService {
                                 return;
                             }
                         }
+                        note_joins_sent(chunk.len());
                         record_lifecycle(&format!("paced JOIN batch: {:?}", chunk));
                     }
                 });
@@ -1611,6 +1673,7 @@ impl IrcService {
                             key,
                             attempts + 1
                         ));
+                        take_join_slot().await;
                         {
                             let mut w = writer_watch.lock().await;
                             if w.send_line(&format!("JOIN #{}\r\n", key)).await.is_err() {
@@ -2711,6 +2774,7 @@ impl IrcService {
         );
         match Self::wait_for_irc_writer(100).await {
             Some(writer) => {
+                take_join_slot().await;
                 let write_result = async {
                     let mut w = writer.lock().await;
                     w.send_line(&format!("JOIN #{}\r\n", key)).await
@@ -5017,6 +5081,31 @@ mod personal_emote_tests {
         assert!(IrcService::apply_personal_emotes(owner, &[text("hello")]).is_none());
         assert!(IrcService::apply_personal_emotes("someone-else", &segments).is_none());
         get_personal_emotes().write().unwrap().pop(owner);
+    }
+}
+
+#[cfg(test)]
+mod join_window_tests {
+    use super::{JoinWindow, JOIN_WINDOW_MAX, JOIN_WINDOW_MS};
+
+    #[test]
+    fn a_full_window_waits_for_its_oldest_join() {
+        let mut w = JoinWindow::default();
+        for i in 0..JOIN_WINDOW_MAX as u64 {
+            assert!(w.claim(1_000 + i).is_ok());
+        }
+        assert_eq!(w.claim(2_000), Err(1_000 + JOIN_WINDOW_MS - 2_000));
+        assert!(w.claim(1_000 + JOIN_WINDOW_MS).is_ok(), "the oldest has aged out");
+    }
+
+    #[test]
+    fn self_paced_joins_count_too() {
+        let mut w = JoinWindow::default();
+        w.note(0, 15);
+        for _ in 0..(JOIN_WINDOW_MAX - 15) {
+            assert!(w.claim(10).is_ok());
+        }
+        assert!(w.claim(10).is_err());
     }
 }
 
