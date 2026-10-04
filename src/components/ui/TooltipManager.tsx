@@ -31,46 +31,54 @@ export const TooltipManager = () => {
     return null;
   }
 
-  // Define position transforms based on desired side
+  // Where the tooltip sits (anchor point plus a static percentage translate),
+  // and the few pixels it drifts in from, toward the element. The drift is a
+  // fixed distance, not a share of the tooltip's height: a tall emote preview
+  // must not start out underneath the emote.
   let x = 0;
   let y = 0;
-  let initialX = "-50%";
-  let initialY = "-50%";
   let animateX = "-50%";
   let animateY = "-50%";
+  let driftX = 0;
+  let driftY = 0;
 
   if (rect) {
     const GAP = 8; // distance from rect
+    const DRIFT = 6; // px the tooltip moves while it fades in
     let currentSide = initialSide;
 
     // Apply baseline unconstrained constraints
     const applyTop = () => {
       x = rect.left + rect.width / 2;
       y = rect.top - GAP;
-      initialX = "-50%";
-      initialY = "0%";
+      animateX = "-50%";
       animateY = "-100%";
+      driftX = 0;
+      driftY = DRIFT;
     };
     const applyBottom = () => {
       x = rect.left + rect.width / 2;
       y = rect.bottom + GAP;
-      initialX = "-50%";
-      initialY = "-100%";
+      animateX = "-50%";
       animateY = "0%";
+      driftX = 0;
+      driftY = -DRIFT;
     };
     const applyLeft = () => {
       x = rect.left - GAP;
       y = rect.top + rect.height / 2;
-      initialX = "0%";
-      initialY = "-50%";
       animateX = "-100%";
+      animateY = "-50%";
+      driftX = DRIFT;
+      driftY = 0;
     };
     const applyRight = () => {
       x = rect.right + GAP;
       y = rect.top + rect.height / 2;
-      initialX = "-100%";
-      initialY = "-50%";
       animateX = "0%";
+      animateY = "-50%";
+      driftX = -DRIFT;
+      driftY = 0;
     };
 
     switch (currentSide) {
@@ -130,27 +138,34 @@ export const TooltipManager = () => {
     >
       <AnimatePresence>
         {isVisible && content && rect && (
+          // The outer node holds the final placement; only the inner one
+          // animates, so the motion is a short drift, never a slide across
+          // the tooltip's own height.
           <motion.div
-            ref={measureRef}
-            initial={{ opacity: 0, scale: 0.95, x: initialX, y: initialY }}
-            animate={{
-              opacity: 1,
-              scale: 1,
-              x: animateX,
-              y: animateY,
-              transition: { duration: 0.15, ease: "easeOut" },
-            }}
-            exit={{
-              opacity: 0,
-              scale: 0.95,
-              x: initialX,
-              y: initialY,
-              transition: { duration: 0.1, ease: "easeIn" },
-            }}
+            key="tooltip"
             style={{
               position: "absolute",
               left: `${x}px`,
               top: `${y}px`,
+              x: animateX,
+              y: animateY,
+            }}
+            className="pointer-events-none"
+          >
+          <motion.div
+            ref={measureRef}
+            initial={{ opacity: 0, scale: 0.97, x: driftX, y: driftY }}
+            animate={{
+              opacity: 1,
+              scale: 1,
+              x: 0,
+              y: 0,
+              transition: { duration: 0.09, ease: "easeOut" },
+            }}
+            exit={{
+              opacity: 0,
+              scale: 0.97,
+              transition: { duration: 0.06, ease: "easeIn" },
             }}
             className="pointer-events-none"
           >
@@ -167,6 +182,7 @@ export const TooltipManager = () => {
             >
               {content}
             </div>
+          </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
