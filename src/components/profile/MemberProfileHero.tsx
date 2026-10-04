@@ -158,7 +158,7 @@ export function MemberProfileHero({
                     )}
                     {bttvPro && imgBadge(bttvPro.src, 'BTTV Pro', 'bttvpro')}
                     {memberNumber !== null && userId && (
-                      <StreamNookBadge userId={userId} side="bottom" />
+                      <StreamNookBadge userId={userId} side="bottom" className="h-[18px] w-[18px] flex-shrink-0 object-contain" />
                     )}
                   </div>
                 );

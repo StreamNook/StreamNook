@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback, useSyncExternalStore } from 'react';
-import { MessageCircle, UserPlus, UserMinus, Loader2, ChevronDown, ChevronUp, Pencil, X, Gift, Share2, Link2, Check, EyeOff, History } from 'lucide-react';
+import { MessageCircle, UserPlus, UserMinus, Loader2, ChevronLeft, ChevronUp, Pencil, X, Gift, Share2, Link2, Check, EyeOff, History } from 'lucide-react';
 import { filterChannelKey, isHiddenInScope } from '../utils/chatFilters';
 import { buildShareUrl, buildProfileUrl } from '../utils/shareLink';
 import { providerLabel, type ProviderId } from '../types/providers';
@@ -1815,14 +1815,14 @@ const UserProfileCard = ({
                     </p>
                     <div className="flex items-center gap-1.5 flex-wrap">
                       {streamNookUserNumber !== null && (
-                        <StreamNookBadge userId={cardMemberId} />
+                        <StreamNookBadge userId={cardMemberId} className="w-5 h-5 inline-block object-contain" />
                       )}
                       {inactiveOwnedSlugs.map(({ slug, cosmetic, asset }) => (
                         <Tooltip key={`sn-${slug}`} content={cosmetic.name} side="top">
                           <img
                             src={asset}
                             alt={cosmetic.name}
-                            className="w-6 h-6 inline-block object-contain cursor-pointer hover:scale-110 transition-transform"
+                            className="w-5 h-5 inline-block object-contain cursor-pointer hover:scale-110 transition-transform"
                             draggable={false}
                             onClick={openBadgesOnStreamNookInMain}
                           />
@@ -2043,8 +2043,11 @@ const UserProfileCard = ({
                 AnimatePresence with `mode="wait"` ensures the exit completes
                 before the enter starts. The wrapper has `overflow-hidden` so the
                 slide stays clipped to the body instead of leaking under the
-                header, where the collapsed compact name carries the identity. */}
-            <div className="relative overflow-hidden">
+                header, where the collapsed compact name carries the identity.
+                `clip`, not `hidden`: a hidden overflow is a scroll container,
+                which pins the sticky Back bar below to this wrapper so it
+                scrolled away with the history. */}
+            <div className="relative overflow-clip">
               <AnimatePresence mode="wait" initial={false}>
                 {showMessages ? (
                   <motion.div
@@ -2057,13 +2060,18 @@ const UserProfileCard = ({
                   >
                     {/* Sticky so "Back to profile" stays reachable once the
                         timeline auto-scrolls to the newest message. */}
-                    <div className="sticky top-0 z-20 flex items-center justify-between px-2 py-2 -mt-2 bg-glass-ink/0 backdrop-blur-sm">
+                    <div className="sticky top-0 z-20 flex items-center justify-between rounded-lg px-2 py-1.5 -mt-2 bg-glass-ink/80 backdrop-blur-md">
                       <button
                         type="button"
-                        onClick={() => setShowMessages(false)}
-                        className="inline-flex items-center gap-1 text-[11px] text-textSecondary hover:text-textPrimary transition-colors"
+                        onClick={() => {
+                          setShowMessages(false);
+                          // The history leaves the body scrolled to its newest
+                          // message; the profile reads from the top.
+                          scrollBodyRef.current?.scrollTo({ top: 0 });
+                        }}
+                        className="glass-button inline-flex items-center gap-1 rounded-full py-0.5 pl-1.5 pr-2.5 text-[11px] font-medium text-textSecondary hover:text-textPrimary transition-colors"
                       >
-                        <ChevronDown size={14} />
+                        <ChevronLeft size={13} />
                         Back to profile
                       </button>
                       <span className="text-[10px] text-textSecondary uppercase tracking-wider font-semibold">

@@ -645,7 +645,7 @@ function UsernameWithCosmetics({
   return (
     <span className="inline-flex items-center align-middle">
       {userBadge && (
-        <span className="inline-flex items-center align-middle gap-1 mr-1">
+        <span className="inline-flex items-center align-middle gap-1 mr-1.5">
           <Tooltip content={userBadge.description || userBadge.name} side="top">
             <img
               src={getBadgeImageUrl(userBadge)}
@@ -2393,7 +2393,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       if (visibleBadges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
 
       return (
-        <span className="inline-flex items-center gap-1 mr-1">
+        <span className="inline-flex items-center gap-1 mr-1.5">
           {visibleBadges.map((badge, idx) => {
             // Handle both old format (key/info) and new format (name/version)
             if (!badge.info) return null;
@@ -2436,14 +2436,14 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                 // 2x, not imageUrl's 4x; see the default layout's badge row.
                 src={badge.image2x || badge.imageUrl}
                 alt={badge.title}
-                className="sn-chat-badge inline-block"
+                className="sn-chat-badge block object-contain"
                 onError={(e) => {
                   e.currentTarget.style.display = 'none';
                 }}
               />
             </Tooltip>
           ))}
-          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} />}
+          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge block object-contain" />}
         </span>
       );
     };
@@ -2586,7 +2586,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       if (visibleBadges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
 
       return (
-        <span className="inline-flex items-center gap-1 mr-1">
+        <span className="inline-flex items-center gap-1 mr-1.5">
           {visibleBadges.map((badge, idx) => {
             if (!badge.info) return null;
             return (
@@ -2628,14 +2628,14 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                 // 2x, not imageUrl's 4x; see the default layout's badge row.
                 src={badge.image2x || badge.imageUrl}
                 alt={badge.title}
-                className="sn-chat-badge inline-block"
+                className="sn-chat-badge block object-contain"
                 onError={(e) => {
                   e.currentTarget.style.display = 'none';
                 }}
               />
             </Tooltip>
           ))}
-          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} />}
+          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge block object-contain" />}
         </span>
       );
     };
@@ -2772,7 +2772,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       if (visibleBadges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
 
       return (
-        <span className="inline-flex items-center gap-1 mr-1">
+        <span className="inline-flex items-center gap-1 mr-0.5">
           {visibleBadges.map((badge, idx) => {
             if (!badge.info) return null;
             return (
@@ -2814,14 +2814,14 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                 // 2x, not imageUrl's 4x; see the default layout's badge row.
                 src={badge.image2x || badge.imageUrl}
                 alt={badge.title}
-                className="sn-chat-badge inline-block"
+                className="sn-chat-badge block object-contain"
                 onError={(e) => {
                   e.currentTarget.style.display = 'none';
                 }}
               />
             </Tooltip>
           ))}
-          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} />}
+          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge block object-contain" />}
         </span>
       );
     };
@@ -2893,7 +2893,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       if (visibleBadges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
 
       return (
-        <span className="inline-flex items-center align-middle gap-1 mr-1">
+        <span className="inline-flex items-center align-middle gap-1 mr-1.5">
           {visibleBadges.map((badge, idx) => {
             if (!badge.info) return null;
             return (
@@ -2935,14 +2935,14 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                 // 2x, not imageUrl's 4x; see the default layout's badge row.
                 src={badge.image2x || badge.imageUrl}
                 alt={badge.title}
-                className="sn-chat-badge inline-block"
+                className="sn-chat-badge block object-contain"
                 onError={(e) => {
                   e.currentTarget.style.display = 'none';
                 }}
               />
             </Tooltip>
           ))}
-          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} />}
+          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge block object-contain" />}
         </span>
       );
     };
@@ -3481,14 +3481,19 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           )}
           {/* Badges */}
           {isSN || (isFromSharedChat && channelProfileImage) || visibleBadges.length > 0 || seventvBadge || thirdPartyBadges.length > 0 ? (
-            <span className="inline-flex items-center gap-1 mr-1.5 align-middle">
+            <span
+              className="inline-flex items-center gap-1 mr-1.5 align-middle"
+              // .sn-chat-badge is sized in em: this row must carry the chat
+              // font size, as every event layout's badge row already does.
+              style={{ fontSize: `${chatDesign?.font_size ?? 14}px` }}
+            >
               {/* Shared chat channel profile image badge */}
               {isFromSharedChat && channelProfileImage && (
                 <Tooltip content={`Chatting from ${fetchedChannelName || 'shared channel'}`} side="top">
                   <img
                     src={channelProfileImage}
                     alt={`${fetchedChannelName || 'Channel'} profile`}
-                    className="w-5 h-5 cursor-pointer hover:scale-110 transition-transform object-cover"
+                    className="sn-chat-badge block cursor-pointer hover:scale-110 transition-transform object-cover"
                     onClick={async () => {
                       if (fetchedChannelName) {
                         try {
@@ -3529,13 +3534,15 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                 <Tooltip content={`Click for details: ${seventvBadge.description || seventvBadge.name}`} side="top">
                   <button
                     onClick={() => openBadgesWithBadgeInMain(seventvBadge.id)}
-                    className="inline-block cursor-pointer hover:scale-110 transition-transform"
+                    // Flex around a block image, as in the event layouts: an
+                    // inline-block button sat the badge on its text baseline.
+                    className="inline-flex items-center cursor-pointer hover:scale-110 transition-transform"
                   >
                     <FallbackImage
                       src={getBadgeImageUrl(seventvBadge)}
                       fallbackUrls={getBadgeFallbackUrls(seventvBadge.id).slice(1)}
                       alt={seventvBadge.description || seventvBadge.name}
-                      className="sn-chat-badge"
+                      className="sn-chat-badge block"
                     />
                   </button>
                 </Tooltip>
@@ -3550,7 +3557,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                   <img
                     src={badge.image2x || badge.imageUrl}
                     alt={badge.title}
-                    className="sn-chat-badge"
+                    className="sn-chat-badge block object-contain"
                     onError={(e) => {
                       e.currentTarget.style.display = 'none';
                     }}
@@ -3558,7 +3565,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                 </Tooltip>
               ))}
               {/* StreamNook identity badge sits rightmost, next to the name (see utils/badgeOrder). */}
-              {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} />}
+              {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge block object-contain" />}
             </span>
           ) : null}
 

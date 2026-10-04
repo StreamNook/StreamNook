@@ -27,6 +27,9 @@ interface StreamNookBadgeProps {
    *  'top' (chat convention); surfaces near the top of the viewport pass
    *  'bottom'. */
   side?: 'top' | 'bottom' | 'left' | 'right';
+  /** Size classes, so the badge matches the other badges beside it (chat
+   *  passes `sn-chat-badge`). Defaults to a fixed 24px. */
+  className?: string;
 }
 
 // Rank tiers based on signup order. The cutoffs and labels are intentionally
@@ -468,6 +471,7 @@ export const MEMBER_REVEAL_CARD_CLASS = CARD_CLASS;
 export const StreamNookBadge = memo(function StreamNookBadge({
   userId,
   side = 'top',
+  className = 'w-6 h-6 inline-block object-contain',
 }: StreamNookBadgeProps) {
   const cosmeticAsset = useActiveCosmeticAsset(userId);
   const cosmeticSlug = getActiveCosmeticSlug(userId);
@@ -488,7 +492,7 @@ export const StreamNookBadge = memo(function StreamNookBadge({
         src={src}
         alt={label}
         loading="lazy"
-        className="w-6 h-6 inline-block object-contain"
+        className={className}
         draggable={false}
       />
     </Tooltip>
