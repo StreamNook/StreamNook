@@ -1,3 +1,36 @@
+## [8.8.3] - 2026-10-03
+
+![One main stage](https://raw.githubusercontent.com/StreamNook/StreamNook/main/.github/assets/release-8.8.3-multinook-main-stage.webp)
+
+### ✨ Features
+- MultiNook can put one stream on a main stage, with the rest in a row below it or a column beside it. A slider sets how big the small tiles are, and presets remember their layout.
+- Any MultiNook stream can be made the main one, and every stream keeps playing while they move.
+- Small MultiNook tiles can play at a lower quality to save bandwidth.
+- MultiNook tiles have a LIVE button that jumps back to the live edge.
+- Click the viewer count to see who's in chat. Moderators get the full list. Everyone else sees Twitch's public list plus anyone who chatted in the last 30 minutes.
+- Pin a chat so it stays when you switch streams. The pin switch shows each streamer's picture.
+- Deleted messages can show in italics with a tag saying why they were removed.
+- Visual chat settings show a live preview, and hovering an option previews it.
+- New installs start with combined chat, larger text, messages that slide in and italic deleted messages. If you never changed those settings, you get the new look too.
+- A badge's page lists the channels taking part in its drop campaign.
+- Sub-only drops list the live channels you can earn them on, like watch drops.
+
+### 🐛 Bug Fixes
+- MultiNook's Resync lines the streams up and keeps them together.
+- MultiNook's uptime no longer restarts every time you switch chats.
+- MultiChat's @ counts include replies. Kick and YouTube tabs no longer count mentions from a Twitch chat with the same name.
+- Jump to message finds the right chat pane.
+- The chat header keeps everything one size and compacts step by step when space runs out, instead of cutting things off.
+- Click-through no longer traps the floating chat.
+- Bonus chests are claimed whichever chat is on screen.
+- Emote previews open faster, and tooltips no longer slide their full height into place.
+- Drop campaigns you already finished still list their channels.
+- New cosmetics show up without restarting the app.
+
+### ⚡ Performance
+- Chats you can't see, like hidden MultiChat tabs, MultiNook tiles and the other side of a pin, cost almost nothing until you look at them.
+- MultiNook checks stream titles in the background, and changing a tile's volume no longer re-saves the whole grid.
+
 ## [8.8.2] - 2026-09-30
 
 ### ✨ Features
