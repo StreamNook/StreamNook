@@ -92,9 +92,10 @@ export interface LatencyGovernorOptions {
    * drain the buffer into a stall. Only valid on the LL-origin path, where
    * `hls.latency` is honest (only real parts are listed). Pass a getter (not a
    * fixed number) so a mid-stream change to the viewer's chosen gap takes effect
-   * immediately, without rebuilding the player.
+   * immediately, without rebuilding the player. A getter may return null for
+   * "no target right now", which runs the forward-buffer mode instead.
    */
-  latencyTarget?: number | (() => number);
+  latencyTarget?: number | (() => number | null);
   /** Current behind-live seconds (e.g. `() => hls.latency`). Paired with `latencyTarget`. */
   getLatency?: () => number | null;
   /**

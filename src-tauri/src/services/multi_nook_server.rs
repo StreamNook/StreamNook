@@ -48,6 +48,13 @@ pub struct TilePromotion {
     /// Entitlement / proxy decision. `None` for a non-Twitch tile, whose solo
     /// path carries no ad-source badge either.
     pub status: Option<crate::services::auth_proxy::PlaybackStatus>,
+    /// The small-tile cap this stream was resolved under, if any. A capped
+    /// stream is never handed to the solo player, which wants the viewer's own
+    /// quality.
+    pub capped: Option<u32>,
+    /// The served rendition's CODECS attribute, when known. A swap in place is
+    /// only safe within one codec family: the player's decoder is not told.
+    pub codecs: Option<String>,
 }
 
 /// Represents a single stream proxy instance
@@ -92,7 +99,29 @@ static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
         .expect("Failed to build global HTTP client")
 });
 
+/// The delay a MultiNook Resync holds every tile at, behind live. While set,
+/// tile windows reach that far back (`ll_origin::window_for_delay`).
+static SYNC_DELAY: std::sync::Mutex<Option<f64>> = std::sync::Mutex::new(None);
+
+fn sync_window() -> usize {
+    match *SYNC_DELAY.lock().unwrap_or_else(|e| e.into_inner()) {
+        Some(d) => ll_origin::window_for_delay(d),
+        None => ll_origin::TILE_MAX_SEGMENTS,
+    }
+}
+
 impl MultiNookServer {
+    /// Hold (or release, with None) the shared delay a Resync lines tiles up
+    /// at: every tile's playlist window follows it, tiles started later too.
+    pub async fn set_sync_delay(delay: Option<f64>) {
+        *SYNC_DELAY.lock().unwrap_or_else(|e| e.into_inner()) = delay;
+        let window = sync_window();
+        let registry = STREAM_REGISTRY.lock().await;
+        for instance in registry.values() {
+            instance.ll_origin.set_window(window);
+        }
+    }
+
     /// Start a new proxy server for a specific stream, or update the URL if one already exists
     pub async fn start_proxy(
         stream_id: &str,
@@ -128,6 +157,7 @@ impl MultiNookServer {
                 let ad_state: Arc<std::sync::Mutex<ad_detect::AdDetectionState>> =
                     Arc::new(std::sync::Mutex::new(ad_detect::AdDetectionState::default()));
                 let origin = LlOrigin::new(ll_origin::TILE_MAX_SEGMENTS);
+                origin.set_window(sync_window());
 
                 let addr = SocketAddr::from(([127, 0, 0, 1], port));
                 let proxy_url_clone = proxy_url.clone();

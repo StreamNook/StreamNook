@@ -1,9 +1,8 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { patchSettings } from '../utils/settingsBroadcast';
-import { helixGet } from '../services/helix';
 import { useAppStore, type StreamStartResult } from './AppStore';
-import { MultiNookSlot, MultiNookPresetChannel, MultiNookRaid, TwitchStream } from '../types';
+import { DEFAULT_MULTI_NOOK_LAYOUT, MultiNookLayout, MultiNookSlot, MultiNookPresetChannel, MultiNookRaid, MultiNookTileMeta, TwitchStream } from '../types';
 import type { ProviderId } from '../types/providers';
 import { makeKey, parseKey } from '../utils/providerKey';
 import { canGridProvider, gridRefusal } from '../types/providers';
@@ -24,6 +23,27 @@ let slotIdSeq = 0;
  *  would destroy a case-sensitive id (utils/providerKey.ts documents which
  *  providers those are). Absent provider means Twitch, so every grid saved
  *  before providers existed keys exactly as it always did. */
+/** The layout setting, with the default for a settings object that predates it. */
+export function currentNookLayout(): MultiNookLayout {
+  return useAppStore.getState().settings.multi_nook_layout ?? DEFAULT_MULTI_NOOK_LAYOUT;
+}
+
+/**
+ * The small-tile cap a tile's stream should run under, or null for its own
+ * quality. Rust picks the actual rendition (commands/multi_nook.rs
+ * tile_quality, with the cap from settings); this mirrors only WHEN the cap
+ * applies, so the page knows a tile must restart because its role changed.
+ * The main tile and a spotlighted tile are never small; a docked tile is.
+ */
+function wantedCap(slot: MultiNookSlot, slots: MultiNookSlot[], maximizedSlotId: string | null): number | null {
+  const layout = currentNookLayout();
+  if (layout.mode === 'grid' || !layout.small_quality_cap) return null;
+  if (slot.id === maximizedSlotId) return null;
+  const main = slots.find((s) => !s.isMinimized);
+  if (main && main.id === slot.id) return null;
+  return layout.small_quality_cap;
+}
+
 function slotKey(slot: Pick<MultiNookSlot, 'provider' | 'channelLogin'>): string {
   return makeKey(slot.provider ?? 'twitch', slot.channelLogin);
 }
@@ -190,6 +210,21 @@ interface MultiNookState {
   dismissSlotRaid: (id: string) => void;
   reorderSlots: (newSlots: MultiNookSlot[]) => void;
   toggleFocusSlot: (id: string) => void;
+  /** Put this tile in the main spot (swapping places with the tile there) and
+   *  give it the sound and the chat, as Spotlight does. */
+  makeMainSlot: (id: string) => void;
+  /** Change the layout. A change of mode or small-tile cap is saved before it
+   *  shows, because Rust reads the cap when a tile starts; the strip size shows
+   *  at once and is saved a moment later. */
+  setLayout: (patch: Partial<MultiNookLayout>) => Promise<void>;
+  /** Bring every tile's stream to the quality its role wants: swapped in
+   *  place by Rust where it can, else restarted. */
+  reconcileTileCaps: () => Promise<void>;
+  /** The strip size while its slider is being dragged; null otherwise. Kept
+   *  here, not in settings, so a drag re-lays the grid without touching the
+   *  app-wide settings object every frame. */
+  draftShare: number | null;
+  setDraftShare: (share: number | null) => void;
   /** Toggle a tile filling the whole grid area. Maximizing also focuses the tile
    *  (takes over audio + chat) so it behaves like the solo player. Passing the
    *  already-maximized id, or any id while it is maximized, restores the grid. */
@@ -206,12 +241,10 @@ interface MultiNookState {
   setActiveChatChannelId: (id: string | null) => void;
   toggleChatHidden: () => void;
   batchLoadMissingStreams: () => Promise<void>;
-  /** One batched Helix call covering every tile, refreshing the stream title and
-   *  category. Both are ephemeral view data: this never writes to settings. */
-  refreshSlotMetadata: () => Promise<void>;
-  /** One-shot fill of partner/affiliate status for tiles that don't have it yet.
-   *  Stable data helix/streams doesn't return, so it isn't part of the poll. */
-  backfillBroadcasterTypes: () => Promise<void>;
+  /** Apply what Rust reports about the Twitch tiles' channels (services/
+   *  multi_nook_meta: one batched poll for the grid, sent on change). All of
+   *  it is ephemeral view data: this never writes to settings. */
+  applySlotMetadata: (entries: MultiNookTileMeta[]) => void;
   loadPresetChannels: (channels: MultiNookPresetChannel[], mode: 'replace' | 'append', presetId?: string) => Promise<void>;
   /** Tag the current grid with the preset it was loaded from (null = no equipped preset). Persisted. */
   setActivePresetId: (id: string | null) => Promise<void>;
@@ -249,6 +282,8 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
   suckUpKey: null,
   recallAnimation: null,
   materializingKey: null,
+  draftShare: null,
+  setDraftShare: (share) => set({ draftShare: share }),
 
   batchLoadMissingStreams: async () => {
     const slots = get().slots;
@@ -265,10 +300,12 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
     // playlist targetduration, so hls.js under-polled and the buffer drained. That
     // is fixed in the relay (multi_nook_server retarget_playlist), so tiles can
     // cold-start together again.
+    const { slots: all, maximizedSlotId } = get();
     await Promise.all(
       missing.map(async (slot) => {
         try {
           const slotProvider = slot.provider ?? 'twitch';
+          const cap = wantedCap(slot, all, maximizedSlotId);
           const url = await invoke<string>('start_multi_nook', {
             streamId: slot.id,
             // buildProviderUrl knows each platform's watch-URL shape and encodes
@@ -277,9 +314,13 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
             url: buildProviderUrl(slotProvider, slot.channelLogin),
             quality: slot.quality || 'best', // Per-tile quality (set via the focused tile's gear menu)
             provider: slotProvider,
+            // A small tile of a main layout: Rust holds it to the cap.
+            small: cap !== null,
           });
           set((state) => ({
-            slots: state.slots.map((s) => (s.id === slot.id ? { ...s, streamUrl: url, loadError: false } : s)),
+            slots: state.slots.map((s) =>
+              s.id === slot.id ? { ...s, streamUrl: url, loadError: false, startedCap: cap } : s,
+            ),
           }));
         } catch (err) {
           Logger.error(`Failed to start multi-nook proxy for ${slot.channelLogin}:`, err);
@@ -293,117 +334,54 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
         }
       }),
     );
+    // A tile still starting when its role changed (a layout switch during a
+    // cold start) was skipped by that reconcile; catch it now it is playing.
+    void get().reconcileTileCaps();
   },
 
-  refreshSlotMetadata: async () => {
-    // Helix answers about TWITCH channels only. Handing it a Kick slug returns
-    // whatever Twitch account owns that name, or nothing, and the "absent means
-    // offline" rule below would then report every provider tile as permanently
-    // offline. Provider tiles keep the metadata their own resolve gave them.
-    const twitchSlots = get().slots.filter((s) => (s.provider ?? 'twitch') === 'twitch');
-    const logins = Array.from(
-      new Set(twitchSlots.map((s) => s.channelLogin.toLowerCase())),
-    ).filter(Boolean);
-    if (logins.length === 0) return;
-
-    // Keyed on channelLogin, not channelId: the id is optional on a slot (a
-    // preset carries whatever was cached when it was saved), so a broadcaster_id
-    // batch would silently skip those tiles. The login is the required key.
-    // No chunking needed — the grid is hard-capped at 25, well under Helix's 100.
-    let byLogin: Map<string, { title?: string; game_name?: string }>;
-    try {
-      const qs = logins.map((l) => `user_login=${encodeURIComponent(l)}`).join('&');
-      const data = await helixGet<{ data?: Array<{ user_login?: string; title?: string; game_name?: string }> }>('streams', qs);
-      byLogin = new Map(
-        (data.data || []).map((s: { user_login?: string; title?: string; game_name?: string }) => [
-          (s.user_login || '').toLowerCase(),
-          { title: s.title, game_name: s.game_name },
-        ]),
-      );
-    } catch (e) {
-      Logger.warn('[multiNookStore] Failed to refresh slot titles', e);
-      return;
-    }
-
+  applySlotMetadata: (entries) => {
+    const byLogin = new Map(entries.map((m) => [m.login.toLowerCase(), m]));
     // Preserve object identity for every tile that didn't actually change: each
     // cell is memoized on its slot's reference, so spreading unconditionally
-    // would re-render the whole grid on every poll. That includes the offline
-    // branch — a tile with no title must come back as the *same* object.
+    // would re-render the whole grid on every report.
     let changed = false;
+    let identityChanged = false;
     const next = get().slots.map((s) => {
-      // Only Twitch tiles were asked about, so only they can be judged by the
-      // answer.
+      // Rust asks Helix about Twitch channels only; a provider tile keeps the
+      // metadata its own resolve gave it.
       if ((s.provider ?? 'twitch') !== 'twitch') return s;
-      const live = byLogin.get(s.channelLogin.toLowerCase());
-      if (!live) {
-        // Absent from the response means offline. Drop the title (a stale live
-        // title on an offline tile is wrong) but keep the last known category.
-        if (s.title === undefined) return s;
-        changed = true;
-        return { ...s, title: undefined };
+      const m = byLogin.get(s.channelLogin.toLowerCase());
+      if (!m) return s;
+      // Offline: no title (a stale live title on an offline tile is wrong),
+      // the last known category kept.
+      const title = m.live ? m.title ?? undefined : undefined;
+      const gameName = m.game_name ?? s.gameName;
+      const broadcasterType = m.broadcaster_type ?? s.broadcasterType;
+      // The saved identity: a fresh avatar (Twitch CDN URLs expire), and an id
+      // or name the slot never captured.
+      const profileImageUrl = m.profile_image_url ?? s.profileImageUrl;
+      const channelId = s.channelId || m.user_id || undefined;
+      const channelName = s.channelName || m.display_name || undefined;
+      if (
+        s.title === title &&
+        s.gameName === gameName &&
+        s.broadcasterType === broadcasterType &&
+        s.profileImageUrl === profileImageUrl &&
+        s.channelId === channelId &&
+        s.channelName === channelName
+      )
+        return s;
+      if (s.profileImageUrl !== profileImageUrl || s.channelId !== channelId || s.channelName !== channelName) {
+        identityChanged = true;
       }
-      const title = live.title || undefined;
-      const gameName = live.game_name || s.gameName;
-      if (s.title === title && s.gameName === gameName) return s;
       changed = true;
-      return { ...s, title, gameName };
-    });
-    if (changed) {
-      // Deliberately no saveSlots(): every field touched here is ephemeral.
-      set({ slots: next });
-    }
-
-    await get().backfillBroadcasterTypes();
-  },
-
-  backfillBroadcasterTypes: async () => {
-    // Partner/affiliate status is stable, and helix/streams doesn't carry it, so
-    // this is a one-shot fill rather than part of the recurring poll: once every
-    // tile has a value the guard below makes it a no-op. Covers the paths that
-    // never see a helix/users response — chiefly loadPresetChannels, which
-    // deliberately opens a preset with no per-channel round-trip at all.
-    const missing = Array.from(
-      new Set(
-        get()
-          .slots.filter(
-            (s) => s.broadcasterType === undefined && (s.provider ?? 'twitch') === 'twitch',
-          )
-          .map((s) => s.channelLogin.toLowerCase()),
-      ),
-    ).filter(Boolean);
-    if (missing.length === 0) return;
-
-    let byLogin: Map<string, string>;
-    try {
-      const qs = missing.map((l) => `login=${encodeURIComponent(l)}`).join('&');
-      const data = await helixGet<{ data?: Array<{ login?: string; broadcaster_type?: string }> }>('users', qs);
-      byLogin = new Map(
-        (data.data || []).map((u: { login?: string; broadcaster_type?: string }) => [
-          (u.login || '').toLowerCase(),
-          u.broadcaster_type || '',
-        ]),
-      );
-    } catch (e) {
-      Logger.warn('[multiNookStore] Failed to backfill broadcaster types', e);
-      return;
-    }
-
-    // Same identity discipline as above: only the tiles that actually resolved
-    // get a new object, so this never re-renders the whole grid.
-    let changed = false;
-    const next = get().slots.map((s) => {
-      if (s.broadcasterType !== undefined) return s;
-      if ((s.provider ?? 'twitch') !== 'twitch') return s;
-      // A login Helix did not answer for (renamed, banned, or simply not a
-      // Twitch channel) must still be marked resolved, or it stays `undefined`
-      // and this batch re-requests it on EVERY 120s poll for the life of the
-      // session. Empty string is the honest answer: asked, no badge.
-      const type = byLogin.get(s.channelLogin.toLowerCase()) ?? '';
-      changed = true;
-      return { ...s, broadcasterType: type };
+      return { ...s, title, gameName, broadcasterType, profileImageUrl, channelId, channelName };
     });
     if (!changed) return;
     set({ slots: next });
+    // Title, category and partner mark are ephemeral; only a repaired
+    // identity is worth saving.
+    if (identityChanged) void get().saveSlots();
   },
 
   loadPresetChannels: async (channels, mode, presetId) => {
@@ -689,14 +667,13 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
   },
 
   resyncAllSlots: () => {
-    Logger.info("[MultiNook] Forcing concurrent resynchronization of all streams");
-    set(state => ({
-      slots: state.slots.map(slot => ({
-        ...slot,
-        streamUrl: undefined, // Clearing streamUrl forces MultiNookCell to natively remount and concurrently invoke start_multi_nook
-        loadError: false,     // Give previously-offline tiles another chance
-      }))
-    }));
+    // Playing tiles line up in place (components/multi-nook/tileSync, called
+    // beside this); only a tile that failed to load starts over.
+    const { slots } = get();
+    if (!slots.some((s) => s.loadError)) return;
+    set({
+      slots: slots.map((s) => (s.loadError ? { ...s, streamUrl: undefined, loadError: false } : s)),
+    });
   },
 
   markSlotsRaided: (raid: MultiNookRaid) => {
@@ -851,28 +828,15 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       }
     } else {
     try {
-      const data = await helixGet<{ data?: Array<{ id: string; display_name: string; profile_image_url: string; broadcaster_type: string }> }>('users', `login=${encodeURIComponent(channelLogin)}`).catch(() => null);
-      if (data) {
-        if (data.data && data.data.length > 0) {
-          resolvedId = data.data[0].id;
-          resolvedName = data.data[0].display_name;
-          resolvedImage = data.data[0].profile_image_url;
-          resolvedBroadcasterType = data.data[0].broadcaster_type;
-
-          // Fetch channel info to get the current category and stream title
-          try {
-            const channelData = await helixGet<{ data?: Array<{ game_name: string; title: string }> }>('channels', `broadcaster_id=${encodeURIComponent(resolvedId)}`);
-            {
-              if (channelData.data && channelData.data.length > 0) {
-                resolvedGameName = channelData.data[0].game_name;
-                resolvedTitle = channelData.data[0].title;
-              }
-            }
-          } catch (e) {
-            Logger.warn('[multiNookStore] Failed to fetch channel info for game name', e);
-          }
-        }
-      }
+      // One Rust lookup: identity, avatar, partner mark, and the live title and
+      // category (or the channel's own when offline).
+      const row = await invoke<TwitchStream>('resolve_stream_for_login', { login: channelLogin });
+      resolvedId = row.user_id || '';
+      resolvedName = row.user_name || '';
+      resolvedImage = row.profile_image_url || '';
+      resolvedBroadcasterType = row.broadcaster_type || '';
+      resolvedGameName = row.game_name || '';
+      resolvedTitle = row.title || '';
     } catch (e) {
       Logger.warn('[multiNookStore] Failed to resolve channel details for', channelLogin, e);
     }
@@ -996,7 +960,20 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
     if (!changed) return;
     set({ slots: newSlots });
     
-    // Only save to settings if it's a persistent config change (not streamUrl)
+    // Volume and mute change on every scroll notch and slider step: Rust
+    // writes just this tile's audio into the saved grid, with no whole-grid
+    // save and nothing broadcast to other windows. Anything else structural
+    // saves the grid.
+    const keys = Object.keys(updates);
+    if (keys.length > 0 && keys.every((k) => k === 'volume' || k === 'muted')) {
+      const slot = newSlots.find((s) => s.id === id);
+      if (slot) {
+        invoke('set_multi_nook_slot_audio', { slotId: id, volume: slot.volume, muted: slot.muted }).catch(
+          (e: unknown) => Logger.warn('[MultiNook] Failed to save tile audio', e),
+        );
+      }
+      return;
+    }
     if ('volume' in updates || 'muted' in updates || 'isFocused' in updates || 'channelLogin' in updates || 'isMinimized' in updates || 'profileImageUrl' in updates) {
       saveSlots();
     }
@@ -1018,7 +995,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
 
     // Persist the new quality and clear the URL. MultiNookView's missing-stream
     // loader re-invokes start_multi_nook at slot.quality and the cell remounts
-    // on the new URL — same path resyncAllSlots uses.
+    // on the new URL, the same path retrySlot uses.
     set(state => ({
       slots: state.slots.map(s => (s.id === id ? { ...s, quality, streamUrl: undefined, loadError: false } : s)),
     }));
@@ -1028,6 +1005,98 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
   reorderSlots: (newSlots: MultiNookSlot[]) => {
     set({ slots: newSlots });
     get().saveSlots();
+  },
+
+  makeMainSlot: (id: string) => {
+    const { slots, saveSlots } = get();
+    const slot = slots.find((s) => s.id === id);
+    const main = slots.find((s) => !s.isMinimized);
+    if (!slot || !main || slot.isMinimized) return;
+    const next = [...slots];
+    if (main.id !== id) {
+      const a = next.findIndex((s) => s.id === main.id);
+      const b = next.findIndex((s) => s.id === id);
+      [next[a], next[b]] = [next[b], next[a]];
+    }
+    // Sound and chat follow, like Spotlight: this tile unmuted, the rest muted.
+    // Set, never toggled: making the focused tile main must not unfocus it.
+    const focused = next.map((s) => {
+      const isFocused = s.id === id;
+      const muted = s.id !== id;
+      if (s.isFocused === isFocused && s.muted === muted) return s;
+      return { ...s, isFocused, muted };
+    });
+    set({ slots: focused, activeChatChannelId: slotKey(slot) });
+    saveSlots();
+  },
+
+  setLayout: async (patch) => {
+    const next: MultiNookLayout = { ...currentNookLayout(), ...patch };
+    // Saved before it shows: Rust reads the mode and the cap when a tile
+    // starts, so the page must not act on a layout Rust has not seen yet.
+    try {
+      await patchSettings({ multi_nook_layout: next });
+    } catch (e) {
+      Logger.error('[MultiNook] Failed to save the layout', e);
+      return;
+    }
+    useAppStore.setState((st) => ({ settings: { ...st.settings, multi_nook_layout: next } }));
+  },
+
+  reconcileTileCaps: async () => {
+    const { slots, maximizedSlotId } = get();
+    const stale = slots.filter(
+      (s) => s.streamUrl && !inFlightStarts.has(s.id) && (s.startedCap ?? null) !== wantedCap(s, slots, maximizedSlotId),
+    );
+    if (stale.length === 0) return;
+    stale.forEach((s) => inFlightStarts.add(s.id));
+
+    // Rust swaps a tile's stream in place on its own relay when the player can
+    // follow (same platform path, same codec family, same low-latency mode),
+    // so it keeps playing. Anything else gets a full restart.
+    const restart: MultiNookSlot[] = [];
+    await Promise.all(
+      stale.map(async (s) => {
+        const cap = wantedCap(s, slots, maximizedSlotId);
+        try {
+          const provider = s.provider ?? 'twitch';
+          const outcome = await invoke<'swapped' | 'restart'>('retier_multi_nook_tile', {
+            streamId: s.id,
+            url: buildProviderUrl(provider, s.channelLogin),
+            quality: s.quality || 'best',
+            provider,
+            small: cap !== null,
+          });
+          if (outcome === 'swapped') {
+            set((state) => ({ slots: state.slots.map((x) => (x.id === s.id ? { ...x, startedCap: cap } : x)) }));
+            return;
+          }
+        } catch (e) {
+          Logger.warn(`[MultiNook] Could not change ${s.id}'s quality in place; restarting it`, e);
+        }
+        restart.push(s);
+      }),
+    );
+
+    await Promise.all(
+      restart.map((s) =>
+        invoke('stop_multi_nook', { streamId: s.id }).catch((e: unknown) =>
+          Logger.warn(`[MultiNook] Failed to stop ${s.id} before restarting at its new size`, e),
+        ),
+      ),
+    );
+    stale.forEach((s) => inFlightStarts.delete(s.id));
+    if (restart.length > 0) {
+      // Clearing the URL hands the tile to the missing-stream loader, which
+      // starts it again under the cap its role now wants.
+      const ids = new Set(restart.map((s) => s.id));
+      set((state) => ({
+        slots: state.slots.map((s) => (ids.has(s.id) ? { ...s, streamUrl: undefined, loadError: false } : s)),
+      }));
+    }
+    // A role that changed again while this ran is caught by one more pass;
+    // with nothing stale it returns at once.
+    void get().reconcileTileCaps();
   },
 
   toggleFocusSlot: (id: string) => {
@@ -1221,57 +1290,9 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
           activeChatChannelId: pickActiveChatChannel(cleanedSlots),
           activePresetId: appSettings.multi_nook_active_preset_id ?? null,
         });
-        // Restored avatars are whatever was persisted: they can be stale (Twitch
-        // CDN URLs expire / the streamer changed their pic) or were never captured
-        // (a network hiccup on the original add), so the offline overlay shows no
-        // picture. Refresh them from Helix in the background (one batched call,
-        // up to 100 logins) and persist the fresh values.
-        void (async () => {
-          const logins = Array.from(
-            new Set(
-              cleanedSlots
-                .filter((s) => (s.provider ?? 'twitch') === 'twitch')
-                .map((s) => s.channelLogin.toLowerCase()),
-            ),
-          ).filter(Boolean);
-          if (logins.length === 0) return;
-          try {
-            const qs = logins.slice(0, 100).map((l) => `login=${encodeURIComponent(l)}`).join('&');
-            const data = await helixGet<{ data?: Array<{ login?: string; id: string; display_name: string; profile_image_url: string }> }>('users', qs);
-            const byLogin = new Map<string, { id: string; display_name: string; profile_image_url: string }>();
-            for (const u of data.data || []) byLogin.set((u.login || '').toLowerCase(), u);
-            let changed = false;
-            const next = get().slots.map((s) => {
-              // Guard the APPLY as well as the request. The lookup above asks
-              // Helix about Twitch logins only, but this loop runs over EVERY
-              // slot, so a Kick tile whose slug matches a Twitch account would
-              // take that stranger's id, display name and avatar, and the
-              // saveSlots below would persist it.
-              if ((s.provider ?? 'twitch') !== 'twitch') return s;
-              const u = byLogin.get(s.channelLogin.toLowerCase());
-              if (!u || !u.profile_image_url) return s;
-              if (
-                u.profile_image_url === s.profileImageUrl &&
-                s.channelId &&
-                s.channelName
-              )
-                return s;
-              changed = true;
-              return {
-                ...s,
-                profileImageUrl: u.profile_image_url,
-                channelId: s.channelId || u.id,
-                channelName: s.channelName || u.display_name,
-              };
-            });
-            if (changed) {
-              set({ slots: next });
-              void get().saveSlots();
-            }
-          } catch (e) {
-            Logger.warn('[multiNookStore] Failed to refresh restored slot avatars', e);
-          }
-        })();
+        // Restored avatars can be stale (Twitch CDN URLs expire) or missing:
+        // Rust's first tile report (services/multi_nook_meta) replaces them,
+        // with no request from here.
       }
       if (appSettings.multi_nook_chat_hidden !== undefined) {
         set({ isChatHidden: appSettings.multi_nook_chat_hidden });

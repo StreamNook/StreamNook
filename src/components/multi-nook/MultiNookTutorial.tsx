@@ -70,7 +70,7 @@ const TUTORIAL_DATA: Record<string, TutorialCardData> = {
     id: 'tutorial::sync',
     icon: <RefreshCcw className="w-5 h-5 text-orange-400" />,
     title: 'Stream Resync',
-    desc: 'If streams ever drift apart, click the circular arrows icon in the toolbar to instantly resynchronize their playback as close to real-time as possible.',
+    desc: 'Click the circular arrows in the toolbar to line every stream up at the same delay behind live. They stay together until you close MultiNook.',
     colorClass: 'text-orange-400',
   },
 };

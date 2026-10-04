@@ -32,7 +32,7 @@ use log::{debug, info, warn};
 use once_cell::sync::Lazy;
 use reqwest::{Client, Response};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -44,6 +44,21 @@ const MAX_SEGMENTS: usize = 6;
 /// and multiplies across every tile of a grid, and tiles ride a slightly looser
 /// cushion than solo so they never need the deeper history.
 pub(crate) const TILE_MAX_SEGMENTS: usize = 4;
+/// Ceiling on a tile window widened for a MultiNook sync (`window_for_delay`).
+const TILE_SYNC_MAX_SEGMENTS: usize = 8;
+
+/// The tile window that keeps a playhead `delay_secs` behind live inside the
+/// playlist. hls.js snaps a playhead that sits before the first listed segment
+/// back to live the moment it buffers, so a tile held at a shared MultiNook
+/// delay needs complete segments covering that delay plus slack (playlist age
+/// and the in-progress segment), and never less than the normal tile window.
+pub(crate) fn window_for_delay(delay_secs: f64) -> usize {
+    if !delay_secs.is_finite() || delay_secs <= 0.0 {
+        return TILE_MAX_SEGMENTS;
+    }
+    let complete = ((delay_secs + 2.0) / TARGET_DURATION as f64).ceil() as usize;
+    (complete + 1).clamp(TILE_MAX_SEGMENTS, TILE_SYNC_MAX_SEGMENTS)
+}
 /// Declared `PART-TARGET` (max part duration). Generously above Twitch's ~0.105s
 /// chunks so every real part is comfortably under it (spec requires that), and so
 /// hls.js's edge clamp (`edge - partTarget`) leaves headroom. It also sets hls.js's
@@ -338,8 +353,9 @@ pub struct LlOrigin {
     /// Generation counter: bumped on every start/stop so a lingering reader task can
     /// detect it has been superseded and exit even before its `abort()` lands.
     generation: AtomicU64,
-    /// Live window size (complete segments + the in-progress one).
-    max_segments: usize,
+    /// Live window size (complete segments + the in-progress one). A tile's
+    /// widens while a MultiNook sync holds it further back (`set_window`).
+    max_segments: AtomicUsize,
     /// TS-to-fMP4 transmuxer, present only on the TS path with
     /// `ENABLE_TS_TRANSMUX`. Behind its own lock (not `live_edge`) so per-part
     /// CPU work never contends with playlist/part serving. Access is naturally
@@ -886,11 +902,21 @@ impl LlOrigin {
             edge_version: AtomicU64::new(0),
             reader_task: Mutex::new(None),
             generation: AtomicU64::new(0),
-            max_segments,
+            max_segments: AtomicUsize::new(max_segments),
             transmux: Mutex::new(None),
             cmaf_video: Mutex::new(None),
             retired: Mutex::new(VecDeque::new()),
         })
+    }
+
+    fn window(&self) -> usize {
+        self.max_segments.load(Ordering::Relaxed)
+    }
+
+    /// Resize the live window. Growing takes effect as new segments arrive (the
+    /// listed history never moves backwards); shrinking trims on the next push.
+    pub(crate) fn set_window(&self, segments: usize) {
+        self.max_segments.store(segments.max(1), Ordering::Relaxed);
     }
 
     /// Move segments leaving the live window into the retirement ring.
@@ -1463,7 +1489,7 @@ async fn run_reader(
                             ));
                         }
                         edge.segments.extend(fetched);
-                        while edge.segments.len() > origin.max_segments {
+                        while edge.segments.len() > origin.window() {
                             if let Some(s) = edge.segments.pop_front() {
                                 origin.retire([s]);
                             }
@@ -1922,7 +1948,7 @@ impl LlOrigin {
             parts: Vec::new(),
             assembled: None,
         });
-        while edge.segments.len() > self.max_segments {
+        while edge.segments.len() > self.window() {
             if let Some(s) = edge.segments.pop_front() {
                 self.retire([s]);
             }
@@ -3173,5 +3199,13 @@ mod tests {
             init_url_update(&transmux, Some("https://cdn/whatever.mp4")),
             None
         );
+    }
+
+    #[test]
+    fn a_synced_tile_window_covers_its_delay() {
+        assert_eq!(window_for_delay(3.0), TILE_MAX_SEGMENTS, "a low-latency delay needs no more");
+        assert_eq!(window_for_delay(10.0), 7, "6 complete segments plus the in-progress one");
+        assert_eq!(window_for_delay(40.0), TILE_SYNC_MAX_SEGMENTS, "bounded");
+        assert_eq!(window_for_delay(f64::NAN), TILE_MAX_SEGMENTS);
     }
 }

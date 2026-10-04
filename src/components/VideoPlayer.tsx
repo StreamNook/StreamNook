@@ -89,23 +89,9 @@ const CHAPTERS_BUTTON_HTML =
   '<span class="sn-chapters-btn__label"></span>' +
   '<span class="plyr__tooltip" role="tooltip">Chapters</span>';
 
-type LiveButtonState = 'live' | 'behind' | 'catching-up';
-const LIVE_BUTTON_TIPS: Record<LiveButtonState, string> = {
-  live: 'Watching live',
-  behind: 'Behind live · click to catch up',
-  'catching-up': 'Catching up…',
-};
-/** Paints the injected LIVE control. Idempotent: returns at once when the
- *  state it shows already matches, so callers can be generous with it. */
-function paintLiveButton(btn: HTMLButtonElement, state: LiveButtonState) {
-  if (btn.dataset.state === state) return;
-  btn.dataset.state = state;
-  btn.setAttribute('aria-label', LIVE_BUTTON_TIPS[state]);
-  const tip = btn.querySelector('.plyr__tooltip');
-  if (tip) tip.textContent = LIVE_BUTTON_TIPS[state];
-}
 
 import { open as openExternalUrl } from '@tauri-apps/plugin-shell';
+import { LIVE_BUTTON_HTML, paintLiveButton, type LiveButtonState } from '../utils/liveButton';
 import { setActiveVideo } from '../utils/activeVideo';
 import { isWindowHidden } from '../utils/windowVisibility';
 import { recognizeNowPlaying, announceSong } from '../utils/songId';
@@ -500,10 +486,7 @@ const VideoPlayer = () => {
     return injectPlyrControl(container, {
       attr: 'data-streamnook-live',
       className: 'sn-live-btn',
-      html:
-        '<span class="sn-live-btn__dot" aria-hidden="true"></span>' +
-        '<span class="sn-live-btn__label">LIVE</span>' +
-        '<span class="plyr__tooltip" role="tooltip"></span>',
+      html: LIVE_BUTTON_HTML,
       onClick: () => liveActionRef.current(),
       place: (controls) => {
         // After the LAST time node: a rewound recording also shows Plyr's

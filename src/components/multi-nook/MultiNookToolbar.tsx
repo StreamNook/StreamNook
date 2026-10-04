@@ -12,6 +12,8 @@ import { useAppStore } from '../../stores/AppStore';
 import { ChannelItem, useChannelSearch, itemKey, parseTypedChannel } from './channelSearch';
 import { ChannelResultRow } from './ChannelResultRow';
 import MultiNookPresets from './MultiNookPresets';
+import MultiNookLayoutPicker from './MultiNookLayoutPicker';
+import { alignTiles } from './tileSync';
 
 interface MultiNookToolbarProps {
   isDragging?: boolean;
@@ -435,12 +437,19 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
           {/* Presets. Saved, named channel sets openable in one click */}
           <MultiNookPresets />
 
+          {/* Layout: Grid, or one main stream with the rest small. */}
+          <MultiNookLayoutPicker />
+
           <span className="mx-0.5 h-4 w-px bg-borderSubtle" aria-hidden />
 
-          {/* Resync — force every tile to reload so co-streams line up again. */}
-          <Tooltip content="Resync playback on every stream" delay={200} side="bottom">
+          {/* Resync: line every playing tile up at one delay behind live, in
+              place, and retry any tile that failed to load. */}
+          <Tooltip content="Line up every stream" delay={200} side="bottom">
             <button
-              onClick={resyncAllSlots}
+              onClick={() => {
+                resyncAllSlots();
+                alignTiles();
+              }}
               disabled={slots.length === 0}
               className="titlebar-icon-btn hover:!text-accent active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
             >

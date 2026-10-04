@@ -12,6 +12,7 @@ import {
   UserMinus,
   Loader2,
   Radio,
+  ArrowLeftRight,
 } from 'lucide-react';
 import { useContextMenuStore } from '../../stores/contextMenuStore';
 import { usemultiNookStore } from '../../stores/multiNookStore';
@@ -52,6 +53,7 @@ export const MultiNookTileMenu: React.FC = () => {
 
   const slots = usemultiNookStore((s) => s.slots);
   const maximizedSlotId = usemultiNookStore((s) => s.maximizedSlotId);
+  const layoutMode = useAppStore((s) => s.settings.multi_nook_layout?.mode ?? 'grid');
   const [copied, setCopied] = useState(false);
 
   // Every way out of the menu clears the share confirmation, so it is never
@@ -111,10 +113,16 @@ export const MultiNookTileMenu: React.FC = () => {
     undockSlot,
     removeSlot,
     toggleFocusSlot,
+    makeMainSlot,
   } = usemultiNookStore.getState();
 
   const isMaximized = maximizedSlotId === slotId;
   const isDocked = !!slot.isMinimized;
+  // In a main layout, a small tile can take the large spot.
+  const canMakeMain =
+    (layoutMode === 'main_row' || layoutMode === 'main_column') &&
+    !isDocked &&
+    slots.find((s) => !s.isMinimized)?.id !== slotId;
   const label = slot.channelName || slot.channelLogin;
   // "Close the others" only means something when there ARE others.
   const hasOthers = slots.length > 1;
@@ -226,6 +234,13 @@ export const MultiNookTileMenu: React.FC = () => {
             docked tile, which is offscreen. */}
         {!isDocked && (
           <>
+            {canMakeMain && (
+              <button onClick={run(() => makeMainSlot(slotId))} className={ROW}>
+                <ArrowLeftRight size={16} />
+                <span>Make main</span>
+              </button>
+            )}
+
             <button onClick={run(() => toggleMaximizeSlot(slotId))} className={ROW}>
               {isMaximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
               <span>{isMaximized ? 'Back to grid' : 'Spotlight'}</span>

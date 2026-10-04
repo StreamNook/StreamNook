@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { isWindowHidden } from '../../utils/windowVisibility';
 import Hls from 'hls.js';
 import Plyr from 'plyr';
 // Plyr's stylesheet ships ONCE, from globals.css, and its position there is
@@ -14,7 +13,10 @@ import { Logger } from '../../utils/logger';
 import { claimPlayerFullscreen, handOffPlayerFullscreen, syncTauriWindowFullscreen } from '../../utils/windowFullscreen';
 import { startLatencyGovernor } from '../../utils/liveLatencyGovernor';
 import { createLiveEdgeTracker } from '../../utils/liveEdge';
-import { multiNookHlsRegistry } from './useMultiNookSync';
+import { injectPlyrControl } from '../../utils/plyrControls';
+import { LIVE_BUTTON_HTML, paintLiveButton, type LiveButtonState } from '../../utils/liveButton';
+import { onTileTick } from './tileTicker';
+import { alignTile, isSynced, registerSyncTile, syncDelayFor } from './tileSync';
 
 interface UseMultiNookPlayerProps {
   streamUrl?: string; // Proxy URL
@@ -42,80 +44,88 @@ export const useMultiNookPlayer = ({
   const [isBuffering, setIsBuffering] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showControls, setShowControls] = useState(false);
-  const progressUpdateIntervalRef = useRef<number | null>(null);
   /** Per-tile smoothed distance from the live edge (see utils/liveEdge). */
   const liveEdgeRef = useRef(createLiveEdgeTracker());
+  // The LIVE control in this tile's bar: red at the edge, grey behind, and a
+  // click back to the edge. A tile holds only seconds of past video (tiny
+  // per-tile buffers, for RAM), so it has no scrub bar; this is its timeline.
+  const liveBtnRef = useRef<HTMLButtonElement | null>(null);
+  const catchingUpUntilRef = useRef(0);
+  const goLiveRef = useRef<() => void>(() => {});
   
   // Handlers for cleanup
   const onPlayingRef = useRef<(() => void) | null>(null);
   const onWaitingRef = useRef<(() => void) | null>(null);
   const onNativeLoadedMetadataRef = useRef<(() => void) | null>(null);
 
-  // The rAF loop below captures a []-dep callback, so props it needs to read
-  // have to arrive through a ref or the running loop keeps a stale value.
+  // The painter below runs on the shared tile clock with no deps, so props it
+  // needs to read have to arrive through a ref or it keeps a stale value.
   const isMinimizedRef = useRef(isMinimized);
   isMinimizedRef.current = isMinimized;
 
-  // Update time display for live streams to show "LIVE" or time behind.
-  //
-  // The rAF scheduling here is deliberately left alone: progressUpdateIntervalRef
-  // holds a requestAnimationFrame handle and is released with
-  // cancelAnimationFrame, so swapping in a timer without changing every cancel
-  // site would be a silent no-op that leaks a forever-running timer per tile.
-  // What actually cost time was the per-frame DOM work below (querySelector +
-  // buffered read + textContent write, multiplied by N tiles), so that is what
-  // is gated.
-  const updateLiveTimeDisplay = useCallback(() => {
+  // Paint the LIVE control at 4 Hz on the clock every tile shares (see
+  // tileTicker). Docked tiles skip; a hidden window skips the tick itself.
+  const paintLive = useCallback(() => {
     const video = videoRef.current;
-    if (!video) return;
+    const btn = liveBtnRef.current;
+    if (!video || !btn || !btn.isConnected || isMinimizedRef.current) return;
+    // Smoothed, with hysteresis: the raw distance to the edge is a sawtooth a
+    // whole segment wide. Same tracker the solo player uses (utils/liveEdge).
+    const atEdge = !liveEdgeRef.current.isBehind(video) && !video.paused && video.readyState >= 3;
+    let state: LiveButtonState = atEdge ? 'live' : 'behind';
+    if (atEdge) catchingUpUntilRef.current = 0;
+    else if (catchingUpUntilRef.current > performance.now()) state = 'catching-up';
+    paintLiveButton(btn, state);
+  }, []);
+  useEffect(() => onTileTick(paintLive), [paintLive]);
 
-    // Docked/hidden tiles and a backgrounded window do no DOM work at all.
-    if (isMinimizedRef.current || isWindowHidden()) {
-      progressUpdateIntervalRef.current = requestAnimationFrame(updateLiveTimeDisplay);
-      return;
-    }
-
-    // In MultiNook, Player container holds the UI
-    const container = (playerRef.current as any)?.elements?.container || video.parentElement?.parentElement;
-    if (!container) {
-      progressUpdateIntervalRef.current = requestAnimationFrame(updateLiveTimeDisplay);
-      return;
-    }
-
-    // Update time display to show "LIVE"
-    const currentTimeDisplay = container.querySelector('.plyr__time--current');
-    if (currentTimeDisplay) {
-      // Smoothed, with hysteresis: the raw `buffered.end - currentTime` is a
-      // sawtooth swinging by a whole segment, which flipped this label between
-      // LIVE and a timestamp several times a minute on a healthy stream. Same
-      // tracker the solo player uses. See utils/liveEdge.
-      let nextText = 'LIVE';
-      const atLive = !liveEdgeRef.current.isBehind(video);
-      if (!atLive) {
-        const behindSeconds = Math.floor(liveEdgeRef.current.behind(video));
-        const mins = Math.floor(behindSeconds / 60);
-        const secs = behindSeconds % 60;
-        nextText = `-${mins}:${secs.toString().padStart(2, '0')}`;
+  // Back to the edge: as far forward as hls.js says is safe, within what is
+  // buffered, and playing. While a Resync holds the tiles together, "live" is
+  // the shared delay instead, so the click rejoins the others.
+  useEffect(() => {
+    goLiveRef.current = () => {
+      const video = videoRef.current;
+      if (!video) return;
+      if (isSynced()) {
+        const align = () => alignTile(streamId, true);
+        if (video.paused) video.play().then(align).catch(() => { /* autoplay policy / teardown */ });
+        else align();
+        catchingUpUntilRef.current = performance.now() + 6000;
+        const btn = liveBtnRef.current;
+        if (btn && btn.isConnected) paintLiveButton(btn, 'catching-up');
+        return;
       }
-      // Compare against what is ACTUALLY in the DOM, never against a cached
-      // copy of our own last write. Plyr writes its own playback time into this
-      // same node on every timeupdate, so a cached comparison sees "unchanged",
-      // skips the write, and leaves Plyr's counter on screen (the live badge
-      // turns into a clock counting up from when you joined). Assigning
-      // textContent replaces the text node and invalidates layout even for an
-      // identical string, so the read is still worth it: in the steady state it
-      // drops us from a write every frame to a write only when Plyr has just
-      // clobbered us. Reading textContent does not force layout.
-      if (currentTimeDisplay.textContent !== nextText) {
-        currentTimeDisplay.textContent = nextText;
-      }
-      if (currentTimeDisplay.classList.contains('plyr__time--live') !== atLive) {
-        currentTimeDisplay.classList.toggle('plyr__time--live', atLive);
-      }
-    }
+      const b = video.buffered;
+      const bufferedEnd = b.length > 0 ? b.end(b.length - 1) : 0;
+      const pos = hlsRef.current?.liveSyncPosition;
+      const syncPos = pos != null && Number.isFinite(pos) ? pos : Infinity;
+      const target = Math.min(syncPos, bufferedEnd - 1);
+      if (Number.isFinite(target) && target > video.currentTime + 0.25) video.currentTime = target;
+      if (video.paused) video.play().catch(() => { /* autoplay policy / teardown */ });
+      catchingUpUntilRef.current = performance.now() + 6000;
+      const btn = liveBtnRef.current;
+      if (btn && btn.isConnected) paintLiveButton(btn, 'catching-up');
+    };
+  }, [streamId]);
 
-    // Continue the animation loop
-    progressUpdateIntervalRef.current = requestAnimationFrame(updateLiveTimeDisplay);
+  // Put the LIVE control in the bar once Plyr has built it, right after play.
+  const attachLiveButton = useCallback(() => {
+    const container = (playerRef.current as unknown as { elements?: { container?: HTMLElement } } | null)?.elements?.container;
+    if (!container) return;
+    injectPlyrControl(container, {
+      attr: 'data-streamnook-live',
+      className: 'sn-live-btn',
+      html: LIVE_BUTTON_HTML,
+      onClick: () => goLiveRef.current(),
+      place: (controls) => {
+        const play = controls.querySelector(':scope > [data-plyr="play"]');
+        return play ? { after: play } : null;
+      },
+      onInserted: (btn) => {
+        liveBtnRef.current = btn;
+        paintLiveButton(btn, 'behind');
+      },
+    });
   }, []);
 
   useEffect(() => {
@@ -157,18 +167,12 @@ export const useMultiNookPlayer = ({
         playerRef.current.destroy();
         playerRef.current = null;
       }
-      if (progressUpdateIntervalRef.current) {
-        cancelAnimationFrame(progressUpdateIntervalRef.current);
-        progressUpdateIntervalRef.current = null;
-      }
     };
   }, []);
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !streamUrl) return;
-
-    progressUpdateIntervalRef.current = requestAnimationFrame(updateLiveTimeDisplay);
 
     Logger.debug(`[MultiNook-${streamId}] Initializing player with URL: ${streamUrl}`);
     
@@ -185,7 +189,6 @@ export const useMultiNookPlayer = ({
 
     // Destroy existing HLS instance
     if (hlsRef.current) {
-      multiNookHlsRegistry.delete(streamId);
       hlsRef.current.destroy();
       hlsRef.current = null;
     }
@@ -206,6 +209,12 @@ export const useMultiNookPlayer = ({
     // construction, and the flag rides the URL this effect already keys on, so a
     // refreshed URL always carries the matching mode with no extra round trip.
     const isLowLatencyChannel = streamUrl.includes('&ll=1');
+    // The tile's own distance from live (see liveSyncDuration below). A tile
+    // that starts while a Resync holds the others starts at their delay
+    // instead, so it joins them without a jump.
+    const cushion = isLowLatencyChannel ? 3 : 8;
+    const startDelay = Math.max(cushion, syncDelayFor(streamId) ?? 0);
+    let unregisterSync: (() => void) | null = null;
 
     if (Hls.isSupported()) {
       const hls = new Hls({
@@ -229,7 +238,7 @@ export const useMultiNookPlayer = ({
         nudgeOffset: 0.2, 
         nudgeMaxRetry: 3, 
         maxFragLookUpTolerance: 0.5, 
-        liveSyncDuration: isLowLatencyChannel ? 3 : 8, // LL origin: parts are consumed progressively, so tiles can ride near the edge; 3 keeps one segment of headroom over the solo player's 2 because per-tile buffers are tiny. Non-LL: conservative 8s BY POLICY. Grid tiles run deliberately tiny per-tile buffers (maxBufferLength 15) for RAM, so they can't absorb a normal ~3s Twitch segment-delivery gap at a tight cushion on the whole-segment path — 6 stalled in the wild.
+        liveSyncDuration: startDelay, // `cushion`, or a Resync's shared delay when larger. LL origin: parts are consumed progressively, so tiles can ride near the edge; 3 keeps one segment of headroom over the solo player's 2 because per-tile buffers are tiny. Non-LL: conservative 8s BY POLICY. Grid tiles run deliberately tiny per-tile buffers (maxBufferLength 15) for RAM, so they can't absorb a normal ~3s Twitch segment-delivery gap at a tight cushion on the whole-segment path — 6 stalled in the wild.
         liveMaxLatencyDuration: 600, // Massive drift ceiling so manual scrobbling backwards into the DVR buffer isn't violently snapped to live edge.
         maxLiveSyncPlaybackRate: 1, // hls.js's latency controller is fully inert on every path (its 0.05-quantized rate steps are audible pops on music); the latency governor below owns catch-up instead.
         liveDurationInfinity: true, 
@@ -262,6 +271,14 @@ export const useMultiNookPlayer = ({
         latencyGovernorStopRef.current();
         latencyGovernorStopRef.current = null;
       }
+      // While a Resync holds the tiles together (see tileSync), the governor
+      // holds the shared delay behind live instead of its own cushion; the
+      // getter returns null outside a sync, which is the cushion mode above.
+      const syncHold = {
+        getTarget: () => cushion,
+        latencyTarget: () => syncDelayFor(streamId),
+        getLatency: () => (Number.isFinite(hls.latency) && hls.latency > 0 ? hls.latency : null),
+      };
       latencyGovernorStopRef.current = isLowLatencyChannel
         ? startLatencyGovernor(hls, video, {
             label: `tile-ll ${streamId}`,
@@ -273,13 +290,27 @@ export const useMultiNookPlayer = ({
             slowRate: 0.97,
             tickMs: 500,
             rampStep: 0.01,
+            ...syncHold,
             log: Logger.debug,
           })
         : startLatencyGovernor(hls, video, {
             label: `tile ${streamId}`,
-            band: 2.0,
+            // A whole segment of slack holding the cushion; a tighter second
+            // holding a shared delay, where latency moves smoothly.
+            band: () => (isSynced() ? 1.0 : 2.0),
+            // Never overspeed a thin buffer: a playlist that stops refreshing
+            // inflates the measured delay while playback is fine.
+            floor: 1.5,
+            ...syncHold,
             log: Logger.debug,
           });
+      unregisterSync = registerSyncTile(streamId, {
+        hls,
+        video,
+        lowLatency: isLowLatencyChannel,
+        cushion,
+        onSeek: (delta) => liveEdgeRef.current.shift(delta),
+      });
 
       let playStarted = false;
       let fragsBuffered = 0;
@@ -301,13 +332,10 @@ export const useMultiNookPlayer = ({
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         Logger.debug(`[MultiNook-${streamId}] Manifest parsed, starting playback`);
         
-        // Register to global sync controller for Co-Stream syncing
-        multiNookHlsRegistry.set(streamId, hls);
-
         // Initialize Plyr once Media is attached
         if (!playerRef.current) {
           playerRef.current = new Plyr(video, {
-            controls: ['play', 'progress', 'current-time', 'volume', 'settings', 'fullscreen'],
+            controls: ['play', 'volume', 'settings', 'fullscreen'],
             settings: ['speed'], // Quality submenu is injected manually by MultiNookCell (every tile)
             autoplay: false, // Wait for buffer gate
             muted: muted,
@@ -322,6 +350,7 @@ export const useMultiNookPlayer = ({
           playerRef.current.on('enterfullscreen', () => syncTauriWindowFullscreen(true));
           playerRef.current.on('exitfullscreen', () => syncTauriWindowFullscreen(false));
           claimPlayerFullscreen(playerRef.current);
+          attachLiveButton();
 
           // Override duration for live stream progress bar
           Object.defineProperty(video, 'duration', {
@@ -426,7 +455,6 @@ export const useMultiNookPlayer = ({
               break;
             default:
               setError('Playback error');
-              multiNookHlsRegistry.delete(streamId);
               hls.destroy();
               break;
           }
@@ -466,10 +494,17 @@ export const useMultiNookPlayer = ({
         });
       }
 
+      let joinedSync = false;
       const onPlaying = () => {
         setIsPlaying(true);
         setIsBuffering(false);
         setError(null);
+        // A tile that starts during a Resync settles onto the shared delay
+        // once, as it begins.
+        if (!joinedSync) {
+          joinedSync = true;
+          alignTile(streamId);
+        }
       };
 
       const onWaiting = () => setIsBuffering(true);
@@ -486,7 +521,7 @@ export const useMultiNookPlayer = ({
       const onNativeLoadedMetadata = () => {
         if (!playerRef.current) {
           playerRef.current = new Plyr(video, {
-            controls: ['play', 'progress', 'current-time', 'volume', 'settings', 'fullscreen'],
+            controls: ['play', 'volume', 'settings', 'fullscreen'],
             settings: ['speed'], // Quality submenu is injected manually by MultiNookCell (every tile)
             autoplay: false,
             muted: muted,
@@ -501,6 +536,7 @@ export const useMultiNookPlayer = ({
           playerRef.current.on('enterfullscreen', () => syncTauriWindowFullscreen(true));
           playerRef.current.on('exitfullscreen', () => syncTauriWindowFullscreen(false));
           claimPlayerFullscreen(playerRef.current);
+          attachLiveButton();
 
           Object.defineProperty(video, 'duration', {
             get: function () {
@@ -555,7 +591,7 @@ export const useMultiNookPlayer = ({
         if (onWaitingRef.current) video.removeEventListener('waiting', onWaitingRef.current);
         if (onNativeLoadedMetadataRef.current) video.removeEventListener('loadedmetadata', onNativeLoadedMetadataRef.current);
       }
-      multiNookHlsRegistry.delete(streamId);
+      unregisterSync?.();
       if (latencyGovernorStopRef.current) {
         latencyGovernorStopRef.current();
         latencyGovernorStopRef.current = null;
@@ -564,12 +600,8 @@ export const useMultiNookPlayer = ({
         hlsRef.current.destroy();
         hlsRef.current = null;
       }
-      if (progressUpdateIntervalRef.current) {
-        cancelAnimationFrame(progressUpdateIntervalRef.current);
-        progressUpdateIntervalRef.current = null;
-      }
     };
-  }, [streamUrl, streamId, updateLiveTimeDisplay]); // intentionally omitting volume/muted from deps
+  }, [streamUrl, streamId, attachLiveButton]); // intentionally omitting volume/muted from deps
 
   return {
     videoRef,

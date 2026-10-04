@@ -25,7 +25,8 @@ import StreamTitleWithEmojis from '../StreamTitleWithEmojis';
 import { Tooltip } from '../ui/Tooltip';
 import { TwitchVerifiedMark } from '../ui/TwitchGlyph';
 import { ProviderLogo } from '../ProviderLogo';
-import { GripHorizontal, Undo2, Loader2, RefreshCcw, EyeOff, WifiOff, Maximize2, Minimize2, Plus, Check, Radio } from 'lucide-react';
+import { ArrowLeftRight, GripHorizontal, Undo2, Loader2, RefreshCcw, EyeOff, WifiOff, Maximize2, Minimize2, Plus, Check, Radio } from 'lucide-react';
+import type { SizeTier } from './nookLayout';
 import { Heart, HeartBreak, X as XIcon } from 'phosphor-react';
 import { Logger } from '../../utils/logger';
 import { canGridProvider, PROVIDER_WATCH, type ProviderId } from '../../types/providers';
@@ -37,6 +38,11 @@ interface MultiNookCellProps {
   customStyle?: React.CSSProperties;
   /** True when this tile is filling the whole grid area (solo-like). */
   isMaximized?: boolean;
+  /** How much chrome fits the tile's size (nookLayout's tiers): everything,
+   *  a trimmed set, or the least. */
+  sizeTier?: SizeTier;
+  /** One of a main layout's small tiles: offer to make it the main one. */
+  canMakeMain?: boolean;
 }
 
 /** A single pending "unfocus" (focus toggle-off) shared across all tiles. Clicking
@@ -51,13 +57,15 @@ const clearPendingFocusToggle = () => {
   }
 };
 
-const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, gridSpanClass = '', customStyle = {}, isMaximized = false }) => {
+const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, gridSpanClass = '', customStyle = {}, isMaximized = false, sizeTier = 'full', canMakeMain = false }) => {
+  const full = sizeTier === 'full';
+  const mini = sizeTier === 'mini';
   const { id, provider, channelLogin, channelName, channelId, volume, muted, isFocused, streamUrl, isMinimized = false, loadError, profileImageUrl, title, broadcasterType, raid } = slot;
   // Actions only, so read them without subscribing. A bare `usemultiNookStore()`
   // here subscribed this tile to the WHOLE store, which meant any mutation
   // (including a volume drag on a sibling tile) re-rendered every tile in the
   // grid. Zustand actions keep the same identity for the store's lifetime.
-  const { toggleFocusSlot, toggleMaximizeSlot, dockSlot, removeSlot, changeSlotQuality, retrySlot, addSlot, dismissSlotRaid } =
+  const { toggleFocusSlot, toggleMaximizeSlot, makeMainSlot, dockSlot, removeSlot, changeSlotQuality, retrySlot, addSlot, dismissSlotRaid } =
     usemultiNookStore.getState();
 
   // The raid card offers the raided channel as a new tile, never in place of
@@ -147,9 +155,9 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
     userName: channelName,
     enabled: socialEnabled,
   });
-  const showFollowButton = socialEnabled && playerOverlayButtonOn(playerOverlayButtons, 'follow');
+  const showFollowButton = socialEnabled && full && playerOverlayButtonOn(playerOverlayButtons, 'follow');
   const showSubscribeButton =
-    socialEnabled && offersMembership && playerOverlayButtonOn(playerOverlayButtons, 'subscribe');
+    socialEnabled && full && offersMembership && playerOverlayButtonOn(playerOverlayButtons, 'subscribe');
 
   // This tile's own quality menu. Every tile offers one, not just the focused
   // tile: the relay kept the list its resolve discovered, so asking for it
@@ -196,13 +204,17 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
 
     const displayedQuality = slot.quality || 'best';
     const cap = (q: string) => q.charAt(0).toUpperCase() + q.slice(1);
+    // A small tile under the small-tile cap plays below the quality it keeps
+    // for when it is large again; say so rather than show a quality it is not
+    // playing.
+    const capNote = slot.startedCap ? ` · ${slot.startedCap}p while small` : '';
 
     const qualityMenuItem = document.createElement('button');
     qualityMenuItem.className = 'plyr__control';
     qualityMenuItem.setAttribute('data-plyr', 'quality');
     qualityMenuItem.setAttribute('type', 'button');
     qualityMenuItem.setAttribute('role', 'menuitem');
-    qualityMenuItem.innerHTML = `<span>Quality<span class="plyr__menu__value">${cap(displayedQuality)}</span></span>`;
+    qualityMenuItem.innerHTML = `<span>Quality<span class="plyr__menu__value">${cap(displayedQuality)}${capNote}</span></span>`;
     qualityMenuItem.addEventListener('click', () => {
       const submenu = settingsMenu.querySelector('[data-quality-menu]');
       if (submenu) {
@@ -270,7 +282,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
         changeSlotQuality(id, selected);
       });
     });
-  }, [availableQualities, slot.quality, id, changeSlotQuality, playerRef]);
+  }, [availableQualities, slot.quality, slot.startedCap, id, changeSlotQuality, playerRef]);
 
   // Add the quality submenu once this tile knows its qualities.
   useEffect(() => {
@@ -426,7 +438,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
     );
   };
 
-  const glassButton = 'flex items-center justify-center p-1.5 glass-button rounded-lg';
+  const glassButton = `flex items-center justify-center ${full ? 'p-1.5' : 'p-1'} glass-button rounded-lg`;
 
   return (
     <motion.div
@@ -601,37 +613,39 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
         className={`stream-title-overlay absolute top-0 left-0 right-0 z-40 transition-all duration-300 opacity-0 group-hover:opacity-100`}
       >
         <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/20 to-transparent pointer-events-none" />
-        <div className="relative px-3 pt-2 pb-6 flex items-start justify-between">
-          {/* Absolute Center Grab Handle — hidden while maximized (nothing to reorder) */}
-          {!isMaximized && (
+        <div className={`relative flex items-start justify-between ${full ? 'px-3 pt-2 pb-6' : 'px-2 pt-1.5 pb-4'}`}>
+          {/* Absolute Center Grab Handle — hidden while maximized (nothing to
+              reorder) and on the smallest tiles, which move with Make main or
+              the right-click menu instead. */}
+          {!isMaximized && !mini && (
             <div className="absolute left-1/2 -translate-x-1/2 top-1.5 z-20">
               <Tooltip content="Drag to reposition stream" delay={500} side="top">
                 <div
-                  className="cursor-grab active:cursor-grabbing flex items-center justify-center px-3 py-1 glass-button rounded-lg text-emerald-300 hover:text-emerald-200 active:scale-95 [&_*]:cursor-grab"
+                  className={`cursor-grab active:cursor-grabbing flex items-center justify-center ${full ? 'px-3 py-1' : 'px-2 py-0.5'} glass-button rounded-lg text-emerald-300 hover:text-emerald-200 active:scale-95 [&_*]:cursor-grab`}
                   style={{ backgroundColor: 'color-mix(in srgb, rgb(16 185 129) 20%, var(--glass-under, transparent))', backdropFilter: 'blur(16px)' }}
                   {...attributes}
                   {...listeners}
                 >
-                  <GripHorizontal className="w-5 h-5 drop-shadow-md" />
+                  <GripHorizontal className={`${full ? 'w-5 h-5' : 'w-4 h-4'} drop-shadow-md`} />
                 </div>
               </Tooltip>
             </div>
           )}
 
           {/* Left: channel identity, then the stream title beneath it */}
-          <div className="flex-1 min-w-0 pr-12 z-10">
+          <div className={`flex-1 min-w-0 z-10 ${mini ? 'pr-2' : 'pr-12'}`}>
             {/* Sized to match the full player's identity row. No live ring on the
                 avatar though — a tile can be offline. */}
-            <div className="flex items-center gap-2 min-w-0 mt-1">
-              {profileImageUrl ? (
+            <div className={`flex items-center min-w-0 ${full ? 'gap-2 mt-1' : 'gap-1.5 mt-0.5'}`}>
+              {mini ? null : profileImageUrl ? (
                 <img
                   src={profileImageUrl}
                   alt=""
                   draggable={false}
-                  className="w-7 h-7 rounded-full object-cover shrink-0 bg-black/20"
+                  className={`${full ? 'w-7 h-7' : 'w-5 h-5'} rounded-full object-cover shrink-0 bg-black/20`}
                 />
               ) : (
-                <div className="w-7 h-7 rounded-full bg-white/15 shrink-0 flex items-center justify-center text-[12px] font-bold text-white">
+                <div className={`${full ? 'w-7 h-7 text-[12px]' : 'w-5 h-5 text-[10px]'} rounded-full bg-white/15 shrink-0 flex items-center justify-center font-bold text-white`}>
                   {(channelName || channelLogin || '?').charAt(0).toUpperCase()}
                 </div>
               )}
@@ -641,7 +655,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
                     login re-cased or a CJK localization — never emoji. */}
                 {/* min-w-0: a flex item won't shrink below its content width by
                     default, which makes `truncate` a no-op and overflows instead. */}
-                <h3 className="text-[15px] font-semibold truncate min-w-0 drop-shadow-lg select-none text-white/90">
+                <h3 className={`${full ? 'text-[15px]' : mini ? 'text-[11px]' : 'text-[13px]'} font-semibold truncate min-w-0 drop-shadow-lg select-none text-white/90`}>
                   {channelName || channelLogin}
                 </h3>
               </Tooltip>
@@ -661,7 +675,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
                 </Tooltip>
               )}
             </div>
-            {title?.trim() && (
+            {full && title?.trim() && (
               <Tooltip content={title} delay={200} side="top">
                 <p className="text-white/70 text-[13px] mt-1 line-clamp-1 drop-shadow-md select-none">
                   <StreamTitleWithEmojis title={title} />
@@ -739,7 +753,22 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
                 </Tooltip>
             )}
 
+            {/* Make main: swap places with the large tile; sound and chat follow. */}
+            {canMakeMain && (
+              <Tooltip content="Make main" delay={200} side="top">
+                <button
+                  onClick={() => makeMainSlot(id)}
+                  className={glassButton}
+                  style={{ backdropFilter: 'blur(16px)' }}
+                  aria-label="Make main"
+                >
+                  <ArrowLeftRight className={`${full ? 'w-4 h-4' : 'w-3.5 h-3.5'} text-white`} />
+                </button>
+              </Tooltip>
+            )}
+
             {/* Spotlight this stream (fills the space) / restore the grid */}
+            {!mini && (
             <Tooltip content={isMaximized ? 'Back to grid · double-click or Esc' : 'Spotlight · double-click'} delay={200} side="top">
               <button
                 onClick={() => toggleMaximizeSlot(id)}
@@ -749,13 +778,14 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
                 {isMaximized ? (
                   <Minimize2 className="w-4 h-4 text-white" />
                 ) : (
-                  <Maximize2 className="w-4 h-4 text-white" />
+                  <Maximize2 className={`${full ? 'w-4 h-4' : 'w-3.5 h-3.5'} text-white`} />
                 )}
               </button>
             </Tooltip>
+            )}
 
             {/* Dock (minimize to the tray strip) — hidden while maximized */}
-            {!isMaximized && (
+            {!isMaximized && !mini && (
               <Tooltip content="Dock Stream" delay={200} side="top">
                 <button
                   onClick={() => dockSlot(id)}
@@ -805,5 +835,6 @@ export const MultiNookCell = React.memo(MultiNookCellInner, (prev, next) => {
   if (prev.cssOrder !== next.cssOrder) return false;
   if (prev.gridSpanClass !== next.gridSpanClass) return false;
   if (prev.isMaximized !== next.isMaximized) return false;
+  if (prev.sizeTier !== next.sizeTier || prev.canMakeMain !== next.canMakeMain) return false;
   return sameStyle(prev.customStyle, next.customStyle);
 });

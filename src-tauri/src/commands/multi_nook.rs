@@ -25,6 +25,22 @@ fn channel_from_url(url: &str) -> Option<String> {
     Some(seg.to_lowercase())
 }
 
+/// The quality a tile asks its resolver for: its own pick, held to about
+/// `cap` lines while it is a small tile. A height is what both resolvers'
+/// pickers understand; a channel without a rendition near it gets the
+/// nearest it has. "worst" and audio-only already sit under any cap.
+pub fn tile_quality(own: &str, cap: Option<u32>) -> String {
+    let Some(cap) = cap else { return own.to_string() };
+    let lower = own.trim().to_ascii_lowercase();
+    if lower == "worst" || lower.starts_with("audio") {
+        return own.to_string();
+    }
+    match crate::services::quality::parse_quality_height(&lower) {
+        Some(h) if h <= cap => own.to_string(),
+        _ => format!("{cap}p"),
+    }
+}
+
 /// Start a stream for multi-stream mode. Each tile resolves natively (same
 /// pipeline as the solo player) and gets its own proxy server.
 #[tauri::command]
@@ -35,9 +51,14 @@ pub async fn start_multi_nook(
     // Which platform this tile is on. Absent means Twitch, matching the
     // frontend's bare-key convention, so older callers keep working.
     provider: Option<String>,
+    // The tile starts as one of the small tiles of a main layout, so the
+    // small-tile quality cap applies. Absent means a full-size tile.
+    small: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let provider = provider.unwrap_or_else(|| "twitch".to_string());
+    let cap = cap_for(&state, small)?;
+    let quality = tile_quality(&quality, cap);
     debug!(
         "[MultiNook] start_multi_nook called: id='{}', provider='{}', url='{}', quality='{}'",
         stream_id, provider, url, quality
@@ -52,37 +73,11 @@ pub async fn start_multi_nook(
     }
 
     if provider != "twitch" {
-        return start_provider_tile(&stream_id, &provider, &url, &quality).await;
+        return start_provider_tile(&stream_id, &provider, &url, &quality, cap).await;
     }
 
-    let stream_timeout = { state.settings.lock().unwrap().streamlink.stream_timeout };
-
-    let channel =
-        channel_from_url(&url).ok_or_else(|| format!("Unrecognized Twitch URL: {}", url))?;
-    let oauth = state.twitch_auth.get_token().await.ok();
-
-    // MultiNook resolves each tile with a SINGLE attempt (retry_delay = 0). Unlike
-    // the solo player, a grid tile is expected to be live, so the solo path's
-    // retry-until-live loop is wrong here: it would keep an offline channel
-    // hammering usher / GQL every `retry_streams` seconds for the full
-    // `stream_timeout` budget (60s by default), saturating the network and
-    // stalling the OTHER tiles' playback. Failing fast lets an offline tile show
-    // its overlay right away; the per-tile Retry button (frontend) covers the
-    // rare "channel just went live" case. `stream_timeout` is still passed as
-    // the budget but is moot at retry_delay = 0 (single attempt).
-    let core =
-        tr::resolve_live_resilient(&channel, oauth.as_deref(), &quality, 0, stream_timeout).await;
-
-    // Same hand-off as the solo player: a resolution-owning plugin takes the
-    // non-entitled tile when installed, addressed by this tile's stream id.
-    let r = match crate::commands::streaming::resolve_via_plugin(
-        &state, &stream_id, &channel, &quality, &core,
-    )
-    .await
-    {
-        Some(plugin_resolved) => plugin_resolved,
-        None => core.map_err(|e| e.to_string())?,
-    };
+    let (channel, r) = resolve_twitch_tile(&state, &stream_id, &url, &quality).await?;
+    let codecs = variant_codecs(&r.master, &r.url, &r.quality);
 
     let port = MultiNookServer::start_proxy(&stream_id, r.url, TileProfile::Twitch, None)
         .await
@@ -96,6 +91,8 @@ pub async fn start_multi_nook(
             quality: r.quality.clone(),
             available: r.available.clone(),
             status: Some(r.status.clone()),
+            capped: cap,
+            codecs,
         },
     )
     .await;
@@ -120,6 +117,166 @@ pub async fn start_multi_nook(
     Ok(proxy_url)
 }
 
+/// What a tile's change of size did to its stream.
+#[derive(serde::Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Retier {
+    /// The relay now serves the new quality under the same local URL; the
+    /// player keeps playing.
+    Swapped,
+    /// The tile needs a full restart (another platform, another codec family,
+    /// a changed low-latency mode, or no relay to swap).
+    Restart,
+}
+
+/// A tile became small or stopped being small while its small-tile cap
+/// applies: serve its stream at the quality its new size wants. A Twitch tile
+/// is re-resolved and swapped in place on its own relay, the path an ad pivot
+/// already uses mid-playback, so the player is not rebuilt. Anything that
+/// would confuse a running decoder asks for a restart instead.
+#[tauri::command]
+pub async fn retier_multi_nook_tile(
+    stream_id: String,
+    url: String,
+    quality: String,
+    provider: Option<String>,
+    small: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<Retier, String> {
+    if provider.as_deref().unwrap_or("twitch") != "twitch" {
+        return Ok(Retier::Restart);
+    }
+    let Some((_, current)) = MultiNookServer::promotion_target(&stream_id).await else {
+        return Ok(Retier::Restart);
+    };
+    let cap = cap_for(&state, small)?;
+    let quality = tile_quality(&quality, cap);
+    let was_low_latency = MultiNookServer::is_low_latency(&stream_id).await;
+
+    let (_, r) = resolve_twitch_tile(&state, &stream_id, &url, &quality).await?;
+    let codecs = variant_codecs(&r.master, &r.url, &r.quality);
+    if !same_codec_family(current.codecs.as_deref(), codecs.as_deref()) {
+        debug!("[MultiNook] '{stream_id}' changes codec at its new size; restarting it");
+        return Ok(Retier::Restart);
+    }
+
+    // The new rendition has its own segment URLs; drop the old projection map.
+    crate::services::hls_projection::reset(&stream_id);
+    MultiNookServer::start_proxy(&stream_id, r.url.clone(), TileProfile::Twitch, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    MultiNookServer::set_promotion(
+        &stream_id,
+        TilePromotion {
+            quality: r.quality.clone(),
+            available: r.available.clone(),
+            status: Some(r.status.clone()),
+            capped: cap,
+            codecs,
+        },
+    )
+    .await;
+    // The player picked its hls.js mode at construction from the URL's `ll`
+    // flag; a mode change needs a fresh player.
+    if MultiNookServer::is_low_latency(&stream_id).await != was_low_latency {
+        return Ok(Retier::Restart);
+    }
+    debug!("[MultiNook] '{stream_id}' now plays {} in place", r.quality);
+    Ok(Retier::Swapped)
+}
+
+/// The small-tile cap from settings when the tile is small, else none.
+fn cap_for(state: &State<'_, AppState>, small: Option<bool>) -> Result<Option<u32>, String> {
+    if !small.unwrap_or(false) {
+        return Ok(None);
+    }
+    Ok(state.settings.lock().map_err(|e| e.to_string())?.multi_nook_layout.caps_small_tiles())
+}
+
+/// The CODECS of the rendition a resolve picked: by its URL, else by its
+/// name, else the source tier for "best".
+fn variant_codecs(master: &str, url: &str, quality: &str) -> Option<String> {
+    let variants = tr::parse_master(master);
+    let by_url = variants.iter().find(|v| v.url == url);
+    let by_name = || variants.iter().find(|v| v.name.eq_ignore_ascii_case(quality));
+    let source = || {
+        if !matches!(quality.to_ascii_lowercase().as_str(), "best" | "source") {
+            return None;
+        }
+        variants
+            .iter()
+            .find(|v| v.group_id.eq_ignore_ascii_case("chunked"))
+            .or_else(|| variants.iter().filter(|v| v.height.is_some()).max_by_key(|v| v.height))
+    };
+    by_url.or_else(by_name).or_else(source).and_then(|v| v.codecs.clone())
+}
+
+/// The video codec family of a CODECS attribute ("avc1.64002A,mp4a.40.2" is
+/// "avc"). Audio entries are skipped.
+fn codec_family(codecs: &str) -> Option<&'static str> {
+    codecs.split(',').map(str::trim).find_map(|c| {
+        let c = c.to_ascii_lowercase();
+        if c.starts_with("avc1") || c.starts_with("avc3") {
+            Some("avc")
+        } else if c.starts_with("hvc1") || c.starts_with("hev1") {
+            Some("hevc")
+        } else if c.starts_with("av01") {
+            Some("av1")
+        } else if c.starts_with("vp09") || c.starts_with("vp9") {
+            Some("vp9")
+        } else {
+            None
+        }
+    })
+}
+
+/// Whether two renditions decode alike. Unknown on either side is not safe.
+fn same_codec_family(a: Option<&str>, b: Option<&str>) -> bool {
+    match (a.and_then(codec_family), b.and_then(codec_family)) {
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
+}
+
+/// Resolve one Twitch tile at `quality`, through a resolution-owning plugin
+/// when one takes it, exactly as the solo player resolves.
+async fn resolve_twitch_tile(
+    state: &State<'_, AppState>,
+    stream_id: &str,
+    url: &str,
+    quality: &str,
+) -> Result<(String, tr::ResolvedLive), String> {
+    let stream_timeout = { state.settings.lock().unwrap().streamlink.stream_timeout };
+
+    let channel =
+        channel_from_url(url).ok_or_else(|| format!("Unrecognized Twitch URL: {}", url))?;
+    let oauth = state.twitch_auth.get_token().await.ok();
+
+    // MultiNook resolves each tile with a SINGLE attempt (retry_delay = 0). Unlike
+    // the solo player, a grid tile is expected to be live, so the solo path's
+    // retry-until-live loop is wrong here: it would keep an offline channel
+    // hammering usher / GQL every `retry_streams` seconds for the full
+    // `stream_timeout` budget (60s by default), saturating the network and
+    // stalling the OTHER tiles' playback. Failing fast lets an offline tile show
+    // its overlay right away; the per-tile Retry button (frontend) covers the
+    // rare "channel just went live" case. `stream_timeout` is still passed as
+    // the budget but is moot at retry_delay = 0 (single attempt).
+    let core =
+        tr::resolve_live_resilient(&channel, oauth.as_deref(), quality, 0, stream_timeout).await;
+
+    // Same hand-off as the solo player: a resolution-owning plugin takes the
+    // non-entitled tile when installed, addressed by this tile's stream id.
+    let r = match crate::commands::streaming::resolve_via_plugin(
+        state, stream_id, &channel, quality, &core,
+    )
+    .await
+    {
+        Some(plugin_resolved) => plugin_resolved,
+        None => core.map_err(|e| e.to_string())?,
+    };
+    Ok((channel, r))
+}
+
 /// Resolve and serve one non-Twitch tile.
 ///
 /// The platform adapter hands back a media-playlist URL and the per-tile relay
@@ -131,6 +288,7 @@ async fn start_provider_tile(
     provider: &str,
     url: &str,
     quality: &str,
+    cap: Option<u32>,
 ) -> Result<String, String> {
     // The frontend addresses tiles by URL, so recover the channel from it rather
     // than inventing a second addressing scheme. Note NO lowercasing here: the
@@ -168,6 +326,8 @@ async fn start_provider_tile(
                     ),
                     // No ad-source badge on a provider stream, so nothing to carry.
                     status: None,
+                    capped: cap,
+                    codecs: None,
                 },
             )
             .await;
@@ -284,6 +444,64 @@ fn provider_channel_from_url(provider: &str, url: &str) -> Option<String> {
 }
 
 #[cfg(test)]
+mod tile_quality_tests {
+    use super::{codec_family, same_codec_family, tile_quality, variant_codecs};
+
+    const MASTER: &str = "#EXTM3U\n\
+#EXT-X-MEDIA:TYPE=VIDEO,GROUP-ID=\"chunked\",NAME=\"1080p60 (source)\",AUTOSELECT=YES,DEFAULT=YES\n\
+#EXT-X-STREAM-INF:BANDWIDTH=8000000,RESOLUTION=1920x1080,CODECS=\"hvc1.1.2.L123.90,mp4a.40.2\",VIDEO=\"chunked\",FRAME-RATE=60.000\n\
+https://cdn.example/source.m3u8\n\
+#EXT-X-MEDIA:TYPE=VIDEO,GROUP-ID=\"480p30\",NAME=\"480p\",AUTOSELECT=YES,DEFAULT=YES\n\
+#EXT-X-STREAM-INF:BANDWIDTH=1400000,RESOLUTION=852x480,CODECS=\"avc1.4D401F,mp4a.40.2\",VIDEO=\"480p30\",FRAME-RATE=30.000\n\
+https://cdn.example/480.m3u8\n";
+
+    #[test]
+    fn the_codec_family_ignores_audio_and_profiles() {
+        assert_eq!(codec_family("avc1.4D401F,mp4a.40.2"), Some("avc"));
+        assert_eq!(codec_family("mp4a.40.2, hev1.1.6.L93.B0"), Some("hevc"));
+        assert_eq!(codec_family("av01.0.08M.08"), Some("av1"));
+        assert_eq!(codec_family("mp4a.40.2"), None);
+    }
+
+    #[test]
+    fn a_swap_in_place_needs_one_known_codec_family() {
+        assert!(same_codec_family(Some("avc1.64002A"), Some("avc1.4D401F,mp4a.40.2")));
+        assert!(!same_codec_family(Some("hvc1.1.2.L123.90"), Some("avc1.4D401F")), "HEVC source to an H.264 transcode restarts");
+        assert!(!same_codec_family(None, Some("avc1.4D401F")), "unknown is never safe");
+    }
+
+    #[test]
+    fn the_served_rendition_is_found_by_url_name_or_source() {
+        assert_eq!(variant_codecs(MASTER, "https://cdn.example/480.m3u8", "x").as_deref(), Some("avc1.4D401F,mp4a.40.2"));
+        assert_eq!(variant_codecs(MASTER, "https://proxy/elsewhere", "480p").as_deref(), Some("avc1.4D401F,mp4a.40.2"));
+        assert_eq!(variant_codecs(MASTER, "https://proxy/elsewhere", "best").as_deref(), Some("hvc1.1.2.L123.90,mp4a.40.2"));
+        assert_eq!(variant_codecs(MASTER, "https://proxy/elsewhere", "720p60"), None);
+    }
+
+    #[test]
+    fn a_full_size_tile_keeps_its_own_quality() {
+        assert_eq!(tile_quality("best", None), "best");
+        assert_eq!(tile_quality("720p60", None), "720p60");
+    }
+
+    #[test]
+    fn a_small_tile_is_held_to_the_cap() {
+        assert_eq!(tile_quality("best", Some(480)), "480p");
+        assert_eq!(tile_quality("source", Some(480)), "480p");
+        assert_eq!(tile_quality("1080p60", Some(720)), "720p");
+        assert_eq!(tile_quality("", Some(360)), "360p");
+    }
+
+    #[test]
+    fn a_pick_already_under_the_cap_stays() {
+        assert_eq!(tile_quality("360p30", Some(480)), "360p30");
+        assert_eq!(tile_quality("480p", Some(480)), "480p");
+        assert_eq!(tile_quality("worst", Some(480)), "worst");
+        assert_eq!(tile_quality("audio_only", Some(480)), "audio_only");
+    }
+}
+
+#[cfg(test)]
 mod provider_url_tests {
     use super::provider_channel_from_url;
 
@@ -387,6 +605,12 @@ pub async fn promote_multi_nook_tile(
         );
         return Ok(None);
     };
+    // A small tile's stream was resolved under the small-tile cap; the solo
+    // player resolves afresh at the viewer's own quality instead.
+    if promotion.capped.is_some() {
+        debug!("[MultiNook] '{}' plays under the small-tile cap; promoting with a fresh resolve", stream_id);
+        return Ok(None);
+    }
 
     // The badge reads from here, exactly as the solo path sets it. A provider
     // tile carries no status and leaves whatever the last Twitch stream wrote,
@@ -449,6 +673,48 @@ pub async fn get_active_multi_nooks() -> Result<Vec<String>, String> {
 #[tauri::command]
 pub fn set_multi_nook_raid_channels(app: AppHandle, channel_ids: Vec<String>) {
     crate::services::multi_nook_raids::set_channels(&app, channel_ids);
+}
+
+/// The grid's Twitch channels, for the live title and category Rust polls
+/// for them (services::multi_nook_meta). An empty list ends the poll.
+#[tauri::command]
+pub fn set_multi_nook_meta_channels(app: AppHandle, logins: Vec<String>) {
+    crate::services::multi_nook_meta::set_channels(&app, logins);
+}
+
+/// One tile's volume and mute as the viewer changes them, written into the
+/// saved grid in place. The debounced settings writer persists it; no other
+/// window shows tile volume, so nothing is broadcast. Saving the whole grid
+/// through `patch_settings` instead ran a full settings round trip and made
+/// every open window re-read its settings, once per scroll notch.
+/// The delay a Resync lines MultiNook tiles up at (seconds behind live), or
+/// None when no sync is held. Tile playlists then reach back that far, so
+/// hls.js never snaps a held tile forward to live.
+#[tauri::command]
+pub async fn set_multi_nook_sync_delay(seconds: Option<f64>) -> Result<(), String> {
+    let delay = seconds.filter(|s| s.is_finite() && *s > 0.0 && *s <= 60.0);
+    MultiNookServer::set_sync_delay(delay).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_multi_nook_slot_audio(
+    slot_id: String,
+    volume: f32,
+    muted: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut settings = state.settings.lock().map_err(|e| e.to_string())?;
+    let Some(slot) = settings.multi_nook_slots.iter_mut().find(|s| s.id == slot_id) else {
+        return Ok(());
+    };
+    let volume = if volume.is_finite() { volume.clamp(0.0, 1.0) } else { slot.volume };
+    if slot.volume == volume && slot.muted == muted {
+        return Ok(());
+    }
+    slot.volume = volume;
+    slot.muted = muted;
+    crate::commands::settings::write_settings_to_disk(&settings)
 }
 
 /// The quality menu for one tile, so every tile in the grid can offer its own

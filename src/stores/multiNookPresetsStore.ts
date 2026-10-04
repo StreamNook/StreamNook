@@ -1,8 +1,8 @@
 import { create } from 'zustand';
 import { patchSettings } from '../utils/settingsBroadcast';
 import { useAppStore } from './AppStore';
-import { usemultiNookStore } from './multiNookStore';
-import { MultiNookPreset, MultiNookPresetChannel, MultiNookPresetIcon, MultiNookSlot } from '../types';
+import { currentNookLayout, usemultiNookStore } from './multiNookStore';
+import { MultiNookLayout, MultiNookPreset, MultiNookPresetChannel, MultiNookPresetIcon, MultiNookSlot } from '../types';
 import { Logger } from '../utils/logger';
 import { makeKey } from '../utils/providerKey';
 
@@ -48,7 +48,12 @@ interface MultiNookPresetsState {
   /** Write the current list back to settings.json (and the in-memory AppStore). */
   persist: (presets: MultiNookPreset[]) => Promise<void>;
 
-  createPreset: (name: string, channels: MultiNookPresetChannel[], icon?: MultiNookPresetIcon) => Promise<string>;
+  createPreset: (
+    name: string,
+    channels: MultiNookPresetChannel[],
+    icon?: MultiNookPresetIcon,
+    layout?: MultiNookLayout,
+  ) => Promise<string>;
   updatePreset: (
     id: string,
     patch: { name?: string; channels?: MultiNookPresetChannel[]; icon?: MultiNookPresetIcon | null },
@@ -89,13 +94,14 @@ export const useMultiNookPresetsStore = create<MultiNookPresetsState>((set, get)
     }
   },
 
-  createPreset: async (name, channels, icon) => {
+  createPreset: async (name, channels, icon, layout) => {
     const now = Date.now();
     const preset: MultiNookPreset = {
       id: newId(),
       name: name.trim() || 'Untitled preset',
       channels: dedupeChannels(channels),
       ...(icon ? { icon } : {}),
+      ...(layout ? { layout } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -165,13 +171,17 @@ export const useMultiNookPresetsStore = create<MultiNookPresetsState>((set, get)
     const slots = usemultiNookStore.getState().slots;
     if (slots.length === 0) return null;
     const channels = dedupeChannels(slots.map(slotToPresetChannel));
-    return get().createPreset(name, channels);
+    // The grid as it looks now, layout included.
+    return get().createPreset(name, channels, undefined, currentNookLayout());
   },
 
   applyPreset: async (id, mode) => {
     const preset = get().presets.find((p) => p.id === id);
     if (!preset || preset.channels.length === 0) return;
     if (mode === 'replace') {
+      // Its layout first, so its tiles start at the right size and quality. A
+      // preset saved without one keeps the layout you have.
+      if (preset.layout) await usemultiNookStore.getState().setLayout(preset.layout);
       // The grid becomes exactly this preset, so tag it as the equipped preset.
       await usemultiNookStore.getState().loadPresetChannels(preset.channels, 'replace', id);
     } else {

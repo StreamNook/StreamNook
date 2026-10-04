@@ -6,7 +6,7 @@
 
 /// Parse the leading resolution height from a quality string (e.g. "480p30" -> 480).
 /// Returns None for non-resolution qualities like "best", "worst", "audio_only".
-fn parse_quality_height(q: &str) -> Option<u32> {
+pub fn parse_quality_height(q: &str) -> Option<u32> {
     let digits: String = q
         .trim()
         .chars()

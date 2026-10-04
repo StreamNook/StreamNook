@@ -16,9 +16,11 @@ import {
 } from '@dnd-kit/core';
 import {
   arrayMove,
+  arraySwap,
   SortableContext,
   sortableKeyboardCoordinates,
   rectSortingStrategy,
+  rectSwappingStrategy,
 } from '@dnd-kit/sortable';
 import { ArrowUpFromLine } from 'lucide-react';
 import { MultiNookCell } from './MultiNookCell';
@@ -31,9 +33,9 @@ import { acquireChannel, releaseChannel } from '../../stores/chatConnectionStore
 import { Logger } from '../../utils/logger';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { MultiNookRaid } from '../../types';
-import { useVisibleInterval } from '../../utils/useVisibleInterval';
-import { useMultiNookSync } from './useMultiNookSync';
+import { DEFAULT_MULTI_NOOK_LAYOUT, type MultiNookRaid, type MultiNookTileMeta } from '../../types';
+import { useAppStore } from '../../stores/AppStore';
+import { nookLayout } from './nookLayout';
 
 const DOCK_DROP_ID = 'dock-drop-zone';
 const UNDOCK_DROP_ID = 'undock-drop-zone';
@@ -48,8 +50,14 @@ export const MultiNookView: React.FC = () => {
   // any store mutation at all.
   const slots = usemultiNookStore((s) => s.slots);
   const maximizedSlotId = usemultiNookStore((s) => s.maximizedSlotId);
-  const { reorderSlots, dockSlot, undockSlot, batchLoadMissingStreams, refreshSlotMetadata, setMaximizedSlot } =
+  const { reorderSlots, dockSlot, undockSlot, batchLoadMissingStreams, setMaximizedSlot, makeMainSlot, reconcileTileCaps } =
     usemultiNookStore.getState();
+  // Grid, or one main tile with the rest small (a setting Rust keeps).
+  const layout = useAppStore((s) => s.settings.multi_nook_layout) ?? DEFAULT_MULTI_NOOK_LAYOUT;
+  const mainLayout = layout.mode === 'main_row' || layout.mode === 'main_column';
+  // The slider's live value while it is being dragged, else the saved one.
+  const draftShare = usemultiNookStore((s) => s.draftShare);
+  const stripShare = draftShare ?? layout.strip_share;
   const visibleSlots = useMemo(() => slots.filter((s) => !s.isMinimized), [slots]);
   const minimizedSlots = useMemo(() => slots.filter((s) => s.isMinimized), [slots]);
 
@@ -71,7 +79,6 @@ export const MultiNookView: React.FC = () => {
   }, [isMaximizing, setMaximizedSlot]);
 
   // Mount the global Co-Stream Sync Controller
-  useMultiNookSync();
 
   // Keep every visible tile's chat connected in the background — not just the
   // focused one. This is what lets the moderator-log pane (and badge metadata)
@@ -101,7 +108,7 @@ export const MultiNookView: React.FC = () => {
     for (const [key, want] of desired) {
       if (!connectedChatRef.current.has(key)) {
         connectedChatRef.current.set(key, { channel: want.channel, provider: want.provider });
-        void acquireChannel(want.channel, want.channelId, want.provider).catch((err) =>
+        void acquireChannel(want.channel, want.channelId, want.provider, { background: true }).catch((err) =>
           Logger.error('[MultiNook] background chat acquire failed:', err),
         );
       }
@@ -109,7 +116,7 @@ export const MultiNookView: React.FC = () => {
     for (const [key, held] of Array.from(connectedChatRef.current)) {
       if (!desired.has(key)) {
         connectedChatRef.current.delete(key);
-        void releaseChannel(held.channel, held.provider).catch((err) =>
+        void releaseChannel(held.channel, held.provider, { background: true }).catch((err) =>
           Logger.warn('[MultiNook] background chat release failed:', err),
         );
       }
@@ -121,7 +128,7 @@ export const MultiNookView: React.FC = () => {
     const held = connectedChatRef.current;
     return () => {
       for (const entry of Array.from(held.values())) {
-        void releaseChannel(entry.channel, entry.provider).catch(() => {});
+        void releaseChannel(entry.channel, entry.provider, { background: true }).catch(() => {});
       }
       held.clear();
     };
@@ -174,33 +181,39 @@ export const MultiNookView: React.FC = () => {
     }
   }, [slots, batchLoadMissingStreams]);
 
-  // Titles and categories change mid-stream, so poll them. Keyed on the tile set
-  // rather than on `slots` itself: volume drags and focus changes mutate slots
-  // constantly and would restart the interval each time.
-  const loginKey = useMemo(
-    () => slots.map((s) => makeKey(s.provider ?? 'twitch', s.channelLogin)).sort().join(','),
+  // Titles and categories change mid-stream. Rust polls them for every Twitch
+  // tile in one batch and reports changes (services/multi_nook_meta). Keyed on
+  // the channel set, so a volume drag never re-sends it.
+  const metaLoginKey = useMemo(
+    () =>
+      Array.from(
+        new Set(slots.filter((s) => (s.provider ?? 'twitch') === 'twitch').map((s) => s.channelLogin.toLowerCase())),
+      )
+        .sort()
+        .join(','),
     [slots],
   );
   useEffect(() => {
-    if (!loginKey) return;
-    // Hold this off the mount frame. Opening a grid already starts up to 25 HLS
-    // proxies at once, and the patch re-renders every tile that gains a title;
-    // landing both together is what starves the main thread and stalls the MSE
-    // appends. Also covers preset loads, which build slots from cached data with
-    // no Twitch round-trip at all.
-    const first = setTimeout(() => void refreshSlotMetadata(), 3_000);
-    return () => clearTimeout(first);
-  }, [loginKey, refreshSlotMetadata]);
-  // Steady-state poll. Purely an on-screen surface, so it pauses while the
-  // window is hidden rather than hitting Helix from the tray.
-  useVisibleInterval(refreshSlotMetadata, 120_000);
-
-  // Build a map of slot id -> visual order index for CSS-based reordering.
-  const orderMap = useMemo(() => {
-    const map = new Map<string, number>();
-    visibleSlots.forEach((s, i) => map.set(s.id, i));
-    return map;
-  }, [visibleSlots]);
+    // Held off the opening frame: a grid starts up to 25 streams at once, and
+    // titles landing on every tile in the same moment starves the main thread
+    // and stalls playback. Also covers preset loads, built from cached data.
+    const t = setTimeout(() => {
+      invoke('set_multi_nook_meta_channels', { logins: metaLoginKey ? metaLoginKey.split(',') : [] }).catch((err) =>
+        Logger.warn('[MultiNook] tile metadata channels update failed:', err),
+      );
+    }, 3_000);
+    return () => clearTimeout(t);
+  }, [metaLoginKey]);
+  useEffect(() => {
+    const unlisten = listen<MultiNookTileMeta[]>('multi-nook://meta', (e) => {
+      usemultiNookStore.getState().applySlotMetadata(e.payload);
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+      // Leaving MultiNook ends the poll.
+      invoke('set_multi_nook_meta_channels', { logins: [] }).catch(() => {});
+    };
+  }, []);
 
   // Stable DOM order: sort visible slots by id so DOM nodes never move on reorder.
   const stableDomSlots = useMemo(
@@ -274,6 +287,24 @@ export const MultiNookView: React.FC = () => {
       return;
     }
 
+    // A main layout swaps two tiles rather than shifting the rest along, and a
+    // swap into or out of the main spot makes the new tile main (sound and chat
+    // follow, as with Make main).
+    if (currentSource === 'visible' && active.id !== over.id && mainLayout) {
+      const mainId = visibleSlots[0]?.id;
+      const overId = over.id as string;
+      if (activeId === mainId) {
+        makeMainSlot(overId);
+      } else if (overId === mainId) {
+        makeMainSlot(activeId);
+      } else {
+        const a = slots.findIndex((s) => s.id === activeId);
+        const b = slots.findIndex((s) => s.id === overId);
+        if (a >= 0 && b >= 0) reorderSlots(arraySwap(slots, a, b));
+      }
+      return;
+    }
+
     // Reorder (only for visible cells)
     if (currentSource === 'visible' && active.id !== over.id) {
       Logger.debug(`Reordering slot ${active.id} to ${over.id}`);
@@ -307,59 +338,21 @@ export const MultiNookView: React.FC = () => {
     return () => observer.disconnect();
   }, [visibleSlots.length]); // re-bind if the entire component shifts dramatically
 
-  // Flexbox Optimal Layout Engine
-  const { cellWidth, cellHeight, optimalCols = 1 } = useMemo(() => {
-    const len = visibleSlots.length;
-    if (len === 0 || dimensions.width === 0 || dimensions.height === 0) {
-      return { cellWidth: '100%', cellHeight: '100%' };
-    }
+  // Where each visible tile goes for the stage's size (components/multi-nook/
+  // nookLayout.ts). One engine for Grid and the main layouts, so switching is
+  // a restyle and never moves a node.
+  const placeById = useMemo(() => {
+    const places = nookLayout(dimensions.width, dimensions.height, visibleSlots.length, layout.mode, stripShare);
+    return new Map(visibleSlots.map((s, i) => [s.id, places[i]]));
+  }, [visibleSlots, dimensions, layout.mode, stripShare]);
 
-    const W = dimensions.width;
-    const H = dimensions.height;
-    const gap = 8; // 8px (Tailwind gap-2)
-    const ratio = 16 / 9;
-
-    let bestArea = 0;
-    let bestW = 0;
-    let bestH = 0;
-    let bestCols = 1;
-
-    for (let cols = 1; cols <= len; cols++) {
-      const rows = Math.ceil(len / cols);
-
-      // Max width bounded
-      const cellW_w = (W - (cols - 1) * gap) / cols;
-      const cellH_w = cellW_w / ratio;
-
-      // Max height bounded
-      const cellH_h = (H - (rows - 1) * gap) / rows;
-      const cellW_h = cellH_h * ratio;
-
-      let cellW = cellW_w;
-      let cellH = cellH_w;
-
-      // If width-bounded height exceeds container height, we are constrained by height
-      if (cellH * rows + (rows - 1) * gap > H) {
-        cellW = cellW_h;
-        cellH = cellH_h;
-      }
-
-      const area = cellW * cellH;
-      if (area > bestArea) {
-        bestArea = area;
-        bestW = cellW;
-        bestH = cellH;
-        bestCols = cols;
-      }
-    }
-
-    // Return as absolute floored pixels to completely avoid sub-pixel DOM wrapping bugs
-    return {
-      cellWidth: `${Math.floor(bestW)}px`,
-      cellHeight: `${Math.floor(bestH)}px`,
-      optimalCols: bestCols,
-    };
-  }, [visibleSlots.length, dimensions]);
+  // With a small-tile quality cap, a tile that changes role (made main, moved
+  // to the strip, spotlighted, docked) restarts at its new size's quality.
+  // Without one this finds nothing to do.
+  const roleKey = `${layout.mode}|${layout.small_quality_cap ?? ''}|${maximizedSlotId ?? ''}|${visibleSlots.map((s) => s.id).join(',')}`;
+  useEffect(() => {
+    void reconcileTileCaps();
+  }, [roleKey, reconcileTileCaps]);
 
   // Show dock zone only when dragging a visible cell
   const showDockZone = dragSource === 'visible' || dragSource === 'tutorial';
@@ -391,21 +384,23 @@ export const MultiNookView: React.FC = () => {
                 <UndockDropZone dropId={UNDOCK_DROP_ID} />
               )}
 
-              <div className="w-full h-full flex flex-wrap justify-center content-center gap-2">
+              <div className="relative w-full h-full">
                 <SortableContext
                   items={visibleSlots.map((s) => s.id)}
-                  strategy={rectSortingStrategy}
+                  strategy={mainLayout ? rectSwappingStrategy : rectSortingStrategy}
                 >
                   {stableDomSlots.map((slot) => {
-                    const cssOrder = orderMap.get(slot.id) ?? 0;
                     const isThisMaximized = isMaximizing && slot.id === maximizedSlotId;
+                    const place = placeById.get(slot.id);
 
-                    // While one tile fills the space, restyle it IN PLACE to an
-                    // absolute full-bleed overlay (no remount → HLS keeps running,
-                    // framer's `layout` animates the zoom) and collapse the rest to
-                    // display:none. They stay mounted (still in the React tree), so
-                    // their players keep buffering for an instant restore.
-                    let cellStyle: React.CSSProperties = { width: cellWidth, height: cellHeight };
+                    // Each tile sits at its rectangle. While one tile fills the
+                    // space it is restyled IN PLACE to a full-bleed overlay (no
+                    // remount, so HLS keeps running and framer's `layout`
+                    // animates the zoom) and the rest collapse to display:none,
+                    // still mounted, so their players keep buffering.
+                    let cellStyle: React.CSSProperties = place
+                      ? { position: 'absolute', left: place.x, top: place.y, width: place.w, height: place.h, margin: 0 }
+                      : { display: 'none' };
                     if (isMaximizing) {
                       cellStyle = isThisMaximized
                         ? { position: 'absolute', inset: 0, width: '100%', height: '100%', zIndex: 30, margin: 0 }
@@ -416,30 +411,15 @@ export const MultiNookView: React.FC = () => {
                       <MultiNookCell
                         key={slot.id}
                         slot={slot}
-                        cssOrder={cssOrder * 2}
                         customStyle={cellStyle}
                         isMaximized={isThisMaximized}
+                        sizeTier={isThisMaximized ? 'full' : (place?.tier ?? 'full')}
+                        canMakeMain={mainLayout && !isMaximizing && !!place && !place.main}
                       />
                     );
                   })}
                 </SortableContext>
-                
-                {/* Odd leftover streams sit on top (an upward-pointing pyramid). */}
-                {/* Flexbox naturally flows left-to-right, putting leftovers on the bottom. */}
-                {/* We reverse the pyramid visually by inserting a flex break with an exact CSS order */}
-                {/* that forces the first visual row to carry the deficit. */}
-                {(visibleSlots.length % optimalCols) > 0 && (
-                  <div 
-                    style={{ 
-                      flexBasis: '100%', 
-                      height: 0, 
-                      margin: 0, 
-                      order: (visibleSlots.length % optimalCols) * 2 - 1 
-                    }} 
-                    aria-hidden="true" 
-                  />
-                )}
-                
+
                 {/* Keep minimized streams mounted in the DOM to avoid HLS cold-start buffering */}
                 {minimizedSlots.map((slot) => (
                   <div key={slot.id} className="hidden">
