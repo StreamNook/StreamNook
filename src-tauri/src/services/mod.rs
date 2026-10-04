@@ -26,6 +26,7 @@ pub mod ll_diagnostics;
 pub mod channel_points_websocket_service;
 pub mod chat_logger_service;
 pub mod automod_queue;
+pub mod chat_bridge_route;
 pub mod chat_history;
 pub mod chat_rules;
 pub mod chat_service;
@@ -92,6 +93,7 @@ pub mod mod_log_storage_service;
 // Desktop-only: MultiNook multi-stream tiling is not part of the phone app.
 #[cfg(desktop)]
 pub mod multi_nook_server;
+pub mod multi_nook_meta;
 #[cfg(desktop)]
 pub mod multi_nook_raids;
 pub mod profile_cache_service;

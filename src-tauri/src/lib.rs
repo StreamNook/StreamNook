@@ -378,6 +378,7 @@ fn load_settings_from_file() -> Result<Settings, Box<dyn std::error::Error>> {
     settings.retire_legacy_live_edge_gap();
     settings.enable_low_latency_engine_once();
     settings.scope_blend_header_marks_once();
+    settings.adopt_first_run_look_once();
     Ok(settings)
 }
 
@@ -1554,6 +1555,14 @@ pub fn run() {
             #[cfg(desktop)]
             start_multi_nook,
             #[cfg(desktop)]
+            retier_multi_nook_tile,
+            #[cfg(desktop)]
+            set_multi_nook_meta_channels,
+            #[cfg(desktop)]
+            set_multi_nook_slot_audio,
+            #[cfg(desktop)]
+            set_multi_nook_sync_delay,
+            #[cfg(desktop)]
             stop_multi_nook,
             #[cfg(desktop)]
             stop_all_multi_nooks,
@@ -1756,6 +1765,7 @@ pub fn run() {
             ingest_badge_drops,
             get_badge_standing,
             get_badge_window,
+            get_badge_drop_campaign,
             // Badge Metadata commands
             fetch_badge_metadata,
             // Link preview commands

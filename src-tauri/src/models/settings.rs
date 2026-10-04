@@ -264,7 +264,7 @@ pub struct ChatDesignSettings {
     #[serde(default = "default_emote_hover_size")]
     pub emote_hover_size: u32, // Enlarged emote height in hover preview, px
     #[serde(default = "default_deleted_message_style")]
-    pub deleted_message_style: String, // strikethrough | hidden | dimmed | keep
+    pub deleted_message_style: String, // strikethrough | hidden | dimmed | italic | keep
     #[serde(default)]
     pub hide_shared_chat: bool,
     #[serde(default = "default_true")]
@@ -480,6 +480,28 @@ impl Default for ChatDesignSettings {
     }
 }
 
+impl ChatDesignSettings {
+    /// The look a brand-new install starts with. `Default` stays what an
+    /// absent `chat_design` block has always meant, so an old settings file
+    /// that lacks one never changes under its owner.
+    ///
+    /// Phones keep Twitch's 14px text and 8px spacing on a narrow screen, and
+    /// keep mod buttons: the phone chat has no drag layer, so drag-only would
+    /// leave a moderator there with no actions at all.
+    pub fn first_run() -> Self {
+        let desktop = cfg!(not(mobile));
+        Self {
+            font_size: if desktop { 16 } else { 14 },
+            message_spacing: if desktop { 11 } else { 8 },
+            message_entrance: "slide".to_string(),
+            deleted_message_style: "italic".to_string(),
+            mod_action_style: if desktop { "drag" } else { "both" }.to_string(),
+            mod_drag_layout: if desktop { "bar" } else { "column" }.to_string(),
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct LiveNotificationSettings {
     pub enabled: bool,
@@ -658,6 +680,76 @@ pub struct CompactViewSettings {
     pub custom_presets: Vec<CompactViewPreset>,
 }
 
+/// How MultiNook arranges its tiles.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MultiNookLayoutMode {
+    /// Every tile the same size.
+    #[default]
+    Grid,
+    /// The first tile large, the rest in a strip below it.
+    MainRow,
+    /// The first tile large, the rest in a strip beside it.
+    MainColumn,
+}
+
+/// The MultiNook layout. Read leniently (see its `Deserialize`): settings load
+/// as ONE parse, so a value this build does not know must never fail the file.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct MultiNookLayout {
+    pub mode: MultiNookLayoutMode,
+    /// The small tiles' strip as a share of the stage: its height for
+    /// `MainRow`, its width for `MainColumn`.
+    pub strip_share: f64,
+    /// Small tiles play at about this height at most (480 = 480p), or their
+    /// own quality when `None`. Main layouts only.
+    pub small_quality_cap: Option<u32>,
+}
+
+impl MultiNookLayout {
+    pub const MIN_SHARE: f64 = 0.15;
+    pub const MAX_SHARE: f64 = 0.40;
+    pub const DEFAULT_SHARE: f64 = 0.25;
+    /// The heights the small-tile cap may take.
+    pub const CAPS: [u32; 3] = [720, 480, 360];
+
+    /// Whether a tile in this spot plays under the cap. Grid has no small tiles.
+    pub fn caps_small_tiles(&self) -> Option<u32> {
+        match self.mode {
+            MultiNookLayoutMode::Grid => None,
+            _ => self.small_quality_cap,
+        }
+    }
+}
+
+impl Default for MultiNookLayout {
+    fn default() -> Self {
+        Self { mode: MultiNookLayoutMode::Grid, strip_share: Self::DEFAULT_SHARE, small_quality_cap: None }
+    }
+}
+
+impl<'de> Deserialize<'de> for MultiNookLayout {
+    /// Field by field, each falling back on its own: an unknown mode (a newer
+    /// build's, or a hand edit) reads as Grid, a share is clamped, a cap that
+    /// is not one of `CAPS` reads as none.
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let v = serde_json::Value::deserialize(d)?;
+        let mut out = Self::default();
+        if let Some(mode) = v.get("mode").and_then(|m| serde_json::from_value::<MultiNookLayoutMode>(m.clone()).ok()) {
+            out.mode = mode;
+        }
+        if let Some(share) = v.get("strip_share").and_then(|x| x.as_f64()).filter(|x| x.is_finite()) {
+            out.strip_share = share.clamp(Self::MIN_SHARE, Self::MAX_SHARE);
+        }
+        out.small_quality_cap = v
+            .get("small_quality_cap")
+            .and_then(|x| x.as_u64())
+            .and_then(|x| u32::try_from(x).ok())
+            .filter(|x| Self::CAPS.contains(x));
+        Ok(out)
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct MultiNookSlot {
@@ -746,6 +838,11 @@ pub struct Settings {
     pub glass_blur: bool,
     #[serde(default)]
     pub setup_complete: bool,
+    /// Set once this install has been moved onto the first-run chat look (see
+    /// `adopt_first_run_look_once`). Backend-owned: a frontend save never
+    /// writes it, so a later choice of the old look is never flipped again.
+    #[serde(default)]
+    pub first_run_look_adopted: bool,
     #[serde(default)]
     pub compact_view: Option<CompactViewSettings>,
     /// Whether diagnostic logging is enabled (defaults to true)
@@ -756,6 +853,10 @@ pub struct Settings {
     pub multi_nook_slots: Vec<MultiNookSlot>,
     #[serde(default)]
     pub multi_nook_chat_hidden: bool,
+    /// How the MultiNook tiles are arranged (grid, or one main tile with the
+    /// rest small).
+    #[serde(default)]
+    pub multi_nook_layout: MultiNookLayout,
     /// Whether the Moderator Logs pane is shown. Persisted so it survives app
     /// restarts and settings reloads instead of resetting to off each session.
     #[serde(default)]
@@ -939,6 +1040,14 @@ impl Default for ChatBlendSettings {
     }
 }
 
+impl ChatBlendSettings {
+    /// A brand-new install merges a streamer's other platforms into one chat
+    /// from the start. `Default` (off) stays what an absent block means.
+    pub fn first_run() -> Self {
+        Self { enabled: true, ..Self::default() }
+    }
+}
+
 /// Identity for a favourited channel, so an unfollowed favourite can still be
 /// drawn while it is offline (a name and a face; `favorite_streamers` is only
 /// ids). Membership stays in `favorite_streamers` — this is a best-effort
@@ -987,9 +1096,9 @@ impl Default for Settings {
             provider_follows: vec![],
             youtube_chat_view: YouTubeChatView::default(),
             channel_links: vec![],
-            chat_blend: ChatBlendSettings::default(),
+            chat_blend: ChatBlendSettings::first_run(),
             snippets: SnippetSettings::default(),
-            chat_design: ChatDesignSettings::default(),
+            chat_design: ChatDesignSettings::first_run(),
             live_notifications: LiveNotificationSettings::default(),
             last_seen_version: None,
             auto_switch: AutoSwitchSettings::default(),
@@ -999,10 +1108,12 @@ impl Default for Settings {
             glass_transparency: None,
             glass_blur: default_glass_blur(),
             setup_complete: false, // New users need to complete setup
+            first_run_look_adopted: true, // already starts with that look
             compact_view: None,
             error_reporting_enabled: true, // Diagnostics enabled by default
             multi_nook_slots: Vec::new(),
             multi_nook_chat_hidden: false,
+            multi_nook_layout: MultiNookLayout::default(),
             show_mod_logs: false,
             keybindings: HashMap::new(),
             chat_logging: ChatLoggingSettings::default(),
@@ -1139,6 +1250,45 @@ impl Settings {
         self.provider_follows = authoritative.provider_follows.clone();
         self.drops = authoritative.drops.clone();
         self.channel_links = authoritative.channel_links.clone();
+        self.first_run_look_adopted = authoritative.first_run_look_adopted;
+    }
+
+    /// One-time move of an existing install onto the first-run chat look,
+    /// setting by setting: a setting still at the value it shipped with was
+    /// never changed (as far as a settings file can tell), so it takes the new
+    /// default; anything the viewer picked stays. Runs once per install, so a
+    /// viewer who sets the old value back afterwards keeps it.
+    pub fn adopt_first_run_look_once(&mut self) {
+        if self.first_run_look_adopted {
+            return;
+        }
+        let new = ChatDesignSettings::first_run();
+        let d = &mut self.chat_design;
+        if d.font_size == 14 {
+            d.font_size = new.font_size;
+        }
+        if d.message_spacing == 8 {
+            d.message_spacing = new.message_spacing;
+        }
+        if d.message_entrance == "none" {
+            d.message_entrance = new.message_entrance;
+        }
+        if d.deleted_message_style == "strikethrough" {
+            d.deleted_message_style = new.deleted_message_style;
+        }
+        // "both" is also what a file from before mod_action_style existed
+        // loads as; there the old switch says what the viewer chose, and
+        // drag_moderation_enabled = false meant buttons only.
+        if d.mod_action_style == "both" && d.drag_moderation_enabled {
+            d.mod_action_style = new.mod_action_style;
+        }
+        if d.mod_drag_layout == "column" {
+            d.mod_drag_layout = new.mod_drag_layout;
+        }
+        if !self.chat_blend.enabled {
+            self.chat_blend.enabled = ChatBlendSettings::first_run().enabled;
+        }
+        self.first_run_look_adopted = true;
     }
 
     /// One-time flip of the low-latency engine to on for installs written before
@@ -1357,11 +1507,12 @@ mod backup_persistence_tests {
         assert!(!back.extra.contains_key("channel_links"));
     }
 
-    /// Blend is off unless the user turns it on, and a settings file written
-    /// before it existed must load rather than failing the whole parse.
+    /// A fresh install starts with blend on, and a settings file written
+    /// before it existed loads with it off rather than failing the parse or
+    /// switching it on under its owner.
     #[test]
-    fn chat_blend_defaults_to_off_and_tolerates_an_older_file() {
-        assert!(!Settings::default().chat_blend.enabled, "off by default");
+    fn chat_blend_is_on_for_a_fresh_install_and_off_for_an_older_file() {
+        assert!(Settings::default().chat_blend.enabled, "on for a fresh install");
         assert!(Settings::default().chat_blend.suggest_links);
 
         let mut value = serde_json::to_value(Settings::default()).expect("serialize");
@@ -1371,6 +1522,88 @@ mod backup_persistence_tests {
         let parsed: Settings = serde_json::from_value(value).expect("an older file still parses");
         assert!(!parsed.chat_blend.enabled);
         assert!(parsed.channel_links.is_empty());
+    }
+
+    /// An existing install written before the first-run look: every setting
+    /// still at its shipped value takes the new one, anything chosen stays,
+    /// and it happens once.
+    #[test]
+    fn an_existing_install_adopts_the_first_run_look_only_where_untouched() {
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize");
+        let obj = value.as_object_mut().expect("object");
+        obj.remove("first_run_look_adopted");
+        obj.insert("chat_design".into(), serde_json::to_value(ChatDesignSettings::default()).unwrap());
+        obj.insert("chat_blend".into(), serde_json::to_value(ChatBlendSettings::default()).unwrap());
+        let mut old: Settings = serde_json::from_value(value).expect("parses");
+        assert!(!old.first_run_look_adopted);
+        // Two choices the viewer made.
+        old.chat_design.message_spacing = 4;
+        old.chat_design.deleted_message_style = "hidden".into();
+
+        old.adopt_first_run_look_once();
+        let fresh = ChatDesignSettings::first_run();
+        assert!(old.first_run_look_adopted);
+        assert!(old.chat_blend.enabled);
+        assert_eq!(old.chat_design.font_size, fresh.font_size);
+        assert_eq!(old.chat_design.message_entrance, "slide");
+        assert_eq!(old.chat_design.mod_action_style, fresh.mod_action_style);
+        assert_eq!(old.chat_design.message_spacing, 4, "a chosen spacing stays");
+        assert_eq!(old.chat_design.deleted_message_style, "hidden", "a chosen style stays");
+
+        // Setting the old look back afterwards sticks across loads.
+        old.chat_design.font_size = 14;
+        old.chat_blend.enabled = false;
+        old.adopt_first_run_look_once();
+        assert_eq!(old.chat_design.font_size, 14);
+        assert!(!old.chat_blend.enabled);
+
+        // A frontend save cannot clear the flag and re-run it.
+        let mut incoming = old.clone();
+        incoming.first_run_look_adopted = false;
+        incoming.adopt_backend_owned(&old);
+        assert!(incoming.first_run_look_adopted);
+    }
+
+    /// The old on/off drag switch, off, meant buttons only. A file from before
+    /// mod_action_style loads that field as "both"; it must not become drag.
+    #[test]
+    fn buttons_only_from_the_old_switch_is_not_moved_to_drag() {
+        let mut old = Settings::default();
+        old.first_run_look_adopted = false;
+        old.chat_design = ChatDesignSettings::default();
+        old.chat_design.drag_moderation_enabled = false;
+        old.adopt_first_run_look_once();
+        assert_eq!(old.chat_design.mod_action_style, "both");
+    }
+
+    /// The first-run chat look reaches only a fresh install. A file that
+    /// predates a field (or the whole block) keeps the look it always had.
+    #[test]
+    fn first_run_chat_look_reaches_only_a_fresh_install() {
+        let fresh = Settings::default().chat_design;
+        assert_eq!(fresh.message_entrance, "slide");
+        assert_eq!(fresh.deleted_message_style, "italic");
+        assert_eq!(fresh.font_size, if cfg!(mobile) { 14 } else { 16 });
+        assert_eq!(fresh.message_spacing, if cfg!(mobile) { 8 } else { 11 });
+        assert_eq!(fresh.mod_action_style, if cfg!(mobile) { "both" } else { "drag" });
+        assert!(!fresh.show_dividers);
+
+        // A file without the block at all.
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize");
+        value.as_object_mut().expect("object").remove("chat_design");
+        let parsed: Settings = serde_json::from_value(value).expect("parses");
+        assert_eq!(parsed.chat_design.message_entrance, "none");
+        assert_eq!(parsed.chat_design.font_size, 14);
+        assert_eq!(parsed.chat_design.deleted_message_style, "strikethrough");
+
+        // A file whose block predates the newer fields.
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize");
+        let design = value["chat_design"].as_object_mut().expect("block");
+        design.remove("message_entrance");
+        design.remove("deleted_message_style");
+        let parsed: Settings = serde_json::from_value(value).expect("parses");
+        assert_eq!(parsed.chat_design.message_entrance, "none");
+        assert_eq!(parsed.chat_design.deleted_message_style, "strikethrough");
     }
 
     /// Frontend-managed preference groups the struct doesn't model (highlight
@@ -1464,6 +1697,42 @@ mod backup_persistence_tests {
     /// restarts AND ride along in exported settings backups (export_settings
     /// serializes this exact shape, minus the non-portable session keys). Every
     /// nested field (per-channel quality, the icon) must survive verbatim.
+    /// A layout this build cannot read must cost only the layout, never the
+    /// settings file: the whole file is one parse.
+    #[test]
+    fn a_bad_multi_nook_layout_never_fails_the_settings_load() {
+        let mut v = serde_json::to_value(Settings::default()).unwrap();
+        v["multi_nook_layout"] = serde_json::json!({ "mode": "hexagon_swirl", "strip_share": 9.5, "small_quality_cap": 123 });
+        v["multi_nook_chat_hidden"] = serde_json::json!(true);
+        let parsed: Settings = serde_json::from_value(v).expect("the rest of the file still loads");
+        assert!(parsed.multi_nook_chat_hidden);
+        assert_eq!(parsed.multi_nook_layout.mode, MultiNookLayoutMode::Grid);
+        assert_eq!(parsed.multi_nook_layout.strip_share, MultiNookLayout::MAX_SHARE);
+        assert_eq!(parsed.multi_nook_layout.small_quality_cap, None);
+
+        let mut v = serde_json::to_value(Settings::default()).unwrap();
+        v["multi_nook_layout"] = serde_json::json!("not even an object");
+        let parsed: Settings = serde_json::from_value(v).expect("still loads");
+        assert_eq!(parsed.multi_nook_layout, MultiNookLayout::default());
+    }
+
+    #[test]
+    fn a_multi_nook_layout_round_trips() {
+        let mut s = Settings::default();
+        s.multi_nook_layout = MultiNookLayout {
+            mode: MultiNookLayoutMode::MainColumn,
+            strip_share: 0.3,
+            small_quality_cap: Some(480),
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"mode\":\"main_column\""));
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.multi_nook_layout, s.multi_nook_layout);
+        assert_eq!(back.multi_nook_layout.caps_small_tiles(), Some(480));
+        let grid = MultiNookLayout { mode: MultiNookLayoutMode::Grid, ..s.multi_nook_layout.clone() };
+        assert_eq!(grid.caps_small_tiles(), None, "a grid has no small tiles");
+    }
+
     #[test]
     fn multi_nook_presets_round_trip_through_extra() {
         let mut value = serde_json::to_value(Settings::default()).expect("serialize defaults");

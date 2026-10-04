@@ -219,7 +219,7 @@ export interface ChatDesignSettings {
   // default behavior. 'hidden' fully suppresses the row. 'dimmed' reduces
   // opacity without strike. 'keep' leaves the message rendered as if nothing
   // happened (useful for mods auditing what was said).
-  deleted_message_style?: 'strikethrough' | 'hidden' | 'dimmed' | 'keep';
+  deleted_message_style?: 'strikethrough' | 'hidden' | 'dimmed' | 'keep' | 'italic';
   // Suppress messages flagged as originating from another room in a Twitch
   // shared-chat session. Default false (keep them visible).
   hide_shared_chat?: boolean;
@@ -782,6 +782,34 @@ export interface CustomTheme {
   palette: CustomThemePalette;
 }
 
+/** What Rust reports about a Twitch tile's channel (services/multi_nook_meta.rs). */
+export interface MultiNookTileMeta {
+  login: string;
+  live: boolean;
+  title: string | null;
+  game_name: string | null;
+  broadcaster_type: string | null;
+  /** The channel's account, looked up once per session: fills a saved grid's
+   *  missing id and name and replaces an expired avatar. */
+  user_id: string | null;
+  display_name: string | null;
+  profile_image_url: string | null;
+}
+
+/** How MultiNook arranges its tiles (Rust: models/settings.rs MultiNookLayoutMode). */
+export type MultiNookLayoutMode = 'grid' | 'main_row' | 'main_column';
+
+/** The MultiNook layout (Rust: MultiNookLayout). */
+export interface MultiNookLayout {
+  mode: MultiNookLayoutMode;
+  /** The small tiles' strip as a share of the stage, 0.15 to 0.40. */
+  strip_share: number;
+  /** Small tiles play at about this height at most (720, 480 or 360); null keeps each tile's own quality. */
+  small_quality_cap: number | null;
+}
+
+export const DEFAULT_MULTI_NOOK_LAYOUT: MultiNookLayout = { mode: 'grid', strip_share: 0.25, small_quality_cap: null };
+
 export interface MultiNookSlot {
   id: string;             // Unique identifier for the slot (e.g., cell-1)
   // The platform this tile is on. ABSENT MEANS TWITCH, matching the bare-key
@@ -805,6 +833,7 @@ export interface MultiNookSlot {
   title?: string;            // Ephemeral: current stream title, refreshed from Helix while the grid is open. Not persisted, since a saved title goes stale the moment the streamer edits it.
   broadcasterType?: string;  // Ephemeral: 'partner' | 'affiliate' | ''. Drives the verified mark on the tile. Resolved from helix/users, which every slot-creating path already calls.
   raid?: MultiNookRaid;      // Ephemeral: the channel this tile's streamer raided. Covers the tile with a card until dismissed. Not persisted.
+  startedCap?: number | null; // Ephemeral: the small-tile cap this tile's stream was started under (null = its own quality). A change means a restart. Not persisted.
 }
 
 /** A raid out of a MultiNook tile, as Rust emits it on `multi-nook://raid`
@@ -847,6 +876,7 @@ export interface MultiNookPreset {
   name: string;                     // User-facing label
   channels: MultiNookPresetChannel[];
   icon?: MultiNookPresetIcon;       // Optional custom icon; default is the avatar stack
+  layout?: MultiNookLayout;         // The layout it was saved with; absent keeps whatever layout is current
   createdAt: number;                // Epoch ms, for stable default ordering
   updatedAt: number;                // Epoch ms, bumped on every edit
 }
@@ -1078,6 +1108,7 @@ export interface Settings {
   font_custom?: string; // Typed family name used when font === 'custom'. Ignored otherwise.
   error_reporting_enabled?: boolean; // Local diagnostic log verbosity; nothing is sent off-device (default: true)
   setup_complete?: boolean; // Whether the first-time setup wizard has been completed
+  first_run_look_adopted?: boolean; // Backend-owned: set once the install moved onto the first-run chat look
   auto_claim_points_watching?: boolean; // Auto-claim the bonus chest on the channel you're actively watching. On by default; when off, a clickable chest appears on the points button. Scoped to the watched channel only (background automation is a separate opt-in plugin).
   compact_view?: CompactViewSettings; // Compact view preset settings
   custom_themes?: CustomTheme[]; // User-created custom themes
@@ -1086,6 +1117,8 @@ export interface Settings {
   oled_accent?: string; // Accent hex (#rrggbb) for the OLED theme, which lets you pick any accent. Default DEFAULT_OLED_ACCENT.
   multi_nook_slots?: MultiNookSlot[]; // Persisted multi-nook grid configurations
   multi_nook_chat_hidden?: boolean; // Whether the chat panel is globally hidden in MultiNook
+  /** How the MultiNook tiles are arranged. Rust reads it leniently and fills the default. */
+  multi_nook_layout?: MultiNookLayout;
   multi_nook_presets?: MultiNookPreset[]; // Saved, named channel sets openable into the grid in one click
   multi_nook_active_preset_id?: string; // Id of the preset currently loaded into the grid (the "equipped" preset), if any
   show_mod_logs?: boolean; // Whether to display the Mod Logs pane
