@@ -276,21 +276,24 @@ const StreamItem = memo(({
                 </div>
             )}
 
-            {/* Viewer count and favorite button */}
+            {/* Viewer count on the name line, favorite heart under it on the
+                game line. Stacked, the heart takes no width, so every row's
+                count sits flush right whether or not it has a heart. */}
             {showExpanded && (
-                <div className={`flex items-center gap-1 flex-shrink-0 ${ROW_REVEAL}`}>
-                    <div className="flex items-center gap-1 text-xs text-textSecondary">
+                <div className={`flex flex-col items-end flex-shrink-0 ${ROW_REVEAL}`}>
+                    <div className="flex h-5 items-center gap-1 text-xs text-textSecondary">
                         <Radio size={10} className="text-live" />
                         <span>{formatViewerCount(stream.viewer_count)}</span>
                     </div>
-                    {showFavorite && (
+                    {showFavorite ? (
                         <Tooltip content={isFavorite ? 'Remove from favorites' : 'Add to favorites'} delay={200} side="top">
                             <button
                                 onClick={(e) => onFavoriteClick(e, stream)}
-                                className={`p-1 flex items-center justify-center bg-transparent transition-transform duration-300 hover:scale-110 active:scale-95`}
+                                aria-label={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                                className="grid h-4 w-4 place-items-center bg-transparent transition-transform duration-300 hover:scale-110 active:scale-95"
                             >
                                 <Heart
-                                    size={14}
+                                    size={12}
                                     fill={isFavorite ? 'url(#glass-heart-fill)' : 'none'}
                                     stroke={isFavorite ? 'url(#glass-heart-stroke)' : 'currentColor'}
                                     strokeWidth={isFavorite ? 1.5 : 2}
@@ -298,8 +301,9 @@ const StreamItem = memo(({
                                 />
                             </button>
                         </Tooltip>
+                    ) : (
+                        <span aria-hidden className="h-4" />
                     )}
-
                 </div>
             )}
         </div>
