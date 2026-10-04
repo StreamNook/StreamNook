@@ -1276,6 +1276,12 @@ impl DropsService {
     /// under Special Events and Twitch offers it on her channel whatever she is
     /// playing. Guessing either way is wrong for the other case, so ask.
     ///
+    /// Asked signed out, because the signed-in answer is per viewer: once the
+    /// viewer has earned a campaign, Twitch reports it offered nowhere, and the
+    /// question here is about the channel. Whether the viewer still needs the
+    /// drop is the caller's to decide. Signed out keeps the category rule
+    /// (participants live in another game are offered nothing).
+    ///
     /// One aliased document covers a whole chunk of channels, so a roster costs
     /// a request per 50 live channels rather than one per channel.
     pub async fn campaign_eligible_channels(
@@ -1293,7 +1299,6 @@ impl DropsService {
             return Ok(Vec::new());
         }
 
-        let token = DropsAuthService::get_token().await?;
         let mut eligible = Vec::new();
 
         for chunk in ids.chunks(50) {
@@ -1307,7 +1312,10 @@ impl DropsService {
             let response = self
                 .client
                 .post("https://gql.twitch.tv/gql")
-                .headers(self.create_gql_headers(&token))
+                .header(
+                    "Client-ID",
+                    crate::services::auth_proxy::TWITCH_WEB_CLIENT_ID,
+                )
                 .json(&serde_json::json!({ "query": query }))
                 .send()
                 .await?;

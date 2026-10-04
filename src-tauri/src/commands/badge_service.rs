@@ -339,6 +339,52 @@ pub async fn get_badge_window(
     Ok(crate::services::badge_standing::window_for(&set_id, &version).await)
 }
 
+/// The live Drops campaign that awards a badge, when one is running, so a
+/// badge page can offer the channels it is earned on. None when no campaign
+/// matches or the Drops list cannot be read (Drops not signed in).
+#[tauri::command]
+pub async fn get_badge_drop_campaign(
+    state: tauri::State<'_, crate::models::settings::AppState>,
+    set_id: String,
+    version: String,
+) -> Result<Option<crate::models::drops::DropCampaign>, String> {
+    let title = crate::commands::badges::get_cached_global_badges()
+        .await
+        .ok()
+        .flatten()
+        .and_then(|catalog| {
+            catalog
+                .data
+                .into_iter()
+                .find(|s| s.set_id == set_id)?
+                .versions
+                .into_iter()
+                .find(|v| v.id == version)
+                .map(|v| v.title)
+        });
+    // The cached list at any age first: a fresh fetch resets the live progress
+    // map, which a badge page has no business doing.
+    let mut campaigns = {
+        let drops = state.drops_service.lock().await;
+        match drops.cached_campaigns_snapshot().await {
+            Some(c) => c,
+            None => match drops.get_all_active_campaigns_cached().await {
+                Ok(c) => c,
+                Err(e) => {
+                    debug!("[Badges] No Drops list for {set_id}: {e}");
+                    return Ok(None);
+                }
+            },
+        }
+    };
+    let now = chrono::Utc::now();
+    campaigns.retain(|c| c.end_at > now);
+    Ok(
+        crate::services::drops_overview::campaign_for_badge(&campaigns, &set_id, title.as_deref())
+            .cloned(),
+    )
+}
+
 /// Whether a badge's earn window is open right now. Prefers the enrichment's
 /// ISO window (authoritative campaign data) over the payload's `status`, which
 /// is only a snapshot of when the relay sent it.

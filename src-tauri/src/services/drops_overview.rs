@@ -387,6 +387,65 @@ pub fn announce_new_favorite_campaigns(
     }
 }
 
+/// Letters and digits only, lowercased, so a badge's set id ("wsci-2026"), its
+/// title ("WSCI 2026") and its campaign's name compare equal.
+fn badge_key(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// A badge reward's name without the "Chat Badge" / "Badge" Twitch appends
+/// ("WSCI Chat Badge" names the WSCI badge).
+fn badge_reward_key(name: &str) -> String {
+    let lower = name.trim().to_lowercase();
+    let stem = lower
+        .strip_suffix("chat badge")
+        .or_else(|| lower.strip_suffix("badge"))
+        .unwrap_or(&lower);
+    badge_key(stem)
+}
+
+/// The active campaign that awards a badge. Only a campaign that hands out a
+/// chat badge qualifies, and it is matched by its own name or its badge
+/// reward's name against the badge's title, then against its set id. The
+/// title goes first because tiers of one set (EWC) are separate campaigns that
+/// share the set id.
+pub fn campaign_for_badge<'a>(
+    campaigns: &'a [DropCampaign],
+    set_id: &str,
+    title: Option<&str>,
+) -> Option<&'a DropCampaign> {
+    let awards_badge = |c: &DropCampaign| {
+        c.time_based_drops
+            .iter()
+            .flat_map(|d| &d.benefit_edges)
+            .any(|b| b.distribution_type.as_deref() == Some("BADGE"))
+    };
+    let names = |c: &DropCampaign| {
+        let mut keys = vec![badge_key(&c.name)];
+        keys.extend(
+            c.time_based_drops
+                .iter()
+                .flat_map(|d| &d.benefit_edges)
+                .filter(|b| b.distribution_type.as_deref() == Some("BADGE"))
+                .map(|b| badge_reward_key(&b.name)),
+        );
+        keys
+    };
+    [title.map(badge_key), Some(badge_key(set_id))]
+        .into_iter()
+        .flatten()
+        .filter(|k| !k.is_empty())
+        .find_map(|key| {
+            campaigns
+                .iter()
+                .filter(|c| awards_badge(c))
+                .find(|c| names(c).contains(&key))
+        })
+}
+
 pub fn overview(
     campaigns: &[DropCampaign],
     progress: Vec<DropProgress>,
@@ -607,5 +666,39 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].new_count, 1);
         assert_eq!(found[0].campaign_names, vec!["campaign 3".to_string()]);
+    }
+
+    fn badge_campaign(id: &str, name: &str, reward: &str, kind: Option<&str>) -> DropCampaign {
+        let mut d = drop(&format!("d-{id}"), 0, reward);
+        d.required_subs = 1;
+        d.benefit_edges[0].distribution_type = kind.map(str::to_string);
+        DropCampaign { name: name.into(), ..campaign(id, "League of Legends", 19, vec![d]) }
+    }
+
+    #[test]
+    fn a_badge_finds_its_campaign_by_set_id_title_or_reward_name() {
+        let campaigns = vec![
+            badge_campaign("item", "WSCI 2026", "Love, Sera", Some("DIRECT_ENTITLEMENT")),
+            badge_campaign("wsci", "WSCI 2026", "WSCI Chat Badge", Some("BADGE")),
+            badge_campaign("other", "Split 3", "Mouse Badge", Some("BADGE")),
+        ];
+        // The in-game item campaign shares the name but awards no badge.
+        let by_set = campaign_for_badge(&campaigns, "wsci-2026", None).unwrap();
+        assert_eq!(by_set.id, "wsci");
+        let by_title = campaign_for_badge(&campaigns, "unrelated", Some("WSCI 2026")).unwrap();
+        assert_eq!(by_title.id, "wsci");
+        let by_reward = campaign_for_badge(&campaigns, "mouse", Some("Mouse")).unwrap();
+        assert_eq!(by_reward.id, "other");
+        assert!(campaign_for_badge(&campaigns, "glhf-pledge", Some("GLHF Pledge")).is_none());
+    }
+
+    #[test]
+    fn the_title_wins_over_a_set_id_tiers_share() {
+        let campaigns = vec![
+            badge_campaign("t1", "EWC Tier 1", "EWC 2026", Some("BADGE")),
+            badge_campaign("t3", "EWC Tier 3", "EWC Tier 3 Badge", Some("BADGE")),
+        ];
+        let tier = campaign_for_badge(&campaigns, "ewc-2026", Some("EWC Tier 3")).unwrap();
+        assert_eq!(tier.id, "t3");
     }
 }

@@ -1,9 +1,10 @@
-import { X, Gift, ChevronLeft, AlertTriangle, Calendar, ChevronRight, Users, Clock, ArrowUpRight } from 'lucide-react';
+import { X, Gift, ChevronLeft, AlertTriangle, Calendar, ChevronRight, Users, Clock, ArrowUpRight, Radio } from 'lucide-react';
 import { useEffect, useState, useMemo, useCallback, type JSX } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../stores/AppStore';
-import type { TwitchStream } from '../types';
+import type { DropCampaign as LiveDropCampaign, TwitchStream } from '../types';
+import ChannelPickerModal from './drops/ChannelPickerModal';
 import { parseBadgeForLinks, type ParsedBadgeLink } from '../services/badgeParsingService';
 import { Tooltip } from './ui/Tooltip';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -388,6 +389,21 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
     fetchBadgeBaseInfo();
   }, [setId, badge.id]);
 
+  // The Drops campaign awarding this badge right now, matched in Rust. An
+  // allow-listed one gets the same live channel picker as the Drops center.
+  const [liveCampaign, setLiveCampaign] = useState<LiveDropCampaign | null>(null);
+  const [showChannelPicker, setShowChannelPicker] = useState(false);
+  useEffect(() => {
+    let live = true;
+    invoke<LiveDropCampaign | null>('get_badge_drop_campaign', { setId, version: badge.id })
+      .then((c) => { if (live) setLiveCampaign(c ?? null); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [setId, badge.id]);
+  const aclCampaign =
+    liveCampaign?.is_acl_based && liveCampaign.allowed_channels.length > 0 ? liveCampaign : null;
+  const aclNeedsSub = !!aclCampaign?.time_based_drops.some((d) => (d.required_subs ?? 0) > 0);
+
   // Live-amend: when the relay pushes enrichment for this badge, refresh the
   // panel in place (no reopen needed).
   useEffect(() => {
@@ -438,8 +454,10 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
     .filter(Boolean)
     .join('\n');
 
+  // The campaign's own channel list, when there is one, replaces the handful
+  // read out of the copy: the picker shows every participant that is live.
   const relayChannels = badgeBaseInfo?.enrichment?.channels ?? [];
-  const channelLogins = (
+  const channelLogins = aclCampaign ? [] : (
     relayChannels.length > 0
       ? relayChannels
       : extractChannelLogins(
@@ -959,8 +977,35 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
 
               {/* Themed navigation: cover-art category card, streamer live cards,
                   and any drops-event card. */}
-              {(displayLinks.length > 0 || channelLogins.length > 0) && (
+              {(displayLinks.length > 0 || channelLogins.length > 0 || aclCampaign) && (
                 <div className="flex flex-col gap-2">
+                  {aclCampaign && (
+                    <button
+                      onClick={() => setShowChannelPicker(true)}
+                      className="group flex items-center gap-3 w-full text-left p-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.06] transition-colors"
+                    >
+                      <span className="w-[46px] h-[46px] rounded-lg bg-white/[0.06] flex items-center justify-center shrink-0">
+                        <Radio size={20} className="text-accent" />
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[11px] text-textMuted uppercase tracking-wide">
+                          Participating channels
+                        </div>
+                        <div className="text-[15px] font-medium text-textPrimary truncate group-hover:text-accent transition-colors">
+                          {aclCampaign.allowed_channels.length} channels
+                        </div>
+                        <div className="text-[12px] text-textSecondary">
+                          {aclNeedsSub
+                            ? 'See which are live, then subscribe on one'
+                            : 'See which are live to watch'}
+                        </div>
+                      </div>
+                      <ChevronRight
+                        size={18}
+                        className="text-textMuted group-hover:text-accent transition-colors shrink-0"
+                      />
+                    </button>
+                  )}
                   {displayLinks.map((link, index) =>
                     link.type === 'category' ? (
                       <BadgeCategoryCard
@@ -1115,6 +1160,29 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
           </div>
         </div>
       </motion.div>
+
+      {aclCampaign && showChannelPicker && (
+        <ChannelPickerModal
+          isOpen
+          onClose={() => setShowChannelPicker(false)}
+          campaignId={aclCampaign.id}
+          campaignName={aclCampaign.name}
+          gameName={aclCampaign.game_name}
+          gameId={aclCampaign.game_id}
+          categoryIds={
+            aclCampaign.has_category === false || (aclCampaign.category_ids?.length ?? 0) > 1
+              ? aclCampaign.category_ids
+              : undefined
+          }
+          allowedChannels={aclCampaign.allowed_channels}
+          isAclBased
+          actionLabel="Watch"
+          onPick={(c) => {
+            setShowChannelPicker(false);
+            handleWatchChannel(c.login, c.stream);
+          }}
+        />
+      )}
     </motion.div>
   );
 };
