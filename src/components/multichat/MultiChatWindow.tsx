@@ -971,7 +971,9 @@ export default function MultiChatWindow() {
       const k = keyOf(entry);
       if (!acquiredKeysRef.current.has(k)) {
         acquiredKeysRef.current.add(k);
-        void acquireChannel(entry.channel, entry.channelId, entry.provider ?? 'twitch').catch(
+        // A background hold: the tab strip keeps every channel joined, and the
+        // pane that shows one marks it on screen (see reviewHold in the chat store).
+        void acquireChannel(entry.channel, entry.channelId, entry.provider ?? 'twitch', { background: true }).catch(
           (err) => Logger.error('[MultiChatWindow] acquire failed:', err),
         );
       }
@@ -980,7 +982,7 @@ export default function MultiChatWindow() {
       if (!current.has(k)) {
         acquiredKeysRef.current.delete(k);
         const parsed = parseKey(k);
-        void releaseChannel(parsed.channel, parsed.provider).catch((err) =>
+        void releaseChannel(parsed.channel, parsed.provider, { background: true }).catch((err) =>
           Logger.warn('[MultiChatWindow] release failed:', err),
         );
       }
@@ -994,7 +996,7 @@ export default function MultiChatWindow() {
     return () => {
       for (const k of Array.from(acquiredKeysRef.current)) {
         const parsed = parseKey(k);
-        void releaseChannel(parsed.channel, parsed.provider).catch((err) =>
+        void releaseChannel(parsed.channel, parsed.provider, { background: true }).catch((err) =>
           Logger.warn('[MultiChatWindow] release on unmount failed:', err),
         );
       }
@@ -3335,10 +3337,9 @@ function TabButton({
   onDragLeave,
   onDrop,
 }: TabButtonProps) {
-  const currentUserLogin = useAppStore((s) => s.currentUser?.login ?? null);
-  const mentionCount = useChannelMentionCount(entry.channel, currentUserLogin);
+  const mentionCount = useChannelMentionCount(entry.provider ?? 'twitch', entry.channel);
   // Track the mention count as of when this tab was last visible. Seeded at mount
-  // so the IVR backfill doesn't light the badge on creation. We ADJUST state during
+  // so a remount never lights the badge for old mentions. We ADJUST state during
   // render (React's supported alternative to an effect for syncing state to a prop)
   // so there's no cascading-render lint and no ref access during render: while
   // visible the baseline tracks the live count so unread stays 0; while hidden it

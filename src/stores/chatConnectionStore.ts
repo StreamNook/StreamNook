@@ -123,6 +123,16 @@ interface ChannelSlice {
   /** Currently pinned message (provider-driven; e.g. Kick's pin event). */
   pinnedMessage: any | null;
   refCount: number;
+  /** How many of `refCount` are background holds (a MultiNook tile, the chat
+   *  pin, a MultiChat tab): kept joined, shown nowhere by that holder. */
+  backgroundRefs: number;
+  /** Held back at the bridge (see `reviewHold`): Rust keeps its frames and
+   *  replays them when it is shown. */
+  heldBack: boolean;
+  /** Mentions that arrived while held back, counted by Rust's tick. Kept apart
+   *  from `liveMentionCount` because the backlog counts those same rows again
+   *  when it replays; `PARK_END` clears this in the flush that counts them. */
+  heldMentions: number;
   isPausedForBuffer: boolean;
   /** Rows above the cap still allowed after a resume; set by setChannelPaused,
    *  released RESUME_DECAY_PER_FLUSH per flush by flushPending. */
@@ -134,6 +144,10 @@ interface ChannelSlice {
    *  trimmed. Historical backfill (prepended, not live) is intentionally
    *  excluded — only `pushMessage` bumps it. */
   liveMessageCount: number;
+  /** Monotonic count of live rows the Rust rule engine stamped as mentioning
+   *  or replying to the signed-in user. Never decremented or reset, so a
+   *  "last seen" baseline stays valid after the rows themselves are trimmed. */
+  liveMentionCount: number;
   // Internals (not surfaced via the per-channel hook):
   seenMessageIds: Set<string>;
   /** Real Helix ids stamped onto our own optimistic rows, still awaiting their
@@ -753,6 +767,7 @@ function flushPending(): void {
     // evict recent subs/redemptions/raids from the shared buffer. liveMessageCount
     // still counts every message (drives the accurate "N new since paused" badge).
     slice.liveMessageCount += queued.length;
+    slice.liveMentionCount += countMentionsOfMe(queued);
     // Copy-on-write (see the helpers above pushMessage): the array identity
     // changes with its content, so consumers can memoize on it.
     slice.messages = trimWithEventRetention(slice.messages.concat(queued), limit, slice.liveMessageCount);
@@ -912,9 +927,13 @@ function emptySlice(
     clearedUserContexts: new Map(),
     pinnedMessage: null,
     refCount: 0,
+    backgroundRefs: 0,
+    heldBack: false,
+    heldMentions: 0,
     isPausedForBuffer: false,
     resumeOverflow: 0,
     liveMessageCount: 0,
+    liveMentionCount: 0,
     seenMessageIds: new Set(),
     pendingUpgradeIds: new Set(),
     userBadgesFromIrc: null,
@@ -1098,6 +1117,7 @@ function releaseHistoryHold(slice: ChannelSlice): boolean {
   slice.historyHold = null;
   if (hold.held.length === 0) return false;
   slice.liveMessageCount += hold.held.length;
+  slice.liveMentionCount += countMentionsOfMe(hold.held);
   slice.messages = trimWithEventRetention(
     slice.messages.concat(hold.held),
     liveAppendLimit(slice, getActiveHistoryMax()),
@@ -1114,7 +1134,24 @@ function pushMessage(slice: ChannelSlice, msg: any) {
   // Monotonic — counts the append regardless of any trim below. Drives the
   // accurate "N new since paused" badge.
   slice.liveMessageCount++;
+  if (isMentionOfMe(msg)) slice.liveMentionCount++;
   slice.messages = trimWithEventRetention(slice.messages.concat([msg]), limit, slice.liveMessageCount);
+}
+
+/** Rust's verdict (`ChatRules::evaluate`) read off the row. Rows Rust never
+ *  evaluated (own optimistic sends, raw-string fallbacks) count as no. */
+function isMentionOfMe(msg: unknown): boolean {
+  const md =
+    msg && typeof msg === 'object'
+      ? (msg as { metadata?: { is_mentioned?: boolean; is_reply_to_me?: boolean } }).metadata
+      : null;
+  return !!md && (md.is_mentioned === true || md.is_reply_to_me === true);
+}
+
+function countMentionsOfMe(rows: readonly unknown[]): number {
+  let n = 0;
+  for (const m of rows) if (isMentionOfMe(m)) n++;
+  return n;
 }
 
 /**
@@ -1705,6 +1742,7 @@ async function connectBridgeInner(
     lastMessageTime = Date.now();
 
     socket.onmessage = (event) => handleWsMessage(event.data);
+    sendRouteSnapshot();
     socket.onerror = (err) => {
       Logger.error('[ChatStore] WS error:', err);
       setAllChannelsError('Connection error');
@@ -2046,6 +2084,35 @@ function handleWsMessage(raw: string) {
         setAllChannelsError('Reconnecting to chat...');
       }, LOST_ROW_GRACE_MS);
     }
+    return;
+  }
+  // A held-back channel's mentions, once a second: its tab badge keeps counting.
+  if (raw.startsWith('PARKED_TICK:')) {
+    const m = /^PARKED_TICK:(\d+):(.+)$/.exec(raw);
+    if (m) {
+      withSlice(m[2], (slice) => {
+        slice.heldMentions += Number(m[1]);
+      });
+    }
+    return;
+  }
+  // The backlog has arrived: count it in place of the held tally, in one step
+  // so the badge never dips or counts a row twice.
+  if (raw.startsWith('PARK_END:')) {
+    const slice = getSlice(raw.slice('PARK_END:'.length));
+    if (slice) {
+      runFlush();
+      slice.heldMentions = 0;
+      bumpRevisionFor([slice.channel]);
+    }
+    return;
+  }
+  // More arrived while it was held back than Rust kept: drop the older rows so
+  // the backlog that follows never sits under a hole.
+  if (raw.startsWith('PARK_GAP:')) {
+    withSlice(raw.slice('PARK_GAP:'.length), (slice) => {
+      slice.messages = [];
+    });
     return;
   }
   if (raw.startsWith('RECONNECTING:')) {
@@ -2995,6 +3062,73 @@ function handleRawIrcString(raw: string) {
   }
 }
 
+// --- What this window receives -----------------------------------------------
+//
+// The bridge sends a window only the channels it holds (src-tauri
+// services/chat_bridge_route.rs). The window says which over its own socket:
+// the full list when the socket opens, then each change. A channel held only by
+// background holders and shown by nothing is held back: Rust keeps its frames in
+// order (up to this slice's own buffer size) and sends a count each second, and
+// the moment anything shows it again the frames arrive in one go, so switching
+// to it is as immediate as before while it costs this page nothing meanwhile.
+
+/** How many mounted views are showing each channel (by slice key). */
+const sliceViewers = new Map<string, number>();
+
+function sendRoute(line: string): void {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    try {
+      ws.send(line);
+    } catch {
+      // A closing socket; the next open sends the whole route again.
+    }
+  }
+}
+
+function holdCap(slice: ChannelSlice): number {
+  return currentBufferLimit(slice, getActiveHistoryMax());
+}
+
+/** Hold the channel back, or bring it back, to match who holds and shows it. */
+function reviewHold(key: string): void {
+  const slice = getSlice(key);
+  if (!slice) return;
+  const hold =
+    slice.refCount > 0 && slice.backgroundRefs >= slice.refCount && (sliceViewers.get(key) ?? 0) === 0;
+  if (hold === slice.heldBack) return;
+  slice.heldBack = hold;
+  sendRoute(hold ? `PARK:${holdCap(slice)}:${key}` : `UNPARK:${key}`);
+}
+
+/** The whole route, for a socket that just opened. */
+function sendRouteSnapshot(): void {
+  const { channels } = useChatConnectionStore.getState();
+  sendRoute(`SUBS:${Array.from(channels.keys()).join('\t')}`);
+  for (const slice of channels.values()) {
+    if (slice.heldBack) sendRoute(`PARK:${holdCap(slice)}:${slice.channel}`);
+  }
+}
+
+/** Mark these channels as on screen while the calling view is mounted. */
+export function useSliceViewers(keys: readonly string[]): void {
+  const joined = keys.map((k) => k.toLowerCase()).sort().join('\n');
+  useEffect(() => {
+    const list = joined ? joined.split('\n') : [];
+    for (const k of list) {
+      sliceViewers.set(k, (sliceViewers.get(k) ?? 0) + 1);
+      reviewHold(k);
+    }
+    return () => {
+      for (const k of list) {
+        const n = (sliceViewers.get(k) ?? 1) - 1;
+        if (n > 0) sliceViewers.set(k, n);
+        else sliceViewers.delete(k);
+        reviewHold(k);
+      }
+    };
+  }, [joined]);
+}
+
 // --- Public API -------------------------------------------------------------
 
 /** Acquire a chat connection for `channel`. Idempotent — if the channel is
@@ -3003,6 +3137,9 @@ export async function acquireChannel(
   channel: string,
   channelId: string | null,
   provider: ProviderId = 'twitch',
+  /** A background hold: keep the channel joined without showing it (see
+   *  `reviewHold`). Release it with the same flag. */
+  opts?: { background?: boolean },
 ): Promise<void> {
   // Twitch keeps bare-login keys (byte-identical to before); non-Twitch sources
   // get a "provider:channel" composite key. MultiChat only.
@@ -3027,6 +3164,8 @@ export async function acquireChannel(
       );
     }
     existing.refCount += 1;
+    if (opts?.background) existing.backgroundRefs += 1;
+    reviewHold(key);
     if (channelId && !existing.channelId) {
       existing.channelId = channelId;
       // MultiChat opens panes before the channel's broadcaster_id has resolved
@@ -3045,7 +3184,10 @@ export async function acquireChannel(
 
   const slice = emptySlice(key, channelId, provider);
   slice.refCount = 1;
+  if (opts?.background) slice.backgroundRefs = 1;
   setSlice(key, slice);
+  sendRoute(`SUB:${key}`);
+  reviewHold(key);
 
   // Twitch: start the Rust backfill now, alongside the connect/join below,
   // and hold the first live rows until it lands (or HISTORY_HOLD_MS) so the
@@ -3116,6 +3258,7 @@ export async function acquireChannel(
 export async function releaseChannel(
   channel: string,
   provider: ProviderId = 'twitch',
+  opts?: { background?: boolean },
 ): Promise<void> {
   // Same fold as acquire. Before this, a mixed-case YouTube id missed here and hit
   // the early return below, so the channel was never PARTed and its slice never
@@ -3125,8 +3268,10 @@ export async function releaseChannel(
   const slice = useChatConnectionStore.getState().channels.get(key);
   if (!slice) return;
   slice.refCount -= 1;
+  if (opts?.background && slice.backgroundRefs > 0) slice.backgroundRefs -= 1;
   Logger.debug(`[ChatStore] -1 ref on ${key} (now ${slice.refCount})`);
   if (slice.refCount > 0) {
+    reviewHold(key);
     bumpRevision();
     return;
   }
@@ -3167,6 +3312,7 @@ async function finishRelease(key: string, channel: string, provider: ProviderId)
   // sibling MultiChat popouts) may still be using it. Tearing down here
   // would kill chat for every other consumer in the process.
   removeSlice(key);
+  sendRoute(`UNSUB:${key}`);
   clearChannelRetry(key);
   // Free per-channel state the slice didn't own: the pending flush queue and the
   // resolved emote set (1 to 3 MB of metadata that otherwise stayed pinned for
@@ -3594,51 +3740,20 @@ export function useChannelMessageCount(channel: string | null | undefined): numb
   return slice ? slice.messages.length : 0;
 }
 
-/** True when this message mentions `login` (case-insensitive). Handles both
- *  the parsed-object form (Rust ChatMessage with optional `is_mentioned` set
- *  by the segment parser) and the raw IRC-string fallback (regex-scan the
- *  PRIVMSG body for `@login`). Used by the unread-mention counter, which only
- *  surfaces unread badges for @ mentions of the signed-in user. */
-function messageMentionsLogin(msg: unknown, login: string): boolean {
-  if (!msg || !login) return false;
-  if (typeof msg === 'object') {
-    const obj = msg as { is_mentioned?: boolean; content?: string };
-    if (obj.is_mentioned) return true;
-    if (typeof obj.content === 'string') {
-      return obj.content.toLowerCase().includes(`@${login}`);
-    }
-    return false;
-  }
-  if (typeof msg === 'string') {
-    const idx = msg.indexOf(' PRIVMSG ');
-    if (idx === -1) return false;
-    const colon = msg.indexOf(' :', idx);
-    if (colon === -1) return false;
-    return msg.slice(colon + 2).toLowerCase().includes(`@${login}`);
-  }
-  return false;
-}
-
-/** React hook returning the count of messages mentioning the supplied login
- *  in a channel. Used by the MultiChat popout's tab strip to drive @-mention
- *  unread indicators — comparing this count against a per-tab "last seen"
- *  snapshot reveals new mentions that arrived while the tab wasn't visible.
- *  Pass `null` for `login` (e.g. unauthenticated) and the count stays at 0. */
+/** React hook returning the monotonic count of live messages in a channel that
+ *  mention or reply to the signed-in user. Used by the MultiChat popout's tab
+ *  strip to drive @-mention unread indicators: comparing this count against a
+ *  per-tab "last seen" snapshot reveals new mentions that arrived while the tab
+ *  wasn't visible. Rerenders only when the count changes, not per message. */
 export function useChannelMentionCount(
+  provider: ProviderId,
   channel: string | null | undefined,
-  login: string | null | undefined,
 ): number {
-  const key = channel ? channel.toLowerCase() : null;
-  useChatConnectionStore((state) => (key ? state.revisionByChannel[key] ?? 0 : state.revision));
-  if (!channel || !login) return 0;
-  const slice = useChatConnectionStore.getState().channels.get(channel.toLowerCase());
-  if (!slice) return 0;
-  const target = login.toLowerCase();
-  let count = 0;
-  for (const msg of slice.messages) {
-    if (messageMentionsLogin(msg, target)) count++;
-  }
-  return count;
+  const key = channel ? sliceLookupKey(provider, channel) : null;
+  return useChatConnectionStore((state) => {
+    const slice = key ? state.channels.get(key) : undefined;
+    return slice ? slice.liveMentionCount + slice.heldMentions : 0;
+  });
 }
 
 /** React hook returning the shared per-channel emote set. Multiple components
@@ -3690,6 +3805,8 @@ export function useChannelChatMeta(channel: string | null | undefined) {
   );
 }
 
+const NO_KEYS: readonly string[] = [];
+
 export function useChannelChat(channel: string | null | undefined): ChannelChatSnapshot {
   const key = channel ? channel.toLowerCase() : null;
   // Subscribe to revision to drive updates; read the slice imperatively to
@@ -3705,6 +3822,8 @@ export function useChannelChat(channel: string | null | undefined): ChannelChatS
   const renderToken = useChatConnectionStore((state) =>
     key ? state.revisionByChannel[key] ?? 0 : 0,
   );
+  // On screen: never held back at the bridge while this view is mounted.
+  useSliceViewers(key ? [key] : NO_KEYS);
   if (!key) return EMPTY_SNAPSHOT;
   const slice = useChatConnectionStore.getState().channels.get(key);
   if (!slice) return EMPTY_SNAPSHOT;

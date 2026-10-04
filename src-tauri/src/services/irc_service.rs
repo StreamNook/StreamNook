@@ -23,6 +23,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::sync::{broadcast, Mutex};
+use crate::services::chat_bridge_route::{BridgeFrame, SocketRoute};
 use warp::Filter;
 
 pub struct IrcService;
@@ -33,9 +34,9 @@ static WS_SERVER_HANDLE: OnceLock<Mutex<Option<tokio::task::JoinHandle<()>>>> = 
 // which leaves the frontend attached to a dead or message-less socket.
 static BRIDGE_BRINGUP_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static CURRENT_CHANNELS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-static MESSAGE_BROADCASTER: OnceLock<Mutex<Option<Arc<broadcast::Sender<String>>>>> =
+static MESSAGE_BROADCASTER: OnceLock<Mutex<Option<Arc<broadcast::Sender<BridgeFrame>>>>> =
     OnceLock::new();
-static MESSAGE_QUEUE: OnceLock<Mutex<VecDeque<String>>> = OnceLock::new();
+static MESSAGE_QUEUE: OnceLock<Mutex<VecDeque<BridgeFrame>>> = OnceLock::new();
 static IRC_HANDLE: OnceLock<Mutex<Option<tokio::task::JoinHandle<()>>>> = OnceLock::new();
 // Abort handles for the keepalive tasks spawned INSIDE the IRC task (ping +
 // frontend heartbeat). Aborting IRC_HANDLE alone orphans them: the ping task's
@@ -553,11 +554,11 @@ fn get_current_channels() -> &'static Mutex<HashSet<String>> {
     CURRENT_CHANNELS.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-fn get_message_broadcaster() -> &'static Mutex<Option<Arc<broadcast::Sender<String>>>> {
+fn get_message_broadcaster() -> &'static Mutex<Option<Arc<broadcast::Sender<BridgeFrame>>>> {
     MESSAGE_BROADCASTER.get_or_init(|| Mutex::new(None))
 }
 
-fn get_message_queue() -> &'static Mutex<VecDeque<String>> {
+fn get_message_queue() -> &'static Mutex<VecDeque<BridgeFrame>> {
     MESSAGE_QUEUE.get_or_init(|| Mutex::new(VecDeque::new()))
 }
 
@@ -598,7 +599,8 @@ async fn abort_keepalive_tasks() {
 /// `queue_on_fail` holds chat payloads for the next client attach. Status
 /// frames must pass `false`: replayed later, a status would misreport the
 /// current state to the frontend watchdog.
-async fn send_to_bridge(msg: String, queue_on_fail: bool) -> bool {
+async fn send_to_bridge(msg: impl Into<BridgeFrame>, queue_on_fail: bool) -> bool {
+    let msg: BridgeFrame = msg.into();
     let tx = get_message_broadcaster().lock().await.clone();
     let delivered = match tx {
         Some(tx) => tx.send(msg.clone()).is_ok(),
@@ -640,27 +642,27 @@ fn get_room_state_cache() -> &'static Mutex<HashMap<String, String>> {
 /// join backlog is published before the frontend WebSocket client attaches.
 /// Bounded, and drained by the first client to attach. The frontend dedupes
 /// by message id, so a replayed row cannot double up one that arrived live.
-static PENDING_MESSAGES: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+static PENDING_MESSAGES: OnceLock<Mutex<Vec<BridgeFrame>>> = OnceLock::new();
 /// Enough for a full join backlog with headroom; past this the oldest go, because
 /// a buffer that grows without a listener is a leak, not a feature.
 const PENDING_MESSAGES_MAX: usize = 200;
 
-fn get_pending_messages() -> &'static Mutex<Vec<String>> {
+fn get_pending_messages() -> &'static Mutex<Vec<BridgeFrame>> {
     PENDING_MESSAGES.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 /// Hold a message that had no subscriber, for replay when one attaches.
-pub async fn hold_undelivered_message(json: String) {
+pub async fn hold_undelivered_message(frame: BridgeFrame) {
     let mut pending = get_pending_messages().lock().await;
     if pending.len() >= PENDING_MESSAGES_MAX {
         let overflow = pending.len() + 1 - PENDING_MESSAGES_MAX;
         pending.drain(0..overflow);
     }
-    pending.push(json);
+    pending.push(frame);
 }
 
 /// Take everything held, leaving the buffer empty.
-pub async fn take_undelivered_messages() -> Vec<String> {
+pub async fn take_undelivered_messages() -> Vec<BridgeFrame> {
     std::mem::take(&mut *get_pending_messages().lock().await)
 }
 
@@ -1516,7 +1518,7 @@ impl IrcService {
 
         // Flush queued messages (dropped if no receiver is attached yet; the
         // WS handshake also drains this queue when a client connects).
-        let queued: Vec<String> = {
+        let queued: Vec<BridgeFrame> = {
             let mut queue = get_message_queue().lock().await;
             queue.drain(..).collect()
         };
@@ -1785,7 +1787,15 @@ impl IrcService {
                 // block the read loop.
                 if !verdict.drop {
                     if let Ok(json_msg) = serde_json::to_string(&chat_msg) {
-                        send_to_bridge(json_msg, true).await;
+                        send_to_bridge(
+                            BridgeFrame::row(
+                                &chat_msg.channel,
+                                json_msg,
+                                chat_msg.metadata.is_mentioned || chat_msg.metadata.is_reply_to_me,
+                            ),
+                            true,
+                        )
+                        .await;
                     }
                     crate::services::reminder_service::on_message(&chat_msg);
                 }
@@ -1796,7 +1806,9 @@ impl IrcService {
                 });
             } else {
                 // Fallback to sending raw string if parsing fails
-                send_to_bridge(enhanced_message.to_string(), true).await;
+                let text = enhanced_message.to_string();
+                let ch = extract_channel_from_irc_line(&text);
+                send_to_bridge(BridgeFrame::maybe_channel(ch.as_deref(), text), true).await;
             }
         } else if trimmed.contains("USERNOTICE") {
             // Subscription, resub, gift sub, etc.
@@ -1848,7 +1860,15 @@ impl IrcService {
                 // USERNOTICE never fed the profile-card history).
                 if !verdict.drop {
                     if let Ok(json_msg) = serde_json::to_string(&chat_msg) {
-                        send_to_bridge(json_msg, true).await;
+                        send_to_bridge(
+                            BridgeFrame::row(
+                                &chat_msg.channel,
+                                json_msg,
+                                chat_msg.metadata.is_mentioned || chat_msg.metadata.is_reply_to_me,
+                            ),
+                            true,
+                        )
+                        .await;
                     }
                 }
                 enqueue_side_effect(MessageSideEffects {
@@ -1858,7 +1878,11 @@ impl IrcService {
                 });
             } else {
                 // Fallback to raw string if parsing fails
-                send_to_bridge(trimmed.to_string(), true).await;
+                send_to_bridge(
+                    BridgeFrame::maybe_channel(extract_channel_from_irc_line(trimmed).as_deref(), trimmed.to_string()),
+                    true,
+                )
+                .await;
             }
         } else if trimmed.contains("ROOMSTATE") {
             // Room state updates (slow mode, sub-only, etc.)
@@ -1916,7 +1940,7 @@ impl IrcService {
                 confirm_join(ch).await;
             }
 
-            send_to_bridge(room_state_str, false).await;
+            send_to_bridge(BridgeFrame::maybe_channel(channel_name.as_deref(), room_state_str), false).await;
 
             // Check for shared chat information. Spawned: this is a Helix HTTP
             // round-trip (pure cache refresh — enhance_message reads the cache
@@ -1966,7 +1990,7 @@ impl IrcService {
                 // only open channel and repainted the user's own rows without
                 // their channel badges, so it is not forwarded at all.
                 if let Some(ch) = &channel_name {
-                    send_to_bridge(format!("USER_BADGES:#{}:{}", ch, badges), false).await;
+                    send_to_bridge(BridgeFrame::channel(ch, format!("USER_BADGES:#{}:{}", ch, badges)), false).await;
                 }
             }
 
@@ -1985,7 +2009,7 @@ impl IrcService {
                         Some(ch) => format!("USER_COLOR:#{}:{}", ch, color),
                         None => format!("USER_COLOR:{}", color),
                     };
-                    send_to_bridge(color_message, false).await;
+                    send_to_bridge(BridgeFrame::maybe_channel(channel_name.as_deref(), color_message), false).await;
                 }
             }
 
@@ -2022,7 +2046,7 @@ impl IrcService {
                     "login": login,
                     "message": deleted_text
                 });
-                send_to_bridge(delete_event.to_string(), false).await;
+                send_to_bridge(BridgeFrame::maybe_channel(channel_name.as_deref(), delete_event.to_string()), false).await;
             }
         } else if trimmed.contains("CLEARCHAT") {
             // User timed out/banned (clear all their messages) or chat cleared
@@ -2061,7 +2085,7 @@ impl IrcService {
                 "target_user": target_user,
                 "ban_duration": ban_duration_secs
             });
-            send_to_bridge(clear_event.to_string(), false).await;
+            send_to_bridge(BridgeFrame::maybe_channel(channel_name.as_deref(), clear_event.to_string()), false).await;
         } else if trimmed.contains("NOTICE") {
             // System notices — forward to frontend for user-facing handling
             debug!("[IRC Chat] Notice: {}", trimmed);
@@ -2091,7 +2115,11 @@ impl IrcService {
                 "msg_id": msg_id,
                 "message": notice_text,
             });
-            send_to_bridge(notice_event.to_string(), false).await;
+            send_to_bridge(
+                BridgeFrame::maybe_channel(extract_channel_from_irc_line(trimmed).as_deref(), notice_event.to_string()),
+                false,
+            )
+            .await;
         } else if let Some(join_ch) = parse_join_channel(trimmed) {
             // JOIN frame — ours or any member's (twitch.tv/membership relays
             // them only for channels we are in). Membership proof for the ack
@@ -2339,9 +2367,9 @@ impl IrcService {
 
     async fn handle_local_ws(
         local_socket: warp::ws::WebSocket,
-        tx: Arc<broadcast::Sender<String>>,
+        tx: Arc<broadcast::Sender<BridgeFrame>>,
     ) {
-        let (mut local_tx, _local_rx) = local_socket.split();
+        let (mut local_tx, mut local_rx) = local_socket.split();
         let mut rx = tx.subscribe();
 
         debug!("[WS] New local WebSocket client connected");
@@ -2363,7 +2391,7 @@ impl IrcService {
         if !held.is_empty() {
             info!("[WS] replaying {} message(s) held for a late client", held.len());
             for msg in held {
-                let _ = local_tx.send(warp::ws::Message::text(msg)).await;
+                let _ = local_tx.send(warp::ws::Message::text(msg.text.to_string())).await;
             }
         }
 
@@ -2400,7 +2428,7 @@ impl IrcService {
                 queued_count
             );
             while let Some(msg) = queue.pop_front() {
-                if local_tx.send(warp::ws::Message::text(msg)).await.is_err() {
+                if local_tx.send(warp::ws::Message::text(msg.text.to_string())).await.is_err() {
                     debug!("[WS] Client disconnected while sending queued messages");
                     return;
                 }
@@ -2408,30 +2436,60 @@ impl IrcService {
         }
         drop(queue);
 
-        // Forward messages from the broadcast to the local client.
+        // Forward frames to this window by its route (services::chat_bridge_route):
+        // until the window says which channels it holds it gets everything; after
+        // that only its own channels, with the ones it holds back waiting here in
+        // order and a per-second count sent instead.
         //
-        // `while let Ok(..) = rx.recv()` is wrong here: it exits on
-        // `RecvError::Lagged`, which fires whenever a subscriber falls behind the
-        // channel capacity. Lagged is a recoverable miss, so log it and keep
-        // draining. Only `Closed` tears the handler down.
+        // A lagged receiver is a recoverable miss: log it and keep draining. Only
+        // `Closed`, a closed client, or a failed send ends the handler.
+        let mut route = SocketRoute::default();
+        let mut ticks = tokio::time::interval(std::time::Duration::from_secs(1));
+        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            match rx.recv().await {
-                Ok(text) => {
-                    if local_tx.send(warp::ws::Message::text(text)).await.is_err() {
-                        debug!("[WS] Client disconnected");
+            tokio::select! {
+                frame = rx.recv() => match frame {
+                    Ok(f) => {
+                        if let Some(text) = route.on_frame(&f) {
+                            if local_tx.send(warp::ws::Message::text(text.to_string())).await.is_err() {
+                                debug!("[WS] Client disconnected");
+                                break;
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        log::warn!(
+                            "[WS] Subscriber lagged behind by {} messages; continuing",
+                            n
+                        );
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        debug!("[WS] Broadcast channel closed");
                         break;
                     }
-                }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    log::warn!(
-                        "[WS] Subscriber lagged behind by {} messages; continuing",
-                        n
-                    );
-                    continue;
-                }
-                Err(broadcast::error::RecvError::Closed) => {
-                    debug!("[WS] Broadcast channel closed");
-                    break;
+                },
+                line = local_rx.next() => match line {
+                    Some(Ok(m)) => {
+                        if m.is_close() {
+                            break;
+                        }
+                        if let Ok(text) = m.to_str() {
+                            for out in route.on_line(text) {
+                                if local_tx.send(warp::ws::Message::text(out.to_string())).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    Some(Err(_)) | None => break,
+                },
+                _ = ticks.tick() => {
+                    for out in route.take_ticks() {
+                        if local_tx.send(warp::ws::Message::text(out.to_string())).await.is_err() {
+                            return;
+                        }
+                    }
                 }
             }
         }
@@ -3201,7 +3259,7 @@ impl IrcService {
                 "user_id": twitch_id,
                 "message_ids": message_ids,
             });
-            send_to_bridge(frame.to_string(), false).await;
+            send_to_bridge(BridgeFrame::channel(&channel, frame.to_string()), false).await;
         }
     }
 
@@ -4516,7 +4574,7 @@ impl IrcService {
         }
 
         // Fresh bring-up: broadcast channel + local warp WS server.
-        let (tx, _rx) = broadcast::channel::<String>(1000);
+        let (tx, _rx) = broadcast::channel::<BridgeFrame>(1000);
         let tx = Arc::new(tx);
 
         let tx_for_warp = tx.clone();
@@ -4561,7 +4619,7 @@ impl IrcService {
     /// The shared broadcast sender for the local WS bridge, if it is up. Provider
     /// adapters serialize a `ChatMessage`/`ActivityEvent` frame and `send` it here
     /// to reach the frontend over the same socket the Twitch path uses.
-    pub async fn broadcaster() -> Option<Arc<broadcast::Sender<String>>> {
+    pub async fn broadcaster() -> Option<Arc<broadcast::Sender<BridgeFrame>>> {
         get_message_broadcaster().lock().await.clone()
     }
 

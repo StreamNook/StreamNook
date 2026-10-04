@@ -72,7 +72,7 @@ export default function ModerationDragLayer() {
       const { origin } = useDragModerationStore.getState();
       const cx = rect && rect.width > 0 ? rect.left + rect.width / 2 : origin.x;
       const msgEl = dragged.messageId
-        ? (document.querySelector(`[data-message-id="${dragged.messageId}"]`) as HTMLElement | null)
+        ? (document.querySelector(`[data-message-id="${CSS.escape(dragged.messageId)}"]`) as HTMLElement | null)
         : null;
       const msgRect = msgEl?.getBoundingClientRect();
       const anchorY = msgRect && msgRect.height > 0 ? msgRect.top : origin.y;

@@ -45,11 +45,11 @@ export function useChatPinHold(): void {
   const pinId = pin?.channel_id || null;
   useEffect(() => {
     if (!pinLogin) return;
-    void acquireChannel(pinLogin, pinId, pinProvider).catch((e: unknown) =>
+    void acquireChannel(pinLogin, pinId, pinProvider, { background: true }).catch((e: unknown) =>
       Logger.warn('[ChatPin] could not hold the pinned chat:', e),
     );
     return () => {
-      void releaseChannel(pinLogin, pinProvider).catch(() => {});
+      void releaseChannel(pinLogin, pinProvider, { background: true }).catch(() => {});
     };
   }, [pinLogin, pinId, pinProvider]);
 
@@ -58,13 +58,13 @@ export function useChatPinHold(): void {
   const liveProvider = live?.provider ?? 'twitch';
   useEffect(() => {
     if (!liveLogin) return;
-    void acquireChannel(liveLogin, liveId || null, liveProvider).catch((e: unknown) =>
+    void acquireChannel(liveLogin, liveId || null, liveProvider, { background: true }).catch((e: unknown) =>
       Logger.warn('[ChatPin] could not hold the live chat:', e),
     );
     const watched = liveProvider === 'twitch' && !!liveId;
     if (watched) void watchChannel(liveLogin, liveId);
     return () => {
-      void releaseChannel(liveLogin, liveProvider).catch(() => {});
+      void releaseChannel(liveLogin, liveProvider, { background: true }).catch(() => {});
       if (watched) void unwatchChannel(liveLogin);
     };
   }, [liveLogin, liveId, liveProvider]);

@@ -638,6 +638,11 @@ pub struct MessageFacts<'a> {
     pub login: String,
     pub display_lower: String,
     pub user_id: &'a str,
+    /// The message came from Twitch. The engine's own identity is the Twitch
+    /// account, so user-id comparisons (own message, reply to me) only mean
+    /// anything here: another platform's ids live in a different space and can
+    /// collide with the Twitch id numerically.
+    pub twitch: bool,
     pub color: &'a str,
     /// `name/version` lowercased.
     pub badge_keys: Vec<String>,
@@ -761,6 +766,7 @@ impl<'a> MessageFacts<'a> {
             login,
             display_lower,
             user_id: &msg.user_id,
+            twitch: msg.provider.is_empty() || msg.provider.eq_ignore_ascii_case("twitch"),
             color: msg.color.as_deref().unwrap_or(""),
             badge_keys,
             badge_names,
@@ -990,7 +996,7 @@ impl ChatRules {
             tauri::async_runtime::spawn(async move {
                 if let Some(tx) = crate::services::irc_service::IrcService::broadcaster().await {
                     for frame in frames {
-                        let _ = tx.send(frame);
+                        let _ = tx.send(crate::services::chat_bridge_route::BridgeFrame::all(frame));
                     }
                 }
             });
@@ -1037,10 +1043,11 @@ impl ChatRules {
 
     fn evaluate_facts(facts: &MessageFacts<'_>, rules: &CompiledRules) -> Evaluation {
         let own = Self::own_identity();
-        let is_own = own
-            .as_ref()
-            .map(|(_, id)| !id.is_empty() && id == facts.user_id)
-            .unwrap_or(false);
+        let is_own = facts.twitch
+            && own
+                .as_ref()
+                .map(|(_, id)| !id.is_empty() && id == facts.user_id)
+                .unwrap_or(false);
 
         // 1. Ignores. Own messages are exempt so hiding yourself can never
         //    eat your sends (same rule the JS gate had).
@@ -1076,7 +1083,9 @@ impl ChatRules {
             .unwrap_or(false);
         let reply_to_me = own
             .as_ref()
-            .map(|(_, id)| !id.is_empty() && !is_own && facts.reply_parent_user_id == id)
+            .map(|(_, id)| {
+                facts.twitch && !id.is_empty() && !is_own && facts.reply_parent_user_id == id
+            })
             .unwrap_or(false);
 
         // 3. Highlight rules: phrase, then user, then badge; first wins. A
@@ -1949,6 +1958,36 @@ mod tests {
         eval_with(&rules, &mut m);
         assert!(!m.metadata.is_mentioned);
         assert!(m.metadata.highlight.is_some());
+    }
+
+    #[test]
+    fn another_platforms_ids_never_match_the_twitch_identity() {
+        ChatRules::set_own_identity("brandon", "999");
+        let rules = rules_from("{}", "{}", "{}");
+        let reply_to = |provider: &str, sender_id: &str| {
+            let mut m = msg("bob", "agreed");
+            m.provider = provider.into();
+            m.user_id = sender_id.into();
+            m.metadata.reply_info = Some(crate::models::chat_layout::ReplyInfo {
+                parent_user_id: "999".into(),
+                ..Default::default()
+            });
+            m
+        };
+        let mut twitch = reply_to("twitch", "1");
+        eval_with(&rules, &mut twitch);
+        assert!(twitch.metadata.is_reply_to_me);
+        // A Kick user replying to a Kick user whose numeric id happens to be
+        // our Twitch id is not a reply to us.
+        let mut kick = reply_to("kick", "1");
+        eval_with(&rules, &mut kick);
+        assert!(!kick.metadata.is_reply_to_me);
+        // Nor is a Kick sender with that id us: they can still mention us.
+        let mut kick = msg("bob", "hi @brandon");
+        kick.provider = "kick".into();
+        kick.user_id = "999".into();
+        eval_with(&rules, &mut kick);
+        assert!(kick.metadata.is_mentioned);
     }
 
     #[test]

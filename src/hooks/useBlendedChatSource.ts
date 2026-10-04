@@ -12,7 +12,7 @@
 // memoized rows and the message list bail instead of re-rendering.
 
 import { useMemo, useRef } from 'react';
-import { useChatConnectionStore, sliceLookupKey, getActiveHistoryMax } from '../stores/chatConnectionStore';
+import { useChatConnectionStore, sliceLookupKey, getActiveHistoryMax, useSliceViewers } from '../stores/chatConnectionStore';
 import { mergedFeedLimit } from '../stores/chatBufferTrim';
 import { parseKey } from '../utils/providerKey';
 import { sourceKeyOf, sourceProviderOf, type ChatSource } from '../utils/sendToSource';
@@ -66,6 +66,8 @@ export function useBlendedChatSource<T extends ChatSource>(
       return sum + (s.revisionByChannel[sliceLookupKey(sourceProviderOf(c), c.channel)] ?? 0);
     }, 0),
   );
+  // Every source is on screen in the merged feed: none is held back.
+  useSliceViewers(channels.map((c) => sliceLookupKey(sourceProviderOf(c), c.channel)));
 
   // Incremental, append-only merge. The feed is ordered by FIRST-seen arrival and
   // only ever grows at the bottom (YouTube is polled, so a send-time sort would slot
