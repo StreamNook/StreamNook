@@ -64,6 +64,8 @@ scraper = "0.27.0"
 # rendered with dangerouslySetInnerHTML and would otherwise execute in a webview
 # that holds the user's Twitch token.
 ammonia = "4.1"
+# Panel descriptions are markdown (with inline HTML), rendered before ammonia.
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 once_cell = "1.21.3"
 spellbook = "0.4.2"
 sevenz-rust = "0.6"

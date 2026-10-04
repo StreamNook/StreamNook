@@ -17,30 +17,53 @@ const GQL_URL: &str = "https://gql.twitch.tv/gql";
 /// the raw Twitch token too). Sanitizing HERE rather than in the component keeps one
 /// choke point: every consumer of this command gets the cleaned string.
 ///
-/// The allowlist is deliberately narrower than ammonia's default (no images, no
-/// tables, no class/style) because a panel only ever needs text plus links.
+/// The allowlist is narrower than ammonia's default (no tables, no class/style):
+/// text formatting, headings, quotes, code, rules, links and images, which is
+/// everything the panel editor's markdown can produce.
 fn panel_sanitizer() -> &'static ammonia::Builder<'static> {
     static SANITIZER: once_cell::sync::Lazy<ammonia::Builder<'static>> =
         once_cell::sync::Lazy::new(|| {
             let mut b = ammonia::Builder::empty();
             b.tags(std::collections::HashSet::from([
-                "a", "b", "strong", "i", "em", "u", "s", "br", "p", "span", "ul", "ol", "li",
+                "a", "b", "strong", "i", "em", "u", "s", "del", "br", "p", "span", "ul", "ol",
+                "li", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "code", "pre", "hr",
+                "img", "center", "sub", "sup", "small",
             ]))
             .link_rel(Some("noopener noreferrer"))
-            // href only, and url_schemes below restricts it to http/https, so
-            // javascript: and data: URLs cannot survive.
-            .tag_attributes(std::collections::HashMap::from([(
-                "a",
-                std::collections::HashSet::from(["href"]),
-            )]))
-            .url_schemes(std::collections::HashSet::from(["http", "https"]));
+            // href/src only, and url_schemes below restricts them to http/https,
+            // so javascript: and data: URLs cannot survive; relative URLs would
+            // resolve against the app's own origin, so they go too.
+            .tag_attributes(std::collections::HashMap::from([
+                ("a", std::collections::HashSet::from(["href"])),
+                ("img", std::collections::HashSet::from(["src", "alt"])),
+            ]))
+            .url_schemes(std::collections::HashSet::from(["http", "https"]))
+            .url_relative(ammonia::UrlRelative::Deny);
             b
         });
     &SANITIZER
 }
 
+/// Panel descriptions are markdown that may carry inline HTML, as twitch.tv
+/// renders them. A single newline is a line break there, not a soft wrap.
+fn panel_markdown_to_html(src: &str) -> String {
+    use pulldown_cmark::{html, Event, Options, Parser};
+    let options = Options::ENABLE_STRIKETHROUGH;
+    let events = Parser::new_ext(src, options).map(|e| match e {
+        Event::SoftBreak => Event::HardBreak,
+        other => other,
+    });
+    let mut out = String::with_capacity(src.len() * 3 / 2);
+    html::push_html(&mut out, events);
+    out
+}
+
 fn sanitize_panel_html(raw: Option<String>) -> Option<String> {
-    raw.map(|html| panel_sanitizer().clean(&html).to_string())
+    raw.map(|src| {
+        panel_sanitizer()
+            .clean(&panel_markdown_to_html(&src))
+            .to_string()
+    })
 }
 
 #[cfg(test)]
@@ -81,6 +104,38 @@ mod panel_sanitizer_tests {
         // A stray angle bracket must not be able to open a tag downstream.
         let out = clean("5 < 6 and 7 > 2");
         assert!(!out.contains("< 6"), "raw angle bracket survived: {out}");
+    }
+
+    #[test]
+    fn renders_markdown() {
+        let out = clean("# Rules\n**Be kind** and *chill*\n[Discord](https://discord.gg/x)\n- one\n- two");
+        assert!(out.contains("<h1>Rules</h1>"), "lost heading: {out}");
+        assert!(out.contains("<strong>Be kind</strong>"), "lost bold: {out}");
+        assert!(out.contains("<em>chill</em>"), "lost italic: {out}");
+        assert!(out.contains(r#"href="https://discord.gg/x""#), "lost link: {out}");
+        assert!(out.contains("<li>one</li>"), "lost list: {out}");
+        assert!(!out.contains("**"), "markdown left raw: {out}");
+    }
+
+    #[test]
+    fn single_newlines_break_lines() {
+        let out = clean("line one\nline two");
+        assert!(out.contains("<br>"), "newline lost: {out}");
+    }
+
+    #[test]
+    fn inline_html_inside_markdown_survives_the_allowlist() {
+        let out = clean("Hello <b>there</b>\n\n<center>Schedule</center>");
+        assert!(out.contains("<b>there</b>"), "lost inline html: {out}");
+        assert!(out.contains("<center>Schedule</center>"), "lost block html: {out}");
+    }
+
+    #[test]
+    fn images_keep_only_https_sources() {
+        let out = clean("![logo](https://example.com/a.png) ![x](x.png) <img src=\"javascript:alert(1)\">");
+        assert!(out.contains(r#"src="https://example.com/a.png""#), "lost https image: {out}");
+        assert!(!out.contains("x.png"), "relative src survived: {out}");
+        assert!(!out.contains("javascript"), "javascript src survived: {out}");
     }
 }
 

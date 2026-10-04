@@ -7008,6 +7008,78 @@ html[data-os="linux"] .sn-chat-overlay-frame {
   display: none;
 }
 
+/* Streamer About panels: the description is markdown rendered to sanitized
+   HTML in Rust (channel_panels.rs), so it arrives as real elements. */
+.sn-panel-md {
+  overflow-wrap: anywhere;
+}
+.sn-panel-md > * + * {
+  margin-top: 0.5em;
+}
+.sn-panel-md :is(h1, h2, h3, h4, h5, h6) {
+  color: var(--color-text-primary);
+  font-weight: 600;
+  line-height: 1.3;
+}
+.sn-panel-md h1 { font-size: 1.25em; }
+.sn-panel-md h2 { font-size: 1.15em; }
+.sn-panel-md :is(h3, h4, h5, h6) { font-size: 1.05em; }
+.sn-panel-md :is(strong, b) {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+.sn-panel-md :is(ul, ol) {
+  padding-left: 1.25em;
+}
+.sn-panel-md ul { list-style: disc; }
+.sn-panel-md ol { list-style: decimal; }
+.sn-panel-md li + li {
+  margin-top: 0.15em;
+}
+.sn-panel-md a {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.sn-panel-md a:hover {
+  opacity: 0.8;
+}
+.sn-panel-md blockquote {
+  border-left: 2px solid rgb(255 255 255 / 0.12);
+  padding-left: 0.6em;
+}
+.sn-panel-md code {
+  border-radius: 4px;
+  background: rgb(255 255 255 / 0.06);
+  padding: 0.05em 0.3em;
+  font-size: 0.95em;
+}
+.sn-panel-md pre {
+  overflow-x: auto;
+  border-radius: 6px;
+  background: rgb(255 255 255 / 0.04);
+  padding: 0.5em 0.6em;
+  scrollbar-width: none;
+}
+.sn-panel-md pre code {
+  background: none;
+  padding: 0;
+}
+.sn-panel-md hr {
+  border: 0;
+  border-top: 1px solid rgb(255 255 255 / 0.08);
+}
+.sn-panel-md img {
+  display: inline-block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+.sn-panel-md center {
+  display: block;
+  text-align: center;
+}
+
 /* ===== Utilities =====
    Last in the file on purpose. These are single-class selectors that have to
    beat single-class COMPONENT selectors (`.glass-button` at 1359, for one), so

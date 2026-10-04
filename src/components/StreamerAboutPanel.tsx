@@ -80,6 +80,16 @@ const getSocialSvg = (name: string): React.ReactNode => {
 // Subcomponents
 // ============================================================================
 
+// A link inside a description opens in the browser and wins over the card's
+// own link, which would otherwise swallow the click.
+const openDescriptionLink = (e: React.MouseEvent) => {
+  const anchor = (e.target as HTMLElement).closest('a');
+  if (!anchor?.href) return;
+  e.preventDefault();
+  e.stopPropagation();
+  invoke('open_browser_url', { url: anchor.href });
+};
+
 const PanelCard = memo(({ panel }: { panel: ChannelPanelType }) => {
   const hasImage = !!panel.image_url;
   const hasLink = !!panel.link_url;
@@ -174,7 +184,8 @@ const PanelCard = memo(({ panel }: { panel: ChannelPanelType }) => {
           )}
           {hasDescription && (
             <div
-              className="text-xs text-textSecondary/80 leading-relaxed whitespace-pre-wrap break-words [&_a]:text-accent [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:text-accent/80"
+              className="sn-panel-md text-xs text-textSecondary/80 leading-relaxed"
+              onClick={openDescriptionLink}
               dangerouslySetInnerHTML={{ __html: panel.description! }}
             />
           )}
