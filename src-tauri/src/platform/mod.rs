@@ -38,3 +38,4 @@ pub mod fs;
 pub mod process;
 pub mod responsiveness;
 pub mod webview_store;
+pub mod webview_url;

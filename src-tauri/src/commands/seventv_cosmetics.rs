@@ -176,7 +176,7 @@ pub async fn open_seventv_login_window(app: AppHandle) -> Result<bool, String> {
 
             if let Some(win) = app_handle.get_webview_window(&label_clone) {
                 // Check the current URL
-                if let Ok(url) = win.url() {
+                if let Some(url) = crate::platform::webview_url::current_url(&win).await {
                     let url_str = url.to_string();
 
                     // Log occasionally
@@ -570,7 +570,7 @@ pub async fn open_seventv_login_window_for_account(
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
             if let Some(win) = app_handle.get_webview_window(&label_clone) {
-                if let Ok(url) = win.url() {
+                if let Some(url) = crate::platform::webview_url::current_url(&win).await {
                     let url_str = url.to_string();
                     if poll_count % 20 == 0 {
                         debug!("[7TV] (account {}) poll #{}", target_twitch_id, poll_count);
@@ -678,8 +678,8 @@ pub async fn refresh_seventv_token_for_account(
     let mut captured = false;
     for _ in 0..24 {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        match win.url() {
-            Ok(url) => {
+        match crate::platform::webview_url::current_url(&win).await {
+            Some(url) => {
                 let url_str = url.to_string();
                 if let Some(token_part) = url_str.split("#7TV_TOKEN=").nth(1) {
                     if let Ok(token) = urlencoding::decode(token_part) {
@@ -704,7 +704,8 @@ pub async fn refresh_seventv_token_for_account(
                     }
                 }
             }
-            Err(_) => break, // window closed/gone
+            // No URL yet, or the page is blocked: wait out the deadline.
+            None => {}
         }
     }
 

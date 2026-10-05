@@ -137,7 +137,7 @@ async fn mint_uncached(content_binding: &str) -> Result<Vec<u8>> {
     let mut outcome: Option<Result<String>> = None;
     while started.elapsed() < MINT_TIMEOUT {
         tokio::time::sleep(Duration::from_millis(250)).await;
-        if let Ok(u) = window.url() {
+        if let Some(u) = crate::platform::webview_url::current_url(&window).await {
             if let Some(r) = read_fragment(u.as_str()) {
                 outcome = Some(r);
                 break;
@@ -485,7 +485,7 @@ async fn resolve_uncached(video_id: &str, min_height: u32) -> Result<ResolvedStr
     let mut outcome: Option<Result<ResolvedStreams>> = None;
     while started.elapsed() < MINT_TIMEOUT {
         tokio::time::sleep(Duration::from_millis(250)).await;
-        if let Ok(u) = window.url() {
+        if let Some(u) = crate::platform::webview_url::current_url(&window).await {
             if let Some(r) = read_streams_fragment(u.as_str()) {
                 outcome = Some(r);
                 break;
