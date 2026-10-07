@@ -74,6 +74,9 @@ export interface VideoPlayerSettings {
   scroll_about_reveal?: boolean;
   /** Middle-click the player to toggle mute. Default true. */
   middle_click_mute?: boolean;
+  /** Middle-click a stream card or sidebar row to open it in MultiNook.
+   *  Default true. */
+  middle_click_multinook?: boolean;
   /** Volume moved per wheel notch, 0.01-0.25. Default 0.05. */
   wheel_volume_step?: number;
   /** Reopen a VOD where you left off. Default true. Typed in Rust. */
@@ -273,6 +276,22 @@ export interface ChatDesignSettings {
   // Live polls open collapsed to their header instead of expanded. Independent
   // of `show_polls`, which hides the card entirely. Default false (polls open).
   polls_start_collapsed?: boolean;
+  /** Sound when a live message mentions you: a built-in tone id or `file:<id>`. Absent or empty: no sound. */
+  mention_sound?: string;
+  /** Mention sound volume, percent of the sound's own level (0-200, default 100). */
+  mention_sound_volume?: number;
+  /** A reply to one of your messages also plays the mention sound (default true). */
+  mention_sound_replies?: boolean;
+  /** @mention text weight in message bodies (default medium). */
+  mention_weight?: 'regular' | 'medium' | 'bold';
+  /** @mention slant: inherit (italic inside /me messages, the default), never, or always. */
+  mention_italic?: 'inherit' | 'never' | 'always';
+  /** @mention shape: plain coloured text (default) or a tinted pill. */
+  mention_style?: 'plain' | 'pill';
+  /** @mention colour. Absent follows the mentioned user's name colour. */
+  mention_text_color?: string;
+  /** How docked chats are switched in a chat column (default menu). */
+  chat_dock_switcher?: 'menu' | 'tabs';
   // --- Username prefix styling (normal messages only; action/"/me" stay plain) ---
   // Glyph rendered between the username and the message body.
   username_separator?: 'none' | 'colon' | 'dot' | 'arrow' | 'pipe' | 'dash';
@@ -613,6 +632,9 @@ export interface ChatInputSettings {
   // button). Typing / still opens the autocomplete.
   hide_command_button?: boolean;
   hide_points_balance?: boolean;
+  // Show the channel points balance beside the points button instead of only
+  // on hover. Ignored while hide_points_balance is on.
+  show_points_balance_inline?: boolean;
 }
 
 // Screen anchor a toast popup appears at. Mirrors the Rust `toast_position`
@@ -648,6 +670,8 @@ export interface LiveNotificationSettings {
   enabled: boolean;
   play_sound: boolean;
   sound_type?: string; // 'boop' | 'tick' | 'gentle' | 'soft' | 'whisper'
+  /** Notification sound volume, percent of the sound's own level (0-200, default 100). */
+  sound_volume?: number;
   // Notification type toggles
   show_live_notifications?: boolean;
   // Go-live notifications for FAVORITED channels, which may not be followed.
@@ -834,6 +858,7 @@ export interface MultiNookSlot {
   broadcasterType?: string;  // Ephemeral: 'partner' | 'affiliate' | ''. Drives the verified mark on the tile. Resolved from helix/users, which every slot-creating path already calls.
   raid?: MultiNookRaid;      // Ephemeral: the channel this tile's streamer raided. Covers the tile with a card until dismissed. Not persisted.
   startedCap?: number | null; // Ephemeral: the small-tile cap this tile's stream was started under (null = its own quality). A change means a restart. Not persisted.
+  audioBoost?: AudioBoostSettings; // This tile's own Audio Boost. Absent: the tile uses the player's video_player.audio_boost until it is changed on the tile. Named on the Rust MultiNookSlot too.
 }
 
 /** A raid out of a MultiNook tile, as Rust emits it on `multi-nook://raid`
@@ -857,6 +882,7 @@ export interface MultiNookPresetChannel {
   channelName?: string;      // Capitalization-correct display name for the preset UI
   profileImageUrl?: string;  // Cached avatar so preset rows render without a network hit
   quality?: string;          // Preferred Streamlink quality carried into the loaded tile
+  audioBoost?: AudioBoostSettings; // The tile's own Audio Boost, carried into the loaded tile like quality
 }
 
 /** Visual icon for a MultiNook preset: either a Twitch game category's box art or
@@ -2021,6 +2047,35 @@ export interface ChannelReward {
   max_per_stream?: number;
   max_per_user_per_stream?: number;
   global_cooldown_seconds?: number;
+  reward_type?: string | null;
+  redemptions_redeemed_current_stream?: number | null;
+  /** Rust's verdict on whether the viewer can redeem it right now. */
+  availability: RewardAvailability;
+}
+
+/** Why Rust judged a reward not redeemable (models/drops.rs RewardBlock). */
+export type RewardBlock =
+  | 'disabled'
+  | 'paused'
+  | 'out_of_stock'
+  | 'input_not_supported'
+  | 'max_per_stream_reached'
+  | 'on_cooldown'
+  | 'not_enough_points';
+
+/** Rust's verdict for one reward, computed when the list was fetched. */
+export interface RewardAvailability {
+  redeemable: boolean;
+  reason: RewardBlock | null;
+  cooldown_until_ms: number | null;
+  affordable: boolean;
+}
+
+/** `get_channel_rewards`: the rewards, the balance they were judged against, and when. */
+export interface ChannelRewardsSnapshot {
+  rewards: ChannelReward[];
+  balance: number | null;
+  fetched_at_ms: number;
 }
 
 /** Result of attempting to redeem a channel reward */

@@ -72,6 +72,51 @@ impl Default for AudioBoostSettings {
     }
 }
 
+impl AudioBoostSettings {
+    /// Every value held to the range the audio graph accepts, so a bad write
+    /// can never reach a compressor or gain node. A non-finite value takes the
+    /// default.
+    pub fn clamped(self) -> Self {
+        let d = Self::default();
+        let fit = |v: f32, lo: f32, hi: f32, fallback: f32| if v.is_finite() { v.clamp(lo, hi) } else { fallback };
+        Self {
+            enabled: self.enabled,
+            gain: fit(self.gain, 0.0, 4.0, d.gain),
+            threshold: fit(self.threshold, -100.0, 0.0, d.threshold),
+            knee: fit(self.knee, 0.0, 40.0, d.knee),
+            ratio: fit(self.ratio, 1.0, 20.0, d.ratio),
+            attack: fit(self.attack, 0.0, 1.0, d.attack),
+            release: fit(self.release, 0.0, 1.0, d.release),
+        }
+    }
+}
+
+/// Song identification (the /song command and the player's music button):
+/// how long to listen and how many times to try again. The page captures and
+/// clamps them (3 to 30 seconds, 0 to 3 retries); this is where they persist.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct SongIdSettings {
+    /// Seconds of audio to fingerprint.
+    #[serde(default = "default_song_capture_seconds")]
+    pub capture_seconds: u32,
+    /// Extra listens when the first finds nothing.
+    #[serde(default = "default_song_retries")]
+    pub retries: u32,
+}
+
+fn default_song_capture_seconds() -> u32 {
+    10
+}
+fn default_song_retries() -> u32 {
+    1
+}
+
+impl Default for SongIdSettings {
+    fn default() -> Self {
+        Self { capture_seconds: default_song_capture_seconds(), retries: default_song_retries() }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct VideoPlayerSettings {
     pub max_buffer_length: u32,
@@ -86,6 +131,8 @@ pub struct VideoPlayerSettings {
     pub cinema_mode: bool,
     #[serde(default)]
     pub audio_boost: AudioBoostSettings,
+    #[serde(default)]
+    pub song_id: SongIdSettings,
     /// Drive playback through the parts-based LL-HLS origin (Twitch-parity
     /// latency) instead of the whole-segment path. On by default since 2026-09-21,
     /// when it was measured level with twitch.tv on H.264 and 1440p channels; the
@@ -120,6 +167,10 @@ pub struct VideoPlayerSettings {
     /// Middle-clicking the player toggles mute. On by default.
     #[serde(default = "default_true")]
     pub middle_click_mute: bool,
+    /// Middle-clicking a stream card or sidebar row opens it in MultiNook. On
+    /// by default.
+    #[serde(default = "default_true")]
+    pub middle_click_multinook: bool,
     /// How much one wheel notch moves the volume (0.01-0.25). Default 5%.
     #[serde(default = "default_wheel_volume_step")]
     pub wheel_volume_step: f32,
@@ -173,6 +224,7 @@ impl Default for VideoPlayerSettings {
             lock_aspect_ratio: true,
             cinema_mode: false,
             audio_boost: AudioBoostSettings::default(),
+            song_id: SongIdSettings::default(),
             experimental_low_latency: true,
             low_latency_engine_defaulted: true,
             ll_target_latency: None,
@@ -182,6 +234,7 @@ impl Default for VideoPlayerSettings {
             scroll_volume: true,
             scroll_about_reveal: true,
             middle_click_mute: true,
+            middle_click_multinook: true,
             wheel_volume_step: 0.05,
             resume_vod_playback: true,
         }
@@ -354,6 +407,31 @@ pub struct ChatDesignSettings {
     pub pinned_start_collapsed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub polls_start_collapsed: Option<bool>,
+    /// Sound played when a live message mentions you: a built-in tone id or
+    /// `file:<id>` from the custom sounds. Absent or empty means no sound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mention_sound: Option<String>,
+    /// Mention sound volume, percent of the sound's own level (0-200).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mention_sound_volume: Option<u32>,
+    /// Whether a reply to one of your messages also plays the mention sound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mention_sound_replies: Option<bool>,
+    /// @mention text weight in message bodies: regular | medium | bold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mention_weight: Option<String>,
+    /// @mention slant: inherit (italic inside /me messages) | never | always.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mention_italic: Option<String>,
+    /// @mention shape: plain (coloured text, the default) | pill (tinted capsule).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mention_style: Option<String>,
+    /// @mention colour: absent follows the mentioned user's name colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mention_text_color: Option<String>,
+    /// How docked chats are switched in a chat column: menu | tabs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_dock_switcher: Option<String>,
 }
 
 fn default_name_color_adjustment() -> String {
@@ -470,6 +548,14 @@ impl Default for ChatDesignSettings {
             username_colon: None,
             pinned_start_collapsed: None,
             polls_start_collapsed: None,
+            mention_sound: None,
+            mention_sound_volume: None,
+            mention_sound_replies: None,
+            mention_weight: None,
+            mention_italic: None,
+            mention_style: None,
+            mention_text_color: None,
+            chat_dock_switcher: None,
             username_accent_source: "user".to_string(),
             drag_moderation_enabled: true,
             mod_action_style: "both".to_string(),
@@ -508,6 +594,10 @@ pub struct LiveNotificationSettings {
     pub play_sound: bool,
     #[serde(default)]
     pub sound_type: Option<String>,
+    /// Notification sound volume, percent of the sound's own level (0-200).
+    /// Absent plays at the sound's own level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sound_volume: Option<u32>,
     // Notification type toggles
     #[serde(default = "default_true")]
     pub show_live_notifications: bool,
@@ -598,6 +688,7 @@ impl Default for LiveNotificationSettings {
             enabled: true,
             play_sound: true,
             sound_type: None,
+            sound_volume: None,
             show_live_notifications: true,
             show_favorite_live_notifications: true,
             show_whisper_notifications: true,
@@ -785,6 +876,11 @@ pub struct MultiNookSlot {
     /// directly above, which is here for exactly that reason.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// This tile's own Audio Boost, set from the tile's boost panel. Absent
+    /// means the tile uses the player's `video_player.audio_boost` until the
+    /// viewer changes it on the tile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_boost: Option<AudioBoostSettings>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -1699,6 +1795,32 @@ mod backup_persistence_tests {
     /// nested field (per-channel quality, the icon) must survive verbatim.
     /// A layout this build cannot read must cost only the layout, never the
     /// settings file: the whole file is one parse.
+    /// The Song Identification sliders write `video_player.song_id`. With no
+    /// typed field, a save dropped it and the values reverted on restart.
+    #[test]
+    fn song_id_settings_survive_a_save() {
+        let mut v = serde_json::to_value(Settings::default()).unwrap();
+        v["video_player"]["song_id"] = serde_json::json!({ "capture_seconds": 18, "retries": 3 });
+        let parsed: Settings = serde_json::from_value(v).expect("deserialize");
+        assert_eq!(parsed.video_player.song_id, SongIdSettings { capture_seconds: 18, retries: 3 });
+        let back = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(back["video_player"]["song_id"]["capture_seconds"], 18);
+        assert_eq!(back["video_player"]["song_id"]["retries"], 3);
+    }
+
+    /// A file from before the field, or a partial object, loads the defaults
+    /// the page has always used (10 seconds, one retry).
+    #[test]
+    fn song_id_settings_default_when_absent_or_partial() {
+        let mut v = serde_json::to_value(Settings::default()).unwrap();
+        v["video_player"].as_object_mut().unwrap().remove("song_id");
+        let parsed: Settings = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!(parsed.video_player.song_id, SongIdSettings { capture_seconds: 10, retries: 1 });
+        v["video_player"]["song_id"] = serde_json::json!({ "retries": 0 });
+        let parsed: Settings = serde_json::from_value(v).unwrap();
+        assert_eq!(parsed.video_player.song_id, SongIdSettings { capture_seconds: 10, retries: 0 });
+    }
+
     #[test]
     fn a_bad_multi_nook_layout_never_fails_the_settings_load() {
         let mut v = serde_json::to_value(Settings::default()).unwrap();
@@ -1731,6 +1853,49 @@ mod backup_persistence_tests {
         assert_eq!(back.multi_nook_layout.caps_small_tiles(), Some(480));
         let grid = MultiNookLayout { mode: MultiNookLayoutMode::Grid, ..s.multi_nook_layout.clone() };
         assert_eq!(grid.caps_small_tiles(), None, "a grid has no small tiles");
+    }
+
+    #[test]
+    fn multi_nook_slot_keeps_its_audio_boost() {
+        let slot: MultiNookSlot = serde_json::from_value(serde_json::json!({
+            "id": "cell-1", "channelLogin": "mande", "volume": 0.5, "muted": false, "isFocused": true,
+            "audioBoost": { "enabled": true, "gain": 2.25 }
+        }))
+        .expect("slot with a boost");
+        let boost = slot.audio_boost.clone().expect("boost kept");
+        assert!(boost.enabled);
+        assert_eq!(boost.gain, 2.25);
+        assert_eq!(boost.ratio, default_audio_ratio(), "missing fields take the defaults");
+        let out = serde_json::to_value(&slot).expect("serialize slot");
+        assert_eq!(out["audioBoost"]["gain"], serde_json::json!(2.25));
+
+        let plain: MultiNookSlot = serde_json::from_value(serde_json::json!({
+            "id": "cell-2", "channelLogin": "x", "volume": 0.5, "muted": true, "isFocused": false
+        }))
+        .expect("slot without a boost");
+        assert!(plain.audio_boost.is_none());
+        assert!(serde_json::to_value(&plain).unwrap().get("audioBoost").is_none());
+    }
+
+    #[test]
+    fn audio_boost_clamps_to_the_graph_range() {
+        let wild = AudioBoostSettings {
+            enabled: true,
+            gain: 99.0,
+            threshold: 12.0,
+            knee: f32::NAN,
+            ratio: 0.0,
+            attack: -1.0,
+            release: f32::INFINITY,
+        }
+        .clamped();
+        assert_eq!(wild.gain, 4.0);
+        assert_eq!(wild.threshold, 0.0);
+        assert_eq!(wild.knee, default_audio_knee());
+        assert_eq!(wild.ratio, 1.0);
+        assert_eq!(wild.attack, 0.0);
+        assert_eq!(wild.release, default_audio_release());
+        assert!(wild.enabled);
     }
 
     #[test]

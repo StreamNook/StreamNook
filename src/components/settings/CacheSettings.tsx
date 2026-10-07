@@ -5,10 +5,12 @@ import { IS_MOBILE } from '../../utils/platform';
 import { SettingsSection, SettingsRow } from './_primitives';
 import { Toggle } from '../ui/Toggle';
 import EmotePrefetchSection from './EmotePrefetchSection';
+import { useSettingReset } from './settingReset';
 
 import { Logger } from '../../utils/logger';
 const CacheSettings = () => {
   const { settings, updateSettings } = useAppStore();
+  const resetFor = useSettingReset();
   /** What the cache currently holds, shown under the buttons. Null until asked. */
   const [cacheInfo, setCacheInfo] = useState<string | null>(null);
 
@@ -19,8 +21,9 @@ const CacheSettings = () => {
         description="Keeps emotes, badges, and channel details on disk so chat loads without fetching them again. Come here to check how much is stored or start fresh."
       >
         <SettingsRow
-          title="Load emotes and badges from disk"
-          description="Stores a copy on this PC after the first download so later channel loads are near instant. Off means every launch fetches them again."
+          title="Disk cache"
+          onReset={resetFor(['cache.enabled', true])}
+          description="Loads emotes and badges from disk: a copy is stored on this PC after the first download so later channel loads are near instant. Off means every launch fetches them again."
           help="Uses a little disk space in the app data folder and nothing else. Turning it off does not delete what is already stored; use Clear cache below for that."
           control={
             <Toggle
@@ -36,7 +39,8 @@ const CacheSettings = () => {
         />
 
         <SettingsRow
-          title={`Refresh stored data after ${settings.cache?.expiry_days ?? 7} days`}
+          title={`Refresh after: ${settings.cache?.expiry_days ?? 7} days`}
+          onReset={resetFor(['cache.expiry_days', 7])}
           description="Anything older than this is fetched again the next time it is needed, so new emotes and badge art show up on their own."
           help="1 to 30 days, 7 by default. A shorter window keeps you current at the cost of more downloads; a longer one saves bandwidth."
         >
@@ -57,7 +61,7 @@ const CacheSettings = () => {
         </SettingsRow>
 
         <SettingsRow
-          title="See what is stored, or clear it"
+          title="Storage"
           description="View cache info shows a count of what is on disk, Open folder reveals the files, and Clear cache deletes every stored emote and badge so they download fresh."
           help="Clearing is safe and does not touch your settings or login. Chat will feel slower for the first visit to each channel while the cache refills."
         >

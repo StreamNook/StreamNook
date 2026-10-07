@@ -2,9 +2,11 @@ import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
 import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
+import { SubControl, SubControls } from '../plugins/settingsPageKit';
 import { MOD_LOG_CATEGORIES, MOD_LOG_STYLES, highlightContainerStyle } from '../../utils/modLogCategories';
 import { Tooltip } from '../ui/Tooltip';
 import { connectModRoomConsent, clearModeratedCache, loadModeratedChannelIds } from '../../services/modRoomService';
+import { useSettingReset } from './settingReset';
 
 const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
   <button
@@ -21,9 +23,12 @@ const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void 
   </button>
 );
 
+const DEFAULT_TIMEOUT_PRESETS = [1, 600, 3600, 86400];
+
 const ModerationSettings = () => {
   const { settings, updateSettings } = useAppStore();
   const mod = settings.moderation ?? {};
+  const resetFor = useSettingReset();
 
   // Mod-room scoped consent: which account it belongs to, and the two actions.
   const [modRoomLogin, setModRoomLogin] = useState<string | null>(null);
@@ -82,9 +87,13 @@ const ModerationSettings = () => {
       <SettingsSection
         id="settings-section-streamer-mode"
         label="Streamer Mode"
-        description="While you are live, hide what should not be on stream: viewer counts in the chat header, link previews are muted, rows from restricted (low-trust) users are hidden, and highlight sounds stay silent. Auto watches for OBS, Streamlabs, XSplit, Twitch Studio and vMix; detection runs in the Rust backend, nothing polls when it is off."
+        description="While you are live, hide what should not be on stream: viewer counts in the chat header, link previews are muted, rows from restricted (low-trust) users are hidden, and highlight sounds stay silent. Auto watches for OBS, Streamlabs, XSplit, Twitch Studio and vMix."
       >
-        <SettingsRow title="Streamer mode" description="Off, always on, or automatic while broadcasting software is running.">
+        <SettingsRow
+          title="Activation"
+          onReset={resetFor(['streamer_mode.mode', 'off'])}
+          description="Streamer mode off, always on, or automatic while broadcasting software is running."
+        >
           <SegmentedSelect<'off' | 'on' | 'auto'>
             value={settings.streamer_mode?.mode ?? 'off'}
             onChange={(mode) => updateSettings({ ...settings, streamer_mode: { ...settings.streamer_mode, mode } })}
@@ -103,12 +112,16 @@ const ModerationSettings = () => {
       >
         <SettingsRow
           title="Timeout presets"
+          onReset={resetFor(['moderation.timeout_presets', DEFAULT_TIMEOUT_PRESETS])}
           description="The durations the timeout button offers when you hover a message. Seconds, comma separated: 60, 600, 3600, 86400 shows as 1m, 10m, 1h, 24h."
           help="Up to eight presets, longest 14 days (1209600). Leave it as is for the classic 1s, 10m, 1h, 24h."
         >
           <input
+            // Uncontrolled while typing; keyed on the saved list so a reset
+            // shows the restored presets.
+            key={(settings.moderation?.timeout_presets ?? DEFAULT_TIMEOUT_PRESETS).join(',')}
             type="text"
-            defaultValue={(settings.moderation?.timeout_presets ?? [1, 600, 3600, 86400]).join(', ')}
+            defaultValue={(settings.moderation?.timeout_presets ?? DEFAULT_TIMEOUT_PRESETS).join(', ')}
             onBlur={(e) => {
               const parsed = e.target.value
                 .split(/[,\s]+/)
@@ -125,9 +138,10 @@ const ModerationSettings = () => {
           />
         </SettingsRow>
         <SettingsRow
-          title="How you act on a message"
-          description="Buttons show delete, timeout, and ban when you hover a message; Drag lets you pick a message up and drop it on a color-coded action bucket; Both gives you both."
-          help="Buttons keep message text selectable. In Drag mode text selection is off, so use Copy instead. Everyone gets profile and whisper buckets; delete, timeout, and ban buckets only appear where you are a mod or the broadcaster."
+          title="Method"
+          onReset={resetFor('chat_design.mod_action_style')}
+          description="How you act on a message: Buttons show delete, timeout, and ban when you hover it; Drag lets you pick it up and drop it on a color-coded action bucket; Both gives you both."
+          help="Buttons keep message text selectable. In Drag mode text selection is off, so use Copy instead. Everyone gets profile and whisper buckets; delete, timeout, and ban buckets only appear where you are a mod or the broadcaster. Bucket position: Beside chat is a column of bigger tiles left of chat, clear of the player controls; Above chat is a compact cluster right above the message. Pin bucket adds a Pin tile to the buckets; mods always get a Pin button beside Copy."
         >
           <SegmentedSelect<'buttons' | 'drag' | 'both'>
             value={modActionStyle}
@@ -138,36 +152,38 @@ const ModerationSettings = () => {
               { value: 'both', label: 'Both' },
             ]}
           />
-        </SettingsRow>
-
-        {modActionStyle !== 'buttons' && (
-          <SettingsRow
-            title="Where the drop buckets appear"
-            description="Beside chat puts a column of bigger tiles to the left of chat, clear of the player controls; Above chat puts a compact cluster right above the message for when space is tight."
-          >
-            <SegmentedSelect<'column' | 'bar'>
-              value={modDragLayout}
-              onChange={setModDragLayout}
-              options={[
-                { value: 'column', label: 'Beside chat' },
-                { value: 'bar', label: 'Above chat' },
-              ]}
-            />
-          </SettingsRow>
-        )}
-
-        <SettingsRow
-          title="Pin from the drag gesture too"
-          description="Moderators always get a Pin button beside Copy on a message; this adds a Pin tile to the drag buckets as well."
-        >
-          <SegmentedSelect<'inline' | 'both'>
-            value={modPinStyle}
-            onChange={setModPinStyle}
-            options={[
-              { value: 'inline', label: 'Button only' },
-              { value: 'both', label: 'Button + drag tile' },
-            ]}
-          />
+          {modActionStyle !== 'buttons' && (
+            <SubControls>
+              <SubControl
+                title="Bucket position"
+                onReset={resetFor('chat_design.mod_drag_layout')}
+                control={
+                  <SegmentedSelect<'column' | 'bar'>
+                    value={modDragLayout}
+                    onChange={setModDragLayout}
+                    options={[
+                      { value: 'column', label: 'Beside chat' },
+                      { value: 'bar', label: 'Above chat' },
+                    ]}
+                  />
+                }
+              />
+              <SubControl
+                title="Pin bucket"
+                onReset={resetFor('chat_design.mod_pin_style')}
+                control={
+                  <SegmentedSelect<'inline' | 'both'>
+                    value={modPinStyle}
+                    onChange={setModPinStyle}
+                    options={[
+                      { value: 'inline', label: 'Button only' },
+                      { value: 'both', label: 'Button + drag tile' },
+                    ]}
+                  />
+                }
+              />
+            </SubControls>
+          )}
         </SettingsRow>
       </SettingsSection>
 
@@ -177,7 +193,7 @@ const ModerationSettings = () => {
         description="What gets recorded against a ban or timeout. Twitch shows these in the channel's mod view."
       >
         <SettingsRow
-          title="Reason for /nuke"
+          title="/nuke reason"
           description="Written against every ban and timeout a /nuke issues. Leave empty to record just “/nuke”."
         >
           <input
@@ -215,8 +231,9 @@ const ModerationSettings = () => {
         description="A running list of timeouts, bans, and deletions in the channel you are watching, so you can see what the mod team is doing."
       >
         <SettingsRow
-          title="Show the mod log beside chat"
-          description="Adds a panel inside chat that lists recent timeouts, bans, and deleted messages as they happen."
+          title="Log panel"
+          onReset={resetFor(['show_mod_logs', false])}
+          description="Shows the mod log beside chat: a panel listing recent timeouts, bans, and deleted messages as they happen."
           control={
             <Toggle
               enabled={settings.show_mod_logs ?? false}
@@ -262,12 +279,13 @@ const ModerationSettings = () => {
       </SettingsSection>
 
       <SettingsSection
-        label="Message Visibility"
+        label="Removed Messages"
         description="How timeouts, bans, and deletions show up inside the chat itself. By default a removed message stays in place with a strikethrough."
       >
         <SettingsRow
-          title="Announce mod actions inline"
-          description="Add an extra system row to chat when a mod times someone out, bans, or deletes a message. Stacks on top of the strikethrough you already see."
+          title="Action notices"
+          onReset={resetFor(['moderation.show_mod_messages', false])}
+          description="Announces mod actions inline: an extra row in chat when a mod times someone out, bans, or deletes a message. Stacks on top of the strikethrough you already see."
           control={
             <Toggle
               enabled={mod.show_mod_messages ?? false}
@@ -276,7 +294,8 @@ const ModerationSettings = () => {
           }
         />
         <SettingsRow
-          title="Hide strikethrough on removed messages"
+          title="Hide strikethrough"
+          onReset={resetFor(['moderation.ignore_clear_chat', false])}
           description="Banned, timed-out, and deleted messages stay exactly as they were, with no line through them."
           control={
             <Toggle
@@ -292,7 +311,8 @@ const ModerationSettings = () => {
         description="Color-code mod-log entries by severity. Choose how the highlight shows, then customize any category's color."
       >
         <SettingsRow
-          title="Highlight style"
+          title="Style"
+          onReset={resetFor(['moderation.mod_log_highlight_style', 'box'])}
           description="How each entry is emphasized by severity. The previews use a sample event."
         >
           <div className="grid grid-cols-3 gap-2">
@@ -338,7 +358,19 @@ const ModerationSettings = () => {
           const current = mod.mod_log_colors?.[c.key] || c.defaultColor;
           const overridden = !!mod.mod_log_colors?.[c.key];
           return (
-            <SettingsRow key={c.key} title={c.label}>
+            <SettingsRow
+              key={c.key}
+              title={c.label}
+              onReset={
+                overridden
+                  ? () => {
+                      const next = { ...(mod.mod_log_colors ?? {}) };
+                      delete next[c.key];
+                      setMod({ mod_log_colors: next });
+                    }
+                  : undefined
+              }
+            >
               <div className="flex items-center gap-2">
                 <Tooltip content={`${c.label} color`}>
                 <input
@@ -352,18 +384,6 @@ const ModerationSettings = () => {
                   className="h-7 w-10 rounded cursor-pointer bg-transparent border border-borderSubtle"
                 />
                 </Tooltip>
-                {overridden && (
-                  <button
-                    onClick={() => {
-                      const next = { ...(mod.mod_log_colors ?? {}) };
-                      delete next[c.key];
-                      setMod({ mod_log_colors: next });
-                    }}
-                    className="text-[11px] text-textSecondary hover:text-text"
-                  >
-                    Reset
-                  </button>
-                )}
               </div>
             </SettingsRow>
           );

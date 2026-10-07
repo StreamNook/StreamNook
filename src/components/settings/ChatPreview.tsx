@@ -9,6 +9,7 @@ import type { ModerationContext } from '../../stores/chatConnectionStore';
 import type { ChatEventSettings } from '../../types';
 import { Tooltip } from '../ui/Tooltip';
 import { calculateHalfPadding } from '../../utils/chatLayoutUtils';
+import { mentionBoxClass, mentionBoxStyle, mentionTextStyle, type MentionLook } from '../chat/mentionStyle';
 
 // A few lines of sample chat for the settings page, drawn with the viewer's own
 // chat design (text size, spacing, dividers, stripes, timestamps, name style)
@@ -120,14 +121,17 @@ const PreviewLine = ({
   first = false,
   moderation,
   deletedStyle,
+  action = false,
 }: {
   design: PreviewDesign;
   who: Chatter;
-  text: string;
+  text: ReactNode;
   minutesAgo: number;
   first?: boolean;
   moderation?: ModerationContext;
   deletedStyle?: DeletedMessageStyle;
+  /** A /me line: the whole body in the sender's colour and italic, as chat draws it. */
+  action?: boolean;
 }) => {
   const adjust = useNameColorAdjust();
   const color = adjust(who.color) ?? who.color;
@@ -136,7 +140,9 @@ const PreviewLine = ({
   return (
     <div
       className={`${box.className} transition-opacity duration-200`}
-      style={{ ...box.style, opacity: dim ? 0.5 : undefined }}
+      // The row carries the chat font size, as the real row does, so the
+      // name and text share one baseline.
+      style={{ ...box.style, opacity: dim ? 0.5 : undefined, fontSize: `${design.font_size}px`, lineHeight: 1.625 }}
     >
       {design.show_timestamps && (
         <div className="mb-0.5 text-[10px] leading-tight text-textSecondary opacity-50">
@@ -144,7 +150,7 @@ const PreviewLine = ({
         </div>
       )}
       <span
-        className="leading-relaxed align-middle"
+        className="leading-relaxed"
         style={{ fontSize: `${design.font_size}px`, fontWeight: design.font_weight }}
       >
         <StyledChatName
@@ -154,7 +160,10 @@ const PreviewLine = ({
           separator={design.username_separator}
           accentColor={design.username_accent_source === 'theme' ? 'var(--color-accent)' : color}
         />
-        <span style={{ fontWeight: 'var(--chat-body-weight, 300)' }} className="text-textPrimary break-words">
+        <span
+          style={action ? { color, fontWeight: 300 } : { fontWeight: 'var(--chat-body-weight, 300)' }}
+          className={action ? 'italic break-words' : 'text-textPrimary break-words'}
+        >
           <span style={moderation && deletedStyle ? deletedBodyStyle(deletedStyle) : undefined}>
             {' '}
             {text}
@@ -300,6 +309,44 @@ export const EventRowPreview = ({
         </div>
         <Row>
           <PreviewLine design={design} who={LOOTGOBLIN} text="welcome to the club" minutesAgo={1} />
+        </Row>
+      </PreviewChat>
+    </SettingPreview>
+  );
+};
+
+/** A mention drawn the way chat draws it (chat/mentionStyle), in a plain line
+ *  and inside a /me line, where the slant setting shows. */
+export const MentionPreview = ({ design, look }: { design: PreviewDesign; look: MentionLook }) => {
+  const adjust = useNameColorAdjust();
+  const mention = (who: Chatter) => {
+    const c = adjust(who.color) ?? who.color;
+    return (
+      <span className={mentionBoxClass(look)} style={mentionBoxStyle(look, c)}>
+        <span style={mentionTextStyle(look, { color: c })}>@{who.name}</span>
+      </span>
+    );
+  };
+  return (
+    <SettingPreview caption="a mention, and one inside a /me message">
+      <PreviewChat design={design}>
+        <Row>
+          <PreviewLine
+            design={design}
+            who={PIXELFOX}
+            text={<>{mention(MOSSY)} that clutch was unreal</>}
+            minutesAgo={2}
+            first
+          />
+        </Row>
+        <Row>
+          <PreviewLine
+            design={design}
+            who={LOOTGOBLIN}
+            text={<>high-fives {mention(QUIETSTORM)}</>}
+            minutesAgo={1}
+            action
+          />
         </Row>
       </PreviewChat>
     </SettingPreview>

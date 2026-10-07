@@ -5,26 +5,51 @@
 import { sectionIdFromLabel } from './sectionId';
 import type { SettingsIndexEntry } from './searchIndex';
 
-/** The settings row a search result names, matched on its title. Exact first,
- *  then a title that leads with it (a row whose title also shows its value,
- *  like "Text size: 14px"). */
+const rowsIn = (root: ParentNode): HTMLElement[] =>
+  Array.from(root.querySelectorAll<HTMLElement>('[data-setting-row]'));
+
+/** Exact title first, then a title that leads with it (a row whose title also
+ *  shows its value, like "Text size: 14px"). */
+const matchRow = (rows: HTMLElement[], title: string): HTMLElement | null =>
+  rows.find((r) => r.dataset.settingRow === title) ??
+  rows.find((r) => r.dataset.settingRow?.startsWith(`${title}:`)) ??
+  rows.find((r) => r.dataset.settingRow?.startsWith(title)) ??
+  null;
+
+/** The settings row a search result names, matched on its title. Short row
+ *  names repeat ("Color", "Volume"), so a top-level row wins over a line of the
+ *  same name nested under another row. */
 export function findSettingRow(root: ParentNode | null, title: string): HTMLElement | null {
   if (!root) return null;
-  const rows = Array.from(root.querySelectorAll<HTMLElement>('[data-setting-row]'));
-  return (
-    rows.find((r) => r.dataset.settingRow === title) ??
-    rows.find((r) => r.dataset.settingRow?.startsWith(`${title}:`)) ??
-    rows.find((r) => r.dataset.settingRow?.startsWith(title)) ??
-    null
-  );
+  const all = rowsIn(root);
+  const top = all.filter((r) => !r.parentElement?.closest('[data-setting-row], [data-setting-subgroup]'));
+  return matchRow(top, title) ?? matchRow(all, title);
 }
 
-/** Where a result should land: its row when one matches, else its section.
- *  Every section has a DOM id, declared or derived from its label, so an entry
- *  without an explicit sectionId still has somewhere to go. */
+/** Where a result should land: its row inside its own section (inside its
+ *  parent row, for a nested setting), else its section. Every section has a
+ *  DOM id, declared or derived from its label, so an entry without an explicit
+ *  sectionId still has somewhere to go. */
 export function findSettingTarget(root: ParentNode | null, entry: SettingsIndexEntry): HTMLElement | null {
+  const section =
+    root?.querySelector<HTMLElement>(`[data-settings-section="${CSS.escape(entry.section)}"]`) ?? null;
+  const scope = section ?? root;
+  if (entry.parent) {
+    const parent = findSettingRow(scope, entry.parent);
+    if (parent) {
+      // Nested inside the row (SubControl), or in the SettingsSubGroup that
+      // follows it (the overlay builder's whole nested rows).
+      const group = parent.nextElementSibling;
+      const nested = [
+        ...rowsIn(parent),
+        ...(group instanceof HTMLElement && group.hasAttribute('data-setting-subgroup') ? rowsIn(group) : []),
+      ];
+      return matchRow(nested, entry.title) ?? parent;
+    }
+  }
   return (
-    findSettingRow(root, entry.title) ??
+    findSettingRow(scope, entry.title) ??
+    section ??
     document.getElementById(entry.sectionId ?? sectionIdFromLabel(entry.section))
   );
 }

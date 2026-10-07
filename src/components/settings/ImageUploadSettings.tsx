@@ -9,6 +9,7 @@ import { Check, ImageUp, Loader2 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { SettingsSection, SettingsRow, SettingsSubGroup } from './_primitives';
 import { Toggle } from '../ui/Toggle';
+import { useSettingReset } from './settingReset';
 import {
   CUSTOM_HOST_ID,
   DEFAULT_HOST_ID,
@@ -28,6 +29,7 @@ function testPngBytes(): Uint8Array {
 
 const ImageUploadSettings = () => {
   const { settings, updateSettings } = useAppStore();
+  const resetFor = useSettingReset();
   const up = settings.chat_input?.image_uploader ?? {};
   const enabled = up.enabled ?? false;
   const presetId = up.preset ?? (up.url && up.url !== UPLOAD_HOST_PRESETS[0].url ? CUSTOM_HOST_ID : DEFAULT_HOST_ID);
@@ -65,7 +67,8 @@ const ImageUploadSettings = () => {
       description="Twitch chat can't carry pictures, so StreamNook can send one to an image host for you and drop the link into your message. Copy a screenshot, press Ctrl+V in the chat box, done."
     >
       <SettingsRow
-        title="Paste images to upload"
+        title="Paste upload"
+        onReset={resetFor(['chat_input.image_uploader.enabled', false])}
         description="Only images pasted into the chat box are sent, and only while this is on. Text pastes are never touched."
         help="Off by default because the picture leaves your PC for the host you choose below. Links from every host here render as image cards in StreamNook chat."
         control={<Toggle enabled={enabled} onChange={() => setUp({ enabled: !enabled })} />}
@@ -103,7 +106,7 @@ const ImageUploadSettings = () => {
           </div>
           {presetId === CUSTOM_HOST_ID && (
             <SettingsRow
-              title="Host details"
+              title="Custom host"
               description="What most self-hosted uploaders ask for. If the host answers with the link as plain text, leave the last box empty."
             >
               <div className="flex w-full flex-col gap-2">
@@ -157,7 +160,7 @@ const ImageUploadSettings = () => {
             </SettingsRow>
           )}
           <SettingsRow
-            title="Try it"
+            title="Test upload"
             description="Sends a 1-pixel test image to the host you picked and shows the link it came back with."
             control={
               <button

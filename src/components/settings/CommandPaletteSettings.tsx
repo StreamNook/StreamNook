@@ -99,7 +99,7 @@ function ShortcutRow({ chord, desc }: { chord: string[]; desc: string }) {
 
 function SectionsWalkthrough() {
   return (
-    <SettingsSection label="What lives in the palette" bare>
+    <SettingsSection label="Palette Sections" bare>
       <div className="grid gap-2">
         <SectionRow name="Quick Actions" desc="Verbs that always apply: open Drops/Badges/Whispers, surprise-me, refresh follows, sleep timers, feedback links." />
         <SectionRow name="Current Stream" desc="Only useful while watching a stream: pop chat out, theatre mode, restart/stop, follow/unfollow, view drops for this game, browse other streams of this game." />

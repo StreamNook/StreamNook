@@ -1,13 +1,17 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Plus, Trash2, Check, Pencil } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { BUILT_IN_COMPACT_PRESETS, DEFAULT_COMPACT_PRESET_ID } from '../../constants/compactViewPresets';
 import { Tooltip } from '../ui/Tooltip';
-import { SettingsSection } from './_primitives';
+import { ResetArrow, SettingsSection } from './_primitives';
+import { useSettingReset } from './settingReset';
 import type { CompactViewPreset } from '../../types';
 
-const CompactViewSettings = () => {
+/** `children` are rows that belong to Compact View but live elsewhere in
+ *  settings state (Keep on top), drawn as a card above the size presets. */
+const CompactViewSettings = ({ children }: { children?: ReactNode }) => {
   const { settings, updateSettings } = useAppStore();
+  const resetPreset = useSettingReset()(['compact_view.selectedPresetId', DEFAULT_COMPACT_PRESET_ID]);
   
   // Get current settings with defaults
   const compactViewSettings = settings.compact_view ?? {
@@ -135,11 +139,15 @@ const CompactViewSettings = () => {
   return (
     <SettingsSection
       label="Compact View"
-      description="Pick the window size StreamNook snaps to when you enter Compact View, handy for parking it on a second monitor."
+      description="The small player you can park on a second monitor: whether it stays on top, and the window size it snaps to."
       bare
     >
+      {children && <div className="settings-card px-4">{children}</div>}
       <div className="space-y-2">
-        <label className="text-sm text-textPrimary font-medium">Preset Sizes</label>
+        <label className="text-sm text-textPrimary font-medium">
+          Preset Sizes
+          {resetPreset && <ResetArrow onReset={resetPreset} />}
+        </label>
         <div className="grid grid-cols-2 gap-2">
           {BUILT_IN_COMPACT_PRESETS.map((preset) => (
             <button

@@ -155,6 +155,16 @@ pub async fn patch_settings(
     Ok(())
 }
 
+/// What a fresh install starts with: the values the settings page's reset
+/// arrows compare against and restore. `Settings::default()` carries the
+/// first-run look and, on a phone build, the phone's own values. Groups the
+/// frontend owns are absent here, so resetting one of their keys removes it
+/// and the page's own fallback applies, exactly as on a fresh install.
+#[tauri::command]
+pub fn get_default_settings() -> Settings {
+    Settings::default()
+}
+
 /// Hide (or unhide) one chatter's messages, everywhere (`channel_key` None) or
 /// in one channel (`channel_key` the filter's composite key, `twitch:xqc`).
 ///
@@ -290,6 +300,7 @@ fn after_settings_change(settings: &Settings, favorites_changed: bool) {
     // Recompile chat rules if their groups changed (hash-gated, cheap).
     crate::services::chat_rules::ChatRules::refresh(settings);
     crate::services::streamer_mode::StreamerMode::refresh(settings);
+    crate::services::mention_ping::refresh(settings);
     // Spawns or aborts the gift-sub poll, so the toggle takes effect without a
     // restart and "off" costs no task at all.
     crate::services::onsite_notifications::refresh(settings);
@@ -397,6 +408,7 @@ pub async fn import_settings(path: String, state: State<'_, AppState>) -> Result
     }
     crate::services::chat_rules::ChatRules::refresh(&imported);
     crate::services::streamer_mode::StreamerMode::refresh(&imported);
+    crate::services::mention_ping::refresh(&imported);
     // Immediate direct write, deliberately not debounced: the frontend reloads
     // right after this returns and must find the imported file on disk.
     write_settings_to_disk_sync(&imported)?;

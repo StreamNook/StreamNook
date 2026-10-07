@@ -84,7 +84,7 @@ const EmotePrefetchSection = () => {
       description="Download every emote from the channels you follow ahead of time, so the emote menu opens instantly in any of their chats."
     >
       <SettingsRow
-        title="Download emotes for every channel you follow"
+        title="Followed channels"
         description="Scan your follows to see how many emotes are missing and how much space they need, then download them in the background while you do something else."
         help="1. Scan follows. 2. Check the count and size. 3. Download. Shared emotes are stored once and anything already cached is skipped, so a rerun only fetches what is new. Best started when you are away from your desk."
       >

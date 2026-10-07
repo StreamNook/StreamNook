@@ -5,6 +5,7 @@ import streamnookLogo from '../../assets/streamnook-logo.png';
 import { SettingsSection, SettingsRow } from './_primitives';
 import { useAppStore } from '../../stores/AppStore';
 import { IS_MOBILE } from '../../utils/platform';
+import { useSettingReset } from './settingReset';
 
 import { Logger } from '../../utils/logger';
 
@@ -266,6 +267,7 @@ const DiagnosticLoggingSection = () => {
     // Absent means ON, matching how AppStore reads it (`!== false`), so an
     // existing install is not silently switched off by adding this control.
     const enabled = settings.error_reporting_enabled !== false;
+    const resetFor = useSettingReset();
 
     return (
         <SettingsSection
@@ -274,7 +276,8 @@ const DiagnosticLoggingSection = () => {
             description="How much StreamNook writes to its log file, and where to find that file when someone asks you for it."
         >
             <SettingsRow
-                title="Keep a detailed log for bug reports"
+                title="Detailed log"
+                onReset={resetFor(['error_reporting_enabled', true])}
                 description="Records connection, playback, and chat activity to streamnook.log on this device so a problem can be traced after the fact."
                 help="Leave it on if you might report a bug; with it off the log holds almost nothing worth sending. The file stays on your device until you choose to share it."
                 control={
@@ -288,7 +291,7 @@ const DiagnosticLoggingSection = () => {
                 // The phone keeps its logs in the app's private folder, which a
                 // file manager cannot open without root, so they are shared.
                 <SettingsRow
-                    title="Get the log file"
+                    title="Log export"
                     description="Saves your logs as one zip in Downloads, or sends it straight to an app, so you can attach it to a bug report."
                     control={
                         <div className="flex gap-2">
@@ -309,7 +312,7 @@ const DiagnosticLoggingSection = () => {
                 />
             ) : (
                 <SettingsRow
-                    title="Find the log file"
+                    title="Log folder"
                     description="Opens the folder that holds streamnook.log so you can attach it to a bug report."
                     control={
                         <button
@@ -340,7 +343,7 @@ const DiagnosticLoggingSection = () => {
  */
 const DataRecordedSection = () => (
     <SettingsSection
-        label="What your account records"
+        label="Account Data"
         description="Signed in, StreamNook keeps a few counts against your account. Chat messages and anything you type are not among them."
     >
         <SettingsRow

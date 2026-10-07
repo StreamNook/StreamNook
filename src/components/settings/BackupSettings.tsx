@@ -120,11 +120,11 @@ const BackupSettings = () => {
   return (
     <div className="space-y-8">
       <SettingsSection
-        label="Settings file"
+        label="Settings File"
         description="Everything you customize in StreamNook lives in one file on this PC, and your Twitch login is stored separately so it never ends up in a backup."
       >
         <SettingsRow
-          title="Where your settings file lives"
+          title="Location"
           description={dir || 'Resolving location...'}
           help="Theme, chat layout, keybindings, highlight phrases, custom commands, player and notification preferences, and your custom themes are all in this one file."
           control={
@@ -139,11 +139,11 @@ const BackupSettings = () => {
       </SettingsSection>
 
       <SettingsSection
-        label="Backup and restore"
+        label="Backup & Restore"
         description="Keep a copy of your setup so you can bring it back after a reset, a reinstall, or a move to a new PC."
       >
         <SettingsRow
-          title="Save a backup"
+          title="Backup"
           description="Writes a copy of your settings file wherever you like, such as a USB drive or a cloud-synced folder."
           control={
             <ActionButton
@@ -155,7 +155,7 @@ const BackupSettings = () => {
           }
         />
         <SettingsRow
-          title="Restore from a backup"
+          title="Restore"
           description="Pick a backup file and StreamNook swaps in those preferences, then reloads itself so everything picks them up."
           help="Your current preferences are replaced, so export first if you want a way back. Your Twitch login is left untouched."
           control={

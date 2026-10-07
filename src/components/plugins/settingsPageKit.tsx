@@ -9,6 +9,7 @@
 import { useRef, useState, type ReactNode } from 'react';
 import { Plus, X } from 'lucide-react';
 import SectionNav from '../settings/SectionNav';
+import { ResetArrow } from '../settings/_primitives';
 
 /** A long settings page that scrolls on its own, with the section rail beside
  *  it on wide windows. Fill it with PageSections; `railKey` names the page. */
@@ -138,19 +139,48 @@ export function SubControls({ children }: { children: ReactNode }) {
   return <div className="mt-4 space-y-3.5 border-l border-borderSubtle pl-4">{children}</div>;
 }
 
-/** One line in SubControls: its name, and its control on the right. */
+/** One line in SubControls: its name, and its control on the right. `stacked`
+ *  puts the control under the name at full width, for a control too wide to
+ *  share the line (a wrapping set of chips). */
 export function SubControl({
   title,
   control,
   disabled = false,
+  stacked = false,
+  onReset,
 }: {
   title: string;
   control: ReactNode;
   disabled?: boolean;
+  stacked?: boolean;
+  /** Restores this line's setting. Pass it only while the setting differs
+   *  from its default, as on SettingsRow. */
+  onReset?: () => void;
 }) {
+  const name = (
+    <div className="min-w-0 text-[12.5px] font-medium text-textPrimary">
+      {title}
+      {onReset && <ResetArrow onReset={onReset} />}
+    </div>
+  );
+  if (stacked) {
+    return (
+      <div
+        className={`space-y-2 ${disabled ? 'pointer-events-none opacity-50' : ''}`}
+        data-setting-row={title}
+      >
+        {name}
+        {control}
+      </div>
+    );
+  }
   return (
-    <div className={`flex items-center justify-between gap-4 ${disabled ? 'pointer-events-none opacity-50' : ''}`}>
-      <div className="min-w-0 text-[12.5px] font-medium text-textPrimary">{title}</div>
+    <div
+      className={`flex items-center justify-between gap-4 ${disabled ? 'pointer-events-none opacity-50' : ''}`}
+      // A settings search result can land on a nested line, as on a row.
+      data-setting-row={title}
+    >
+      {name}
       <div className="shrink-0">{control}</div>
     </div>
   );

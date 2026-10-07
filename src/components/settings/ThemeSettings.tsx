@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAppStore } from '../../stores/AppStore';
 import { themes, themeCategories, getThemeById, applyTheme, customThemeToTheme, getThemeByIdWithCustom, applyGlassStrength, DEFAULT_GLASS_TRANSPARENCY, DEFAULT_GLASS_BLUR, applyFont, FONT_OPTIONS, DEFAULT_FONT_ID, CUSTOM_FONT_ID, SUGGESTED_FONTS, customFontStack, sanitizeFontFamily, loadSuggestionPreviews, Theme, OLED_THEME_ID, DEFAULT_OLED_ACCENT, OLED_ACCENT_PRESETS, getOledTheme } from '../../themes';
+import { ResetArrow } from './_primitives';
+import { thenRun, useSettingReset } from './settingReset';
 import { Check, Palette, Sparkles, Moon, Leaf, Code, Star, Plus, Edit2, PaintBucket, Droplets, Type } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
 import { Toggle } from '../ui/Toggle';
@@ -144,6 +146,7 @@ const ThemeCard = ({ theme, isSelected, onSelect, isCustom, onEdit }: ThemeCardP
 
 const ThemeSettings = () => {
     const { settings, updateSettings } = useAppStore();
+    const resetFor = useSettingReset();
     const currentThemeId = settings.theme || 'winters-glass';
     const customThemes = settings.custom_themes || [];
     
@@ -337,6 +340,21 @@ const ThemeSettings = () => {
         setEditingTheme(undefined);
     };
 
+    // Each reset goes through the same apply path as its control, so the
+    // window repaints at once rather than on the next launch.
+    const resetTheme = thenRun(resetFor(['theme', 'winters-glass']), (n) => {
+        const theme = getThemeByIdWithCustom(n.theme || 'winters-glass', n.custom_themes || []);
+        if (theme) applyTheme(theme);
+    });
+    const resetGlass = thenRun(resetFor(['glass_transparency', DEFAULT_GLASS_TRANSPARENCY]), (n) =>
+        applyGlassStrength(n.glass_transparency ?? DEFAULT_GLASS_TRANSPARENCY),
+    );
+    const resetBlur = resetFor(['glass_blur', DEFAULT_GLASS_BLUR]);
+    // These two reset through their own handlers, which also settle a pending
+    // debounced write, so only whether to show the arrow comes from the hook.
+    const fontChanged = !!resetFor(['font', DEFAULT_FONT_ID]);
+    const oledAccentChanged = !!resetFor(['oled_accent', DEFAULT_OLED_ACCENT]);
+
     const handleEditTheme = (theme: CustomTheme) => {
         setEditingTheme(theme);
         setIsCreating(true);
@@ -363,7 +381,10 @@ const ThemeSettings = () => {
             <div className="flex items-center justify-between gap-4">
                 <div className="flex items-center gap-2">
                     <Palette size={18} className="text-accent" />
-                    <h3 className="text-base font-semibold text-textPrimary">Theme</h3>
+                    <h3 className="text-base font-semibold text-textPrimary">
+                        Theme
+                        {resetTheme && <ResetArrow onReset={resetTheme} />}
+                    </h3>
                 </div>
                 <div className="flex items-center gap-3">
                     {currentTheme && (
@@ -391,7 +412,10 @@ const ThemeSettings = () => {
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                         <Droplets size={16} className="text-accent" />
-                        <h4 className="text-sm font-semibold text-textPrimary">Glassiness</h4>
+                        <h4 className="text-sm font-semibold text-textPrimary">
+                            Glassiness
+                            {resetGlass && <ResetArrow onReset={resetGlass} />}
+                        </h4>
                     </div>
                     <span className="text-xs text-textMuted font-mono">{liveGlass}%</span>
                 </div>
@@ -418,7 +442,10 @@ const ThemeSettings = () => {
                 {IS_LINUX && (
                     <div className="flex items-center justify-between gap-3 pt-1">
                         <div className="min-w-0">
-                            <p className="text-sm text-textPrimary">Blur behind glass</p>
+                            <p className="text-sm text-textPrimary">
+                                Blur behind glass
+                                {resetBlur && <ResetArrow onReset={resetBlur} />}
+                            </p>
                             <p className="text-xs text-textMuted">
                                 Frosts whatever shows through your glass. Turn it off if the app feels slow.
                             </p>
@@ -439,7 +466,10 @@ const ThemeSettings = () => {
             <div id="settings-section-font" className="settings-card p-4 space-y-3">
                 <div className="flex items-center gap-2">
                     <Type size={16} className="text-accent" />
-                    <h4 className="text-sm font-semibold text-textPrimary">Font</h4>
+                    <h4 className="text-sm font-semibold text-textPrimary">
+                        Font
+                        {fontChanged && <ResetArrow onReset={() => handleFontChange(DEFAULT_FONT_ID)} />}
+                    </h4>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                     {FONT_OPTIONS.map((font) => {
@@ -602,7 +632,12 @@ const ThemeSettings = () => {
                             <div className="settings-card p-4 space-y-3">
                                 <div className="flex items-center gap-2">
                                     <Droplets size={16} className="text-accent" />
-                                    <h4 className="text-sm font-semibold text-textPrimary">OLED accent</h4>
+                                    <h4 className="text-sm font-semibold text-textPrimary">
+                                        OLED accent
+                                        {oledAccentChanged && (
+                                            <ResetArrow onReset={() => handleOledAccentChange(DEFAULT_OLED_ACCENT)} />
+                                        )}
+                                    </h4>
                                     <span className="text-xs text-textMuted">The glow color on pure black</span>
                                 </div>
                                 <div className="flex flex-wrap gap-2">

@@ -1,7 +1,9 @@
 import React from 'react';
 import { useAppStore } from '../../stores/AppStore';
 import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
+import { SubControl, SubControls } from '../plugins/settingsPageKit';
 import { Dropdown } from '../ui/Dropdown';
+import { useSettingReset } from './settingReset';
 import type { BuiltInHighlightSettings, BuiltInHighlightRule } from '../../types';
 
 const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
@@ -61,6 +63,7 @@ const ROWS: Array<{
 const BuiltInHighlightsSettings = () => {
   const { settings, updateSettings } = useAppStore();
   const builtIn = settings.chat_highlights?.built_in ?? {};
+  const resetFor = useSettingReset();
 
   const patchRule = (key: RuleKey, patch: Partial<BuiltInHighlightRule>) => {
     const row = ROWS.find((r) => r.key === key)!;
@@ -83,8 +86,8 @@ const BuiltInHighlightsSettings = () => {
 
   return (
     <SettingsSection
-      label="Built-in Event Highlights"
-      description="Auto-highlight messages from specific event types. Runs alongside your custom phrase highlights and does not affect mention or reply flashes. Monitored / restricted suspicious-user highlights need the Twitch low-trust-users PubSub topic and are coming in a follow-up."
+      label="Event Highlights"
+      description="Highlight messages from certain kinds of chatters. Works alongside your phrase highlights and never changes the mention or reply flash."
     >
       {ROWS.map((row) => {
         const rule: BuiltInHighlightRule = builtIn[row.key] ?? {
@@ -92,11 +95,18 @@ const BuiltInHighlightsSettings = () => {
           color: row.defaultColor,
         };
         const firstTimeExtras = row.key === 'first_time_chatter' && rule.enabled;
+        const path = `chat_highlights.built_in.${row.key}`;
         return (
           <React.Fragment key={row.key}>
             <SettingsRow
               title={row.label}
+              onReset={resetFor([`${path}.color`, row.defaultColor], [`${path}.enabled`, row.defaultEnabled])}
               description={row.hint}
+              help={
+                row.key === 'first_time_chatter'
+                  ? 'Style is a tinted wash with a bar down the left, or a ring around the message; Ring fill adds a faint color-matched fill inside it. Glint is a short highlight as the row lands (a sheen, a pulse, or a spark around the edge), and Loop keeps it going.'
+                  : undefined
+              }
               control={
                 <div className="flex items-center gap-2">
                   <input
@@ -109,60 +119,63 @@ const BuiltInHighlightsSettings = () => {
                   <Toggle enabled={rule.enabled} onChange={() => patchRule(row.key, { enabled: !rule.enabled })} />
                 </div>
               }
-            />
-            {firstTimeExtras && (
-              <>
-                <SettingsRow
-                  title="First-time look"
-                  description="A tinted wash with a bar down the left, or a ring around the message."
-                >
-                  <SegmentedSelect<'wash' | 'ring'>
-                    value={rule.style ?? 'wash'}
-                    onChange={(style) => patchRule(row.key, { style })}
-                    options={[
-                      { value: 'wash', label: 'Wash' },
-                      { value: 'ring', label: 'Ring' },
-                    ]}
-                  />
-                </SettingsRow>
-                {(rule.style ?? 'wash') === 'ring' && (
-                  <SettingsRow
-                    title="Fill inside the ring"
-                    description="A faint color-matched fill, so the row reads as highlighted and not only outlined."
-                    control={<Toggle enabled={rule.fill ?? false} onChange={() => patchRule(row.key, { fill: !(rule.fill ?? false) })} />}
-                  />
-                )}
-                <SettingsRow
-                  title="First-time glint"
-                  description="A short highlight as the row lands: a sheen, a pulse, or a spark around the edge."
-                >
-                  <Dropdown<'none' | 'sheen' | 'pulse' | 'chase'>
-                    value={rule.animation ?? 'none'}
-                    onChange={(animation) => patchRule(row.key, { animation })}
-                    className="w-full"
-                    ariaLabel="First-time glint"
-                    options={[
-                      { value: 'none', label: 'None' },
-                      { value: 'sheen', label: 'Sheen' },
-                      { value: 'pulse', label: 'Pulse' },
-                      { value: 'chase', label: 'Chase' },
-                    ]}
-                  />
-                </SettingsRow>
-                {(rule.animation ?? 'none') !== 'none' && (
-                  <SettingsRow
-                    title="Keep the glint going"
-                    description="Off plays it once."
+            >
+              {firstTimeExtras && (
+                <SubControls>
+                  <SubControl
+                    title="Style"
+                    onReset={resetFor([`${path}.style`, 'wash'])}
                     control={
-                      <Toggle
-                        enabled={rule.animate_repeat ?? false}
-                        onChange={() => patchRule(row.key, { animate_repeat: !(rule.animate_repeat ?? false) })}
+                      <SegmentedSelect<'wash' | 'ring'>
+                        value={rule.style ?? 'wash'}
+                        onChange={(style) => patchRule(row.key, { style })}
+                        options={[
+                          { value: 'wash', label: 'Wash' },
+                          { value: 'ring', label: 'Ring' },
+                        ]}
                       />
                     }
                   />
-                )}
-              </>
-            )}
+                  {(rule.style ?? 'wash') === 'ring' && (
+                    <SubControl
+                      title="Ring fill"
+                      onReset={resetFor([`${path}.fill`, false])}
+                      control={<Toggle enabled={rule.fill ?? false} onChange={() => patchRule(row.key, { fill: !(rule.fill ?? false) })} />}
+                    />
+                  )}
+                  <SubControl
+                    title="Glint"
+                    onReset={resetFor([`${path}.animation`, 'none'])}
+                    control={
+                      <Dropdown<'none' | 'sheen' | 'pulse' | 'chase'>
+                        value={rule.animation ?? 'none'}
+                        onChange={(animation) => patchRule(row.key, { animation })}
+                        className="w-36"
+                        ariaLabel="First-time glint"
+                        options={[
+                          { value: 'none', label: 'None' },
+                          { value: 'sheen', label: 'Sheen' },
+                          { value: 'pulse', label: 'Pulse' },
+                          { value: 'chase', label: 'Chase' },
+                        ]}
+                      />
+                    }
+                  />
+                  {(rule.animation ?? 'none') !== 'none' && (
+                    <SubControl
+                      title="Loop"
+                      onReset={resetFor([`${path}.animate_repeat`, false])}
+                      control={
+                        <Toggle
+                          enabled={rule.animate_repeat ?? false}
+                          onChange={() => patchRule(row.key, { animate_repeat: !(rule.animate_repeat ?? false) })}
+                        />
+                      }
+                    />
+                  )}
+                </SubControls>
+              )}
+            </SettingsRow>
           </React.Fragment>
         );
       })}

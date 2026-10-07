@@ -19,7 +19,7 @@ const UserOverridesSettings = () => {
 
   return (
     <SettingsSection
-      label="User Overrides"
+      label="Nicknames"
       description="Nicknames you've set for individual chatters. Only visible to you. Set or clear a nickname from the user's profile card in chat."
       bare
     >

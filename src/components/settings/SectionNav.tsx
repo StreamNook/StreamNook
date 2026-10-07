@@ -7,6 +7,12 @@
 // page and never competes with the settings themselves. Discovers sections
 // from the DOM (every SettingsSection carries data-settings-section), so any
 // tab with enough sections gets it without per-tab wiring.
+//
+// It follows whatever actually scrolls the sections: the container itself
+// (the Settings dialog's pane), the nearest scrolling ancestor, or the window
+// (streamnook.app's overlay page). A pinned header inside the container
+// (data-settings-sticky) counts as the top edge, so the section under it is
+// the one being read.
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { motion } from 'framer-motion';
@@ -18,6 +24,8 @@ interface SectionNavProps {
   hidden?: boolean;
   /** Fewer sections than this and the rail stays out of the way. */
   minSections?: number;
+  /** Where the rail sticks, as a CSS length. Defaults to the pane's top inset. */
+  stickyTop?: string;
 }
 
 interface Entry {
@@ -25,7 +33,18 @@ interface Entry {
   label: string;
 }
 
-export default function SectionNav({ containerRef, tabKey, hidden = false, minSections = 4 }: SectionNavProps) {
+/** The element whose scrolling moves `el`, or null for the window. */
+function scrollerOf(el: HTMLElement): HTMLElement | null {
+  for (let node: HTMLElement | null = el; node; node = node.parentElement) {
+    const { overflowY } = getComputedStyle(node);
+    if ((overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') && node !== document.body && node !== document.documentElement) {
+      return node;
+    }
+  }
+  return null;
+}
+
+export default function SectionNav({ containerRef, tabKey, hidden = false, minSections = 4, stickyTop }: SectionNavProps) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -57,9 +76,25 @@ export default function SectionNav({ containerRef, tabKey, hidden = false, minSe
     return () => mo.disconnect();
   }, [containerRef, tabKey, discover]);
 
+  /** The line a section has to pass to count as the one being read: the top
+   *  of the scroll port, or the bottom of a pinned header inside it. The
+   *  header is measured where it PINS (its sticky top plus its height), not
+   *  where it sits right now: near the top of the page it has not pinned yet,
+   *  and a jump aimed at its current bottom would stop short. */
+  const readingLine = useCallback((scroller: HTMLElement | null): number => {
+    const root = containerRef.current;
+    const portTop = scroller ? scroller.getBoundingClientRect().top : 0;
+    const sticky = root?.querySelector<HTMLElement>('[data-settings-sticky]');
+    if (!sticky) return portTop;
+    const stuckTop = parseFloat(getComputedStyle(sticky).top);
+    return portTop + (Number.isFinite(stuckTop) ? stuckTop : 0) + sticky.offsetHeight;
+  }, [containerRef]);
+
   useEffect(() => {
     const root = containerRef.current;
     if (!root || entries.length === 0) return;
+    const scroller = scrollerOf(root);
+    const target: HTMLElement | Window = scroller ?? window;
     const measure = () => {
       rafRef.current = null;
       const pinned = pinnedRef.current;
@@ -68,7 +103,7 @@ export default function SectionNav({ containerRef, tabKey, hidden = false, minSe
         return;
       }
       pinnedRef.current = null;
-      const top = root.getBoundingClientRect().top + 24;
+      const top = readingLine(scroller) + 24;
       let current: string | null = entries[0]?.id ?? null;
       for (const e of entries) {
         const el = document.getElementById(e.id);
@@ -76,7 +111,10 @@ export default function SectionNav({ containerRef, tabKey, hidden = false, minSe
         if (el.getBoundingClientRect().top <= top) current = e.id;
         else break;
       }
-      if (root.scrollTop + root.clientHeight >= root.scrollHeight - 2) current = entries[entries.length - 1].id;
+      const atBottom = scroller
+        ? scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2
+        : window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2;
+      if (atBottom) current = entries[entries.length - 1].id;
       setActiveId(current);
     };
     const onScroll = () => {
@@ -84,27 +122,28 @@ export default function SectionNav({ containerRef, tabKey, hidden = false, minSe
       rafRef.current = requestAnimationFrame(measure);
     };
     measure();
-    root.addEventListener('scroll', onScroll, { passive: true });
+    target.addEventListener('scroll', onScroll, { passive: true });
     return () => {
-      root.removeEventListener('scroll', onScroll);
+      target.removeEventListener('scroll', onScroll);
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     };
-  }, [containerRef, entries, tabKey]);
+  }, [containerRef, entries, tabKey, readingLine]);
 
   const jump = useCallback((id: string) => {
     const root = containerRef.current;
     const el = document.getElementById(id);
     if (!root || !el) return;
+    const scroller = scrollerOf(root);
     // Pin for the length of the smooth scroll so the spy does not walk
     // through every section on the way.
     const now = performance.now();
     pinnedRef.current = { id, until: now + 700 };
     setActiveId(id);
-    root.scrollBy({
-      top: el.getBoundingClientRect().top - root.getBoundingClientRect().top - 12,
+    (scroller ?? window).scrollBy({
+      top: el.getBoundingClientRect().top - readingLine(scroller) - 12,
       behavior: 'smooth',
     });
-  }, [containerRef]);
+  }, [containerRef, readingLine]);
 
   if (hidden || entries.length < minSections) return null;
 
@@ -112,6 +151,7 @@ export default function SectionNav({ containerRef, tabKey, hidden = false, minSe
     <nav
       aria-label="Sections on this page"
       className="sn-section-rail sticky top-6 hidden w-[168px] flex-shrink-0 self-start min-[1120px]:block"
+      style={stickyTop ? { top: stickyTop } : undefined}
     >
       <div className="relative pl-4">
         {/* The track: a hairline the indicator travels along. */}

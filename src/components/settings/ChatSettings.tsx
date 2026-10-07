@@ -20,6 +20,7 @@ import UserOverridesSettings from './UserOverridesSettings';
 import UserCommandsSettings from './UserCommandsSettings';
 import RemindersSettings from './RemindersSettings';
 import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
+import { useSettingReset } from './settingReset';
 import { Toggle } from '../ui/Toggle';
 import { usePhonePrefs } from '../../mobile/phonePrefs';
 import { useNameColorAdjust } from '../../hooks/useNameColor';
@@ -57,13 +58,13 @@ const REPEAT_DEFAULT_COLOR = '#8b8b8b';
 // Rows the user card can show, in the order they appear on the card itself.
 // Everything defaults to on; the toggle stores `false` to hide.
 const USER_CARD_ROWS: { key: keyof UserCardSettings; title: string; description: string }[] = [
-  { key: 'show_join_date', title: 'Joined Twitch', description: 'When the account was created.' },
+  { key: 'show_join_date', title: 'Join date', description: 'When their Twitch account was created.' },
   { key: 'show_followage', title: 'Following since', description: 'When they followed this channel, or that they are not following.' },
-  { key: 'show_follows_count', title: 'Channels they follow', description: 'How many channels this person follows.' },
+  { key: 'show_follows_count', title: 'Follow count', description: 'How many channels this person follows.' },
   { key: 'show_chatter_count', title: 'Chatters', description: "How many people are in this person's own chat right now." },
   { key: 'show_past_subscriber', title: 'Past subscriber', description: 'Total months subscribed, for people who are not subscribed now.' },
   { key: 'show_last_live', title: 'Last live', description: 'When they last streamed, if they ever have.' },
-  { key: 'show_relative_time', title: 'Show "how long ago"', description: 'Adds a plain-English age next to dates, so "Mar 3, 2019" also reads "(6y ago)".' },
+  { key: 'show_relative_time', title: 'Relative dates', description: 'Adds a plain-English age next to dates, so "Mar 3, 2019" also reads "(6y ago)".' },
   { key: 'show_seventv_link', title: '7TV profile link', description: 'A 7TV chip next to their name that opens their 7TV profile in your browser.' },
   { key: 'show_pronouns', title: 'Pronouns', description: 'Their pronouns from pronouns.alejo.io, where chatters set them once for every chat client. One small request per person, cached for six hours. Off by default because it is a third-party lookup.' },
   { key: 'show_notes', title: 'Private notes', description: 'A note only you can see, kept with the user across renames. Handy for moderators.' },
@@ -72,40 +73,32 @@ import { useChatUserStore } from '../../stores/chatUserStore';
 import { getUserCosmetics, computePaintStyle } from '../../services/seventvService';
 import { StyledChatName, type NameSeparator, type NameStyle } from '../chat/StyledChatName';
 import type { DeletedMessageStyle } from '../chat/deletedMessage';
-import { DeletedMessagePreview, EventRowPreview, MessageLayoutPreview, SettingPreview } from './ChatPreview';
+import { DeletedMessagePreview, EventRowPreview, MentionPreview, MessageLayoutPreview, SettingPreview } from './ChatPreview';
+import { SoundVolume } from './SoundControls';
+import { InlineSlider, SubControl, SubControls } from '../plugins/settingsPageKit';
+import { useSoundOptions } from '../../hooks/useSoundOptions';
+import { mentionLook, type MentionItalic, type MentionLook, type MentionShape, type MentionWeight } from '../chat/mentionStyle';
 
 // Native color swatch matching the mod-log Log Highlights control: clicking it
 // opens the OS picker (always on top, unlike an in-app popover that can render
-// behind later settings rows). Reset appears once the value leaves its default.
+// behind later settings rows). Its row's reset arrow restores the default.
 const ColorSwatch = ({
   value,
-  defaultValue,
   onChange,
   tooltip,
 }: {
   value: string;
-  defaultValue: string;
   onChange: (color: string) => void;
   tooltip: string;
 }) => (
-  <div className="flex items-center gap-2">
-    <Tooltip content={tooltip}>
-      <input
-        type="color"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="h-7 w-10 rounded cursor-pointer bg-transparent border border-borderSubtle"
-      />
-    </Tooltip>
-    {value.toLowerCase() !== defaultValue.toLowerCase() && (
-      <button
-        onClick={() => onChange(defaultValue)}
-        className="text-[11px] text-textSecondary hover:text-text"
-      >
-        Reset
-      </button>
-    )}
-  </div>
+  <Tooltip content={tooltip}>
+    <input
+      type="color"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="h-7 w-10 rounded cursor-pointer bg-transparent border border-borderSubtle"
+    />
+  </Tooltip>
 );
 
 // Live preview of how the current user's own name will look in chat with the
@@ -365,6 +358,7 @@ const BADGE_PROVIDERS: { id: string; label: string }[] = [
 
 const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {}) => {
   const { settings, updateSettings } = useAppStore();
+  const resetFor = useSettingReset();
   // Phone-shell preferences (see mobile/phonePrefs.ts); only read on the phone.
   const mentionHaptic = usePhonePrefs((s) => s.mentionHaptic);
   const setMentionHaptic = usePhonePrefs((s) => s.setMentionHaptic);
@@ -381,6 +375,16 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
   // before it is picked; null falls back to the saved value.
   const [deletedHover, setDeletedHover] = useState<DeletedMessageStyle | null>(null);
   const [entranceHover, setEntranceHover] = useState<'none' | 'fade' | 'slide' | 'rise' | null>(null);
+  // Hovering a mention-style option previews it before it is chosen.
+  const [mentionHover, setMentionHover] = useState<Partial<MentionLook>>({});
+  const hoverMention = <K extends keyof MentionLook>(key: K) => (value: MentionLook[K] | null) =>
+    setMentionHover((h) => {
+      const next = { ...h };
+      if (value === null) delete next[key];
+      else next[key] = value;
+      return next;
+    });
+  const mentionSoundOptions = useSoundOptions({ noneLabel: 'No sound' });
   const [eventStyleHover, setEventStyleHover] = useState<'cards' | 'outline' | 'plain' | null>(null);
   const [glintHover, setGlintHover] = useState<'none' | 'sheen' | 'pulse' | 'chase' | null>(null);
   const [commandDraft, setCommandDraft] = useState('');
@@ -452,6 +456,19 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     reply_style: (stored?.reply_style ?? 'full') as 'full' | 'mention' | 'off',
     link_color: stored?.link_color ?? '',
     link_underline: stored?.link_underline ?? true,
+    // Absent stays absent: every save writes `cd` whole, so a field missing
+    // here would be wiped, and a default written here would change what an
+    // untouched install sees.
+    mention_sound: stored?.mention_sound,
+    mention_sound_volume: stored?.mention_sound_volume,
+    mention_sound_replies: stored?.mention_sound_replies,
+    mention_weight: stored?.mention_weight,
+    mention_italic: stored?.mention_italic,
+    mention_style: stored?.mention_style,
+    mention_text_color: stored?.mention_text_color,
+    chat_dock_switcher: stored?.chat_dock_switcher,
+    username_colon: stored?.username_colon,
+    drag_moderation_enabled: stored?.drag_moderation_enabled,
   };
   const badgeProviderHidden = (id: string) => cd.hidden_badge_providers.includes(id);
   const toggleBadgeProvider = (id: string) =>
@@ -572,13 +589,16 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           bottom / hidden) plus the hover-reveal that goes with it. The phone
           shell stacks the player over chat and has no edge to tuck against. */}
       {!hidePlacement && !IS_MOBILE && (
+      <>
       <SettingsSection
         label="Chat Placement"
-        description="Where chat sits next to the player, and what it does when the video goes fullscreen."
+        description="Where chat sits next to the player."
       >
         <SettingsRow
-          title="Where chat sits"
+          title="Position"
+          onReset={resetFor('chat_placement')}
           description="Dock chat to the left, right, or bottom of the player, or hide it to give the video the whole window."
+          help="Hover reveal (left or right only) keeps chat tucked against its edge and slides it out when you move toward that side. The player shrinks to make room, the same as dragging the chat open."
         >
           <SegmentedSelect<'left' | 'right' | 'bottom' | 'hidden'>
             value={settings.chat_placement as 'left' | 'right' | 'bottom' | 'hidden'}
@@ -590,10 +610,34 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               { value: 'right', label: 'Right' },
             ]}
           />
+          {(settings.chat_placement === 'left' || settings.chat_placement === 'right') && (
+            <SubControls>
+              <SubControl
+                title="Hover reveal"
+                onReset={resetFor(['chat_auto_hide', false])}
+                control={
+                  <Toggle
+                    enabled={settings.chat_auto_hide ?? false}
+                    onChange={() =>
+                      updateSettings({ ...settings, chat_auto_hide: !(settings.chat_auto_hide ?? false) })
+                    }
+                  />
+                }
+              />
+            </SubControls>
+          )}
         </SettingsRow>
+      </SettingsSection>
+
+      <SettingsSection
+        label="Fullscreen Chat"
+        description="Keep chatting while the stream fills the screen."
+      >
         <SettingsRow
-          title="Chat over fullscreen video"
-          description="Keep chatting while the stream fills the screen: the chat panel floats over the video as a translucent column. No extra window."
+          title="Overlay"
+          onReset={resetFor(['fullscreen_chat.mode', 'overlay'])}
+          description="The chat panel floats over fullscreen video as a translucent column. No extra window."
+          help="Auto-hide fades the column out with the player controls and brings it back when you move the mouse; hovering the chat or typing keeps it up. Opacity is how solid the column is. Width runs from 240 to 640 pixels. Side on Auto follows the chat placement, so a bottom-docked chat floats on the right."
           control={
             <Toggle
               enabled={(settings.fullscreen_chat?.mode ?? 'overlay') === 'overlay'}
@@ -608,120 +652,104 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               }
             />
           }
-        />
-        {(settings.fullscreen_chat?.mode ?? 'overlay') === 'overlay' && (
-          <>
-            <SettingsRow
-              title="Hide with the player controls"
-              description="The column fades out when the controls do and comes back when you move the mouse. Hovering the chat or typing keeps it up."
-              control={
-                <Toggle
-                  enabled={settings.fullscreen_chat?.auto_hide ?? true}
-                  onChange={() =>
-                    updateSettings({
-                      ...settings,
-                      fullscreen_chat: {
-                        ...settings.fullscreen_chat,
-                        auto_hide: !(settings.fullscreen_chat?.auto_hide ?? true),
-                      },
-                    })
-                  }
-                />
-              }
-            />
-            <SettingsRow
-              title="Overlay opacity"
-              description="How solid the chat column's background is. Lower lets more of the video show through."
-              control={
-                <div className="flex items-center gap-2">
-                  <input
-                    type="range"
+        >
+          {(settings.fullscreen_chat?.mode ?? 'overlay') === 'overlay' && (
+            <SubControls>
+              <SubControl
+                title="Auto-hide"
+                onReset={resetFor(['fullscreen_chat.auto_hide', true])}
+                control={
+                  <Toggle
+                    enabled={settings.fullscreen_chat?.auto_hide ?? true}
+                    onChange={() =>
+                      updateSettings({
+                        ...settings,
+                        fullscreen_chat: {
+                          ...settings.fullscreen_chat,
+                          auto_hide: !(settings.fullscreen_chat?.auto_hide ?? true),
+                        },
+                      })
+                    }
+                  />
+                }
+              />
+              <SubControl
+                title="Opacity"
+                onReset={resetFor(['fullscreen_chat.opacity', 55])}
+                control={
+                  <InlineSlider
+                    value={settings.fullscreen_chat?.opacity ?? 55}
                     min={0}
                     max={100}
                     step={5}
-                    value={settings.fullscreen_chat?.opacity ?? 55}
-                    onChange={(e) =>
+                    label="Fullscreen chat opacity"
+                    format={(v) => `${v}%`}
+                    onChange={(opacity) =>
+                      updateSettings({ ...settings, fullscreen_chat: { ...settings.fullscreen_chat, opacity } })
+                    }
+                  />
+                }
+              />
+              <SubControl
+                title="Width"
+                onReset={resetFor(['fullscreen_chat.width', 340])}
+                control={
+                  <input
+                    type="number"
+                    min={240}
+                    max={640}
+                    step={10}
+                    aria-label="Fullscreen chat width in pixels"
+                    value={settings.fullscreen_chat?.width ?? 340}
+                    onChange={(e) => {
+                      const n = Math.max(240, Math.min(640, Math.round(Number(e.target.value) || 340)));
                       updateSettings({
                         ...settings,
-                        fullscreen_chat: { ...settings.fullscreen_chat, opacity: Number(e.target.value) },
-                      })
-                    }
-                    className="w-32 accent-accent"
+                        fullscreen_chat: { ...settings.fullscreen_chat, width: n },
+                      });
+                    }}
+                    className="glass-input w-24 px-2.5 py-1.5 text-sm text-textPrimary"
                   />
-                  <span className="w-10 text-right text-xs tabular-nums text-textSecondary">
-                    {settings.fullscreen_chat?.opacity ?? 55}%
-                  </span>
-                </div>
-              }
-            />
-            <SettingsRow
-              title="Overlay width"
-              description="Column width in pixels while fullscreen (240 to 640)."
-              control={
-                <input
-                  type="number"
-                  min={240}
-                  max={640}
-                  step={10}
-                  value={settings.fullscreen_chat?.width ?? 340}
-                  onChange={(e) => {
-                    const n = Math.max(240, Math.min(640, Math.round(Number(e.target.value) || 340)));
-                    updateSettings({
-                      ...settings,
-                      fullscreen_chat: { ...settings.fullscreen_chat, width: n },
-                    });
-                  }}
-                  className="glass-input w-24 px-2.5 py-1.5 text-sm text-textPrimary"
-                />
-              }
-            />
-            <SettingsRow
-              title="Overlay side"
-              description="Auto follows the chat placement (a bottom-docked chat floats on the right)."
-            >
-              <SegmentedSelect<'auto' | 'left' | 'right'>
-                value={settings.fullscreen_chat?.side ?? 'auto'}
-                onChange={(side) =>
-                  updateSettings({ ...settings, fullscreen_chat: { ...settings.fullscreen_chat, side } })
-                }
-                options={[
-                  { value: 'auto', label: 'Auto' },
-                  { value: 'left', label: 'Left' },
-                  { value: 'right', label: 'Right' },
-                ]}
-              />
-            </SettingsRow>
-          </>
-        )}
-        {(settings.chat_placement === 'left' || settings.chat_placement === 'right') && (
-          <SettingsRow
-            title="Reveal on hover"
-            description="Keep chat tucked against its edge and slide it out when you move toward that side. The player shrinks to make room, the same as dragging the chat open."
-            control={
-              <Toggle
-                enabled={settings.chat_auto_hide ?? false}
-                onChange={() =>
-                  updateSettings({ ...settings, chat_auto_hide: !(settings.chat_auto_hide ?? false) })
                 }
               />
-            }
-          />
-        )}
+              <SubControl
+                title="Side"
+                onReset={resetFor(['fullscreen_chat.side', 'auto'])}
+                control={
+                  <SegmentedSelect<'auto' | 'left' | 'right'>
+                    value={settings.fullscreen_chat?.side ?? 'auto'}
+                    onChange={(side) =>
+                      updateSettings({ ...settings, fullscreen_chat: { ...settings.fullscreen_chat, side } })
+                    }
+                    options={[
+                      { value: 'auto', label: 'Auto' },
+                      { value: 'left', label: 'Left' },
+                      { value: 'right', label: 'Right' },
+                    ]}
+                  />
+                }
+              />
+            </SubControls>
+          )}
+        </SettingsRow>
       </SettingsSection>
+      </>
       )}
 
       {/* The phone's counterpart to Chat Placement: how chat shares the screen
-          with landscape video, and how it gets your attention. The overlay's
-          opacity, width and side are the SAME keys as the desktop overlay, so
-          one preference follows you between the two. */}
+          with landscape video. The overlay's opacity, width and side are the
+          SAME keys as the desktop overlay, so one preference follows you
+          between the two. */}
       {IS_MOBILE && (
         <SettingsSection
-          label="Chat on your phone"
-          description="How chat behaves when the phone is on its side, and how a mention reaches you."
+          label="Landscape Chat"
+          description="How chat shares the screen when the phone is on its side."
         >
           <SettingsRow
-            title="Chat in landscape"
-            description="Turn the phone sideways and tap the chat button on the player. Chat can float over the video, or take a column beside it while the video fills the rest. Drag the column's edge to resize it either way. Floating chat is read-only; tap its edge for the background slider."
+            title="Layout"
+            onReset={resetFor(['fullscreen_chat.phone_layout', 'overlay'])}
+            description="Turn the phone sideways and tap the chat button on the player. Chat floats over the video, or takes a column beside it."
+            help="Drag the column's edge to resize it either way. Floating chat is read-only; tap its edge for the background slider. A lower background lets more of the video show through. Width never goes past half the screen."
           >
             <SegmentedSelect<'overlay' | 'beside'>
               value={settings.fullscreen_chat?.phone_layout ?? 'overlay'}
@@ -736,76 +764,63 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                 { value: 'beside', label: 'Beside the video' },
               ]}
             />
-          </SettingsRow>
-          {(settings.fullscreen_chat?.phone_layout ?? 'overlay') === 'overlay' && (
-            <SettingsRow
-              title="Chat background"
-              description="Lower lets more of the video show through; higher is easier reading."
-              control={
-                <div className="flex items-center gap-2">
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    step={5}
-                    value={settings.fullscreen_chat?.opacity ?? 55}
-                    onChange={(e) =>
-                      updateSettings({
-                        ...settings,
-                        fullscreen_chat: { ...settings.fullscreen_chat, opacity: Number(e.target.value) },
-                      })
-                    }
-                    className="w-32 accent-accent"
-                  />
-                  <span className="text-[12px] text-textMuted tabular-nums w-9 text-right">
-                    {settings.fullscreen_chat?.opacity ?? 55}%
-                  </span>
-                </div>
-              }
-            />
-          )}
-          <SettingsRow
-            title="How wide"
-            description="Never more than half the screen, whatever you pick here."
-            control={
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min={240}
-                  max={480}
-                  step={20}
-                  value={Math.min(480, settings.fullscreen_chat?.width ?? 340)}
-                  onChange={(e) =>
-                    updateSettings({
-                      ...settings,
-                      fullscreen_chat: { ...settings.fullscreen_chat, width: Number(e.target.value) },
-                    })
+            <SubControls>
+              {(settings.fullscreen_chat?.phone_layout ?? 'overlay') === 'overlay' && (
+                <SubControl
+                  title="Background"
+                  onReset={resetFor(['fullscreen_chat.opacity', 55])}
+                  control={
+                    <InlineSlider
+                      value={settings.fullscreen_chat?.opacity ?? 55}
+                      min={0}
+                      max={100}
+                      step={5}
+                      label="Landscape chat background"
+                      format={(v) => `${v}%`}
+                      onChange={(opacity) =>
+                        updateSettings({ ...settings, fullscreen_chat: { ...settings.fullscreen_chat, opacity } })
+                      }
+                    />
                   }
-                  className="w-32 accent-accent"
                 />
-                <span className="text-[12px] text-textMuted tabular-nums w-12 text-right">
-                  {Math.min(480, settings.fullscreen_chat?.width ?? 340)}px
-                </span>
-              </div>
-            }
-          />
-          <SettingsRow title="Which side" description="The screen edge chat sits against.">
-            <SegmentedSelect<'left' | 'right'>
-              value={settings.fullscreen_chat?.side === 'left' ? 'left' : 'right'}
-              onChange={(side) =>
-                updateSettings({ ...settings, fullscreen_chat: { ...settings.fullscreen_chat, side } })
-              }
-              options={[
-                { value: 'left', label: 'Left' },
-                { value: 'right', label: 'Right' },
-              ]}
-            />
+              )}
+              <SubControl
+                title="Width"
+                onReset={resetFor(['fullscreen_chat.width', 340])}
+                control={
+                  <InlineSlider
+                    value={Math.min(480, settings.fullscreen_chat?.width ?? 340)}
+                    min={240}
+                    max={480}
+                    step={20}
+                    label="Landscape chat width"
+                    format={(v) => `${v}px`}
+                    onChange={(width) =>
+                      updateSettings({ ...settings, fullscreen_chat: { ...settings.fullscreen_chat, width } })
+                    }
+                  />
+                }
+              />
+              <SubControl
+                title="Side"
+                onReset={
+                  settings.fullscreen_chat?.side === 'left' ? resetFor(['fullscreen_chat.side', 'auto']) : undefined
+                }
+                control={
+                  <SegmentedSelect<'left' | 'right'>
+                    value={settings.fullscreen_chat?.side === 'left' ? 'left' : 'right'}
+                    onChange={(side) =>
+                      updateSettings({ ...settings, fullscreen_chat: { ...settings.fullscreen_chat, side } })
+                    }
+                    options={[
+                      { value: 'left', label: 'Left' },
+                      { value: 'right', label: 'Right' },
+                    ]}
+                  />
+                }
+              />
+            </SubControls>
           </SettingsRow>
-          <SettingsRow
-            title="Buzz when someone mentions you"
-            description="A short vibration when a message says your name, on top of the highlight."
-            control={<Toggle enabled={mentionHaptic} onChange={() => setMentionHaptic(!mentionHaptic)} />}
-          />
         </SettingsSection>
       )}
 
@@ -815,70 +830,73 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         description="Show a streamer's chat from their other platforms alongside the one you are watching."
       >
         <SettingsRow
-          title="Combine chat across platforms"
-          description="When a streamer you are watching also streams elsewhere, their other chats can join this one in a single feed. Each message is marked with where it came from."
-          help="Off by default, and completely inactive while off: no extra connections and nothing extra fetched. Turn it on and the chat header shows which platforms a linked channel is drawing from. You can still only chat on the platform you are watching, but replying to someone from another platform sends your reply back there. One thing saved filters cannot do across platforms: a rule about sub length or bits reads Twitch chat tags that Kick and YouTube do not send, so it never matches their messages."
+          title="Merged feed"
+          onReset={resetFor(['chat_blend.enabled', false])}
+          description="When a streamer you are watching also streams elsewhere, their other chats join this one in a single feed, each message marked with where it came from."
+          help="Off by default, and inactive while off: no extra connections and nothing extra fetched. Suggestions look for a Kick or YouTube channel of the same name when you open a stream and wait behind the + in the chat header; YouTube is only found while it is live, and nothing is linked without you. Platform marks put a small logo on messages from the other platforms. Platforms sets which ones may ever join; the marks in the chat header drop one for just this channel. You chat on the platform you are watching, but a reply to someone elsewhere goes back there. Saved filters about sub length or bits only match Twitch messages."
           control={
             <Toggle
               enabled={settings.chat_blend?.enabled === true}
               onChange={() => setBlend({ enabled: !(settings.chat_blend?.enabled === true) })}
             />
           }
-        />
-        <SettingsRow
-          title="Suggest links"
-          description="Look for a Kick or YouTube channel of the same name when you open a stream. Anything found waits behind the + in the chat header."
-          help="Each platform is checked once per channel and the answer remembered, so reopening a stream asks nothing. Kick is found whether or not it is live; YouTube is found through its search, which only sees channels that are streaming right now, so an offline YouTube channel has to be added by hand. Nothing is ever linked without you saying so, and refusing a suggestion stops it being offered again."
-          disabled={settings.chat_blend?.enabled !== true}
-          control={
-            <Toggle
-              enabled={settings.chat_blend?.suggest_links !== false}
-              disabled={settings.chat_blend?.enabled !== true}
-              onChange={() => setBlend({ suggest_links: !(settings.chat_blend?.suggest_links !== false) })}
-            />
-          }
-        />
-        <SettingsRow
-          title="Mark where a message came from"
-          description="Put a small platform logo on messages that came from somewhere other than the channel you are watching."
-          help="Messages from the channel you are watching are left unmarked, since that is most of them. Turning this off makes a combined feed harder to read, but it is there if you prefer the plainer look."
-          disabled={settings.chat_blend?.enabled !== true}
-          control={
-            <Toggle
-              enabled={settings.chat_blend?.show_platform_badge !== false}
-              disabled={settings.chat_blend?.enabled !== true}
-              onChange={() =>
-                setBlend({ show_platform_badge: !(settings.chat_blend?.show_platform_badge !== false) })
-              }
-            />
-          }
-        />
-        <SettingsRow
-          title="Platforms to include"
-          description="Leave a platform off here and it never joins a combined feed, even where you have linked it."
-          help="This is the default for every channel. The platform marks in the chat header also drop one out of the feed for just the channel you are watching, without changing this."
-          disabled={settings.chat_blend?.enabled !== true}
         >
-          <div className="mt-3 flex flex-wrap gap-4">
-            {BLEND_PLATFORMS.map((p) => (
-              <label key={p} className="flex items-center gap-2 text-sm text-textSecondary">
-                <Toggle
-                  enabled={settings.chat_blend?.platforms?.[p] !== false}
-                  disabled={settings.chat_blend?.enabled !== true}
-                  ariaLabel={`Include ${PROVIDERS[p].label} in combined chat`}
-                  onChange={() =>
-                    setBlend({
-                      platforms: {
-                        ...settings.chat_blend?.platforms,
-                        [p]: !(settings.chat_blend?.platforms?.[p] !== false),
-                      },
-                    })
-                  }
-                />
-                {PROVIDERS[p].label}
-              </label>
-            ))}
-          </div>
+          {settings.chat_blend?.enabled === true && (
+            <SubControls>
+              <SubControl
+                title="Suggestions"
+                onReset={resetFor(['chat_blend.suggest_links', true])}
+                control={
+                  <Toggle
+                    enabled={settings.chat_blend?.suggest_links !== false}
+                    onChange={() => setBlend({ suggest_links: !(settings.chat_blend?.suggest_links !== false) })}
+                  />
+                }
+              />
+              <SubControl
+                title="Platform marks"
+                onReset={resetFor(['chat_blend.show_platform_badge', true])}
+                control={
+                  <Toggle
+                    enabled={settings.chat_blend?.show_platform_badge !== false}
+                    onChange={() =>
+                      setBlend({ show_platform_badge: !(settings.chat_blend?.show_platform_badge !== false) })
+                    }
+                  />
+                }
+              />
+              <SubControl
+                title="Platforms"
+                onReset={
+                  BLEND_PLATFORMS.some((p) => settings.chat_blend?.platforms?.[p] === false)
+                    ? resetFor(['chat_blend.platforms', {}])
+                    : undefined
+                }
+                stacked
+                control={
+                  <div className="flex flex-wrap gap-4">
+                    {BLEND_PLATFORMS.map((p) => (
+                      <label key={p} className="flex items-center gap-1.5 text-[12px] text-textSecondary">
+                        <Toggle
+                          enabled={settings.chat_blend?.platforms?.[p] !== false}
+                          ariaLabel={`Include ${PROVIDERS[p].label} in combined chat`}
+                          onChange={() =>
+                            setBlend({
+                              platforms: {
+                                ...settings.chat_blend?.platforms,
+                                [p]: !(settings.chat_blend?.platforms?.[p] !== false),
+                              },
+                            })
+                          }
+                        />
+                        {PROVIDERS[p].label}
+                      </label>
+                    ))}
+                  </div>
+                }
+              />
+            </SubControls>
+          )}
         </SettingsRow>
       </SettingsSection>
 
@@ -888,7 +906,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         description="Settings that only apply to YouTube chat: which of its two feeds you read, and how Super Chat amounts show."
       >
         <SettingsRow
-          title="Which chat to read"
+          title="Feed"
+          onReset={resetFor(['youtube_chat_view', 'live'])}
           description="Live chat shows everything, while Top chat is YouTube's own filtered view that keeps a very fast chat readable."
           help="Top chat drops messages YouTube judges low quality and most of one person's repeats, so you see less but can miss some."
         >
@@ -903,8 +922,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         </SettingsRow>
 
         <SettingsRow
-          title="Super Chat currency"
-          description="Show amounts converted to one currency. Rates refresh daily; until they load the amount shows as sent."
+          title="Currency"
+          onReset={resetFor(['chat_events.superchat_currency', ''])}
+          description="Show Super Chat amounts converted to one currency. Rates refresh daily; until they load the amount shows as sent."
         >
           <Dropdown<string>
             value={chatEvents.superchat_currency ?? ''}
@@ -917,38 +937,44 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       </SettingsSection>
 
       <SettingsSection
-        id="settings-section-chat-events"
-        label="Chat Events"
-        description="What live channel activity shows while you watch. Turn any of these off to keep chat clean."
+        label="Polls & Predictions"
+        description="The live cards at the top of chat while the streamer runs a poll or a prediction."
       >
         <SettingsRow
           title="Polls"
-          description="Show a live poll card at the top of chat when the streamer runs one, with the running vote tally."
+          onReset={resetFor(['show_polls', true])}
+          description="A live poll card with the running vote tally."
+          help="Collapsed opens a poll as its header bar, so it never takes over the top of chat; tap the header to expand it. Collapsing a poll sticks: it no longer reopens every time somebody votes."
           control={
             <Toggle
               enabled={settings.show_polls ?? true}
               onChange={() => updateSettings({ ...settings, show_polls: !(settings.show_polls ?? true) })}
             />
           }
-        />
-
-        <SettingsRow
-          title="Polls start collapsed"
-          description="Opens live polls as their header bar instead of expanded, so a poll never takes over the top of chat. Tap the header to expand it."
-          help="Collapsing a poll sticks: it no longer reopens itself every time somebody votes."
-          control={
-            <Toggle
-              enabled={cd.polls_start_collapsed ?? false}
-              onChange={() =>
-                setDesign({ polls_start_collapsed: !(cd.polls_start_collapsed ?? false) })
-              }
-            />
-          }
-        />
+        >
+          {(settings.show_polls ?? true) && (
+            <SubControls>
+              <SubControl
+                title="Collapsed"
+                onReset={resetFor(['chat_design.polls_start_collapsed', false])}
+                control={
+                  <Toggle
+                    enabled={cd.polls_start_collapsed ?? false}
+                    onChange={() =>
+                      setDesign({ polls_start_collapsed: !(cd.polls_start_collapsed ?? false) })
+                    }
+                  />
+                }
+              />
+            </SubControls>
+          )}
+        </SettingsRow>
 
         <SettingsRow
           title="Predictions"
-          description="Show a live prediction card at the top of chat, with the outcomes and how points are stacking up."
+          onReset={resetFor(['show_predictions', true])}
+          description="A live prediction card with the outcomes and how points are stacking up."
+          help="Top card picks which one sits on top when a poll and a prediction run at the same time. Both cards show either way, stacked."
           control={
             <Toggle
               enabled={settings.show_predictions ?? true}
@@ -957,28 +983,37 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               }
             />
           }
-        />
+        >
+          {(settings.show_polls ?? true) && (settings.show_predictions ?? true) && (
+            <SubControls>
+              <SubControl
+                title="Top card"
+                onReset={resetFor(['chat_overlay_order', 'prediction-first'])}
+                control={
+                  <SegmentedSelect<'prediction-first' | 'poll-first'>
+                    value={settings.chat_overlay_order ?? 'prediction-first'}
+                    onChange={(order) => updateSettings({ ...settings, chat_overlay_order: order })}
+                    options={[
+                      { value: 'prediction-first', label: 'Prediction' },
+                      { value: 'poll-first', label: 'Poll' },
+                    ]}
+                  />
+                }
+              />
+            </SubControls>
+          )}
+        </SettingsRow>
+      </SettingsSection>
 
-        {(settings.show_polls ?? true) && (settings.show_predictions ?? true) && (
-          <SettingsRow
-            title="When both are running"
-            description="Pick which card sits on top when a poll and a prediction run at the same time."
-            help="Both cards show either way, stacked one above the other."
-          >
-            <SegmentedSelect<'prediction-first' | 'poll-first'>
-              value={settings.chat_overlay_order ?? 'prediction-first'}
-              onChange={(order) => updateSettings({ ...settings, chat_overlay_order: order })}
-              options={[
-                { value: 'prediction-first', label: 'Prediction on top' },
-                { value: 'poll-first', label: 'Poll on top' },
-              ]}
-            />
-          </SettingsRow>
-        )}
-
+      <SettingsSection
+        id="settings-section-chat-events"
+        label="Chat Events"
+        description="What live channel activity shows while you watch. Turn any of these off to keep chat clean."
+      >
         <SettingsRow
-          title="Channel point redemptions"
-          description="Shows a chat row when someone redeems a reward that does not post its own message, like a no-input reward."
+          title="Redemptions"
+          onReset={resetFor(['show_channel_point_redemptions', true])}
+          description="A chat row when someone redeems a channel point reward that does not post its own message, like a no-input reward."
           help="Rewards that already post to chat are unaffected."
           control={
             <Toggle
@@ -994,8 +1029,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
 
         <SettingsRow
-          title="Collapse gift-sub floods"
-          description="Shows one 'gifting N subs' row with the recipients attached when someone gifts a batch, instead of a row per gift."
+          title="Gift sub batches"
+          onReset={resetFor(['collapse_gift_subs', true])}
+          description="One 'gifting N subs' row with the recipients attached when someone gifts a batch, instead of a row per gift."
           help="Turn this off to see every gift as its own row."
           control={
             <Toggle
@@ -1008,7 +1044,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
 
         <SettingsRow
-          title="Chat replay on clips"
+          title="Clip chat replay"
+          onReset={resetFor(['clip_chat_replay', true])}
           description="Shows the chat that was live while a clip was recorded, beside the clip."
           help="Needs the original broadcast to still be up, so older clips may have no replay."
           control={
@@ -1022,8 +1059,10 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
 
         <SettingsRow
-          title="How event rows look"
+          title="Style"
+          onReset={resetFor(['chat_events.event_style', 'cards'])}
           description="Subs, gifts, bits and milestones as tinted cards, as a plain row with a ring, or as a plain row."
+          help="With Outline, Outline color sets the ring. Leave it on the default to follow the theme accent."
         >
           <div className="space-y-3">
             <SegmentedSelect<'cards' | 'outline' | 'plain'>
@@ -1045,22 +1084,28 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               }}
             />
           </div>
+          {(chatEvents.event_style ?? 'cards') === 'outline' && (
+            <SubControls>
+              <SubControl
+                title="Outline color"
+                onReset={resetFor(['chat_events.event_outline_color', ''])}
+                control={
+                  <ColorSwatch
+                    value={chatEvents.event_outline_color || '#9147ff'}
+                    onChange={(color) => setEvents({ event_outline_color: color })}
+                    tooltip="Outline color"
+                  />
+                }
+              />
+            </SubControls>
+          )}
         </SettingsRow>
 
-        {(chatEvents.event_style ?? 'cards') === 'outline' && (
-          <SettingsRow title="Outline color" description="Leave it on the default to follow the theme accent.">
-            <ColorSwatch
-              value={chatEvents.event_outline_color || '#9147ff'}
-              defaultValue=""
-              onChange={(color) => setEvents({ event_outline_color: color })}
-              tooltip="Outline color"
-            />
-          </SettingsRow>
-        )}
-
         <SettingsRow
-          title="Event glint"
+          title="Glint"
+          onReset={resetFor(['chat_events.event_animation', 'none'])}
           description="A short highlight when an event row lands: a sheen across it, a pulse, or a spark that runs around the edge."
+          help="Loop keeps the glint going; off plays it once as the row arrives."
         >
           <Dropdown<'none' | 'sheen' | 'pulse' | 'chase'>
             value={chatEvents.event_animation ?? 'none'}
@@ -1075,24 +1120,26 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               { value: 'chase', label: 'Chase' },
             ]}
           />
+          {(chatEvents.event_animation ?? 'none') !== 'none' && (
+            <SubControls>
+              <SubControl
+                title="Loop"
+                onReset={resetFor(['chat_events.event_animate_repeat', false])}
+                control={
+                  <Toggle
+                    enabled={chatEvents.event_animate_repeat ?? false}
+                    onChange={() => setEvents({ event_animate_repeat: !(chatEvents.event_animate_repeat ?? false) })}
+                  />
+                }
+              />
+            </SubControls>
+          )}
         </SettingsRow>
 
-        {(chatEvents.event_animation ?? 'none') !== 'none' && (
-          <SettingsRow
-            title="Keep the glint going"
-            description="Off plays it once as the row arrives."
-            control={
-              <Toggle
-                enabled={chatEvents.event_animate_repeat ?? false}
-                onChange={() => setEvents({ event_animate_repeat: !(chatEvents.event_animate_repeat ?? false) })}
-              />
-            }
-          />
-        )}
-
         <SettingsRow
-          title="Bits cheers"
-          description="As their own card with the cheer gem, or as an ordinary message with the cheermotes inline."
+          title="Cheers"
+          onReset={resetFor(['chat_events.cheer_display', 'card'])}
+          description="Bits cheers as their own card with the cheer gem, or as an ordinary message with the cheermotes inline."
         >
           <SegmentedSelect<'card' | 'message'>
             value={chatEvents.cheer_display ?? 'card'}
@@ -1105,7 +1152,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         </SettingsRow>
 
         <SettingsRow
-          title="Event wording"
+          title="Wording"
           description="Your own sentence for each kind of event. Tokens in braces fill in from the event; if one is missing, the platform's wording is used."
           help="Tokens: {username} {tier} {months} {years} {streak} {recipient} {count} {bits} {viewers} {channel} {platform} {time} {default}. Leave a box empty to keep the platform's wording."
         >
@@ -1131,7 +1178,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         </SettingsRow>
 
         <SettingsRow
-          title="Events by platform"
+          title="Platforms"
+          onReset={resetFor(['chat_events.hidden_provider_events', []])}
           description="Turn event kinds off per platform. Lit means shown."
         >
           <div className="flex flex-col gap-2 w-full">
@@ -1167,44 +1215,48 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         description="How a pinned message shows at the top of chat."
       >
         <SettingsRow
-          title="Pins start collapsed"
+          title="Collapsed"
+          onReset={resetFor(['chat_design.pinned_start_collapsed', true])}
           description="Shows the pinned message as a compact one-line bar when you enter a channel."
-          help="Click the bar to expand it. Turn this off to always open pins fully expanded."
+          help="Click the bar to expand it. Turn this off to always open pins fully expanded. Style shrinks any collapsed pin to a thin bar showing the sender and the start of the message, or hides it completely."
           control={
             <Toggle
               enabled={cd.pinned_start_collapsed ?? true}
               onChange={() => setDesign({ pinned_start_collapsed: !(cd.pinned_start_collapsed ?? true) })}
             />
           }
-        />
-
-        <SettingsRow
-          title="Collapsed pin style"
-          description="Shrinks a collapsed pin to a thin one-line bar you can click to expand, or hides it completely."
-          help="The bar shows the sender and the start of the message."
         >
-          <SegmentedSelect<'bar' | 'hidden'>
-            value={cd.pinned_collapsed_style ?? 'bar'}
-            onChange={(v) => setDesign({ pinned_collapsed_style: v })}
-            options={[
-              { value: 'bar', label: 'Bar' },
-              { value: 'hidden', label: 'Hidden' },
-            ]}
-          />
+          <SubControls>
+            <SubControl
+              title="Style"
+              onReset={resetFor(['chat_design.pinned_collapsed_style', 'bar'])}
+              control={
+                <SegmentedSelect<'bar' | 'hidden'>
+                  value={cd.pinned_collapsed_style ?? 'bar'}
+                  onChange={(v) => setDesign({ pinned_collapsed_style: v })}
+                  options={[
+                    { value: 'bar', label: 'Bar' },
+                    { value: 'hidden', label: 'Hidden' },
+                  ]}
+                />
+              }
+            />
+          </SubControls>
         </SettingsRow>
       </SettingsSection>
 
       <SettingsSection
         label="Message Layout"
-        description="Spacing, text size, timestamps, and how a new message arrives."
+        description="Spacing, text size, animation and timestamps."
       >
         <div className="pt-3">
           <MessageLayoutPreview design={cd} entrance={entranceHover ?? cd.message_entrance} />
         </div>
 
         <SettingsRow
-          title="Lines between messages"
-          description="Draws a thin line between messages so a fast chat is easier to scan."
+          title="Dividers"
+          onReset={resetFor(['chat_design.show_dividers', true])}
+          description="A thin line between messages so a fast chat is easier to scan."
           control={
             <Toggle
               enabled={cd.show_dividers ?? true}
@@ -1214,7 +1266,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
 
         <SettingsRow
-          title="Striped message rows"
+          title="Striped rows"
+          onReset={resetFor(['chat_design.alternating_backgrounds', false])}
           description="Gives every other message a slightly different background, in your theme's colors, so rows are easier to follow."
           control={
             <Toggle
@@ -1225,8 +1278,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
 
         <SettingsRow
-          title={`Message spacing: ${cd.message_spacing ?? 8}px`}
-          description="Blank space between one message and the next; more room means fewer messages on screen."
+          title={`Spacing: ${cd.message_spacing ?? 8}px`}
+          onReset={resetFor(['chat_design.message_spacing', 8])}
+          description="Blank space between messages; more room means fewer messages on screen."
         >
           <input
             type="range"
@@ -1241,6 +1295,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
         <SettingsRow
           title={`Text size: ${cd.font_size ?? 14}px`}
+          onReset={resetFor(['chat_design.font_size', 14])}
           description="Size of message text, with room to go large when MultiChat fills a whole monitor."
         >
           <input
@@ -1260,6 +1315,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         {!IS_MOBILE && (
           <SettingsRow
             title={`Activity feed size: ${cd.activity_font_size ?? 14}px`}
+            onReset={resetFor(['chat_design.activity_font_size', 14])}
             description="Text size for the MultiChat activity feed, where subs, raids, and gifts land."
           >
             <input
@@ -1276,6 +1332,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
         <SettingsRow
           title="Text weight"
+          onReset={resetFor(['chat_design.font_weight', 400])}
           description="How heavy the message text is, from light to bold."
         >
           <Dropdown
@@ -1294,8 +1351,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         </SettingsRow>
 
         <SettingsRow
-          title="How a new message arrives"
-          description="A short fade or slide as each message lands. History loaded on join never animates, and it is skipped when motion is reduced."
+          title="Message animation"
+          onReset={resetFor(['chat_design.message_entrance', 'none'])}
+          description="How a new message arrives: a short fade or slide as each one lands. History loaded on join never animates, and it is skipped when motion is reduced."
         >
           <SegmentedSelect<'none' | 'fade' | 'slide' | 'rise'>
             value={cd.message_entrance}
@@ -1312,6 +1370,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
         <SettingsRow
           title={`History opacity: ${cd.backfill_opacity ?? 100}%`}
+          onReset={resetFor(['chat_design.backfill_opacity', 100])}
           description="Dim the scrollback that loads when you join a chat, so live messages stand out."
         >
           <input
@@ -1326,8 +1385,10 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         </SettingsRow>
 
         <SettingsRow
-          title="Show timestamps"
+          title="Timestamps"
+          onReset={resetFor(['chat_design.show_timestamps', false])}
           description="Shows the time each message was sent, next to the name."
+          help="Clock is 12-hour (7:42 PM) or 24-hour (19:42). Seconds turns 7:42 PM into 7:42:30 PM."
           control={
             <Toggle
               enabled={cd.show_timestamps ?? false}
@@ -1336,28 +1397,32 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           }
         >
           {cd.show_timestamps && (
-            <SettingsRow title="Clock" description="12-hour (7:42 PM) or 24-hour (19:42). Formatted once in the backend.">
-              <SegmentedSelect<'12h' | '24h'>
-                value={cd.timestamp_format ?? '12h'}
-                onChange={(timestamp_format) => setDesign({ timestamp_format })}
-                options={[
-                  { value: '12h', label: '12h' },
-                  { value: '24h', label: '24h' },
-                ]}
+            <SubControls>
+              <SubControl
+                title="Clock"
+                onReset={resetFor(['chat_design.timestamp_format', '12h'])}
+                control={
+                  <SegmentedSelect<'12h' | '24h'>
+                    value={cd.timestamp_format ?? '12h'}
+                    onChange={(timestamp_format) => setDesign({ timestamp_format })}
+                    options={[
+                      { value: '12h', label: '12h' },
+                      { value: '24h', label: '24h' },
+                    ]}
+                  />
+                }
               />
-            </SettingsRow>
-          )}
-          {cd.show_timestamps && (
-            <SettingsRow
-              title="Include seconds"
-              description="Shows seconds too, so 7:42 PM reads 7:42:30 PM."
-              control={
-                <Toggle
-                  enabled={cd.show_timestamp_seconds ?? false}
-                  onChange={() => setDesign({ show_timestamp_seconds: !(cd.show_timestamp_seconds ?? false) })}
-                />
-              }
-            />
+              <SubControl
+                title="Seconds"
+                onReset={resetFor(['chat_design.show_timestamp_seconds', false])}
+                control={
+                  <Toggle
+                    enabled={cd.show_timestamp_seconds ?? false}
+                    onChange={() => setDesign({ show_timestamp_seconds: !(cd.show_timestamp_seconds ?? false) })}
+                  />
+                }
+              />
+            </SubControls>
           )}
         </SettingsRow>
       </SettingsSection>
@@ -1375,29 +1440,10 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         </SettingPreview>
 
         <SettingsRow
-          title="Name separator"
-          description="The mark between a name and its message, like a colon or an arrow."
-          help="Action messages (/me) never get a separator."
-        >
-          <Dropdown<'none' | 'colon' | 'dot' | 'arrow' | 'pipe' | 'dash'>
-            value={cd.username_separator ?? 'none'}
-            onChange={(v) => setDesign({ username_separator: v })}
-            className="w-full"
-            ariaLabel="Name separator"
-            options={[
-              { value: 'none', label: 'None' },
-              { value: 'colon', label: 'Colon   name:' },
-              { value: 'dot', label: 'Dot   name ·' },
-              { value: 'arrow', label: 'Arrow   name ›' },
-              { value: 'pipe', label: 'Pipe   name |' },
-              { value: 'dash', label: 'Dash   name –' },
-            ]}
-          />
-        </SettingsRow>
-
-        <SettingsRow
           title="Name style"
+          onReset={resetFor(['chat_design.username_style', 'plain'])}
           description="How names stand out from the message: plain, or with a bar, chip, brackets, or dot."
+          help="Separator is the mark between a name and its message, like a colon or an arrow; /me messages never get one. Prefix color paints the separator, bar, dot, brackets, or chip with the chatter's own color or your theme accent."
         >
           <Dropdown<'plain' | 'bar' | 'chip' | 'brackets' | 'dot'>
             value={cd.username_style ?? 'plain'}
@@ -1412,26 +1458,49 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               { value: 'dot', label: 'Color dot' },
             ]}
           />
+          <SubControls>
+            <SubControl
+              title="Separator"
+              onReset={resetFor(['chat_design.username_separator', 'none'])}
+              control={
+                <Dropdown<'none' | 'colon' | 'dot' | 'arrow' | 'pipe' | 'dash'>
+                  value={cd.username_separator ?? 'none'}
+                  onChange={(v) => setDesign({ username_separator: v })}
+                  className="w-44"
+                  ariaLabel="Name separator"
+                  options={[
+                    { value: 'none', label: 'None' },
+                    { value: 'colon', label: 'Colon   name:' },
+                    { value: 'dot', label: 'Dot   name ·' },
+                    { value: 'arrow', label: 'Arrow   name ›' },
+                    { value: 'pipe', label: 'Pipe   name |' },
+                    { value: 'dash', label: 'Dash   name –' },
+                  ]}
+                />
+              }
+            />
+            {(cd.username_separator !== 'none' || cd.username_style !== 'plain') && (
+              <SubControl
+                title="Prefix color"
+                onReset={resetFor(['chat_design.username_accent_source', 'user'])}
+                control={
+                  <SegmentedSelect<'user' | 'theme'>
+                    value={cd.username_accent_source ?? 'user'}
+                    onChange={(v) => setDesign({ username_accent_source: v })}
+                    options={[
+                      { value: 'user', label: 'User color' },
+                      { value: 'theme', label: 'Theme accent' },
+                    ]}
+                  />
+                }
+              />
+            )}
+          </SubControls>
         </SettingsRow>
 
-        {(cd.username_separator !== 'none' || cd.username_style !== 'plain') && (
-          <SettingsRow
-            title="Prefix color"
-            description="Colors the separator, bar, dot, brackets, or chip with the chatter's own color or your theme accent."
-          >
-            <SegmentedSelect<'user' | 'theme'>
-              value={cd.username_accent_source ?? 'user'}
-              onChange={(v) => setDesign({ username_accent_source: v })}
-              options={[
-                { value: 'user', label: 'User color' },
-                { value: 'theme', label: 'Theme accent' },
-              ]}
-            />
-          </SettingsRow>
-        )}
-
         <SettingsRow
-          title="Keep name colors readable"
+          title="Readable colors"
+          onReset={resetFor(['chat_design.name_color_adjustment', 'hsl_loop'])}
           description="Nudges a chatter's color lighter on a dark theme, or darker on a light one, until it stands out from the background. The hue stays theirs. Off shows colors exactly as they set them."
           control={
             <Toggle
@@ -1446,13 +1515,15 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
 
         <SettingsRow
-          title="Show badges"
+          title="Badges"
+          onReset={resetFor(['chat_design.show_badges', true])}
           description="The platform's own badges next to names: moderator, subscriber, VIP and the rest."
           control={<Toggle enabled={cd.show_badges} onChange={() => setDesign({ show_badges: !cd.show_badges })} />}
         />
 
         <SettingsRow
           title="Badge size"
+          onReset={resetFor(['chat_design.badge_scale', 1])}
           description="How big badges draw, relative to the text."
           control={
             <div className="flex items-center gap-2">
@@ -1473,55 +1544,64 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
         <SettingsRow
           title="Add-on badges"
+          onReset={resetFor(['chat_design.show_third_party_badges', true])}
           description="Badges from 7TV, FFZ, Chatterino, Homies and the other badge services, plus StreamNook membership badges."
+          help="Services turns individual badge services off. Lit means shown."
           control={
             <Toggle
               enabled={cd.show_third_party_badges}
               onChange={() => setDesign({ show_third_party_badges: !cd.show_third_party_badges })}
             />
           }
-        />
-
-        {cd.show_third_party_badges && (
-          <SettingsRow
-            title="Badge services"
-            description="Turn individual badge services off. Lit means shown."
-          >
-            <div className="flex flex-wrap gap-1.5">
-              {BADGE_PROVIDERS.map((p) => {
-                const on = !badgeProviderHidden(p.id);
-                return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    aria-pressed={on}
-                    onClick={() => toggleBadgeProvider(p.id)}
-                    className={`px-2.5 py-1 rounded-full text-[12px] font-medium transition-colors ${
-                      on ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textPrimary' : 'glass-button-static text-textMuted'
-                    }`}
-                  >
-                    {p.label}
-                  </button>
-                );
-              })}
-            </div>
-          </SettingsRow>
-        )}
+        >
+          {cd.show_third_party_badges && (
+            <SubControls>
+              <SubControl
+                title="Services"
+                onReset={resetFor(['chat_design.hidden_badge_providers', []])}
+                stacked
+                control={
+                  <div className="flex flex-wrap gap-1.5">
+                    {BADGE_PROVIDERS.map((p) => {
+                      const on = !badgeProviderHidden(p.id);
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          aria-pressed={on}
+                          onClick={() => toggleBadgeProvider(p.id)}
+                          className={`px-2.5 py-1 rounded-full text-[12px] font-medium transition-colors ${
+                            on ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textPrimary' : 'glass-button-static text-textMuted'
+                          }`}
+                        >
+                          {p.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                }
+              />
+            </SubControls>
+          )}
+        </SettingsRow>
 
         <SettingsRow
-          title="Profile pictures beside names"
+          title="Profile pictures"
+          onReset={resetFor(['chat_design.show_avatars', true])}
           description="On platforms that send one (YouTube, TikTok), the chatter's picture leads their message."
           control={<Toggle enabled={cd.show_avatars} onChange={() => setDesign({ show_avatars: !cd.show_avatars })} />}
         />
 
         <SettingsRow
-          title="@ before names"
+          title="@ prefix"
+          onReset={resetFor(['chat_design.show_at_sign', false])}
           description="Writes every name as @name."
           control={<Toggle enabled={cd.show_at_sign} onChange={() => setDesign({ show_at_sign: !cd.show_at_sign })} />}
         />
 
         <SettingsRow
-          title="Paint drop shadows"
+          title="Paint shadows"
+          onReset={resetFor(['cosmetics.paint_shadows', 'all'])}
           description="Some paints stack several drop shadows for readability; keep them all, just one, or none if names look too noisy."
         >
           <SegmentedSelect<'all' | 'one' | 'none'>
@@ -1538,33 +1618,168 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
       <SettingsSection
         label="Mentions & Replies"
-        description="How a message that mentions you, and a reply, stand out."
+        description="How a message that mentions you, and a reply, stand out, and how an @name reads in chat."
       >
-        <SettingsRow
-          title="Flash when you are mentioned"
-          description="Briefly flashes any message that mentions or replies to you, so you spot it in a fast chat."
-          control={
-            <Toggle
-              enabled={cd.mention_animation ?? true}
-              onChange={() => setDesign({ mention_animation: !(cd.mention_animation ?? true) })}
-            />
-          }
-        />
+        <div className="pt-3">
+          <MentionPreview design={cd} look={{ ...mentionLook(cd), ...mentionHover }} />
+        </div>
 
         <SettingsRow
-          title="Mention color"
-          description="The highlight color on messages that mention you."
+          title="Mention sound"
+          onReset={resetFor(['chat_design.mention_sound', ''])}
+          description="Plays when someone @s you in any chat you have open."
+          help="At most once every few seconds per chat, and never in streamer mode. Add your own sounds under Custom Sounds."
         >
-          <ColorSwatch
-            value={cd.mention_color ?? '#ff4444'}
-            defaultValue="#ff4444"
-            onChange={(color) => setDesign({ mention_color: color })}
-            tooltip="Mention color"
+          <Dropdown
+            value={cd.mention_sound ?? ''}
+            onChange={(v) => setDesign({ mention_sound: v })}
+            className="w-full"
+            ariaLabel="Mention sound"
+            options={mentionSoundOptions}
           />
+          {cd.mention_sound && (
+            <SubControls>
+              <SubControl
+                title="Volume"
+                onReset={resetFor(['chat_design.mention_sound_volume', 100])}
+                control={
+                  <SoundVolume
+                    value={cd.mention_sound_volume ?? 100}
+                    onChange={(mention_sound_volume) => setDesign({ mention_sound_volume })}
+                    sound={cd.mention_sound}
+                    label="Mention sound volume"
+                  />
+                }
+              />
+              <SubControl
+                title="Replies to you"
+                onReset={resetFor(['chat_design.mention_sound_replies', true])}
+                control={
+                  <Toggle
+                    enabled={cd.mention_sound_replies ?? true}
+                    onChange={() => setDesign({ mention_sound_replies: !(cd.mention_sound_replies ?? true) })}
+                  />
+                }
+              />
+            </SubControls>
+          )}
         </SettingsRow>
 
         <SettingsRow
-          title="Paint @mentions inline"
+          title="@name style"
+          description="How an @mention reads in chat. Hover an option to see it in the preview."
+          help="A /me message is italic as a whole: Like the message keeps a mention in it italic too, Never keeps it upright."
+        >
+          <SubControls>
+            <SubControl
+              title="Weight"
+              onReset={resetFor(['chat_design.mention_weight', 'medium'])}
+              control={
+                <SegmentedSelect<MentionWeight>
+                  value={mentionLook(cd).weight}
+                  onChange={(mention_weight) => setDesign({ mention_weight })}
+                  onPreview={hoverMention('weight')}
+                  options={[
+                    { value: 'regular', label: 'Regular' },
+                    { value: 'medium', label: 'Medium' },
+                    { value: 'bold', label: 'Bold' },
+                  ]}
+                />
+              }
+            />
+            <SubControl
+              title="Italic"
+              onReset={resetFor(['chat_design.mention_italic', 'inherit'])}
+              control={
+                <SegmentedSelect<MentionItalic>
+                  value={mentionLook(cd).italic}
+                  onChange={(mention_italic) => setDesign({ mention_italic })}
+                  onPreview={hoverMention('italic')}
+                  options={[
+                    { value: 'inherit', label: 'Like the message' },
+                    { value: 'never', label: 'Never' },
+                    { value: 'always', label: 'Always' },
+                  ]}
+                />
+              }
+            />
+            <SubControl
+              title="Shape"
+              onReset={resetFor(['chat_design.mention_style', 'plain'])}
+              control={
+                <SegmentedSelect<MentionShape>
+                  value={mentionLook(cd).shape}
+                  onChange={(mention_style) => setDesign({ mention_style })}
+                  onPreview={hoverMention('shape')}
+                  options={[
+                    { value: 'plain', label: 'Plain' },
+                    { value: 'pill', label: 'Pill' },
+                  ]}
+                />
+              }
+            />
+            <SubControl
+              title="Color"
+              onReset={resetFor(['chat_design.mention_text_color', ''])}
+              control={
+                <div className="flex items-center gap-2">
+                  {cd.mention_text_color && (
+                    <ColorSwatch
+                      value={cd.mention_text_color}
+                      onChange={(color) => setDesign({ mention_text_color: color })}
+                      tooltip="@mention color"
+                    />
+                  )}
+                  <SegmentedSelect<'name' | 'fixed'>
+                    value={cd.mention_text_color ? 'fixed' : 'name'}
+                    onChange={(mode) => setDesign({ mention_text_color: mode === 'fixed' ? cd.mention_text_color || '#bf94ff' : '' })}
+                    options={[
+                      { value: 'name', label: 'Their color' },
+                      { value: 'fixed', label: 'One color' },
+                    ]}
+                  />
+                </div>
+              }
+            />
+          </SubControls>
+        </SettingsRow>
+
+        <SettingsRow
+          title="Highlight"
+          onReset={resetFor(['chat_design.mention_color', '#ff4444'])}
+          description="The color that marks a message mentioning or replying to you."
+          help="Flash briefly lights the message up as it lands, so you spot it in a fast chat. The color edge stays either way."
+        >
+          <ColorSwatch
+            value={cd.mention_color ?? '#ff4444'}
+            onChange={(color) => setDesign({ mention_color: color })}
+            tooltip="Mention color"
+          />
+          <SubControls>
+            <SubControl
+              title="Flash"
+              onReset={resetFor(['chat_design.mention_animation', true])}
+              control={
+                <Toggle
+                  enabled={cd.mention_animation ?? true}
+                  onChange={() => setDesign({ mention_animation: !(cd.mention_animation ?? true) })}
+                />
+              }
+            />
+          </SubControls>
+        </SettingsRow>
+
+        {IS_MOBILE && (
+          <SettingsRow
+            title="Vibration"
+            description="A short buzz when a message says your name, on top of the highlight."
+            control={<Toggle enabled={mentionHaptic} onChange={() => setMentionHaptic(!mentionHaptic)} />}
+          />
+        )}
+
+        <SettingsRow
+          title="7TV paint"
+          onReset={resetFor(['chat_design.paint_mentions_in_body', true])}
           description="Draws a mentioned name in that person's 7TV paint instead of a flat color."
           help="Off shows mentions in the chatter's plain name color."
           control={
@@ -1576,20 +1791,21 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
 
         <SettingsRow
-          title="Reply thread color"
+          title="Thread color"
+          onReset={resetFor(['chat_design.reply_color', '#ff6b6b'])}
           description="The color that marks replies in a thread."
         >
           <ColorSwatch
             value={cd.reply_color ?? '#ff6b6b'}
-            defaultValue="#ff6b6b"
             onChange={(color) => setDesign({ reply_color: color })}
             tooltip="Reply thread color"
           />
         </SettingsRow>
 
         <SettingsRow
-          title="How replies show their parent"
-          description="A context line above the message, an @name at the start of it, or nothing."
+          title="Context"
+          onReset={resetFor(['chat_design.reply_style', 'full'])}
+          description="How a reply shows the message it answers: a context line above it, an @name at the start, or nothing."
         >
           <SegmentedSelect<'full' | 'mention' | 'off'>
             value={cd.reply_style}
@@ -1604,13 +1820,14 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       </SettingsSection>
 
       <SettingsSection
-        label="Link Previews"
-        description="Turn links in chat into preview cards, and choose which sites are allowed to expand on their own."
+        label="Links"
+        description="How links in chat look, and which sites expand into a preview card on their own."
       >
         <SettingsRow
-          title="How links show"
+          title="Style"
+          onReset={resetFor(['chat_design.link_previews', true], ['chat_design.link_preview_keep_link', false])}
           description="Off keeps links as plain text, Card + Link adds a preview card under the link, and Clean shows only the card."
-          help="In Clean, hover the card to see where it goes. StreamNook fetches the page from your PC to build the card, so the site sees a visit from you."
+          help="In Clean, hover the card to see where it goes. StreamNook fetches the page from your PC to build the card, so the site sees a visit from you. Trusted sites expand on their own; every other link shows a Load preview button, and the shield on that button trusts the site from chat. Popular sites are trusted out of the box."
         >
           <SegmentedSelect<'off' | 'with_link' | 'clean'>
             value={
@@ -1629,10 +1846,25 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               { value: 'clean', label: 'Clean' },
             ]}
           />
+          {cd.link_previews && (
+            <SubControls>
+              <SubControl
+                title="Trusted sites"
+                stacked
+                control={
+                  <TrustedSourcesEditor
+                    domains={cd.link_preview_trusted_domains}
+                    onChange={(next) => setDesign({ link_preview_trusted_domains: next })}
+                  />
+                }
+              />
+            </SubControls>
+          )}
         </SettingsRow>
 
         <SettingsRow
-          title="Shorten links"
+          title="Short links"
+          onReset={resetFor(['chat_design.shorten_links', true])}
           description="Shows each link as a compact label, the site plus a short path, instead of the full raw URL."
           help="The full link still opens on click and shows on hover."
           control={
@@ -1644,34 +1876,23 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
 
         <SettingsRow
-          title="Link color"
-          description="Leave it on the default to follow the theme."
+          title="Color"
+          onReset={resetFor(['chat_design.link_color', ''])}
+          description="The color of links in chat. Leave it on the default to follow the theme."
         >
           <ColorSwatch
             value={cd.link_color || '#8ab4ff'}
-            defaultValue=""
             onChange={(color) => setDesign({ link_color: color })}
             tooltip="Link color"
           />
         </SettingsRow>
 
         <SettingsRow
-          title="Underline links"
+          title="Underline"
+          onReset={resetFor(['chat_design.link_underline', true])}
           description="Off leaves links colored but not underlined."
           control={<Toggle enabled={cd.link_underline} onChange={() => setDesign({ link_underline: !cd.link_underline })} />}
         />
-
-        <SettingsRow
-          title="Trusted sites"
-          description="Links from trusted sites expand into a preview on their own; every other link shows a Load preview button instead."
-          help="The shield on a Load preview button trusts that site from chat. Popular sites are trusted out of the box; add or remove your own here."
-          disabled={!cd.link_previews}
-        >
-          <TrustedSourcesEditor
-            domains={cd.link_preview_trusted_domains}
-            onChange={(next) => setDesign({ link_preview_trusted_domains: next })}
-          />
-        </SettingsRow>
       </SettingsSection>
 
       <SettingsSection
@@ -1680,6 +1901,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       >
         <SettingsRow
           title="Emoji style"
+          onReset={resetFor(['chat_design.emoji_style', 'apple'])}
           description="Which set draws the emoji in messages. System uses your device's own."
         >
           <Dropdown<'system' | 'apple' | 'google' | 'twitter' | 'facebook'>
@@ -1698,8 +1920,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         </SettingsRow>
 
         <SettingsRow
-          title="7TV personal emotes"
-          description="Emotes from a chatter's own personal set. Off shows the text they typed instead."
+          title="Personal emotes"
+          onReset={resetFor(['chat_design.show_personal_emotes', true])}
+          description="Emotes from a chatter's own 7TV personal set. Off shows the text they typed instead."
           control={
             <Toggle
               enabled={cd.show_personal_emotes}
@@ -1709,7 +1932,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
 
         <SettingsRow
-          title="Animate emotes"
+          title="Animation"
+          onReset={resetFor(['chat_design.animate_emotes', 'always'])}
           description={
             IS_MOBILE
               ? 'Play animated emotes, or show only their first frame. Never is the lightest on the GPU in a fast chat.'
@@ -1738,12 +1962,13 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         </SettingsRow>
 
         <SettingsRow
-          title="Show GIFs in chat"
+          title="GIFs"
+          onReset={resetFor(['chat_design.show_chat_gifs', true])}
           description="Twitch lets Tier 2 and Tier 3 subscribers post GIFs. Off swaps each one for a small chip you can click to reveal."
           help={
             IS_MOBILE
-              ? 'GIFs also follow Animate emotes: Never shows the chip instead.'
-              : 'GIFs also follow Animate emotes: Never shows the chip, On hover plays them while you hover the message.'
+              ? 'GIFs also follow Animation: Never shows the chip instead.'
+              : 'GIFs also follow Animation: Never shows the chip, On hover plays them while you hover the message.'
           }
           control={
             <Toggle
@@ -1754,7 +1979,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
 
         <SettingsRow
-          title={`Emote size: ${(cd.emote_scale ?? 1).toFixed(2)}x`}
+          title={`Size: ${(cd.emote_scale ?? 1).toFixed(2)}x`}
+          onReset={resetFor(['chat_design.emote_scale', 1])}
           description="Scales emotes in chat relative to the text, with 1.00x being the default size."
         >
           <input
@@ -1768,20 +1994,20 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           />
         </SettingsRow>
 
-        {/* Desktop only, with Compact emote tooltips below: a phone never
-            shows emote tooltips (Tooltip.tsx returns early on IS_MOBILE). */}
+        {/* Desktop only: a phone never shows emote tooltips (Tooltip.tsx
+            returns early on IS_MOBILE). */}
         {!IS_MOBILE && (
           <SettingsRow
-            title={`Emote hover size: ${(HOVER_SIZE_OPTIONS.find((o) => o.px === cd.emote_hover_size) ?? HOVER_SIZE_OPTIONS[1]).label}`}
+            title={`Hover size: ${(HOVER_SIZE_OPTIONS.find((o) => o.px === cd.emote_hover_size) ?? HOVER_SIZE_OPTIONS[1]).label}`}
+            onReset={resetFor(['chat_design.emote_hover_size', 96])}
             description={
               cd.compact_emote_tooltips
-                ? 'Off while Compact emote tooltips is on, since that replaces the hover card with just the emote name.'
+                ? 'Off while Compact is on, since that replaces the hover card with just the emote name.'
                 : 'How large an emote grows when you hover it, in chat and in the emote menu.'
             }
-            help="Hover the sample below to try the chosen size. The size of emotes in the message still follows Emote size above."
-            disabled={cd.compact_emote_tooltips}
+            help='Hover the sample below to try the chosen size. The size of emotes in the message still follows Size above. Compact shows just the emote name on hover instead of the card and its "Right-click to copy" hint.'
           >
-            <div className="space-y-3">
+            <div className={`space-y-3 ${cd.compact_emote_tooltips ? 'pointer-events-none opacity-50' : ''}`}>
               <SegmentedSelect<HoverSizeKey>
                 value={(HOVER_SIZE_OPTIONS.find((o) => o.px === cd.emote_hover_size) ?? HOVER_SIZE_OPTIONS[1]).value}
                 options={HOVER_SIZE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
@@ -1792,11 +2018,24 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               />
               <EmoteHoverDemo hoverSize={cd.emote_hover_size} emoteScale={cd.emote_scale} />
             </div>
+            <SubControls>
+              <SubControl
+                title="Compact"
+                onReset={resetFor(['chat_design.compact_emote_tooltips', false])}
+                control={
+                  <Toggle
+                    enabled={cd.compact_emote_tooltips}
+                    onChange={() => setDesign({ compact_emote_tooltips: !cd.compact_emote_tooltips })}
+                  />
+                }
+              />
+            </SubControls>
           </SettingsRow>
         )}
 
         <SettingsRow
-          title={`Emote spacing: ${(cd.emote_margin ?? 0.125).toFixed(3)}rem`}
+          title={`Spacing: ${(cd.emote_margin ?? 0.125).toFixed(3)}rem`}
+          onReset={resetFor(['chat_design.emote_margin', 0.125])}
           description="Space on each side of an emote; go negative to let neighboring emotes overlap."
         >
           <input
@@ -1810,75 +2049,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           />
         </SettingsRow>
 
-        {!IS_MOBILE && (
-          <SettingsRow
-            title="Compact emote tooltips"
-            description='Show just the emote name on hover instead of the full "Right-click to copy" hint.'
-            control={
-              <Toggle
-                enabled={cd.compact_emote_tooltips}
-                onChange={() => setDesign({ compact_emote_tooltips: !cd.compact_emote_tooltips })}
-              />
-            }
-          />
-        )}
-
         <SettingsRow
-          title="FFZ emote effects"
-          description="Applies FrankerFaceZ modifiers (wide, flips, rainbow, shake) to the emote before them, the way FFZ does."
-          help="Off shows modifier emotes as plain overlay emotes."
-          control={
-            <Toggle
-              enabled={cd.ffz_emote_effects}
-              onChange={() => setDesign({ ffz_emote_effects: !cd.ffz_emote_effects })}
-            />
-          }
-        />
-
-        <SettingsRow
-          title="BetterTTV emote modifiers"
-          description="Applies BetterTTV modifiers (w! wide, h! and v! flips, c! cursed, p! party, s! shake) to the emote after them, the way BetterTTV does."
-          help="Off shows the modifiers as plain emotes."
-          control={
-            <Toggle
-              enabled={cd.bttv_emote_modifiers}
-              onChange={() => setDesign({ bttv_emote_modifiers: !cd.bttv_emote_modifiers })}
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Giant emotes"
-          description={'Draws the last emote of a "Gigantify an Emote" power-up message at 4x below the message, like Twitch does.'}
-          help="Off shows the emote inline at its normal size."
-          control={
-            <Toggle
-              enabled={cd.giant_emotes}
-              onChange={() => setDesign({ giant_emotes: !cd.giant_emotes })}
-            />
-          }
-        />
-
-        {cd.giant_emotes && (
-          <SettingsRow
-            title="Where the giant emote sits"
-            description="Under the message on the left, centered or on the right, or kept in the text at its normal size."
-          >
-            <SegmentedSelect<'left' | 'center' | 'right' | 'inline'>
-              value={cd.giant_emote_align}
-              onChange={(giant_emote_align) => setDesign({ giant_emote_align })}
-              options={[
-                { value: 'left', label: 'Left' },
-                { value: 'center', label: 'Center' },
-                { value: 'right', label: 'Right' },
-                { value: 'inline', label: 'In the text' },
-              ]}
-            />
-          </SettingsRow>
-        )}
-
-        <SettingsRow
-          title="7TV emote update notices"
+          title="7TV notices"
+          onReset={resetFor(['chat_design.seventv_emote_notices', true])}
           description="Shows a chat notice when a mod adds, removes, or renames a 7TV emote in the channel."
           help="The new emote is usable right away either way."
           control={
@@ -1891,12 +2064,78 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       </SettingsSection>
 
       <SettingsSection
+        label="Emote Effects"
+        description="Emotes that change the emote beside them, and Twitch's giant power-up emotes."
+      >
+        <SettingsRow
+          title="FFZ effects"
+          onReset={resetFor(['chat_design.ffz_emote_effects', true])}
+          description="Applies FrankerFaceZ modifiers (wide, flips, rainbow, shake) to the emote before them, the way FFZ does."
+          help="Off shows modifier emotes as plain overlay emotes."
+          control={
+            <Toggle
+              enabled={cd.ffz_emote_effects}
+              onChange={() => setDesign({ ffz_emote_effects: !cd.ffz_emote_effects })}
+            />
+          }
+        />
+
+        <SettingsRow
+          title="BetterTTV modifiers"
+          onReset={resetFor(['chat_design.bttv_emote_modifiers', true])}
+          description="Applies BetterTTV modifiers (w! wide, h! and v! flips, c! cursed, p! party, s! shake) to the emote after them, the way BetterTTV does."
+          help="Off shows the modifiers as plain emotes."
+          control={
+            <Toggle
+              enabled={cd.bttv_emote_modifiers}
+              onChange={() => setDesign({ bttv_emote_modifiers: !cd.bttv_emote_modifiers })}
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Giant emotes"
+          onReset={resetFor(['chat_design.giant_emotes', true])}
+          description={'Draws the last emote of a "Gigantify an Emote" power-up message at 4x below the message, like Twitch does.'}
+          help="Off shows the emote inline at its normal size. Position puts it under the message on the left, centered or on the right, or keeps it in the text at its normal size."
+          control={
+            <Toggle
+              enabled={cd.giant_emotes}
+              onChange={() => setDesign({ giant_emotes: !cd.giant_emotes })}
+            />
+          }
+        >
+          {cd.giant_emotes && (
+            <SubControls>
+              <SubControl
+                title="Position"
+                onReset={resetFor(['chat_design.giant_emote_align', 'center'])}
+                control={
+                  <SegmentedSelect<'left' | 'center' | 'right' | 'inline'>
+                    value={cd.giant_emote_align}
+                    onChange={(giant_emote_align) => setDesign({ giant_emote_align })}
+                    options={[
+                      { value: 'left', label: 'Left' },
+                      { value: 'center', label: 'Center' },
+                      { value: 'right', label: 'Right' },
+                      { value: 'inline', label: 'In the text' },
+                    ]}
+                  />
+                }
+              />
+            </SubControls>
+          )}
+        </SettingsRow>
+      </SettingsSection>
+
+      <SettingsSection
         label="Chat Input"
         description="Small conveniences in the box where you type, and which buttons sit around it."
       >
         <SettingsRow
-          title="Send the same message twice"
-          description="Adds an invisible character when you repeat a message, so Twitch does not reject the second send."
+          title="Duplicate sends"
+          onReset={resetFor(['chat_input.bypass_duplicate', false])}
+          description="Lets you send the same message twice in a row by adding an invisible character, so Twitch does not reject the second send."
           help="Twitch normally blocks identical messages sent back to back. Handy for repeating an emote."
           control={
             <Toggle
@@ -1908,8 +2147,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         {/* Desktop only: there is no Ctrl to hold on a phone keyboard. */}
         {!IS_MOBILE && (
           <SettingsRow
-            title="Ctrl+Enter sends and keeps the text"
-            description="Sends the message and leaves it in the box, so you can send it again straight away."
+            title="Ctrl+Enter"
+            onReset={resetFor(['chat_input.quick_send', false])}
+            description="Sends the message and keeps the text in the box, so you can send it again straight away."
             help="Plain Enter still sends and clears the box as normal."
             control={
               <Toggle
@@ -1920,18 +2160,26 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           />
         )}
         <SettingsRow
-          title="Check spelling as you type"
-          description="Underlines misspelled words in the message box and offers corrections when you right-click one. Emotes, chatters, commands and links are left alone."
+          title="Spellcheck"
+          onReset={resetFor(['chat_input.spellcheck_enabled', true])}
+          description="Underlines misspelled words as you type and offers corrections when you right-click one. Emotes, chatters, commands and links are left alone."
+          help="Dictionary holds the words you have taught it, added when you pick Add to dictionary on a word in chat. Remove one here after a mis-click."
           control={
             <Toggle
               enabled={settings.chat_input?.spellcheck_enabled ?? true}
               onChange={() => setInput({ spellcheck_enabled: !(settings.chat_input?.spellcheck_enabled ?? true) })}
             />
           }
-        />
-        {(settings.chat_input?.spellcheck_enabled ?? true) && <SpellcheckDictionary />}
+        >
+          {(settings.chat_input?.spellcheck_enabled ?? true) && (
+            <SubControls>
+              <SubControl title="Dictionary" stacked control={<SpellcheckDictionary />} />
+            </SubControls>
+          )}
+        </SettingsRow>
         <SettingsRow
-          title="Hide the placeholder text"
+          title="Hide placeholder"
+          onReset={resetFor(['chat_input.hide_placeholder', false])}
           description="Leaves the message box empty instead of prompting you to send a message. Notices you can act on, like read-only or subscriber-only mode, still show."
           control={
             <Toggle
@@ -1941,7 +2189,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           }
         />
         <SettingsRow
-          title="Hide the command button"
+          title="Hide command button"
+          onReset={resetFor(['chat_input.hide_command_button', false])}
           description="Removes the slash button from inside the message box. Typing / still opens the quick command list."
           help="The command button opens a browsable menu of every command you can run here, with what each one does and examples you can click into the box. It also has a larger view for reading comfortably."
           control={
@@ -1952,7 +2201,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           }
         />
         <SettingsRow
-          title="Hide the emote button"
+          title="Hide emote button"
+          onReset={resetFor(['chat_input.hide_emote_button', false])}
           description="Removes the smiley from inside the message box. The emote picker is still reachable from its keyboard shortcut and from tab completion."
           control={
             <Toggle
@@ -1962,12 +2212,29 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           }
         />
         <SettingsRow
-          title="Hide the points balance"
-          description="Removes the channel points button next to the message box. It comes back on its own whenever a bonus chest is waiting, so you never miss one."
+          title="Points balance"
+          onReset={resetFor(['chat_input.hide_points_balance', false], ['chat_input.show_points_balance_inline', false])}
+          description="Always shows your channel points beside the button next to the message box. Hidden removes the button, which still comes back whenever a bonus chest is waiting."
           control={
-            <Toggle
-              enabled={settings.chat_input?.hide_points_balance ?? false}
-              onChange={() => setInput({ hide_points_balance: !(settings.chat_input?.hide_points_balance ?? false) })}
+            <SegmentedSelect<'always' | 'hover' | 'hidden'>
+              value={
+                settings.chat_input?.hide_points_balance
+                  ? 'hidden'
+                  : settings.chat_input?.show_points_balance_inline
+                    ? 'always'
+                    : 'hover'
+              }
+              onChange={(mode) =>
+                setInput({
+                  hide_points_balance: mode === 'hidden',
+                  show_points_balance_inline: mode === 'always',
+                })
+              }
+              options={[
+                { value: 'always', label: 'Always' },
+                { value: 'hover', label: 'On hover' },
+                { value: 'hidden', label: 'Hidden' },
+              ]}
             />
           }
         />
@@ -1990,7 +2257,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           the command palette, neither of which is platform-aware, so changing
           the desktop copy here would silently desync three files. */}
       <SettingsSection
-        label="Emote Tab Completion"
+        label="Tab Completion"
         description={
           IS_MOBILE
             ? 'Type part of an emote name in chat to see matching emotes above the input. Swipe the strip to see more, tap one to use it.'
@@ -1999,7 +2266,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         id="settings-section-emote-tab-completion"
       >
         <SettingsRow
-          title="Complete emote names with Tab"
+          title="Emotes"
+          onReset={resetFor(['chat_input.emote_tab_complete_enabled', true])}
           description={
             IS_MOBILE
               ? 'Suggest matching emotes as you type.'
@@ -2007,8 +2275,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           }
           help={
             IS_MOBILE
-              ? undefined
-              : 'In the carousel, Tab again moves to the next match and Shift+Tab to the previous one; on an empty spot it starts with your favorites and the emotes of this channel. In the list, Tab or the arrow keys move down it (Shift+Tab or the up arrow moves back up), Enter inserts the highlighted emote, and Esc closes it.'
+              ? 'Matching: Starts With needs the emote to begin with what you typed; Contains matches it anywhere in the name.'
+              : 'Style: Carousel puts the best match straight into your message, and each Tab after that swaps in the next one (Shift+Tab goes back; on an empty spot it starts with your favorites and this channel\'s emotes). List opens every emote you can use with where it comes from; Tab or the arrows move, Enter inserts, Esc closes. Matching: Starts With needs the emote to begin with what you typed, Contains matches anywhere in the name. The : list always looks inside names, so :love finds vulpLove.'
           }
           control={
             <Toggle
@@ -2020,25 +2288,46 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               }
             />
           }
-        />
+        >
+          {(settings.chat_input?.emote_tab_complete_enabled ?? true) && (
+            <SubControls>
+              {!IS_MOBILE && (
+                <SubControl
+                  title="Style"
+                  onReset={resetFor(['chat_input.emote_tab_style', 'carousel'])}
+                  control={
+                    <SegmentedSelect<'carousel' | 'list'>
+                      value={settings.chat_input?.emote_tab_style ?? 'carousel'}
+                      options={[
+                        { value: 'carousel', label: 'Carousel' },
+                        { value: 'list', label: 'List' },
+                      ]}
+                      onChange={(v) => setInput({ emote_tab_style: v })}
+                    />
+                  }
+                />
+              )}
+              <SubControl
+                title="Matching"
+                onReset={resetFor(['chat_input.emote_tab_complete_match_mode', 'starts_with'])}
+                control={
+                  <SegmentedSelect<'starts_with' | 'includes'>
+                    value={settings.chat_input?.emote_tab_complete_match_mode ?? 'starts_with'}
+                    options={[
+                      { value: 'starts_with', label: 'Starts With' },
+                      { value: 'includes', label: 'Contains' },
+                    ]}
+                    onChange={(v) => setInput({ emote_tab_complete_match_mode: v })}
+                  />
+                }
+              />
+            </SubControls>
+          )}
+        </SettingsRow>
         {!IS_MOBILE && (
           <SettingsRow
-            title="What Tab opens"
-            help="Carousel puts the best match straight into your message, and each Tab after that swaps in the next one. List opens a list of every emote you can use, with where each one comes from; keep typing to narrow it. Pressed partway through a name, it searches for that word."
-          >
-            <SegmentedSelect<'carousel' | 'list'>
-              value={settings.chat_input?.emote_tab_style ?? 'carousel'}
-              options={[
-                { value: 'carousel', label: 'Carousel' },
-                { value: 'list', label: 'List' },
-              ]}
-              onChange={(v) => setInput({ emote_tab_style: v })}
-            />
-          </SettingsRow>
-        )}
-        {!IS_MOBILE && (
-          <SettingsRow
-            title="Show the emote list when you type :"
+            title="Colon list"
+            onReset={resetFor(['chat_input.emote_colon_search_enabled', true])}
             description="Type a colon and two letters to see every emote you can use and where it comes from."
             control={
               <Toggle
@@ -2052,24 +2341,10 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             }
           />
         )}
-        <SettingsRow
-          title="How names match"
-          description="Starts With needs the emote to begin with what you typed; Contains matches it anywhere in the name."
-          help={IS_MOBILE ? undefined : 'This is for Tab. The emote list always looks inside names too, so :love finds a channel emote like vulpLove, and it shows names that start with your text first.'}
-        >
-          <SegmentedSelect<'starts_with' | 'includes'>
-            value={settings.chat_input?.emote_tab_complete_match_mode ?? 'starts_with'}
-            options={[
-              { value: 'starts_with', label: 'Starts With' },
-              { value: 'includes', label: 'Contains' },
-            ]}
-            onChange={(v) => setInput({ emote_tab_complete_match_mode: v })}
-          />
-        </SettingsRow>
-
 
         <SettingsRow
-          title="Complete chatter names too"
+          title="Chatter names"
+          onReset={resetFor(['chat_input.emote_tab_complete_include_chatters', true])}
           description={
             IS_MOBILE
               ? 'Also suggest display names of users currently in chat.'
@@ -2093,7 +2368,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         description="Bonus chest pickup on the channel you are watching."
       >
         <SettingsRow
-          title="Auto-claim bonus chests"
+          title="Bonus chests"
+          onReset={resetFor(['auto_claim_points_watching', true])}
           description="Collects the bonus chest on the stream you are watching the moment it appears."
           help="When this is off, a claim button appears on the points icon so you can grab it yourself. Claiming on channels you are not watching is a separate opt-in plugin."
           control={
@@ -2116,6 +2392,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       >
         <SettingsRow
           title="Deleted messages"
+          onReset={resetFor(['chat_design.deleted_message_style', 'strikethrough'])}
           description="How a message looks once a moderator deletes it or times out or bans its sender."
         >
           <div className="space-y-3">
@@ -2139,7 +2416,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         </SettingsRow>
 
         <SettingsRow
-          title="Hide shared chat messages"
+          title="Hide shared chat"
+          onReset={resetFor(['chat_design.hide_shared_chat', false])}
           description="Hides messages that came from the other channel in a Twitch Shared Chat, so you only see this channel's own chatters."
           control={
             <Toggle
@@ -2150,7 +2428,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
 
         <SettingsRow
-          title="Smooth scroll on Resume"
+          title="Smooth resume"
+          onReset={resetFor(['chat_render.smooth_scroll_on_resume', true])}
           description="Animates the scroll back to the bottom when you click Resume; auto-scroll for new messages stays instant."
           control={
             <Toggle
@@ -2163,7 +2442,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         />
 
         <SettingsRow
-          title={`Message buffer: ${Math.min(IS_MOBILE ? 300 : 1000, settings.chat_render?.message_buffer_cap ?? 100)} messages`}
+          title={`Scrollback: ${Math.min(IS_MOBILE ? 300 : 1000, settings.chat_render?.message_buffer_cap ?? 100)} messages`}
+          onReset={resetFor(['chat_render.message_buffer_cap', 100])}
           description={
             IS_MOBILE
               ? 'How many messages each chat keeps to scroll back through. Phones stop at 300: more than that costs memory and smoothness with nothing extra to see.'
@@ -2183,12 +2463,33 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       </SettingsSection>
 
       <SettingsSection
+        label="Docked Chats"
+        description="Chats you keep open beside the stream, and how you switch between them."
+      >
+        <SettingsRow
+          title="Menu style"
+          onReset={resetFor(['chat_design.chat_dock_switcher', 'menu'])}
+          description="A list that opens from the chat name, or a row of tabs under the chat header so each chat is one click away."
+        >
+          <SegmentedSelect<'menu' | 'tabs'>
+            value={cd.chat_dock_switcher ?? 'menu'}
+            onChange={(chat_dock_switcher) => setDesign({ chat_dock_switcher })}
+            options={[
+              { value: 'menu', label: 'List' },
+              { value: 'tabs', label: 'Tabs' },
+            ]}
+          />
+        </SettingsRow>
+      </SettingsSection>
+
+      <SettingsSection
         id="settings-section-repeated-messages"
         label="Repeated Messages"
         description="When several people post the same thing at once, fold the run into one row with a count instead of repeating it down the whole chat."
       >
         <SettingsRow
-          title="When a message repeats"
+          title="Mode"
+          onReset={resetFor(['message_repeat.mode', 'off'])}
           description={
             repeatMode === 'collapse'
               ? 'Keeps the first one and counts the rest onto it.'
@@ -2196,6 +2497,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                 ? 'Leaves every message in chat and just numbers them, so nothing is hidden.'
                 : 'Repeats are left completely alone.'
           }
+          help={'Match: "Nearly the same" ignores capitals, extra spaces and trailing punctuation, so "LULW!!" joins "lulw". Minimum is how many copies it takes before the counter appears. Window is how long a run stays open; after that the next copy starts a fresh run. Counter color is the little x12. Mod & VIP exemption keeps mods, VIPs and the streamer on their own rows. Moderated channels turns folding off wherever you are a mod, so a hidden copy is never a message you needed to action.'}
         >
           <SegmentedSelect<RepeatDisplayMode>
             value={repeatMode}
@@ -2206,102 +2508,105 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               { value: 'off', label: 'Off' },
             ]}
           />
+          {repeatMode !== 'off' && (
+            <SubControls>
+              <SubControl
+                title="Match"
+                onReset={resetFor(['message_repeat.match', 'normalized'])}
+                control={
+                  <SegmentedSelect<RepeatMatchMode>
+                    value={rp?.match ?? 'normalized'}
+                    onChange={(match) => setRepeat({ match })}
+                    options={[
+                      { value: 'normalized', label: 'Nearly the same' },
+                      { value: 'exact', label: 'Exactly the same' },
+                    ]}
+                  />
+                }
+              />
+              <SubControl
+                title="Minimum"
+                onReset={resetFor(['message_repeat.threshold', 2])}
+                control={
+                  <InlineSlider
+                    value={repeatThreshold}
+                    min={2}
+                    max={10}
+                    label="Copies before the counter shows"
+                    format={(v) => `${v} copies`}
+                    onChange={(threshold) => setRepeat({ threshold })}
+                  />
+                }
+              />
+              <SubControl
+                title="Window"
+                onReset={resetFor(['message_repeat.window_seconds', 60])}
+                control={
+                  <InlineSlider
+                    value={repeatWindow}
+                    min={10}
+                    max={300}
+                    step={5}
+                    label="Seconds a run stays open"
+                    format={(v) => `${v}s`}
+                    onChange={(window_seconds) => setRepeat({ window_seconds })}
+                  />
+                }
+              />
+              <SubControl
+                title="Counter color"
+                onReset={resetFor(['message_repeat.color', REPEAT_DEFAULT_COLOR])}
+                control={
+                  <ColorSwatch
+                    value={rp?.color || REPEAT_DEFAULT_COLOR}
+                    onChange={(color) => setRepeat({ color })}
+                    tooltip="Pick the counter color"
+                  />
+                }
+              />
+              <SubControl
+                title="Mod & VIP exemption"
+                onReset={resetFor(['message_repeat.exempt_privileged', true])}
+                control={
+                  <Toggle
+                    enabled={rp?.exempt_privileged !== false}
+                    onChange={() => setRepeat({ exempt_privileged: rp?.exempt_privileged === false })}
+                  />
+                }
+              />
+              <SubControl
+                title="Moderated channels"
+                onReset={resetFor(['message_repeat.keep_all_when_moderator', true])}
+                control={
+                  <Toggle
+                    enabled={rp?.keep_all_when_moderator !== false}
+                    onChange={() => setRepeat({ keep_all_when_moderator: rp?.keep_all_when_moderator === false })}
+                  />
+                }
+              />
+            </SubControls>
+          )}
         </SettingsRow>
-        {repeatMode !== 'off' && (
-          <>
-            <SettingsRow
-              title="How closely they must match"
-              description='"Nearly the same" ignores capitals, extra spaces and trailing punctuation, so "LULW!!" joins "lulw".'
-            >
-              <SegmentedSelect<RepeatMatchMode>
-                value={rp?.match ?? 'normalized'}
-                onChange={(match) => setRepeat({ match })}
-                options={[
-                  { value: 'normalized', label: 'Nearly the same' },
-                  { value: 'exact', label: 'Exactly the same' },
-                ]}
-              />
-            </SettingsRow>
-            <SettingsRow
-              title={`Show the count from ${repeatThreshold} copies`}
-              description="How many copies it takes before the counter appears."
-            >
-              <input
-                type="range"
-                min={2}
-                max={10}
-                step={1}
-                value={repeatThreshold}
-                onChange={(e) => setRepeat({ threshold: Number(e.target.value) })}
-                className="w-full accent-accent cursor-pointer"
-              />
-            </SettingsRow>
-            <SettingsRow
-              title={`Group copies sent within ${repeatWindow}s`}
-              description="After this long, the next copy starts a fresh run instead of joining the old one."
-            >
-              <input
-                type="range"
-                min={10}
-                max={300}
-                step={5}
-                value={repeatWindow}
-                onChange={(e) => setRepeat({ window_seconds: Number(e.target.value) })}
-                className="w-full accent-accent cursor-pointer"
-              />
-            </SettingsRow>
-            <SettingsRow
-              title="Counter colour"
-              description="The colour of the little x12 next to the message."
-              control={
-                <ColorSwatch
-                  value={rp?.color || REPEAT_DEFAULT_COLOR}
-                  defaultValue={REPEAT_DEFAULT_COLOR}
-                  onChange={(color) => setRepeat({ color })}
-                  tooltip="Pick the counter colour"
-                />
-              }
-            />
-            <SettingsRow
-              title="Never fold mods, VIPs or the streamer"
-              description="Their messages always stay on their own row, so you can see exactly who said what."
-              control={
-                <Toggle
-                  enabled={rp?.exempt_privileged !== false}
-                  onChange={() => setRepeat({ exempt_privileged: rp?.exempt_privileged === false })}
-                />
-              }
-            />
-            <SettingsRow
-              title="Show everything in channels you moderate"
-              description="Turns folding off wherever you're a mod, so a hidden copy can never be a message you needed to action."
-              control={
-                <Toggle
-                  enabled={rp?.keep_all_when_moderator !== false}
-                  onChange={() => setRepeat({ keep_all_when_moderator: rp?.keep_all_when_moderator === false })}
-                />
-              }
-            />
-          </>
-        )}
       </SettingsSection>
 
       <SettingsSection
         id="settings-section-chat-filters"
-        label="Hidden Users & Bots"
-        description="Stop chosen users' messages from reaching your chat, in one channel or everywhere. Only affects what you see; nothing is sent to the platform, and your own messages are never hidden."
+        label="Hidden Messages"
+        description="Keep chosen users, bots, commands and phrases out of your chat. Only affects what you see; nothing is sent to the platform, and your own messages are never hidden."
       >
         <SettingsRow
-          title="Hide known bots"
-          description="StreamElements, Nightbot, Moobot and the other well-known chat bots, in every channel."
-        >
-          <Toggle
-            enabled={cfs?.hide_bots ?? false}
-            onChange={() => setChatFilters({ hide_bots: !(cfs?.hide_bots ?? false) })}
-          />
-        </SettingsRow>
+          title="Known bots"
+          onReset={resetFor(['chat_filters.hide_bots', false])}
+          description="Hides StreamElements, Nightbot, Moobot and the other well-known chat bots, in every channel."
+          control={
+            <Toggle
+              enabled={cfs?.hide_bots ?? false}
+              onChange={() => setChatFilters({ hide_bots: !(cfs?.hide_bots ?? false) })}
+            />
+          }
+        />
         <SettingsRow
-          title="Hidden everywhere"
+          title="Everywhere"
           description="Messages from these names never appear, on any platform. Add someone here, or from their user card in chat."
         >
           <HiddenNameEditor
@@ -2310,88 +2615,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             onRemove={(n) => setHidden(n, 'global', false)}
           />
         </SettingsRow>
-        <SettingsRow
-          title="Ignored phrases"
-          description="Never see messages that contain these words, in any chat. The sender is not told. Plain words work; turn on regex or whole-word per phrase when you need precision."
-        >
-          <SettingsRow
-            title="Hide commands"
-            description="Hides messages that are bot commands, so a chat full of !drops and !uptime reads as a chat."
-            help="With no patterns below, anything starting with ! is hidden. Your own messages are never hidden."
-            control={
-              <Toggle
-                enabled={settings.chat_filters?.hide_commands ?? false}
-                onChange={() => setCommandFilters(commandFilters, !(settings.chat_filters?.hide_commands ?? false))}
-              />
-            }
-          />
-          {(settings.chat_filters?.hide_commands ?? false) && (
-            <SettingsRow
-              title="Command patterns"
-              description="A prefix hides every command starting with it; an exact pattern hides only that word at the start of a message."
-            >
-              <div className="flex flex-col gap-2 w-full">
-                <div className="flex flex-wrap gap-1.5">
-                  {commandFilters.length === 0 && (
-                    <span className="text-[12px] text-textMuted">Using the default: anything starting with !</span>
-                  )}
-                  {commandFilters.map((f, i) => (
-                    <button
-                      key={`${f.mode}:${f.value}:${i}`}
-                      type="button"
-                      onClick={() => setCommandFilters(commandFilters.filter((_, j) => j !== i))}
-                      title="Remove"
-                      className="glass-button-static px-2.5 py-1 rounded-full text-[12px] text-textPrimary flex items-center gap-1.5"
-                    >
-                      <span className="font-mono">{f.value}</span>
-                      <span className="text-textMuted">{f.mode === 'exact' ? 'exact' : 'prefix'}</span>
-                      <X size={12} className="text-textMuted" />
-                    </button>
-                  ))}
-                </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={commandDraft}
-                    onChange={(e) => setCommandDraft(e.target.value)}
-                    placeholder="!"
-                    maxLength={40}
-                    className="glass-input flex-1 min-w-0 px-3 py-2 text-[13px] font-mono text-textPrimary placeholder:text-textMuted"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && commandDraft.trim()) {
-                        setCommandFilters([...commandFilters, { value: commandDraft.trim(), mode: commandMode }]);
-                        setCommandDraft('');
-                      }
-                    }}
-                  />
-                  <SegmentedSelect<'prefix' | 'exact'>
-                    value={commandMode}
-                    onChange={setCommandMode}
-                    options={[
-                      { value: 'prefix', label: 'Prefix' },
-                      { value: 'exact', label: 'Exact' },
-                    ]}
-                  />
-                  <button
-                    type="button"
-                    disabled={!commandDraft.trim()}
-                    onClick={() => {
-                      setCommandFilters([...commandFilters, { value: commandDraft.trim(), mode: commandMode }]);
-                      setCommandDraft('');
-                    }}
-                    className="glass-button px-3 py-2 text-[13px] font-medium text-textPrimary disabled:opacity-50"
-                  >
-                    Add
-                  </button>
-                </div>
-              </div>
-            </SettingsRow>
-          )}
-          <IgnoredPhrasesSettings />
-        </SettingsRow>
         {perChannelHidden.length > 0 && (
           <SettingsRow
-            title="Hidden in one channel"
+            title="Per channel"
             description="Added from user cards while watching. Removing a name shows their messages again in that channel."
           >
             <div className="flex flex-col gap-2 w-full">
@@ -2415,6 +2641,90 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             </div>
           </SettingsRow>
         )}
+        <SettingsRow
+          title="Bot commands"
+          onReset={resetFor(['chat_filters.hide_commands', false])}
+          description="Hides messages that are bot commands, so a chat full of !drops and !uptime reads as a chat."
+          help="Patterns: a prefix hides every command starting with it; an exact pattern hides only that word at the start of a message. With no patterns, anything starting with ! is hidden. Your own messages are never hidden."
+          control={
+            <Toggle
+              enabled={settings.chat_filters?.hide_commands ?? false}
+              onChange={() => setCommandFilters(commandFilters, !(settings.chat_filters?.hide_commands ?? false))}
+            />
+          }
+        >
+          {(settings.chat_filters?.hide_commands ?? false) && (
+            <SubControls>
+              <SubControl
+                title="Patterns"
+                stacked
+                control={
+                  <div className="flex flex-col gap-2 w-full">
+                    <div className="flex flex-wrap gap-1.5">
+                      {commandFilters.length === 0 && (
+                        <span className="text-[12px] text-textMuted">Using the default: anything starting with !</span>
+                      )}
+                      {commandFilters.map((f, i) => (
+                        <button
+                          key={`${f.mode}:${f.value}:${i}`}
+                          type="button"
+                          onClick={() => setCommandFilters(commandFilters.filter((_, j) => j !== i))}
+                          title="Remove"
+                          className="glass-button-static px-2.5 py-1 rounded-full text-[12px] text-textPrimary flex items-center gap-1.5"
+                        >
+                          <span className="font-mono">{f.value}</span>
+                          <span className="text-textMuted">{f.mode === 'exact' ? 'exact' : 'prefix'}</span>
+                          <X size={12} className="text-textMuted" />
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={commandDraft}
+                        onChange={(e) => setCommandDraft(e.target.value)}
+                        placeholder="!"
+                        maxLength={40}
+                        className="glass-input flex-1 min-w-0 px-3 py-2 text-[13px] font-mono text-textPrimary placeholder:text-textMuted"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && commandDraft.trim()) {
+                            setCommandFilters([...commandFilters, { value: commandDraft.trim(), mode: commandMode }]);
+                            setCommandDraft('');
+                          }
+                        }}
+                      />
+                      <SegmentedSelect<'prefix' | 'exact'>
+                        value={commandMode}
+                        onChange={setCommandMode}
+                        options={[
+                          { value: 'prefix', label: 'Prefix' },
+                          { value: 'exact', label: 'Exact' },
+                        ]}
+                      />
+                      <button
+                        type="button"
+                        disabled={!commandDraft.trim()}
+                        onClick={() => {
+                          setCommandFilters([...commandFilters, { value: commandDraft.trim(), mode: commandMode }]);
+                          setCommandDraft('');
+                        }}
+                        className="glass-button px-3 py-2 text-[13px] font-medium text-textPrimary disabled:opacity-50"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </div>
+                }
+              />
+            </SubControls>
+          )}
+        </SettingsRow>
+        <SettingsRow
+          title="Ignored phrases"
+          description="Never see messages that contain these words, in any chat. The sender is not told. Plain words work; turn on regex or whole-word per phrase when you need precision."
+        >
+          <IgnoredPhrasesSettings />
+        </SettingsRow>
       </SettingsSection>
 
       {/* Desktop only: filters are applied from the funnel in a chat's header
@@ -2422,7 +2732,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       {!IS_MOBILE && (
       <SettingsSection
         id="settings-section-chat-query"
-        label="Message Filters & Search"
+        label="Filters & Search"
         description="Cut a busy chat down to what you care about, and find things you saw earlier. Filters live here; you apply one to a chat from the funnel in its header. Ctrl+F opens search in any chat."
       >
         <SettingsRow
@@ -2433,8 +2743,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           <SavedFiltersSettings />
         </SettingsRow>
         <SettingsRow
-          title="How far back search reaches"
-          description="Messages remembered per chat for Ctrl+F. Higher finds older messages; 1000 is roughly a megabyte per open chat."
+          title="Search depth"
+          onReset={resetFor(['chat_query.history_cap', 1000])}
+          description="How far back Ctrl+F search reaches: messages remembered per chat. Higher finds older messages; 1000 is roughly a megabyte per open chat."
           help="Kept in the backend, not in the chat view, so scrolling stays smooth no matter what you set. Range 200 to 5000."
         >
           <input
@@ -2468,8 +2779,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         description="The card that opens when you click someone in chat."
       >
         <SettingsRow
-          title="Open on their messages"
-          description="Land on the person's recent chat history straight away. Off opens the profile first, with their badges and stats. Either way the card switches between the two."
+          title="Messages first"
+          onReset={resetFor(['chat_design.user_card_opens_messages', false])}
+          description="Opens on the person's recent chat history straight away. Off opens the profile first, with their badges and stats. Either way the card switches between the two."
           control={
             <Toggle
               enabled={cd.user_card_opens_messages}
@@ -2481,6 +2793,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           <SettingsRow
             key={key}
             title={title}
+            onReset={resetFor([`user_card.${key}`, key !== 'show_pronouns'])}
             description={description}
             control={
               <Toggle
@@ -2510,82 +2823,78 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         description="Keep a text copy of chat on your disk, for searching later or feeding another tool."
       >
         <SettingsRow
-          title="Save chat logs"
+          title="Save logs"
+          onReset={resetFor(['chat_logging.enabled', false])}
           description="Writes chat to plain text files as you watch: one folder per channel, one file per day."
-          help="The files grow with the chat, so a busy channel adds up over weeks. Delete old days from the folder any time."
+          help="The files grow with the chat, so a busy channel adds up over weeks; delete old days from the folder any time. Folder is where they are written (Browse to pick your own; the arrow beside it puts the default back). Channels limits logging to the ones listed; empty logs every channel you open. Timestamps starts each line with the time it was sent. Events also logs subscriptions, raids, announcements, timeouts and deleted messages."
           control={
             <Toggle
               enabled={loggingEnabled}
               onChange={() => setLogging({ enabled: !loggingEnabled })}
             />
           }
-        />
-        {loggingEnabled && (
-          <>
-            <SettingsRow
-              title="Log folder"
-              description="Where the files are written. Browse to pick your own folder, Reset to go back to the default."
-            >
-              <div className="flex items-center gap-2">
-                <div className="glass-input min-w-0 flex-1 truncate rounded-md px-3 py-1.5 text-[13px] text-textPrimary">
-                  {logDir}
-                </div>
-                <button
-                  type="button"
-                  onClick={browseLogFolder}
-                  className="glass-button-secondary flex-shrink-0 px-3 py-1.5 text-[13px] text-textSecondary hover:text-textPrimary"
-                >
-                  Browse
-                </button>
-                {(logging.folder ?? '') !== '' && (
-                  <button
-                    type="button"
-                    onClick={() => setLogging({ folder: '' })}
-                    className="glass-button-secondary flex-shrink-0 px-2 py-1.5 text-[13px] text-textMuted hover:text-textPrimary"
-                  >
-                    Reset
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={openLogFolder}
-                  className="glass-button-secondary flex-shrink-0 px-3 py-1.5 text-[13px] text-textSecondary hover:text-textPrimary"
-                >
-                  Open
-                </button>
-              </div>
-            </SettingsRow>
-            <SettingsRow
-              title="Only log these channels"
-              description="Leave empty to log every channel you open."
-            >
-              <PanelChannelList
-                value={logging.channels ?? []}
-                onChange={(channels) => setLogging({ channels })}
+        >
+          {loggingEnabled && (
+            <SubControls>
+              <SubControl
+                title="Folder"
+                onReset={resetFor(['chat_logging.folder', ''])}
+                stacked
+                control={
+                  <div className="flex items-center gap-2">
+                    <div className="glass-input min-w-0 flex-1 truncate rounded-md px-3 py-1.5 text-[13px] text-textPrimary">
+                      {logDir}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={browseLogFolder}
+                      className="glass-button-secondary flex-shrink-0 px-3 py-1.5 text-[13px] text-textSecondary hover:text-textPrimary"
+                    >
+                      Browse
+                    </button>
+                    <button
+                      type="button"
+                      onClick={openLogFolder}
+                      className="glass-button-secondary flex-shrink-0 px-3 py-1.5 text-[13px] text-textSecondary hover:text-textPrimary"
+                    >
+                      Open
+                    </button>
+                  </div>
+                }
               />
-            </SettingsRow>
-            <SettingsRow
-              title="Timestamps"
-              description="Start each line with the time it was sent."
-              control={
-                <Toggle
-                  enabled={logging.timestamps ?? true}
-                  onChange={() => setLogging({ timestamps: !(logging.timestamps ?? true) })}
-                />
-              }
-            />
-            <SettingsRow
-              title="Events and moderation"
-              description="Also log subscriptions, raids, announcements, timeouts, and deleted messages."
-              control={
-                <Toggle
-                  enabled={logging.include_events ?? true}
-                  onChange={() => setLogging({ include_events: !(logging.include_events ?? true) })}
-                />
-              }
-            />
-          </>
-        )}
+              <SubControl
+                title="Channels"
+                stacked
+                control={
+                  <PanelChannelList
+                    value={logging.channels ?? []}
+                    onChange={(channels) => setLogging({ channels })}
+                  />
+                }
+              />
+              <SubControl
+                title="Timestamps"
+                onReset={resetFor(['chat_logging.timestamps', true])}
+                control={
+                  <Toggle
+                    enabled={logging.timestamps ?? true}
+                    onChange={() => setLogging({ timestamps: !(logging.timestamps ?? true) })}
+                  />
+                }
+              />
+              <SubControl
+                title="Events"
+                onReset={resetFor(['chat_logging.include_events', true])}
+                control={
+                  <Toggle
+                    enabled={logging.include_events ?? true}
+                    onChange={() => setLogging({ include_events: !(logging.include_events ?? true) })}
+                  />
+                }
+              />
+            </SubControls>
+          )}
+        </SettingsRow>
       </SettingsSection>
       )}
 

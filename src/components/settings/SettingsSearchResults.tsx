@@ -61,7 +61,7 @@ const SettingsSearchResults = ({
     <div className="space-y-1.5">
       {results.map((entry, i) => (
         <button
-          key={`${entry.tab}-${entry.section}-${entry.title}-${i}`}
+          key={`${entry.tab}-${entry.section}-${entry.parent ?? ''}-${entry.title}-${i}`}
           onClick={() => onSelect(entry)}
           className="settings-card group flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-white/[0.03]"
         >
@@ -70,6 +70,12 @@ const SettingsSearchResults = ({
               <span>{entry.tab}</span>
               <ChevronRight size={11} className="opacity-60" />
               <span>{entry.section}</span>
+              {entry.parent && (
+                <>
+                  <ChevronRight size={11} className="opacity-60" />
+                  <span>{entry.parent}</span>
+                </>
+              )}
             </div>
             <div className="text-[13px] font-medium text-textPrimary">
               <Highlight text={entry.title} query={query} />

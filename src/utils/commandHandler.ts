@@ -665,7 +665,7 @@ export const handleSlashCommand = async (
           return true;
         }
         await invoke('set_chat_user_hidden', { name: target, channelKey: null, hidden: true });
-        emitSystemMessage(`Hiding ${target} everywhere. Undo in Settings > Chat > Hidden Users.`);
+        emitSystemMessage(`Hiding ${target} everywhere. Undo in Settings > Chat > Hidden Messages.`);
         return true;
       }
       case 'settitle': {

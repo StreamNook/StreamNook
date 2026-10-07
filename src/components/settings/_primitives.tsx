@@ -40,6 +40,22 @@ export const SettingsSection = ({
   </section>
 );
 
+/** The arrow beside a changed setting's title that puts its default back.
+ *  Shared by SettingsRow and the nested SubControl lines. */
+export const ResetArrow = ({ onReset }: { onReset: () => void }) => (
+  <Tooltip content="Reset to default">
+    <button
+      type="button"
+      onClick={onReset}
+      aria-label="Reset to default"
+      // Touch has no hover tooltip and needs a bigger target than the glyph.
+      className={`inline-flex align-middle text-textMuted hover:text-textPrimary transition-colors ${IS_MOBILE ? '-my-1.5 p-1.5' : 'ml-1.5'}`}
+    >
+      <RotateCcw size={11} />
+    </button>
+  </Tooltip>
+);
+
 interface SettingsRowProps {
   title: ReactNode;
   /** Small inline element after the title (e.g. a source-scope indicator). */
@@ -107,18 +123,7 @@ export const SettingsRow = ({
               </span>
             </Tooltip>
           ) : null}
-          {onReset && (
-            <Tooltip content="Reset to default">
-              <button
-                type="button"
-                onClick={onReset}
-                aria-label="Reset to default"
-                className="ml-1.5 inline-flex align-middle text-textMuted hover:text-textPrimary transition-colors"
-              >
-                <RotateCcw size={11} />
-              </button>
-            </Tooltip>
-          )}
+          {onReset && <ResetArrow onReset={onReset} />}
         </div>
         {description && (
           <p className="mt-0.5 text-[12px] leading-relaxed text-textSecondary">
@@ -141,7 +146,9 @@ export const SettingsRow = ({
  *  that setting's sub-settings instead of more top-level rows. The pl-4 exactly
  *  absorbs each row's -mx-4 bleed, so row separators start at the rule. */
 export const SettingsSubGroup = ({ children }: { children: ReactNode }) => (
-  <div className="ml-1 border-l border-borderSubtle pl-4">{children}</div>
+  // The marker lets a search result for a nested row find it: the group sits
+  // after its parent row, not inside it.
+  <div className="ml-1 border-l border-borderSubtle pl-4" data-setting-subgroup="">{children}</div>
 );
 
 interface SegmentedOption<T extends string> {

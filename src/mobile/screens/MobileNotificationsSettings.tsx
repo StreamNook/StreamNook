@@ -42,7 +42,7 @@ const TOGGLES: {
   {
     key: 'show_live_notifications',
     channel: NOTIFY_CHANNEL.live,
-    label: 'Channels going live',
+    label: 'Live channels',
     description: 'Alert when a channel you follow starts streaming',
   },
   {

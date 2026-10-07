@@ -3,10 +3,14 @@ import { useAppStore } from '../../stores/AppStore';
 import { usePluginUiRegistry, selectSlot } from '../../plugins-ui/registry';
 import { DiscordGlyph } from '../ui/DiscordGlyph';
 import { Toggle } from '../ui/Toggle';
+import { ResetArrow } from './_primitives';
+import { useSettingReset } from './settingReset';
 import streamnookLogo from '../../assets/streamnook-logo-128.webp';
 
 const IntegrationsSettings = () => {
   const { settings, updateSettings } = useAppStore();
+  const resetFor = useSettingReset();
+  const resetDiscord = resetFor('discord_rpc_enabled');
   // Plugins contribute their own integration panels here, the same way a drops
   // plugin contributes into the Drops center's settings slot. The tab renders
   // whatever is contributed and names none of it; with no such plugin installed
@@ -52,7 +56,10 @@ const IntegrationsSettings = () => {
               <DiscordGlyph size={26} className="text-[#5865F2]" />
             </div>
             <div className="min-w-0 flex-1">
-              <div className="text-[14px] font-semibold text-textPrimary">Discord Rich Presence</div>
+              <div className="text-[14px] font-semibold text-textPrimary">
+                Discord Rich Presence
+                {resetDiscord && <ResetArrow onReset={resetDiscord} />}
+              </div>
               <p className="mt-0.5 text-[12px] leading-relaxed text-textSecondary">
                 Show what you're watching on your Discord profile.
               </p>

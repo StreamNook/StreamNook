@@ -579,7 +579,8 @@ const SettingsDialog = () => {
                 </div>
                 {/* Section rail: sticky beside the panel, spring indicator
                     follows the section being read (settings/SectionNav). */}
-                <SectionNav containerRef={contentRef} tabKey={activeTab} hidden={searching} />
+                {/* The overlay builder draws its own rail beside its controls. */}
+                <SectionNav containerRef={contentRef} tabKey={activeTab} hidden={searching || activeTab === 'Overlay'} />
                </div>
               </div>
             </section>

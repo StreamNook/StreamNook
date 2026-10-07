@@ -2,11 +2,13 @@ import { useState, useEffect } from 'react';
 import { Eye, EyeOff, Columns, X, Sparkles, Gauge, Zap } from 'lucide-react';
 import CompactViewSettings from './CompactViewSettings';
 import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
+import { SubControl, SubControls } from '../plugins/settingsPageKit';
 import { GlassMultiSelect } from '../ui/GlassMultiSelect';
 import { DISCOVERY_LANGUAGES } from '../../utils/discoveryLanguages';
 import { useAppStore } from '../../stores/AppStore';
 import { IS_MAC } from '../../utils/platform';
 import type { MotionMode, CloseToTrayMode } from '../../types';
+import { useSettingReset } from './settingReset';
 
 export type SidebarMode = 'expanded' | 'compact' | 'hidden' | 'disabled';
 
@@ -60,6 +62,7 @@ const MOTION_MODE_OPTIONS: { value: MotionMode; label: string; hint: string; Ico
 
 const InterfaceSettings = () => {
     const { settings, updateSettings } = useAppStore();
+    const resetFor = useSettingReset();
     const [sidebarMode, setSidebarMode] = useState<SidebarMode>('compact');
     const [expandOnHover, setExpandOnHover] = useState(true);
     const [showRecommended, setShowRecommended] = useState(true);
@@ -164,8 +167,9 @@ const InterfaceSettings = () => {
                 description="How much of the streams list stays on screen while you watch."
             >
                 <SettingsRow
-                    title="How the sidebar appears"
+                    title="Style"
                     description={modeDescription}
+                    help="Hover expand (Compact only) opens the sidebar fully while your cursor is over it, and folds it back when you leave."
                 >
                     <div className="grid grid-cols-4 gap-2">
                         {SIDEBAR_MODE_OPTIONS.map(({ value, label, hint, Icon }) => {
@@ -187,24 +191,24 @@ const InterfaceSettings = () => {
                             );
                         })}
                     </div>
+                    {sidebarMode === 'compact' && (
+                        <SubControls>
+                            <SubControl
+                                title="Hover expand"
+                                control={
+                                    <Toggle
+                                        enabled={expandOnHover}
+                                        onChange={() => handleExpandOnHoverChange(!expandOnHover)}
+                                    />
+                                }
+                            />
+                        </SubControls>
+                    )}
                 </SettingsRow>
 
-                {sidebarMode === 'compact' && (
-                    <SettingsRow
-                        title="Expand when you hover"
-                        description="Move your cursor over the compact sidebar to open it fully, and it folds back when you leave."
-                        control={
-                            <Toggle
-                                enabled={expandOnHover}
-                                onChange={() => handleExpandOnHoverChange(!expandOnHover)}
-                            />
-                        }
-                    />
-                )}
-
                 <SettingsRow
-                    title="Show recommended streams"
-                    description="Show the Recommended section in the sidebar. Turn this off to keep only your followed channels and favorites."
+                    title="Recommended"
+                    description="Shows the Recommended section in the sidebar. Turn this off to keep only your followed channels and favorites."
                     control={
                         <Toggle
                             enabled={showRecommended}
@@ -216,11 +220,12 @@ const InterfaceSettings = () => {
 
             <SettingsSection
                 id="settings-section-discover"
-                label="Discover Feed"
+                label="Discover"
                 description="What the Discover tab and the sidebar's Recommended section show."
             >
                 <SettingsRow
-                    title="Personalized recommendations"
+                    title="Personalized"
+                    onReset={resetFor(['discovery_personalized', false]) && (() => void applyDiscoveryPersonalized(false))}
                     description="Use your Twitch account to tailor Discover to what you watch. When off, recommendations are anonymous and based only on your region."
                     control={
                         <Toggle
@@ -233,7 +238,7 @@ const InterfaceSettings = () => {
                 <SettingsRow
                     title="Languages"
                     description="Only show recommended streams in these languages. Empty means any language."
-                    onReset={(settings.discovery_languages?.length ?? 0) > 0 ? () => void applyDiscoveryLanguages([]) : undefined}
+                    onReset={resetFor(['discovery_languages', []]) && (() => void applyDiscoveryLanguages([]))}
                     control={
                         <GlassMultiSelect
                             values={settings.discovery_languages ?? []}
@@ -251,7 +256,8 @@ const InterfaceSettings = () => {
                 description="How much the interface moves, from full animation to instant."
             >
                 <SettingsRow
-                    title="How much the interface animates"
+                    title="Amount"
+                    onReset={resetFor(['motion_mode', 'full'])}
                     description={motionDescription}
                     help="Off is the best choice on a low-end PC, since the frosted-glass blur is expensive to animate."
                 >
@@ -279,12 +285,13 @@ const InterfaceSettings = () => {
             </SettingsSection>
 
             <SettingsSection
-                id="settings-section-window-close"
-                label="Closing the Window"
-                description="Whether the close button quits StreamNook or tucks it into the system tray."
+                id="settings-section-window"
+                label="Window"
+                description="What the close button does, how settings open, and what full screen hides."
             >
                 <SettingsRow
-                    title="What the close button does"
+                    title="Close button"
+                    onReset={resetFor(['close_to_tray', 'with-popouts'])}
                     description={closeToTrayDescription}
                 >
                     <SegmentedSelect<CloseToTrayMode>
@@ -297,15 +304,10 @@ const InterfaceSettings = () => {
                         ]}
                     />
                 </SettingsRow>
-            </SettingsSection>
 
-            <SettingsSection
-                id="settings-section-settings-window"
-                label="Settings Window"
-                description="How much room this settings screen takes up."
-            >
                 <SettingsRow
-                    title="Keep settings in a centered window"
+                    title="Centered settings"
+                    onReset={resetFor(['compact_settings_window', true])}
                     description="Settings open in a centered window; turn this off to open them as a full page that fills the app."
                     help="The full page gives long tabs more room, so you see more options at once with less scrolling."
                     control={
@@ -315,16 +317,11 @@ const InterfaceSettings = () => {
                         />
                     }
                 />
-            </SettingsSection>
 
-            <SettingsSection
-                id="settings-section-window-fullscreen"
-                label="Full Screen"
-                description={`What stays on screen when you go full screen (${IS_MAC ? 'Ctrl+Cmd+F' : 'F11'}) while watching.`}
-            >
                 <SettingsRow
-                    title="Show only the stream and chat"
-                    description="The title bar and sidebar tuck away while you watch in full screen. Move your cursor to the top edge to bring the title bar back, or to the side edge for the sidebar."
+                    title="Full screen"
+                    onReset={resetFor(['fullscreen_stream_only', true])}
+                    description={`Shows only the stream and chat in full screen (${IS_MAC ? 'Ctrl+Cmd+F' : 'F11'}): the title bar and sidebar tuck away while you watch. Move your cursor to the top edge to bring the title bar back, or to the side edge for the sidebar.`}
                     help="Home keeps its title bar in full screen, since its tabs and search live there."
                     control={
                         <Toggle
@@ -335,26 +332,21 @@ const InterfaceSettings = () => {
                 />
             </SettingsSection>
 
-            <SettingsSection
-                id="settings-section-window-on-top"
-                label="Keep on Top"
-                description="Keep the small Compact View player visible over whatever else you are doing."
-            >
-                <SettingsRow
-                    title="Keep on top in Compact View"
-                    description="While Compact View is active, the small player floats above other apps so clicking your browser does not bury it."
-                    help="The window drops back to normal as soon as you leave Compact View."
-                    control={
-                        <Toggle
-                            enabled={keepOnTopInCompact}
-                            onChange={() => void updateSettings({ ...settings, keep_on_top_in_compact: !keepOnTopInCompact })}
-                        />
-                    }
-                />
-            </SettingsSection>
-
             <div id="settings-section-compact">
-                <CompactViewSettings />
+                <CompactViewSettings>
+                    <SettingsRow
+                        title="Keep on top"
+                        onReset={resetFor(['keep_on_top_in_compact', false])}
+                        description="While Compact View is active, the small player floats above other apps so clicking your browser does not bury it."
+                        help="The window drops back to normal as soon as you leave Compact View."
+                        control={
+                            <Toggle
+                                enabled={keepOnTopInCompact}
+                                onChange={() => void updateSettings({ ...settings, keep_on_top_in_compact: !keepOnTopInCompact })}
+                            />
+                        }
+                    />
+                </CompactViewSettings>
             </div>
         </div>
     );

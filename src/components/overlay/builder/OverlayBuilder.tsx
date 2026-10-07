@@ -13,6 +13,7 @@ import { RotateCcw, RefreshCw, Link2, Plus, X, AlertTriangle, Play, Pause, Copy,
 import { Tooltip } from '../../ui/Tooltip';
 import { Dropdown } from '../../ui/Dropdown';
 import { SettingsSection, SettingsRow, SettingsSubGroup, SegmentedSelect } from '../../settings/_primitives';
+import SectionNav from '../../settings/SectionNav';
 import { SevenTVLogo } from '../../emotesets/SevenTVLogo';
 import streamNookLogo from '../../../assets/streamnook-logo.png';
 import { OverlayChat } from '../OverlayChat';
@@ -660,6 +661,8 @@ const OverlayEditor = () => {
   // The scaled stage measures its own width so the overlay canvas fits the pane
   // at true proportions (scaled down when the canvas is wider than the pane).
   const stageWrapRef = useRef<HTMLDivElement>(null);
+  // The controls column: the section rail lists and follows its sections.
+  const controlsRef = useRef<HTMLDivElement>(null);
   const [stageW, setStageW] = useState(360);
   useLayoutEffect(() => {
     const el = stageWrapRef.current;
@@ -1255,9 +1258,27 @@ const OverlayEditor = () => {
   return (
     // The preview column's widest size is the host's to pick: the app's settings
     // pane is narrow, the site page has room for a larger preview.
+    // On wide screens a section rail leads the controls, so the builder carries
+    // its own quick navigation on any host (the app hides its dialog-wide rail
+    // on this tab; the site page has none). The rail lives INSIDE the controls
+    // column, never as a grid column of its own: two breakpoint templates on
+    // one grid resolve in stylesheet order, and the losing order put the
+    // controls in the preview's column and pushed the preview off the page.
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(340px,var(--overlay-builder-preview-max,430px))]">
+      <div className="flex min-w-0 gap-6">
+      {/* ── Section rail ─────────────────────────────────────────── */}
+      {/* From 1440 px only: below that the preview column leaves the controls
+          too little room to give 168 px to the rail. */}
+      <div className="hidden w-[168px] flex-shrink-0 min-[1440px]:block">
+        <SectionNav
+          containerRef={controlsRef}
+          tabKey="overlay-builder"
+          stickyTop="calc(var(--overlay-builder-sticky-top, 0.25rem) + 0.5rem)"
+        />
+      </div>
+
       {/* ── Controls ─────────────────────────────────────────────── */}
-      <div className="space-y-5 min-w-0">
+      <div ref={controlsRef} className="space-y-5 min-w-0 flex-1">
         {/* Which overlay you are editing, and the two things you do to it.
             Sticks against the settings dialog's scroll port so switching
             overlays never means scrolling back to the top; data-settings-sticky
@@ -1474,7 +1495,7 @@ const OverlayEditor = () => {
               Paste a channel link from any platform and it is added to that platform.
             </p>
           </div>
-          <SettingsRow onReset={resetFor('sources')} title="Platform filter" description="Hide a platform's messages without removing its source.">
+          <SettingsRow onReset={resetFor('sources')} title="Platforms" description="Hide a platform's messages without removing its source.">
             <div className="flex flex-wrap gap-2">
               {SOURCE_PROVIDERS.map((id) => {
                 // Only a platform you've actually added as a source can be toggled;
@@ -1543,10 +1564,10 @@ const OverlayEditor = () => {
           </SettingsRow>
           {style.background === 'solid' && (
             <SettingsSubGroup>
-              <SettingsRow onReset={resetFor('backgroundColor')} title="Background color" control={
+              <SettingsRow onReset={resetFor('backgroundColor')} title="Color" control={
                 <input type="color" value={style.backgroundColor} onChange={(e) => set('backgroundColor', e.target.value)} className="h-7 w-10 rounded cursor-pointer bg-transparent border border-borderSubtle" />
               } />
-              <SettingsRow onReset={resetFor('backgroundOpacity')} title="Background opacity">
+              <SettingsRow onReset={resetFor('backgroundOpacity')} title="Opacity">
                 <Slider value={style.backgroundOpacity} min={0} max={1} step={0.05} onChange={(v) => set('backgroundOpacity', v)} format={(v) => `${Math.round(v * 100)}%`} />
               </SettingsRow>
             </SettingsSubGroup>
@@ -1580,62 +1601,64 @@ const OverlayEditor = () => {
             </SettingsRow>
             </SettingsSubGroup>
           )}
-          <SettingsRow onReset={resetFor('fontSize')} title="Font size">
+          <SettingsRow onReset={resetFor('fontSize')} title="Size">
             <Slider value={style.fontSize} min={OVERLAY_LIMITS.fontSize.min} max={OVERLAY_LIMITS.fontSize.max} onChange={(v) => set('fontSize', v)} format={(v) => `${v}px`} />
           </SettingsRow>
           <SettingsRow onReset={resetFor('lineHeight')} title="Line height" description="Spacing within a wrapped message.">
             <Slider value={style.lineHeight} min={OVERLAY_LIMITS.lineHeight.min} max={OVERLAY_LIMITS.lineHeight.max} step={0.05} onChange={(v) => set('lineHeight', v)} format={(v) => v.toFixed(2)} />
           </SettingsRow>
-          <SettingsRow onReset={resetFor('messageGap')} title="Message spacing" description="Gap between messages.">
+          <SettingsRow onReset={resetFor('messageGap')} title="Spacing" description="Gap between messages.">
             <Slider value={style.messageGap} min={OVERLAY_LIMITS.messageGap.min} max={OVERLAY_LIMITS.messageGap.max} onChange={(v) => set('messageGap', v)} format={(v) => `${v}px`} />
           </SettingsRow>
-          <SettingsRow onReset={resetFor('textAlign')} title="Text alignment" description="Left, center, or right; event cards line up the same way.">
+          <SettingsRow onReset={resetFor('textAlign')} title="Alignment" description="Left, center, or right; event cards line up the same way.">
             <SegmentedSelect value={style.textAlign ?? 'left'} onChange={(v) => set('textAlign', v)} options={OVERLAY_TEXT_ALIGNS} />
           </SettingsRow>
-          <SettingsRow onReset={resetFor('fontWeight')} title="Text weight" description="How heavy the text is. Usernames stay bold either way.">
+          <SettingsRow onReset={resetFor('fontWeight')} title="Weight" description="How heavy the text is. Usernames stay bold either way.">
             <SegmentedSelect value={String(style.fontWeight ?? 400)} onChange={(v) => set('fontWeight', parseInt(v, 10))} options={OVERLAY_TEXT_WEIGHTS} />
           </SettingsRow>
           <SettingsRow onReset={resetFor('textItalic')} title="Italic" description="Slant message text. Actions (/me) are italic either way." control={<Toggle enabled={style.textItalic === true} onChange={() => set('textItalic', style.textItalic !== true)} />} />
           <SettingsRow onReset={resetFor('textStrikethrough')} title="Strikethrough" description="Draw a line through message text." control={<Toggle enabled={style.textStrikethrough === true} onChange={() => set('textStrikethrough', style.textStrikethrough !== true)} />} />
-          <SettingsRow onReset={resetFor('bodyTextColor')} title="Text color" control={
+          <SettingsRow onReset={resetFor('bodyTextColor')} title="Color" control={
             <input type="color" value={style.bodyTextColor} onChange={(e) => set('bodyTextColor', e.target.value)} className="h-7 w-10 rounded cursor-pointer bg-transparent border border-borderSubtle" />
           } />
-          <SettingsRow onReset={resetFor('textShadow')} title="Text shadow" description="An outline behind text so it stays readable over any scene." control={<Toggle enabled={style.textShadow} onChange={() => set('textShadow', !style.textShadow)} />} />
-          <SettingsSubGroup>
-            <SettingsRow onReset={resetFor('textShadowColor')} title="Shadow color" disabled={!style.textShadow} control={
-              <input type="color" value={style.textShadowColor || '#000000'} onChange={(e) => set('textShadowColor', e.target.value)} disabled={!style.textShadow} className="h-7 w-10 rounded cursor-pointer bg-transparent border border-borderSubtle disabled:cursor-not-allowed" />
-            } />
-            <SettingsRow onReset={resetFor('textShadowSize')} title="Shadow size" description="How far the shadow spreads. 0 turns it off." disabled={!style.textShadow}>
-              <Slider value={style.textShadowSize ?? 2} min={OVERLAY_LIMITS.textShadowSize.min} max={OVERLAY_LIMITS.textShadowSize.max} step={0.5} onChange={(v) => set('textShadowSize', v)} format={(v) => `${v}px`} />
-            </SettingsRow>
-            <SettingsRow onReset={resetFor('textShadowOpacity')} title="Shadow strength" description="How solid the shadow is." disabled={!style.textShadow}>
-              <Slider value={style.textShadowOpacity ?? 0.85} min={OVERLAY_LIMITS.textShadowOpacity.min} max={OVERLAY_LIMITS.textShadowOpacity.max} step={0.05} onChange={(v) => set('textShadowOpacity', v)} format={(v) => `${Math.round(v * 100)}%`} />
-            </SettingsRow>
-          </SettingsSubGroup>
+          <SettingsRow onReset={resetFor('textShadow')} title="Shadow" description="An outline behind text so it stays readable over any scene." control={<Toggle enabled={style.textShadow} onChange={() => set('textShadow', !style.textShadow)} />} />
+          {style.textShadow && (
+            <SettingsSubGroup>
+              <SettingsRow onReset={resetFor('textShadowColor')} title="Color" control={
+                <input type="color" value={style.textShadowColor || '#000000'} onChange={(e) => set('textShadowColor', e.target.value)} className="h-7 w-10 rounded cursor-pointer bg-transparent border border-borderSubtle" />
+              } />
+              <SettingsRow onReset={resetFor('textShadowSize')} title="Size" description="How far the shadow spreads. 0 turns it off.">
+                <Slider value={style.textShadowSize ?? 2} min={OVERLAY_LIMITS.textShadowSize.min} max={OVERLAY_LIMITS.textShadowSize.max} step={0.5} onChange={(v) => set('textShadowSize', v)} format={(v) => `${v}px`} />
+              </SettingsRow>
+              <SettingsRow onReset={resetFor('textShadowOpacity')} title="Strength" description="How solid the shadow is.">
+                <Slider value={style.textShadowOpacity ?? 0.85} min={OVERLAY_LIMITS.textShadowOpacity.min} max={OVERLAY_LIMITS.textShadowOpacity.max} step={0.05} onChange={(v) => set('textShadowOpacity', v)} format={(v) => `${Math.round(v * 100)}%`} />
+              </SettingsRow>
+            </SettingsSubGroup>
+          )}
           <SettingsRow onReset={resetFor('emojiStyle')} title="Emoji style" description="One consistent emoji set across every platform." help="System uses your machine's own emoji font instead." control={<Dropdown value={style.emojiStyle} options={emojiStyleOptions} onChange={(v) => set('emojiStyle', v)} align="right" />} />
         </SettingsSection>
 
-        <SettingsSection label="Emotes & badges" description="Emote sizing and every badge type.">
+        <SettingsSection label="Emotes & Badges" description="Emote sizing and every badge type.">
           <SettingsRow onReset={resetFor('emoteScale')} title="Emote size">
             <Slider value={style.emoteScale} min={OVERLAY_LIMITS.emoteScale.min} max={OVERLAY_LIMITS.emoteScale.max} step={0.05} onChange={(v) => set('emoteScale', v)} format={(v) => `${v.toFixed(2)}x`} />
           </SettingsRow>
           <SettingsRow onReset={resetFor('giantEmotes')} title="Giant emotes" description="The Gigantify an Emote power-up, drawn at 4x like Twitch does." help="The last emote of a gigantified message renders at 4x below the message." control={<Toggle enabled={style.giantEmotes !== false} onChange={() => set('giantEmotes', style.giantEmotes === false)} />} />
           <SettingsSubGroup>
-            <SettingsRow onReset={resetFor('giantEmoteAlign')} title="Giant emote placement" description="Where the big emote sits." help="Left, Center, and Right give it its own line below the message. Inline leaves it where it was typed, so an emote-only message shows it right after the name." disabled={style.giantEmotes === false}>
+            <SettingsRow onReset={resetFor('giantEmoteAlign')} title="Placement" description="Where the big emote sits." help="Left, Center, and Right give it its own line below the message. Inline leaves it where it was typed, so an emote-only message shows it right after the name." disabled={style.giantEmotes === false}>
               <SegmentedSelect value={style.giantEmoteAlign ?? 'center'} onChange={(v) => set('giantEmoteAlign', v)} options={GIANT_EMOTE_ALIGNS} />
             </SettingsRow>
           </SettingsSubGroup>
-          <SettingsRow onReset={resetFor('showGifs')} title="Chat GIFs" titleBadge={<SourceScope sources={['twitch']} />} description="GIFs that Tier 2 and Tier 3 subscribers post in chat, drawn big like a gigantified emote." help="Follows Giant emote placement: Left, Center and Right give each GIF its own line below the message, Inline leaves it where it was typed. Off shows the short description Twitch sends in its place." control={<Toggle enabled={style.showGifs !== false} onChange={() => set('showGifs', style.showGifs === false)} />} />
-          <SettingsRow onReset={resetFor('showPersonalEmotes')} title="7TV personal emotes" titleBadge={<SourceScope sources={['twitch']} />} description="Emotes a 7TV subscriber brings into every channel." help="A subscriber's personal 7TV set works in every channel, so chatters can show emotes your channel never added. Off renders those as the word that was typed. Your channel's own 7TV emotes are unaffected." control={<Toggle enabled={style.showPersonalEmotes !== false} onChange={() => set('showPersonalEmotes', style.showPersonalEmotes === false)} />} />
-          <SettingsRow onReset={resetFor('showBadges')} title="Show badges" description="Badges the platform sends: subscriber, moderator, VIP, and the rest." help="These arrive with each message from Twitch, Kick, YouTube and TikTok. Chat-client badges and the StreamNook member badge are separate, on the Third-party badges switch below, so turning this off leaves those showing." control={<Toggle enabled={style.showBadges} onChange={() => set('showBadges', !style.showBadges)} />} />
+          <SettingsRow onReset={resetFor('showGifs')} title="GIFs" titleBadge={<SourceScope sources={['twitch']} />} description="GIFs that Tier 2 and Tier 3 subscribers post in chat, drawn big like a gigantified emote." help="Follows the giant emote Placement: Left, Center and Right give each GIF its own line below the message, Inline leaves it where it was typed. Off shows the short description Twitch sends in its place." control={<Toggle enabled={style.showGifs !== false} onChange={() => set('showGifs', style.showGifs === false)} />} />
+          <SettingsRow onReset={resetFor('showPersonalEmotes')} title="Personal emotes" titleBadge={<SourceScope sources={['twitch']} />} description="Emotes a 7TV subscriber brings into every channel from their personal set." help="A subscriber's personal 7TV set works in every channel, so chatters can show emotes your channel never added. Off renders those as the word that was typed. Your channel's own 7TV emotes are unaffected." control={<Toggle enabled={style.showPersonalEmotes !== false} onChange={() => set('showPersonalEmotes', style.showPersonalEmotes === false)} />} />
+          <SettingsRow onReset={resetFor('showBadges')} title="Badges" description="Badges the platform sends: subscriber, moderator, VIP, and the rest." help="These arrive with each message from Twitch, Kick, YouTube and TikTok. Chat-client badges and the StreamNook member badge are separate, on the Add-on badges switch below, so turning this off leaves those showing." control={<Toggle enabled={style.showBadges} onChange={() => set('showBadges', !style.showBadges)} />} />
           {/* Scales every badge in the row, not just the platform ones, so this
               only goes dead when BOTH badge switches are off. */}
           <SettingsRow onReset={resetFor('badgeScale')} title="Badge size" disabled={!style.showBadges && style.showThirdPartyBadges === false}>
             <Slider value={style.badgeScale} min={OVERLAY_LIMITS.badgeScale.min} max={OVERLAY_LIMITS.badgeScale.max} step={0.05} onChange={(v) => set('badgeScale', v)} format={(v) => `${v.toFixed(2)}x`} />
           </SettingsRow>
-          <SettingsRow onReset={resetFor('showThirdPartyBadges')} title="Third-party badges" description="7TV, FFZ, Chatterino, and more." help="Native platform badges follow the Show badges toggle above." control={<Toggle enabled={style.showThirdPartyBadges} onChange={() => set('showThirdPartyBadges', !style.showThirdPartyBadges)} />} />
+          <SettingsRow onReset={resetFor('showThirdPartyBadges')} title="Add-on badges" description="Third-party badges: 7TV, FFZ, Chatterino, and more." help="Native platform badges follow the Badges toggle above." control={<Toggle enabled={style.showThirdPartyBadges} onChange={() => set('showThirdPartyBadges', !style.showThirdPartyBadges)} />} />
           <SettingsSubGroup>
-          <SettingsRow onReset={resetFor('hiddenBadgeProviders')} title="Badge providers" description="Pick which providers show." help="StreamNook is the member badge. The rest are third-party.">
+          <SettingsRow onReset={resetFor('hiddenBadgeProviders')} title="Services" description="Pick which badge services show." help="StreamNook is the member badge. The rest are third-party.">
             <div className="flex flex-wrap gap-2">
               {THIRD_PARTY_BADGE_PROVIDERS.map((p) => {
                 const on = style.showThirdPartyBadges !== false && !(style.hiddenBadgeProviders ?? []).includes(p.id);
@@ -1658,8 +1681,8 @@ const OverlayEditor = () => {
 
         <SettingsSection label="Chatters" description="Picture, name, and cosmetics of the person behind each message.">
           <SettingsRow onReset={resetFor('showAvatars')} title="Profile pictures" titleBadge={<SourceScope sources={['youtube', 'tiktok']} />} description="Avatars beside names." help="YouTube and TikTok send avatars. Twitch and Kick don't have them, so nothing changes there." control={<Toggle enabled={style.showAvatars} onChange={() => set('showAvatars', !style.showAvatars)} />} />
-          <SettingsRow onReset={resetFor('showAtSign')} title="@ before usernames" titleBadge={<SourceScope sources={['youtube']} />} description="Keep the @ on YouTube handles." help="YouTube names arrive as @handles. Off drops the leading @ from every name." control={<Toggle enabled={style.showAtSign} onChange={() => set('showAtSign', !style.showAtSign)} />} />
-          <SettingsRow onReset={resetFor('readableNameColors')} title="Readable name colors" description="Brighten names too dark to read." help="Walks a chatter's own color lighter until it stands out against your bubbles, your background, or the stream. The hue stays the same, and 7TV paints are never changed." control={<Toggle enabled={style.readableNameColors} onChange={() => set('readableNameColors', !style.readableNameColors)} />} />
+          <SettingsRow onReset={resetFor('showAtSign')} title="@ prefix" titleBadge={<SourceScope sources={['youtube']} />} description="Keep the @ before YouTube usernames." help="YouTube names arrive as @handles. Off drops the leading @ from every name." control={<Toggle enabled={style.showAtSign} onChange={() => set('showAtSign', !style.showAtSign)} />} />
+          <SettingsRow onReset={resetFor('readableNameColors')} title="Readable colors" description="Brighten name colors too dark to read." help="Walks a chatter's own color lighter until it stands out against your bubbles, your background, or the stream. The hue stays the same, and 7TV paints are never changed." control={<Toggle enabled={style.readableNameColors} onChange={() => set('readableNameColors', !style.readableNameColors)} />} />
           <SettingsRow onReset={resetFor('showPaints')}
             title={<span className="inline-flex items-center gap-1.5"><SevenTVLogo className="h-[11px] w-auto text-[#29b6f6]" /> Paints</span>}
             description="Colored and animated username gradients."
@@ -1679,7 +1702,7 @@ const OverlayEditor = () => {
           </SettingsRow>
           <SettingsSubGroup>
           <SettingsRow onReset={resetFor('firstTimeColor')}
-            title="Highlight color"
+            title="Color"
             description="Default matches the style: Twitch pink or StreamNook purple." help="One color drives the outline, fill, bar, and label together."
             disabled={style.firstTimeStyle === 'off'}
             control={
@@ -1699,7 +1722,7 @@ const OverlayEditor = () => {
               </div>
             }
           />
-          <SettingsRow onReset={resetFor('firstTimeFill')} title="Fill the highlight" description="A faint tint inside the outline." help="Color-matched to the outline, so the message reads highlighted instead of just bordered. The StreamNook style has its own wash." disabled={style.firstTimeStyle !== 'twitch'} control={<Toggle enabled={style.firstTimeFill} onChange={() => set('firstTimeFill', !style.firstTimeFill)} />} />
+          <SettingsRow onReset={resetFor('firstTimeFill')} title="Fill" description="A faint tint inside the outline." help="Color-matched to the outline, so the message reads highlighted instead of just bordered. The StreamNook style has its own wash." disabled={style.firstTimeStyle !== 'twitch'} control={<Toggle enabled={style.firstTimeFill} onChange={() => set('firstTimeFill', !style.firstTimeFill)} />} />
           <SettingsRow onReset={resetFor('firstTimeAnimation')} title="Animation" description="Plays on the border when the message lands." help="Sheen sweeps a glint across it. Pulse breathes it brighter. Chase sends a spark around it." disabled={style.firstTimeStyle === 'off'}>
             <SegmentedSelect
               value={style.firstTimeAnimation}
@@ -1707,11 +1730,11 @@ const OverlayEditor = () => {
               options={OVERLAY_ANIMATIONS.map((a) => ({ value: a.value, label: a.label }))}
             />
           </SettingsRow>
-          <SettingsRow onReset={resetFor('firstTimeAnimateRepeat')} title="Repeat the animation" description="Keep it going while the message is on screen." help="Sheen and Pulse replay every 5 seconds. Chase spins continuously." disabled={style.firstTimeStyle === 'off' || style.firstTimeAnimation === 'none'} control={<Toggle enabled={style.firstTimeAnimateRepeat} onChange={() => set('firstTimeAnimateRepeat', !style.firstTimeAnimateRepeat)} />} />
+          <SettingsRow onReset={resetFor('firstTimeAnimateRepeat')} title="Loop" description="Keep the animation going while the message is on screen." help="Sheen and Pulse replay every 5 seconds. Chase spins continuously." disabled={style.firstTimeStyle === 'off' || style.firstTimeAnimation === 'none'} control={<Toggle enabled={style.firstTimeAnimateRepeat} onChange={() => set('firstTimeAnimateRepeat', !style.firstTimeAnimateRepeat)} />} />
           </SettingsSubGroup>
         </SettingsSection>
 
-        <SettingsSection label="Messages" description="How messages render and flow.">
+        <SettingsSection label="Messages" description="How each message looks.">
           <SettingsRow onReset={resetFor('replyStyle')} title="Replies" description="How a reply shows the message it answers." help={'Context line shows "Replying to @name: their message" above it. @username puts just the name in front of the message, the way Twitch chat did before threading. Off shows the message on its own.'}>
             <SegmentedSelect value={style.replyStyle} options={REPLY_STYLES} onChange={(v) => set('replyStyle', v)} />
           </SettingsRow>
@@ -1719,16 +1742,16 @@ const OverlayEditor = () => {
             <SegmentedSelect value={style.linkStyle} options={LINK_STYLES} onChange={(v) => set('linkStyle', v)} />
           </SettingsRow>
           <SettingsSubGroup>
-            <SettingsRow onReset={resetFor('linkColor')} title="Link color" disabled={style.linkStyle !== 'accent'} control={
+            <SettingsRow onReset={resetFor('linkColor')} title="Color" disabled={style.linkStyle !== 'accent'} control={
               <input type="color" value={style.linkColor || DEFAULT_LINK_COLOR} onChange={(e) => set('linkColor', e.target.value)} disabled={style.linkStyle !== 'accent'} className="h-7 w-10 rounded cursor-pointer bg-transparent border border-borderSubtle disabled:cursor-not-allowed" />
             } />
-            <SettingsRow onReset={resetFor('linkUnderline')} title="Underline links" control={<Toggle enabled={style.linkUnderline !== false} onChange={() => set('linkUnderline', style.linkUnderline === false)} />} />
+            <SettingsRow onReset={resetFor('linkUnderline')} title="Underline" control={<Toggle enabled={style.linkUnderline !== false} onChange={() => set('linkUnderline', style.linkUnderline === false)} />} />
           </SettingsSubGroup>
-          <SettingsRow onReset={resetFor('showTimestamps')} title="Show timestamps" control={<Toggle enabled={style.showTimestamps} onChange={() => set('showTimestamps', !style.showTimestamps)} />} />
-          <SettingsRow onReset={resetFor('bubble')} title="Message bubbles" description="Each message in its own bubble. Reads better over busy gameplay." help="A member's atmosphere replaces the bubble on their rows." control={<Toggle enabled={style.bubble} onChange={() => set('bubble', !style.bubble)} />} />
+          <SettingsRow onReset={resetFor('showTimestamps')} title="Timestamps" control={<Toggle enabled={style.showTimestamps} onChange={() => set('showTimestamps', !style.showTimestamps)} />} />
+          <SettingsRow onReset={resetFor('bubble')} title="Bubbles" description="Each message in its own bubble. Reads better over busy gameplay." help="A member's atmosphere replaces the bubble on their rows." control={<Toggle enabled={style.bubble} onChange={() => set('bubble', !style.bubble)} />} />
           {style.bubble && (
             <SettingsSubGroup>
-              <SettingsRow onReset={resetFor('bubbleShape')} title="Bubble shape" description="Rounded, pill, or speech bubble." help="Rounded uses the corner radius below. Pill fully rounds the ends. Speech tucks in the bottom-left corner like a messenger bubble.">
+              <SettingsRow onReset={resetFor('bubbleShape')} title="Shape" description="Rounded, pill, or speech bubble." help="Rounded uses the corner radius below. Pill fully rounds the ends. Speech tucks in the bottom-left corner like a messenger bubble.">
                 <SegmentedSelect
                   value={style.bubbleShape}
                   onChange={(v) => set('bubbleShape', v)}
@@ -1738,24 +1761,27 @@ const OverlayEditor = () => {
               <SettingsRow onReset={resetFor('bubbleRadius')} title="Corner radius" disabled={style.bubbleShape === 'pill'}>
                 <Slider value={style.bubbleRadius} min={OVERLAY_LIMITS.bubbleRadius.min} max={OVERLAY_LIMITS.bubbleRadius.max} step={1} onChange={(v) => set('bubbleRadius', Math.round(v))} format={(v) => `${v}px`} />
               </SettingsRow>
-              <SettingsRow onReset={resetFor('bubbleColor')} title="Bubble color" control={
+              <SettingsRow onReset={resetFor('bubbleColor')} title="Color" control={
                 <input type="color" value={style.bubbleColor} onChange={(e) => set('bubbleColor', e.target.value)} className="h-7 w-10 rounded cursor-pointer bg-transparent border border-borderSubtle" />
               } />
-              <SettingsRow onReset={resetFor('bubbleOpacity')} title="Bubble opacity">
+              <SettingsRow onReset={resetFor('bubbleOpacity')} title="Opacity">
                 <Slider value={style.bubbleOpacity} min={OVERLAY_LIMITS.bubbleOpacity.min} max={OVERLAY_LIMITS.bubbleOpacity.max} step={0.05} onChange={(v) => set('bubbleOpacity', v)} format={(v) => `${Math.round(v * 100)}%`} />
               </SettingsRow>
             </SettingsSubGroup>
           )}
-          <SettingsRow onReset={resetFor('maxMessageLines')} title="Max lines per message" description="Cut long messages off so one wall of text can't eat the canvas.">
+          <SettingsRow onReset={resetFor('maxMessageLines')} title="Max lines" description="Lines per message; long ones are cut off so one wall of text can't eat the canvas.">
             <Slider value={style.maxMessageLines} min={OVERLAY_LIMITS.maxMessageLines.min} max={OVERLAY_LIMITS.maxMessageLines.max} step={1} onChange={(v) => set('maxMessageLines', Math.round(v))} format={(v) => (v === 0 ? 'No limit' : `${v}`)} />
           </SettingsRow>
-          <SettingsRow onReset={resetFor('maxMessageAgeSec')} title="Remove messages after" description="Takes a message off the overlay once it has been up this long, so a quiet stream never shows stale chat.">
+        </SettingsSection>
+
+        <SettingsSection label="Behavior" description="How chat flows: where new messages land, how long they stay, and what happens on reload.">
+          <SettingsRow onReset={resetFor('maxMessageAgeSec')} title="Lifetime" description="Removes a message from the overlay once it has been up this long, so a quiet stream never shows stale chat.">
             <Slider value={style.maxMessageAgeSec} min={OVERLAY_LIMITS.maxMessageAgeSec.min} max={OVERLAY_LIMITS.maxMessageAgeSec.max} step={5} onChange={(v) => set('maxMessageAgeSec', Math.round(v))} format={(v) => (v === 0 ? 'Never' : `${v}s`)} />
           </SettingsRow>
-          <SettingsRow onReset={resetFor('restoreOnReload')} title="Restore chat on reload" description="Bring back the last messages when the OBS source reloads." help="Off means the overlay comes back cleared when you reopen OBS or start a stream." control={<Toggle enabled={style.restoreOnReload} onChange={() => set('restoreOnReload', !style.restoreOnReload)} />} />
-          <SettingsRow onReset={resetFor('loadRecentChat')} title="Recent chat on start" titleBadge={<SourceScope sources={['twitch']} />} description="Open with the channel's last messages." help="When the overlay starts, it fills with up to 40 recent Twitch messages instead of waiting for new ones. Deleted messages stay gone." control={<Toggle enabled={style.loadRecentChat} onChange={() => set('loadRecentChat', !style.loadRecentChat)} />} />
+          <SettingsRow onReset={resetFor('restoreOnReload')} title="Restore on reload" description="Bring back the last chat messages when the OBS source reloads." help="Off means the overlay comes back cleared when you reopen OBS or start a stream." control={<Toggle enabled={style.restoreOnReload} onChange={() => set('restoreOnReload', !style.restoreOnReload)} />} />
+          <SettingsRow onReset={resetFor('loadRecentChat')} title="Recent chat" titleBadge={<SourceScope sources={['twitch']} />} description="Open with the channel's last messages when the overlay starts." help="When the overlay starts, it fills with up to 40 recent Twitch messages instead of waiting for new ones. Deleted messages stay gone." control={<Toggle enabled={style.loadRecentChat} onChange={() => set('loadRecentChat', !style.loadRecentChat)} />} />
           <SettingsRow onReset={resetFor('modCommands')} title="Mod commands" titleBadge={<SourceScope sources={['twitch']} />} description="Mods can reload or clear the overlay from chat." help="The broadcaster and moderators type !refreshoverlay to reload it or !clearoverlay to empty it. The command itself never shows on the overlay." control={<Toggle enabled={style.modCommands} onChange={() => set('modCommands', !style.modCommands)} />} />
-          <SettingsRow onReset={resetFor('direction')} title="New messages" description="Where incoming messages appear.">
+          <SettingsRow onReset={resetFor('direction')} title="Direction" description="Where new messages appear.">
             <SegmentedSelect
               value={style.direction}
               onChange={(v) => set('direction', v)}
@@ -1773,20 +1799,20 @@ const OverlayEditor = () => {
 
         <>
         <SettingsSection label="Filters" description="Keep bots and command spam out of the overlay.">
-          <SettingsRow onReset={resetFor('hideBots')} title="Hide bot messages" description="Nightbot, StreamElements, other known bots, and anyone with a bot badge." help="Channel bots vary and some slip through. Hide any it misses by name under Hidden accounts." control={<Toggle enabled={style.hideBots} onChange={() => set('hideBots', !style.hideBots)} />} />
-          <SettingsRow onReset={resetFor('hideCommands')} title="Hide command messages" description="Keeps chat commands like !title off the overlay; choose which ones below." control={<Toggle enabled={style.hideCommands} onChange={() => set('hideCommands', !style.hideCommands)} />} />
+          <SettingsRow onReset={resetFor('hideBots')} title="Hide bots" description="Nightbot, StreamElements, other known bots, and anyone with a bot badge." help="Channel bots vary and some slip through. Hide any it misses by name under Hidden Accounts." control={<Toggle enabled={style.hideBots} onChange={() => set('hideBots', !style.hideBots)} />} />
+          <SettingsRow onReset={resetFor('hideCommands')} title="Hide commands" description="Keeps chat commands like !title off the overlay; choose which ones below." control={<Toggle enabled={style.hideCommands} onChange={() => set('hideCommands', !style.hideCommands)} />} />
           {style.hideCommands && (
             <SettingsSubGroup>
-              <SettingsRow onReset={resetFor('commandFilters')} title="Commands to hide">
+              <SettingsRow onReset={resetFor('commandFilters')} title="Commands">
                 <CommandFilterEditor filters={style.commandFilters ?? []} onAdd={addCommandFilter} onRemove={removeCommandFilter} />
               </SettingsRow>
             </SettingsSubGroup>
           )}
-          <SettingsRow onReset={resetFor('hidePhrases')} title="Hide messages containing" description="Words or phrases that keep a message off the overlay." help="Matched anywhere in the message, in any case, whatever channel moderation does. Events are unaffected.">
+          <SettingsRow onReset={resetFor('hidePhrases')} title="Phrases" description="Hide messages containing these words or phrases." help="Matched anywhere in the message, in any case, whatever channel moderation does. Events are unaffected.">
             <PhraseEditor phrases={style.hidePhrases ?? []} onAdd={addPhrase} onRemove={removePhrase} />
           </SettingsRow>
         </SettingsSection>
-        <SettingsSection label="Hidden accounts" description="Hide specific people on each source, by username or display name.">
+        <SettingsSection label="Hidden Accounts" description="Hide specific people on each source, by username or display name.">
           {sources.length === 0 ? (
             <p className="py-3 text-[13px] text-textMuted">Add a source first, then hide accounts on it.</p>
           ) : (
@@ -1804,21 +1830,21 @@ const OverlayEditor = () => {
         </>
 
         <SettingsSection label="Events" description="Subs, gifts, raids, and more. How they look, and which ones each source shows.">
-          <SettingsRow onReset={resetFor('cheerDisplay')} title="Bits messages" titleBadge={<SourceScope sources={['twitch']} />} description="Show a cheer inline like a normal message, or as an event card like subs and raids.">
+          <SettingsRow onReset={resetFor('cheerDisplay')} title="Cheers" titleBadge={<SourceScope sources={['twitch']} />} description="Show a bits cheer inline like a normal message, or as an event card like subs and raids.">
             <SegmentedSelect value={style.cheerDisplay ?? 'message'} onChange={(v) => set('cheerDisplay', v)} options={CHEER_DISPLAYS} />
           </SettingsRow>
-          <SettingsRow onReset={resetFor('eventStyle')} title="Event style" description="A subtle tint, a thin platform-colored ring, or the StreamNook gradient wash." help="Every style shows the sender's badges and paint name.">
+          <SettingsRow onReset={resetFor('eventStyle')} title="Style" description="A subtle tint, a thin platform-colored ring, or the StreamNook gradient wash." help="Every style shows the sender's badges and paint name.">
             <SegmentedSelect
               value={style.eventStyle}
               onChange={(v) => set('eventStyle', v)}
               options={[{ value: 'plain', label: 'Plain' }, { value: 'outline', label: 'Outline' }, { value: 'streamnook', label: 'StreamNook' }]}
             />
           </SettingsRow>
+          {style.eventStyle === 'outline' && (
           <SettingsSubGroup>
           <SettingsRow onReset={resetFor('eventOutlineColor')}
             title="Outline color"
             description="One fixed ring color for every event. Default gives each event its own platform's color."
-            disabled={style.eventStyle !== 'outline'}
             control={
               <div className="flex items-center gap-2">
                 {!!style.eventOutlineColor && (
@@ -1830,26 +1856,26 @@ const OverlayEditor = () => {
                   type="color"
                   value={style.eventOutlineColor || '#9147ff'}
                   onChange={(e) => set('eventOutlineColor', e.target.value)}
-                  disabled={style.eventStyle !== 'outline'}
-                  className="h-7 w-10 rounded cursor-pointer bg-transparent border border-borderSubtle disabled:cursor-not-allowed"
+                  className="h-7 w-10 rounded cursor-pointer bg-transparent border border-borderSubtle"
                 />
               </div>
             }
           />
-          <SettingsRow onReset={resetFor('eventFill')} title="Fill the outline" description="A nearly transparent tint inside the ring, matched to the outline's color." disabled={style.eventStyle !== 'outline'} control={<Toggle enabled={style.eventFill} onChange={() => set('eventFill', !style.eventFill)} />} />
-          <SettingsRow onReset={resetFor('eventAnimation')} title="Animation" description="Plays on the ring when the event lands." help="Sheen sweeps a glint across it. Pulse breathes it brighter. Chase sends a spark around it." disabled={style.eventStyle !== 'outline'}>
+          <SettingsRow onReset={resetFor('eventFill')} title="Fill" description="A nearly transparent tint inside the ring, matched to the outline's color." control={<Toggle enabled={style.eventFill} onChange={() => set('eventFill', !style.eventFill)} />} />
+          <SettingsRow onReset={resetFor('eventAnimation')} title="Animation" description="Plays on the ring when the event lands." help="Sheen sweeps a glint across it. Pulse breathes it brighter. Chase sends a spark around it.">
             <SegmentedSelect
               value={style.eventAnimation}
               onChange={(v) => set('eventAnimation', v)}
               options={OVERLAY_ANIMATIONS.map((a) => ({ value: a.value, label: a.label }))}
             />
           </SettingsRow>
-          <SettingsRow onReset={resetFor('eventAnimateRepeat')} title="Repeat the animation" description="Keep it going while the event is on screen." help="Sheen and Pulse replay every 5 seconds. Chase spins continuously." disabled={style.eventStyle !== 'outline' || style.eventAnimation === 'none'} control={<Toggle enabled={style.eventAnimateRepeat} onChange={() => set('eventAnimateRepeat', !style.eventAnimateRepeat)} />} />
+          <SettingsRow onReset={resetFor('eventAnimateRepeat')} title="Loop" description="Keep the animation going while the event is on screen." help="Sheen and Pulse replay every 5 seconds. Chase spins continuously." disabled={style.eventAnimation === 'none'} control={<Toggle enabled={style.eventAnimateRepeat} onChange={() => set('eventAnimateRepeat', !style.eventAnimateRepeat)} />} />
           </SettingsSubGroup>
+          )}
           <SettingsRow
-            title="Custom event text"
+            title="Wording"
             onReset={resetFor('eventTemplates')}
-            description="Your own wording for each event, with tokens for the details." help="Leave one blank to keep what the platform sends. Click a token to drop it in at the cursor, or open the full list to see everything you can reference."
+            description="Custom event text: your own wording for each event, with tokens for the details." help="Leave one blank to keep what the platform sends. Click a token to drop it in at the cursor, or open the full list to see everything you can reference."
           >
             <TokenLegend />
           </SettingsRow>
@@ -1870,43 +1896,45 @@ const OverlayEditor = () => {
             ))}
           </SettingsSubGroup>
           <SettingsRow
-            title="Show events"
-            description="Each platform filters on its own."
+            title="Platforms"
+            description="Which events show, set per platform. Each platform filters on its own."
             help={sourceProviders.length
               ? "Turn a type off and that platform's version of it never reaches the overlay. The other platforms are untouched."
               : "Add sources and this narrows to just those platforms. Turning a type off hides only that platform's version of it."}
           />
-          {eventProviders.map((provider) => (
-            <SettingsRow
-              key={`pe-${provider}`}
-              title={<span className="inline-flex items-center gap-1.5"><ProviderIcon provider={provider} size="14px" /> {PROVIDERS[provider].label}</span>}
-              // Scoped to this platform: every source filters on its own, so
-              // restoring one must not un-hide what was turned off on another.
-              onReset={(style.hiddenProviderEvents ?? []).some((k) => k.startsWith(`${provider}:`))
-                ? () => setStyle((st) => ({
-                    ...st,
-                    hiddenProviderEvents: (st.hiddenProviderEvents ?? []).filter((k) => !k.startsWith(`${provider}:`)),
-                  }))
-                : undefined}
-            >
-              <div className="flex flex-wrap gap-2">
-                {(PROVIDER_EVENT_CATEGORIES[provider] ?? []).map((cat) => {
-                  const key = `${provider}:${cat}`;
-                  const on = !(style.hiddenProviderEvents ?? []).includes(key);
-                  return (
-                    <button
-                      key={key}
-                      onClick={() => toggleProviderEvent(key)}
-                      style={{ borderRadius: 8 }}
-                      className={`px-2.5 py-1.5 text-[13px] font-medium transition-all ${on ? 'glass-input text-textPrimary' : 'glass-button text-textSecondary hover:text-textPrimary'}`}
-                    >
-                      {catLabel(provider, cat)}
-                    </button>
-                  );
-                })}
-              </div>
-            </SettingsRow>
-          ))}
+          <SettingsSubGroup>
+            {eventProviders.map((provider) => (
+              <SettingsRow
+                key={`pe-${provider}`}
+                title={<span className="inline-flex items-center gap-1.5"><ProviderIcon provider={provider} size="14px" /> {PROVIDERS[provider].label}</span>}
+                // Scoped to this platform: every source filters on its own, so
+                // restoring one must not un-hide what was turned off on another.
+                onReset={(style.hiddenProviderEvents ?? []).some((k) => k.startsWith(`${provider}:`))
+                  ? () => setStyle((st) => ({
+                      ...st,
+                      hiddenProviderEvents: (st.hiddenProviderEvents ?? []).filter((k) => !k.startsWith(`${provider}:`)),
+                    }))
+                  : undefined}
+              >
+                <div className="flex flex-wrap gap-2">
+                  {(PROVIDER_EVENT_CATEGORIES[provider] ?? []).map((cat) => {
+                    const key = `${provider}:${cat}`;
+                    const on = !(style.hiddenProviderEvents ?? []).includes(key);
+                    return (
+                      <button
+                        key={key}
+                        onClick={() => toggleProviderEvent(key)}
+                        style={{ borderRadius: 8 }}
+                        className={`px-2.5 py-1.5 text-[13px] font-medium transition-all ${on ? 'glass-input text-textPrimary' : 'glass-button text-textSecondary hover:text-textPrimary'}`}
+                      >
+                        {catLabel(provider, cat)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </SettingsRow>
+            ))}
+          </SettingsSubGroup>
           {sourceProviders.includes('youtube') && (
             <SettingsRow onReset={resetFor('superchatCurrency')}
               title="Super Chat currency"
@@ -1915,6 +1943,7 @@ const OverlayEditor = () => {
             />
           )}
         </SettingsSection>
+      </div>
       </div>
 
       {/* ── Preview studio ───────────────────────────────────────── */}
