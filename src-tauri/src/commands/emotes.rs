@@ -13,31 +13,86 @@ use tokio::sync::RwLock;
 
 pub struct EmoteServiceState(pub Arc<RwLock<EmoteService>>);
 
+/// The 7TV image size a page renders at, from what it asked for. 7TV is the
+/// only provider cached per size; the others have one file per emote.
+pub(crate) fn render_tier(tier: Option<&str>) -> &'static str {
+    match tier {
+        Some("1x") => "1x",
+        Some("3x") => "3x",
+        Some("4x") => "4x",
+        _ => "2x",
+    }
+}
+
+/// Put each emote's disk-cache file in `local_url`, at `tier` for 7TV, from
+/// the in-memory manifest (one read lock for the whole set). A page used to
+/// work this out itself, which meant pulling the entire cache index (tens of
+/// thousands of id -> path pairs, megabytes over IPC) into every window that
+/// shows emotes. Only ever applied to the copy handed to a page: a path goes
+/// stale when the cache is cleared, so the cached and stored sets never hold one.
+pub(crate) fn stamp_local_paths<'a>(emotes: impl IntoIterator<Item = &'a mut Emote>, tier: &str) {
+    let mut emotes: Vec<&mut Emote> = emotes.into_iter().collect();
+    let keys: Vec<String> = emotes.iter().map(|e| emote_cache_key(&e.provider, &e.id, tier)).collect();
+    let paths = universal_cache_service::cached_file_paths(CacheType::Emote, &keys);
+    if paths.is_empty() {
+        return;
+    }
+    for (emote, key) in emotes.iter_mut().zip(&keys) {
+        emote.local_url = paths.get(key).cloned();
+    }
+}
+
+pub(crate) fn stamp_set_paths(set: &mut EmoteSet, tier: &str) {
+    let EmoteSet { twitch, bttv, seven_tv, ffz, kick, .. } = set;
+    stamp_local_paths(
+        twitch.iter_mut().chain(bttv.iter_mut()).chain(seven_tv.iter_mut()).chain(ffz.iter_mut()).chain(kick.iter_mut()),
+        tier,
+    );
+}
+
+/// A channel's emote set for a page, with disk-cache paths filled in for the
+/// size the page renders. Rust finds the signed-in viewer's token itself
+/// (their sub, follower and bits emotes), so no page ever holds it.
 #[tauri::command]
 pub async fn fetch_channel_emotes(
     channel_name: Option<String>,
     channel_id: Option<String>,
-    access_token: Option<String>,
     // Which platform `channel_id` belongs to. Absent = twitch, so callers that
     // predate multi-platform are unchanged.
     provider: Option<String>,
+    tier: Option<String>,
     state: State<'_, EmoteServiceState>,
 ) -> Result<EmoteSet, String> {
+    // Only Twitch has per-viewer emotes. Signed out is fine: globals and the
+    // channel's third-party sets still come back.
+    let access_token = match provider.as_deref() {
+        None | Some("twitch") => crate::services::twitch_service::TwitchService::get_token().await.ok(),
+        _ => None,
+    };
     let service = state.0.read().await;
-    service
+    let mut set = service
         .fetch_channel_emotes(channel_name, channel_id, access_token, provider)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    drop(service);
+    stamp_set_paths(&mut set, render_tier(tier.as_deref()));
+    Ok(set)
 }
 
 #[tauri::command]
 pub async fn get_emote_by_name(
     channel_id: Option<String>,
     emote_name: String,
+    tier: Option<String>,
     state: State<'_, EmoteServiceState>,
 ) -> Result<Option<Emote>, String> {
     let service = state.0.read().await;
-    Ok(service.get_emote_by_name(channel_id, &emote_name).await)
+    let mut emote = service.get_emote_by_name(channel_id, &emote_name).await;
+    drop(service);
+    if let Some(e) = emote.as_mut() {
+        stamp_local_paths(std::iter::once(e), render_tier(tier.as_deref()));
+    }
+    Ok(emote)
 }
 
 #[derive(Serialize)]
@@ -81,10 +136,7 @@ pub async fn match_emote_tokens(
         Profile::Cycle => 50,
         Profile::Search => 60,
     });
-    let tier = match tier.as_deref() {
-        Some(t @ ("1x" | "2x" | "3x" | "4x")) => t,
-        _ => "2x",
-    };
+    let tier = render_tier(tier.as_deref());
     let channel_id = channel_id.filter(|id| !id.is_empty());
 
     // Taken before any set is locked, so nothing awaits under those locks.

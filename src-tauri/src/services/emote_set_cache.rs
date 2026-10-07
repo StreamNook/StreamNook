@@ -10,6 +10,8 @@
 //! Chatterino7's readProviderEmotesCache / writeProviderEmotesCache.
 //!
 //! Files live at <cache_dir>/emote_sets/<channel_id>.json, one per channel.
+//! Kick and YouTube 7TV sets, which are keyed differently and hold their own
+//! emote shape, live beside them as <provider>-<key>.json (`load_provider`).
 
 use anyhow::{Context, Result};
 use log::{debug, warn};
@@ -206,5 +208,40 @@ fn write_set(channel_id: &str, set: &EmoteSet) {
             }
         }
         Err(e) => warn!("[EmoteSetCache] failed to serialize {}: {}", channel_id, e),
+    }
+}
+
+/// A non-Twitch 7TV set (Kick, YouTube), stored beside the Twitch
+/// dictionaries as `<provider>-<key>.json`. Those sets otherwise lived in memory
+/// only, so every start rendered the first minute of 7TV words in that chat as
+/// text while a large set downloaded, and rows already parsed never recover.
+pub fn load_provider<T: serde::de::DeserializeOwned>(provider: &str, key: &str) -> Option<T> {
+    let path = path_for(&format!("{provider}-{key}")).ok()?;
+    let bytes = fs::read(&path).ok()?;
+    match serde_json::from_slice::<T>(&bytes) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            warn!("[EmoteSetCache] failed to parse {} (treating as absent): {}", path.display(), e);
+            None
+        }
+    }
+}
+
+/// Persist a non-Twitch 7TV set. Callers save only complete answers.
+pub fn save_provider<T: serde::Serialize>(provider: &str, key: &str, value: &T) {
+    let path = match path_for(&format!("{provider}-{key}")) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("[EmoteSetCache] skip save, bad key {provider}-{key}: {e}");
+            return;
+        }
+    };
+    match serde_json::to_vec(value) {
+        Ok(bytes) => {
+            if let Err(e) = fs::write(&path, &bytes) {
+                warn!("[EmoteSetCache] failed to write {}: {}", path.display(), e);
+            }
+        }
+        Err(e) => warn!("[EmoteSetCache] failed to serialize {provider}-{key}: {e}"),
     }
 }

@@ -36,8 +36,10 @@ use crate::services::universal_cache_service::{
 };
 
 /// How many channels' emote lists to fetch at once during planning. Each fetch
-/// internally fans out to 4 providers, so keep this modest.
-const SCAN_CONCURRENCY: usize = 8;
+/// internally fans out to 4 providers, and at 8 a scan of a hundred follows
+/// drew 429s from Twitch's user-emotes endpoint. The scan runs while the viewer
+/// is away, so finishing sooner buys nothing.
+const SCAN_CONCURRENCY: usize = 4;
 /// How many emote image downloads to keep in flight. AFK, so aggressive, but
 /// capped to stay a decent citizen to the provider CDNs.
 const DOWNLOAD_CONCURRENCY: usize = 16;

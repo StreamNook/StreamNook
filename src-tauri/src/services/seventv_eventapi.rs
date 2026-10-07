@@ -132,6 +132,19 @@ pub fn init(app_handle: AppHandle, emote_service: Arc<RwLock<EmoteService>>) {
     let _ = SERVICE.set(service);
 }
 
+/// The subscription table's key: the bare login for Twitch (every existing
+/// Twitch call site passes one), `platform:name` for the rest. Keyed by name
+/// alone, Twitch `xqc` and Kick `xqc` were one entry: whichever subscribed
+/// second was skipped as already subscribed and never got live set updates,
+/// and a Twitch PART unsubscribed the Kick channel.
+fn sub_key(channel_name: &str, platform: &str) -> String {
+    let name = channel_name.to_lowercase();
+    match platform.to_lowercase().as_str() {
+        "twitch" | "" => name,
+        p => format!("{p}:{name}"),
+    }
+}
+
 /// Subscribe to a Twitch channel's 7TV events. Thin wrapper over
 /// `subscribe_channel_on` so every existing Twitch call site is unchanged.
 pub async fn subscribe_channel(channel_name: &str, channel_id: &str) {
@@ -153,7 +166,7 @@ pub async fn subscribe_channel_on(channel_name: &str, channel_id: &str, platform
         return;
     };
 
-    let key = channel_name.to_lowercase();
+    let key = sub_key(channel_name, platform);
     if svc.subs.read().await.contains_key(&key) {
         return; // already subscribed (e.g. IRC reconnect re-running the hook)
     }
@@ -168,7 +181,8 @@ pub async fn subscribe_channel_on(channel_name: &str, channel_id: &str, platform
     }
 
     let sub = ChannelSub {
-        channel_name: key.clone(),
+        // The bare name: each platform's own emote store is keyed by it.
+        channel_name: channel_name.to_lowercase(),
         channel_id: channel_id.to_string(),
         platform: platform.to_lowercase(),
         emote_set_id: ids.emote_set_id,
@@ -191,12 +205,17 @@ pub async fn subscribe_channel_on(channel_name: &str, channel_id: &str, platform
     );
 }
 
-/// Unsubscribe a channel (last consumer left).
+/// Unsubscribe a Twitch channel (last consumer left).
 pub async fn unsubscribe_channel(channel_name: &str) {
+    unsubscribe_channel_on(channel_name, "twitch").await;
+}
+
+/// Unsubscribe a channel on a given platform (its chat closed).
+pub async fn unsubscribe_channel_on(channel_name: &str, platform: &str) {
     let Some(svc) = SERVICE.get() else {
         return;
     };
-    let key = channel_name.to_lowercase();
+    let key = sub_key(channel_name, platform);
     if let Some(sub) = svc.subs.write().await.remove(&key) {
         let _ = svc.cmd_tx.send(Cmd::Unsubscribe(sub));
         debug!("[7TV EventAPI] unsubscribed channel {}", key);
@@ -377,13 +396,11 @@ fn spawn_resync(sub: &ChannelSub, emote_service: Arc<RwLock<EmoteService>>) {
         match sub.platform.as_str() {
             "kick" => {
                 if let Ok(uid) = sub.channel_id.parse::<u64>() {
-                    super::providers::kick_emotes::invalidate(&sub.channel_name);
-                    super::providers::kick_emotes::refresh(&sub.channel_name, uid).await;
+                    super::providers::kick_emotes::refresh_after_edit(&sub.channel_name, uid).await;
                 }
             }
             "youtube" => {
-                super::providers::youtube_emotes::invalidate(&sub.channel_name);
-                super::providers::youtube_emotes::refresh(&sub.channel_name, &sub.channel_id)
+                super::providers::youtube_emotes::refresh_after_edit(&sub.channel_name, &sub.channel_id)
                     .await;
             }
             _ => {
@@ -777,18 +794,22 @@ async fn handle_emote_set_update(
         return;
     }
 
-    // Map the emote set back to the channel we subscribed it for. The channel
-    // entitlement subscription also delivers other people's PERSONAL sets on
-    // this same event type; those match no channel and are ignored here.
-    let channel = {
+    // Map the emote set back to every channel we subscribed it for: one 7TV
+    // set is commonly shared by a streamer's Twitch and Kick (or YouTube), and
+    // applying it to whichever entry a map lookup met first left the other
+    // channel's chat on the old set. The channel entitlement subscription also
+    // delivers other people's PERSONAL sets on this same event type; those
+    // match no channel and are ignored here.
+    let targets: Vec<(String, String, String)> = {
         let map = subs.read().await;
         map.values()
-            .find(|s| s.emote_set_id.as_deref() == Some(set_id))
+            .filter(|s| s.emote_set_id.as_deref() == Some(set_id))
             .map(|s| (s.channel_name.clone(), s.channel_id.clone(), s.platform.clone()))
+            .collect()
     };
-    let Some((channel_name, channel_id, platform)) = channel else {
+    if targets.is_empty() {
         return;
-    };
+    }
 
     let actor_name = body
         .pointer("/actor/display_name")
@@ -854,83 +875,83 @@ async fn handle_emote_set_update(
         .map(|(_, old, row)| json!({ "old": old, "new": row.name }))
         .collect();
 
-    // Apply the delta to every copy this process holds. Kick and YouTube keep
-    // their own name-keyed stores; until those grow a delta entry point they
-    // refetch, spawned so the read loop never waits on it.
-    let composed: Option<Value> = match platform.as_str() {
-        "kick" | "youtube" => {
-            let (name, id, p) = (channel_name.clone(), channel_id.clone(), platform.clone());
-            tokio::spawn(async move {
-                if p == "kick" {
-                    if let Ok(uid) = id.parse::<u64>() {
-                        super::providers::kick_emotes::invalidate(&name);
-                        super::providers::kick_emotes::refresh(&name, uid).await;
+    for (channel_name, channel_id, platform) in targets {
+        // Apply the delta to every copy this process holds. Kick and YouTube keep
+        // their own name-keyed stores; until those grow a delta entry point they
+        // refetch, spawned so the read loop never waits on it.
+        let composed: Option<Value> = match platform.as_str() {
+            "kick" | "youtube" => {
+                let (name, id, p) = (channel_name.clone(), channel_id.clone(), platform.clone());
+                tokio::spawn(async move {
+                    if p == "kick" {
+                        if let Ok(uid) = id.parse::<u64>() {
+                            super::providers::kick_emotes::refresh_after_edit(&name, uid).await;
+                        }
+                    } else {
+                        super::providers::youtube_emotes::refresh_after_edit(&name, &id).await;
                     }
-                } else {
-                    super::providers::youtube_emotes::invalidate(&name);
-                    super::providers::youtube_emotes::refresh(&name, &id).await;
-                }
-            });
-            None
-        }
-        _ => {
-            let globals = emote_service::seventv_globals_snapshot().await;
-            let delta = SeventvSetDelta {
-                added: added_rows,
-                removed: removed_rows,
-                updated: updated_rows,
-            };
-            // The parse dictionary (chat) and the picker cache get the same
-            // patch; the disk copy follows on a debounce inside the first call.
-            let composed =
-                IrcService::apply_seventv_delta(&channel_name, &channel_id, &delta, &globals).await;
-            let svc = emote_service.read().await;
-            let _ = svc
-                .apply_seventv_delta_cached(&channel_id, &delta, &globals)
-                .await;
-            match composed {
-                Some(c) => serde_json::to_value(&c).ok(),
-                None => {
-                    // Channel set not in memory (no chat open on it here): there
-                    // is nothing to patch, and a window that fetches next must
-                    // not get the pre-change cached set.
-                    svc.invalidate_channel(&channel_id).await;
-                    None
+                });
+                None
+            }
+            _ => {
+                let globals = emote_service::seventv_globals_snapshot().await;
+                let delta = SeventvSetDelta {
+                    added: added_rows.clone(),
+                    removed: removed_rows.clone(),
+                    updated: updated_rows.clone(),
+                };
+                // The parse dictionary (chat) and the picker cache get the same
+                // patch; the disk copy follows on a debounce inside the first call.
+                let composed =
+                    IrcService::apply_seventv_delta(&channel_name, &channel_id, &delta, &globals).await;
+                let svc = emote_service.read().await;
+                let _ = svc
+                    .apply_seventv_delta_cached(&channel_id, &delta, &globals)
+                    .await;
+                match composed {
+                    Some(c) => serde_json::to_value(&c).ok(),
+                    None => {
+                        // Channel set not in memory (no chat open on it here): there
+                        // is nothing to patch, and a window that fetches next must
+                        // not get the pre-change cached set.
+                        svc.invalidate_channel(&channel_id).await;
+                        None
+                    }
                 }
             }
-        }
-    };
+        };
 
-    let composed_present = composed.is_some();
-    let _ = app_handle.emit(
-        "7tv://emote-set-update",
-        json!({
-            "channel": channel_name,
-            "channel_id": channel_id,
-            // Which platform's chat key / emote store this refers to; without it
-            // the frontend would treat every update as Twitch.
-            "platform": platform,
-            "actor_name": actor_name,
-            "added": added_names,
-            "removed": removed_names,
-            "renamed": renamed_json,
-            // The composed dictionary delta: rows to drop (by id AND name) then
-            // rows to add, including any global a removal stopped shadowing, so
-            // a window patches its cached set in place with no fetch. Null when
-            // this process holds no copy of the set; the window refetches then.
-            "composed": composed,
-        }),
-    );
+        let composed_present = composed.is_some();
+        let _ = app_handle.emit(
+            "7tv://emote-set-update",
+            json!({
+                "channel": channel_name,
+                "channel_id": channel_id,
+                // Which platform's chat key / emote store this refers to; without it
+                // the frontend would treat every update as Twitch.
+                "platform": platform,
+                "actor_name": actor_name,
+                "added": added_names,
+                "removed": removed_names,
+                "renamed": renamed_json,
+                // The composed dictionary delta: rows to drop (by id AND name) then
+                // rows to add, including any global a removal stopped shadowing, so
+                // a window patches its cached set in place with no fetch. Null when
+                // this process holds no copy of the set; the window refetches then.
+                "composed": composed,
+            }),
+        );
 
-    info!(
-        "[7TV EventAPI] {} emote set: +{} -{} ~{} (by {}){}",
-        channel_name,
-        added_names.len(),
-        removed_names.len(),
-        renamed_json.len(),
-        actor_name,
-        if composed_present { "" } else { ", refetch" }
-    );
+        info!(
+            "[7TV EventAPI] {} emote set: +{} -{} ~{} (by {}){}",
+            channel_name,
+            added_names.len(),
+            removed_names.len(),
+            renamed_json.len(),
+            actor_name,
+            if composed_present { "" } else { ", refetch" }
+        );
+    }
 }
 
 // A user's entitlement changed in a subscribed channel. Two kinds matter:

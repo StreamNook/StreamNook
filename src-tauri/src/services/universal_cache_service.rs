@@ -1612,10 +1612,15 @@ pub async fn get_cached_files_list(cache_type: CacheType) -> Result<HashMap<Stri
     //     "[UniversalCache] Getting cached files list for {:?}",
     //     cache_type
     // );
-    let manifest = load_manifest()?;
+    // Filtered under the read lock. `load_manifest()` clones every entry of
+    // every kind first, which cost ~150 ms per call on a 70k-entry cache to
+    // return a few hundred badge paths.
+    let guard = MANIFEST_MEMORY
+        .read()
+        .map_err(|_| anyhow::anyhow!("manifest memory lock poisoned"))?;
     let mut files = HashMap::new();
 
-    for (key, entry) in manifest.entries.iter() {
+    for (key, entry) in guard.entries.iter() {
         if let (Some(id), Some(path)) = (key.strip_prefix("file:"), usable_file_path(&cache_type, entry)) {
             files.insert(id.to_string(), path.to_string());
         }

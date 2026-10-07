@@ -69,6 +69,21 @@ fn seventv_globals_cache() -> &'static SharedEmoteCache {
     SEVENTV_GLOBALS_CACHE.get_or_init(|| RwLock::new(None))
 }
 
+// The BTTV and FFZ global sets, cached the same way. Fetching them once per
+// channel turned a scan of a hundred follows into two hundred global requests
+// inside two minutes; both APIs answer that with errors, and every channel
+// scanned during the burst lost its BTTV and FFZ rows.
+static BTTV_GLOBALS_CACHE: OnceLock<SharedEmoteCache> = OnceLock::new();
+static FFZ_GLOBALS_CACHE: OnceLock<SharedEmoteCache> = OnceLock::new();
+
+fn bttv_globals_cache() -> &'static SharedEmoteCache {
+    BTTV_GLOBALS_CACHE.get_or_init(|| RwLock::new(None))
+}
+
+fn ffz_globals_cache() -> &'static SharedEmoteCache {
+    FFZ_GLOBALS_CACHE.get_or_init(|| RwLock::new(None))
+}
+
 /// The last known 7TV global set, any age (empty if never fetched). Delta
 /// application needs it to restore a global whose name a channel row stopped
 /// shadowing; a stale copy is fine for that, globals change rarely.
@@ -184,6 +199,7 @@ pub async fn fetch_personal_emote_set(set_id: &str) -> Vec<Emote> {
                 .pointer("/owner/display_name")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
+            let animated = data.get("animated").and_then(|v| v.as_bool());
             out.push(Emote {
                 id: id.to_string(),
                 name: name.to_string(),
@@ -197,6 +213,7 @@ pub async fn fetch_personal_emote_set(set_id: &str) -> Vec<Emote> {
                 owner_name,
                 modifier_flags: None,
                 ffz_sub_only: None,
+                animated,
             });
         }
     }
@@ -386,6 +403,7 @@ pub(crate) fn parse_seventv_active_emotes(items: &[serde_json::Value]) -> Vec<Em
                 .pointer("/owner/display_name")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
+            let animated = emote_data.get("animated").and_then(|v| v.as_bool());
             out.push(Emote {
                 id: id.to_string(),
                 name: name.to_string(),
@@ -399,6 +417,7 @@ pub(crate) fn parse_seventv_active_emotes(items: &[serde_json::Value]) -> Vec<Em
                 owner_name,
                 modifier_flags: None,
                 ffz_sub_only: None,
+                animated,
             });
         }
     }
@@ -490,6 +509,12 @@ pub struct Emote {
     /// the API's default_sets). Rendering is never gated on this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ffz_sub_only: Option<bool>,
+    /// Whether the image animates, where the provider says so (7TV, BTTV, FFZ,
+    /// Twitch). The emote menu draws animated emotes as their first frame
+    /// while it scrolls, so a fling never decodes hundreds of animations;
+    /// None means unknown and is treated as "may animate".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animated: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -599,6 +624,36 @@ fn twitch_broadcaster_id<'a>(is_twitch: bool, channel_id: Option<&'a str>) -> Op
     Some(id)
 }
 
+/// Puts `held` rows back for each provider whose fetch failed, so a failed
+/// fetch never replaces a channel's rows with nothing. A provider with no held
+/// rows keeps whatever the failed fetch produced.
+///
+/// Returns whether every failed BTTV/FFZ fetch was covered by held rows. Only
+/// an uncovered one is worth a fast retry: a covered set is the channel's last
+/// good answer, and retrying it every few seconds through a provider outage
+/// would re-pull the whole set, 7TV document included, on every picker open.
+fn keep_held_rows(set: &mut EmoteSet, held: EmoteSet, bttv_ok: bool, ffz_ok: bool, twitch_ok: bool) -> bool {
+    let mut covered = true;
+    if !bttv_ok {
+        if held.bttv.is_empty() {
+            covered = false;
+        } else {
+            set.bttv = held.bttv;
+        }
+    }
+    if !ffz_ok {
+        if held.ffz.is_empty() {
+            covered = false;
+        } else {
+            set.ffz = held.ffz;
+        }
+    }
+    if !twitch_ok && !held.twitch.is_empty() {
+        set.twitch = held.twitch;
+    }
+    covered
+}
+
 impl EmoteService {
     /// Number of channel emote sets resident in the LRU (try-read; `None`
     /// while a refresh holds the lock). Diagnostics for the resource line.
@@ -680,7 +735,10 @@ impl EmoteService {
         let (bttv_result, seven_tv_result, ffz_result, twitch_result) = tokio::join!(
             self.fetch_bttv_emotes(channel_name.clone(), channel_id.clone()),
             self.fetch_7tv_emotes(channel_name.clone(), channel_id.clone()),
-            self.fetch_ffz_emotes(channel_name.clone()),
+            self.fetch_ffz_emotes(
+                channel_name.clone(),
+                twitch_broadcaster_id(is_twitch, channel_id.as_deref()).map(str::to_string),
+            ),
             // Twitch's `chat/emotes/user` takes a NUMERIC Twitch broadcaster_id, so a
             // YouTube UC id makes it 400 ("value must be numeric"). The id only means
             // anything for follower emotes on a Twitch channel, so it is omitted
@@ -698,11 +756,11 @@ impl EmoteService {
         );
 
         // Collect results (log errors but continue with available emotes)
-        let bttv_emotes = match bttv_result {
-            Ok(emotes) => emotes,
+        let (bttv_emotes, bttv_ok) = match bttv_result {
+            Ok(result) => result,
             Err(e) => {
                 error!("[EmoteService] BTTV fetch error: {}", e);
-                Vec::new()
+                (Vec::new(), false)
             }
         };
 
@@ -714,11 +772,11 @@ impl EmoteService {
             }
         };
 
-        let ffz_emotes = match ffz_result {
-            Ok(emotes) => emotes,
+        let (ffz_emotes, ffz_ok) = match ffz_result {
+            Ok(result) => result,
             Err(e) => {
                 error!("[EmoteService] FFZ fetch error: {}", e);
-                Vec::new()
+                (Vec::new(), false)
             }
         };
 
@@ -794,6 +852,33 @@ impl EmoteService {
             }
         }
 
+        // The same rule for the other providers: a failed fetch never stands in
+        // for the channel's rows. A rate-limited BTTV, FFZ or Twitch answer used
+        // to come back empty (Twitch: the hardcoded fallback list), and both
+        // writers stored it, wiping those rows from the channel's dictionary
+        // until a later clean fetch. Each failed provider keeps what was held
+        // before, from memory, else from the disk dictionary.
+        let mut held_covers_failures = bttv_ok && ffz_ok;
+        if !bttv_ok || !ffz_ok || has_twitch_error {
+            let held = {
+                let cache = self.cache.read().await;
+                cache.peek(&cache_key).map(|c| c.set.clone())
+            }
+            .or_else(|| {
+                channel_id
+                    .as_deref()
+                    .and_then(crate::services::emote_set_cache::load)
+            });
+            if let Some(held) = held {
+                held_covers_failures =
+                    keep_held_rows(&mut emote_set, held, bttv_ok, ffz_ok, !has_twitch_error);
+                debug!(
+                    "[EmoteService] {}: kept held rows for failed providers (BTTV ok {}, FFZ ok {}, Twitch ok {})",
+                    cache_key, bttv_ok, ffz_ok, !has_twitch_error
+                );
+            }
+        }
+
         // Update memory cache
         {
             let mut cache = self.cache.write().await;
@@ -807,7 +892,13 @@ impl EmoteService {
             // re-fetch and self-heal once 7TV recovers, on both the chat and picker
             // paths. A channel genuinely not on 7TV has seven_tv_ok == true (clean
             // 404), so it is correctly NOT treated as degraded.
-            let degraded = has_twitch_error || emote_set.seven_tv.is_empty() || !seven_tv_ok;
+            // A failed BTTV or FFZ fetch is degraded only when nothing held
+            // covered it; a covered one is the last good answer and keeps the
+            // normal TTL (see `keep_held_rows`).
+            let degraded = has_twitch_error
+                || emote_set.seven_tv.is_empty()
+                || !seven_tv_ok
+                || !held_covers_failures;
             let timestamp = if degraded {
                 SystemTime::now()
                     .checked_sub(Duration::from_secs(290))
@@ -1123,6 +1214,9 @@ impl EmoteService {
                         // Capture emote type and owner for categorization
                         let emote_type = emote_data["emote_type"].as_str().map(|s| s.to_string());
                         let owner_id = emote_data["owner_id"].as_str().map(|s| s.to_string());
+                        let animated = emote_data["format"]
+                            .as_array()
+                            .map(|f| f.iter().any(|v| v.as_str() == Some("animated")));
 
                         all_emotes.push(Emote {
                             id: id.to_string(),
@@ -1145,6 +1239,7 @@ impl EmoteService {
                             owner_name: None,
                             modifier_flags: None,
                             ffz_sub_only: None,
+                            animated,
                         });
                     }
                 }
@@ -1195,6 +1290,7 @@ impl EmoteService {
             None
         };
         let is_overlay = BTTV_OVERLAY_EMOTE_IDS.contains(&id);
+        let animated = item.get("animated").and_then(|v| v.as_bool());
 
         Some(Emote {
             id: id.to_string(),
@@ -1213,6 +1309,7 @@ impl EmoteService {
             owner_name: None,
             modifier_flags,
             ffz_sub_only: None,
+            animated,
         })
     }
 
@@ -1220,30 +1317,51 @@ impl EmoteService {
         &self,
         _channel_name: Option<String>,
         channel_id: Option<String>,
-    ) -> Result<Vec<Emote>> {
-        let mut emotes = Vec::new();
+    ) -> Result<(Vec<Emote>, bool)> {
+        // True when every part of the result is a real answer: globals came
+        // back (fresh or cached), and the channel set came back or BTTV said
+        // the channel has none (404). False means rows are missing because a
+        // request failed, so the caller must not store this as the channel's
+        // BTTV set.
+        let mut complete = true;
 
-        // Fetch global BTTV emotes
-        match self
-            .client
-            .get("https://api.betterttv.net/3/cached/emotes/global")
-            .send()
-            .await
-        {
-            Ok(response) if response.status().is_success() => {
-                if let Ok(json) = response.json::<serde_json::Value>().await {
-                    if let Some(array) = json.as_array() {
-                        // Marked global so a completion can say where it came from.
-                        emotes.extend(array.iter().filter_map(Self::parse_bttv_emote).map(|mut e| {
-                            e.emote_type = Some(crate::services::emote_match::GLOBAL_EMOTE_TYPE.to_string());
-                            e
-                        }));
+        let mut emotes = if let Some(cached) = shared_cache_fresh(bttv_globals_cache()).await {
+            cached
+        } else {
+            let mut globals = Vec::new();
+            match self
+                .client
+                .get("https://api.betterttv.net/3/cached/emotes/global")
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => {
+                    if let Ok(json) = response.json::<serde_json::Value>().await {
+                        if let Some(array) = json.as_array() {
+                            // Marked global so a completion can say where it came from.
+                            globals.extend(array.iter().filter_map(Self::parse_bttv_emote).map(|mut e| {
+                                e.emote_type = Some(crate::services::emote_match::GLOBAL_EMOTE_TYPE.to_string());
+                                e
+                            }));
+                        }
                     }
                 }
+                Ok(response) => error!("[EmoteService] BTTV global: status {}", response.status()),
+                Err(e) => error!("[EmoteService] BTTV global request failed: {}", e),
             }
-            Ok(_) => error!("[EmoteService] BTTV global: non-success status"),
-            Err(e) => error!("[EmoteService] BTTV global request failed: {}", e),
-        }
+            if globals.is_empty() {
+                match shared_cache_any(bttv_globals_cache()).await {
+                    Some(stale) => stale,
+                    None => {
+                        complete = false;
+                        Vec::new()
+                    }
+                }
+            } else {
+                shared_cache_store(bttv_globals_cache(), globals.clone()).await;
+                globals
+            }
+        };
 
         // Fetch channel-specific BTTV emotes
         if let Some(channel_id) = channel_id {
@@ -1257,24 +1375,38 @@ impl EmoteService {
                 .await
             {
                 Ok(response) if response.status().is_success() => {
-                    if let Ok(json) = response.json::<serde_json::Value>().await {
-                        // Channel emotes, then shared emotes. Neither can be a
-                        // modifier (BetterTTV only sets `modifier` on globals),
-                        // but both can be overlay emotes, so both go through
-                        // the same parser.
-                        for key in ["channelEmotes", "sharedEmotes"] {
-                            if let Some(list) = json.get(key).and_then(|v| v.as_array()) {
-                                emotes.extend(list.iter().filter_map(Self::parse_bttv_emote));
+                    match response.json::<serde_json::Value>().await {
+                        Ok(json) => {
+                            // Channel emotes, then shared emotes. Neither can be a
+                            // modifier (BetterTTV only sets `modifier` on globals),
+                            // but both can be overlay emotes, so both go through
+                            // the same parser.
+                            for key in ["channelEmotes", "sharedEmotes"] {
+                                if let Some(list) = json.get(key).and_then(|v| v.as_array()) {
+                                    emotes.extend(list.iter().filter_map(Self::parse_bttv_emote));
+                                }
                             }
+                        }
+                        Err(e) => {
+                            warn!("[EmoteService] BTTV channel payload for {} did not parse: {}", channel_id, e);
+                            complete = false;
                         }
                     }
                 }
-                Ok(_) => {} // Channel not found or error - not critical
-                Err(e) => error!("[EmoteService] BTTV channel request failed: {}", e),
+                // The channel has no BTTV account: a definitive empty answer.
+                Ok(response) if response.status() == reqwest::StatusCode::NOT_FOUND => {}
+                Ok(response) => {
+                    warn!("[EmoteService] BTTV channel {}: status {}", channel_id, response.status());
+                    complete = false;
+                }
+                Err(e) => {
+                    error!("[EmoteService] BTTV channel request failed: {}", e);
+                    complete = false;
+                }
             }
         }
 
-        Ok(emotes)
+        Ok((emotes, complete))
     }
 
     async fn fetch_7tv_emotes(
@@ -1458,77 +1590,54 @@ impl EmoteService {
             owner_name: None,
             modifier_flags,
             ffz_sub_only: if sub_only { Some(true) } else { None },
+            animated: Some(item.get("animated").is_some_and(|v| !v.is_null())),
         })
     }
 
-    async fn fetch_ffz_emotes(&self, channel_name: Option<String>) -> Result<Vec<Emote>> {
-        let mut emotes = Vec::new();
+    async fn fetch_ffz_emotes(
+        &self,
+        channel_name: Option<String>,
+        twitch_id: Option<String>,
+    ) -> Result<(Vec<Emote>, bool)> {
+        // Same meaning as in `fetch_bttv_emotes`: false when rows are missing
+        // because a request failed rather than because FFZ has none.
+        let mut complete = true;
 
-        // Fetch global FFZ emotes
-        match self
-            .client
-            .get("https://api.frankerfacez.com/v1/set/global")
-            .send()
-            .await
-        {
-            Ok(response) if response.status().is_success() => {
-                if let Ok(json) = response.json::<serde_json::Value>().await {
-                    // Sets outside `default_sets` (e.g. the Subwoofer Emote
-                    // Effects set) are FFZ-subscriber perks: rendered for
-                    // everyone, offered in the picker only to subscribers.
-                    let default_sets: Vec<i64> = json
-                        .get("default_sets")
-                        .and_then(|v| v.as_array())
-                        .map(|a| a.iter().filter_map(|v| v.as_i64()).collect())
-                        .unwrap_or_default();
-                    if let Some(sets) = json.get("sets").and_then(|v| v.as_object()) {
-                        for (set_id, set_data) in sets {
-                            let sub_only = set_id
-                                .parse::<i64>()
-                                .map(|id| !default_sets.contains(&id))
-                                .unwrap_or(false);
-                            if let Some(emoticons) =
-                                set_data.get("emoticons").and_then(|v| v.as_array())
-                            {
-                                for item in emoticons {
-                                    if let Some(mut emote) = Self::parse_ffz_emoticon(item, sub_only) {
-                                        // Marked global so a completion can say where it came from.
-                                        emote.emote_type =
-                                            Some(crate::services::emote_match::GLOBAL_EMOTE_TYPE.to_string());
-                                        emotes.push(emote);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            Ok(_) => error!("[EmoteService] FFZ global: non-success status"),
-            Err(e) => error!("[EmoteService] FFZ global request failed: {}", e),
-        }
-
-        // Fetch channel-specific FFZ emotes
-        if let Some(channel_name) = channel_name {
+        let mut emotes = if let Some(cached) = shared_cache_fresh(ffz_globals_cache()).await {
+            cached
+        } else {
+            let mut globals = Vec::new();
             match self
                 .client
-                .get(format!(
-                    "https://api.frankerfacez.com/v1/room/{}",
-                    channel_name
-                ))
+                .get("https://api.frankerfacez.com/v1/set/global")
                 .send()
                 .await
             {
                 Ok(response) if response.status().is_success() => {
                     if let Ok(json) = response.json::<serde_json::Value>().await {
+                        // Sets outside `default_sets` (e.g. the Subwoofer Emote
+                        // Effects set) are FFZ-subscriber perks: rendered for
+                        // everyone, offered in the picker only to subscribers.
+                        let default_sets: Vec<i64> = json
+                            .get("default_sets")
+                            .and_then(|v| v.as_array())
+                            .map(|a| a.iter().filter_map(|v| v.as_i64()).collect())
+                            .unwrap_or_default();
                         if let Some(sets) = json.get("sets").and_then(|v| v.as_object()) {
-                            for (_set_id, set_data) in sets {
+                            for (set_id, set_data) in sets {
+                                let sub_only = set_id
+                                    .parse::<i64>()
+                                    .map(|id| !default_sets.contains(&id))
+                                    .unwrap_or(false);
                                 if let Some(emoticons) =
                                     set_data.get("emoticons").and_then(|v| v.as_array())
                                 {
                                     for item in emoticons {
-                                        if let Some(emote) = Self::parse_ffz_emoticon(item, false)
-                                        {
-                                            emotes.push(emote);
+                                        if let Some(mut emote) = Self::parse_ffz_emoticon(item, sub_only) {
+                                            // Marked global so a completion can say where it came from.
+                                            emote.emote_type =
+                                                Some(crate::services::emote_match::GLOBAL_EMOTE_TYPE.to_string());
+                                            globals.push(emote);
                                         }
                                     }
                                 }
@@ -1536,12 +1645,77 @@ impl EmoteService {
                         }
                     }
                 }
-                Ok(_) => {} // Channel not found - not critical
-                Err(e) => error!("[EmoteService] FFZ channel request failed: {}", e),
+                Ok(response) => error!("[EmoteService] FFZ global: status {}", response.status()),
+                Err(e) => error!("[EmoteService] FFZ global request failed: {}", e),
+            }
+            if globals.is_empty() {
+                match shared_cache_any(ffz_globals_cache()).await {
+                    Some(stale) => stale,
+                    None => {
+                        complete = false;
+                        Vec::new()
+                    }
+                }
+            } else {
+                shared_cache_store(ffz_globals_cache(), globals.clone()).await;
+                globals
+            }
+        };
+
+        // Fetch channel-specific FFZ emotes. FFZ keeps a room under the login it
+        // was created with, so a renamed Twitch channel 404s by login; the
+        // Twitch id is stable, and the login is only the fallback when no
+        // Twitch id is known.
+        let room_url = match (twitch_id, channel_name) {
+            (Some(id), _) => Some(format!("https://api.frankerfacez.com/v1/room/id/{}", id)),
+            (None, Some(name)) => Some(format!("https://api.frankerfacez.com/v1/room/{}", name)),
+            (None, None) => None,
+        };
+        if let Some(room_url) = room_url {
+            match self
+                .client
+                .get(room_url)
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => {
+                    match response.json::<serde_json::Value>().await {
+                        Ok(json) => {
+                            if let Some(sets) = json.get("sets").and_then(|v| v.as_object()) {
+                                for (_set_id, set_data) in sets {
+                                    if let Some(emoticons) =
+                                        set_data.get("emoticons").and_then(|v| v.as_array())
+                                    {
+                                        for item in emoticons {
+                                            if let Some(emote) = Self::parse_ffz_emoticon(item, false)
+                                            {
+                                                emotes.push(emote);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("[EmoteService] FFZ room payload did not parse: {}", e);
+                            complete = false;
+                        }
+                    }
+                }
+                // The channel has no FFZ room: a definitive empty answer.
+                Ok(response) if response.status() == reqwest::StatusCode::NOT_FOUND => {}
+                Ok(response) => {
+                    warn!("[EmoteService] FFZ room: status {}", response.status());
+                    complete = false;
+                }
+                Err(e) => {
+                    error!("[EmoteService] FFZ channel request failed: {}", e);
+                    complete = false;
+                }
             }
         }
 
-        Ok(emotes)
+        Ok((emotes, complete))
     }
 
     fn get_global_twitch_emotes() -> Vec<Emote> {
@@ -1559,6 +1733,7 @@ impl EmoteService {
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
+                animated: None,
             },
             Emote {
                 id: "354".to_string(),
@@ -1573,6 +1748,7 @@ impl EmoteService {
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
+                animated: None,
             },
             Emote {
                 id: "425618".to_string(),
@@ -1588,6 +1764,7 @@ impl EmoteService {
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
+                animated: None,
             },
             Emote {
                 id: "305954156".to_string(),
@@ -1603,6 +1780,7 @@ impl EmoteService {
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
+                animated: None,
             },
             Emote {
                 id: "88".to_string(),
@@ -1617,6 +1795,7 @@ impl EmoteService {
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
+                animated: None,
             },
             Emote {
                 id: "81273".to_string(),
@@ -1631,6 +1810,7 @@ impl EmoteService {
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
+                animated: None,
             },
             Emote {
                 id: "81248".to_string(),
@@ -1645,6 +1825,7 @@ impl EmoteService {
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
+                animated: None,
             },
             Emote {
                 id: "81249".to_string(),
@@ -1659,6 +1840,7 @@ impl EmoteService {
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
+                animated: None,
             },
             Emote {
                 id: "81274".to_string(),
@@ -1673,6 +1855,7 @@ impl EmoteService {
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
+                animated: None,
             },
             Emote {
                 id: "81997".to_string(),
@@ -1687,6 +1870,7 @@ impl EmoteService {
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
+                animated: None,
             },
             Emote {
                 id: "166266".to_string(),
@@ -1702,6 +1886,7 @@ impl EmoteService {
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
+                animated: None,
             },
             Emote {
                 id: "191762".to_string(),
@@ -1717,6 +1902,7 @@ impl EmoteService {
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
+                animated: None,
             },
             Emote {
                 id: "196892".to_string(),
@@ -1732,6 +1918,7 @@ impl EmoteService {
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
+                animated: None,
             },
             Emote {
                 id: "245".to_string(),
@@ -1746,6 +1933,7 @@ impl EmoteService {
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
+                animated: None,
             },
             Emote {
                 id: "1902".to_string(),
@@ -1760,6 +1948,7 @@ impl EmoteService {
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
+                animated: None,
             },
         ]
     }
@@ -1774,6 +1963,34 @@ impl Default for EmoteService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The emote menu draws animated emotes as their first frame while it
+    /// scrolls, and lets known-still ones keep their disk copy. Each provider
+    /// says which is which in its own way.
+    #[test]
+    fn every_provider_reports_whether_an_emote_animates() {
+        let stv = parse_seventv_active_emotes(&[
+            serde_json::json!({ "id": "a", "name": "catJAM", "data": { "id": "a", "animated": true } }),
+            serde_json::json!({ "id": "b", "name": "Still", "data": { "id": "b", "animated": false } }),
+            serde_json::json!({ "id": "c", "name": "Unknown", "data": { "id": "c" } }),
+        ]);
+        let flags: Vec<_> = stv.iter().map(|e| e.animated).collect();
+        assert_eq!(flags, vec![Some(true), Some(false), None]);
+
+        let bttv = EmoteService::parse_bttv_emote(&serde_json::json!({ "id": "x", "code": "catJAM", "animated": true })).unwrap();
+        assert_eq!(bttv.animated, Some(true));
+        let bttv = EmoteService::parse_bttv_emote(&serde_json::json!({ "id": "y", "code": "LUL", "animated": false })).unwrap();
+        assert_eq!(bttv.animated, Some(false));
+
+        let ffz_moving = serde_json::json!({ "id": 1, "name": "Dance", "urls": { "1": "a" }, "animated": { "1": "b" } });
+        let ffz_still = serde_json::json!({ "id": 2, "name": "Still", "urls": { "1": "a" }, "animated": null });
+        assert_eq!(EmoteService::parse_ffz_emoticon(&ffz_moving, false).unwrap().animated, Some(true));
+        assert_eq!(EmoteService::parse_ffz_emoticon(&ffz_still, false).unwrap().animated, Some(false));
+
+        // Unknown stays out of the payload, so older pages and stored sets agree.
+        let json = serde_json::to_value(&stv[2]).unwrap();
+        assert!(json.get("animated").is_none());
+    }
 
     #[test]
     fn parses_active_emotes_with_nested_data() {
@@ -1861,6 +2078,7 @@ mod tests {
             owner_name: None,
             modifier_flags: None,
             ffz_sub_only: None,
+            animated: None,
         }
     }
 
@@ -2240,5 +2458,72 @@ mod broadcaster_id_tests {
         assert_eq!(twitch_broadcaster_id(true, None), None);
         // Correctly-flagged non-Twitch stays dropped even when it looks numeric.
         assert_eq!(twitch_broadcaster_id(false, Some("12345")), None);
+    }
+}
+
+#[cfg(test)]
+mod keep_held_rows_tests {
+    use super::{keep_held_rows, Emote, EmoteProvider, EmoteSet};
+
+    fn emote(name: &str, provider: EmoteProvider) -> Emote {
+        Emote {
+            id: name.to_string(),
+            name: name.to_string(),
+            url: String::new(),
+            provider,
+            is_zero_width: None,
+            local_url: None,
+            emote_type: None,
+            owner_id: None,
+            width: None,
+            owner_name: None,
+            modifier_flags: None,
+            ffz_sub_only: None,
+            animated: None,
+        }
+    }
+
+    fn set(twitch: &[&str], bttv: &[&str], ffz: &[&str]) -> EmoteSet {
+        EmoteSet {
+            twitch: twitch.iter().map(|n| emote(n, EmoteProvider::Twitch)).collect(),
+            bttv: bttv.iter().map(|n| emote(n, EmoteProvider::BTTV)).collect(),
+            seven_tv: Vec::new(),
+            ffz: ffz.iter().map(|n| emote(n, EmoteProvider::FFZ)).collect(),
+            kick: Vec::new(),
+            seven_tv_ok: true,
+        }
+    }
+
+    fn names(v: &[Emote]) -> Vec<&str> {
+        v.iter().map(|e| e.name.as_str()).collect()
+    }
+
+    #[test]
+    fn failed_providers_keep_held_rows() {
+        let mut fresh = set(&["Kappa"], &[], &[]);
+        let covered = keep_held_rows(&mut fresh, set(&["Kappa", "SubEmote"], &["catJAM"], &["Pepega"]), false, false, false);
+        assert!(covered);
+        assert_eq!(names(&fresh.bttv), ["catJAM"]);
+        assert_eq!(names(&fresh.ffz), ["Pepega"]);
+        assert_eq!(names(&fresh.twitch), ["Kappa", "SubEmote"]);
+    }
+
+    #[test]
+    fn successful_providers_take_the_fresh_answer() {
+        // An authoritative empty answer (the channel removed every FFZ emote)
+        // must replace the held rows, or removals would never land.
+        let mut fresh = set(&["Kappa"], &["newBTTV"], &[]);
+        assert!(keep_held_rows(&mut fresh, set(&["Old"], &["oldBTTV"], &["oldFFZ"]), true, true, true));
+        assert_eq!(names(&fresh.bttv), ["newBTTV"]);
+        assert!(fresh.ffz.is_empty());
+        assert_eq!(names(&fresh.twitch), ["Kappa"]);
+    }
+
+    #[test]
+    fn nothing_held_keeps_the_partial_result() {
+        let mut fresh = set(&[], &["globalOnly"], &[]);
+        // Nothing covered the failures, so the set must retry soon.
+        assert!(!keep_held_rows(&mut fresh, set(&[], &[], &[]), false, false, true));
+        assert_eq!(names(&fresh.bttv), ["globalOnly"]);
     }
 }

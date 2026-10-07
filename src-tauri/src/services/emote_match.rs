@@ -635,6 +635,7 @@ mod tests {
             width: None,
             modifier_flags: None,
             ffz_sub_only: None,
+            animated: None,
         }
     }
 

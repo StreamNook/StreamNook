@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct KickEmote {
     pub id: String,
     pub url: String,
@@ -180,6 +180,7 @@ pub async fn channel_emote_set(slug: &str) -> EmoteSet {
                     owner_name: None,
                     modifier_flags: None,
                     ffz_sub_only: None,
+                    animated: None,
                     width: None,
                 })
                 .collect();
@@ -203,6 +204,7 @@ pub async fn channel_emote_set(slug: &str) -> EmoteSet {
                     owner_name: None,
                     modifier_flags: None,
                     ffz_sub_only: None,
+                    animated: None,
                     width: None,
                 })
                 .collect();
@@ -265,11 +267,36 @@ fn kick_set_label(raw: &str, slug: &str, display: Option<&str>) -> String {
 /// call repeatedly — it self-throttles to the TTL. Spawned during channel resolve
 /// once the numeric Kick `user_id` is known.
 pub async fn refresh(slug: &str, user_id: u64) {
+    refresh_inner(slug, user_id, false).await;
+}
+
+/// Refetch right away after a live 7TV edit, skipping the TTL. The cached set
+/// keeps serving while the fetch runs (dropping it first left every 7TV word
+/// in this chat as text for as long as the fetch took, up to 90 s), and it is
+/// replaced, smaller or not, only by a complete answer: a removal must land,
+/// a failed fetch must not wipe the set.
+pub async fn refresh_after_edit(slug: &str, user_id: u64) {
+    refresh_inner(slug, user_id, true).await;
+}
+
+async fn refresh_inner(slug: &str, user_id: u64, live_edit: bool) {
     let slug = slug.to_lowercase();
+    // No set in memory yet (first use this run): seed the saved one so this
+    // chat parses 7TV words from its first message, marked stale so the fetch
+    // below still runs.
+    if let Ok(mut s) = store().lock() {
+        if !s.contains_key(&slug) {
+            if let Some(map) = crate::services::emote_set_cache::load_provider::<HashMap<String, KickEmote>>("kick7tv", &slug) {
+                log::debug!("[Kick] seeded {} 7TV emote(s) for {} from disk", map.len(), slug);
+                let stale = Instant::now().checked_sub(TTL).unwrap_or_else(Instant::now);
+                s.insert(slug.clone(), ChannelEmotes { map, fetched_at: stale });
+            }
+        }
+    }
     {
         if let Ok(s) = store().lock() {
             if let Some(c) = s.get(&slug) {
-                if c.fetched_at.elapsed() < TTL {
+                if !live_edit && c.fetched_at.elapsed() < TTL {
                     return;
                 }
             }
@@ -280,6 +307,10 @@ pub async fn refresh(slug: &str, user_id: u64) {
     let mut map: HashMap<String, KickEmote> = HashMap::new();
     // Globals first so the channel set overrides on name collisions.
     fetch_into(&client, "https://7tv.io/v3/emote-sets/global", "/emotes", &mut map).await;
+    let globals_len = map.len();
+    // Whether 7TV says this channel HAS a set; with one, an answer holding only
+    // the globals means the set fetch failed.
+    let mut has_set = false;
     let chan_url = format!("https://7tv.io/v3/users/kick/{user_id}");
     // Whether the CHANNEL half resolved. A failed fetch and a channel with no
     // 7TV set both leave the map holding globals only, but they need opposite
@@ -299,8 +330,10 @@ pub async fn refresh(slug: &str, user_id: u64) {
             .is_some()
         {
             // Inline set (pre-change payload).
+            has_set = true;
             collect_emotes(&user, "/emote_set/emotes", &mut map);
         } else if let Some(set_id) = emote_service::seventv_active_set_id(&user) {
+            has_set = true;
             // Post-change payload: fetch the active set by id.
             let set_url = format!("https://7tv.io/v3/emote-sets/{set_id}");
             fetch_into(&client, &set_url, "/emotes", &mut map).await;
@@ -312,8 +345,16 @@ pub async fn refresh(slug: &str, user_id: u64) {
     // emotes were replaced by the 45 globals when one of three concurrent
     // refreshes lost its channel fetch. Same discipline `store_native` already
     // uses: never let a partial result overwrite a fuller one.
+    // After a live edit a complete answer replaces the set even when smaller,
+    // since that is what a removal looks like.
+    let channel_complete = channel_ok && (!has_set || map.len() > globals_len);
     if let Ok(s) = store().lock() {
-        if s.get(&slug).is_some_and(|c| c.map.len() > map.len()) {
+        let cached = s.get(&slug);
+        if live_edit && !channel_complete && cached.is_some() {
+            log::debug!("[7TV] refetch after an edit for {} was incomplete; keeping the cached set", slug);
+            return;
+        }
+        if !(live_edit && channel_complete) && cached.is_some_and(|c| c.map.len() > map.len()) {
             log::debug!(
                 "[Kick] 7TV refresh for {} returned {} vs {} cached; keeping the cached set",
                 slug,
@@ -341,6 +382,9 @@ pub async fn refresh(slug: &str, user_id: u64) {
             .checked_sub(TTL - RETRY_AFTER)
             .unwrap_or_else(Instant::now)
     };
+    if channel_complete {
+        crate::services::emote_set_cache::save_provider("kick7tv", &slug, &map);
+    }
     if let Ok(mut s) = store().lock() {
         s.insert(
             slug.clone(),
@@ -529,10 +573,3 @@ mod tests {
     }
 }
 
-/// Drop a channel's cached 7TV set so the next `refresh` re-fetches instead of
-/// returning early on the TTL. Used when 7TV pushes an emote-set update.
-pub fn invalidate(slug: &str) {
-    if let Ok(mut s) = store().lock() {
-        s.remove(&slug.to_lowercase());
-    }
-}

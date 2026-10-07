@@ -24,6 +24,9 @@ export interface Emote {
   modifierFlags?: number;
   /** FFZ effect emote composable only by FFZ subscribers (rendering ungated) */
   ffzSubOnly?: boolean;
+  /** Whether the image animates, where the provider says (Rust `animated`).
+   *  Absent means unknown, treated as "may animate". */
+  animated?: boolean;
   /** Composition is gated for this account (YouTube members-only emoji). Shown
    *  in the grid with the same lock treatment as `ffzSubOnly`. */
   locked?: boolean;
@@ -51,9 +54,12 @@ export interface EmoteSet {
   seven_tv_ok?: boolean;
 }
 
-// Module-level registry of cached emote files (cacheKey -> localPath).
-// For 7TV the key is `${id}@${tier}` (see emoteCacheKey); other providers key
-// by bare id since they have a single canonical URL.
+// The cached files this window knows about (cacheKey -> localPath), for the
+// disk-first lookups in chat rows and the picker. For 7TV the key is
+// `${id}@${tier}` (see emoteCacheKey); other providers are namespaced by
+// provider. Never the whole disk cache: it fills from the paths Rust stamps on
+// each emote set this window loads, and from Rust's answers to caching
+// requests (a file already on disk is answered at once).
 const cachedEmoteFiles: Map<string, string> = new Map();
 
 // Lazily-built per-set name indexes, keyed by set identity. Emote sets are only
@@ -85,18 +91,20 @@ export function getEmoteLookup(set: EmoteSet): { byName: Map<string, Emote>; low
 }
 
 /**
- * Shape emote rows from Rust for the page: camelCase the flags and attach a
- * local URL ONLY when the file is already cached (a Map lookup, never a fetch);
- * the browser loads from the CDN when localUrl is undefined. Used for whole sets
- * and for the rows a live 7TV delta adds, so both paths produce identical rows.
+ * Shape emote rows from Rust for the page: camelCase the flags and turn the
+ * disk-cache path Rust stamped on a cached emote (`local_url`, at the tier the
+ * set was fetched for) into a loadable URL, remembering it for the per-message
+ * lookups. The browser loads from the CDN when localUrl is undefined. Used for
+ * whole sets and for the rows a live 7TV delta adds, so both paths produce
+ * identical rows.
  */
-export function enhanceRustEmotes(emotes: any[]): Emote[] {
-  return emotes.map((emote) => {
-    // 7TV is looked up at the per-DPI tier so the cached size matches what renders.
-    const localPath = cachedEmoteFiles.get(emoteCacheKey(emote.id, emote.provider));
+export function enhanceRustEmotes(emotes: any[], tier: EmoteTier = inlineEmoteTier()): Emote[] {
+  return (emotes ?? []).map((emote) => {
+    const { local_url: localPath, ...rest } = emote as { local_url?: string } & Record<string, unknown>;
+    if (localPath) cachedEmoteFiles.set(emoteCacheKey(emote.id, emote.provider, tier), localPath);
     const zeroWidth = emote.is_zero_width !== undefined ? emote.is_zero_width : emote.isZeroWidth;
     return {
-      ...emote,
+      ...rest,
       isZeroWidth: zeroWidth,
       modifierFlags: emote.modifier_flags ?? emote.modifierFlags,
       ffzSubOnly: emote.ffz_sub_only ?? emote.ffzSubOnly,
@@ -226,8 +234,6 @@ export function setEmoteCacheBurst(active: boolean) {
   setAssetCacheBurst(active);
 }
 
-let initializationPromise: Promise<void> | null = null;
-
 export function queueEmoteForCaching(id: string, url: string, priority: boolean = false) {
   if (cachedEmoteFiles.has(id)) return;
   requestAssetCaching('emote', id, url, priority);
@@ -238,7 +244,12 @@ export function getCachedEmoteUrl(
   provider?: string,
   tier: EmoteTier = inlineEmoteTier(),
 ): string | undefined {
-  const path = cachedEmoteFiles.get(emoteCacheKey(id, provider, tier));
+  const path =
+    cachedEmoteFiles.get(emoteCacheKey(id, provider, tier)) ??
+    // Kick emotes in chat used to be cached under the bare id. Reading that
+    // file serves it instead of downloading and storing the image a second
+    // time under `kick-<id>`.
+    (provider === 'kick' ? cachedEmoteFiles.get(id) : undefined);
   return path ? convertFileSrc(path) : undefined;
 }
 
@@ -285,29 +296,6 @@ export function queueChannelEmotesForCaching(set: EmoteSet) {
   }
 }
 
-async function ensureEmoteFileCache() {
-  if (cachedEmoteFiles.size > 0) return;
-
-  if (initializationPromise) {
-    return initializationPromise;
-  }
-
-  initializationPromise = (async () => {
-    try {
-      Logger.debug('[EmoteService] Initializing emote file cache...');
-      const files = await invoke('get_cached_files', { cacheType: 'emote' }) as Record<string, string>;
-      Object.entries(files).forEach(([id, path]) => cachedEmoteFiles.set(id, path));
-      Logger.debug(`[EmoteService] Emote file cache initialized with ${cachedEmoteFiles.size} entries`);
-    } catch (e) {
-      Logger.warn('[EmoteService] Failed to init emote file cache:', e);
-    } finally {
-      initializationPromise = null;
-    }
-  })();
-
-  return initializationPromise;
-}
-
 export function preloadChannelEmotes(emotes: Emote[]) {
   if (emotes.length === 0) return;
 
@@ -337,75 +325,42 @@ export function preloadChannelEmotes(emotes: Emote[]) {
 }
 
 /**
- * Fetch all emotes for a channel using the high-performance Rust backend
- * This performs concurrent fetching from BTTV, 7TV, and FFZ with serde JSON parsing
- * Also fetches user-specific Twitch emotes (subscriptions, drops, etc.) if authenticated
- * 
- * IMPORTANT: This is "content-first" - we return emotes with CDN URLs immediately.
- * Local cached URLs are only used if they're already in memory (non-blocking).
- * Background caching happens when emotes are displayed via onLoad handlers.
+ * A Twitch channel's emotes (Twitch, BTTV, 7TV, FFZ) from Rust, which fetches
+ * them concurrently, keeps the one shared copy, uses the signed-in viewer's
+ * token for their own emotes, and stamps the disk-cache path of every emote
+ * already cached at this window's 7TV tier.
  */
 export async function fetchAllEmotes(channelName?: string, channelId?: string): Promise<EmoteSet> {
-  // AWAIT cache initialization to ensure cached files are found
-  // This populates cachedEmoteFiles so local URLs can be used
-  await ensureEmoteFileCache();
-
-  Logger.debug('[EmoteService] Fetching emotes via Rust backend for channel:', channelName, 'ID:', channelId, 'Cached files:', cachedEmoteFiles.size);
-
+  const tier = inlineEmoteTier();
   try {
-    // Try to get the auth token for user-specific Twitch emotes
-    let accessToken: string | null = null;
-    try {
-      accessToken = await invoke<string>('get_twitch_token');
-      Logger.debug('[EmoteService] Auth token available, will fetch user-specific Twitch emotes');
-    } catch {
-      Logger.debug('[EmoteService] No auth token available, Twitch emotes will be limited to globals');
-    }
-
-    // Call the Rust backend which does concurrent fetching with tokio::join!
     const emoteSet = await invoke<EmoteSet>('fetch_channel_emotes', {
       channelName: channelName || null,
       channelId: channelId || null,
-      accessToken,
+      tier,
     });
-
-    // Enhance with local URLs ONLY if they're already cached (non-blocking lookup)
-    // The browser will load from CDN if localUrl is undefined
-    const enhanceWithLocalUrls = enhanceRustEmotes;
-
     const enhancedSet: EmoteSet = {
-      twitch: enhanceWithLocalUrls(emoteSet.twitch),
-      bttv: enhanceWithLocalUrls(emoteSet.bttv),
-      '7tv': enhanceWithLocalUrls(emoteSet['7tv']),
-      ffz: enhanceWithLocalUrls(emoteSet.ffz),
-      kick: enhanceWithLocalUrls(emoteSet.kick ?? []),
+      twitch: enhanceRustEmotes(emoteSet.twitch, tier),
+      bttv: enhanceRustEmotes(emoteSet.bttv, tier),
+      '7tv': enhanceRustEmotes(emoteSet['7tv'], tier),
+      ffz: enhanceRustEmotes(emoteSet.ffz, tier),
+      kick: enhanceRustEmotes(emoteSet.kick ?? [], tier),
       // Learned from chat, not fetched — merged in by the picker at render time.
       youtube: [],
       seven_tv_ok: emoteSet.seven_tv_ok ?? true,
     };
-
-    // Count how many emotes got local URLs
-    const countLocalUrls = (emotes: Emote[]) => emotes.filter(e => e.localUrl).length;
-    const localUrlCounts = {
-      twitch: countLocalUrls(enhancedSet.twitch),
-      bttv: countLocalUrls(enhancedSet.bttv),
-      '7tv': countLocalUrls(enhancedSet['7tv']),
-      ffz: countLocalUrls(enhancedSet.ffz),
-    };
-
     Logger.debug('[EmoteService] Fetched emotes from Rust:', {
       twitch: enhancedSet.twitch.length,
       bttv: enhancedSet.bttv.length,
       '7tv': enhancedSet['7tv'].length,
       ffz: enhancedSet.ffz.length,
-      cachedFilesInMemory: cachedEmoteFiles.size,
-      localUrlsAssigned: localUrlCounts,
+      onDisk: [enhancedSet.twitch, enhancedSet.bttv, enhancedSet['7tv'], enhancedSet.ffz].reduce(
+        (n, list) => n + list.filter((e) => e.localUrl).length,
+        0,
+      ),
     });
-
     return enhancedSet;
   } catch (error) {
     Logger.error('[EmoteService] Failed to fetch emotes from Rust backend:', error);
-    // Return empty set on error
     return {
       twitch: [],
       bttv: [],
@@ -423,30 +378,18 @@ export async function fetchAllEmotes(channelName?: string, channelId?: string): 
  * the same local-URL enhancement as Twitch applies so cached art renders disk-first.
  */
 export async function fetchKickChannelEmotes(slug: string): Promise<EmoteSet> {
-  await ensureEmoteFileCache();
+  const tier = inlineEmoteTier();
   try {
-    const emoteSet = await invoke<EmoteSet>('get_kick_channel_emotes', { slug });
+    const emoteSet = await invoke<EmoteSet>('get_kick_channel_emotes', { slug, tier });
     Logger.info(
       `[EmoteService] Kick emotes for "${slug}": ${emoteSet.kick?.length ?? 0} native, ${emoteSet['7tv']?.length ?? 0} 7TV`,
     );
-    const enhance = (emotes: any[]) =>
-      (emotes ?? []).map((emote) => {
-        const localPath = cachedEmoteFiles.get(emoteCacheKey(emote.id, emote.provider));
-        const zeroWidth = emote.is_zero_width !== undefined ? emote.is_zero_width : emote.isZeroWidth;
-        return {
-          ...emote,
-          isZeroWidth: zeroWidth,
-          modifierFlags: emote.modifier_flags ?? emote.modifierFlags,
-          ffzSubOnly: emote.ffz_sub_only ?? emote.ffzSubOnly,
-          localUrl: localPath ? convertFileSrc(localPath) : undefined,
-        };
-      });
     return {
-      twitch: enhance(emoteSet.twitch),
-      bttv: enhance(emoteSet.bttv),
-      '7tv': enhance(emoteSet['7tv']),
-      ffz: enhance(emoteSet.ffz),
-      kick: enhance(emoteSet.kick),
+      twitch: enhanceRustEmotes(emoteSet.twitch, tier),
+      bttv: enhanceRustEmotes(emoteSet.bttv, tier),
+      '7tv': enhanceRustEmotes(emoteSet['7tv'], tier),
+      ffz: enhanceRustEmotes(emoteSet.ffz, tier),
+      kick: enhanceRustEmotes(emoteSet.kick, tier),
       youtube: [],
     };
   } catch (error) {
@@ -461,28 +404,16 @@ export async function fetchKickChannelEmotes(slug: string): Promise<EmoteSet> {
  * have either, both, or neither, so the picker merges the two.
  */
 export async function fetchYouTubeChannelEmotes(channel: string): Promise<EmoteSet> {
-  await ensureEmoteFileCache();
+  const tier = inlineEmoteTier();
   try {
-    const emoteSet = await invoke<EmoteSet>('get_youtube_channel_emotes', { channel });
+    const emoteSet = await invoke<EmoteSet>('get_youtube_channel_emotes', { channel, tier });
     Logger.info(
       `[EmoteService] YouTube 7TV emotes for "${channel}": ${emoteSet['7tv']?.length ?? 0}`,
     );
-    const enhance = (emotes: any[]) =>
-      (emotes ?? []).map((emote) => {
-        const localPath = cachedEmoteFiles.get(emoteCacheKey(emote.id, emote.provider));
-        const zeroWidth = emote.is_zero_width !== undefined ? emote.is_zero_width : emote.isZeroWidth;
-        return {
-          ...emote,
-          isZeroWidth: zeroWidth,
-          modifierFlags: emote.modifier_flags ?? emote.modifierFlags,
-          ffzSubOnly: emote.ffz_sub_only ?? emote.ffzSubOnly,
-          localUrl: localPath ? convertFileSrc(localPath) : undefined,
-        };
-      });
     return {
       twitch: [],
       bttv: [],
-      '7tv': enhance(emoteSet['7tv']),
+      '7tv': enhanceRustEmotes(emoteSet['7tv'], tier),
       ffz: [],
       kick: [],
       youtube: [],
@@ -493,31 +424,46 @@ export async function fetchYouTubeChannelEmotes(channel: string): Promise<EmoteS
   }
 }
 
+/** A YouTube channel's own emoji as `get_youtube_channel_emojis` returns them. */
+export interface YouTubeChannelEmoji {
+  id: string;
+  name: string;
+  url: string;
+  is_global: boolean;
+  locked: boolean;
+}
+
+/** The channel's emoji as picker rows (custom channel emoji lead the grid). */
+export function youTubeChannelEmojiRows(list: YouTubeChannelEmoji[]): Emote[] {
+  return list.map((e) => ({
+    id: e.id,
+    name: e.name,
+    url: e.url,
+    provider: 'youtube' as const,
+    // Custom channel emoji lead the grid; YouTube's own set follows.
+    emote_type: e.is_global ? 'youtube' : 'custom',
+    locked: e.locked,
+    lockedLabel: e.locked ? 'Members only' : undefined,
+    // Unicode entries insert the literal character, which needs no
+    // server-side shortcut lookup. Custom emoji ids are `UC…/hash`, so
+    // the slash is what tells the two apart. NOT codepoint length: flags
+    // and ZWJ sequences are multi-codepoint and would be misread.
+    insertText: e.is_global && !e.id.includes('/') ? e.id : e.name,
+  }));
+}
+
 /**
  * Get a specific emote by name from the Rust cache
  */
 export async function getEmoteByName(channelId: string | null, emoteName: string): Promise<Emote | null> {
+  const tier = inlineEmoteTier();
   try {
     const emote = await invoke<Emote | null>('get_emote_by_name', {
       channelId,
       emoteName,
+      tier,
     });
-    
-    if (emote) {
-      // Enhance with local URL if available (tiered lookup for 7TV)
-      const localPath = cachedEmoteFiles.get(emoteCacheKey(emote.id, emote.provider));
-      const anyEmote = emote as any;
-      const zeroWidth = anyEmote.is_zero_width !== undefined ? anyEmote.is_zero_width : emote.isZeroWidth;
-      return {
-        ...emote,
-        isZeroWidth: zeroWidth,
-        modifierFlags: anyEmote.modifier_flags ?? emote.modifierFlags,
-        ffzSubOnly: anyEmote.ffz_sub_only ?? emote.ffzSubOnly,
-        localUrl: localPath ? convertFileSrc(localPath) : undefined
-      };
-    }
-    
-    return null;
+    return emote ? enhanceRustEmotes([emote], tier)[0] : null;
   } catch (error) {
     Logger.error('[EmoteService] Failed to get emote by name:', error);
     return null;
