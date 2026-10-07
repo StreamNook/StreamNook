@@ -9,14 +9,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use crate::rt::AppHandle;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use uuid::Uuid;
 
+use crate::models::settings::AppState;
 use crate::services::drops_auth_service::DropsAuthService;
+use crate::services::irc_service::{IrcService, RedemptionRow};
 use crate::services::twitch_limits::{
     PUBSUB_LISTEN_TOPICS_PER_FRAME, PUBSUB_MAX_TOPICS_PER_CONNECTION,
 };
@@ -567,6 +569,7 @@ impl ChannelPointsWebSocketService {
                                     message_data,
                                     app_handle,
                                     channel_id,
+                                    channel_mappings,
                                     active_viewing_channels,
                                 )
                                 .await;
@@ -850,30 +853,9 @@ impl ChannelPointsWebSocketService {
             }
         }
         // Resolve channel name from mapping or API
-        let channel_name = if let Some(ref cid) = channel_id {
-            let mapping = channel_mappings.read().await;
-            if let Some(channel_info) = mapping.get(cid) {
-                Some(channel_info.login.clone())
-            } else {
-                drop(mapping);
-                // Try API lookup
-                if let Ok(Some((login, display_name))) = Self::lookup_channel_by_id(cid).await {
-                    // Cache for future use
-                    let mut mapping_write = channel_mappings.write().await;
-                    mapping_write.insert(
-                        cid.clone(),
-                        ChannelMapping {
-                            login: login.clone(),
-                            display_name: display_name.clone(),
-                        },
-                    );
-                    Some(login)
-                } else {
-                    None
-                }
-            }
-        } else {
-            None
+        let channel_name = match channel_id {
+            Some(ref cid) => Self::resolve_channel_login(cid, channel_mappings).await,
+            None => None,
         };
 
         // Format display string: "channel_name (ID)" or just "ID"
@@ -1201,20 +1183,21 @@ impl ChannelPointsWebSocketService {
     ///
     /// This is broadcast to every viewer with no broadcaster auth, so it's how we
     /// surface OTHER viewers' reward redemptions on a channel we're only watching.
-    /// We forward every `reward-redeemed` event with an `is_input_required` flag;
-    /// the frontend shows the no-input ones (input rewards' text isn't public, and
-    /// message-style rewards already appear in chat on their own).
+    /// A no-input redemption becomes a chat row built and delivered like any
+    /// received one (`IrcService::publish_redemption_row`). Input rewards are
+    /// skipped: their text is not public, and their chat message already shows
+    /// the redemption, as message-style rewards do.
     async fn handle_channel_redemption_event(
         message_data: Value,
         app_handle: &AppHandle,
         channel_id: Option<String>,
+        channel_mappings: &Arc<RwLock<HashMap<String, ChannelMapping>>>,
         active_viewing_channels: &Arc<RwLock<HashSet<String>>>,
     ) {
         // Only for channels we're actively watching (skip background farming channels).
-        if let Some(ref cid) = channel_id {
-            if !active_viewing_channels.read().await.contains(cid) {
-                return;
-            }
+        let Some(cid) = channel_id else { return };
+        if !active_viewing_channels.read().await.contains(&cid) {
+            return;
         }
 
         if message_data["type"].as_str() != Some("reward-redeemed") {
@@ -1228,8 +1211,8 @@ impl ChannelPointsWebSocketService {
         let user = redemption.get("user");
         let reward = redemption.get("reward");
 
-        // Twitch's redemption id — a stable dedupe key so the same redemption
-        // injected by more than one open chat view collapses to one row.
+        // Twitch's redemption id: the row id derives from it, so a redemption
+        // delivered twice (a reconnect overlap) is still one row.
         let redemption_id = redemption.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let user_id = user.and_then(|u| u["id"].as_str()).unwrap_or("");
         let user_login = user.and_then(|u| u["login"].as_str()).unwrap_or("");
@@ -1241,21 +1224,21 @@ impl ChannelPointsWebSocketService {
         let reward_id = reward.and_then(|r| r["id"].as_str()).unwrap_or("");
         let reward_title = reward.and_then(|r| r["title"].as_str()).unwrap_or("");
         let reward_cost = reward.and_then(|r| r["cost"].as_i64()).unwrap_or(0);
-        let reward_prompt = reward.and_then(|r| r["prompt"].as_str()).unwrap_or("");
         let is_input_required = reward
             .and_then(|r| r["is_user_input_required"].as_bool())
             .unwrap_or(false);
-        let user_input = redemption
-            .get("user_input")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
         let background_color = reward
             .and_then(|r| r["background_color"].as_str())
             .unwrap_or("");
 
-        // Reward image (image / default_image can be null); prefer the largest.
+        // Reward art, largest first. A reward without custom art sends
+        // `image: null` beside its `default_image`.
         let image_url = reward
-            .and_then(|r| r.get("image").or_else(|| r.get("default_image")))
+            .and_then(|r| {
+                ["image", "default_image"]
+                    .into_iter()
+                    .find_map(|k| r.get(k).filter(|v| v.is_object()))
+            })
             .and_then(|img| {
                 img["url_4x"]
                     .as_str()
@@ -1264,43 +1247,60 @@ impl ChannelPointsWebSocketService {
             })
             .unwrap_or("");
 
-        if reward_title.is_empty() {
+        if reward_title.is_empty() || is_input_required {
             return;
         }
 
+        let shown = app_handle
+            .state::<AppState>()
+            .settings
+            .lock()
+            .ok()
+            .and_then(|s| s.extra.get("show_channel_point_redemptions").and_then(|v| v.as_bool()))
+            .unwrap_or(true);
+        if !shown {
+            return;
+        }
+
+        let Some(channel_login) = Self::resolve_channel_login(&cid, channel_mappings).await else {
+            debug!("Community redemption on {}: channel login unknown, row skipped", cid);
+            return;
+        };
+
         debug!(
-            "Community redemption on {:?}: {} redeemed '{}' ({} pts)",
-            channel_id, user_name, reward_title, reward_cost
+            "Community redemption on {}: {} redeemed '{}' ({} pts)",
+            channel_login, user_name, reward_title, reward_cost
         );
 
         // The event names the redeemer but carries no chat badges; wear the
         // ones they last showed in this channel's chat, and their name colour.
-        let (badges, color) = channel_id
-            .as_deref()
-            .and_then(|cid| crate::services::chat_history::ChatHistory::last_look(cid, user_id))
+        let (badges, color) = crate::services::chat_history::ChatHistory::last_look(&cid, user_id)
             .map(|(badges, color)| (badges.join(","), color.unwrap_or_default()))
             .unwrap_or_default();
 
-        let _ = app_handle.emit(
-            "channel-points-community-redemption",
-            json!({
-                "channel_id": channel_id,
-                "redemption_id": redemption_id,
-                "user_id": user_id,
-                "user_login": user_login,
-                "user_name": user_name,
-                "reward_id": reward_id,
-                "reward_title": reward_title,
-                "reward_cost": reward_cost,
-                "reward_prompt": reward_prompt,
-                "is_input_required": is_input_required,
-                "user_input": user_input,
-                "background_color": background_color,
-                "image_url": image_url,
-                "badges": badges,
-                "color": color,
-            }),
-        );
+        // The channel's own points icon, as its chat header shows it.
+        let points_icon_url = crate::services::channel_state::get(&channel_login)
+            .await
+            .and_then(|s| s.points)
+            .filter(|p| p.enabled)
+            .and_then(|p| p.icon_url);
+
+        IrcService::publish_redemption_row(RedemptionRow {
+            channel: channel_login,
+            redemption_id: redemption_id.to_string(),
+            user_id: user_id.to_string(),
+            user_login: user_login.to_string(),
+            user_name: user_name.to_string(),
+            reward_id: reward_id.to_string(),
+            reward_title: reward_title.to_string(),
+            reward_cost,
+            image_url: image_url.to_string(),
+            background_color: background_color.to_string(),
+            points_icon_url,
+            badges,
+            color,
+        })
+        .await;
     }
 
     /// Start ping keeper to maintain connections. Idempotent — if a keeper is
@@ -1373,6 +1373,23 @@ impl ChannelPointsWebSocketService {
         self.channel_mappings.write().await.clear();
 
         debug!("All WebSocket connections closed (reader + ping tasks aborted)");
+    }
+
+    /// A channel's login from its id: the registered mapping, else the Twitch
+    /// API, whose answer is cached in the mapping.
+    async fn resolve_channel_login(
+        channel_id: &str,
+        channel_mappings: &Arc<RwLock<HashMap<String, ChannelMapping>>>,
+    ) -> Option<String> {
+        if let Some(info) = channel_mappings.read().await.get(channel_id) {
+            return Some(info.login.clone());
+        }
+        let (login, display_name) = Self::lookup_channel_by_id(channel_id).await.ok().flatten()?;
+        channel_mappings.write().await.insert(
+            channel_id.to_string(),
+            ChannelMapping { login: login.clone(), display_name },
+        );
+        Some(login)
     }
 
     /// Look up channel info by ID via Twitch API (fallback for unknown channels)

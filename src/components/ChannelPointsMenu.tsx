@@ -1,11 +1,24 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../stores/AppStore';
-import { ChannelReward, RedemptionResult, UnlockedEmote } from '../types';
+import { ChannelReward, ChannelRewardsSnapshot, RedemptionResult, RewardAvailability, UnlockedEmote } from '../types';
 
 import { Logger } from '../utils/logger';
 import { ChannelPointsIcon } from './ChannelPointsIcon';
 import { Tooltip } from './ui/Tooltip';
+
+/** Opening a reward re-reads the list when it is older than this. */
+const REWARDS_STALE_MS = 30_000;
+/** setTimeout's ceiling; longer cooldowns re-arm after a refresh. */
+const MAX_TIMER_MS = 2_147_483_647;
+
+const formatCountdown = (ms: number): string => {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = String(total % 60).padStart(2, '0');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+};
 
 interface ChannelPointsMenuProps {
   channelLogin: string;  // Username for fetching rewards
@@ -31,9 +44,15 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
   onEmotesChange,
 }) => {
   const [rewards, setRewards] = useState<ChannelReward[]>([]);
+  // The balance the backend judged the list against.
+  const [snapshotBalance, setSnapshotBalance] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [redeemingId, setRedeemingId] = useState<string | null>(null);
+  // Clock for the cooldown countdown text; ticks only while one is on screen.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const fetchedAtRef = useRef(0);
+  const fetchSeqRef = useRef(0);
   // The balance already refreshes on a timer and on earn/spend events. This is
   // the escape hatch for when it still looks stale.
   const [isRefreshingBalance, setIsRefreshingBalance] = useState(false);
@@ -93,29 +112,146 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     'MOD_CV': { name: 'Cursed', description: 'Spooky distortion' },
   };
 
+  // Read the reward list and the backend's per-reward verdicts. Only the
+  // newest call applies; a failed background refresh keeps the list shown.
+  const refreshRewards = useCallback((initial = false): Promise<void> => {
+    const seq = ++fetchSeqRef.current;
+    return invoke<ChannelRewardsSnapshot>('get_channel_rewards', {
+      channelId: channelLogin  // Backend param is named channelId but expects login
+    }).then(
+      (snapshot) => {
+        if (seq !== fetchSeqRef.current) return;
+        fetchedAtRef.current = snapshot.fetched_at_ms;
+        setRewards(snapshot.rewards);
+        setSnapshotBalance(snapshot.balance);
+        setError(null);
+        setIsLoading(false);
+      },
+      (err: unknown) => {
+        if (seq !== fetchSeqRef.current) return;
+        Logger.error('[ChannelPointsMenu] Failed to fetch rewards:', err);
+        if (initial) {
+          setError(typeof err === 'string' ? err : 'Failed to load rewards');
+          setIsLoading(false);
+        }
+      },
+    );
+  }, [channelLogin]);
+
   // Fetch rewards when menu opens
   useEffect(() => {
-    let isMounted = true;
-    const fetchRewards = async () => {
-      setIsLoading(true);
-      setError(null);
-      try {
-        // CommunityPointsRewardRedemptionContext expects channelLogin (username)
-        const result = await invoke<ChannelReward[]>('get_channel_rewards', {
-          channelId: channelLogin  // Backend param is named channelId but expects login
-        });
-        if (isMounted) setRewards(result);
-      } catch (err) {
-        Logger.error('[ChannelPointsMenu] Failed to fetch rewards:', err);
-        if (isMounted) setError(typeof err === 'string' ? err : 'Failed to load rewards');
-      } finally {
-        if (isMounted) setIsLoading(false);
-      }
-    };
+    const seqRef = fetchSeqRef;
+    void refreshRewards(true);
+    // Unmounting (or a channel switch) voids any call still in flight.
+    return () => { seqRef.current++; };
+  }, [refreshRewards]);
 
-    fetchRewards();
-    return () => { isMounted = false; };
-  }, [channelLogin]);
+  const retryRewards = () => {
+    setIsLoading(true);
+    setError(null);
+    void refreshRewards(true);
+  };
+
+  // Re-read a list older than REWARDS_STALE_MS; a no-op otherwise.
+  const refreshIfStale = useCallback(async () => {
+    if (Date.now() - fetchedAtRef.current <= REWARDS_STALE_MS) return;
+    await refreshRewards();
+  }, [refreshRewards]);
+
+  // Points were earned or spent since the verdicts were made: have them
+  // judged again against the new balance.
+  useEffect(() => {
+    if (currentBalance === null || snapshotBalance === null) return;
+    if (currentBalance === snapshotBalance) return;
+    void refreshRewards();
+  }, [currentBalance, snapshotBalance, refreshRewards]);
+
+  // One timer to the soonest cooldown end, then a fresh verdict.
+  const nextCooldownEnd = useMemo(
+    () => rewards.reduce<number | null>((soonest, r) => {
+      const until = r.availability.cooldown_until_ms;
+      return until !== null && (soonest === null || until < soonest) ? until : soonest;
+    }, null),
+    [rewards],
+  );
+  useEffect(() => {
+    if (nextCooldownEnd === null) return;
+    // A beat past the end, so the backend judges it after the cooldown.
+    const delay = Math.min(Math.max(0, nextCooldownEnd - Date.now()) + 250, MAX_TIMER_MS);
+    const timer = window.setTimeout(() => { void refreshRewards(); }, delay);
+    return () => window.clearTimeout(timer);
+  }, [nextCooldownEnd, refreshRewards]);
+
+  // Presentational countdown tick, only while a cooldown text is visible.
+  const showsCooldown = rewards.some((r) => r.availability.reason === 'on_cooldown');
+  useEffect(() => {
+    if (!showsCooldown) return;
+    const tick = () => setNowMs(Date.now());
+    const first = window.setTimeout(tick, 0);
+    const interval = window.setInterval(tick, 1000);
+    return () => {
+      window.clearTimeout(first);
+      window.clearInterval(interval);
+    };
+  }, [showsCooldown]);
+
+  // A modal holds the reward it opened with; read its current verdict from the
+  // latest list. A reward that dropped out of the list cannot be redeemed.
+  const liveOf = (reward: ChannelReward): ChannelReward => {
+    const live = rewards.find((r) => r.id === reward.id);
+    if (live) return live;
+    return {
+      ...reward,
+      availability: { ...reward.availability, redeemable: false, reason: 'disabled', cooldown_until_ms: null },
+    };
+  };
+
+  /** Plain sentence shown beside a blocked confirm button. */
+  const blockedText = (availability: RewardAvailability): string | null => {
+    switch (availability.reason) {
+      case null:
+        return null;
+      case 'disabled':
+        return 'Turned off by the streamer';
+      case 'paused':
+        return 'Paused by the streamer';
+      case 'out_of_stock':
+        return 'Out of stock';
+      case 'input_not_supported':
+        return 'Needs typed input, not supported yet';
+      case 'max_per_stream_reached':
+        return 'Limit reached for this stream';
+      case 'on_cooldown':
+        return availability.cooldown_until_ms !== null
+          ? `On cooldown, ${formatCountdown(availability.cooldown_until_ms - nowMs)} left`
+          : 'On cooldown';
+      case 'not_enough_points':
+        return `Not enough ${customPointsName || 'points'}`;
+    }
+  };
+
+  /** Short badge for a blocked row in the list. */
+  const badgeText = (availability: RewardAvailability): string | null => {
+    switch (availability.reason) {
+      case 'disabled':
+        return 'Off';
+      case 'paused':
+        return 'Paused';
+      case 'out_of_stock':
+        return 'Out of stock';
+      case 'input_not_supported':
+        return 'Needs input';
+      case 'max_per_stream_reached':
+        return 'Limit reached';
+      case 'on_cooldown':
+        return availability.cooldown_until_ms !== null
+          ? `Cooldown ${formatCountdown(availability.cooldown_until_ms - nowMs)}`
+          : 'Cooldown';
+      // Too few points shows on the red cost pill instead.
+      default:
+        return null;
+    }
+  };
 
   // Close on Escape key
   useEffect(() => {
@@ -131,26 +267,23 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
 
   const handleRedeem = async (reward: ChannelReward) => {
     if (redeemingId) return; // Already redeeming something
-    if (currentBalance === null || currentBalance < reward.cost) {
-      useAppStore.getState().addToast(`Not enough ${customPointsName || 'points'}`, 'error');
-      return;
-    }
-    if (!reward.is_enabled || reward.is_paused || !reward.is_in_stock) {
-      useAppStore.getState().addToast('This reward is not available', 'error');
+    if (!reward.availability.redeemable) {
+      useAppStore
+        .getState()
+        .addToast(blockedText(reward.availability) ?? 'This reward is not available', 'error');
       return;
     }
 
-    // Handle input-required rewards (Highlight My Message)
+    // The verdict may have gone stale while the menu sat open (a reward
+    // paused, a cooldown started elsewhere). The view below follows the
+    // fresh list as soon as it lands.
+    void refreshIfStale();
+
+    // The only input reward the backend lets through is Highlight My Message.
     if (reward.is_user_input_required) {
-      // Check if this is a highlight message type
-      if (reward.title.toLowerCase().includes('highlight')) {
-        setHighlightReward(reward);
-        setHighlightMessage('');
-        setShowHighlightModal(true);
-        return;
-      }
-      // Other input types not yet supported
-      useAppStore.getState().addToast('This reward type is not yet supported', 'info');
+      setHighlightReward(reward);
+      setHighlightMessage('');
+      setShowHighlightModal(true);
       return;
     }
 
@@ -227,6 +360,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
       useAppStore.getState().addToast('Please enter a message', 'error');
       return;
     }
+    if (!liveOf(highlightReward).availability.redeemable) return;
 
     setRedeemingId(highlightReward.id);
     try {
@@ -242,6 +376,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
         setHighlightMessage('');
         setHighlightReward(null);
         onBalanceUpdate(); // Refresh balance
+        void refreshRewards(); // A redeem can start a cooldown or use up stock
       } else {
         useAppStore.getState().addToast(result.error_message || 'Failed to send', 'error');
       }
@@ -255,6 +390,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
 
   const handleConfirmRedemption = async () => {
     if (!pendingReward) return;
+    if (!liveOf(pendingReward).availability.redeemable) return;
 
     const reward = pendingReward;
     const titleLower = reward.title.toLowerCase();
@@ -278,6 +414,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
             useAppStore.getState().addToast('Random emote unlocked!', 'success');
           }
           onBalanceUpdate();
+          void refreshRewards();
           if (onEmotesChange) onEmotesChange();
         } else {
           useAppStore
@@ -295,6 +432,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
         if (result.success) {
           useAppStore.getState().addToast(`Redeemed: ${reward.title}`, 'success');
           onBalanceUpdate();
+          void refreshRewards();
         } else {
           useAppStore
             .getState()
@@ -318,6 +456,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
       useAppStore.getState().addToast('Please select an emote and modifier', 'error');
       return;
     }
+    if (!liveOf(modifyEmoteReward).availability.redeemable) return;
 
     // Use the full modified emote ID from the API (e.g., "1022569_BW")
     const finalEmoteId = selectedModifier.id;
@@ -343,6 +482,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
         setRevealedEmote(emoteToReveal);
         setShowEmoteReveal(true);
         onBalanceUpdate();
+        void refreshRewards();
         // Trigger emote refresh
         if (onEmotesChange) {
           onEmotesChange();
@@ -368,6 +508,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
       useAppStore.getState().addToast('Please select an emote', 'error');
       return;
     }
+    if (!liveOf(chooseEmoteReward).availability.redeemable) return;
 
     setShowChooseEmoteModal(false);
     setRedeemingId(chooseEmoteReward.id);
@@ -389,6 +530,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
         setRevealedEmote(emoteToReveal);
         setShowEmoteReveal(true);
         onBalanceUpdate();
+        void refreshRewards();
         // Trigger emote refresh
         if (onEmotesChange) {
           onEmotesChange();
@@ -406,33 +548,15 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     }
   };
 
-  const isRewardAvailable = (reward: ChannelReward): boolean => {
-    if (!reward.is_enabled || reward.is_paused || !reward.is_in_stock) return false;
-    if (currentBalance === null || currentBalance < reward.cost) return false;
-    if (reward.cooldown_expires_at) {
-      const cooldownEnd = new Date(reward.cooldown_expires_at);
-      if (cooldownEnd > new Date()) return false;
-    }
-    return true;
-  };
-
-  const getRewardStatusText = (reward: ChannelReward): string | null => {
-    if (!reward.is_enabled) return 'Disabled';
-    if (reward.is_paused) return 'Paused';
-    if (!reward.is_in_stock) return 'Out of stock';
-    if (reward.cooldown_expires_at) {
-      const cooldownEnd = new Date(reward.cooldown_expires_at);
-      if (cooldownEnd > new Date()) {
-        const remaining = Math.ceil((cooldownEnd.getTime() - Date.now()) / 1000);
-        if (remaining > 60) {
-          return `${Math.ceil(remaining / 60)}m cooldown`;
-        }
-        return `${remaining}s cooldown`;
-      }
-    }
-    if (reward.is_user_input_required) return 'Requires input';
-    return null;
-  };
+  // Current verdicts for whichever confirm view is open.
+  const highlightAvail = highlightReward ? liveOf(highlightReward).availability : null;
+  const pendingAvail = pendingReward ? liveOf(pendingReward).availability : null;
+  const modifyAvail = modifyEmoteReward ? liveOf(modifyEmoteReward).availability : null;
+  const chooseAvail = chooseEmoteReward ? liveOf(chooseEmoteReward).availability : null;
+  const highlightBlocked = highlightAvail ? blockedText(highlightAvail) : null;
+  const pendingBlocked = pendingAvail ? blockedText(pendingAvail) : null;
+  const modifyBlocked = modifyAvail ? blockedText(modifyAvail) : null;
+  const chooseBlocked = chooseAvail ? blockedText(chooseAvail) : null;
 
   return (
     <div
@@ -484,7 +608,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
           <div className="px-4 py-6 text-center">
             <p className="text-textSecondary text-sm">{error}</p>
             <button 
-              onClick={() => window.location.reload()}
+              onClick={retryRewards}
               className="mt-2 text-xs text-accent hover:underline"
             >
               Try again
@@ -500,10 +624,10 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
         ) : (
           <div className="p-2 space-y-1">
             {rewards.map((reward) => {
-              const available = isRewardAvailable(reward);
-              const statusText = getRewardStatusText(reward);
+              const available = reward.availability.redeemable;
+              const statusText = badgeText(reward.availability);
               const isRedeeming = redeemingId === reward.id;
-              const canAfford = currentBalance !== null && currentBalance >= reward.cost;
+              const canAfford = reward.availability.affordable;
 
               return (
                 <button
@@ -626,9 +750,15 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
               }}
             />
             <div className="flex items-center justify-between">
-              <span className="text-xs text-textMuted">
-                {highlightMessage.length}/500
-              </span>
+              {highlightBlocked ? (
+                <span className="text-xs text-yellow-400" role="status">
+                  {highlightBlocked}
+                </span>
+              ) : (
+                <span className="text-xs text-textMuted">
+                  {highlightMessage.length}/500
+                </span>
+              )}
               <div className="flex gap-2">
                 <button
                   onClick={() => setShowHighlightModal(false)}
@@ -638,10 +768,10 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                 </button>
                 <button
                   onClick={handleSendHighlightedMessage}
-                  disabled={!highlightMessage.trim() || redeemingId === highlightReward.id}
+                  disabled={!highlightMessage.trim() || redeemingId === highlightReward.id || !highlightAvail?.redeemable}
                   className={`
                     px-4 py-1.5 text-xs font-semibold glass-button transition-all
-                    ${highlightMessage.trim() && redeemingId !== highlightReward.id
+                    ${highlightMessage.trim() && redeemingId !== highlightReward.id && highlightAvail?.redeemable
                       ? 'text-yellow-400 hover:text-yellow-300'
                       : 'opacity-50 cursor-not-allowed'}
                   `}
@@ -737,7 +867,11 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                 ? 'You will receive a random subscriber emote.'
                 : 'Spend channel points to redeem this reward.'}
             <br />
-            <span className="text-yellow-400/80">This cannot be undone.</span>
+            {pendingBlocked ? (
+              <span className="text-yellow-400" role="status">{pendingBlocked}</span>
+            ) : (
+              <span className="text-yellow-400/80">This cannot be undone.</span>
+            )}
           </div>
 
           {/* Cost */}
@@ -767,10 +901,10 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
             </button>
             <button
               onClick={handleConfirmRedemption}
-              disabled={redeemingId !== null}
+              disabled={redeemingId !== null || !pendingAvail?.redeemable}
               className={`
                 px-6 py-2 text-sm font-semibold glass-button transition-all
-                ${redeemingId === null
+                ${redeemingId === null && pendingAvail?.redeemable
                   ? 'text-accent hover:text-accent-hover active:scale-[0.98]'
                   : 'opacity-50 cursor-not-allowed'}
               `}
@@ -942,8 +1076,13 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
 
           {/* Footer */}
           <div className="flex items-center justify-between p-4 border-t border-borderSubtle">
-            <p className="text-xs text-textSecondary">
-              {modifyStep === 'emote'
+            <p
+              className={`text-xs ${modifyBlocked ? 'text-yellow-400' : 'text-textSecondary'}`}
+              role={modifyBlocked ? 'status' : undefined}
+            >
+              {modifyBlocked
+                ? modifyBlocked
+                : modifyStep === 'emote'
                 ? selectedModifyEmote
                   ? `Selected: ${modifiableEmotes.find(e => e.id === selectedModifyEmote)?.token || 'Unknown'}`
                   : 'Click an emote to select it'
@@ -987,10 +1126,10 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
               ) : (
                 <button
                   onClick={handleModifyEmoteConfirm}
-                  disabled={!selectedModifier || redeemingId !== null}
+                  disabled={!selectedModifier || redeemingId !== null || !modifyAvail?.redeemable}
                   className={`
                     px-4 py-2 text-sm font-semibold glass-button transition-all
-                    ${selectedModifier && redeemingId === null
+                    ${selectedModifier && redeemingId === null && modifyAvail?.redeemable
                       ? 'text-accent hover:text-accent-hover active:scale-[0.98]'
                       : 'opacity-50 cursor-not-allowed'
                     }
@@ -1097,8 +1236,13 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
 
           {/* Footer */}
           <div className="flex items-center justify-between p-4 border-t border-borderSubtle">
-            <p className="text-xs text-textSecondary">
-              {selectedUnlockEmote
+            <p
+              className={`text-xs ${chooseBlocked ? 'text-yellow-400' : 'text-textSecondary'}`}
+              role={chooseBlocked ? 'status' : undefined}
+            >
+              {chooseBlocked
+                ? chooseBlocked
+                : selectedUnlockEmote
                 ? `Selected: ${selectedUnlockEmote.token}`
                 : 'Click an emote to select it'
               }
@@ -1116,10 +1260,10 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
               </button>
               <button
                 onClick={handleChooseEmoteConfirm}
-                disabled={!selectedUnlockEmote || redeemingId !== null}
+                disabled={!selectedUnlockEmote || redeemingId !== null || !chooseAvail?.redeemable}
                 className={`
                   px-4 py-2 text-sm font-semibold glass-button transition-all
-                  ${selectedUnlockEmote && redeemingId === null
+                  ${selectedUnlockEmote && redeemingId === null && chooseAvail?.redeemable
                     ? 'text-accent hover:text-accent-hover active:scale-[0.98]'
                     : 'opacity-50 cursor-not-allowed'
                   }

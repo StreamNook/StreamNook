@@ -211,6 +211,67 @@ pub struct ChannelReward {
     pub max_per_stream: Option<i32>,
     pub max_per_user_per_stream: Option<i32>,
     pub global_cooldown_seconds: Option<i32>,
+    /// Built-in reward type (`SEND_HIGHLIGHTED_MESSAGE`, ...); None for a
+    /// streamer-defined reward.
+    #[serde(default)]
+    pub reward_type: Option<String>,
+    /// Channel-wide redemptions this stream. Twitch reports no per-viewer
+    /// count, so only the per-stream cap can be judged ahead of a redeem.
+    #[serde(default)]
+    pub redemptions_redeemed_current_stream: Option<i32>,
+    /// Whether the viewer can redeem this reward right now, decided when the
+    /// list was fetched. The menu shows this verdict as-is.
+    #[serde(default)]
+    pub availability: RewardAvailability,
+}
+
+/// Why a reward cannot be redeemed right now. Earlier variants win when
+/// several apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RewardBlock {
+    Disabled,
+    Paused,
+    OutOfStock,
+    /// The reward needs typed input this client cannot collect (every
+    /// input reward except Highlight My Message).
+    InputNotSupported,
+    MaxPerStreamReached,
+    OnCooldown,
+    NotEnoughPoints,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RewardAvailability {
+    pub redeemable: bool,
+    pub reason: Option<RewardBlock>,
+    /// Unix ms when a running cooldown ends; None when none is running.
+    pub cooldown_until_ms: Option<i64>,
+    /// False only when the viewer's balance is known and below the cost.
+    pub affordable: bool,
+}
+
+impl Default for RewardAvailability {
+    fn default() -> Self {
+        Self {
+            redeemable: true,
+            reason: None,
+            cooldown_until_ms: None,
+            affordable: true,
+        }
+    }
+}
+
+/// The reward list for one channel plus the viewer's balance it was judged
+/// against.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelRewardsSnapshot {
+    pub rewards: Vec<ChannelReward>,
+    /// The viewer's points on this channel; None when Twitch did not report
+    /// one (points off, or the account cannot earn here).
+    pub balance: Option<i64>,
+    /// Unix ms the verdicts were computed at.
+    pub fetched_at_ms: i64,
 }
 
 /// Result of attempting to redeem a channel reward

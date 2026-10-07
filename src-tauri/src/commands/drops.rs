@@ -1132,42 +1132,11 @@ fn parse_reward(
     let is_in_stock = reward["isInStock"].as_bool().unwrap_or(true);
     let is_user_input_required = reward["isUserInputRequired"].as_bool().unwrap_or(false);
     let cooldown_expires_at = reward["cooldownExpiresAt"].as_str().map(|s| s.to_string());
-
-    // Parse max per stream setting
-    let max_per_stream = if reward["maxPerStreamSetting"]["isEnabled"]
-        .as_bool()
-        .unwrap_or(false)
-    {
-        reward["maxPerStreamSetting"]["maxPerStream"]
-            .as_i64()
-            .map(|v| v as i32)
-    } else {
-        None
-    };
-
-    // Parse max per user per stream setting
-    let max_per_user_per_stream = if reward["maxPerUserPerStreamSetting"]["isEnabled"]
-        .as_bool()
-        .unwrap_or(false)
-    {
-        reward["maxPerUserPerStreamSetting"]["maxPerUserPerStream"]
-            .as_i64()
-            .map(|v| v as i32)
-    } else {
-        None
-    };
-
-    // Parse global cooldown setting
-    let global_cooldown_seconds = if reward["globalCooldownSetting"]["isEnabled"]
-        .as_bool()
-        .unwrap_or(false)
-    {
-        reward["globalCooldownSetting"]["globalCooldownSeconds"]
-            .as_i64()
-            .map(|v| v as i32)
-    } else {
-        None
-    };
+    let max_per_stream = enabled_setting(reward, "maxPerStreamSetting", "maxPerStream");
+    let max_per_user_per_stream =
+        enabled_setting(reward, "maxPerUserPerStreamSetting", "maxPerUserPerStream");
+    let global_cooldown_seconds =
+        enabled_setting(reward, "globalCooldownSetting", "globalCooldownSeconds");
 
     Some(crate::models::drops::ChannelReward {
         id,
@@ -1184,7 +1153,79 @@ fn parse_reward(
         max_per_stream,
         max_per_user_per_stream,
         global_cooldown_seconds,
+        reward_type: None,
+        redemptions_redeemed_current_stream: redemptions_this_stream(reward),
+        availability: Default::default(),
     })
+}
+
+/// A reward limit Twitch sends as `{ isEnabled, <field> }`; None when the
+/// streamer has it switched off.
+fn enabled_setting(reward: &serde_json::Value, setting: &str, field: &str) -> Option<i32> {
+    if reward[setting]["isEnabled"].as_bool().unwrap_or(false) {
+        reward[setting][field].as_i64().map(|v| v as i32)
+    } else {
+        None
+    }
+}
+
+fn redemptions_this_stream(reward: &serde_json::Value) -> Option<i32> {
+    reward["redemptionsRedeemedCurrentStream"]
+        .as_i64()
+        .map(|v| v as i32)
+}
+
+/// The built-in reward whose text input the menu collects itself.
+const HIGHLIGHTED_MESSAGE_REWARD: &str = "SEND_HIGHLIGHTED_MESSAGE";
+
+/// Decide whether the viewer can redeem `reward` right now. `balance` is the
+/// viewer's points on the channel (None when unknown, which never blocks:
+/// Twitch still refuses an unaffordable redeem). `now_ms` is Unix ms.
+pub(crate) fn reward_availability(
+    reward: &crate::models::drops::ChannelReward,
+    balance: Option<i64>,
+    now_ms: i64,
+) -> crate::models::drops::RewardAvailability {
+    use crate::models::drops::{RewardAvailability, RewardBlock};
+
+    let cooldown_until_ms = reward
+        .cooldown_expires_at
+        .as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|t| t.timestamp_millis())
+        .filter(|&until| until > now_ms);
+    let affordable = balance.map_or(true, |b| b >= i64::from(reward.cost));
+    let input_supported = !reward.is_user_input_required
+        || reward.reward_type.as_deref() == Some(HIGHLIGHTED_MESSAGE_REWARD);
+    let stream_cap_reached = matches!(
+        (reward.max_per_stream, reward.redemptions_redeemed_current_stream),
+        (Some(max), Some(done)) if max > 0 && done >= max
+    );
+
+    let reason = if !reward.is_enabled {
+        Some(RewardBlock::Disabled)
+    } else if reward.is_paused {
+        Some(RewardBlock::Paused)
+    } else if !reward.is_in_stock {
+        Some(RewardBlock::OutOfStock)
+    } else if !input_supported {
+        Some(RewardBlock::InputNotSupported)
+    } else if stream_cap_reached {
+        Some(RewardBlock::MaxPerStreamReached)
+    } else if cooldown_until_ms.is_some() {
+        Some(RewardBlock::OnCooldown)
+    } else if !affordable {
+        Some(RewardBlock::NotEnoughPoints)
+    } else {
+        None
+    };
+
+    RewardAvailability {
+        redeemable: reason.is_none(),
+        reason,
+        cooldown_until_ms,
+        affordable,
+    }
 }
 
 /// Parse an automatic (built-in) reward from the GQL response
@@ -1259,19 +1300,30 @@ fn parse_automatic_reward(
         is_enabled,
         is_paused: false,
         is_in_stock: reward["isInStock"].as_bool().unwrap_or(true),
-        is_user_input_required: reward_type == "SEND_HIGHLIGHTED_MESSAGE"
+        is_user_input_required: reward_type == HIGHLIGHTED_MESSAGE_REWARD
             || reward_type == "SINGLE_MESSAGE_BYPASS_SUB_MODE",
-        cooldown_expires_at: None,
-        max_per_stream: None,
-        max_per_user_per_stream: None,
-        global_cooldown_seconds: reward["globalCooldownSeconds"].as_i64().map(|v| v as i32),
+        cooldown_expires_at: reward["cooldownExpiresAt"].as_str().map(|s| s.to_string()),
+        max_per_stream: enabled_setting(reward, "maxPerStreamSetting", "maxPerStream"),
+        max_per_user_per_stream: enabled_setting(
+            reward,
+            "maxPerUserPerStreamSetting",
+            "maxPerUserPerStream",
+        ),
+        global_cooldown_seconds: enabled_setting(
+            reward,
+            "globalCooldownSetting",
+            "globalCooldownSeconds",
+        ),
+        reward_type: Some(reward_type.to_string()),
+        redemptions_redeemed_current_stream: redemptions_this_stream(reward),
+        availability: Default::default(),
     })
 }
 
 #[tauri::command]
 pub async fn get_channel_rewards(
     channel_id: String, // Actually channel login (username)
-) -> Result<Vec<crate::models::drops::ChannelReward>, String> {
+) -> Result<crate::models::drops::ChannelRewardsSnapshot, String> {
     use crate::services::drops_auth_service::DropsAuthService;
     use serde_json::json;
 
@@ -1347,7 +1399,22 @@ pub async fn get_channel_rewards(
     // Sort rewards by cost (cheapest first)
     rewards.sort_by(|a, b| a.cost.cmp(&b.cost));
 
-    Ok(rewards)
+    // The same answer carries the viewer's balance under the channel's `self`
+    // edge (null when points are off for this viewer).
+    let balance = ["/data/community/channel", "/data/channel"]
+        .iter()
+        .find_map(|base| result.pointer(&format!("{base}/self/communityPoints/balance")))
+        .and_then(|b| b.as_i64());
+    let fetched_at_ms = chrono::Utc::now().timestamp_millis();
+    for reward in &mut rewards {
+        reward.availability = reward_availability(reward, balance, fetched_at_ms);
+    }
+
+    Ok(crate::models::drops::ChannelRewardsSnapshot {
+        rewards,
+        balance,
+        fetched_at_ms,
+    })
 }
 
 #[tauri::command]
@@ -2281,5 +2348,179 @@ mod tests {
         let mut patch = serde_json::Map::new();
         patch.insert("auto_claim_drops".to_string(), serde_json::json!("yes"));
         assert!(apply_drops_patch(&DropsSettings::default(), patch).is_err());
+    }
+
+    const NOW_MS: i64 = 1_700_000_000_000;
+
+    fn reward() -> ChannelReward {
+        ChannelReward {
+            id: "r1".to_string(),
+            title: "Hydrate".to_string(),
+            cost: 500,
+            prompt: None,
+            image_url: None,
+            background_color: "#9147FF".to_string(),
+            is_enabled: true,
+            is_paused: false,
+            is_in_stock: true,
+            is_user_input_required: false,
+            cooldown_expires_at: None,
+            max_per_stream: None,
+            max_per_user_per_stream: None,
+            global_cooldown_seconds: None,
+            reward_type: None,
+            redemptions_redeemed_current_stream: None,
+            availability: RewardAvailability::default(),
+        }
+    }
+
+    fn iso(ms: i64) -> String {
+        chrono::DateTime::from_timestamp_millis(ms).unwrap().to_rfc3339()
+    }
+
+    #[test]
+    fn an_open_affordable_reward_is_redeemable() {
+        let a = reward_availability(&reward(), Some(1_000), NOW_MS);
+        assert!(a.redeemable);
+        assert_eq!(a.reason, None);
+        assert!(a.affordable);
+        assert_eq!(a.cooldown_until_ms, None);
+    }
+
+    #[test]
+    fn an_unknown_balance_never_blocks() {
+        let a = reward_availability(&reward(), None, NOW_MS);
+        assert!(a.redeemable);
+        assert!(a.affordable);
+    }
+
+    #[test]
+    fn too_few_points_blocks() {
+        let a = reward_availability(&reward(), Some(499), NOW_MS);
+        assert!(!a.redeemable);
+        assert_eq!(a.reason, Some(RewardBlock::NotEnoughPoints));
+        assert!(!a.affordable);
+        assert!(reward_availability(&reward(), Some(500), NOW_MS).redeemable);
+    }
+
+    #[test]
+    fn disabled_paused_and_out_of_stock_block_in_that_order() {
+        let mut r = reward();
+        r.is_in_stock = false;
+        assert_eq!(reward_availability(&r, Some(1_000), NOW_MS).reason, Some(RewardBlock::OutOfStock));
+        r.is_paused = true;
+        assert_eq!(reward_availability(&r, Some(1_000), NOW_MS).reason, Some(RewardBlock::Paused));
+        r.is_enabled = false;
+        assert_eq!(reward_availability(&r, Some(1_000), NOW_MS).reason, Some(RewardBlock::Disabled));
+    }
+
+    #[test]
+    fn a_running_cooldown_blocks_until_it_ends() {
+        let mut r = reward();
+        r.cooldown_expires_at = Some(iso(NOW_MS + 84_000));
+        let a = reward_availability(&r, Some(1_000), NOW_MS);
+        assert_eq!(a.reason, Some(RewardBlock::OnCooldown));
+        assert_eq!(a.cooldown_until_ms, Some(NOW_MS + 84_000));
+
+        let later = reward_availability(&r, Some(1_000), NOW_MS + 84_000);
+        assert!(later.redeemable);
+        assert_eq!(later.cooldown_until_ms, None);
+    }
+
+    #[test]
+    fn twitch_nanosecond_timestamps_parse() {
+        let mut r = reward();
+        r.cooldown_expires_at = Some("2023-11-14T22:14:20.462676805Z".to_string());
+        let a = reward_availability(&r, Some(1_000), NOW_MS);
+        assert_eq!(a.reason, Some(RewardBlock::OnCooldown));
+        assert_eq!(a.cooldown_until_ms, Some(1_700_000_060_462));
+    }
+
+    #[test]
+    fn a_cooldown_outranks_too_few_points() {
+        let mut r = reward();
+        r.cooldown_expires_at = Some(iso(NOW_MS + 1_000));
+        let a = reward_availability(&r, Some(0), NOW_MS);
+        assert_eq!(a.reason, Some(RewardBlock::OnCooldown));
+        assert!(!a.affordable);
+    }
+
+    #[test]
+    fn only_highlight_my_message_input_is_supported() {
+        let mut r = reward();
+        r.is_user_input_required = true;
+        assert_eq!(
+            reward_availability(&r, Some(1_000), NOW_MS).reason,
+            Some(RewardBlock::InputNotSupported)
+        );
+        r.reward_type = Some("SINGLE_MESSAGE_BYPASS_SUB_MODE".to_string());
+        assert_eq!(
+            reward_availability(&r, Some(1_000), NOW_MS).reason,
+            Some(RewardBlock::InputNotSupported)
+        );
+        r.reward_type = Some(HIGHLIGHTED_MESSAGE_REWARD.to_string());
+        assert!(reward_availability(&r, Some(1_000), NOW_MS).redeemable);
+    }
+
+    #[test]
+    fn the_per_stream_cap_blocks_once_reached() {
+        let mut r = reward();
+        r.max_per_stream = Some(3);
+        r.redemptions_redeemed_current_stream = Some(2);
+        assert!(reward_availability(&r, Some(1_000), NOW_MS).redeemable);
+        r.redemptions_redeemed_current_stream = Some(3);
+        assert_eq!(
+            reward_availability(&r, Some(1_000), NOW_MS).reason,
+            Some(RewardBlock::MaxPerStreamReached)
+        );
+        r.max_per_stream = None;
+        assert!(reward_availability(&r, Some(1_000), NOW_MS).redeemable);
+    }
+
+    #[test]
+    fn parsed_rewards_carry_limits_cooldowns_and_type() {
+        let custom = serde_json::json!({
+            "id": "c1", "title": "Run an ad", "cost": 100,
+            "isEnabled": true, "isPaused": false, "isInStock": true,
+            "cooldownExpiresAt": "2023-11-14T22:14:20Z",
+            "redemptionsRedeemedCurrentStream": 3,
+            "maxPerStreamSetting": { "isEnabled": true, "maxPerStream": 3 },
+            "maxPerUserPerStreamSetting": { "isEnabled": false, "maxPerUserPerStream": 1 },
+            "globalCooldownSetting": { "isEnabled": true, "globalCooldownSeconds": 60 }
+        });
+        let c = parse_reward(&custom, false).unwrap();
+        assert_eq!(c.max_per_stream, Some(3));
+        assert_eq!(c.max_per_user_per_stream, None);
+        assert_eq!(c.global_cooldown_seconds, Some(60));
+        assert_eq!(c.redemptions_redeemed_current_stream, Some(3));
+        assert_eq!(c.reward_type, None);
+
+        let auto = serde_json::json!({
+            "id": "1:SEND_HIGHLIGHTED_MESSAGE", "type": "SEND_HIGHLIGHTED_MESSAGE",
+            "cost": null, "defaultCost": 100, "isEnabled": true, "isInStock": true,
+            "pricingType": "POINTS", "cooldownExpiresAt": "2023-11-14T22:14:20Z",
+            "globalCooldownSetting": { "isEnabled": true, "globalCooldownSeconds": 30 }
+        });
+        let a = parse_automatic_reward(&auto).unwrap();
+        assert_eq!(a.reward_type.as_deref(), Some(HIGHLIGHTED_MESSAGE_REWARD));
+        assert!(a.is_user_input_required);
+        assert_eq!(a.cooldown_expires_at.as_deref(), Some("2023-11-14T22:14:20Z"));
+        assert_eq!(a.global_cooldown_seconds, Some(30));
+    }
+
+    #[test]
+    fn availability_serializes_for_the_menu() {
+        let mut r = reward();
+        r.is_paused = true;
+        let v = serde_json::to_value(reward_availability(&r, Some(1_000), NOW_MS)).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "redeemable": false,
+                "reason": "paused",
+                "cooldown_until_ms": null,
+                "affordable": true
+            })
+        );
     }
 }
