@@ -1,3 +1,42 @@
+## [8.8.5] - 2026-10-06
+
+### ✨ Features
+- Docked chats can sit in a row of tabs under the chat header, one click to switch. Turn it on in Settings > Chat > Docked Chats > Menu style. When the tabs don't all fit, hover the row or click its pin to unfold every tab in place.
+- Docked chat tabs show each chat's platform when you have chats from more than one.
+- TikTok chat can join combined chat. The chat header shows one button with every source's logo, and its menu turns each source on or off.
+- A sound can play when someone mentions you, with its own volume and a switch for replies to you.
+- @mentions in chat can be bold or regular, italic or upright, plain text or a pill, in any color.
+- Upload your own notification and mention sounds, in more audio formats, and set how loud they play.
+- The emote menu can pop out into its own window beside the chat. It can stay on top, and a picked emote goes in at your cursor with the chat box ready to send.
+- Channel point rewards you can't redeem right now say why: paused, out of stock, on cooldown (with a countdown), over the stream's limit, or not enough points. The redeem button stays greyed out until it works.
+- Middle-click a stream on Home or in the sidebar to open it in MultiNook.
+- Each MultiNook tile can have its own Audio Boost. Tiles you haven't changed follow the main player.
+- A setting you've changed shows a reset arrow beside its name. Click it to go back to the default.
+- Settings are reorganized into a section per feature, with short row names. Options that depend on another sit under it, and search finds them there.
+
+### 🐛 Bug Fixes
+- Some low-latency streams froze their picture for a few seconds every few minutes while the sound kept going.
+- 7TV emotes showed as plain text after switching back to a docked chat.
+- Zero-width 7TV emotes stack on top of the emote before them.
+- Kick, YouTube and TikTok messages in combined chat show their own channel's emotes, and so do reply previews.
+- YouTube emotes next to a line break show as emotes.
+- Badges line up with the name on messages with emotes and on bits messages, and StreamNook badges match the size of the others.
+- Notification sounds play with the Dynamic Island turned off.
+- Link previews and the docked chat search no longer flicker.
+- Messages that slide in no longer twitch as they land.
+- The Prism theme no longer draws a box behind the Back button in a profile card's recent messages.
+- Channel point redemptions show in chat with the channel's emotes. A reward named something like "Cheer100" no longer turns into bits.
+- A channel keeps its emotes when an emote provider rate-limits StreamNook. FFZ emotes are back for channels that changed their name.
+- 7TV emote changes on Kick and YouTube channels show up live, and the rest of the set stays while it reloads.
+- Kick emotes are no longer downloaded twice.
+- Song ID remembers its capture length and retry settings.
+- Large viewer counts read "136K" instead of "136.0K".
+
+### ⚡ Performance
+- The emote menu opens faster. Emoji load in blocks, and animated emotes pause while you scroll.
+- Chat windows no longer load the whole emote cache list to find an emote on disk.
+- Emote prefetching stays under Twitch's rate limit.
+
 ## [8.8.4] - 2026-10-03
 
 ### ✨ Features

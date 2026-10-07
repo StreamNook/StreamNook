@@ -1,6 +1,6 @@
 [package]
 name = "StreamNook"
-version = "8.8.4"
+version = "8.8.5"
 description = "StreamNook"
 authors = ["Brandon Winters"]
 license = "PolyForm-Noncommercial-1.0.0"
