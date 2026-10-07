@@ -43,7 +43,6 @@ import { useGiftBombStore, type GiftRecipient } from './giftBombStore';
 import { giftBombOriginOf, isGiftBombAnnouncement, isGiftBombChild } from '../utils/giftBombCollapse';
 import { useMessageRepeatStore, type RepeatParticipant } from './messageRepeatStore';
 import { normalizeForRepeat, isPrivilegedChatter } from '../utils/messageRepeat';
-import { tokenizeLocalBody } from '../utils/localMessageTokens';
 import type { SongMatch } from '../utils/songId';
 import type { BackendChatMessage } from '../services/twitchChat';
 
@@ -2941,10 +2940,10 @@ function appendStructuredMessage(slice: ChannelSlice, parsed: any) {
       );
     }
 
-    // Channel-point redemptions that posted to chat (Twitch only): a highlighted
-    // message or a reward that required text. On channels you only watch these
-    // are the ONLY visible redemptions (the rest need broadcaster auth), and
-    // Twitch sends just the reward id (no name) so custom rewards stay generic.
+    // Channel-point redemptions in chat (Twitch only): a highlighted message, a
+    // reward that required text, and the row Rust builds for a no-input reward
+    // from the channel points feed. Only that row names its reward
+    // (`sn-reward-title`); Twitch's own messages carry just the reward id.
     if (pk.provider === 'twitch') {
       const isHighlight = tags['msg-id'] === 'highlighted-message';
       if (isHighlight || tags['custom-reward-id']) {
@@ -2958,7 +2957,7 @@ function appendStructuredMessage(slice: ChannelSlice, parsed: any) {
               displayName: parsed.display_name || parsed.username,
               userId: parsed.user_id,
               color: parsed.color,
-              systemText: isHighlight ? 'highlighted message' : undefined,
+              systemText: isHighlight ? 'highlighted message' : tags['sn-reward-title'] || undefined,
             },
           }),
         );
@@ -3629,84 +3628,6 @@ export function injectSystemMessage(
       ]),
     });
     slice.seenMessageIds.add(sysMsgId);
-  });
-}
-
-/** Inject a no-input channel-points redemption as a chat row. Reuses the native
- *  highlight-message render path (via the `custom-reward-id` tag) so it reads as
- *  a redemption, with the redeemer as the author and the reward name as the body.
- *  No-ops when the channel's chat isn't open. Message-style rewards post their
- *  own PRIVMSG, so callers should only pass the no-input ones. */
-export function injectRedemptionMessage(
-  channel: string,
-  r: {
-    userLogin: string;
-    userName: string;
-    userId?: string;
-    rewardId: string;
-    rewardTitle: string;
-    cost?: number;
-    color?: string;
-    redemptionId?: string;
-    pointsIconUrl?: string | null;
-    rewardImageUrl?: string;
-    rewardBackground?: string;
-    /** `name/version,...` in chat order, from Rust's chat history. */
-    badges?: string;
-  },
-): void {
-  // A stable id from Twitch's redemption id (when present) makes this idempotent:
-  // the same redemption seen by two open chat views collapses to one row.
-  const id = r.redemptionId
-    ? `redeem-${r.redemptionId}`
-    : `redeem-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  const login = r.userLogin || r.userName;
-  const name = r.userName || r.userLogin || login;
-  // Body is just the reward name; the cost renders as the channel-points glyph +
-  // amount in ChatMessage (via the sn-reward-cost / sn-points-icon tags), not as
-  // a plain "(N)" appended to the text.
-  const body = r.rewardTitle;
-  // Plain-object tags (NOT a Map): parseMessage rebuilds tags with
-  // `Object.entries(raw.tags)`, which is empty for a Map — that silently dropped
-  // custom-reward-id, so redemptions lost their decoration and rendered plain.
-  const tags: Record<string, string> = {
-    'user-id': r.userId || '',
-    id,
-    'display-name': name,
-    // Triggers the redemption highlight + label in ChatMessage.
-    'custom-reward-id': r.rewardId || 'sn-redemption',
-    // Marks the row as a redemption for the stream overlay renderer, which draws
-    // it as a Channel points event (the hosted overlay builds the same tags).
-    'sn-reward-title': r.rewardTitle,
-  };
-  if (r.rewardImageUrl) tags['sn-reward-image'] = r.rewardImageUrl;
-  if (r.rewardBackground) tags['sn-reward-bg'] = r.rewardBackground;
-  if (r.cost && r.cost > 0) tags['sn-reward-cost'] = String(r.cost);
-  if (r.pointsIconUrl) tags['sn-points-icon'] = r.pointsIconUrl;
-  withSlice(channel, (slice) => {
-    if (slice.seenMessageIds.has(id)) return;
-    pushMessage(slice, {
-      id,
-      username: login,
-      display_name: name,
-      color: r.color || '#9147ff',
-      badges: (r.badges ?? '')
-        .split(',')
-        .filter(Boolean)
-        .map((b) => {
-          const [name, version = ''] = b.split('/');
-          return { name, version };
-        }),
-      content: body,
-      segments: tokenizeLocalBody(body, getChannelEmotes(channel)),
-      is_action: false,
-      is_first_message: false,
-      is_mentioned: false,
-      is_from_shared_chat: false,
-      user_id: r.userId || '',
-      tags,
-    });
-    slice.seenMessageIds.add(id);
   });
 }
 

@@ -113,6 +113,12 @@ pub struct ReplyInfo {
     pub parent_msg_body: String,
     pub parent_user_id: String,
     pub parent_user_login: String,
+    /// The quoted parent tokenized the way its own row would be: with the
+    /// channel and platform it was said in. The page has only the home
+    /// channel's sets, so in combined chat it could not do this for a reply
+    /// on another platform's row. Absent on rows built before this existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_segments: Option<Vec<MessageSegment>>,
 }
 
 /// Pre-computed message metadata - THE ENDGAME

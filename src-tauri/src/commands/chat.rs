@@ -479,10 +479,16 @@ pub async fn kick_can_moderate(channel: String) -> bool {
 }
 
 /// A Kick channel's 7TV emotes (channel set + 7TV globals) as an EmoteSet, for the
-/// emote picker — parity with Twitch's `fetch_channel_emotes`.
+/// emote picker — parity with Twitch's `fetch_channel_emotes`, disk-cache paths
+/// included for the page's `tier`.
 #[tauri::command]
-pub async fn get_kick_channel_emotes(slug: String) -> crate::services::emote_service::EmoteSet {
-    crate::services::providers::kick_emotes::channel_emote_set(&slug).await
+pub async fn get_kick_channel_emotes(
+    slug: String,
+    tier: Option<String>,
+) -> crate::services::emote_service::EmoteSet {
+    let mut set = crate::services::providers::kick_emotes::channel_emote_set(&slug).await;
+    super::emotes::stamp_set_paths(&mut set, super::emotes::render_tier(tier.as_deref()));
+    set
 }
 
 /// A YouTube channel's 7TV emotes (channel set + 7TV globals) as an EmoteSet,
@@ -491,8 +497,11 @@ pub async fn get_kick_channel_emotes(slug: String) -> crate::services::emote_ser
 #[tauri::command]
 pub async fn get_youtube_channel_emotes(
     channel: String,
+    tier: Option<String>,
 ) -> crate::services::emote_service::EmoteSet {
-    crate::services::providers::youtube_emotes::channel_emote_set(&channel).await
+    let mut set = crate::services::providers::youtube_emotes::channel_emote_set(&channel).await;
+    super::emotes::stamp_set_paths(&mut set, super::emotes::render_tier(tier.as_deref()));
+    set
 }
 
 #[tauri::command]
@@ -788,6 +797,9 @@ pub async fn parse_historical_messages(
 const HISTORY_CACHE_TTL: Duration = Duration::from_secs(30);
 /// Mirror page size; robotty caps at 800.
 const HISTORY_DEFAULT_LIMIT: u32 = 100;
+/// How long history waits for its channel's emote table to seed before
+/// parsing. The seed is a cached broadcaster lookup plus a disk read.
+const HISTORY_EMOTE_SEED_WAIT: Duration = Duration::from_secs(3);
 const HISTORY_MAX_LIMIT: u32 = 800;
 const RECENT_MESSAGES_BASE: &str = "https://recent-messages.robotty.de/api/v2/recent-messages";
 
@@ -910,13 +922,22 @@ pub async fn load_channel_history(
             lines
         }
     };
-    // Same background emote warm as parse_historical_messages: never in front
-    // of the rows, a down provider must not blank the chat.
-    let emote_service = state.emote_service.clone();
-    let warm = key.clone();
-    tokio::spawn(async move {
-        IrcService::fetch_and_store_emotes(&warm, emote_service).await;
-    });
+    // Rust decides which words are emotes when it parses, and a row parsed as
+    // text stays text, so the channel's table must be in place first. The JOIN
+    // that normally seeds it can wait in the join window behind other chats,
+    // so history seeds it here: the broadcaster lookup and the saved
+    // dictionary, never the providers (the refresh follows in the background,
+    // so a down provider still cannot blank the chat). Bounded, because a
+    // backlog with names beats no backlog.
+    let seeded = crate::services::irc_service::with_channel_emotes(&key, |_| ())
+        .await
+        .is_some();
+    if !seeded {
+        let seed = IrcService::seed_emotes_deferring_refresh(&key, state.emote_service.clone());
+        if tokio::time::timeout(HISTORY_EMOTE_SEED_WAIT, seed).await.is_err() {
+            log::debug!("[ChatHistory] {key}: emote seed slower than the wait, parsing without it");
+        }
+    }
     let parsed = IrcService::parse_historical_messages(raw).await;
     log::debug!(
         "[ChatHistory] {key}: {} rows in {} ms{}",

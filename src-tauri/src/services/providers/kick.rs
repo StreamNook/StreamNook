@@ -186,6 +186,8 @@ impl ChatProvider for KickProvider {
             // modes to the next client that attaches.
             crate::services::irc_service::remove_provider_room_state(&key::make_key("kick", &slug))
                 .await;
+            // And its live 7TV feed: nothing reads this channel's set now.
+            crate::services::seventv_eventapi::unsubscribe_channel_on(&slug, "kick").await;
         }
         Ok(())
     }
@@ -214,6 +216,7 @@ impl ChatProvider for KickProvider {
         for slug in dropped {
             crate::services::irc_service::remove_provider_room_state(&key::make_key("kick", &slug))
                 .await;
+            crate::services::seventv_eventapi::unsubscribe_channel_on(&slug, "kick").await;
         }
     }
 
@@ -816,25 +819,12 @@ async fn resolve_via_webview(slug: &str) -> Result<u64> {
 
     match result {
         Ok(Ok(resolved)) => {
-            if !resolved.sub_badges.is_empty() {
-                if let Ok(mut m) = sub_badges_cache().lock() {
-                    m.insert(slug_lc.clone(), resolved.sub_badges);
-                }
-            }
-            if let Some(meta) = resolved.meta {
-                let uid = meta.user_id;
-                if let Ok(mut m) = kick_meta_cache().lock() {
-                    m.insert(slug_lc.clone(), meta);
-                }
-                // Warm the channel's 7TV emotes now that its numeric Kick id is
-                // known (the fetch self-throttles, so this won't re-hit 7TV).
-                if let Some(uid) = uid {
-                    let slug_owned = slug_lc.clone();
-                    tokio::spawn(async move {
-                        kick_emotes::refresh(&slug_owned, uid).await;
-                    });
-                }
-            }
+            // The same commit as the http path: badges, meta, room modes, the
+            // 7TV set AND its live subscription. A hand copy here had drifted
+            // and never subscribed, so a channel resolved this way got no live
+            // emote updates.
+            let chatroom_id = resolved.chatroom_id;
+            commit_resolved(&slug_lc, resolved);
             // Keep the (hidden) resolver webview alive just long enough to collect
             // the native emotes it's still fetching, then store them and close it.
             // Detached so the chrome above is already live for the caller.
@@ -849,7 +839,7 @@ async fn resolve_via_webview(slug: &str) -> Result<u64> {
                 }
                 pending_emotes().lock().await.remove(&label_owned);
             });
-            Ok(resolved.chatroom_id)
+            Ok(chatroom_id)
         }
         other => {
             // Chrome never arrived: drop the emote channel + destroy the webview now.
@@ -1344,15 +1334,20 @@ fn parse_chat_message(frame: &Value, channel_key: &str) -> Option<ChatMessage> {
                     .unwrap_or("")
                     .to_string(),
                 parent_display_name: parent_name.clone(),
-                // The reply preview is a plain-text surface, so Kick's inline
-                // `[emote:id:name]` tokens are reduced to their names the same way
-                // the pinned banner does it. Left raw, the preview literally read
-                // "[emote:37225:KEKW]".
+                // The plain text keeps Kick's inline `[emote:id:name]` tokens
+                // reduced to their names (left raw it read "[emote:37225:KEKW]");
+                // the segments render them, and this channel's 7TV words, as the
+                // parent's own row would.
                 parent_msg_body: strip_emote_tokens(
                     m.pointer("/original_message/content")
                         .and_then(|c| c.as_str())
                         .unwrap_or(""),
                 ),
+                parent_segments: m
+                    .pointer("/original_message/content")
+                    .and_then(|c| c.as_str())
+                    .filter(|c| !c.is_empty())
+                    .map(|c| parse_segments(c, &slug).0),
                 parent_user_id: parent_id,
                 parent_user_login: parent_name.to_lowercase(),
             }

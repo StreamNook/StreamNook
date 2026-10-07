@@ -238,11 +238,15 @@ impl ChatProvider for YouTubeProvider {
                     dec_bridge_users();
                 }
             }
+            drop(conns);
+            // Nothing reads this channel's 7TV set now, so its live feed goes too.
+            crate::services::seventv_eventapi::unsubscribe_channel_on(&id_lc, "youtube").await;
         }
         Ok(())
     }
 
     async fn release_window(&self, window: &str) {
+        let mut dropped: Vec<String> = Vec::new();
         let mut conns = self.conns.lock().await;
         conns.retain(|id_lc, conn| {
             if !conn.consumers.remove(window) || !conn.consumers.is_empty() {
@@ -255,8 +259,14 @@ impl ChatProvider for YouTubeProvider {
                 dec_bridge_users();
                 log::debug!("[youtube] released '{}' with window '{}'", id_lc, window);
             }
+            dropped.push(id_lc.clone());
             false
         });
+        // Outside the retain closure, which is synchronous.
+        drop(conns);
+        for id_lc in dropped {
+            crate::services::seventv_eventapi::unsubscribe_channel_on(&id_lc, "youtube").await;
+        }
     }
 
     async fn send(&self, channel: &str, text: &str, _reply_to: Option<&str>) -> Result<SendOutcome> {
@@ -2353,6 +2363,9 @@ fn parse_membership(r: &Value, channel_key: &str) -> ChatMessage {
         .or_else(|| milestone.clone())
         .unwrap_or_else(|| "New member".to_string());
     let (segments, plain) = parse_runs(r.get("message"));
+    // A milestone's own comment is a chat line like any other: the channel's
+    // 7TV emotes apply to it too.
+    let segments = bake_seventv(segments, channel_key);
     let display = r
         .pointer("/authorName/simpleText")
         .and_then(|x| x.as_str())
@@ -2527,11 +2540,14 @@ fn bake_seventv(segments: Vec<MessageSegment>, channel_key: &str) -> Vec<Message
             out.push(seg);
             continue;
         };
-        // Split on spaces, keeping them, so the message reads exactly as sent.
+        // Split on any whitespace (YouTube runs carry newlines and no-break
+        // spaces as well as spaces), keeping it, so the message reads exactly
+        // as sent and a word beside a line break still matches.
         let mut buf = String::new();
-        for (i, word) in content.split(' ').enumerate() {
-            if i > 0 {
-                buf.push(' ');
+        for (is_space, word) in whitespace_runs(content) {
+            if is_space {
+                buf.push_str(word);
+                continue;
             }
             match youtube_emotes::lookup(&identifier, word) {
                 Some(e) => {
@@ -2555,6 +2571,30 @@ fn bake_seventv(segments: Vec<MessageSegment>, channel_key: &str) -> Vec<Message
         if !buf.is_empty() {
             out.push(MessageSegment::Text { content: buf });
         }
+    }
+    out
+}
+
+/// `text` cut into alternating runs of whitespace and non-whitespace, in order,
+/// each tagged with whether it is whitespace. Joined back they are `text`.
+fn whitespace_runs(text: &str) -> Vec<(bool, &str)> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut current: Option<bool> = None;
+    for (i, c) in text.char_indices() {
+        let space = c.is_whitespace();
+        match current {
+            Some(kind) if kind == space => {}
+            Some(kind) => {
+                out.push((kind, &text[start..i]));
+                start = i;
+                current = Some(space);
+            }
+            None => current = Some(space),
+        }
+    }
+    if let Some(kind) = current {
+        out.push((kind, &text[start..]));
     }
     out
 }
@@ -2840,6 +2880,18 @@ fn color_for(channel_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn whitespace_runs_keep_every_kind_of_space() {
+        let runs = whitespace_runs("KEKW\nok\u{a0}\u{a0}LUL ");
+        assert_eq!(
+            runs,
+            vec![(false, "KEKW"), (true, "\n"), (false, "ok"), (true, "\u{a0}\u{a0}"), (false, "LUL"), (true, " ")]
+        );
+        let joined: String = runs.iter().map(|(_, s)| *s).collect();
+        assert_eq!(joined, "KEKW\nok\u{a0}\u{a0}LUL ");
+        assert!(whitespace_runs("").is_empty());
+    }
+
 
     /// Captured 2026-09-19 from `/channel/UCAhaFPP6v3WCfK5Tjao0B7A/live`, which
     /// still fronts a broadcast scheduled for March 2017 that never began.

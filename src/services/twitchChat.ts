@@ -22,6 +22,8 @@ export interface BackendReplyInfo {
   parent_msg_body: string;
   parent_user_id: string;
   parent_user_login: string;
+  /** The quoted parent tokenized by Rust with the channel it was said in. */
+  parent_segments?: MessageSegment[];
 }
 
 // Pre-computed message metadata - THE ENDGAME
@@ -132,6 +134,8 @@ export interface ReplyInfo {
   parentMsgBody: string;
   parentUserId: string;
   parentUserLogin: string;
+  /** Rust's segments for the quoted parent, when the row carries them. */
+  parentSegments?: MessageSegment[];
 }
 
 // Structured backend rows are parsed at least twice per message today (the
@@ -200,6 +204,7 @@ const parseMessageUncached = (raw: string | BackendChatMessage, channelId?: stri
         parentMsgBody: ri.parent_msg_body,
         parentUserId: ri.parent_user_id,
         parentUserLogin: ri.parent_user_login,
+        parentSegments: ri.parent_segments,
       };
     } else {
       // Fallback: parse from tags (legacy support)

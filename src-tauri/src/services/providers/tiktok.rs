@@ -36,7 +36,7 @@ use tiktok_live::http::api::{fetch_room_id, fetch_room_info, FetchParams};
 use tiktok_live::http::sigi::scrape_profile;
 use tiktok_live::http::ttwid::fetch_ttwid;
 use tiktok_live::structs::proto::{
-    Image, UserIdentity, WebcastChatMessage, WebcastControlMessage, WebcastGiftMessage,
+    EmoteData, Image, UserIdentity, WebcastChatMessage, WebcastControlMessage, WebcastGiftMessage,
     WebcastImDeleteMessage, WebcastLikeMessage, WebcastRoomUserSeqMessage, WebcastSocialMessage,
 };
 use tiktok_live::structs::TikTokLiveEvent;
@@ -385,9 +385,7 @@ fn build_chat_message(m: &WebcastChatMessage, channel_key: &str) -> Option<ChatM
         );
     }
     let id = msg_id(m.common.as_ref().map(|c| c.msg_id).unwrap_or(0));
-    let segments = vec![MessageSegment::Text {
-        content: m.comment.clone(),
-    }];
+    let segments = comment_segments(&m.comment, &m.emotes);
     Some(base_message(
         user,
         channel_key,
@@ -817,6 +815,47 @@ async fn refresh_meta(handle: &str, id_lc: &str) {
 
 // --- Small helpers ----------------------------------------------------------
 
+/// A comment's text with TikTok's own emotes placed in it. TikTok sends each
+/// emote as an image and the character position it sits at; the text itself
+/// does not contain it. Positions count characters, not bytes, so a comment
+/// with non-ASCII text splits where TikTok meant; one past the end appends.
+fn comment_segments(comment: &str, emotes: &[EmoteData]) -> Vec<MessageSegment> {
+    let mut placed: Vec<(usize, String, String)> = emotes
+        .iter()
+        .filter_map(|e| {
+            let details = e.emote.as_ref()?;
+            let url = image_url(&details.image)?;
+            Some((e.place_in_comment.max(0) as usize, details.emote_id.clone(), url))
+        })
+        .collect();
+    if placed.is_empty() {
+        return vec![MessageSegment::Text { content: comment.to_string() }];
+    }
+    placed.sort_by_key(|(at, _, _)| *at);
+    let chars: Vec<char> = comment.chars().collect();
+    let mut out = Vec::new();
+    let mut from = 0usize;
+    for (at, emote_id, url) in placed {
+        let at = at.min(chars.len());
+        if at > from {
+            out.push(MessageSegment::Text { content: chars[from..at].iter().collect() });
+            from = at;
+        }
+        out.push(MessageSegment::Emote {
+            content: "[emote]".to_string(),
+            emote_id: Some(emote_id),
+            emote_url: url,
+            is_zero_width: None,
+            modifier_flags: None,
+            is_personal: None,
+        });
+    }
+    if from < chars.len() {
+        out.push(MessageSegment::Text { content: chars[from..].iter().collect() });
+    }
+    out
+}
+
 fn image_url(img: &Option<Image>) -> Option<String> {
     img.as_ref().and_then(|i| i.url_list.first().cloned())
 }
@@ -867,6 +906,38 @@ fn like_allowed(channel_key: &str, user_id: i64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn emote_at(at: i32, id: &str) -> EmoteData {
+        EmoteData {
+            place_in_comment: at,
+            emote: Some(tiktok_live::structs::proto::EmoteDetails {
+                emote_id: id.to_string(),
+                image: Some(Image { url_list: vec![format!("https://e.test/{id}.png")], ..Default::default() }),
+            }),
+        }
+    }
+
+    fn shape(segs: &[MessageSegment]) -> Vec<String> {
+        segs.iter()
+            .map(|s| match s {
+                MessageSegment::Text { content } => format!("t:{content}"),
+                MessageSegment::Emote { emote_id, .. } => format!("e:{}", emote_id.as_deref().unwrap_or("")),
+                _ => "?".to_string(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn tiktok_emotes_land_where_tiktok_placed_them() {
+        // No emotes: the comment as it came.
+        assert_eq!(shape(&comment_segments("hi chat", &[])), vec!["t:hi chat"]);
+        // Start, middle and end; out-of-order input is sorted.
+        let segs = comment_segments("hi chat", &[emote_at(7, "c"), emote_at(0, "a"), emote_at(3, "b")]);
+        assert_eq!(shape(&segs), vec!["e:a", "t:hi ", "e:b", "t:chat", "e:c"]);
+        // A position past the end appends; character positions, not bytes.
+        let segs = comment_segments("héllo", &[emote_at(2, "x"), emote_at(99, "y")]);
+        assert_eq!(shape(&segs), vec!["t:hé", "e:x", "t:llo", "e:y"]);
+    }
+
 
     #[test]
     fn cleans_handles() {

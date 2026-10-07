@@ -845,6 +845,11 @@ pub(crate) struct EmoteLookup {
     /// name -> emote, inserted bttv, ffz, seven_tv in order (later insert
     /// wins), preserving the word tier's 7TV > FFZ > BTTV priority.
     by_name: HashMap<String, Emote>,
+    /// The channel's own Twitch emotes. A live message never reads these (its
+    /// Twitch emotes come from the IRC tag's positions, and matching names
+    /// would turn a word into an emote its sender cannot use); they are for
+    /// text that arrives without positions, like a reply's quoted parent.
+    natives: Vec<Emote>,
 }
 
 impl EmoteLookup {
@@ -854,7 +859,7 @@ impl EmoteLookup {
         for e in set.bttv.iter().chain(&set.ffz).chain(&set.seven_tv) {
             by_name.insert(e.name.clone(), e.clone());
         }
-        Arc::new(Self { by_name })
+        Arc::new(Self { by_name, natives: set.twitch.clone() })
     }
 
     fn get(&self, name: &str) -> Option<&Emote> {
@@ -879,6 +884,29 @@ static CHANNEL_PARSE_LOOKUP: OnceLock<std::sync::RwLock<HashMap<String, Arc<Emot
 
 fn channel_parse_lookup() -> &'static std::sync::RwLock<HashMap<String, Arc<EmoteLookup>>> {
     CHANNEL_PARSE_LOOKUP.get_or_init(|| std::sync::RwLock::new(HashMap::new()))
+}
+
+/// Join each run of whitespace-only Text segments into one, keeping its exact
+/// text. The renderer attaches a zero-width emote to the emote before it by
+/// looking back past one spacer, so a doubled space (a composer autocomplete
+/// leaves a trailing one) split into two spacers orphaned the overlay.
+/// Chatterino and 7TV stack across any whitespace; one spacer per run matches
+/// them, and a run of spaces renders the same either way.
+fn merge_space_runs(segments: &mut Vec<MessageSegment>) {
+    let is_space = |s: &MessageSegment| matches!(s, MessageSegment::Text { content } if !content.is_empty() && content.trim().is_empty());
+    let mut out: Vec<MessageSegment> = Vec::with_capacity(segments.len());
+    for seg in segments.drain(..) {
+        if is_space(&seg) {
+            if let (Some(MessageSegment::Text { content: prev }), MessageSegment::Text { content }) = (out.last_mut(), &seg) {
+                if !prev.is_empty() && prev.trim().is_empty() {
+                    prev.push_str(content);
+                    continue;
+                }
+            }
+        }
+        out.push(seg);
+    }
+    *segments = out;
 }
 
 fn rebuild_parse_lookup(key: &str, set: &EmoteSet) {
@@ -914,6 +942,7 @@ impl ParseSnapshots {
             channel: self.channel.as_deref(),
             personal: self.personal.as_deref(),
             cheermotes: self.cheermotes.as_deref(),
+            no_cheermotes: false,
         }
     }
 }
@@ -926,6 +955,10 @@ struct ParseCtx<'a> {
     channel: Option<&'a EmoteLookup>,
     personal: Option<&'a HashMap<String, Emote>>,
     cheermotes: Option<&'a CheermoteSet>,
+    /// Text nobody cheered with (a reward title) never turns a word like
+    /// `Cheer100` into bits; without a channel set the global prefixes
+    /// would still match.
+    no_cheermotes: bool,
 }
 
 /// One cheermote tier from Helix: bits threshold, hex color, animated dark art.
@@ -1843,6 +1876,13 @@ impl IrcService {
                 // side-effect lane: the log is the record, not the display.
                 let rules = ChatRules::snapshot();
                 let verdict = ChatRules::evaluate(&mut chat_msg, &rules);
+                if !verdict.drop {
+                    crate::services::mention_ping::on_live_message(
+                        &chat_msg,
+                        verdict.mentioned,
+                        verdict.reply_to_me,
+                    );
+                }
 
                 // Deliver to the frontend FIRST (wire order is the only order
                 // the UI needs), then hand the slow side effects (history LRU,
@@ -3329,12 +3369,37 @@ impl IrcService {
 
     /// The ids, per channel, of the rows whose text holds one of the set's
     /// names as a whole word (the same split the parser uses).
+    /// A reply's quoted parent as segments, tokenized with the channel's sets
+    /// like a row (its Twitch emotes matched by name, since the parent arrives
+    /// without positions). The parent's sender is not this message's, so no
+    /// personal emotes; and no cheermotes, a quote does not spend bits.
+    fn quoted_segments(body: &str, snapshots: &ParseSnapshots) -> Vec<MessageSegment> {
+        let natives = snapshots
+            .channel
+            .as_deref()
+            .map(|lookup| native_emote_positions(body, &lookup.natives))
+            .unwrap_or_default();
+        let ctx = ParseCtx {
+            channel: snapshots.channel.as_deref(),
+            no_cheermotes: true,
+            ..Default::default()
+        };
+        Self::parse_message_segments(body, &natives, &ctx)
+    }
+
     fn rows_naming_personal_emotes(
         rows: Vec<(String, String, String)>,
         set: &HashMap<String, Emote>,
     ) -> HashMap<String, Vec<String>> {
         let mut by_channel: HashMap<String, Vec<String>> = HashMap::new();
         for (channel, id, text) in rows {
+            // A personal set belongs to a TWITCH id. The history ring also holds
+            // other platforms' rows (keyed `provider:channel`), whose user ids are
+            // a different number space: a Kick chatter sharing the number would
+            // have been painted with a Twitch stranger's emotes.
+            if channel.contains(':') {
+                continue;
+            }
             if text.split(' ').any(|word| set.contains_key(word)) {
                 by_channel.entry(channel).or_default().push(id);
             }
@@ -3659,9 +3724,11 @@ impl IrcService {
                         content: trailing.to_string(),
                     });
                 }
-            } else if let Some((prefix, bits, tier, color, cheermote_url)) =
+            } else if let Some((prefix, bits, tier, color, cheermote_url)) = if ctx.no_cheermotes {
+                None
+            } else {
                 Self::parse_cheermote(word, ctx.cheermotes)
-            {
+            } {
                 // Found a cheermote pattern (e.g., Cheer500, Party1000)
                 segments.push(MessageSegment::Cheermote {
                     content: word.to_string(),
@@ -3717,6 +3784,7 @@ impl IrcService {
             }
         }
 
+        merge_space_runs(&mut segments);
         segments
     }
 
@@ -4009,11 +4077,7 @@ impl IrcService {
                             if let (Ok(start), Ok(end)) =
                                 (start_s.parse::<usize>(), end_s.parse::<usize>())
                             {
-                                // url: https://static-cdn.jtvnw.net/emoticons/v2/{id}/default/dark/3.0
-                                let url = format!(
-                                    "https://static-cdn.jtvnw.net/emoticons/v2/{}/default/dark/3.0",
-                                    id
-                                );
+                                let url = native_emote_url(id);
                                 emotes.push(EmotePos {
                                     id: id.to_string(),
                                     start,
@@ -4041,6 +4105,8 @@ impl IrcService {
         let reply_info = tag_map
             .get("reply-parent-msg-id")
             .map(|parent_id| ReplyInfo {
+                // Filled once the channel's parse snapshot is in hand, below.
+                parent_segments: None,
                 parent_msg_id: parent_id.to_string(),
                 parent_display_name: tag_map
                     .get("reply-parent-display-name")
@@ -4127,6 +4193,12 @@ impl IrcService {
         let snapshots = Self::gather_parse_snapshots(&privmsg_channel, &user_id);
         let segments =
             Self::parse_message_segments(&content_for_segments, &emotes_adjusted, &snapshots.ctx());
+        let reply_info = reply_info.map(|mut reply| {
+            if !reply.parent_msg_body.is_empty() {
+                reply.parent_segments = Some(Self::quoted_segments(&reply.parent_msg_body, &snapshots));
+            }
+            reply
+        });
 
         // Shared chat detection
         let source_room_id = tag_map.get("source-room-id").map(|s| s.to_string());
@@ -4329,10 +4401,7 @@ impl IrcService {
                             if let (Ok(start), Ok(end)) =
                                 (start_s.parse::<usize>(), end_s.parse::<usize>())
                             {
-                                let url = format!(
-                                    "https://static-cdn.jtvnw.net/emoticons/v2/{}/default/dark/3.0",
-                                    id
-                                );
+                                let url = native_emote_url(id);
                                 emotes.push(EmotePos {
                                     id: id.to_string(),
                                     start,
@@ -4832,32 +4901,158 @@ fn escape_tag_value(value: &str) -> String {
     out
 }
 
-/// The `emotes` tag Twitch would attach to `text`: each word that names one of
-/// the channel's Twitch emotes, by inclusive codepoint range, grouped by emote
-/// id in first-seen order. Twitch emotes resolve from this tag, never by name,
-/// so a row built without it would show them as text until the echo arrives.
-fn own_emotes_tag(text: &str, twitch: &[Emote]) -> String {
+/// The CDN art for a Twitch-native emote id, as every received row carries it.
+fn native_emote_url(id: &str) -> String {
+    format!("https://static-cdn.jtvnw.net/emoticons/v2/{}/default/dark/3.0", id)
+}
+
+/// Each word of `text` that names one of the channel's Twitch emotes, by
+/// inclusive codepoint range in text order: the positions Twitch would send in
+/// the `emotes` tag. Twitch emotes resolve from positions, never by name.
+fn native_emote_positions(text: &str, twitch: &[Emote]) -> Vec<EmotePos> {
     let by_name: HashMap<&str, &str> = twitch.iter().map(|e| (e.name.as_str(), e.id.as_str())).collect();
-    let mut order: Vec<&str> = Vec::new();
-    let mut ranges: HashMap<&str, Vec<String>> = HashMap::new();
+    let mut out = Vec::new();
     let mut pos = 0usize;
     for word in text.split(' ') {
         let len = word.chars().count();
         if let Some(id) = by_name.get(word).copied() {
             if len > 0 {
-                if !ranges.contains_key(id) {
-                    order.push(id);
-                }
-                ranges.entry(id).or_default().push(format!("{}-{}", pos, pos + len - 1));
+                out.push(EmotePos {
+                    id: id.to_string(),
+                    start: pos,
+                    end: pos + len - 1,
+                    url: native_emote_url(id),
+                    gif: false,
+                });
             }
         }
         pos += len + 1;
+    }
+    out
+}
+
+/// The `emotes` tag Twitch would attach to `text`: the native emote positions
+/// grouped by emote id in first-seen order. A sent row built without it would
+/// show its Twitch emotes as text until the echo arrives.
+fn own_emotes_tag(text: &str, twitch: &[Emote]) -> String {
+    let mut order: Vec<&str> = Vec::new();
+    let mut ranges: HashMap<&str, Vec<String>> = HashMap::new();
+    let positions = native_emote_positions(text, twitch);
+    for p in &positions {
+        if !ranges.contains_key(p.id.as_str()) {
+            order.push(&p.id);
+        }
+        ranges.entry(&p.id).or_default().push(format!("{}-{}", p.start, p.end));
     }
     order
         .iter()
         .map(|id| format!("{}:{}", id, ranges[id].join(",")))
         .collect::<Vec<_>>()
         .join("/")
+}
+
+/// A channel-points redemption that posts nothing to chat on its own (a reward
+/// with no text input), shown as a chat row authored by the redeemer whose
+/// body is the reward title.
+pub struct RedemptionRow {
+    /// The channel's bare login.
+    pub channel: String,
+    /// Twitch's redemption id; the row id derives from it so the same
+    /// redemption reported twice is one row.
+    pub redemption_id: String,
+    pub user_id: String,
+    pub user_login: String,
+    pub user_name: String,
+    pub reward_id: String,
+    pub reward_title: String,
+    pub reward_cost: i64,
+    pub image_url: String,
+    pub background_color: String,
+    /// The channel's own points icon, when it has one.
+    pub points_icon_url: Option<String>,
+    /// `name/version,...` the redeemer last showed in this chat.
+    pub badges: String,
+    pub color: String,
+}
+
+/// The row for a redemption, in the shape every received row has. The tags
+/// drive the renderers: `custom-reward-id` gives the chat row its redemption
+/// highlight, `sn-reward-*` and `sn-points-icon` its reward name, art and
+/// cost, and the stream overlay draws any row with `sn-reward-title` as a
+/// channel points event.
+fn redemption_message(r: &RedemptionRow, segments: Vec<MessageSegment>, timestamp_ms: i64) -> ChatMessage {
+    let id = if r.redemption_id.is_empty() {
+        format!("redeem-{}", uuid::Uuid::new_v4())
+    } else {
+        format!("redeem-{}", r.redemption_id)
+    };
+    let login = if r.user_login.is_empty() { &r.user_name } else { &r.user_login };
+    let name = if r.user_name.is_empty() { login } else { &r.user_name };
+    let reward_id = if r.reward_id.is_empty() { "sn-redemption" } else { &r.reward_id };
+
+    let mut tags: HashMap<String, String> = HashMap::new();
+    tags.insert("user-id".into(), r.user_id.clone());
+    tags.insert("id".into(), id.clone());
+    tags.insert("display-name".into(), name.clone());
+    tags.insert("custom-reward-id".into(), reward_id.to_string());
+    tags.insert("sn-reward-title".into(), r.reward_title.clone());
+    if !r.image_url.is_empty() {
+        tags.insert("sn-reward-image".into(), r.image_url.clone());
+    }
+    if !r.background_color.is_empty() {
+        tags.insert("sn-reward-bg".into(), r.background_color.clone());
+    }
+    if r.reward_cost > 0 {
+        tags.insert("sn-reward-cost".into(), r.reward_cost.to_string());
+    }
+    if let Some(icon) = r.points_icon_url.as_deref().filter(|s| !s.is_empty()) {
+        tags.insert("sn-points-icon".into(), icon.to_string());
+    }
+
+    let mut badges: Vec<Badge> = r
+        .badges
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(|b| {
+            let mut p = b.split('/');
+            Badge {
+                name: p.next().unwrap_or("").to_string(),
+                version: p.next().unwrap_or("").to_string(),
+                image_url_1x: None,
+                image_url_2x: None,
+                image_url_4x: None,
+                title: None,
+                description: None,
+            }
+        })
+        .collect();
+    crate::models::chat_layout::order_twitch_badges(&mut badges);
+
+    let timestamp = timestamp_ms.to_string();
+    let (formatted_timestamp, formatted_timestamp_with_seconds) =
+        IrcService::format_timestamp(&timestamp);
+
+    ChatMessage {
+        id,
+        user_id: r.user_id.clone(),
+        username: login.clone(),
+        display_name: name.clone(),
+        color: Some(if r.color.is_empty() { "#9147ff".to_string() } else { r.color.clone() }),
+        badges,
+        timestamp,
+        content: r.reward_title.clone(),
+        provider: "twitch".to_string(),
+        channel: r.channel.clone(),
+        emotes: Vec::new(),
+        tags,
+        layout: LayoutResult::default(),
+        segments,
+        metadata: MessageMetadata {
+            formatted_timestamp,
+            formatted_timestamp_with_seconds,
+            ..Default::default()
+        },
+    }
 }
 
 /// The badges a sent row carries: the channel's USERSTATE badges from the
@@ -4946,6 +5141,51 @@ impl IrcService {
         let _ = ChatRules::evaluate(&mut msg, &rules);
         Some(msg)
     }
+
+    /// Deliver a redemption row to the windows holding its channel, over the
+    /// bridge every received row takes, so it is routed, held for a parked
+    /// chat and deduped by id like any other. The title tokenizes against the
+    /// channel's emote table here, which a hidden chat keeps while its page
+    /// lets its own copy go. Nothing is delivered for a chat that is not open.
+    pub async fn publish_redemption_row(mut r: RedemptionRow) {
+        let key = r.channel.trim_start_matches('#').to_lowercase();
+        if key.is_empty() || r.reward_title.is_empty() || !Self::is_joined(&key).await {
+            return;
+        }
+        r.channel = key;
+        // Your own redemption before you have chatted here has no remembered
+        // look; wear the badges USERSTATE reported for the channel, which the
+        // page also takes from any row you author.
+        if r.badges.is_empty() {
+            let is_primary = ChatRules::own_identity()
+                .map(|(_, id)| !id.is_empty() && id == r.user_id)
+                .unwrap_or(false);
+            if is_primary {
+                if let Some(cached) = get_user_badges_cache().lock().await.get(&r.channel) {
+                    r.badges = cached.clone();
+                }
+            }
+        }
+        let natives = {
+            let map = get_channel_emotes().lock().await;
+            map.get(&r.channel)
+                .map(|set| native_emote_positions(&r.reward_title, &set.twitch))
+                .unwrap_or_default()
+        };
+        // The broadcaster wrote the title, so the redeemer's personal emotes
+        // and cheermotes have no part in it.
+        let snapshots = Self::gather_parse_snapshots(&r.channel, "");
+        let ctx = ParseCtx {
+            channel: snapshots.channel.as_deref(),
+            no_cheermotes: true,
+            ..Default::default()
+        };
+        let segments = Self::parse_message_segments(&r.reward_title, &natives, &ctx);
+        let msg = redemption_message(&r, segments, chrono::Utc::now().timestamp_millis());
+        if let Ok(json_msg) = serde_json::to_string(&msg) {
+            send_to_bridge(BridgeFrame::row(&msg.channel, json_msg, false), true).await;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -5019,6 +5259,83 @@ mod own_message_tests {
         assert!(line.contains("display-name=Me\\sMe;"));
         assert!(line.ends_with("PRIVMSG #chan :hi"));
     }
+
+    fn redemption(title: &str) -> RedemptionRow {
+        RedemptionRow {
+            channel: "chan".into(),
+            redemption_id: "r-1".into(),
+            user_id: "42".into(),
+            user_login: "viewer".into(),
+            user_name: "Viewer".into(),
+            reward_id: "reward-9".into(),
+            reward_title: title.into(),
+            reward_cost: 5000,
+            image_url: "https://img/4x.png".into(),
+            background_color: "#00C7AC".into(),
+            points_icon_url: Some("https://img/points.png".into()),
+            badges: "vip/1,subscriber/12".into(),
+            color: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_redemption_title_tokenizes_against_the_channel_table() {
+        let mut set = EmoteSet::new();
+        set.twitch.push(twitch_emote("25", "Kappa"));
+        set.seven_tv.push(
+            serde_json::from_value(json!({ "id": "7a", "name": "COPIUM", "url": "https://7tv/1x", "provider": "7tv" }))
+                .expect("minimal emote"),
+        );
+        let lookup = EmoteLookup::build(&set);
+        let ctx = ParseCtx { channel: Some(&lookup), no_cheermotes: true, ..Default::default() };
+        let title = "COPIUM Kappa copium Cheer100";
+        let natives = native_emote_positions(title, &set.twitch);
+        let segs = IrcService::parse_message_segments(title, &natives, &ctx);
+        let kinds: Vec<String> = segs
+            .iter()
+            .map(|s| match s {
+                MessageSegment::Emote { content, emote_id, .. } => format!("emote:{content}:{}", emote_id.as_deref().unwrap_or("")),
+                MessageSegment::Text { content } => format!("text:{content}"),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        // Exact case, as in chat; and no word becomes bits.
+        assert_eq!(
+            kinds,
+            ["emote:COPIUM:7a", "text: ", "emote:Kappa:25", "text: ", "text:copium", "text: ", "text:Cheer100"]
+        );
+    }
+
+    #[test]
+    fn a_redemption_row_carries_the_reward_tags_and_a_stable_id() {
+        let msg = redemption_message(&redemption("Hydrate"), Vec::new(), 1000);
+        assert_eq!(msg.id, "redeem-r-1");
+        assert_eq!(msg.tags["id"], "redeem-r-1");
+        assert_eq!(msg.tags["custom-reward-id"], "reward-9");
+        assert_eq!(msg.tags["sn-reward-title"], "Hydrate");
+        assert_eq!(msg.tags["sn-reward-image"], "https://img/4x.png");
+        assert_eq!(msg.tags["sn-reward-bg"], "#00C7AC");
+        assert_eq!(msg.tags["sn-reward-cost"], "5000");
+        assert_eq!(msg.tags["sn-points-icon"], "https://img/points.png");
+        assert_eq!(msg.username, "viewer");
+        assert_eq!(msg.display_name, "Viewer");
+        assert_eq!(msg.content, "Hydrate");
+        assert_eq!(msg.color.as_deref(), Some("#9147ff"));
+        assert_eq!(msg.provider, "twitch");
+        let badges: Vec<&str> = msg.badges.iter().map(|b| b.name.as_str()).collect();
+        assert!(badges.contains(&"vip") && badges.contains(&"subscriber"));
+
+        let mut bare = redemption("Hydrate");
+        bare.reward_id.clear();
+        bare.reward_cost = 0;
+        bare.points_icon_url = None;
+        bare.image_url.clear();
+        let msg = redemption_message(&bare, Vec::new(), 1000);
+        assert_eq!(msg.tags["custom-reward-id"], "sn-redemption");
+        for absent in ["sn-reward-cost", "sn-points-icon", "sn-reward-image"] {
+            assert!(!msg.tags.contains_key(absent), "{absent}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -5039,11 +5356,39 @@ mod personal_emote_tests {
             width: None,
             modifier_flags: None,
             ffz_sub_only: None,
+            animated: None,
         }
     }
 
     fn text(s: &str) -> MessageSegment {
         MessageSegment::Text { content: s.to_string() }
+    }
+
+    #[test]
+    fn a_quoted_parent_gets_the_channels_emotes() {
+        // A reply's parent arrives as plain text with no positions: its Twitch
+        // emotes are matched by name against the channel's own, its 7TV words
+        // against the channel's set, like the parent's own row.
+        let mut native = emote("25", "Kappa");
+        native.provider = crate::services::emote_service::EmoteProvider::Twitch;
+        let mut set = EmoteSet::new();
+        set.twitch = vec![native];
+        set.seven_tv = vec![emote("7a", "catJAM")];
+        let snapshots = ParseSnapshots { channel: Some(EmoteLookup::build(&set)), personal: None, cheermotes: None };
+        let segs = IrcService::quoted_segments("hi Kappa catJAM", &snapshots);
+        let emotes: Vec<(&str, Option<&str>)> = segs
+            .iter()
+            .filter_map(|s| match s {
+                MessageSegment::Emote { content, emote_id, .. } => Some((content.as_str(), emote_id.as_deref())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(emotes, vec![("Kappa", Some("25")), ("catJAM", Some("7a"))]);
+        // No channel table yet: the quote reads as words, never as nothing.
+        let empty = ParseSnapshots { channel: None, personal: None, cheermotes: None };
+        assert!(IrcService::quoted_segments("hi Kappa", &empty)
+            .iter()
+            .all(|s| matches!(s, MessageSegment::Text { .. })));
     }
 
     #[test]
@@ -5053,10 +5398,13 @@ mod personal_emote_tests {
             ("xqc".to_string(), "m1".to_string(), "hello cuh".to_string()),
             ("xqc".to_string(), "m2".to_string(), "cuhh not it".to_string()),
             ("forsen".to_string(), "m3".to_string(), "cuh".to_string()),
+            // Another platform's row: its user id is not a Twitch id.
+            ("kick:xqc".to_string(), "m4".to_string(), "cuh".to_string()),
         ];
         let named = IrcService::rows_naming_personal_emotes(rows, &set);
         assert_eq!(named.get("xqc"), Some(&vec!["m1".to_string()]));
         assert_eq!(named.get("forsen"), Some(&vec!["m3".to_string()]));
+        assert!(named.get("kick:xqc").is_none());
     }
 
     #[test]
@@ -5138,11 +5486,7 @@ mod tests {
     fn gif_position_becomes_a_gif_segment_and_the_placeholder_never_renders_as_text() {
         let content = "[Y A Y Yes GIF by Djemilah Birnie] nice";
         let pos = parse_gifs_tag(TWITCH_GIFS_TAG);
-        let ctx = ParseCtx {
-            channel: None,
-            personal: None,
-            cheermotes: None,
-        };
+        let ctx = ParseCtx::default();
         let segments = IrcService::parse_message_segments(content, &pos, &ctx);
         match &segments[0] {
             MessageSegment::Gif {
@@ -5298,8 +5642,9 @@ mod tests {
                 assert!(!content.is_empty(), "empty Text segment emitted");
             }
         }
-        // "a  b" -> a, space, space, b
-        assert_eq!(segs.len(), 4);
+        // "a  b" -> a, one spacer holding both spaces, b
+        assert_eq!(segs.len(), 3);
+        assert!(matches!(&segs[1], MessageSegment::Text { content } if content == "  "));
     }
 
     #[test]
@@ -5334,6 +5679,7 @@ mod tests {
             width: None,
             modifier_flags: None,
             ffz_sub_only: None,
+            animated: None,
         };
         let set = EmoteSet {
             twitch: Vec::new(),
