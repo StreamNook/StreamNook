@@ -2008,8 +2008,10 @@ impl LlOrigin {
     /// Passthrough (bytes and the caller's duration unchanged) when the
     /// transmux is off.
     ///
-    /// On the transmux path the published duration is the transmuxer's sample-
-    /// measured span, NOT `dur` from the chunker: the chunker measures
+    /// On the transmux path the published duration is the transmuxer's decode-
+    /// timeline measurement (each part runs from where the previous declared
+    /// part ended, so final-sample estimates never sum into drift), NOT `dur`
+    /// from the chunker: the chunker measures
     /// presentation-timestamp deltas at its cut points, which B-frame arrival
     /// order systematically inflates by tens of milliseconds per segment.
     /// hls.js sums the declared durations to place fragments, so that bias

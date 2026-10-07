@@ -368,6 +368,11 @@ pub struct Transmuxer {
     force_bridge_next: bool,
     pending_video: Vec<VideoSample>,
     pending_audio: Vec<AudioFrame>,
+    /// Where the declared part durations (the playlist timeline) currently end,
+    /// in output 90 kHz ticks. Each new part's declared duration is measured
+    /// from here instead of from its own first sample, so the previous part's
+    /// final-sample estimate is corrected rather than summed (see `emit_fragment`).
+    declared_end: Option<u64>,
     /// moof sequence number (informational; placement is by tfdt).
     seq: u32,
     init: Option<Vec<u8>>,
@@ -403,6 +408,7 @@ impl Transmuxer {
             force_bridge_next: false,
             pending_video: Vec::new(),
             pending_audio: Vec::new(),
+            declared_end: None,
             seq: 0,
             init: None,
             init_has_audio: None,
@@ -417,12 +423,13 @@ impl Transmuxer {
     /// stream order; PES state carries across calls on purpose (PES packets
     /// straddle part and segment cuts).
     ///
-    /// The duration is the sample span actually written into the fragment
-    /// (video DTS deltas; audio frame count when a part has no video). DTS is
-    /// monotonic and uniform regardless of B-frame reordering, so summing
-    /// these durations tiles the timeline exactly — unlike presentation-
-    /// timestamp deltas measured at arbitrary byte-stream cut points, which
-    /// B-frame arrival order inflates.
+    /// The duration is measured on the decode timeline (video DTS; audio frame
+    /// count when a part has no video), from where the previously declared
+    /// parts end to the end of this part's last sample. DTS is monotonic
+    /// regardless of B-frame reordering, unlike presentation-timestamp deltas
+    /// measured at arbitrary byte-stream cut points, which B-frame arrival
+    /// order inflates. Summing the returned durations reproduces the decode
+    /// timeline to within one frame, however long the stream runs.
     pub fn push_part(&mut self, ts: &[u8]) -> Option<(Vec<u8>, f64)> {
         self.demux(ts);
         self.emit_fragment()
@@ -458,6 +465,9 @@ impl Transmuxer {
         self.last_video_in = None;
         self.pending_delta = None;
         self.force_bridge_next = false;
+        // The playlist itself jumps with the window, so the declared timeline
+        // restarts at the first part after the skip.
+        self.declared_end = None;
     }
 
     /// Drop half-assembled PES state WITHOUT touching the timeline
@@ -773,8 +783,8 @@ impl Transmuxer {
 
         // Per-sample durations are DTS deltas; the final sample's real duration
         // is unknowable here (its successor is in the next fragment) so it
-        // reuses the previous delta. The next fragment's tfdt re-anchors, so the
-        // estimate can never accumulate.
+        // reuses the previous delta. The next fragment's tfdt re-anchors the
+        // media, and `declared_end` re-anchors the declared duration (below).
         let mut vruns: Vec<TrunSample> = Vec::with_capacity(video.len());
         for (i, s) in video.iter().enumerate() {
             let dur = match video.get(i + 1) {
@@ -872,15 +882,43 @@ impl Transmuxer {
             });
         }
 
-        // The fragment's media span. Video owns the pacing when present (the
-        // playlist durations must tile the video timeline); an audio-only part
-        // (e.g. a PAT/PMT+audio tail) spans its emitted frame count.
-        let duration = if video.is_empty() {
-            self.aac
-                .map(|cfg| audio_frames_emitted as f64 * 1024.0 / cfg.sample_rate as f64)
-                .unwrap_or_default()
+        // The fragment's declared duration. Video owns the pacing when present
+        // (the playlist durations must tile the video timeline); an audio-only
+        // part (e.g. a PAT/PMT+audio tail) spans its emitted frame count.
+        //
+        // hls.js places parts by SUMMING declared durations and checks that
+        // sum against PROGRAM-DATE-TIME. Declaring each part's own sample span
+        // would carry every final-sample estimate into that sum: Twitch's DTS
+        // cadence jitters by tens of ticks around segment cuts, so the
+        // estimate errs the same way in every segment and the declared
+        // timeline drifts off the real one by milliseconds per segment. Near a
+        // whole segment of drift hls.js re-appends parts it already buffered,
+        // and the backwards append makes MSE discard video until the next
+        // keyframe while audio plays on. Measuring from where the previous
+        // declaration ended folds that error into this part instead, so the
+        // declared sum never strays more than one estimate from the decode
+        // timeline. A start far from the declared end is a jump the bridge did
+        // not absorb; the declared timeline restarts there.
+        let duration = if let (Some(first), Some(last), Some(last_run)) =
+            (video.first(), video.last(), vruns.last())
+        {
+            let end = last.dts + last_run.duration as u64;
+            let reanchor = 2 * self.last_video_delta.max(DEFAULT_VIDEO_DUR);
+            let start = match self.declared_end {
+                Some(declared) if declared.abs_diff(first.dts) <= reanchor => declared,
+                _ => first.dts,
+            };
+            self.declared_end = Some(end);
+            end.saturating_sub(start) as f64 / 90_000.0
         } else {
-            vruns.iter().map(|r| r.duration as u64).sum::<u64>() as f64 / 90_000.0
+            let secs = self
+                .aac
+                .map(|cfg| audio_frames_emitted as f64 * 1024.0 / cfg.sample_rate as f64)
+                .unwrap_or_default();
+            if let Some(declared) = self.declared_end.as_mut() {
+                *declared += (secs * 90_000.0).round() as u64;
+            }
+            secs
         };
         Some((build_fragment(self.seq, &tracks), duration))
     }
@@ -2093,6 +2131,71 @@ mod tests {
             .expect("4 AUs complete");
         // The dangling 4th AU of segment 1 plus 3 of segment 2.
         assert!((d2 - 6000.0 / 90_000.0).abs() < 1e-9, "4 frames, got {d2}");
+    }
+
+    /// One part holding a video access unit at each given DTS (PTS == DTS).
+    /// The first part of a stream carries the SPS/PPS keyframe.
+    fn cadence_part(dts: &[u64], with_params: bool) -> Vec<u8> {
+        let sps = test_sps();
+        let pps = vec![0x68, 0xCE, 0x3C, 0x80];
+        let mut ts = Vec::new();
+        ts.extend_from_slice(&psi_packet(0, &pat()));
+        ts.extend_from_slice(&psi_packet(PMT_PID, &pmt()));
+        let mut vcc = 0u8;
+        for (i, &d) in dts.iter().enumerate() {
+            let es = if i == 0 && with_params {
+                annexb(&[&[9, 0xF0][..], &sps, &pps, &[5, 0x88, 0x80, 0x10]])
+            } else {
+                annexb(&[&[9, 0xF0][..], &[1, 0x9A, 0x40, 0x22]])
+            };
+            ts.extend_from_slice(&pes_packets(VIDEO_PID, &es, d, Some(d), &mut vcc));
+        }
+        ts
+    }
+
+    #[test]
+    fn declared_durations_track_the_decode_timeline_through_cut_jitter() {
+        // Measured on a live channel: every segment is exactly 180000 ticks of
+        // DTS, cut into parts of 16, 18, 18, 18, 18, 18 and 14 frames, but the
+        // cadence jitters around the cuts (part 0 spans 24030 ticks, part 6
+        // spans 20970), so the final-sample estimate errs the same way in every
+        // segment. Declaring each part's own span summed that error into a
+        // playlist that drifted off PROGRAM-DATE-TIME until hls.js re-appended
+        // buffered parts and MSE dropped video to the next keyframe. The
+        // declared sum must stay on the decode timeline however long it runs.
+        const SEGMENTS: usize = 2000;
+        let mut t = Transmuxer::new();
+        let mut declared = 0.0f64;
+        let mut first: Option<u64> = None;
+        let mut next_dts = 900_000u64;
+        for seg in 0..SEGMENTS {
+            // delta[i] runs from frame i to frame i + 1 (frame 119's leads into
+            // the next segment). 1530 enters part 1; 1470 is inside part 6.
+            let mut delta = [1500u64; 120];
+            delta[15] = 1530;
+            delta[118] = 1470;
+            let mut frame = 0usize;
+            for (k, len) in [16usize, 18, 18, 18, 18, 18, 14].into_iter().enumerate() {
+                let mut dts = Vec::with_capacity(len);
+                for _ in 0..len {
+                    dts.push(next_dts);
+                    next_dts += delta[frame];
+                    frame += 1;
+                }
+                if let Some((frag, d)) = t.push_part(&cadence_part(&dts, seg == 0 && k == 0)) {
+                    first.get_or_insert(video_tfdt(&frag));
+                    declared += d;
+                }
+            }
+        }
+        // Every emitted sample starts before the declared end, and the declared
+        // end runs at most one estimated frame past the last sample's start.
+        let last_start = t.last_video_out.unwrap() - first.unwrap();
+        let over = declared * 90_000.0 - last_start as f64;
+        assert!(
+            (0.0..=1531.0).contains(&over),
+            "declared timeline is {over} ticks off the decode timeline after {SEGMENTS} segments"
+        );
     }
 
     fn video_tfdt(frag: &[u8]) -> u64 {
