@@ -46,7 +46,7 @@ use commands::{
 // Desktop-only feature modules, excluded from the phone app (watch/earn/chat
 // only): MultiNook tiling, Discord RPC, and profile-card screen capture.
 #[cfg(desktop)]
-use commands::{discord::*, multi_nook::*, popout_window::*, screen_capture::*};
+use commands::{discord::*, emote_palette::*, multi_nook::*, popout_window::*, screen_capture::*};
 use log::{debug, error, info, warn};
 use models::settings::{AppState, CloseToTrayMode, Settings};
 use services::background_service::BackgroundService;
@@ -706,6 +706,7 @@ pub fn run() {
     // the loaded settings before any chat connects.
     services::chat_rules::ChatRules::refresh(&settings);
     services::streamer_mode::StreamerMode::refresh(&settings);
+    services::mention_ping::refresh(&settings);
 
     // Apply persisted diagnostic logging setting immediately after loading settings
     services::diagnostic_logger::set_diagnostics_enabled(settings.error_reporting_enabled);
@@ -798,9 +799,7 @@ pub fn run() {
                     || label.starts_with("kick-resolve-")
                     || label.starts_with("identity-fetch-")
                     || label.starts_with("seventv-login-")
-                    || label.starts_with("overlay-")
-                    || label.starts_with("multichat-")
-                    || label.starts_with("plugin-"))
+                    || commands::popout_window::is_placed_label(label))
             })
             // The main window is created hidden and revealed on first paint;
             // the plugin's ready-time MAXIMIZED restore would force-show it
@@ -1413,6 +1412,18 @@ pub fn run() {
             #[cfg(desktop)]
             set_chat_overlay_click_through,
             #[cfg(desktop)]
+            open_emote_palette,
+            #[cfg(desktop)]
+            get_emote_palette_target,
+            #[cfg(desktop)]
+            emote_palette_insert,
+            #[cfg(desktop)]
+            update_emote_palette_channel,
+            #[cfg(desktop)]
+            release_emote_palette,
+            commands::sounds::import_custom_sound,
+            commands::sounds::remove_custom_sound,
+            #[cfg(desktop)]
             commands::chat_dock::get_chat_dock,
             #[cfg(desktop)]
             commands::chat_dock::dock_chat,
@@ -1572,6 +1583,8 @@ pub fn run() {
             set_multi_nook_meta_channels,
             #[cfg(desktop)]
             set_multi_nook_slot_audio,
+            #[cfg(desktop)]
+            set_multi_nook_slot_audio_boost,
             #[cfg(desktop)]
             set_multi_nook_sync_delay,
             #[cfg(desktop)]
@@ -1733,6 +1746,7 @@ pub fn run() {
             // Settings commands
             load_settings,
             patch_settings,
+            get_default_settings,
             set_chat_user_hidden,
             get_settings_dir,
             open_settings_folder,
@@ -2149,6 +2163,8 @@ pub fn run() {
                 // recommended poll and the Discover lists running after Go Live,
                 // or a close to the tray, destroyed the main window.
                 services::home_snapshot::release_window(&label);
+                // The emote menu closes with the chat window it types into.
+                commands::emote_palette::on_window_gone(&app_handle, &label);
                 // Tell popouts the main window is gone so their Go Live control
                 // flips to "Live Chat" (standalone). Mirrors `main-ready`, which
                 // the main window emits when it boots.
@@ -2200,6 +2216,8 @@ pub fn run() {
                             // handler is intentionally NOT a full stopStream
                             // (which would tear down the IRC connection too).
                             let _ = main_win.emit("main-hiding-to-tray", ());
+                            // A hidden owner does not hide its owned windows.
+                            commands::emote_palette::on_window_gone(&app_handle, "main");
                             #[cfg(target_os = "linux")]
                             commands::twitch::linux_overlays::hide_with_main(&app_handle);
                             let _ = main_win.hide();

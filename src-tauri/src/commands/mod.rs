@@ -15,6 +15,7 @@ pub mod chat;
 // The chats docked in the main window (desktop only).
 #[cfg(desktop)]
 pub mod chat_dock;
+pub mod sounds;
 pub mod chat_identity;
 pub mod chat_query;
 pub mod moderation_tools;
@@ -52,6 +53,9 @@ pub mod provider_browse;
 // Opening and placing the chat popouts (desktop windows only).
 #[cfg(desktop)]
 pub mod popout_window;
+// The popped-out emote menu and the chat box it types into.
+#[cfg(desktop)]
+pub mod emote_palette;
 pub mod resub;
 #[cfg(desktop)]
 pub mod screen_capture;
