@@ -2,13 +2,14 @@ import React, { useMemo, useState, useEffect, useRef, memo, useSyncExternalStore
 import { Gift } from 'lucide-react';
 import { parseBadges } from '../services/twitchBadges';
 import { Tooltip } from './ui/Tooltip';
-import { parseMessage } from '../services/twitchChat';
+import { parseMessage, type MessageSegment } from '../services/twitchChat';
 import { queueEmoteForDisplayCaching, getCachedEmoteUrl, getEmoteLookup, inlineEmoteTier, sevenTvTierUrl, EmoteSet } from '../services/emoteService';
 import { getCachedEmojiUrl, parseEmojisSync } from '../services/emojiService';
 import { calculateHalfPadding } from '../utils/chatLayoutUtils';
 import { deletedBodyStyle, deletedRowDimmed, DEFAULT_DELETED_STYLE } from './chat/deletedMessage';
 import { ModerationTag } from './chat/ModerationTag';
 import { eventCardClass as eventCardClassFor, eventCardStyle as eventCardStyleFor } from './chat/eventCard';
+import { mentionBoxClass, mentionBoxStyle, mentionLook, mentionTextStyle } from './chat/mentionStyle';
 
 // Emote previews open almost at once: a quick pass over an emote should still
 // show it (the shared tooltip default waits 250 ms).
@@ -262,6 +263,66 @@ const WideEmoteImg = (
 // Parse plain text into emote/emoji/text segments by name lookup against the
 // loaded emote sets. Serves the local-echo fallback (no Rust segments yet) and
 // the reply preview, which only ever has the parent message as raw text.
+/** Rust's segments as the renderer's. Twitch text is already emoji-tokenized
+ *  in Rust; the other providers (Kick/YouTube/TikTok) emit raw text, so their
+ *  unicode emoji become Apple-emoji image segments here for parity. */
+const fromRustSegments = (segments: MessageSegment[], isProvider: boolean): EmoteSegment[] => {
+  return segments.flatMap((seg): EmoteSegment[] => {
+    if (seg.type === 'emote') {
+      return [{
+        type: 'emote' as const,
+        content: seg.content,
+        emoteId: seg.emote_id,
+        emoteUrl: seg.emote_url,
+        isZeroWidth: seg.is_zero_width,
+        modifierFlags: seg.modifier_flags,
+        isPersonal: seg.is_personal,
+      }];
+    } else if (seg.type === 'emoji') {
+      return [{
+        type: 'emoji' as const,
+        content: seg.content,
+        emojiUrl: seg.emoji_url,
+      }];
+    } else if (seg.type === 'link') {
+      // Links are handled in parseTextWithLinks
+      return [{
+        type: 'text' as const,
+        content: seg.content,
+      }];
+    } else if (seg.type === 'cheermote') {
+      // Cheermote segment with animated GIF and bits amount
+      return [{
+        type: 'cheermote' as const,
+        content: seg.content,
+        cheermoteUrl: seg.cheermote_url,
+        prefix: seg.prefix,
+        bits: seg.bits,
+        tier: seg.tier,
+        color: seg.color,
+      }];
+    } else if (seg.type === 'gif') {
+      return [{
+        type: 'gif' as const,
+        content: seg.content,
+        gifId: seg.gif_id,
+        gifUrl: seg.gif_url,
+      }];
+    } else if (isProvider) {
+      return parseEmojisSync(seg.content).map((es): EmoteSegment =>
+        es.type === 'emoji' && es.emojiUrl
+          ? { type: 'emoji' as const, content: es.content, emojiUrl: es.emojiUrl }
+          : { type: 'text' as const, content: es.content },
+      );
+    } else {
+      return [{
+        type: 'text' as const,
+        content: seg.content,
+      }];
+    }
+  });
+};
+
 const parseTextWithEmoteSets = (text: string, emotes?: EmoteSet | null): EmoteSegment[] => {
   const words = text.split(' ');
   const segments: EmoteSegment[] = [];
@@ -483,6 +544,20 @@ const MentionSpan: React.FC<{
   // When the user has turned off paint-on-mentions globally, fall back to the
   // flat color even if the user has a paint set.
   const paintMentionsInBody = useAppStore((s) => s.settings.chat_design?.paint_mentions_in_body) ?? true;
+  const mentionWeight = useAppStore((s) => s.settings.chat_design?.mention_weight);
+  const mentionItalic = useAppStore((s) => s.settings.chat_design?.mention_italic);
+  const mentionShape = useAppStore((s) => s.settings.chat_design?.mention_style);
+  const mentionColor = useAppStore((s) => s.settings.chat_design?.mention_text_color);
+  const look = useMemo(
+    () =>
+      mentionLook({
+        mention_weight: mentionWeight,
+        mention_italic: mentionItalic,
+        mention_style: mentionShape,
+        mention_text_color: mentionColor,
+      }),
+    [mentionWeight, mentionItalic, mentionShape, mentionColor],
+  );
   const nameStyle = useMemo(() => {
     if (userPaint && paintMentionsInBody) {
       return computePaintStyle(userPaint, userColor, paintShadowMode);
@@ -526,17 +601,17 @@ const MentionSpan: React.FC<{
     }
   };
   
-  // No pill fill here: normal-chat mentions are plain colored names. A latent
-  // bg-accent/15 never compiled until the 2026-07-26 token-alpha fix, then
-  // surfaced as an accidental pill and was removed.
+  // Plain coloured names by default; weight, slant, a pill and a fixed colour
+  // are the viewer's choice (chat/mentionStyle). The pill tint sits on the
+  // outer box because a paint draws the text through background-clip.
   return (
     <Tooltip content={`View ${username}'s profile`} side="top">
       <span
-        className="inline-block px-1.5 py-0.5 rounded font-medium cursor-pointer transition-colors"
-        style={nameStyle}
+        className={`${mentionBoxClass(look)} cursor-pointer transition-colors`}
+        style={mentionBoxStyle(look, userColor)}
         onClick={handleClick}
       >
-        @{username}
+        <span style={mentionTextStyle(look, nameStyle)}>@{username}</span>
       </span>
     </Tooltip>
   );
@@ -829,60 +904,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       // Apple-emoji image segments here for parity (also covers the blended feed,
       // which renders these segments directly).
       const isProvider = !!parsed.provider && parsed.provider !== 'twitch';
-      return parsed.segments.flatMap((seg): EmoteSegment[] => {
-        if (seg.type === 'emote') {
-          return [{
-            type: 'emote' as const,
-            content: seg.content,
-            emoteId: seg.emote_id,
-            emoteUrl: seg.emote_url,
-            isZeroWidth: seg.is_zero_width,
-            modifierFlags: seg.modifier_flags,
-            isPersonal: seg.is_personal,
-          }];
-        } else if (seg.type === 'emoji') {
-          return [{
-            type: 'emoji' as const,
-            content: seg.content,
-            emojiUrl: seg.emoji_url,
-          }];
-        } else if (seg.type === 'link') {
-          // Links are handled in parseTextWithLinks
-          return [{
-            type: 'text' as const,
-            content: seg.content,
-          }];
-        } else if (seg.type === 'cheermote') {
-          // Cheermote segment with animated GIF and bits amount
-          return [{
-            type: 'cheermote' as const,
-            content: seg.content,
-            cheermoteUrl: seg.cheermote_url,
-            prefix: seg.prefix,
-            bits: seg.bits,
-            tier: seg.tier,
-            color: seg.color,
-          }];
-        } else if (seg.type === 'gif') {
-          return [{
-            type: 'gif' as const,
-            content: seg.content,
-            gifId: seg.gif_id,
-            gifUrl: seg.gif_url,
-          }];
-        } else if (isProvider) {
-          return parseEmojisSync(seg.content).map((es): EmoteSegment =>
-            es.type === 'emoji' && es.emojiUrl
-              ? { type: 'emoji' as const, content: es.content, emojiUrl: es.emojiUrl }
-              : { type: 'text' as const, content: es.content },
-          );
-        } else {
-          return [{
-            type: 'text' as const,
-            content: seg.content,
-          }];
-        }
-      });
+      return fromRustSegments(parsed.segments, isProvider);
     }
 
     // Fallback for local messages (no segments from Rust yet): parse text by
@@ -890,13 +912,22 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     return parseTextWithEmoteSets(parsed.content, emotes);
   }, [parsed.segments, parsed.content, parsed.provider, emotes]);
 
-  // Reply preview: the parent message only exists as raw tag text, so emotes
-  // in it are resolved by name against the same loaded sets.
+  // Reply preview: Rust tokenizes the quoted parent with the channel and
+  // platform it was said in, as it does the row. A row from before that (no
+  // parent segments) falls back to matching names against the loaded sets,
+  // which are the home channel's, so only for a home row: on another
+  // platform's row (combined chat) they would show the home channel's emote
+  // for a name that channel may mean differently.
+  const replyFromHome = rowProvider(message, homeProvider) === homeProvider;
   const replyPreviewSegments = useMemo<EmoteSegment[] | null>(() => {
+    const quoted = parsed.replyInfo?.parentSegments;
+    if (quoted && quoted.length > 0) {
+      return fromRustSegments(quoted, !!parsed.provider && parsed.provider !== 'twitch');
+    }
     const body = parsed.replyInfo?.parentMsgBody;
     if (!body) return null;
-    return parseTextWithEmoteSets(body, emotes);
-  }, [parsed.replyInfo?.parentMsgBody, emotes]);
+    return parseTextWithEmoteSets(body, replyFromHome ? emotes : null);
+  }, [parsed.replyInfo?.parentSegments, parsed.replyInfo?.parentMsgBody, parsed.provider, emotes, replyFromHome]);
 
   // Extract userId once to prevent re-renders
   const userId = useMemo(() => parsed.tags.get('user-id'), [parsed.tags]);
@@ -1452,7 +1483,12 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             ? 'bttv'
             : emoteUrl.includes('frankerfacez')
               ? 'ffz'
-              : undefined;
+              : // Kick's own emotes: the same `kick-<id>` file the emote picker
+                // and Rust's prefetch keep. Without a provider they were cached
+                // again under the bare id, two files for one image.
+                emoteUrl.includes('files.kick.com')
+                ? 'kick'
+                : undefined;
 
       // Giant art URL. Only 7TV cache keys are per-tier; the other providers
       // key by bare id, so caching 4x bytes there would overwrite the
@@ -1820,6 +1856,10 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     const isPrefixMod = (s: EmoteSegment) =>
       s.type === 'emote' && ((s.modifierFlags ?? 0) & MOD_PREFIX) !== 0;
     const isSpacer = (s: EmoteSegment) => s.type === 'text' && s.content.trim() === '';
+    // Rust hands a whitespace run over as one spacer holding all of it.
+    // BetterTTV modifiers attach across exactly one space; zero-width overlays
+    // (below) attach across any run, as Chatterino and 7TV stack them.
+    const isSingleSpace = (s: EmoteSegment) => s.type === 'text' && s.content === ' ';
     // A modifier can never be another modifier's target.
     const isTarget = (s: EmoteSegment) =>
       (s.type === 'emote' || s.type === 'emoji') && s.modifierFlags == null;
@@ -1847,13 +1887,13 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
 
       if (pending.length > 0) {
         const last = pending[pending.length - 1];
-        // The run survives exactly one spacer, matching BetterTTV: a doubled
-        // space breaks attachment.
-        if (isSpacer(segment) && !isSpacer(last)) {
+        // The run survives exactly one spacer of one space, matching
+        // BetterTTV: a doubled space breaks attachment.
+        if (isSingleSpace(segment) && !isSpacer(last)) {
           pending.push(segment);
           return;
         }
-        if (isTarget(segment) && isSpacer(last)) {
+        if (isTarget(segment) && isSingleSpace(last)) {
           groupedSegments.push([segment, ...pending.filter(isPrefixMod)]);
           pending = [];
           return;
@@ -2393,7 +2433,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       if (visibleBadges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
 
       return (
-        <span className="inline-flex items-center gap-1 mr-1.5">
+        <span className="sn-badge-strip mr-1.5">
           {visibleBadges.map((badge, idx) => {
             // Handle both old format (key/info) and new format (name/version)
             if (!badge.info) return null;
@@ -2443,7 +2483,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               />
             </Tooltip>
           ))}
-          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge block object-contain" />}
+          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge sn-chat-badge--sn block object-contain" />}
         </span>
       );
     };
@@ -2586,7 +2626,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       if (visibleBadges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
 
       return (
-        <span className="inline-flex items-center gap-1 mr-1.5">
+        <span className="sn-badge-strip mr-1.5">
           {visibleBadges.map((badge, idx) => {
             if (!badge.info) return null;
             return (
@@ -2635,7 +2675,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               />
             </Tooltip>
           ))}
-          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge block object-contain" />}
+          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge sn-chat-badge--sn block object-contain" />}
         </span>
       );
     };
@@ -2772,7 +2812,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       if (visibleBadges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
 
       return (
-        <span className="inline-flex items-center gap-1 mr-0.5">
+        <span className="sn-badge-strip mr-0.5">
           {visibleBadges.map((badge, idx) => {
             if (!badge.info) return null;
             return (
@@ -2821,7 +2861,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               />
             </Tooltip>
           ))}
-          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge block object-contain" />}
+          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge sn-chat-badge--sn block object-contain" />}
         </span>
       );
     };
@@ -2893,7 +2933,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       if (visibleBadges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
 
       return (
-        <span className="inline-flex items-center align-middle gap-1 mr-1.5">
+        <span className="sn-badge-strip mr-1.5">
           {visibleBadges.map((badge, idx) => {
             if (!badge.info) return null;
             return (
@@ -2942,7 +2982,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               />
             </Tooltip>
           ))}
-          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge block object-contain" />}
+          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge sn-chat-badge--sn block object-contain" />}
         </span>
       );
     };
@@ -3447,7 +3487,14 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             block hugging the badges + name + message (the timestamp gets its
             own separate frost above), so the text/badges stay readable over a
             busy wash. */}
-        <div className={atmosphereFrost ? `inline-block max-w-full rounded-md px-1.5 py-0.5 ${frostClass}` : 'min-w-0'}>
+        {/* The row carries the chat font size so badges, name and text are all
+            measured against the same line: the badge group centres on it and the
+            text sits on its baseline, so a tall emote grows the line without
+            moving the name away from the badges. */}
+        <div
+          className={atmosphereFrost ? `inline-block max-w-full rounded-md px-1.5 py-0.5 ${frostClass}` : 'min-w-0'}
+          style={{ fontSize: `${chatDesign?.font_size ?? 14}px`, lineHeight: 1.625 }}
+        >
           {/* Where this row came from, when it is not the platform being watched.
               FIRST, ahead of the avatar and every badge, because it answers
               "which community is this" before anything about who they are in
@@ -3482,7 +3529,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           {/* Badges */}
           {isSN || (isFromSharedChat && channelProfileImage) || visibleBadges.length > 0 || seventvBadge || thirdPartyBadges.length > 0 ? (
             <span
-              className="inline-flex items-center gap-1 mr-1.5 align-middle"
+              className="sn-badge-strip mr-1.5"
               // .sn-chat-badge is sized in em: this row must carry the chat
               // font size, as every event layout's badge row already does.
               style={{ fontSize: `${chatDesign?.font_size ?? 14}px` }}
@@ -3565,13 +3612,13 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                 </Tooltip>
               ))}
               {/* StreamNook identity badge sits rightmost, next to the name (see utils/badgeOrder). */}
-              {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge block object-contain" />}
+              {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge sn-chat-badge--sn block object-contain" />}
             </span>
           ) : null}
 
           {/* Message content */}
           <span
-            className="leading-relaxed align-middle"
+            className="leading-relaxed"
             style={{
               fontSize: `${chatDesign?.font_size ?? 14}px`,
               fontWeight: chatDesign?.font_weight ?? 400,

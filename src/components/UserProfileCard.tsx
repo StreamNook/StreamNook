@@ -2023,6 +2023,44 @@ const UserProfileCard = ({
         </>
         )}
 
+        {/* The history view's bar sits between the header and the scroll body,
+            outside the scroller, so "Back to profile" stays reachable once the
+            timeline auto-scrolls to the newest message without any message ever
+            passing under it. A sticky bar inside the body needed its own fill and
+            blur to hide the rows behind it, and that fill read as a dark box cut
+            out of whatever light shows through the card (the Prism theme's, for
+            one): the card is the backdrop root, so the bar's blur could never
+            sample the light behind the card, only darken the card a second time. */}
+        <AnimatePresence initial={false}>
+          {showMessages && (
+            <motion.div
+              key="messages-bar"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ type: 'tween', duration: 0.18, ease: 'easeOut' }}
+              className="relative z-[2] flex flex-shrink-0 items-center justify-between px-4 pt-2"
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMessages(false);
+                  // The history leaves the body scrolled to its newest
+                  // message; the profile reads from the top.
+                  scrollBodyRef.current?.scrollTo({ top: 0 });
+                }}
+                className="glass-button inline-flex items-center gap-1 rounded-full py-0.5 pl-1.5 pr-2.5 text-[11px] font-medium text-textSecondary hover:text-textPrimary transition-colors"
+              >
+                <ChevronLeft size={13} />
+                Back to profile
+              </button>
+              <span className="text-[10px] text-textSecondary uppercase tracking-wider font-semibold">
+                Chat history{(historicalLoading || deepLoading) ? ' · loading…' : ''}
+              </span>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Single scroll body. One padded container, vertical rhythm via space-y, no section dividers. */}
         <div
           // glass-exempt: the atmosphere card body; an atmosphere keeps its own glass.
@@ -2041,12 +2079,10 @@ const UserProfileCard = ({
                 body (identity + stats + badges + actions) slides UP and out and
                 the messages view slides in — a "curtain reveal" feel.
                 AnimatePresence with `mode="wait"` ensures the exit completes
-                before the enter starts. The wrapper has `overflow-hidden` so the
-                slide stays clipped to the body instead of leaking under the
-                header, where the collapsed compact name carries the identity.
-                `clip`, not `hidden`: a hidden overflow is a scroll container,
-                which pins the sticky Back bar below to this wrapper so it
-                scrolled away with the history. */}
+                before the enter starts. The wrapper clips so the slide stays
+                inside the body instead of leaking under the header, where the
+                collapsed compact name carries the identity. `clip`, not
+                `hidden`: a hidden overflow is a scroll container. */}
             <div className="relative overflow-clip">
               <AnimatePresence mode="wait" initial={false}>
                 {showMessages ? (
@@ -2058,26 +2094,6 @@ const UserProfileCard = ({
                     transition={{ type: 'tween', duration: 0.22, ease: 'easeOut' }}
                     className="-mx-2"
                   >
-                    {/* Sticky so "Back to profile" stays reachable once the
-                        timeline auto-scrolls to the newest message. */}
-                    <div className="sticky top-0 z-20 flex items-center justify-between rounded-lg px-2 py-1.5 -mt-2 bg-glass-ink/80 backdrop-blur-md">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowMessages(false);
-                          // The history leaves the body scrolled to its newest
-                          // message; the profile reads from the top.
-                          scrollBodyRef.current?.scrollTo({ top: 0 });
-                        }}
-                        className="glass-button inline-flex items-center gap-1 rounded-full py-0.5 pl-1.5 pr-2.5 text-[11px] font-medium text-textSecondary hover:text-textPrimary transition-colors"
-                      >
-                        <ChevronLeft size={13} />
-                        Back to profile
-                      </button>
-                      <span className="text-[10px] text-textSecondary uppercase tracking-wider font-semibold">
-                        Chat history{(historicalLoading || deepLoading) ? ' · loading…' : ''}
-                      </span>
-                    </div>
                     {(() => {
                       // Unified message timeline. Historical (Twitch GQL +
                       // Justlog + Robotty, merged in Rust) AND in-session

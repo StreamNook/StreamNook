@@ -225,6 +225,11 @@ html[data-theme-effect="prism"] .glass-button:hover {
   );
 }
 
+/* A neutral stage (`sn-light-off`, above) stays neutral under the cursor too. */
+html[data-theme-effect="prism"] .sn-light-off .glass-button:hover {
+  background-image: none;
+}
+
 /* Selected text sits in the ice band. */
 html[data-theme-effect="prism"] ::selection {
   background: rgba(var(--pr-ice), 0.34);

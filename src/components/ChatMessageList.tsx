@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useCallback, useMemo, memo } from 'react';
+import React, { useRef, useEffect, useLayoutEffect, useCallback, useMemo, memo } from 'react';
 import ChatMessage from './ChatMessage';
 import { isHiddenEvent } from '../utils/chatEvents';
 import { EmoteSet } from '../services/emoteService';
@@ -9,6 +9,12 @@ import { useStreamerMode } from '../utils/streamerMode';
 import { useChatUserStore } from '../stores/chatUserStore';
 import { ProviderLogo } from './ProviderLogo';
 import type { ProviderId } from '../types/providers';
+
+/**
+ * How many of the newest rows always paint (see MessageRow). Enough to fill
+ * a tall chat column at the smallest text size.
+ */
+const NEWEST_ROWS_PAINTED = 40;
 
 /**
  * Per-row wrapper carrying the native-virtualization styles, with one
@@ -29,6 +35,8 @@ interface MessageRowProps {
   messageId: string | null;
   userId: string | undefined;
   isModFocus: boolean;
+  /** One of the newest rows, which are on screen whenever the list follows. */
+  isNewest: boolean;
   intrinsicSizeCSS: string;
   sourceProvider: ProviderId | undefined;
   sourceLogoSize: number;
@@ -60,6 +68,7 @@ const messageRowAreEqual = (prev: MessageRowProps, next: MessageRowProps): boole
   if (prev.messageId !== next.messageId) return false;
   if (prev.userId !== next.userId) return false;
   if (prev.isModFocus !== next.isModFocus) return false;
+  if (prev.isNewest !== next.isNewest) return false;
   if (prev.intrinsicSizeCSS !== next.intrinsicSizeCSS) return false;
   if (prev.sourceProvider !== next.sourceProvider) return false;
   if (prev.sourceLogoSize !== next.sourceLogoSize) return false;
@@ -82,6 +91,7 @@ const MessageRow = memo(function MessageRow({
   messageId,
   userId,
   isModFocus,
+  isNewest,
   intrinsicSizeCSS,
   sourceProvider,
   sourceLogoSize,
@@ -106,16 +116,22 @@ const MessageRow = memo(function MessageRow({
     // they need the same always-paint treatment to dodge the ghost bug.
     return !u?.themeHiddenInChat && !!(u?.atmosphereId || u?.cologne);
   });
+  // Native virtualization for normal rows. Atmosphere rows paint always to
+  // dodge the content-visibility compositing-ghost bug (see above). The newest
+  // rows paint always too: a row lands below the fold, and under `auto` it is
+  // laid out at the size hint until the browser marks it relevant, so a
+  // wrapped row arrived at the hint and grew a frame later, jolting the list
+  // a second time while the row slid in. They are on screen whenever the list
+  // follows, so skipping them never saved anything.
+  const paintAlways = hasAtmosphere || isNewest;
   const style = useMemo(
     () => ({
-      // Native virtualization for normal rows; atmosphere rows paint always
-      // to dodge the content-visibility compositing-ghost bug (see above).
-      contentVisibility: hasAtmosphere ? ('visible' as const) : ('auto' as const),
+      contentVisibility: paintAlways ? ('visible' as const) : ('auto' as const),
       // Off-screen size hint, computed per-user from font size, spacing, and
       // whether timestamps are on. Ignored when content-visibility is visible.
-      containIntrinsicBlockSize: hasAtmosphere ? undefined : intrinsicSizeCSS,
+      containIntrinsicBlockSize: paintAlways ? undefined : intrinsicSizeCSS,
     }),
-    [hasAtmosphere, intrinsicSizeCSS],
+    [paintAlways, intrinsicSizeCSS],
   );
   const chatMessageEl = (
     <ChatMessage
@@ -389,7 +405,10 @@ const ChatMessageList = memo(function ChatMessageList({
   // SIMPLE RULE: If not paused, always scroll to bottom
   const lastMessageId = messages.length > 0 ? getMessageId(messages[messages.length - 1]) : null;
 
-  useEffect(() => {
+  // A layout effect, so the pin lands before the new row is painted: pinned
+  // after paint, the row first drew below the fold and the list jumped to it a
+  // frame later, mid-entrance.
+  useLayoutEffect(() => {
     if (!containerRef.current) return;
     
     const prevCount = prevMessageCountRef.current;
@@ -412,18 +431,11 @@ const ChatMessageList = memo(function ChatMessageList({
     // rather than instant-jumping on every message and stuttering it.
     if (isResumeAnimatingRef.current) return;
 
-    // NOT PAUSED: Always scroll to bottom
-    // Use double-scroll pattern to ensure we catch the final height after content-visibility resolves
-
-    // First scroll: immediate RAF to catch initial render
-    requestAnimationFrame(() => {
-      if (!containerRef.current) return;
-      if (!isChannelLoad && userScrolledUpRef.current) return;
-      if (isResumeAnimatingRef.current) return;
-      isScrollingProgrammatically.current = true;
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
-      wasAtBottomRef.current = true;
-    });
+    // NOT PAUSED: Always scroll to bottom, now (before paint), then once more
+    // after content-visibility resolves for anything further up.
+    isScrollingProgrammatically.current = true;
+    containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    wasAtBottomRef.current = true;
 
     // Second scroll: short delay to catch content-visibility final height calculation
     // This fixes the issue where new messages appear partially behind the input box
@@ -713,6 +725,7 @@ const ChatMessageList = memo(function ChatMessageList({
               messageId={messageId}
               userId={userId}
               isModFocus={!!modFocusId && messageId === modFocusId}
+              isNewest={index >= messages.length - NEWEST_ROWS_PAINTED}
               intrinsicSizeCSS={intrinsicSizeCSS}
               sourceProvider={sourceProvider}
               sourceLogoSize={sourceLogoSize}

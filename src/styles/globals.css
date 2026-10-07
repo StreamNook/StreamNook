@@ -1449,6 +1449,43 @@ body[data-window-blurred="true"] .glaze-inset::after {
   box-shadow: 0 0 0 1.5px var(--color-background);
 }
 
+/* The combined chat's one header control: the linked platforms overlap like
+   an avatar group, so three sources take barely more room than one. Each mark
+   sits on a disc ringed in the header's colour so the overlap reads as a
+   stack rather than a smudge. */
+.blend-sources {
+  gap: 0;
+  padding: 0 1px;
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+.blend-sources:hover,
+.blend-sources.is-open {
+  background-color: rgba(255, 255, 255, 0.06);
+}
+.blend-sources-marks {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 2px;
+}
+.blend-sources-mark {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--color-background-tertiary, #1f1f23), #fff 7%);
+  box-shadow: 0 0 0 1.5px var(--color-background, #0e0e10);
+}
+.blend-sources-mark + .blend-sources-mark {
+  margin-left: -5px;
+}
+.blend-sources-mark.is-off > * {
+  opacity: 0.4;
+  filter: grayscale(1);
+}
+
 /* The panel's way on to linking by hand. */
 .blend-more {
   display: inline-flex;
@@ -3100,12 +3137,37 @@ html[data-motion="reduced"] .animate-shimmer {
   height: calc(1.4em * var(--sn-badge-scale, 1));
 }
 
+/* The StreamNook mark is opaque to the edge of its canvas, where Twitch and
+   7TV badge art keeps a transparent margin, so at the same box it read larger
+   than the badges beside it. The inset gives it the same visual weight. */
+.sn-chat-badge--sn {
+  box-sizing: border-box;
+  padding: 0.09em;
+}
+
+/* Every chat row's badge group, centred on the name it sits beside. An
+   image-only inline-flex box takes its baseline from the images' bottom edge,
+   so the offset lowers that edge until the badge centre meets the text centre
+   (0.38em above the baseline in the chat font), whatever the badge scale.
+   Measured from the baseline, the badges stay put when a tall emote grows the
+   line; `middle` measured from the x-height drew them about 2px low. */
+.sn-badge-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  vertical-align: calc(0.38em - 0.7em * var(--sn-badge-scale, 1));
+}
+
 /* Message arrival. CSS only, on the row itself, chosen by data-entrance on
    the list: the animation runs once when the element is inserted and never
    again. History rows (.is-backfill) sit out, so a join's backfill does not
-   ripple. Opacity for fade; a short transform for slide and rise, kept brief
-   so a fast chat never has more than a couple of rows mid-flight. The
-   data-motion kill switch and the OS reduced-motion preference both apply. */
+   ripple. Only the last three rows can play it: an animation starts when
+   its selector first matches, so rows that arrive all at once (a remount on
+   a chat switch, a held backlog catching up) stay still instead of the whole
+   column sliding. Opacity for fade; a short transform for slide and rise,
+   kept brief so a fast chat never has more than a couple of rows mid-flight.
+   The data-motion kill switch and the OS reduced-motion preference both
+   apply. */
 @keyframes sn-enter-fade {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -3118,17 +3180,33 @@ html[data-motion="reduced"] .animate-shimmer {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: none; }
 }
-[data-entrance='fade'] > .chat-message-row:not(.is-backfill) {
+[data-entrance='fade'] > .chat-message-row:not(.is-backfill):nth-last-child(-n + 3) {
   animation: sn-enter-fade 220ms ease-out both;
 }
-[data-entrance='slide'] > .chat-message-row:not(.is-backfill) {
+[data-entrance='slide'] > .chat-message-row:not(.is-backfill):nth-last-child(-n + 3) {
   animation: sn-enter-slide 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
-[data-entrance='rise'] > .chat-message-row:not(.is-backfill) {
+[data-entrance='rise'] > .chat-message-row:not(.is-backfill):nth-last-child(-n + 3) {
   animation: sn-enter-rise 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 @media (prefers-reduced-motion: reduce) {
   [data-entrance] > .chat-message-row {
+    animation: none;
+  }
+}
+
+/* The chat dock's tab row unfolding: the wrapped lines reveal downward from
+   the row's own line, so the row reads as opening rather than a menu
+   appearing over it. clip-path only: nothing about the layout animates. */
+@keyframes sn-tabs-unfold {
+  from { clip-path: inset(0 -12px calc(100% - 26px) -12px); }
+  to { clip-path: inset(0 -12px -24px -12px); }
+}
+.sn-tabs-unfolded {
+  animation: sn-tabs-unfold 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sn-tabs-unfolded {
     animation: none;
   }
 }
@@ -4630,6 +4708,16 @@ html[data-watching] .drops-progress-inline {
   position: fixed;
   inset: 0;
   z-index: 10000001;
+}
+
+/* A MultiNook tile's Audio Boost panel, for the same reason: pinned above the
+   fullscreen tile's control bar instead of hidden under the fixed .plyr. */
+.video-player-container:has(.plyr--fullscreen-fallback) .tile-audio-boost-panel {
+  position: fixed;
+  bottom: 4.5rem;
+  right: 0.75rem;
+  z-index: 10000001;
+  max-height: calc(100vh - 6rem) !important;
 }
 
 /* Custom overlay positioning for Plyr fullscreen mode */
@@ -7093,16 +7181,23 @@ html[data-os="linux"] .sn-chat-overlay-frame {
 
    Reach for it whenever the backdrop does not actually vary: the filter is then
    a compositing layer bought for nothing, and in WebView2 it can smear whatever
-   is repainting next to it. Two cases in the app today:
+   is repainting next to it. Cases in the app today:
 
    - The MultiChat popout's title bar (`--flat`), whose own note explains that
      the chat scrolling below it bleeds into a live blur layer there.
    - The setup wizard's primary button, which sits on a flat panel roughly 16px
      under a looping swipe hint. That hint animates `width`, which is a LAYOUT
      property, so every frame of an infinite loop forced layout and paint right
-     inside the region an 8px backdrop blur samples from. */
+     inside the region an 8px backdrop blur samples from.
+   - Chat link-preview cards. Chat rows use `content-visibility: auto`, and a
+     backdrop filter inside one leaves stale copies of the card behind as the
+     list scrolls.
+   - A search field inside a flyout menu (the rule below): the flyout is its
+     backdrop root, so the field could only ever blur the flyout's own fill,
+     while the flyout animates open over live chat. */
 .chrome-glaze--flat,
-.no-live-blur {
+.no-live-blur,
+.glass-flyout .glass-input {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }

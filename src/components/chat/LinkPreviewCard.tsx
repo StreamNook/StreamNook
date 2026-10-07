@@ -134,7 +134,9 @@ function formatViews(n: number): string {
 /**
  * A single inline link-preview card. Resolves lazily (only fetches once the row
  * scrolls near the viewport) and renders a fixed-height skeleton while loading.
- * Card chrome reuses `.glass-panel` (subtle inset bevel, no outer glow).
+ * Card chrome reuses `.glass-panel` (subtle inset bevel, no outer glow) with
+ * `.no-live-blur`: a backdrop filter inside a `content-visibility: auto` chat
+ * row leaves stale copies of the card behind as the list scrolls in WebView2.
  *
  * `showChip` controls the no-preview fallback: in "clean" mode (inline link
  * suppressed) it's true, so a failed/empty preview falls back to a compact link
@@ -276,7 +278,7 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
     ? wrap(
         <div
           {...cardProps}
-          className="glass-panel mt-1 inline-flex max-w-md cursor-pointer items-center gap-1.5 px-2.5 py-1.5 align-middle transition-colors hover:bg-white/[0.03]"
+          className="glass-panel no-live-blur mt-1 inline-flex max-w-md cursor-pointer items-center gap-1.5 px-2.5 py-1.5 align-middle transition-colors hover:bg-white/[0.03]"
         >
           <ExternalLink size={13} className="flex-shrink-0 text-textSecondary" />
           <span className="truncate text-xs text-blue-400">{prettyUrlLabel(url)}</span>
@@ -303,7 +305,7 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
                 loadPreview();
               }
             }}
-            className="glass-panel inline-flex min-w-0 cursor-pointer items-center gap-1.5 px-2.5 py-1.5 align-middle transition-colors hover:bg-white/[0.03]"
+            className="glass-panel no-live-blur inline-flex min-w-0 cursor-pointer items-center gap-1.5 px-2.5 py-1.5 align-middle transition-colors hover:bg-white/[0.03]"
           >
             <Eye size={13} className="flex-shrink-0 text-textSecondary" />
             <span className="truncate text-xs text-textSecondary">Load preview · {hostOf(url)}</span>
@@ -314,7 +316,7 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
             type="button"
             onClick={trustHostAndLoad}
             aria-label={`Always trust ${hostOf(url)}`}
-            className="glass-panel flex flex-shrink-0 cursor-pointer items-center justify-center p-1.5 text-textSecondary transition-colors hover:bg-white/[0.03] hover:text-textPrimary"
+            className="glass-panel no-live-blur flex flex-shrink-0 cursor-pointer items-center justify-center p-1.5 text-textSecondary transition-colors hover:bg-white/[0.03] hover:text-textPrimary"
           >
             <ShieldCheck size={14} />
           </button>
@@ -328,7 +330,7 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
     return (
       <div
         ref={containerRef}
-        className="glass-panel mt-1 w-full max-w-md overflow-hidden"
+        className="glass-panel no-live-blur mt-1 w-full max-w-md overflow-hidden"
         style={{ height: 56, opacity: 0.5 }}
         aria-hidden
       >
@@ -350,7 +352,7 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
     if (!trusted) {
       return (
         <Tooltip content={url} side="top">
-          <div className="glass-panel mt-1 inline-flex max-w-md items-center gap-1.5 px-2.5 py-1.5 align-middle text-xs text-textSecondary">
+          <div className="glass-panel no-live-blur mt-1 inline-flex max-w-md items-center gap-1.5 px-2.5 py-1.5 align-middle text-xs text-textSecondary">
             <Eye size={13} className="flex-shrink-0 opacity-50" />
             <span className="truncate">No preview available · {hostOf(url)}</span>
           </div>
@@ -367,7 +369,7 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
     return wrap(
       <div
         {...cardProps}
-        className="glass-panel mt-1 block w-full max-w-md cursor-pointer overflow-hidden text-left transition-colors hover:bg-white/[0.03]"
+        className="glass-panel no-live-blur mt-1 block w-full max-w-md cursor-pointer overflow-hidden text-left transition-colors hover:bg-white/[0.03]"
       >
         <div className="relative w-full bg-black/40" style={{ aspectRatio: '16 / 9' }}>
           <img
@@ -407,7 +409,7 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
     return wrap(
       <div
         {...cardProps}
-        className="glass-panel mt-1 block w-full max-w-md cursor-pointer overflow-hidden p-3 text-left transition-colors hover:bg-white/[0.03]"
+        className="glass-panel no-live-blur mt-1 block w-full max-w-md cursor-pointer overflow-hidden p-3 text-left transition-colors hover:bg-white/[0.03]"
       >
         <div className="flex items-center gap-2.5">
           {preview.author_avatar && !imageFailed && (
@@ -444,7 +446,7 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
     return wrap(
       <div
         {...cardProps}
-        className="glass-panel mt-1 block w-full max-w-md cursor-pointer overflow-hidden p-3 text-left transition-colors hover:bg-white/[0.03]"
+        className="glass-panel no-live-blur mt-1 block w-full max-w-md cursor-pointer overflow-hidden p-3 text-left transition-colors hover:bg-white/[0.03]"
       >
         <div className="flex items-center gap-2.5">
           {preview.author_avatar && !imageFailed && (
@@ -487,7 +489,7 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
     return wrap(
       <div
         {...cardProps}
-        className="glass-panel mt-1 block w-full max-w-md cursor-pointer overflow-hidden text-left transition-colors hover:bg-white/[0.03]"
+        className="glass-panel no-live-blur mt-1 block w-full max-w-md cursor-pointer overflow-hidden text-left transition-colors hover:bg-white/[0.03]"
       >
         <div className="relative w-full bg-black/40" style={{ aspectRatio: '16 / 9' }}>
           <img
@@ -544,7 +546,7 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
     return wrap(
       <div
         {...cardProps}
-        className="glass-panel mt-1 flex w-full max-w-md cursor-pointer items-center gap-3 p-3 text-left transition-colors hover:bg-white/[0.03]"
+        className="glass-panel no-live-blur mt-1 flex w-full max-w-md cursor-pointer items-center gap-3 p-3 text-left transition-colors hover:bg-white/[0.03]"
       >
         <div className="h-11 w-11 flex-shrink-0 overflow-hidden rounded-2xl bg-white/[0.04]">
           {preview.image && !imageFailed ? (
@@ -607,7 +609,7 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
     return wrap(
       <div
         {...cardProps}
-        className="glass-panel mt-1 block w-full max-w-md cursor-pointer overflow-hidden text-left transition-colors hover:bg-white/[0.03]"
+        className="glass-panel no-live-blur mt-1 block w-full max-w-md cursor-pointer overflow-hidden text-left transition-colors hover:bg-white/[0.03]"
       >
         {showImage && (
           <div className="relative w-full bg-black/40" style={{ aspectRatio: '460 / 215' }}>
@@ -659,7 +661,7 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
     return wrap(
       <div
         {...cardProps}
-        className="glass-panel mt-1 flex w-full max-w-md cursor-pointer items-center overflow-hidden text-left transition-colors hover:bg-white/[0.03]"
+        className="glass-panel no-live-blur mt-1 flex w-full max-w-md cursor-pointer items-center overflow-hidden text-left transition-colors hover:bg-white/[0.03]"
       >
         {showImage && (
           <img
@@ -696,7 +698,7 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
     return wrap(
       <div
         {...cardProps}
-        className="glass-panel mt-1 inline-block max-w-md cursor-pointer overflow-hidden transition-colors hover:bg-white/[0.03]"
+        className="glass-panel no-live-blur mt-1 inline-block max-w-md cursor-pointer overflow-hidden transition-colors hover:bg-white/[0.03]"
       >
         <img
           src={preview.image}
@@ -716,7 +718,7 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
     return wrap(
       <div
         {...cardProps}
-        className="glass-panel mt-1 block w-full max-w-md cursor-pointer overflow-hidden p-3 text-left transition-colors hover:bg-white/[0.03]"
+        className="glass-panel no-live-blur mt-1 block w-full max-w-md cursor-pointer overflow-hidden p-3 text-left transition-colors hover:bg-white/[0.03]"
       >
         <div className="flex items-center gap-2">
           {preview.author_avatar && (
@@ -777,7 +779,7 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
     return wrap(
       <div
         {...cardProps}
-        className="glass-panel mt-1 block w-full max-w-md cursor-pointer overflow-hidden text-left transition-colors hover:bg-white/[0.03]"
+        className="glass-panel no-live-blur mt-1 block w-full max-w-md cursor-pointer overflow-hidden text-left transition-colors hover:bg-white/[0.03]"
       >
         {showImage && (
           <img
@@ -811,7 +813,7 @@ export const LinkPreviewCard = memo(function LinkPreviewCard({
   return wrap(
     <div
       {...cardProps}
-      className="glass-panel mt-1 flex w-full max-w-md cursor-pointer items-center overflow-hidden text-left transition-colors hover:bg-white/[0.03]"
+      className="glass-panel no-live-blur mt-1 flex w-full max-w-md cursor-pointer items-center overflow-hidden text-left transition-colors hover:bg-white/[0.03]"
     >
       {showImage && (
         <img

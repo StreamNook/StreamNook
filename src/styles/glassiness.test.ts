@@ -349,3 +349,65 @@ describe('Glassiness 0% leaves no see-through surface', () => {
     expect(config.theme.extend.colors.accent({ opacityValue: '0.2' })).not.toContain('--glass-under');
   });
 });
+
+// WebView2 paints some backdrop-filter combinations wrong while a plain
+// Chromium paints them right, so a lab can only ever prove one broken. These
+// read the source for the two combinations already seen to fail in the app.
+describe('Backdrop filters stay out of combinations WebView2 mispaints', () => {
+  const css = files.filter((f) => f.endsWith('.css'));
+  const rules = css.flatMap((f) => cssRules(read(f)).map((r) => ({ ...r, file: f })));
+  const frosted = (body: string) => {
+    const v = decl(body, 'backdrop-filter') ?? decl(body, '-webkit-backdrop-filter');
+    return v !== null && !v.startsWith('none');
+  };
+  const squircle = (body: string) => {
+    const v = decl(body, 'corner-shape');
+    return v !== null && !/^(inherit|round|none)$/.test(v);
+  };
+
+  it('no squircle corner on a frosted surface', () => {
+    // A superellipse corner on an element that also carries a backdrop filter
+    // makes the content inside it fail to paint.
+    const bad: string[] = [];
+    // A class whose own rule turns the filter off is safe beside glass classes.
+    const unfrosts = new Set<string>();
+    for (const r of rules) {
+      const v = decl(r.body, 'backdrop-filter');
+      if (v !== null && v.startsWith('none')) {
+        for (const m of r.selector.matchAll(/\.([\w-]+)/g)) unfrosts.add(m[1]);
+      }
+    }
+    const squircleClasses = new Set<string>();
+    for (const r of rules) {
+      if (!squircle(r.body)) continue;
+      if (frosted(r.body)) bad.push(`${rel(r.file)}:${r.line} ${r.selector.replace(/\s+/g, ' ')}`);
+      for (const sel of r.selector.split(',')) {
+        const m = /^\s*\.([\w-]+)\s*$/.exec(sel);
+        if (m && !unfrosts.has(m[1])) squircleClasses.add(m[1]);
+      }
+    }
+    for (const file of files.filter((f) => f.endsWith('.tsx') && !/\.test\.tsx$/.test(f))) {
+      for (const el of parsed(file)) {
+        const has = (c: string) => new RegExp(`(?<![\w-])${c}(?![\w-])`).test(el.expr);
+        const shaped = [...squircleClasses].find(has);
+        if (!shaped) continue;
+        if ((GLASS_CLASS.test(el.expr) || BLUR.test(el.expr)) && !has('no-live-blur')) {
+          bad.push(`${rel(file)}:${el.line} .${shaped} on a frosted element`);
+        }
+      }
+    }
+    expect(bad, 'corner-shape: squircle and a backdrop filter on one element. Drop one of them ' +
+      '(a class that needs both can switch the filter off in its own rule)').toEqual([]);
+  });
+
+  it('chat link previews carry no live blur', () => {
+    // Chat rows use content-visibility: auto, and a backdrop filter inside one
+    // leaves stale copies of the card behind as the list scrolls.
+    const file = files.find((f) => rel(f) === 'src/components/chat/LinkPreviewCard.tsx');
+    expect(file, 'LinkPreviewCard.tsx moved; point this test at it').toBeTruthy();
+    const bad = parsed(file!)
+      .filter((el) => (GLASS_CLASS.test(el.expr) || BLUR.test(el.expr)) && !/(?<![\w-])no-live-blur(?![\w-])/.test(el.expr))
+      .map((el) => `${rel(file!)}:${el.line}`);
+    expect(bad, 'Frosted link-preview elements without no-live-blur').toEqual([]);
+  });
+});
