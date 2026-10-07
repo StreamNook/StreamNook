@@ -91,6 +91,7 @@ import {
 import { listenForSettingsUpdates } from '../../utils/settingsBroadcast';
 import { MULTICHAT_BASE_WIDTH, openMultiChatWindow } from '../../utils/multichatWindow';
 import { Tooltip } from '../ui/Tooltip';
+import { TabScroller } from '../ui/TabScroller';
 import { Logger } from '../../utils/logger';
 import type { TwitchStream } from '../../types';
 import streamNookLogoUrl from '../../assets/streamnook-logo-128.webp';
@@ -3047,8 +3048,6 @@ interface TabContextMenuState {
 // pattern so the popout's channel switcher looks and feels identical to the
 // in-app MultiNook switcher. Active tab: `glass-input` + accent text;
 // inactive: `glass-button` + secondary text → primary on hover.
-/** How far the tab strip fades at an edge with tabs scrolled behind it. */
-const TAB_FADE_PX = 24;
 
 function TabStrip({
   channels,
@@ -3087,61 +3086,6 @@ function TabStrip({
     return () => window.removeEventListener('keydown', onKey);
   }, [contextMenu]);
 
-  // The tabs scroll sideways with no scrollbar: a bar under a row of pills is
-  // chrome, not information. Overflow shows as a fade on each edge that has tabs
-  // behind it, a mouse wheel scrolls the row, and the active tab is kept in view.
-  const scrollerRef = useRef<HTMLDivElement>(null);
-  const [edges, setEdges] = useState({ left: false, right: false });
-  const measureEdges = useCallback(() => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    const left = el.scrollLeft > 1;
-    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
-    setEdges((prev) => (prev.left === left && prev.right === right ? prev : { left, right }));
-  }, []);
-  useEffect(() => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    // Re-measure when the window resizes or the tabs change width (added,
-    // removed, renamed). A vertical mouse wheel turns into a sideways scroll;
-    // trackpads already send deltaX, so only a mostly-vertical wheel is taken.
-    const observer = new ResizeObserver(measureEdges);
-    observer.observe(el);
-    if (el.firstElementChild) observer.observe(el.firstElementChild);
-    const onWheel = (e: WheelEvent) => {
-      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX) || el.scrollWidth <= el.clientWidth) return;
-      e.preventDefault();
-      el.scrollLeft += e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
-    };
-    el.addEventListener('wheel', onWheel, { passive: false });
-    measureEdges();
-    return () => {
-      observer.disconnect();
-      el.removeEventListener('wheel', onWheel);
-    };
-  }, [measureEdges]);
-  // A tab added past the right edge becomes the active one: bring it into view,
-  // clear of the fade, instead of leaving it scrolled out of sight.
-  useEffect(() => {
-    const el = scrollerRef.current;
-    if (!el || !active) return;
-    const tab = el.querySelector<HTMLElement>(`[data-tab-key="${CSS.escape(active)}"]`);
-    if (!tab) return;
-    const t = tab.getBoundingClientRect();
-    const s = el.getBoundingClientRect();
-    if (t.left < s.left + TAB_FADE_PX) {
-      el.scrollBy({ left: t.left - s.left - TAB_FADE_PX, behavior: 'smooth' });
-    } else if (t.right > s.right - TAB_FADE_PX) {
-      el.scrollBy({ left: t.right - s.right + TAB_FADE_PX, behavior: 'smooth' });
-    }
-  }, [active, channels.length]);
-  const edgeMask =
-    edges.left || edges.right
-      ? `linear-gradient(to right, ${edges.left ? `transparent, #000 ${TAB_FADE_PX}px` : '#000'}, ${
-          edges.right ? `#000 calc(100% - ${TAB_FADE_PX}px), transparent` : '#000'
-        })`
-      : undefined;
-
   return (
     <div className="flex flex-shrink-0 items-center gap-2 border-b border-borderSubtle bg-glass/30 px-3 py-2.5 portrait:py-3.5 shadow-sm backdrop-blur-sm">
       {/* Permanent, pinned-left Go Live control: one click loads the streamer's
@@ -3161,15 +3105,8 @@ function TabStrip({
       {/* Only the tabs scroll. The new-window and add buttons sit outside the
           scroller, so a narrow window (a new one is 402 px) can't push "+" off
           its right edge. While the tabs fit, the buttons still follow the last
-          tab, because the scroller takes only the width its tabs need. The
-          standard scrollbar-width (not ::-webkit-scrollbar) hides the bar, so it
-          also beats the macOS thin-bar rule in globals.css. */}
-      <div
-        ref={scrollerRef}
-        onScroll={measureEdges}
-        className="flex min-w-0 flex-initial items-center overflow-x-auto"
-        style={{ scrollbarWidth: 'none', maskImage: edgeMask, WebkitMaskImage: edgeMask }}
-      >
+          tab, because the scroller takes only the width its tabs need. */}
+      <TabScroller activeKey={active} count={channels.length}>
         <div className="flex min-w-max items-center gap-1.5">
         {channels.map((c) => {
           // Provider-namespaced identity — bare `c.channel` collides when the
@@ -3232,7 +3169,7 @@ function TabStrip({
           );
         })}
         </div>
-      </div>
+      </TabScroller>
       <div className="flex flex-shrink-0 items-center gap-1.5">
         <Tooltip content="New MultiChat window. Each window is its own renderer, about 150 MB; splits inside one window are free." side="bottom">
           <button

@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState, useMemo, useCallback, useId } from 'react';
-import { createPortal } from 'react-dom';
+import { createPortal, flushSync } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import ChatMessageList from './ChatMessageList';
 import { readableNameColor } from '../hooks/useNameColor';
@@ -23,7 +23,7 @@ const ChannelPointsIcon = ({ className = "", size = 14 }: { className?: string; 
   </svg>
 );
 import { useTwitchChat, type ModerationContext } from '../hooks/useTwitchChat';
-import { useChannelEmotes, ensureChannelEmotes, getChannelEmotes, emoteCacheKey, refreshChannelEmotes, useChannelChat, useChannelChatMeta, useChatConnectionStore, setChannelPaused, sliceLookupKey, injectRedemptionMessage, injectSystemMessage, systemSourceFor } from '../stores/chatConnectionStore';
+import { useChannelEmotes, ensureChannelEmotes, getChannelEmotes, emoteCacheKey, refreshChannelEmotes, useChannelChat, useChannelChatMeta, useChatConnectionStore, setChannelPaused, sliceLookupKey, injectSystemMessage, systemSourceFor } from '../stores/chatConnectionStore';
 import { useSpellcheck } from '../hooks/useSpellcheck';
 import { warmSpellcheck } from '../utils/spellcheck';
 import SpellcheckUnderlay from './chat/SpellcheckUnderlay';
@@ -34,11 +34,12 @@ import { useBlendCompanions, type BlendCompanion } from '../hooks/useBlendCompan
 import { sendToSource } from '../utils/sendToSource';
 import { ProviderMark } from './ProviderLogo';
 import BlendBar, { type BlendView } from './chat/BlendBar';
+import { BlendSourcesButton } from './chat/BlendSourcesButton';
 import { historyKey as chatterHistoryKey } from '../utils/chatterIdentity';
 import { streamProvider } from '../utils/streamProvider';
 import { PROVIDERS, type ProviderId } from '../types/providers';
-import { ChatCircle, Chats, Plus, PushPin, ShieldCheck, Timer, UsersThree } from 'phosphor-react';
-import { ChatDockPanel, ChatDockSwitcher } from './chat/ChatDock';
+import { ChatCircle, Chats, PushPin, ShieldCheck, Timer, UsersThree } from 'phosphor-react';
+import { ChatDockPanel, ChatDockSwitcher, ChatDockTabs } from './chat/ChatDock';
 import { useDockSwitcherFloor } from '../hooks/useChatDock';
 import ChatHeaderMenu, { type ChatHeaderMenuItem } from './chat/ChatHeaderMenu';
 import { dockChat, setDockPanelOpen, undockChat, useChatDockStore } from '../stores/chatDockStore';
@@ -72,7 +73,9 @@ import ChannelPointsMenu from './ChannelPointsMenu';
 import ModeratorMenu from './chat/ModeratorMenu';
 import ResubNotificationBanner, { ResubNotification } from './ResubNotificationBanner';
 import WatchStreakBanner, { WatchStreakMilestone } from './WatchStreakBanner';
-import { Emote, EmoteSet, queueChannelEmotesForCaching, setEmoteCacheBurst } from '../services/emoteService';
+import { Emote, EmoteSet, queueChannelEmotesForCaching, setEmoteCacheBurst, youTubeChannelEmojiRows, type YouTubeChannelEmoji } from '../services/emoteService';
+import { useEmoteOwnerNames } from '../hooks/useEmoteOwnerNames';
+import { useEmotePalette, type PaletteChannel } from '../hooks/useEmotePalette';
 import { prefetchChannelBadges } from '../services/badgeService';
 import { parseBadges } from '../services/twitchBadges';
 import { initializeBadgeImageCache } from '../services/badgeImageCacheService';
@@ -89,6 +92,7 @@ import EmoteSearchList from './chat/EmoteSearchList';
 import SendAsPicker from './SendAsPicker';
 import { useSendAccountStore } from '../stores/sendAccountStore';
 import {
+  insertAtCaret,
   getWordRange,
   wordBeforeCaret,
   emoteSearchTrigger,
@@ -139,7 +143,7 @@ import { Logger } from '../utils/logger';
 // Unsent composer text per channel key, for the per-channel draft restore.
 const chatDrafts = new Map<string, string>();
 import { useVisibleInterval } from '../utils/useVisibleInterval';
-import { formatUptimeClock, pickLiveStartedAt } from '../utils/streamStats';
+import { formatShortCount, formatUptimeClock, pickLiveStartedAt } from '../utils/streamStats';
 import { kickAppliedSeconds, kickTimeoutMinutes } from '../utils/kickTimeout';
 
 // Channel Points hover tooltip — portalled to document.body to escape overflow-hidden
@@ -955,6 +959,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // may treat a switch between them as leaving a channel.
   const dockChats = useChatDockStore((s) => s.chats);
   const dockHeld = isMainSurface && dockChats.length > 0 && !isMultiNookActive;
+  // The dock as a row of tabs under the header instead of the capsule's list.
+  const dockTabs = useAppStore((s) => s.settings.chat_design?.chat_dock_switcher === 'tabs') && dockHeld;
   const dockSwitcherFloor = useDockSwitcherFloor();
   const activeChatChannelId = usemultiNookStore((s) => s.activeChatChannelId);
   const slots = usemultiNookStore((s) => s.slots);
@@ -1215,7 +1221,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     // `isConnected` cannot go true until that same resolve has run, which makes
     // it an exact "the set is ready now" signal: no polling, no retry timer.
     let cancelled = false;
-    void invoke<Array<{ id: string; name: string; url: string; is_global: boolean; locked: boolean }>>(
+    void invoke<YouTubeChannelEmoji[]>(
       'get_youtube_channel_emojis',
       { channel: videoId },
     )
@@ -1231,24 +1237,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
           return;
         }
         seededYouTubeRef.current.add(providerKey);
-        useProviderEmoteStore.getState().seed(
-          providerKey,
-          list.map((e) => ({
-            id: e.id,
-            name: e.name,
-            url: e.url,
-            provider: 'youtube' as const,
-            // Custom channel emoji lead the grid; YouTube's own set follows.
-            emote_type: e.is_global ? 'youtube' : 'custom',
-            locked: e.locked,
-            lockedLabel: e.locked ? 'Members only' : undefined,
-            // Unicode entries insert the literal character, which needs no
-            // server-side shortcut lookup. Custom emoji ids are `UC…/hash`, so
-            // the slash is what tells the two apart. NOT codepoint length: flags
-            // and ZWJ sequences are multi-codepoint and would be misread.
-            insertText: e.is_global && !e.id.includes('/') ? e.id : e.name,
-          })),
-        );
+        useProviderEmoteStore.getState().seed(providerKey, youTubeChannelEmojiRows(list));
       })
       .catch(() => {
         // Chat still resolving. The isConnected dep brings us back.
@@ -1269,6 +1258,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       youtube: harvestedYouTube ? Array.from(harvestedYouTube.values()) : [],
     };
   }, [baseEmotes, harvestedYouTube, provider]);
+  // Display names for the Twitch subscription emote groups in the picker.
+  const channelNameCache = useEmoteOwnerNames(emotes);
   // Forget a channel's harvested emoji when its chat goes away. Bounded per
   // channel already, but without this every YouTube channel opened in a session
   // stays resident for the life of the app.
@@ -1432,6 +1423,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // handed to the list below, both to scroll it and so the list's own wheel
   // handler still reads the pause-on-scroll-up intent.
   const forwardHeaderWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    // Something in the header used it already (the dock's tab row scrolling
+    // sideways), so the chat underneath must not scroll as well.
+    if (e.defaultPrevented) return;
     const header = e.currentTarget;
     const beneath = document
       .elementsFromPoint(e.clientX, e.clientY)
@@ -1483,57 +1477,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
   const settings = useAppStore((s) => s.settings);
 
-  // No-input channel-point redemptions (from Twitch's channel-wide community
-  // points feed). Message-style and text-input rewards already surface in chat
-  // on their own, so we inject only the ones that otherwise wouldn't show, as a
-  // native-looking redemption row. Gated by a setting (defaults on).
-  // The channel's points icon loads asynchronously and this listener only
-  // re-subscribes on channel change, so read the latest value from a ref at
-  // redemption time (synced just below the customPointsIconUrl state).
-  const customPointsIconRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!isTwitch) return;
-    const channelId = currentStream?.user_id;
-    const channelLogin = currentStream?.user_login;
-    if (!channelId || !channelLogin) return;
-    const unlisten = listen<{
-      channel_id: string;
-      user_login: string;
-      user_name: string;
-      user_id: string;
-      reward_id: string;
-      reward_title: string;
-      reward_cost: number;
-      is_input_required: boolean;
-      redemption_id: string;
-      image_url: string;
-      background_color: string;
-      /** `name/version,...` the redeemer last showed in this chat, if any. */
-      badges?: string;
-      color?: string;
-    }>('channel-points-community-redemption', (event) => {
-      const p = event.payload;
-      if (p.channel_id !== channelId || p.is_input_required) return;
-      if (useAppStore.getState().settings.show_channel_point_redemptions === false) return;
-      injectRedemptionMessage(channelLogin.toLowerCase(), {
-        userLogin: p.user_login,
-        userName: p.user_name,
-        userId: p.user_id,
-        rewardId: p.reward_id,
-        rewardTitle: p.reward_title,
-        cost: p.reward_cost,
-        redemptionId: p.redemption_id,
-        pointsIconUrl: customPointsIconRef.current,
-        rewardImageUrl: p.image_url || undefined,
-        rewardBackground: p.background_color || undefined,
-        badges: p.badges || undefined,
-        color: p.color || undefined,
-      });
-    });
-    return () => {
-      unlisten.then((fn) => fn()).catch(() => {});
-    };
-  }, [isTwitch, currentStream?.user_id, currentStream?.user_login]);
   const [selectedUser, setSelectedUser] = useState<{
     userId: string;
     username: string;
@@ -1811,7 +1754,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const [isLoadingChannelPoints, setIsLoadingChannelPoints] = useState(false);
   const [customPointsName, setCustomPointsName] = useState<string | null>(null);
   const [customPointsIconUrl, setCustomPointsIconUrl] = useState<string | null>(null);
-  customPointsIconRef.current = customPointsIconUrl;
 
   // Pinned chat state
   interface PinnedMessage {
@@ -1868,8 +1810,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     });
   };
 
-  // Cache for channel names (broadcaster ID -> display name) used in emote picker grouping
-  const [channelNameCache, setChannelNameCache] = useState<Map<string, string>>(new Map());
 
   // Dynamic chat privileges based on IRC badge context & room state
   const isSubOnly = roomState?.subsOnly || false;
@@ -1952,6 +1892,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const chatInputPrefs = settings.chat_input;
   const showEmoteButton = !chatInputPrefs?.hide_emote_button;
   const showPointsBalance = !chatInputPrefs?.hide_points_balance;
+  const pointsBalanceInline = !!chatInputPrefs?.show_points_balance_inline;
   const visiblePlaceholder =
     chatInputPrefs?.hide_placeholder && !isInputDisabled && !isWatchStreakMode
       ? ''
@@ -3330,40 +3271,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       // Note: We use loading="lazy" on emote picker images instead of preloading
       // This prevents WebView connection throttling issues with 900+ images
 
-      // BACKGROUND: Fetch channel names for Twitch emote owners (for grouped display)
-      // This can happen after emotes are already displayed
-      if (emoteSet?.twitch) {
-        const ownerIds = new Set<string>();
-        for (const emote of emoteSet.twitch) {
-          if (emote.owner_id && emote.emote_type === 'subscriptions') {
-            ownerIds.add(emote.owner_id);
-          }
-        }
-        
-        // Fetch display names for all unique owner IDs (in parallel, non-blocking)
-        if (ownerIds.size > 0) {
-          const newCache = new Map(channelNameCache);
-          const idsToFetch = Array.from(ownerIds).filter(id => !newCache.has(id));
-          
-          if (idsToFetch.length > 0) {
-            Logger.debug(`[ChatWidget] Fetching ${idsToFetch.length} channel names for emote groups`);
-            Promise.allSettled(
-              idsToFetch.map(async (id) => {
-                const user = await invoke<{ display_name: string }>('get_user_by_id', { userId: id });
-                return { id, name: user.display_name };
-              })
-            ).then(results => {
-              for (const result of results) {
-                if (result.status === 'fulfilled') {
-                  newCache.set(result.value.id, result.value.name);
-                }
-              }
-              setChannelNameCache(new Map(newCache));
-            });
-          }
-        }
-      }
-
       // BACKGROUND: Load favorite emotes for the picker (non-blocking). Completion
       // ranking reads favorites from Rust.
       loadFavoriteEmotes().catch(err => Logger.warn('[ChatWidget] Failed to load favorites:', err));
@@ -4284,10 +4191,38 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     }, 0);
   }, [messageInput, mentionStartPosition, mentionQuery, provider]);
 
+  // At the cursor, spaced from its neighbours. The textarea keeps its caret
+  // while focus is elsewhere (the emote menu, or the popped-out one in another
+  // window), so this lands where the viewer left off.
   const insertEmote = (emoteName: string) => {
-    setMessageInput(prev => prev + (prev ? ' ' : '') + emoteName + ' ');
-    inputRef.current?.focus({ preventScroll: true });
+    const ta = inputRef.current;
+    const value = ta?.value ?? messageInput;
+    const { text, caret } = insertAtCaret(
+      value,
+      ta?.selectionStart ?? value.length,
+      ta?.selectionEnd ?? value.length,
+      emoteName,
+    );
+    // Committed before the caret is placed. A pick from the popped-out menu
+    // arrives as a Tauri event, not a React one, so a plain state update renders
+    // in a later task, and that commit would put the caret back at the end
+    // after any timer had moved it.
+    flushSync(() => setMessageInput(text));
+    const el = inputRef.current;
+    el?.focus({ preventScroll: true });
+    el?.setSelectionRange(caret, caret);
   };
+  // The emote menu popped out into its own window types into this chat box.
+  const paletteChannel = useMemo<PaletteChannel | null>(() => {
+    if (!currentStream?.user_login || (provider !== 'twitch' && provider !== 'kick' && provider !== 'youtube')) return null;
+    return {
+      login: currentStream.user_login,
+      id: currentStream.user_id || null,
+      name: currentStream.user_name || null,
+      provider,
+    };
+  }, [currentStream, provider]);
+  const popOutEmotes = useEmotePalette(paletteChannel, insertEmote);
 
   /**
    * Put matches[index] in place of the word being completed and remember the
@@ -4796,11 +4731,15 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         </ChatOverlayStack>
 
         {/* Chat header - transforms when Hype Train active */}
+        {/* While the dock's tab row is unfolded the header rises above the pinned
+            message (z-15) and the poll stack (z-40): the unfolded lines live
+            inside the header's own stacking context and could not otherwise
+            draw over them. */}
         {/* flex-col-reverse keeps the stream-info row on top while the hype bar
             (declared first below) renders underneath it */}
         {/* The tint follows Glassiness: 10% of the rows show through at full
             glass, none at 0%, where the blur is stripped too. */}
-        <div ref={setChromeEl} onWheel={forwardHeaderWheel} className={`absolute top-0 left-0 right-0 px-3 py-1.5 border-b backdrop-blur-ultra z-10 shadow-[0_8px_18px_-12px_rgba(0,0,0,0.7)] overflow-hidden flex flex-col-reverse ${
+        <div ref={setChromeEl} onWheel={forwardHeaderWheel} className={`absolute top-0 left-0 right-0 px-3 py-1.5 border-b backdrop-blur-ultra z-10 has-[.sn-tabs-unfolded]:z-[45] shadow-[0_8px_18px_-12px_rgba(0,0,0,0.7)] overflow-x-clip flex flex-col-reverse ${
           isSharedChat && !currentHypeTrain ? 'iridescent-border' : 'border-borderSubtle'
         }`} style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(100% - 10% * var(--glass-strength, 1)), transparent)' }}>
           {currentHypeTrain && (
@@ -4812,6 +4751,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               }}
             />
           )}
+          {/* The dock's tab row, right under the stream-info row (the column is
+              reversed, so declared here it sits between that row and the hype
+              bar). The header is measured, so the chat below makes room for it. */}
+          {dockTabs && <ChatDockTabs />}
           {/* Stream-info header, always visible; sits as the top row, above the hype bar */}
           <div className="relative z-10">
               <div
@@ -4878,7 +4821,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                         <span className="text-xs text-textSecondary">Connecting...</span>
                       )}
                     </motion.div>
-                  ) : dockHeld ? (
+                  ) : dockHeld && !dockTabs ? (
                     <motion.div
                       key="chat-dock-switch"
                       initial={{ opacity: 0, y: -4 }}
@@ -4920,110 +4863,43 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     </motion.p>
                   )}
                 </AnimatePresence>
-                {/* Which platforms this feed is drawing from, in the header rather
-                    than on a line of their own: the label already says the chat is
-                    combined, so the marks are the only thing left to say and they
-                    fit beside it. Clicking one drops that platform out of THIS
-                    streamer's feed, stored with the link in Rust; the global
-                    switches belong to Settings and a header click never touches
-                    them. */}
+                {/* Which platforms this feed is drawing from, as one control: their
+                    marks overlap in a fixed-size capsule (separate buttons cost
+                    about 22px each and truncated the title at three), and its
+                    menu holds a switch per platform. A switch drops that platform
+                    out of THIS streamer's feed, stored with the link in Rust; the
+                    global switches belong to Settings. With nothing linked it is
+                    the way into combining, and suggestions wait behind it. */}
                 {blendEnabled && isMainSurface && homeChannel && activeView !== 'modroom' && (
-                  <span className="chrome-glaze chrome-glaze--flat chat-header-capsule pointer-events-auto shrink-0">
-                    {blendLinked.map((c) => {
+                  <BlendSourcesButton
+                    rows={blendLinked.map((c) => {
                       const offInSettings = settings.chat_blend?.platforms?.[c.provider] === false;
-                      const included = blendOn && !offInSettings && !c.hidden;
-                      const meta = PROVIDERS[c.provider];
-                      const err = blendErrorMap?.[c.provider];
-                      return (
-                        <Tooltip
-                          key={`${c.provider}:${c.channel}`}
-                          content={
-                            offInSettings
-                              ? `${meta.label} is off for every channel in Settings, Chat, Combined Chat`
-                              : err ?? `${included ? 'Hide' : 'Show'} ${c.channelName}'s ${meta.label} chat here`
-                          }
-                          side="bottom"
-                        >
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (offInSettings) return;
-                              if (!blendOn) {
-                                setBlendOn(true);
-                                if (c.hidden) void editBlendLink({ provider: c.provider, channel: c.channel }, 'show');
-                                return;
-                              }
-                              void editBlendLink({ provider: c.provider, channel: c.channel }, included ? 'hide' : 'show');
-                            }}
-                            // The mark is drawn with an empty alt (it is
-                            // decorative inside the button), so the button has to
-                            // carry the name itself or it reads as nothing.
-                            aria-label={`${included ? 'Hide' : 'Show'} ${meta.label} chat`}
-                            aria-pressed={included}
-                            aria-disabled={offInSettings}
-                            className={`grid h-[22px] w-[22px] place-items-center rounded-full transition-colors ${
-                              offInSettings ? 'cursor-default' : 'hover:bg-white/10'
-                            }`}
-                          >
-                            <ProviderMark
-                              provider={c.provider}
-                              size={13}
-                              className={included ? '' : 'opacity-40 grayscale'}
-                            />
-                          </button>
-                        </Tooltip>
-                      );
+                      return {
+                        source: c,
+                        included: blendOn && !offInSettings && !c.hidden,
+                        offInSettings,
+                        error: blendErrorMap?.[c.provider],
+                      };
                     })}
-                    {/* The one way into combining: suggestions wait behind it
-                        rather than pushing a row into chat. With something
-                        found, it shows those platforms' marks and, until
-                        looked at, a small dot. */}
-                    <Tooltip
-                      content={
-                        blendPanel !== 'closed'
-                          ? 'Close'
-                          : blendSuggestions.length > 0
-                            ? `Also streaming on ${blendSuggestions
-                                .map((s) => PROVIDERS[s.candidate.provider].label)
-                                .join(' and ')}? Take a look`
-                            : blendLinked.length > 0
-                              ? "Link another of this streamer's channels"
-                              : 'Combine chat from another platform'
+                    suggestions={blendSuggestions}
+                    suggestionsUnseen={blendSuggestionsUnseen}
+                    panelOpen={blendPanel !== 'closed'}
+                    onToggle={(c) => {
+                      const included = blendOn && !c.hidden;
+                      if (!blendOn) {
+                        setBlendOn(true);
+                        if (c.hidden) void editBlendLink({ provider: c.provider, channel: c.channel }, 'show');
+                        return;
                       }
-                      side="bottom"
-                    >
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (blendPanel !== 'closed') {
-                            setBlendPanel('closed');
-                            return;
-                          }
-                          if (blendSuggestions.length > 0) {
-                            setSeenBlendSuggestions(blendSuggestionsKey);
-                            setBlendPanel('suggestions');
-                          } else {
-                            setBlendPanel('editor');
-                          }
-                        }}
-                        aria-label={blendSuggestions.length > 0 ? 'Suggested channels' : 'Link another platform'}
-                        aria-expanded={blendPanel !== 'closed'}
-                        className={`blend-trigger ${blendSuggestions.length > 0 ? 'blend-trigger--found' : ''} ${
-                          blendPanel !== 'closed' ? 'is-open' : ''
-                        }`}
-                      >
-                        <Plus size={10} weight="bold" />
-                        {blendSuggestions.map((s) => (
-                          <ProviderMark key={s.candidate.provider} provider={s.candidate.provider} size={11} />
-                        ))}
-                        {blendSuggestionsUnseen && blendPanel === 'closed' && (
-                          <span className="blend-trigger-dot" aria-hidden />
-                        )}
-                      </button>
-                    </Tooltip>
-                  </span>
+                      void editBlendLink({ provider: c.provider, channel: c.channel }, included ? 'hide' : 'show');
+                    }}
+                    onOpenSuggestions={() => {
+                      setSeenBlendSuggestions(blendSuggestionsKey);
+                      setBlendPanel('suggestions');
+                    }}
+                    onOpenEditor={() => setBlendPanel('editor')}
+                    onClosePanel={() => setBlendPanel('closed')}
+                  />
                 )}
                 {/* MultiChat panes have no player, so surface the live title/game
                     here. The MAIN window does have one — showing them again in the
@@ -5635,6 +5511,14 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                 isLoadingEmotes={isLoadingEmotes}
                 channelNameCache={channelNameCache}
                 onInsert={insertEmote}
+                onPopOut={
+                  popOutEmotes
+                    ? () => {
+                        setShowEmotePicker(false);
+                        popOutEmotes();
+                      }
+                    : undefined
+                }
                 onManageEmotes={
                   // The overlay this opens is scoped to a Twitch user id, so it
                   // only ever made sense on a Twitch pane.
@@ -5850,7 +5734,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   ) : (
                     <button
                       onClick={() => setShowChannelPointsMenu(!showChannelPointsMenu)}
-                      className={`group flex items-center justify-center w-9 h-9 transition-all duration-200 ${showChannelPointsMenu ? 'text-accent-neon' : channelPoints !== null ? 'text-accent-neon' : 'text-textSecondary hover:text-accent-neon'}`}
+                      className={`group flex items-center justify-center h-9 gap-1.5 transition-all duration-200 ${pointsBalanceInline && channelPoints !== null ? 'px-1.5' : 'w-9'} ${showChannelPointsMenu ? 'text-accent-neon' : channelPoints !== null ? 'text-accent-neon' : 'text-textSecondary hover:text-accent-neon'}`}
                     >
                       {customPointsIconUrl ? (
                         <img
@@ -5860,6 +5744,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                         />
                       ) : (
                         <ChannelPointsIcon size={18} className="transition-all duration-200 group-hover:drop-shadow-[0_0_6px_color-mix(in_srgb,var(--color-accent-neon)_85%,transparent)]" />
+                      )}
+                      {/* Short form beside the icon; the hover bubble keeps the exact number. */}
+                      {pointsBalanceInline && channelPoints !== null && (
+                        <span className="text-[12px] font-semibold tabular-nums leading-none whitespace-nowrap">
+                          {formatShortCount(channelPoints)}
+                        </span>
                       )}
                     </button>
                   )}

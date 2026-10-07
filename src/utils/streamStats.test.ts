@@ -6,7 +6,7 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 
-import { formatViewerCount, formatUptimeClock, pickLiveStartedAt } from './streamStats.ts';
+import { formatShortCount, formatViewerCount, formatUptimeClock, pickLiveStartedAt } from './streamStats.ts';
 
 const NOW = Date.parse('2026-08-20T12:00:00.000Z');
 const startedAgo = (ms: number) => new Date(NOW - ms).toISOString();
@@ -67,4 +67,15 @@ test('the chat header counts from Rust, and never from a recording or a missing 
   // Under a VOD, clip or offline chat the stream's date is the video's.
   assert.equal(pickLiveStartedAt(null, stream, true), '');
   assert.equal(pickLiveStartedAt('', stream, true), '');
+});
+
+test('short counts drop a zero tenth and keep any other', () => {
+  assert.equal(formatShortCount(136000), '136K');
+  assert.equal(formatShortCount(136049), '136K');
+  assert.equal(formatShortCount(136400), '136.4K');
+  assert.equal(formatShortCount(1000000), '1M');
+  assert.equal(formatShortCount(1600000), '1.6M');
+  assert.equal(formatShortCount(10000), '10K');
+  assert.equal(formatShortCount(999), '999');
+  assert.equal(formatShortCount(0), '0');
 });

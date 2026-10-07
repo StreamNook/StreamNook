@@ -35,7 +35,7 @@ import { searchPlatforms } from '../../services/platformSearch';
 import type { BlendCompanion, LinkSuggestion } from '../../hooks/useBlendCompanions';
 
 /** The platforms whose chat can be combined, in the order the picker lists them. */
-const COMBINABLE: ProviderId[] = ['kick', 'youtube', 'twitch'];
+const COMBINABLE: ProviderId[] = ['kick', 'youtube', 'tiktok', 'twitch'];
 
 const BAR_BG = { backgroundColor: 'color-mix(in srgb, var(--color-background) calc(90% + (1 - var(--glass-strength, 1)) * 10%), transparent)' };
 
@@ -140,6 +140,7 @@ function PlatformPicker({
 const PLACEHOLDER: Partial<Record<ProviderId, string>> = {
   kick: 'Kick channel name or link',
   youtube: '@handle or channel link',
+  tiktok: 'TikTok @handle or LIVE link',
   twitch: 'Twitch username or link',
 };
 

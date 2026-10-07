@@ -200,6 +200,11 @@ export function parseLinkInput(
   if (!s) return null;
   const fromLink = parseChannelInput(s);
   if (fromLink) return fromLink;
+  // A TikTok link names TikTok whatever is picked. parseChannelInput leaves
+  // TikTok out for the boxes that cannot take it; this one's caller turns
+  // away a platform it cannot combine before parsing.
+  const tiktok = parseTikTokLink(s);
+  if (tiktok) return { provider: 'tiktok', channel: tiktok };
   if (platform === 'youtube') {
     const yt = parseYouTubeIdentifier(s);
     return yt ? { provider: 'youtube', channel: yt } : null;
@@ -211,6 +216,10 @@ export function parseLinkInput(
   if (platform === 'kick') {
     const slug = kickSlugFromInput(s.replace(/^@/, ''));
     return slug ? { provider: 'kick', channel: slug } : null;
+  }
+  if (platform === 'tiktok') {
+    const handle = parseTikTokIdentifier(s);
+    return handle ? { provider: 'tiktok', channel: handle } : null;
   }
   if (s.startsWith('@') || isYouTubeChannelId(s)) {
     const yt = parseYouTubeIdentifier(s);

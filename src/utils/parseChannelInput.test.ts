@@ -204,4 +204,9 @@ test('with a platform picked, a bare word is read on that platform and a link st
   assert.equal(parseLinkInput('not a login!', 'twitch'), null);
   assert.deepEqual(parseLinkInput('https://kick.com/xqc', 'youtube'), { provider: 'kick', channel: 'xqc' });
   assert.equal(parseLinkInput('  ', 'kick'), null);
+  // TikTok: a handle with or without @, or a profile / LIVE link.
+  assert.deepEqual(parseLinkInput('@kathi.tv', 'tiktok'), { provider: 'tiktok', channel: 'kathi.tv' });
+  assert.deepEqual(parseLinkInput('kathi', 'tiktok'), { provider: 'tiktok', channel: 'kathi' });
+  assert.deepEqual(parseLinkInput('https://www.tiktok.com/@kathi/live', 'kick'), { provider: 'tiktok', channel: 'kathi' });
+  assert.equal(parseLinkInput('not a handle!', 'tiktok'), null);
 });

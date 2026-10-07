@@ -11,6 +11,11 @@ export function formatViewerCount(count: number): string {
     return count.toString();
 }
 
+/** formatViewerCount without a zero tenth: 136000 -> "136K", 136400 -> "136.4K". */
+export function formatShortCount(count: number): string {
+    return formatViewerCount(count).replace(/\.0(?=[KM]$)/, '');
+}
+
 /**
  * The start time a chat header's uptime counts from. Rust's channel state
  * (`rustStartedAt`, Twitch only, polled with the viewer count) wins. The

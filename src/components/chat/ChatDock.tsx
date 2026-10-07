@@ -15,8 +15,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
-import { Bell, BellSlash, CaretDown, CircleNotch, MagnifyingGlass, Plus, X } from 'phosphor-react';
+import { Bell, BellSlash, CaretDown, CircleNotch, MagnifyingGlass, Plus, SquaresFour, X } from 'phosphor-react';
 import { Tooltip } from '../ui/Tooltip';
+import { TabScroller } from '../ui/TabScroller';
 import { ProviderLogo } from '../ProviderLogo';
 import { useAppStore } from '../../stores/AppStore';
 import {
@@ -724,5 +725,297 @@ function PanelBody({ top }: { top: number }) {
         {error && <p className="px-3.5 pt-2 text-[11px] text-error">{error}</p>}
       </div>
     </motion.div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tab row
+// ---------------------------------------------------------------------------
+
+const TAB =
+  'group relative inline-flex h-[26px] max-w-[9.5rem] flex-shrink-0 cursor-pointer items-center gap-1.5 rounded-full pl-1 pr-2 text-[11.5px] font-semibold transition-colors';
+// The tab on screen wears the header's own capsule (the flat glaze every
+// chat header object uses); the rest stay quiet text with their face.
+const tabTone = (active: boolean, lit: boolean) =>
+  active
+    ? 'chrome-glaze chrome-glaze--flat text-textPrimary'
+    : `${lit ? 'text-textPrimary' : 'text-textSecondary'} hover:bg-white/[0.05] hover:text-textPrimary`;
+
+/** The tab's face: the picture, then the platform's mark where the row mixes
+ *  platforms (two chats of the same name on different platforms are told
+ *  apart by it), then the name. Inline rather than on the picture's corner,
+ *  where the row's sideways scroller would clip it. */
+function TabFace({ src, name, live, provider }: { src: string | null | undefined; name: string; live?: boolean; provider?: ProviderId }) {
+  return (
+    <>
+      <Avatar src={src} name={name} size={18} live={live} />
+      {provider && <ProviderLogo provider={provider} size={11} className="flex-shrink-0" />}
+      <span className="min-w-0 truncate">{name}</span>
+    </>
+  );
+}
+
+const platformName = (p: ProviderId) => PROVIDERS[p]?.label ?? p;
+
+function DockTab({
+  chat,
+  active,
+  showPlatform,
+  onDragStart,
+  onDropOn,
+}: {
+  chat: DockedChat;
+  active: boolean;
+  showPlatform: boolean;
+  onDragStart: () => void;
+  onDropOn: () => void;
+}) {
+  const activity = useChannelHeldActivity(chat.provider, chat.login);
+  const mentions = useChannelHeldMentions(chat.provider, chat.login);
+  const fresh = chat.light_on_new && activity >= 1;
+  const [over, setOver] = useState(false);
+  const name = chat.display_name || chat.login;
+  const key = chatKey(chat);
+  return (
+    <div
+      role="tab"
+      aria-selected={active}
+      aria-label={`${name} on ${platformName(chat.provider)}`}
+      title={`${name} on ${platformName(chat.provider)}`}
+      data-tab-key={key}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = 'move';
+        onDragStart();
+      }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setOver(false);
+        onDropOn();
+      }}
+      onClick={() => void showDockedChat(key)}
+      onAuxClick={(e) => {
+        // Middle click closes, as on any tab.
+        if (e.button === 1) void undockChat(key);
+      }}
+      className={`${TAB} ${tabTone(active, fresh || mentions > 0)}`}
+    >
+      {over && <span aria-hidden className="absolute -left-0.5 top-1 bottom-1 w-0.5 rounded-full bg-accent" />}
+      <TabFace src={chat.avatar_url} name={name} provider={showPlatform ? chat.provider : undefined} />
+      {/* The mark, or a close button in its place while hovered, in one
+          fixed-width slot: a tab that grew on hover reflowed every tab after
+          it out from under the cursor. */}
+      <span className="flex w-4 flex-shrink-0 items-center justify-center">
+        <Mark mentions={mentions} fresh={fresh} className="group-hover:hidden" />
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            void undockChat(key);
+          }}
+          className="hidden h-4 w-4 place-items-center rounded-full text-textSecondary hover:bg-white/10 hover:text-error group-hover:grid"
+          aria-label={`Close ${name}`}
+        >
+          <X size={10} weight="bold" />
+        </button>
+      </span>
+    </div>
+  );
+}
+
+/** The watched stream's chat, first in the row. */
+function WatchingTab({ active, showPlatform }: { active: boolean; showPlatform: boolean }) {
+  const stream = useAppStore((s) => s.currentStream);
+  const provider: ProviderId = stream ? streamProvider(stream) : 'twitch';
+  const activity = useChannelHeldActivity(provider, stream?.user_login);
+  const mentions = useChannelHeldMentions(provider, stream?.user_login);
+  if (!stream) return null;
+  const name = stream.user_name || stream.user_login;
+  return (
+    <div
+      role="tab"
+      aria-selected={active}
+      data-tab-key="watching"
+      aria-label={`${name} on ${platformName(provider)}, the stream you are watching`}
+      title={`${name} on ${platformName(provider)}, the stream you are watching`}
+      onClick={() => void showDockedChat(null)}
+      className={`${TAB} ${tabTone(active, activity >= 1 || mentions > 0)}`}
+    >
+      <TabFace src={stream.profile_image_url} name={name} live provider={showPlatform ? provider : undefined} />
+      <Mark mentions={mentions} fresh={activity >= 1} />
+    </div>
+  );
+}
+
+/**
+ * The dock as a row of tabs under the chat header, for viewers who would
+ * rather switch in one click than open the list. Same chats, order, marks and
+ * actions as the list; the trailing "+" opens the list's search to add one.
+ */
+/** How far the unfolded row's surface reaches past the tabs on each side
+ *  and below; the tabs themselves never move. */
+const UNFOLD_PAD = 6;
+
+export function ChatDockTabs() {
+  const { held, shown, others, live } = useDockView();
+  const open = useChatDockStore((s) => s.panelOpen);
+  const dragKey = useRef<string | null>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
+  // More tabs than fit: hovering the row (or the button beside it) unfolds
+  // the row itself. The same tabs stop scrolling and wrap downward over the
+  // chat, from where they already sit, so nothing is drawn twice and nothing
+  // under the pointer moves sideways.
+  const [overflowing, setOverflowing] = useState(false);
+  const [unfoldRaw, setUnfoldRaw] = useState<'hover' | 'pinned' | null>(null);
+  // Nothing left to reveal (the tabs fit again): no reason to stay unfolded.
+  const unfold = overflowing ? unfoldRaw : null;
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearTimer = () => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+  };
+  useEffect(() => clearTimer, []);
+  const hoverOpen = () => {
+    clearTimer();
+    if (!overflowing || unfold) return;
+    timer.current = setTimeout(() => setUnfoldRaw('hover'), 350);
+  };
+  const hoverClose = () => {
+    clearTimer();
+    if (unfold !== 'hover') return;
+    timer.current = setTimeout(() => setUnfoldRaw(null), 250);
+  };
+  // Pinned open: Escape or a click outside the row folds it.
+  useEffect(() => {
+    if (unfold !== 'pinned') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setUnfoldRaw(null);
+    };
+    const onDown = (e: PointerEvent) => {
+      if (rowRef.current?.contains(e.target as Node)) return;
+      setUnfoldRaw(null);
+    };
+    window.addEventListener('keydown', onKey);
+    document.addEventListener('pointerdown', onDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', onDown, true);
+    };
+  }, [unfold]);
+  if (!held) return null;
+  const shownKey = shown ? chatKey(shown) : null;
+  // Platform marks only where platforms mix, and then on every tab: the list's rule.
+  const mixed = new Set([...(live ? [live.provider] : []), ...others.map((c) => c.provider)]).size > 1;
+  const onDrop = (target: DockedChat) => {
+    const from = dragKey.current;
+    dragKey.current = null;
+    const to = chatKey(target);
+    if (!from || from === to) return;
+    const keys = others.map(chatKey).filter((k) => k !== from);
+    keys.splice(keys.indexOf(to), 0, from);
+    void reorderChatDock(keys);
+  };
+  return (
+    <div
+      ref={rowRef}
+      className="pointer-events-auto flex min-w-0 items-center gap-1 pt-1.5"
+      onPointerEnter={hoverOpen}
+      onPointerLeave={hoverClose}
+    >
+      {/* The row's slot keeps one line's height, so the header (and the chat
+          sized from it) never moves; unfolded, the tabs hang below it. */}
+      <div className="relative h-[26px] min-w-0 flex-1">
+        <TabScroller
+          activeKey={shownKey ?? 'watching'}
+          count={others.length}
+          onOverflowChange={setOverflowing}
+          unfolded={!!unfold}
+          className={
+            unfold
+              ? 'sn-tabs-unfolded absolute inset-x-0 top-0 z-20'
+              : 'h-full'
+          }
+        >
+          <div
+            role="tablist"
+            aria-label="Open chats"
+            className={`flex items-center gap-1 ${unfold ? 'flex-wrap shadow-[0_12px_24px_-12px_rgba(0,0,0,0.7)]' : 'min-w-max'}`}
+            style={
+              unfold
+                ? {
+                    // The surface reaches past the tabs; the tabs stay put.
+                    margin: `0 -${UNFOLD_PAD}px`,
+                    padding: `0 ${UNFOLD_PAD}px ${UNFOLD_PAD}px`,
+                    // The header's own material, so the unfolded lines are the
+                    // header continuing: the same tint, ramped to opaque as
+                    // Glassiness falls, and no blur over the live chat below.
+                    backgroundColor:
+                      'color-mix(in srgb, var(--color-background) calc(100% - 10% * var(--glass-strength, 1)), transparent)',
+                    borderRadius: '0 0 12px 12px',
+                  }
+                : undefined
+            }
+            onClick={(e) => {
+              // Picking a tab from the unfolded row folds it away.
+              const t = e.target as Element;
+              if (unfold && t.closest('[role="tab"]') && !t.closest('button')) setUnfoldRaw(null);
+            }}
+          >
+            {live && <WatchingTab active={!shown} showPlatform={mixed} />}
+            {others.map((c) => (
+              <DockTab
+                key={chatKey(c)}
+                chat={c}
+                active={shownKey === chatKey(c)}
+                showPlatform={mixed}
+                onDragStart={() => {
+                  dragKey.current = chatKey(c);
+                }}
+                onDropOn={() => onDrop(c)}
+              />
+            ))}
+          </div>
+        </TabScroller>
+      </div>
+      {overflowing && (
+        <Tooltip content={unfold === 'pinned' ? 'Fold the tabs' : 'Show every tab'} side="bottom">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              clearTimer();
+              setUnfoldRaw(unfold === 'pinned' ? null : 'pinned');
+            }}
+            aria-expanded={!!unfold}
+            aria-label="Show every tab"
+            className={`grid h-[26px] w-[26px] flex-shrink-0 place-items-center rounded-full transition-colors hover:bg-white/[0.06] hover:text-textPrimary ${
+              unfold === 'pinned' ? 'text-textPrimary' : 'text-textSecondary'
+            }`}
+          >
+            <SquaresFour size={13} weight="bold" />
+          </button>
+        </Tooltip>
+      )}
+      <Tooltip content="Add a chat" side="bottom">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setDockPanelOpen(!open);
+          }}
+          aria-expanded={open}
+          aria-label="Add a chat"
+          data-dock-capsule
+          className="grid h-[26px] w-[26px] flex-shrink-0 place-items-center rounded-full text-textSecondary transition-colors hover:bg-white/[0.06] hover:text-textPrimary"
+        >
+          <Plus size={13} weight="bold" />
+        </button>
+      </Tooltip>
+    </div>
   );
 }

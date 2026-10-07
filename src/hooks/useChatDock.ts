@@ -110,18 +110,31 @@ export function useChatDockHold(): void {
     (s) => s.currentMediaType === 'video' || s.currentMediaType === 'clip' || s.currentMediaType === 'offline_chat',
   );
   // A VOD's chat is a replay, not a room to hold.
-  const liveLogin = shown && live && !recording ? live.login : null;
   const liveProvider = live?.provider ?? 'twitch';
+  // The watched stream's chat is held for as long as the dock is in play, not
+  // only while a docked chat covers it. React runs every effect cleanup before
+  // any new effect, so a hold that followed the chat on screen dropped the
+  // room's last reference for an instant on each switch: Twitch PARTs at once,
+  // which wiped the room's emote table, rejoined, and re-read its history.
+  const heldLogin = held && live && !recording ? live.login : null;
   useEffect(() => {
-    if (!liveLogin) return;
-    void acquireChannel(liveLogin, liveId || null, liveProvider, { background: true }).catch((e: unknown) =>
+    if (!heldLogin) return;
+    void acquireChannel(heldLogin, liveId || null, liveProvider, { background: true }).catch((e: unknown) =>
       Logger.warn('[ChatDock] could not hold the live chat:', e),
     );
-    const watched = liveProvider === 'twitch' && !!liveId;
-    if (watched) void watchChannel(liveLogin, liveId);
     return () => {
-      void releaseChannel(liveLogin, liveProvider, { background: true }).catch(() => {});
-      if (watched) void unwatchChannel(liveLogin);
+      void releaseChannel(heldLogin, liveProvider, { background: true }).catch(() => {});
     };
-  }, [liveLogin, liveId, liveProvider]);
+  }, [heldLogin, liveId, liveProvider]);
+  // Its full channel-state watch (the bonus-chest check) is this hook's job
+  // only while a docked chat is on screen; otherwise the stream's own chat
+  // watches it.
+  const watchedLogin = shown && live && !recording && liveProvider === 'twitch' && liveId ? live.login : null;
+  useEffect(() => {
+    if (!watchedLogin) return;
+    void watchChannel(watchedLogin, liveId);
+    return () => {
+      void unwatchChannel(watchedLogin);
+    };
+  }, [watchedLogin, liveId]);
 }
