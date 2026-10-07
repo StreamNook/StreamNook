@@ -54,6 +54,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import InputContextMenuHost from './components/InputContextMenuHost';
 import ModerationDragLayer from './components/chat/ModerationDragLayer';
 import { listen } from '@tauri-apps/api/event';
+import { useMentionPing } from './hooks/useMentionPing';
 import { applyModerateEvent } from './utils/applyModerateEvent';
 import { handleSeventvEmoteSetUpdate, handleSeventvCosmeticUpdate, type EmoteSetUpdatePayload, type CosmeticUpdatePayload } from './services/seventvEventApi';
 import { invoke } from '@tauri-apps/api/core';
@@ -206,6 +207,8 @@ function App() {
   useWatchedChestStat();
   // The chat dock: loads the docked chats from Rust and keeps them joined.
   useChatDockHold();
+  // Plays the mention sound when Rust says a live message mentioned you.
+  useMentionPing();
   // A YouTube account can own several channels, and a brand channel has its OWN
   // subscriptions. When Rust notices the active one changed (at launch, or after
   // the user switched channel inside an in-app YouTube window), the imported follow

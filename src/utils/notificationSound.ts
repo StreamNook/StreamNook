@@ -38,11 +38,24 @@ function getSharedAudioContext(): AudioContext | null {
 /** Any sound reference: a built-in tone id or a custom `file:<id>`. */
 export type SoundRef = SoundId | string;
 
+/** A volume setting (percent of the sound's own level, 0-200) as a gain
+ *  multiplier. Absent means the sound's own level. */
+function volumeScale(percent: number | undefined | null): number {
+  if (percent == null || !Number.isFinite(percent)) return 1;
+  return Math.max(0, Math.min(2, percent / 100));
+}
+
+/** A custom file's element volume at 100%. Element volume cannot exceed 1, so
+ *  the headroom above 100% comes from starting below it. */
+const FILE_BASE_VOLUME = 0.7;
+
 const fileAudio = new Map<string, HTMLAudioElement>();
 
 /** Custom sound file: resolved through settings, played via the asset
- *  protocol, one HTMLAudioElement per id reused across plays. */
-function playCustomSound(id: string): void {
+ *  protocol, one HTMLAudioElement per id reused across plays. A plain element,
+ *  not a Web Audio graph: an element routed into the shared AudioContext stays
+ *  pinned to it, and its cross-origin asset URL would play silent there. */
+function playCustomSound(id: string, scale: number): void {
   void import('../stores/AppStore').then(({ useAppStore }) => {
     const entry = useAppStore.getState().settings.chat_highlights?.custom_sounds?.find((s) => s.id === id);
     if (!entry?.path) return;
@@ -50,18 +63,21 @@ function playCustomSound(id: string): void {
     if (!el || el.dataset.path !== entry.path) {
       el = new Audio(convertFileSrc(entry.path));
       el.dataset.path = entry.path;
-      el.volume = 0.7;
       fileAudio.set(id, el);
     }
+    el.volume = Math.min(1, FILE_BASE_VOLUME * scale);
     el.currentTime = 0;
     el.play().catch((err) => Logger.debug('[Sound] custom play failed:', err));
   });
 }
 
-export function playSound(soundId: SoundRef | undefined | null): void {
+/** Play a sound at `volume` percent of its own level (0-200, default 100). */
+export function playSound(soundId: SoundRef | undefined | null, volume?: number | null): void {
   if (!soundId) return;
+  const scale = volumeScale(volume);
+  if (scale <= 0) return;
   if (soundId.startsWith('file:')) {
-    playCustomSound(soundId);
+    playCustomSound(soundId, scale);
     return;
   }
   const ctx = getSharedAudioContext();
@@ -70,8 +86,13 @@ export function playSound(soundId: SoundRef | undefined | null): void {
   try {
     const oscillator = ctx.createOscillator();
     const gainNode = ctx.createGain();
+    // The tones below are shaped at their own level; the volume setting scales
+    // the whole envelope after it.
+    const volumeNode = ctx.createGain();
+    volumeNode.gain.value = scale;
     oscillator.connect(gainNode);
-    gainNode.connect(ctx.destination);
+    gainNode.connect(volumeNode);
+    volumeNode.connect(ctx.destination);
 
     const t = ctx.currentTime;
 
@@ -148,11 +169,11 @@ export function playSound(soundId: SoundRef | undefined | null): void {
 const NOTIFICATION_SOUND_GAP_MS = 2000;
 let lastNotificationSoundAt = 0;
 
-export function playNotificationSound(soundId: SoundRef | undefined | null): void {
+export function playNotificationSound(soundId: SoundRef | undefined | null, volume?: number | null): void {
   const now = Date.now();
   if (now - lastNotificationSoundAt < NOTIFICATION_SOUND_GAP_MS) return;
   lastNotificationSoundAt = now;
-  playSound(soundId || 'boop');
+  playSound(soundId || 'boop', volume);
 }
 
 // Per-key cooldown tracking. Skipping plays inside the cooldown window avoids

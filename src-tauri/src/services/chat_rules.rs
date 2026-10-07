@@ -839,6 +839,8 @@ pub struct Verdict {
     pub drop: bool,
     pub matched_highlight: bool,
     pub mentioned: bool,
+    /// A reply to one of the signed-in account's own messages.
+    pub reply_to_me: bool,
 }
 
 /// Full result of one evaluation, applied to the message after the borrowed
@@ -1024,6 +1026,7 @@ impl ChatRules {
             drop: ev.drop,
             matched_highlight: ev.highlight.is_some(),
             mentioned: ev.mentioned,
+            reply_to_me: ev.reply_to_me,
         };
         if !ev.drop {
             Self::apply(msg, ev);
@@ -1862,6 +1865,7 @@ mod tests {
             drop: ev.drop,
             matched_highlight: ev.highlight.is_some(),
             mentioned: ev.mentioned,
+            reply_to_me: ev.reply_to_me,
         };
         if !ev.drop {
             ChatRules::apply(m, ev);

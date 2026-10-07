@@ -476,8 +476,8 @@ const DynamicIsland = () => {
     // toast path uses) so the notification-center sound honors the user's chosen
     // Sound Style instead of a hardcoded tone, and reuses one AudioContext.
     const playNotificationSound = useCallback(() => {
-        playGatedNotificationSound(settings.live_notifications?.sound_type);
-    }, [settings.live_notifications?.sound_type]);
+        playGatedNotificationSound(settings.live_notifications?.sound_type, settings.live_notifications?.sound_volume);
+    }, [settings.live_notifications?.sound_type, settings.live_notifications?.sound_volume]);
 
     // Send native Windows desktop notification (disabled - plugin not installed)
     const sendNativeNotification = useCallback(async (_title: string, _body: string) => {
@@ -719,10 +719,13 @@ const DynamicIsland = () => {
                 };
 
                 addNotification(notification);
+            }
 
-                if (soundEnabled) {
-                    playNotificationSound();
-                }
+            // The sound follows its own toggle, not the surface: inside the
+            // notification-centre branch it went quiet whenever the centre was off,
+            // and the toast for these events never plays one.
+            if (soundEnabled) {
+                playNotificationSound();
             }
 
             // Show toast if enabled
@@ -784,10 +787,13 @@ const DynamicIsland = () => {
                 };
 
                 addNotification(notification);
+            }
 
-                if (soundEnabled) {
-                    playNotificationSound();
-                }
+            // The sound follows its own toggle, not the surface: inside the
+            // notification-centre branch it went quiet whenever the centre was off,
+            // and the toast for these events never plays one.
+            if (soundEnabled) {
+                playNotificationSound();
             }
 
             if (useToast) {
@@ -830,10 +836,13 @@ const DynamicIsland = () => {
                 };
 
                 addNotification(notification);
+            }
 
-                if (soundEnabled) {
-                    playNotificationSound();
-                }
+            // The sound follows its own toggle, not the surface: inside the
+            // notification-centre branch it went quiet whenever the centre was off,
+            // and the toast for these events never plays one.
+            if (soundEnabled) {
+                playNotificationSound();
             }
 
             if (useToast) {
@@ -870,9 +879,9 @@ const DynamicIsland = () => {
                         read: false,
                         data: { grantedAt, permanent } as MembershipGiftNotificationData,
                     });
-                    if (soundEnabled) {
-                        playNotificationSound();
-                    }
+                }
+                if (soundEnabled) {
+                    playNotificationSound();
                 }
 
                 if (useToast) {
@@ -918,10 +927,13 @@ const DynamicIsland = () => {
                 };
 
                 addNotification(notification);
+            }
 
-                if (soundEnabled) {
-                    playNotificationSound();
-                }
+            // The sound follows its own toggle, not the surface: inside the
+            // notification-centre branch it went quiet whenever the centre was off,
+            // and the toast for these events never plays one.
+            if (soundEnabled) {
+                playNotificationSound();
             }
 
             // Show toast if enabled
@@ -1034,10 +1046,13 @@ const DynamicIsland = () => {
             };
 
             addNotification(notification);
+        }
 
-            if (soundEnabled) {
-                playNotificationSound();
-            }
+        // The sound follows its own toggle, not the surface: inside the
+        // notification-centre branch it went quiet whenever the centre was off,
+        // and the toast for these events never plays one.
+        if (soundEnabled) {
+            playNotificationSound();
         }
 
         // Show toast if enabled - show rich formatted version
