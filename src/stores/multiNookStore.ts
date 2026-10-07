@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { patchSettings } from '../utils/settingsBroadcast';
 import { useAppStore, type StreamStartResult } from './AppStore';
-import { DEFAULT_MULTI_NOOK_LAYOUT, MultiNookLayout, MultiNookSlot, MultiNookPresetChannel, MultiNookRaid, MultiNookTileMeta, TwitchStream } from '../types';
+import { DEFAULT_MULTI_NOOK_LAYOUT, type AudioBoostSettings, MultiNookLayout, MultiNookSlot, MultiNookPresetChannel, MultiNookRaid, MultiNookTileMeta, TwitchStream } from '../types';
 import type { ProviderId } from '../types/providers';
 import { makeKey, parseKey } from '../utils/providerKey';
 import { canGridProvider, gridRefusal } from '../types/providers';
@@ -202,6 +202,8 @@ interface MultiNookState {
   removeSlotByLogin: (channelLogin: string, provider?: ProviderId) => Promise<void>;
   updateSlot: (id: string, updates: Partial<MultiNookSlot>) => void;
   changeSlotQuality: (id: string, quality: string) => Promise<void>;
+  /** This tile's own Audio Boost; undefined hands it back to the player's. */
+  setSlotAudioBoost: (id: string, boost: AudioBoostSettings | undefined) => void;
   retrySlot: (id: string) => void;
   /** Cover every Twitch tile of the raiding channel with the raid card. The
    *  tile itself is never replaced: the user put that channel in the grid. */
@@ -455,6 +457,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       channelName: ch.channelName || ch.channelLogin,
       profileImageUrl: ch.profileImageUrl || undefined,
       quality: ch.quality || undefined,
+      audioBoost: ch.audioBoost,
       volume: 0.5,
       muted: i > 0,
       isFocused: i === 0,
@@ -977,6 +980,16 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
     if ('volume' in updates || 'muted' in updates || 'isFocused' in updates || 'channelLogin' in updates || 'isMinimized' in updates || 'profileImageUrl' in updates) {
       saveSlots();
     }
+  },
+
+  setSlotAudioBoost: (id: string, boost: AudioBoostSettings | undefined) => {
+    if (!get().slots.some((s) => s.id === id)) return;
+    set((state) => ({ slots: state.slots.map((s) => (s.id === id ? { ...s, audioBoost: boost } : s)) }));
+    // Written in place by Rust like the tile's volume: a fader drag would
+    // otherwise run a whole-grid save once per step.
+    invoke('set_multi_nook_slot_audio_boost', { slotId: id, boost: boost ?? null }).catch((e: unknown) =>
+      Logger.warn('[MultiNook] Failed to save tile Audio Boost', e),
+    );
   },
 
   changeSlotQuality: async (id: string, quality: string) => {

@@ -455,6 +455,43 @@ export const audioBoostFaderDefs = (b: AudioBoostSettings): AudioBoostFaderDef[]
   },
 ];
 
+// The Audio Boost button injected into a Plyr control bar (the solo player's
+// and each MultiNook tile's). Static markup; `paintAudioBoostButton` writes the
+// state.
+export const AUDIO_BOOST_BUTTON_HTML = `
+  <svg class="plyr__icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2 13a2 2 0 0 0 2-2V7a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0V4a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0v-4a2 2 0 0 1 2-2"></path>
+  </svg>
+  <span class="plyr__tooltip" role="tooltip">Audio Boost</span>
+`;
+
+/**
+ * Paint an injected Audio Boost button on or off. The `is-active` class lights
+ * it up as an accent chip (fill + inset rim, styled in globals.css, no outer
+ * glow); off falls back to the normal control.
+ */
+export function paintAudioBoostButton(btn: Element | null, on: boolean): void {
+  if (!btn) return;
+  const tip = btn.querySelector('.plyr__tooltip');
+
+  // Shown but inert where the audio graph cannot run, the same way the overlay
+  // buttons refuse a platform they cannot serve. A control that simply vanishes
+  // reads as a missing feature; a dimmed one with the reason reads as a limit.
+  if (!AUDIO_GRAPH_SUPPORTED) {
+    btn.classList.remove('is-active');
+    btn.setAttribute('aria-pressed', 'false');
+    btn.setAttribute('aria-disabled', 'true');
+    (btn as HTMLElement).style.opacity = '0.4';
+    (btn as HTMLElement).style.cursor = 'default';
+    if (tip) tip.textContent = 'Audio Boost: unavailable on macOS';
+    return;
+  }
+
+  btn.classList.toggle('is-active', on);
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  if (tip) tip.textContent = on ? 'Audio Boost: On' : 'Audio Boost: Off';
+}
+
 // All adjustable params (Boost + the five compressor controls) reset to
 // defaults; the on/off state is left as-is.
 export const audioBoostResetPatch = (): Partial<AudioBoostSettings> => ({

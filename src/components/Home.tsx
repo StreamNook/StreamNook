@@ -27,6 +27,7 @@ import { WATCHABLE_PROVIDERS, PROVIDER_WATCH, providerLabel, type ProviderId, ty
 import { useFollowsStore } from '../stores/followsStore';
 import { favoriteIdOf, favoriteMetaOf } from '../utils/favorites';
 import { streamProvider, streamKey, followIdentifier, isTwitchStream } from '../utils/streamProvider';
+import { streamMiddleClickHandlers } from '../utils/openInMultiNook';
 import { isPortraitGrid, thumbFitFor } from '../utils/thumbFit';
 import { makeKey } from '../utils/providerKey';
 
@@ -1893,6 +1894,7 @@ const Home = () => {
                                                                 : `glass-panel media-card cursor-pointer hover:bg-glass-hover ${isOverlayMode ? '!bg-black/40 !border-white/5' : ''}`
                                                     }`}
                                                     onClick={(e) => !isQueued && handleStreamClick(e, stream)}
+                                                    {...(isQueued ? {} : streamMiddleClickHandlers(stream))}
                                                     onContextMenu={(e) => !isQueued && useContextMenuStore.getState().openMenu(e, stream)}
                                                 >
                                                     {isQueued && !isSuckingUp ? (
@@ -3399,6 +3401,7 @@ const Home = () => {
                                                         }`}
                                                         style={!isQueued && hasDrops ? { boxShadow: '0 0 12px var(--color-accent-muted)' } : undefined}
                                                         onClick={(e) => !isQueued && handleStreamClick(e, stream)}
+                                                        {...(isQueued ? {} : streamMiddleClickHandlers(stream))}
                                                         onContextMenu={(e) => !isQueued && useContextMenuStore.getState().openMenu(e, stream)}
                                                     >
                                                         {isQueued && !isSuckingUp ? (

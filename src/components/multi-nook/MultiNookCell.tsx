@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
-import { motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
-import { MultiNookSlot } from '../../types';
+import { MultiNookSlot, type AudioBoostSettings } from '../../types';
 import { useMultiNookPlayer } from './useMultiNookPlayer';
 import { usemultiNookStore } from '../../stores/multiNookStore';
 import { useContextMenuStore } from '../../stores/contextMenuStore';
@@ -29,6 +29,16 @@ import { ArrowLeftRight, GripHorizontal, Undo2, Loader2, RefreshCcw, EyeOff, Wif
 import type { SizeTier } from './nookLayout';
 import { Heart, HeartBreak, X as XIcon } from 'phosphor-react';
 import { Logger } from '../../utils/logger';
+import {
+  AUDIO_BOOST_BUTTON_HTML,
+  AUDIO_GRAPH_SUPPORTED,
+  applyAudioBoost,
+  paintAudioBoostButton,
+  releaseAudioGraphOnceGone,
+  resolveAudioBoost,
+} from '../../utils/audioBoost';
+import { injectPlyrControl } from '../../utils/plyrControls';
+import { AudioBoostControls } from '../AudioBoostFaders';
 import { canGridProvider, PROVIDER_WATCH, type ProviderId } from '../../types/providers';
 
 interface MultiNookCellProps {
@@ -65,7 +75,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
   // here subscribed this tile to the WHOLE store, which meant any mutation
   // (including a volume drag on a sibling tile) re-rendered every tile in the
   // grid. Zustand actions keep the same identity for the store's lifetime.
-  const { toggleFocusSlot, toggleMaximizeSlot, makeMainSlot, dockSlot, removeSlot, changeSlotQuality, retrySlot, addSlot, dismissSlotRaid } =
+  const { toggleFocusSlot, toggleMaximizeSlot, makeMainSlot, dockSlot, removeSlot, changeSlotQuality, setSlotAudioBoost, retrySlot, addSlot, dismissSlotRaid } =
     usemultiNookStore.getState();
 
   // The raid card offers the raided channel as a new tile, never in place of
@@ -123,6 +133,53 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
       el.removeEventListener('resize', measure);
     };
   }, [videoRef, streamUrl]);
+
+  // Audio Boost, per tile. A tile with its own settings (slot.audioBoost, set
+  // from its boost panel) uses those; one without uses the player's Audio Boost
+  // until it is changed here. Same per-element graph as the solo player
+  // (utils/audioBoost). Applied only while this tile can be heard, so a tile
+  // that stays muted (focus mode mutes every other tile) is never tapped and
+  // never opens an audio context of its own. Once tapped, the element keeps its
+  // graph until the tile unmounts. `playing` re-applies so a context that
+  // started suspended picks up once the stream actually plays.
+  const playerBoostSettings = useAppStore((s) => s.settings.video_player?.audio_boost);
+  const tileBoostSettings = slot.audioBoost;
+  const ownBoost = tileBoostSettings !== undefined;
+  const resolvedBoost = resolveAudioBoost(tileBoostSettings ?? playerBoostSettings);
+  const audible = !!streamUrl && !muted && !isAllMuted && !isMinimized;
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el || !audible) return;
+    const apply = () => applyAudioBoost(el, resolveAudioBoost(tileBoostSettings ?? playerBoostSettings));
+    apply();
+    el.addEventListener('playing', apply);
+    return () => el.removeEventListener('playing', apply);
+  }, [videoRef, audible, tileBoostSettings, playerBoostSettings, streamUrl]);
+
+  // Edits from the tile's panel always land on the tile's own copy, seeded from
+  // whatever it was using, so changing one tile never moves the player or any
+  // other tile. Reads fresh state so a fast fader drag never clobbers itself.
+  const patchTileBoost = useCallback(
+    (patch: Partial<AudioBoostSettings>) => {
+      const current = usemultiNookStore.getState().slots.find((s) => s.id === id)?.audioBoost;
+      const base = resolveAudioBoost(current ?? useAppStore.getState().settings.video_player?.audio_boost);
+      setSlotAudioBoost(id, { ...base, ...patch });
+    },
+    [id, setSlotAudioBoost],
+  );
+
+  // The tile's boost panel, opened from the control-bar button.
+  const [boostPanelOpen, setBoostPanelOpen] = useState(false);
+  const boostPanelRef = useRef<HTMLDivElement>(null);
+
+  // The tile's <video> lives as long as the tile (Plyr swaps in a clone on
+  // destroy), so hand it back once it has left the page. See releaseAudioGraph.
+  useEffect(() => {
+    const el = videoRef.current;
+    return () => {
+      if (el) releaseAudioGraphOnceGone(el);
+    };
+  }, [videoRef]);
 
   // Volume readout for this tile's wheel/middle-click changes.
   const { osd, showOsd } = useVolumeOsd();
@@ -293,6 +350,57 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
     // isPlaying/streamUrl re-trigger after the player (re)initialises
   }, [availableQualities, updateQualityMenu, isPlaying, streamUrl]);
 
+  // The Audio Boost button in this tile's control bar, right after volume, the
+  // same control the solo player has. It opens the tile's own boost panel, and
+  // is shown but inert on macOS (paintAudioBoostButton says why). One effect
+  // both inserts (idempotent, keyed by the attribute) and paints, so a button
+  // the retry inserts late still gets the current state.
+  const audioBoostOn = resolvedBoost.enabled;
+  useEffect(() => {
+    const container = (playerRef.current as unknown as { elements?: { container?: HTMLElement } } | null)?.elements
+      ?.container;
+    if (!container) return;
+    paintAudioBoostButton(container.querySelector('[data-streamnook-audioboost]'), audioBoostOn);
+    return injectPlyrControl(container, {
+      attr: 'data-streamnook-audioboost',
+      className: '',
+      html: AUDIO_BOOST_BUTTON_HTML,
+      onClick: () => {
+        if (AUDIO_GRAPH_SUPPORTED) setBoostPanelOpen((o) => !o);
+      },
+      place: (controls) => {
+        const volume = controls.querySelector(':scope > .plyr__volume');
+        if (volume) return { after: volume };
+        const menu = controls.querySelector(':scope > .plyr__menu');
+        return menu ? { before: menu } : null;
+      },
+      onInserted: (btn) => paintAudioBoostButton(btn, audioBoostOn),
+    });
+    // isPlaying/streamUrl re-trigger after the player (re)initialises
+  }, [audioBoostOn, isPlaying, streamUrl, playerRef]);
+
+  // Close the panel on Escape or a press outside it (the button itself toggles).
+  // Capture phase so it runs before the tile's own pointer handlers.
+  useEffect(() => {
+    if (!boostPanelOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setBoostPanelOpen(false);
+    };
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const panel = boostPanelRef.current;
+      const btn = (playerRef.current as unknown as { elements?: { container?: HTMLElement } } | null)?.elements
+        ?.container?.querySelector('[data-streamnook-audioboost]');
+      if (panel && !panel.contains(target) && !(btn && btn.contains(target))) setBoostPanelOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onDown, true);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onDown, true);
+    };
+  }, [boostPanelOpen, playerRef]);
+
   const {
     attributes,
     listeners,
@@ -322,7 +430,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
     const onDblCapture = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       // Let real player controls (incl. the fullscreen button) behave normally.
-      if (target.closest('button') || target.closest('.plyr__controls') || target.closest('.plyr__menu')) return;
+      if (target.closest('button') || target.closest('.plyr__controls') || ignoresPlayerMouse(target)) return;
       e.stopPropagation();
       e.preventDefault();
       clearPendingFocusToggle(); // a double-click cancels any deferred unfocus
@@ -451,7 +559,7 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
       onClick={(e) => {
         // Ignore clicks on buttons, tools, or plyr control sliders.
         const target = e.target as HTMLElement;
-        if (target.closest('button') || target.closest('.plyr__controls') || target.closest('.plyr__menu')) return;
+        if (target.closest('button') || target.closest('.plyr__controls') || ignoresPlayerMouse(target)) return;
         // While maximized, a bare click shouldn't change focus (you're already
         // watching this one). The second click of a double-click (detail === 2)
         // is left for the capture-phase dblclick handler that fills the space.
@@ -811,7 +919,49 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
         </div>
       </div>
 
-      <PlayerVolumeOsd osd={osd} />
+      {/* This tile's Audio Boost panel. Sits above the control bar and scrolls
+          inside a short tile; globals.css pins it to the viewport while the tile
+          is fullscreen. Swallows pointer events so it never focuses, maximizes
+          or re-volumes the tile underneath. */}
+      <AnimatePresence>
+        {boostPanelOpen && (
+          <motion.div
+            ref={boostPanelRef}
+            initial={{ opacity: 0, y: 8, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.98 }}
+            transition={{ duration: 0.16, ease: 'easeOut' }}
+            onClick={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            data-no-wheel-volume
+            className="tile-audio-boost-panel liquid-glass-panel absolute bottom-14 right-2 z-[60] overflow-y-auto rounded-xl p-4 cursor-default"
+            style={{ width: 'min(460px, calc(100% - 16px))', maxHeight: 'calc(100% - 64px)' }}
+          >
+            <AudioBoostControls
+              boost={resolvedBoost}
+              onPatch={patchTileBoost}
+              note={ownBoost ? 'Set for this stream only.' : 'Matching the main player. Changes here apply to this stream only.'}
+              footer={
+                ownBoost ? (
+                  <button
+                    onClick={() => setSlotAudioBoost(id, undefined)}
+                    className="text-xs text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline"
+                  >
+                    Match main player
+                  </button>
+                ) : null
+              }
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <PlayerVolumeOsd osd={osd} boost={resolvedBoost.enabled && AUDIO_GRAPH_SUPPORTED ? resolvedBoost.gain : 1} />
     </motion.div>
   );
 };

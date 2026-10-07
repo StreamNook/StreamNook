@@ -17,6 +17,7 @@ import { ProviderLogo } from './ProviderLogo';
 import { useFollowsStore } from '../stores/followsStore';
 import { favoriteIdOf, favoriteMetaOf } from '../utils/favorites';
 import { streamProvider, streamKey } from '../utils/streamProvider';
+import { streamMiddleClickHandlers } from '../utils/openInMultiNook';
 import { useStreamAvatars } from '../hooks/useStreamAvatars';
 import { useStreamOnlyFullscreen } from '../hooks/useStreamOnlyFullscreen';
 
@@ -170,6 +171,7 @@ const StreamItem = memo(({
                     ${showExpanded ? 'gap-2 justify-start' : 'gap-0 justify-center'}
                 `}
                 onClick={(e) => onStreamClick(e, stream)}
+                {...streamMiddleClickHandlers(stream)}
                 onContextMenu={(e) => useContextMenuStore.getState().openMenu(e, stream)}
             >
             {/* Avatar with live indicator */}

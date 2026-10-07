@@ -1,5 +1,5 @@
 use crate::commands::streaming::StreamStartResult;
-use crate::models::settings::AppState;
+use crate::models::settings::{AppState, AudioBoostSettings};
 use crate::rt::AppHandle;
 use crate::services::multi_nook_server::{
     MultiNookServer, TileProfile, TilePromotion, TileRefresher,
@@ -682,11 +682,6 @@ pub fn set_multi_nook_meta_channels(app: AppHandle, logins: Vec<String>) {
     crate::services::multi_nook_meta::set_channels(&app, logins);
 }
 
-/// One tile's volume and mute as the viewer changes them, written into the
-/// saved grid in place. The debounced settings writer persists it; no other
-/// window shows tile volume, so nothing is broadcast. Saving the whole grid
-/// through `patch_settings` instead ran a full settings round trip and made
-/// every open window re-read its settings, once per scroll notch.
 /// The delay a Resync lines MultiNook tiles up at (seconds behind live), or
 /// None when no sync is held. Tile playlists then reach back that far, so
 /// hls.js never snaps a held tile forward to live.
@@ -697,6 +692,11 @@ pub async fn set_multi_nook_sync_delay(seconds: Option<f64>) -> Result<(), Strin
     Ok(())
 }
 
+/// One tile's volume and mute as the viewer changes them, written into the
+/// saved grid in place. The debounced settings writer persists it; no other
+/// window shows tile volume, so nothing is broadcast. Saving the whole grid
+/// through `patch_settings` instead ran a full settings round trip and made
+/// every open window re-read its settings, once per scroll notch.
 #[tauri::command]
 pub fn set_multi_nook_slot_audio(
     slot_id: String,
@@ -714,6 +714,23 @@ pub fn set_multi_nook_slot_audio(
     }
     slot.volume = volume;
     slot.muted = muted;
+    crate::commands::settings::write_settings_to_disk(&settings)
+}
+
+/// One tile's own Audio Boost, written into the saved grid in place the same
+/// way as its volume (a fader drag writes once per step). `None` hands the
+/// tile back to the player's Audio Boost.
+#[tauri::command]
+pub fn set_multi_nook_slot_audio_boost(
+    slot_id: String,
+    boost: Option<AudioBoostSettings>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut settings = state.settings.lock().map_err(|e| e.to_string())?;
+    let Some(slot) = settings.multi_nook_slots.iter_mut().find(|s| s.id == slot_id) else {
+        return Ok(());
+    };
+    slot.audio_boost = boost.map(AudioBoostSettings::clamped);
     crate::commands::settings::write_settings_to_disk(&settings)
 }
 

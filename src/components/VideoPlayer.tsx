@@ -47,13 +47,13 @@ import {
   applyAudioBoost,
   releaseAudioGraphOnceGone,
   resolveAudioBoost,
-  audioBoostFaderDefs,
-  audioBoostResetPatch,
+  paintAudioBoostButton,
+  AUDIO_BOOST_BUTTON_HTML,
   AUDIO_GRAPH_SUPPORTED,
   AUDIO_GRAPH_REFUSAL,
 } from '../utils/audioBoost';
 import type { AudioBoostSettings, MutedRange, VodChapter } from '../types';
-import { Fader, Toggle } from './AudioBoostFaders';
+import { AudioBoostControls } from './AudioBoostFaders';
 
 /** A backward scrub on a live stream smaller than this is treated as a
  *  nudge, not a rewind request. */
@@ -106,32 +106,6 @@ import {
 } from '../utils/playerMouseControls';
 import { PlayerVolumeOsd } from './PlayerVolumeOsd';
 import { useVolumeOsd } from '../hooks/useVolumeOsd';
-
-// Paint the Audio Boost toggle that gets injected into Plyr's control bar so it
-// reflects on/off. The `is-active` class lights it up as an accent chip (fill +
-// inset rim, styled in globals.css, no outer glow); off falls back to the normal
-// control. Module-level so the inject and sync effects share one copy.
-function paintAudioBoostButton(btn: Element | null, on: boolean): void {
-  if (!btn) return;
-  const tip = btn.querySelector('.plyr__tooltip');
-
-  // Shown but inert where the audio graph cannot run, the same way the overlay
-  // buttons refuse a platform they cannot serve. A control that simply vanishes
-  // reads as a missing feature; a dimmed one with the reason reads as a limit.
-  if (!AUDIO_GRAPH_SUPPORTED) {
-    btn.classList.remove('is-active');
-    btn.setAttribute('aria-pressed', 'false');
-    btn.setAttribute('aria-disabled', 'true');
-    (btn as HTMLElement).style.opacity = '0.4';
-    (btn as HTMLElement).style.cursor = 'default';
-    if (tip) tip.textContent = 'Audio Boost: unavailable on macOS';
-    return;
-  }
-
-  btn.classList.toggle('is-active', on);
-  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-  if (tip) tip.textContent = on ? 'Audio Boost: On' : 'Audio Boost: Off';
-}
 
 // Per-channel learned cushion (LL path), relative to the viewer's chosen target. The
 // `base` is the user's target latency converted to the real (raw) cushion. The
@@ -346,8 +320,8 @@ const VideoPlayer = () => {
   // Route the live audio through the optional compressor + makeup-gain graph.
   // Re-applied whenever the audio-boost settings change. While the feature has
   // never been turned on, this is a no-op and playback is left completely
-  // untouched. Scoped to the main player; MultiNook tiles keep their own
-  // per-tile audio.
+  // untouched. MultiNook tiles apply the same setting to their own elements
+  // (MultiNookCell).
   //
   // This player is keyed by stream URL, so every channel switch builds a new
   // <video>. An element that played through the graph stays alive until its
@@ -435,12 +409,7 @@ const VideoPlayer = () => {
       btn.className = 'plyr__controls__item plyr__control';
       btn.type = 'button';
       btn.setAttribute('data-streamnook-audioboost', '');
-      btn.innerHTML = `
-        <svg class="plyr__icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M2 13a2 2 0 0 0 2-2V7a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0V4a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0v-4a2 2 0 0 1 2-2"></path>
-        </svg>
-        <span class="plyr__tooltip" role="tooltip">Audio Boost</span>
-      `;
+      btn.innerHTML = AUDIO_BOOST_BUTTON_HTML;
       // Click opens the in-player popover (which holds the on/off toggle plus
       // all the faders), so everything is adjustable on the fly.
       btn.addEventListener('click', () => {
@@ -3754,48 +3723,21 @@ const VideoPlayer = () => {
             className="liquid-glass-panel absolute bottom-16 right-3 z-[60] rounded-xl p-4"
             style={{ width: 'min(460px, calc(100% - 24px))' }}
           >
-            <div className="mb-3 flex items-center justify-between">
-              <span className="text-[13px] font-semibold text-textPrimary">Audio Boost</span>
-              <Toggle
-                enabled={audioBoostEnabled}
-                onChange={() => applyBoostPatch({ enabled: !audioBoostEnabled })}
-              />
-            </div>
-            <div className={audioBoostEnabled ? '' : 'opacity-50 pointer-events-none'}>
-              <div className="flex flex-wrap items-end justify-center gap-x-5 gap-y-4">
-                {audioBoostFaderDefs(resolvedBoost).map((d) => (
-                  <Fader
-                    key={d.key}
-                    label={d.label}
-                    display={d.display}
-                    value={d.value}
-                    min={d.min}
-                    max={d.max}
-                    step={d.step}
-                    hint={d.hint}
-                    onChange={(v) => applyBoostPatch(d.apply(v))}
-                  />
-                ))}
-              </div>
-            </div>
-            <div className="mt-3 flex items-center justify-center gap-4">
-              <button
-                onClick={() => applyBoostPatch(audioBoostResetPatch())}
-                style={{ borderRadius: 8 }}
-                className="glass-button text-textSecondary hover:text-textPrimary text-xs px-3 py-1.5"
-              >
-                Reset to defaults
-              </button>
-              <button
-                onClick={() => {
-                  setAudioPanelOpen(false);
-                  useAppStore.getState().openSettings('Player', 'settings-section-audio-boost');
-                }}
-                className="text-xs text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline"
-              >
-                Open in Settings
-              </button>
-            </div>
+            <AudioBoostControls
+              boost={resolvedBoost}
+              onPatch={applyBoostPatch}
+              footer={
+                <button
+                  onClick={() => {
+                    setAudioPanelOpen(false);
+                    useAppStore.getState().openSettings('Player', 'settings-section-audio-boost');
+                  }}
+                  className="text-xs text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline"
+                >
+                  Open in Settings
+                </button>
+              }
+            />
           </motion.div>
         )}
       </AnimatePresence>

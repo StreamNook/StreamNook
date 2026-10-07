@@ -16,6 +16,7 @@ export function slotToPresetChannel(slot: MultiNookSlot): MultiNookPresetChannel
     channelName: slot.channelName,
     profileImageUrl: slot.profileImageUrl,
     quality: slot.quality,
+    audioBoost: slot.audioBoost,
   };
 }
 
