@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo, Fragment, useSyncExternalStore } from 'react';
+import { flushSync } from 'react-dom';
 import type { ReactNode, MouseEvent, CSSProperties, ChangeEvent, ClipboardEvent, KeyboardEvent } from 'react';
 import { ShieldCheck, Paperclip, X, CornerUpLeft, Pencil } from 'lucide-react';
 import { EmotePickerPanel, useSwappingSmiley } from '../chat/EmotePickerPanel';
@@ -23,6 +24,8 @@ import { StreamNookBadge, MemberReveal, MEMBER_REVEAL_CARD_CLASS } from '../Stre
 import { Tooltip } from '../ui/Tooltip';
 import SpellcheckUnderlay from '../chat/SpellcheckUnderlay';
 import { useSpellcheck } from '../../hooks/useSpellcheck';
+import { useEmotePalette, type PaletteChannel } from '../../hooks/useEmotePalette';
+import { insertAtCaret } from '../../utils/chatInputWord';
 import { warmSpellcheck } from '../../utils/spellcheck';
 import { AtmosphereBackground } from '../AtmosphereBackground';
 import { MajorCologneChrome } from '../MajorCologneChrome';
@@ -329,7 +332,7 @@ const ModRoomMessageRow = ({
           <span className="mr-1.5 align-middle text-[10px] tabular-nums text-textSecondary">{time}</span>
           {isSN && (
             <span className="mr-1 inline-flex align-middle">
-              <StreamNookBadge userId={m.userId} />
+              <StreamNookBadge userId={m.userId} className="sn-chat-badge--sn block h-[18px] w-[18px] object-contain" />
             </span>
           )}
           {onUsernameClick ? (
@@ -463,6 +466,28 @@ const ModRoomPane = ({ channelId, channelLogin, emotes, onStatus, onUsernameClic
     (value: string) => storeSetDraft(channelId, value),
     [channelId, storeSetDraft],
   );
+  // An emote at the caret. Reads the live text, not the render's `draft`, so
+  // picks landing back to back from the popped-out menu each see the last one.
+  const insertEmote = useCallback(
+    (name: string) => {
+      const ta = textareaRef.current;
+      const value = ta?.value ?? useModRoomStore.getState().drafts[channelId] ?? '';
+      const { text, caret } = insertAtCaret(value, ta?.selectionStart ?? value.length, ta?.selectionEnd ?? value.length, name);
+      // Committed before the caret is placed: a pick from the popped-out menu
+      // is a Tauri event, whose render would otherwise land after the caret
+      // moved and put it back at the end.
+      flushSync(() => setDraft(text));
+      const el = textareaRef.current;
+      el?.focus();
+      el?.setSelectionRange(caret, caret);
+    },
+    [channelId, setDraft],
+  );
+  const paletteChannel = useMemo<PaletteChannel | null>(
+    () => (channelLogin ? { login: channelLogin, id: channelId, name: channelLogin, provider: 'twitch' } : null),
+    [channelLogin, channelId],
+  );
+  const popOutEmotes = useEmotePalette(paletteChannel, insertEmote);
 
   // The room connection outlives this pane (the manager holds it for unread
   // tracking); mounting just adds a reference and flags the room as viewed.
@@ -900,10 +925,15 @@ const ModRoomPane = ({ channelId, channelLogin, emotes, onStatus, onUsernameClic
           isKick={false}
           channelId={channelId}
           channelLogin={channelLogin}
-          onInsert={(name) => {
-            setDraft(draft + (draft && !draft.endsWith(' ') ? ' ' : '') + name + ' ');
-            textareaRef.current?.focus();
-          }}
+          onInsert={insertEmote}
+          onPopOut={
+            popOutEmotes
+              ? () => {
+                  setShowEmotes(false);
+                  popOutEmotes();
+                }
+              : undefined
+          }
         />
         {mentionOpen && (
           <div

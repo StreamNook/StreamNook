@@ -1,5 +1,5 @@
-//! Opening the chat popouts, MultiChat windows and the floating chat overlay,
-//! and remembering where each one was.
+//! Opening the chat popouts, MultiChat windows, the floating chat overlay and
+//! the popped-out emote menu, and remembering where each one was.
 //!
 //! Rust builds both kinds and places them in physical pixels from start to
 //! finish. The page used to build them itself, handing the window API a spot
@@ -42,7 +42,11 @@ enum Kind {
     ChatOverlay,
     MultiChat,
     Plugin,
+    EmotePalette,
 }
+
+/// The popped-out emote menu. One at a time, so the label is fixed.
+pub(crate) const EMOTE_PALETTE_LABEL: &str = "emote-palette";
 
 impl Kind {
     /// Logical size with nothing saved. The MultiChat width is
@@ -52,6 +56,8 @@ impl Kind {
             Kind::ChatOverlay => (380.0, 520.0),
             Kind::MultiChat => (402.0, 620.0),
             Kind::Plugin => (420.0, 560.0),
+            // The in-chat menu's height, at a chat column's width.
+            Kind::EmotePalette => (360.0, 520.0),
         }
     }
 
@@ -60,6 +66,7 @@ impl Kind {
         match self {
             Kind::ChatOverlay => 32.0,
             Kind::MultiChat | Kind::Plugin => 36.0,
+            Kind::EmotePalette => 0.0,
         }
     }
 
@@ -68,13 +75,14 @@ impl Kind {
             Kind::ChatOverlay => "overlay-",
             Kind::MultiChat => "multichat-",
             Kind::Plugin => "plugin-",
+            Kind::EmotePalette => EMOTE_PALETTE_LABEL,
         }
     }
 }
 
 /// Whether this module places and remembers the window with this label.
 pub fn is_placed_label(label: &str) -> bool {
-    [Kind::ChatOverlay, Kind::MultiChat, Kind::Plugin]
+    [Kind::ChatOverlay, Kind::MultiChat, Kind::Plugin, Kind::EmotePalette]
         .iter()
         .any(|k| label.starts_with(k.prefix()))
 }
@@ -322,6 +330,53 @@ pub async fn open_plugin_window(
     Ok(PopoutOutcome::Opened)
 }
 
+/// Build the popped-out emote menu beside `caller`, the window holding the chat
+/// it types into. It is a tool window of that chat: no taskbar entry, owned by
+/// it on Windows (see `set_emote_palette_owner`).
+pub(crate) fn build_emote_palette(app: &AppHandle, caller: &Window) -> Result<(), String> {
+    let kind = Kind::EmotePalette;
+    let placement = placement(app, caller, EMOTE_PALETTE_LABEL, kind, 0, kind.default_size());
+    let (w, h) = placement.initial;
+    let win = WebviewWindowBuilder::new(app, EMOTE_PALETTE_LABEL, app_route(app, "/emote-palette"))
+        .title("StreamNook emotes")
+        .decorations(false)
+        .resizable(true)
+        .skip_taskbar(true)
+        .minimizable(false)
+        .maximizable(false)
+        .min_inner_size(300.0, 320.0)
+        .disable_drag_drop_handler()
+        .inner_size(w, h)
+        .visible(false)
+        .build()
+        .map_err(|e| e.to_string())?;
+    set_emote_palette_owner(&win, caller);
+    settle(win, placement);
+    Ok(())
+}
+
+/// Make `owner` the palette's owner window (Windows). An owned window stays
+/// above its owner, hides while the owner is minimized and is destroyed with
+/// it, which is exactly a tool window's life. Changed in place when the menu
+/// is popped out from a chat in another window, so the palette is never rebuilt.
+/// Elsewhere this is a no-op: macOS child windows move with their parent and
+/// the Linux runtime's transient-for is unverified, so Rust closes the palette
+/// with its chat window instead (`emote_palette::on_window_gone`).
+pub(crate) fn set_emote_palette_owner(palette: &WebviewWindow, owner: &Window) {
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowLongPtrW, GWLP_HWNDPARENT};
+        let (Ok(p), Ok(o)) = (palette.hwnd(), owner.hwnd()) else { return };
+        // GWLP_HWNDPARENT on a top-level window sets its OWNER (not a parent).
+        unsafe {
+            SetWindowLongPtrW(HWND(p.0 as *mut std::ffi::c_void), GWLP_HWNDPARENT, o.0 as isize);
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = (palette, owner);
+}
+
 /// `plugin-<id>-<surface>`, with everything a window label cannot hold
 /// (plugin ids carry dots) turned into dashes.
 fn plugin_window_label(plugin_id: &str, surface: &str) -> String {
@@ -496,7 +551,7 @@ fn placement(
     // theirs, so their plugin-saved rects still apply.
     let saved = saved_rect(label).or_else(|| match kind {
         Kind::MultiChat | Kind::Plugin => from_window_state_file(app, label),
-        Kind::ChatOverlay => None,
+        Kind::ChatOverlay | Kind::EmotePalette => None,
     });
     let scale = from.scale_factor().unwrap_or(1.0);
     let home = from
@@ -569,6 +624,8 @@ fn fresh_rect(
         Some(c) => match kind {
             Kind::ChatOverlay => (c.x + c.w as i32 - w - px(24.0), c.y + px(64.0)),
             Kind::MultiChat | Kind::Plugin => (c.x + c.w as i32 + px(10.0), c.y),
+            // Beside the chat it types into, bottom-aligned with the chat box.
+            Kind::EmotePalette => (c.x + c.w as i32 + px(10.0), c.y + c.h as i32 - h),
         },
         None => (home.x + (home.w as i32 - w) / 2, home.y + (home.h as i32 - h) / 2),
     };
@@ -724,7 +781,7 @@ fn work_areas(window: &Window) -> tauri::Result<Vec<Rect>> {
     Ok(window.available_monitors()?.iter().map(Rect::of_work_area).collect())
 }
 
-fn bring_forward(win: &WebviewWindow) {
+pub(crate) fn bring_forward(win: &WebviewWindow) {
     let _ = win.unminimize();
     let _ = win.show();
     let _ = win.set_focus();
@@ -988,6 +1045,45 @@ mod tests {
 
     fn saved(x: i32, y: i32, used: u64) -> Saved {
         Saved { x, y, width: 400, height: 500, maximized: false, used }
+    }
+
+    /// The desktop capability is scoped by window label. A popout kind whose
+    /// label it does not cover is denied every command, silently, so the
+    /// window opens and then does nothing.
+    #[test]
+    fn every_popout_kind_is_granted_the_app_commands() {
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../../capabilities/desktop.json")).unwrap();
+        let patterns: Vec<&str> = capability["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w.as_str().unwrap())
+            .collect();
+        let covered = |label: &str| {
+            patterns.iter().any(|p| match p.strip_suffix('*') {
+                Some(prefix) => label.starts_with(prefix),
+                None => *p == label,
+            })
+        };
+        for kind in [Kind::ChatOverlay, Kind::MultiChat, Kind::Plugin, Kind::EmotePalette] {
+            // A label of the kind: the prefix, plus a name for the glob kinds.
+            let label = if kind.prefix().ends_with('-') {
+                format!("{}x", kind.prefix())
+            } else {
+                kind.prefix().to_string()
+            };
+            assert!(covered(&label), "{label} is missing from capabilities/desktop.json windows");
+            assert!(is_placed_label(&label), "{label} is not placed by this module");
+        }
+    }
+
+    #[test]
+    fn the_emote_palette_opens_beside_its_chat_bottom_aligned() {
+        let chat = Rect { x: 100, y: 100, w: 1200, h: 800 };
+        let r = fresh_rect(Kind::EmotePalette, (360.0, 520.0), Some(chat), 1.0, 0, None, SCREEN);
+        assert_eq!((r.x, r.w, r.h), (1310, 360, 520));
+        assert_eq!(r.y + r.h as i32, chat.y + chat.h as i32);
     }
 
     #[test]

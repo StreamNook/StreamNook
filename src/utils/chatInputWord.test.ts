@@ -8,6 +8,7 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 
 import {
+  insertAtCaret,
   emoteSearchTrigger,
   withChatterCandidates,
   wrapIndex,
@@ -134,4 +135,24 @@ test('the cycle never grows past its limit', () => {
   const emotes = Array.from({ length: TAB_CYCLE_LIMIT + 5 }, (_, i) => ({ name: `e${i}`, priority: i }));
   const out = withChatterCandidates(emotes, 'e', [{ username: 'eve' }], 'starts_with');
   assert.equal(out.length, TAB_CYCLE_LIMIT);
+});
+
+// The emote menu (in the chat or popped out into its own window) puts its
+// pick where the caret was left, not at the end of the message.
+test('insertAtCaret spaces the pick from its neighbours', () => {
+  assert.deepEqual(insertAtCaret('', 0, 0, 'Kappa'), { text: 'Kappa ', caret: 6 });
+  assert.deepEqual(insertAtCaret('hi', 2, 2, 'Kappa'), { text: 'hi Kappa ', caret: 9 });
+  assert.deepEqual(insertAtCaret('hi ', 3, 3, 'Kappa'), { text: 'hi Kappa ', caret: 9 });
+  assert.deepEqual(insertAtCaret('there', 0, 0, 'Kappa'), { text: 'Kappa there', caret: 6 });
+  assert.deepEqual(insertAtCaret('a  b', 2, 2, 'Kappa'), { text: 'a Kappa b', caret: 7 });
+});
+
+test('insertAtCaret replaces a selection and clamps stale positions', () => {
+  assert.deepEqual(insertAtCaret('one two three', 4, 7, 'LUL'), { text: 'one LUL three', caret: 7 });
+  // A caret past the end (the text shrank since it was read) appends.
+  assert.deepEqual(insertAtCaret('hi', 99, 99, 'Kappa'), { text: 'hi Kappa ', caret: 9 });
+  // An end before the start never cuts text.
+  assert.deepEqual(insertAtCaret('hi', 2, 0, 'Kappa'), { text: 'hi Kappa ', caret: 9 });
+  // Emoji are inserted whole.
+  assert.deepEqual(insertAtCaret('gg', 2, 2, '\u{1F525}'), { text: 'gg \u{1F525} ', caret: 6 });
 });

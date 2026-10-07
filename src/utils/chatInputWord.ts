@@ -8,6 +8,34 @@
  *   "Kappa| HeyGuys"      -> [0, 5]   ("Kappa")
  *   "abc def gh|ij klm"   -> [8, 12]  ("ghij")
  */
+/**
+ * Put `insert` in place of the selection `start..end` (a bare caret when they
+ * match), spaced from its neighbours: a space before it unless the text
+ * before already ends in whitespace (or is empty), and one after unless the
+ * text after already starts with a space. Returns the new text and the caret
+ * just past the inserted word and its trailing space. Out-of-range positions
+ * are clamped, so a stale selection can never cut the text.
+ *
+ *   ("hi|", "Kappa")         -> "hi Kappa |"
+ *   ("|there", "Kappa")      -> "Kappa |there"
+ *   ("a | b", "Kappa")       -> "a Kappa | b"
+ */
+export function insertAtCaret(
+  value: string,
+  start: number,
+  end: number,
+  insert: string,
+): { text: string; caret: number } {
+  const at = Math.max(0, Math.min(start, value.length));
+  const to = Math.max(at, Math.min(end, value.length));
+  const before = value.slice(0, at);
+  const after = value.slice(to);
+  const lead = before && !/\s$/.test(before) ? ' ' : '';
+  const trail = after.startsWith(' ') ? '' : ' ';
+  const head = before + lead + insert + trail;
+  return { text: head + after, caret: head.length };
+}
+
 export function getWordRange(text: string, position: number): [number, number] {
   let start = 0;
   let end = text.length;

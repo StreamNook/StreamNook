@@ -6,7 +6,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { motion } from 'framer-motion';
-import { Lock, Settings } from 'lucide-react';
+import { ExternalLink, Lock, Settings } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
 import EmoteProviderLogo from './EmoteProviderLogo';
 import {
@@ -46,6 +46,7 @@ import { Logger } from '../../utils/logger';
 import { MOD_PREFIX, staticModifierStyle } from '../../utils/emoteModifiers';
 import { PROVIDERS } from '../../types/providers';
 import { IS_MOBILE } from '../../utils/platform';
+import { staticEmoteUrl } from '../../utils/staticEmoteUrl';
 
 type ProviderTab = 'twitch' | 'bttv' | '7tv' | 'ffz' | 'favorites' | 'emoji' | 'kick' | 'youtube' | 'gifs';
 
@@ -73,14 +74,18 @@ const EmoteGridItem = memo(
   ({
     emote,
     isFavorited,
+    still,
     onInsert,
     onToggleFavorite,
   }: {
     emote: Emote;
     isFavorited: boolean;
+    /** Draw the first frame (see `LazyEmoteBlock`); hovering still animates it. */
+    still: boolean;
     onInsert: () => void;
     onToggleFavorite: () => void;
   }) => {
+    const [hovered, setHovered] = useState(false);
     const is7tv = emote.provider === '7tv';
     const ffzIsSubwoofer = useAppStore((s) => s.ffzIsSubwoofer);
     const isModifier = emote.modifierFlags != null;
@@ -94,9 +99,13 @@ const EmoteGridItem = memo(
     const lockedSub = (!!emote.ffzSubOnly && !ffzIsSubwoofer) || !!emote.locked;
     const emoteTier = inlineEmoteTier();
     const liveLocal = getCachedEmoteUrl(emote.id, emote.provider, emoteTier);
-    const gridSrc = is7tv
-      ? liveLocal || emote.localUrl || sevenTvTierUrl(emote.id, emoteTier)
-      : liveLocal || emote.localUrl || emote.url;
+    // An emote known to be still has no frames to save: it keeps its disk copy.
+    const showStill = still && !hovered && emote.animated !== false;
+    const gridSrc = showStill
+      ? staticEmoteUrl(is7tv ? sevenTvTierUrl(emote.id, emoteTier) : emote.url)
+      : is7tv
+        ? liveLocal || emote.localUrl || sevenTvTierUrl(emote.id, emoteTier)
+        : liveLocal || emote.localUrl || emote.url;
     const hoverPreviewSize = useAppStore((s) => s.settings.chat_design?.emote_hover_size) ?? 96;
 
     return (
@@ -163,6 +172,8 @@ const EmoteGridItem = memo(
         <div
           className="relative group flex items-center justify-center focus:outline-none w-full h-full min-h-8"
           style={{ contentVisibility: 'auto', containIntrinsicBlockSize: '40px' }}
+          onPointerEnter={still ? () => setHovered(true) : undefined}
+          onPointerLeave={still ? () => setHovered(false) : undefined}
         >
           <button
             onClick={onInsert}
@@ -177,7 +188,7 @@ const EmoteGridItem = memo(
           >
             <img
               src={gridSrc}
-              srcSet={is7tv && !emote.localUrl ? `https://cdn.7tv.app/emote/${emote.id}/1x.avif 1x, https://cdn.7tv.app/emote/${emote.id}/2x.avif 2x` : undefined}
+              srcSet={is7tv && !emote.localUrl && !showStill ? `https://cdn.7tv.app/emote/${emote.id}/1x.avif 1x, https://cdn.7tv.app/emote/${emote.id}/2x.avif 2x` : undefined}
               alt={emote.name}
               loading="lazy"
               decoding="async"
@@ -250,24 +261,46 @@ const TWITCH_BLOCK_ROWS = 6;
 // name in the tooltip.
 const TWITCH_ROW_PX = IS_MOBILE ? 42 : 60;
 const TWITCH_COLS = 7;
+// Emoji grid: 8 across, a 24px image in a 6px-padded button, rows 4px apart.
+const EMOJI_COLS = 8;
+const EMOJI_BLOCK_ROWS = 6;
+const EMOJI_ROW_PX = 40;
 
 const LazyEmoteBlock = memo(
   ({
     scrollRef,
     estimatedHeight,
     gridClass,
+    animate,
     onActivate,
     children,
   }: {
     scrollRef: RefObject<HTMLDivElement | null>;
     estimatedHeight: number;
     gridClass: string;
+    /** Animation is allowed right now: the list is at rest and the viewer's
+     *  setting permits it. Only blocks actually on screen then animate. */
+    animate: boolean;
     onActivate?: () => void;
-    children: () => ReactNode;
+    /** `still` = draw first frames. */
+    children: (still: boolean) => ReactNode;
   }) => {
     const ref = useRef<HTMLDivElement>(null);
     const [visible, setVisible] = useState(false);
+    const [onScreen, setOnScreen] = useState(false);
     const activatedRef = useRef(false);
+    // Mounted blocks include 600px of overscan each way, and a fast scroll
+    // mounts a great many on the way past. Animated emotes cost their decoded
+    // frames (megabytes each for a long 7TV animation), so only what is on
+    // screen animates; the rest draw their first frame.
+    useEffect(() => {
+      const el = ref.current;
+      const root = scrollRef.current;
+      if (!el || !root) return;
+      const obs = new IntersectionObserver((entries) => setOnScreen(entries[0]?.isIntersecting ?? false), { root });
+      obs.observe(el);
+      return () => obs.disconnect();
+    }, [scrollRef]);
     useEffect(() => {
       const el = ref.current;
       const root = scrollRef.current;
@@ -300,7 +333,7 @@ const LazyEmoteBlock = memo(
     }, [scrollRef]);
     return (
       <div ref={ref} className={visible ? gridClass : undefined} style={visible ? undefined : { minHeight: estimatedHeight }}>
-        {visible ? children() : null}
+        {visible ? children(!(animate && onScreen)) : null}
       </div>
     );
   },
@@ -321,6 +354,9 @@ export interface EmotePickerPanelProps {
   channelNameCache?: Map<string, string>;
   onInsert: (text: string) => void;
   onManageEmotes?: () => void;
+  /** Moves the menu into a window of its own beside the chat. Absent where
+   *  it cannot pop out (a phone, or already popped out). */
+  onPopOut?: () => void;
   /** Positioning for the popover (defaults to full-width above the composer). */
   className?: string;
 }
@@ -341,6 +377,7 @@ export function EmotePickerPanel({
   channelNameCache,
   onInsert,
   onManageEmotes,
+  onPopOut,
   className,
 }: EmotePickerPanelProps) {
   const [mounted, setMounted] = useState(open);
@@ -361,6 +398,27 @@ export function EmotePickerPanel({
   const [searchQuery, setSearchQuery] = useState('');
   const [favoriteEmotes, setFavoriteEmotes] = useState<Emote[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Emotes animate only while the list is at rest, like the chat's own
+  // "Animate emotes" setting allows: during a scroll every cell going past
+  // draws its first frame, so a fling never decodes hundreds of animations.
+  const animateSetting = useAppStore((s) => s.settings.chat_design?.animate_emotes) ?? 'always';
+  const [scrollSettled, setScrollSettled] = useState(true);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !mounted) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onScroll = () => {
+      setScrollSettled(false);
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => setScrollSettled(true), 200);
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      if (timer) clearTimeout(timer);
+    };
+  }, [mounted]);
+  const animateGrid = animateSetting === 'always' && scrollSettled;
 
   // ── Twitch chat GIFs ───────────────────────────────────────────────────────
   // Eligibility is Twitch's call (the server-side Tier 2/3 gate), so the tab
@@ -674,6 +732,18 @@ export function EmotePickerPanel({
             placeholder={selectedProvider === 'gifs' ? 'Search GIFs...' : 'Search emotes...'}
             className="flex-1 min-w-0 glass-input text-xs px-3 py-1.5 placeholder-textSecondary"
           />
+          {onPopOut && (
+            <Tooltip content="Pop out" side="top">
+              <button
+                onClick={onPopOut}
+                aria-label="Pop out the emote menu"
+                className="shrink-0 glass-button p-1.5 text-textSecondary hover:text-white transition-colors"
+                style={{ borderRadius: '8px' }}
+              >
+                <ExternalLink size={15} />
+              </button>
+            </Tooltip>
+          )}
           {onManageEmotes && (
             <Tooltip content="Manage 7TV emotes" side="top">
               <button
@@ -855,29 +925,42 @@ export function EmotePickerPanel({
                 return (
                   <div key={category} className="flex flex-col">
                     <h3 className="text-[10px] text-textSecondary uppercase tracking-wider font-bold mb-2 -mx-2 px-4 sticky top-0 py-1.5 border-b border-white/[0.03] z-10 backdrop-blur-ultra" style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) calc(95% + (1 - var(--glass-strength, 1)) * 5%), transparent)' }}>{category}</h3>
-                    <div className="grid grid-cols-8 gap-1 px-1">
-                      {filteredCategoryEmojis.map((emoji, idx) => (
-                        <Tooltip key={`${category}-${idx}`} content={emoji}>
-                          <button onClick={() => onInsert(emoji)} className="flex items-center justify-center p-1.5 hover:bg-glass rounded transition-colors">
-                            <img
-                              src={getAppleEmojiUrl(emoji)}
-                              alt={emoji}
-                              className="w-6 h-6 object-contain"
-                              onError={(e) => {
-                                const t = e.currentTarget;
-                                if (!t.dataset.fe0f && t.src.endsWith('.png') && !t.src.includes('-fe0f')) {
-                                  t.dataset.fe0f = '1';
-                                  t.src = t.src.replace(/\.png$/, '-fe0f.png');
-                                  return;
-                                }
-                                t.style.display = 'none';
-                                if (t.nextSibling?.textContent !== emoji) t.insertAdjacentText('afterend', emoji);
-                              }}
-                            />
-                          </button>
-                        </Tooltip>
-                      ))}
-                    </div>
+                    {/* Lazy blocks like the emote tabs: all ~1,870 emoji at once was
+                        1,870 buttons, tooltips and images on every open. */}
+                    {chunkArray(filteredCategoryEmojis, EMOJI_COLS * EMOJI_BLOCK_ROWS).map((block, bi) => (
+                      <LazyEmoteBlock
+                        key={`${category}-blk-${bi}`}
+                        scrollRef={scrollRef}
+                        estimatedHeight={Math.ceil(block.length / EMOJI_COLS) * EMOJI_ROW_PX}
+                        gridClass="grid grid-cols-8 gap-1 px-1"
+                        // Emoji are still images: nothing to animate or freeze.
+                        animate={false}
+                      >
+                        {() =>
+                          block.map((emoji, idx) => (
+                            <Tooltip key={`${category}-${bi}-${idx}`} content={emoji}>
+                              <button onClick={() => onInsert(emoji)} className="flex items-center justify-center p-1.5 hover:bg-glass rounded transition-colors">
+                                <img
+                                  src={getAppleEmojiUrl(emoji)}
+                                  alt={emoji}
+                                  className="w-6 h-6 object-contain"
+                                  onError={(e) => {
+                                    const t = e.currentTarget;
+                                    if (!t.dataset.fe0f && t.src.endsWith('.png') && !t.src.includes('-fe0f')) {
+                                      t.dataset.fe0f = '1';
+                                      t.src = t.src.replace(/\.png$/, '-fe0f.png');
+                                      return;
+                                    }
+                                    t.style.display = 'none';
+                                    if (t.nextSibling?.textContent !== emoji) t.insertAdjacentText('afterend', emoji);
+                                  }}
+                                />
+                              </button>
+                            </Tooltip>
+                          ))
+                        }
+                      </LazyEmoteBlock>
+                    ))}
                   </div>
                 );
               })}
@@ -913,15 +996,18 @@ export function EmotePickerPanel({
                       scrollRef={scrollRef}
                       estimatedHeight={rows * TWITCH_ROW_PX}
                       gridClass="grid grid-cols-7 gap-2 px-1"
+                      animate={animateGrid}
                       onActivate={() => {
                         const tier = inlineEmoteTier();
                         for (const e of block) queueEmoteForDisplayCaching(e.id, e.provider, e.url, tier, true);
                       }}
                     >
-                      {() =>
+                      {(still) =>
                         block.map((emote, idx) => {
                           const isFavorited = isFavoriteEmote(emote.id);
-                          const liveSrc = getCachedEmoteUrl(emote.id, emote.provider) || emote.localUrl || emote.url;
+                          const liveSrc = still && emote.animated !== false
+                            ? staticEmoteUrl(emote.url)
+                            : getCachedEmoteUrl(emote.id, emote.provider) || emote.localUrl || emote.url;
                           return (
                             <div key={`${groupKey}-${emote.provider}-${emote.id}-${idx}`} className="relative group">
                               <Tooltip content={emote.name}>
@@ -983,12 +1069,13 @@ export function EmotePickerPanel({
                         scrollRef={scrollRef}
                         estimatedHeight={rows * WIDTH_ROW_PX}
                         gridClass={`grid ${group.gridCols} gap-2 px-1`}
+                        animate={animateGrid}
                         onActivate={() => {
                           const tier = inlineEmoteTier();
                           for (const e of block) queueEmoteForDisplayCaching(e.id, e.provider, e.url, tier, true);
                         }}
                       >
-                        {() =>
+                        {(still) =>
                           block.map((emote: Emote, idx: number) => {
                             const isFavorited = isFavoriteEmote(emote.id);
                             return (
@@ -996,6 +1083,7 @@ export function EmotePickerPanel({
                                 key={`${emote.provider}-${emote.id}-${idx}`}
                                 emote={emote}
                                 isFavorited={isFavorited}
+                                still={still}
                                 onInsert={() => onInsert(emote.insertText ?? emote.name)}
                                 onToggleFavorite={() => void toggleFavorite(emote, isFavorited)}
                               />

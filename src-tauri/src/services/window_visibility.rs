@@ -45,6 +45,19 @@ struct Visibility {
     hidden: bool,
 }
 
+/// A window that only serves another one (the popped-out emote menu).
+fn serves_another_window(label: &str) -> bool {
+    #[cfg(desktop)]
+    {
+        label == crate::commands::popout_window::EMOTE_PALETTE_LABEL
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = label;
+        false
+    }
+}
+
 /// Start the poller. Called once from the setup hook.
 pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
@@ -56,7 +69,9 @@ pub fn start(app: AppHandle) {
             let mut on_screen = false;
             for (label, window) in windows {
                 let hidden = window.is_minimized().unwrap_or(false);
-                on_screen |= !hidden && window.is_visible().unwrap_or(true);
+                // The emote menu only serves a chat window; on its own it is
+                // nobody watching anything, so it never keeps the UI pollers up.
+                on_screen |= !hidden && !serves_another_window(&label) && window.is_visible().unwrap_or(true);
                 let changed = last.get(&label) != Some(&hidden);
                 if changed {
                     last.insert(label.clone(), hidden);

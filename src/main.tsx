@@ -18,6 +18,7 @@ const ProfileCardPage = lazy(() => import('./pages/ProfileCardPage.tsx'));
 const MultiChatWindow = lazy(() => import('./components/multichat/MultiChatWindow.tsx'));
 const ChatOverlayWindow = lazy(() => import('./components/multichat/ChatOverlayWindow'));
 const PluginWindowHost = lazy(() => import('./plugins-ui/PluginWindowHost.tsx'));
+const EmotePaletteWindow = lazy(() => import('./components/chat/EmotePaletteWindow.tsx'));
 // Linux only (see the mount below); lazy so the other desktops never load it.
 const LinuxResizeEdges = lazy(() => import('./components/LinuxResizeEdges.tsx'));
 // Popout-window and tray plumbing. These used to be unconditional side-effect
@@ -97,6 +98,7 @@ const isProfileCard = hash.startsWith('#/profile');
 const isMultiChat = hash.startsWith('#/multichat');
 const isChatOverlay = hash.startsWith('#/chat-overlay');
 const isPluginWindow = hash.startsWith('#/plugin/');
+const isEmotePalette = hash.startsWith('#/emote-palette');
 
 // The dedicated mobile shell (src/mobile/: bottom tabs, sheets, touch player,
 // drill-in settings) is the mobile DEFAULT. The in-place adapted App
@@ -186,7 +188,7 @@ root.render(
   <React.StrictMode>
     <MotionScope>
       <Suspense fallback={null}>
-        {isChatOverlay ? <ChatOverlayWindow /> : isMultiChat ? <MultiChatWindow /> : isPluginWindow ? <PluginWindowHost /> : isProfileCard ? <ProfileCardPage /> : useNextMobileShell ? <MobileApp /> : <App />}
+        {isEmotePalette ? <EmotePaletteWindow /> : isChatOverlay ? <ChatOverlayWindow /> : isMultiChat ? <MultiChatWindow /> : isPluginWindow ? <PluginWindowHost /> : isProfileCard ? <ProfileCardPage /> : useNextMobileShell ? <MobileApp /> : <App />}
         {/* Linux: the borderless windows' resize border, which the X11
             window has none of (LinuxResizeEdges says why). Every window page
             gets it; a window that cannot be resized renders nothing. */}

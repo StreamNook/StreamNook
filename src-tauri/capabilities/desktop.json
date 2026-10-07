@@ -13,7 +13,8 @@
     "drops-login",
     "multichat-*",
     "plugin-*",
-    "overlay-*"
+    "overlay-*",
+    "emote-palette"
   ],
   "permissions": [
     "app-commands",
