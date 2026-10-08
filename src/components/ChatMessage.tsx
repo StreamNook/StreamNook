@@ -3192,6 +3192,123 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     );
   }
 
+  // Raids arrive as a USERNOTICE with no body, so the plain row would show the
+  // raider's name and nothing else. The card says who raided and with how many.
+  if (msgId === 'raid' || sourceMsgId === 'raid') {
+    const messageId = parsed.tags.get('id') || `raid-${parsed.username}-${parsed.tags.get('tmi-sent-ts') ?? ''}`;
+    const displayName = parsed.tags.get('display-name') || parsed.username;
+    const raidViewers = parseInt(parsed.tags.get('msg-param-viewerCount') || '', 10);
+    const raidTemplate = eventTemplateFor('raid');
+
+    const renderBadges = () => {
+      const senderUserId = senderMemberId;
+      const isSN = isSNSender;
+
+      if (visibleBadges.length === 0 && !seventvBadge && thirdPartyBadges.length === 0 && !isSN) return null;
+
+      return (
+        <span className="sn-badge-strip mr-1.5">
+          {visibleBadges.map((badge, idx) => {
+            if (!badge.info) return null;
+            return (
+              <Tooltip key={`raid-badge-${badge.key}-${idx}`} content={badge.info.title} side="top">
+                <img
+                  src={getTwitchBadgeUrl(badge.key, badge.info)}
+                  alt={badge.info.title}
+                  className="sn-chat-badge inline-block cursor-pointer hover:scale-110 transition-transform"
+                  onClick={() => onBadgeClick?.(badge.key, badge.info)}
+                  onError={(e) => {
+                    Logger.warn('[Badge] Failed to load badge:', badge.key, badge.info.image_url_1x);
+                    e.currentTarget.style.display = 'none';
+                  }}
+                />
+              </Tooltip>
+            );
+          })}
+          {seventvBadge && (
+            <Tooltip content={`Click for details: ${seventvBadge.description || seventvBadge.name}`} side="top">
+              <button
+                onClick={() => openBadgesWithBadgeInMain(seventvBadge.id)}
+                className="inline-flex items-center cursor-pointer hover:scale-110 transition-transform"
+              >
+                <FallbackImage
+                  src={getBadgeImageUrl(seventvBadge)}
+                  fallbackUrls={getBadgeFallbackUrls(seventvBadge.id).slice(1)}
+                  alt={seventvBadge.description || seventvBadge.name}
+                  className="sn-chat-badge block"
+                />
+              </button>
+            </Tooltip>
+          )}
+          {thirdPartyBadges.filter(badge => badge && badge.imageUrl).map((badge, idx) => (
+            <Tooltip key={`raid-tp-badge-${badge.id}-${idx}`} content={`${badge.title} (${badge.provider.toUpperCase()})`} side="top">
+              <img
+                src={badge.image2x || badge.imageUrl}
+                alt={badge.title}
+                className="sn-chat-badge block object-contain"
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none';
+                }}
+              />
+            </Tooltip>
+          ))}
+          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge sn-chat-badge--sn block object-contain" />}
+        </span>
+      );
+    };
+
+    const eventPadding = calculateHalfPadding(chatDesign?.message_spacing ?? 8);
+
+    return (
+      <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('raid-gradient')}`} style={{ ...eventCardStyle, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
+        <div className="flex items-center gap-2.5">
+          <div className="flex-shrink-0">
+            <svg className="w-5 h-5 text-highlight-red" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              <path d="M7 6a3 3 0 1 1 6 0 3 3 0 0 1-6 0ZM3.5 8.5a2 2 0 1 1 4 0 2 2 0 0 1-4 0ZM12.5 8.5a2 2 0 1 1 4 0 2 2 0 0 1-4 0ZM5 15a5 5 0 0 1 10 0v2H5v-2ZM1 16a3.5 3.5 0 0 1 3.6-3.5A6.5 6.5 0 0 0 3.5 15v2H1v-1ZM19 16a3.5 3.5 0 0 0-3.6-3.5 6.5 6.5 0 0 1 1.1 2.5v2H19v-1Z" />
+            </svg>
+          </div>
+          <div
+            className="flex-1 min-w-0 flex flex-col leading-relaxed"
+            style={{ fontSize: `${chatDesign?.font_size ?? 14}px` }}
+          >
+            <p className="text-white font-semibold leading-relaxed">
+              {raidTemplate ? (
+                <span className="text-highlight-red font-bold">{raidTemplate}</span>
+              ) : (
+                <>
+                  {renderBadges()}
+                  <Tooltip content="Click to view profile" side="top">
+                    <span
+                      className="font-bold cursor-pointer hover:underline"
+                      style={usernameStyle}
+                      onClick={(e) => {
+                        if (clickUserId && onUsernameClick) {
+                          onUsernameClick(clickUserId, parsed.username, displayName, parsed.color, parsed.badges, e, clickProvider);
+                        }
+                      }}
+                    >
+                      {effectiveDisplayName || displayName}
+                    </span>
+                  </Tooltip>
+                  <span className="text-highlight-red font-bold">
+                    {Number.isFinite(raidViewers)
+                      ? ` is raiding with ${raidViewers.toLocaleString()} ${raidViewers === 1 ? 'viewer' : 'viewers'}!`
+                      : ' is raiding!'}
+                  </span>
+                </>
+              )}
+            </p>
+            {parsed.content && (
+              <p className="text-textSecondary mt-1 leading-relaxed break-words">
+                {renderContent(contentWithEmotes)}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Handle system messages directly to apply strict yellow styling without username
   if (isSystemMessage) {
     const eventPadding = calculateHalfPadding(chatDesign?.message_spacing ?? 8);
