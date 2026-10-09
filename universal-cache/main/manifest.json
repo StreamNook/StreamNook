@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_sync": 1791463632,
+  "last_sync": 1791548204,
   "entries": {
     "global_badges": {
       "id": "global_badges",
@@ -2783,9 +2783,9 @@
               "versions": [
                 {
                   "id": "1",
-                  "image_url_1x": "https://static-cdn.jtvnw.net/badges/v1/f68e567f-67cf-4d4a-8c3e-a0dcee42f095/1",
-                  "image_url_2x": "https://static-cdn.jtvnw.net/badges/v1/f68e567f-67cf-4d4a-8c3e-a0dcee42f095/2",
-                  "image_url_4x": "https://static-cdn.jtvnw.net/badges/v1/f68e567f-67cf-4d4a-8c3e-a0dcee42f095/3",
+                  "image_url_1x": "https://static-cdn.jtvnw.net/badges/v1/21c5d89c-bea4-4682-8080-96b22770d0f4/1",
+                  "image_url_2x": "https://static-cdn.jtvnw.net/badges/v1/21c5d89c-bea4-4682-8080-96b22770d0f4/2",
+                  "image_url_4x": "https://static-cdn.jtvnw.net/badges/v1/21c5d89c-bea4-4682-8080-96b22770d0f4/3",
                   "title": "Gengar",
                   "description": "This badge was earned by evolving the Night Out 2026 Haunter badge.",
                   "click_action": null,
@@ -7420,10 +7420,10 @@
             }
           ]
         },
-        "cached_at": 1791462468
+        "cached_at": 1791548203
       },
       "metadata": {
-        "timestamp": 1791462468,
+        "timestamp": 1791548203,
         "expiry_days": 7,
         "source": "twitch",
         "version": 1
@@ -15675,10 +15675,10 @@
       "data": {
         "date_added": "1 October 2026",
         "usage_stats": null,
-        "more_info": "FrekiFriend is a limited-time global chat badge dedicated to the launch of Dragon’s Dogma 2: Dark Arisen. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the Dragon’s Dogma 2: Dark Arisen category. Event duration: to be confirmed The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. There is also a free badge from this campaign: TheDragonsDogma"
+        "more_info": "FrekiFriend is a limited-time global chat badge dedicated to the launch of Dragon’s Dogma 2: Dark Arisen. To earn it, you need to subscribe or gift a subscription (Prime subs doesn’t count) to streamer in the Dragon’s Dogma 2 category. Event duration: 2026-10-08T12:00:00Z – 2026-10-31T10:58:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. There is also a free badge from this campaign: TheDragonsDogma"
       },
       "metadata": {
-        "timestamp": 1790940877,
+        "timestamp": 1791548204,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -15691,10 +15691,10 @@
       "data": {
         "date_added": "1 October 2026",
         "usage_stats": null,
-        "more_info": "TheDragonsDogma is a limited-time global chat badge dedicated to the launch of Dragon’s Dogma 2: Dark Arisen. To earn it, you need to watch 60 minutes of any livestream in the Dragon’s Dogma 2: Dark Arisen category. Event duration: to be confirmed The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. There is also a paid badge from this campaign: FrekiFriend"
+        "more_info": "TheDragonsDogma is a limited-time global chat badge dedicated to the launch of Dragon’s Dogma 2: Dark Arisen. To earn it, you need to watch 60 minutes of any livestream in the Dragon’s Dogma 2 category. Event duration: 2026-10-08T12:00:00Z – 2026-10-31T10:58:00Z The badge is distributed via Twitch Drops and granted automatically after meeting the requirement. There is also a paid badge from this campaign: FrekiFriend"
       },
       "metadata": {
-        "timestamp": 1790940878,
+        "timestamp": 1791548204,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
