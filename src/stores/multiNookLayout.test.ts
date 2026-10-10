@@ -34,7 +34,44 @@ beforeEach(() => {
   invoke.mockReset();
   invoke.mockResolvedValue(undefined);
   appState.settings = {};
-  usemultiNookStore.setState({ slots: [], maximizedSlotId: null, activeChatChannelId: null });
+  usemultiNookStore.setState({ slots: [], maximizedSlotId: null, activeChatChannelId: null, isChatPinned: false });
+});
+
+describe('pinned chat', () => {
+  const pinnedOn = (key: string) => {
+    usemultiNookStore.setState({
+      slots: [slot('a', { isFocused: true, muted: false }), slot('b'), slot('c', { isMinimized: true })],
+      activeChatChannelId: key,
+    });
+    usemultiNookStore.getState().toggleChatPinned();
+  };
+  const chat = () => usemultiNookStore.getState().activeChatChannelId;
+
+  it('stays put while focus moves, and sound still follows focus', () => {
+    pinnedOn('twitch:a');
+    const s = usemultiNookStore.getState();
+    s.toggleFocusSlot('b');
+    expect(chat()).toBe('twitch:a');
+    expect(byId('b')).toMatchObject({ isFocused: true, muted: false });
+    s.makeMainSlot('a');
+    s.toggleMaximizeSlot('b');
+    s.swapDockedSlot('c');
+    expect(chat()).toBe('twitch:a');
+  });
+
+  it('follows focus again once unpinned', () => {
+    pinnedOn('twitch:a');
+    usemultiNookStore.getState().toggleChatPinned();
+    usemultiNookStore.getState().toggleFocusSlot('b');
+    expect(chat()).toBe('twitch:b');
+  });
+
+  it('drops the pin when the pinned channel leaves the grid', async () => {
+    pinnedOn('twitch:b');
+    await usemultiNookStore.getState().removeSlot('b');
+    expect(usemultiNookStore.getState().isChatPinned).toBe(false);
+    expect(chat()).toBe('twitch:a');
+  });
 });
 
 describe('makeMainSlot', () => {

@@ -1,5 +1,9 @@
-//! Live title and category for MultiNook's Twitch tiles: one Helix batch for
-//! the whole grid every two minutes, and an event only when something changed.
+//! Live state, title and category for MultiNook's Twitch tiles: one Helix
+//! batch for the whole grid every minute, and an event only when something
+//! changed. `live` drives the tiles: an offline tile starts its stream when its
+//! channel goes live, and a playing tile whose channel ended shows the offline
+//! card (a live channel reads offline only after two missed polls, so one
+//! glitch never stops a playing tile).
 //!
 //! The grid registers its Twitch channels (`set_multi_nook_meta_channels`),
 //! the way it registers them for raids; a change of channels refreshes at once
@@ -24,7 +28,7 @@ use crate::rt::AppHandle;
 use crate::services::twitch_service::TwitchService;
 
 pub const EVENT: &str = "multi-nook://meta";
-const PERIOD: Duration = Duration::from_secs(120);
+const PERIOD: Duration = Duration::from_secs(60);
 
 /// What a tile shows about its channel. `live` false clears the title; the
 /// category is kept as the last one known.
@@ -54,6 +58,8 @@ struct State {
     logins: Vec<String>,
     last: HashMap<String, TileMeta>,
     accounts: HashMap<String, Account>,
+    /// Polls in a row a live channel was missing from the batch.
+    misses: HashMap<String, u8>,
 }
 
 static STATE: Lazy<Mutex<State>> = Lazy::new(|| Mutex::new(State::default()));
@@ -76,6 +82,7 @@ pub fn set_channels(app: &AppHandle, logins: Vec<String>) {
         }
         // Forget channels that left, so a channel added back is reported.
         s.last.retain(|k, _| logins.contains(k));
+        s.misses.retain(|k, _| logins.contains(k));
         s.logins = logins;
     }
     if RUNNING.swap(true, Ordering::AcqRel) {
@@ -142,7 +149,9 @@ async fn refresh(app: &AppHandle) {
     let changed = {
         let Ok(mut s) = STATE.lock() else { return };
         s.accounts.extend(looked_up.into_iter().flatten());
-        let now = build(&logins, &live, &s.accounts, &s.last);
+        let built = build(&logins, &live, &s.accounts, &s.last);
+        let State { last, misses, .. } = &mut *s;
+        let now = hold_live(built, last, misses);
         let changed = changed_entries(&s.last, &now);
         for m in &changed {
             s.last.insert(m.login.clone(), m.clone());
@@ -196,6 +205,29 @@ fn build(
         .collect()
 }
 
+/// Keep a live channel live through ONE poll that left it out: a single
+/// missing row is often a glitch, and reading it as offline would stop a
+/// playing tile. The second miss in a row is believed.
+fn hold_live(now: Vec<TileMeta>, last: &HashMap<String, TileMeta>, misses: &mut HashMap<String, u8>) -> Vec<TileMeta> {
+    now.into_iter()
+        .map(|m| {
+            let was_live = last.get(&m.login).is_some_and(|l| l.live);
+            if m.live || !was_live {
+                misses.remove(&m.login);
+                return m;
+            }
+            let count = misses.entry(m.login.clone()).or_insert(0);
+            *count += 1;
+            if *count >= 2 {
+                misses.remove(&m.login);
+                m
+            } else {
+                last.get(&m.login).cloned().unwrap_or(m)
+            }
+        })
+        .collect()
+}
+
 /// The entries that differ from what was last sent.
 fn changed_entries(last: &HashMap<String, TileMeta>, now: &[TileMeta]) -> Vec<TileMeta> {
     now.iter().filter(|m| last.get(&m.login) != Some(*m)).cloned().collect()
@@ -242,6 +274,22 @@ mod tests {
             }
         );
         assert_eq!(now[1], TileMeta { login: "b".into(), live: false, title: None, game_name: Some("Chess".into()), ..Default::default() });
+    }
+
+    #[test]
+    fn a_live_tile_reads_offline_only_after_two_missed_polls() {
+        let live = TileMeta { login: "a".into(), live: true, title: Some("hi".into()), ..Default::default() };
+        let gone = TileMeta { login: "a".into(), live: false, ..Default::default() };
+        let mut last = HashMap::new();
+        last.insert("a".to_string(), live.clone());
+        let mut misses = HashMap::new();
+        assert_eq!(hold_live(vec![gone.clone()], &last, &mut misses), vec![live.clone()], "one miss is held");
+        assert_eq!(hold_live(vec![gone.clone()], &last, &mut misses), vec![gone.clone()], "the second is believed");
+        assert!(misses.is_empty());
+        assert_eq!(hold_live(vec![live.clone()], &last, &mut misses), vec![live.clone()]);
+        let mut offline_last = HashMap::new();
+        offline_last.insert("a".to_string(), gone.clone());
+        assert_eq!(hold_live(vec![gone.clone()], &offline_last, &mut misses), vec![gone], "offline stays offline");
     }
 
     #[test]

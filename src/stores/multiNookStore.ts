@@ -168,6 +168,11 @@ interface MultiNookState {
   isMultiNookActive: boolean;
   isChatHidden: boolean;
   activeChatChannelId: string | null;
+  /** True while the chat is pinned to the active channel: focusing, making
+   *  main, maximizing or swapping in a tile then leaves chat where it is.
+   *  Only the chat switcher moves a pinned chat. Ephemeral: never persisted,
+   *  and dropped whenever the pinned channel leaves the grid. */
+  isChatPinned: boolean;
   /** Id of the preset the current grid was loaded from, or null. Drives the
    *  toolbar's "equipped preset" icon and the Stop action. Persisted with slots. */
   activePresetId: string | null;
@@ -241,6 +246,7 @@ interface MultiNookState {
   undockSlot: (id: string) => void;
   swapDockedSlot: (id: string) => void;
   setActiveChatChannelId: (id: string | null) => void;
+  toggleChatPinned: () => void;
   toggleChatHidden: () => void;
   batchLoadMissingStreams: () => Promise<void>;
   /** Apply what Rust reports about the Twitch tiles' channels (services/
@@ -276,6 +282,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
   isMultiNookActive: false,
   isChatHidden: false,
   activeChatChannelId: null,
+  isChatPinned: false,
   activePresetId: null,
   maximizedSlotId: null,
   isAllMuted: false,
@@ -354,6 +361,21 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       if ((s.provider ?? 'twitch') !== 'twitch') return s;
       const m = byLogin.get(s.channelLogin.toLowerCase());
       if (!m) return s;
+      // The tile follows its channel. Live again (or live at last) while the
+      // tile shows the offline card: start it. Ended while playing (Rust holds
+      // one missed poll, so this is not a glitch): stop the relay and show the
+      // offline card. Only a live-to-offline edge stops a tile, so a channel
+      // that went live moments ago (Helix lists it late) is never cut off.
+      const offline = !m.live;
+      let { streamUrl, loadError } = s;
+      if (m.live && s.loadError) {
+        streamUrl = undefined;
+        loadError = false;
+      } else if (offline && s.offline === false && s.streamUrl) {
+        void invoke('stop_multi_nook', { streamId: s.id }).catch(() => {});
+        streamUrl = undefined;
+        loadError = true;
+      }
       // Offline: no title (a stale live title on an offline tile is wrong),
       // the last known category kept.
       const title = m.live ? m.title ?? undefined : undefined;
@@ -365,6 +387,9 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       const channelId = s.channelId || m.user_id || undefined;
       const channelName = s.channelName || m.display_name || undefined;
       if (
+        s.offline === offline &&
+        s.streamUrl === streamUrl &&
+        s.loadError === loadError &&
         s.title === title &&
         s.gameName === gameName &&
         s.broadcasterType === broadcasterType &&
@@ -377,7 +402,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
         identityChanged = true;
       }
       changed = true;
-      return { ...s, title, gameName, broadcasterType, profileImageUrl, channelId, channelName };
+      return { ...s, offline, streamUrl, loadError, title, gameName, broadcasterType, profileImageUrl, channelId, channelName };
     });
     if (!changed) return;
     set({ slots: next });
@@ -466,7 +491,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
     // streamUrl is intentionally left undefined: MultiNookView's missing-stream
     // loader picks these up and concurrently starts the proxies on the next frame.
     // Tag the grid with the preset it came from (replace mode = the grid IS this preset).
-    set({ slots: newSlots, activeChatChannelId: pickActiveChatChannel(newSlots), activePresetId: presetId ?? null, maximizedSlotId: null });
+    set({ slots: newSlots, activeChatChannelId: pickActiveChatChannel(newSlots), isChatPinned: false, activePresetId: presetId ?? null, maximizedSlotId: null });
 
     for (const slot of newSlots) {
       if (slot.channelId) {
@@ -567,6 +592,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       isMultiNookActive: false,
       slots: [],
       activeChatChannelId: null,
+      isChatPinned: false,
       activePresetId: null,
       maximizedSlotId: null,
       isAllMuted: false,
@@ -602,7 +628,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
         invoke('unregister_active_channel', { channelId: slot.channelId }).catch(() => {});
       }
     }
-    set({ slots: [], activeChatChannelId: null, activePresetId: null, maximizedSlotId: null, isAllMuted: false });
+    set({ slots: [], activeChatChannelId: null, isChatPinned: false, activePresetId: null, maximizedSlotId: null, isAllMuted: false });
 
     // Revert presence to idle since nothing is playing.
     const settings = useAppStore.getState().settings;
@@ -724,7 +750,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       // away (loadStoredSlots seeds it; this covers slots already in memory).
       const slotsNow = get().slots;
       if (!isActiveChatValid(slotsNow, get().activeChatChannelId)) {
-        set({ activeChatChannelId: pickActiveChatChannel(slotsNow) });
+        set({ activeChatChannelId: pickActiveChatChannel(slotsNow), isChatPinned: false });
       }
 
       // Ensure Home view is hidden
@@ -759,7 +785,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
         }
       }
 
-      set({ activeChatChannelId: null, slots: [], maximizedSlotId: null, isAllMuted: false }); // Maintain chat hidden state
+      set({ activeChatChannelId: null, isChatPinned: false, slots: [], maximizedSlotId: null, isAllMuted: false }); // Maintain chat hidden state
 
       // Restore Home view if no single stream is playing
       if (!useAppStore.getState().streamUrl) {
@@ -930,7 +956,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
     // never set), fall back to the focused/first remaining slot so chat keeps
     // loading. Resolves to null only when no slots remain.
     if (!isActiveChatValid(newSlots, get().activeChatChannelId)) {
-      set({ activeChatChannelId: pickActiveChatChannel(newSlots) });
+      set({ activeChatChannelId: pickActiveChatChannel(newSlots), isChatPinned: false });
     }
     
     if (newSlots.length > 0) {
@@ -1039,7 +1065,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       if (s.isFocused === isFocused && s.muted === muted) return s;
       return { ...s, isFocused, muted };
     });
-    set({ slots: focused, activeChatChannelId: slotKey(slot) });
+    set(get().isChatPinned ? { slots: focused } : { slots: focused, activeChatChannelId: slotKey(slot) });
     saveSlots();
   },
 
@@ -1133,8 +1159,8 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
     set({ slots: newSlots });
     saveSlots();
     
-    // Jump chat focus to this slot if we are focusing it
-    if (!isCurrentlyFocused) {
+    // Jump chat focus to this slot if we are focusing it, unless chat is pinned
+    if (!isCurrentlyFocused && !get().isChatPinned) {
        set({ activeChatChannelId: slotKey(slot) });
     }
   },
@@ -1162,8 +1188,9 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
     set({ maximizedSlotId: id, slots: newSlots });
     saveSlots();
 
-    // Move chat to the maximized stream so chat matches what you're watching.
-    set({ activeChatChannelId: slotKey(slot) });
+    // Move chat to the maximized stream so chat matches what you're watching,
+    // unless chat is pinned.
+    if (!get().isChatPinned) set({ activeChatChannelId: slotKey(slot) });
   },
 
   setMaximizedSlot: (id: string | null) => {
@@ -1258,11 +1285,16 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
     set(get().maximizedSlotId ? { slots: newSlots, maximizedSlotId: null } : { slots: newSlots });
     saveSlots();
 
-    set({ activeChatChannelId: slotKey(slotToRestore) });
+    // A docked tile stays in the grid, so a pinned chat stays valid through a swap.
+    if (!get().isChatPinned) set({ activeChatChannelId: slotKey(slotToRestore) });
   },
 
   setActiveChatChannelId: (id: string | null) => {
     set({ activeChatChannelId: id });
+  },
+
+  toggleChatPinned: () => {
+    set((state) => ({ isChatPinned: !state.isChatPinned && state.activeChatChannelId !== null }));
   },
 
   toggleChatHidden: async () => {
@@ -1293,6 +1325,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
             const cleaned = { ...s };
             delete cleaned.streamUrl;
             delete cleaned.loadError;
+            delete cleaned.offline;
             delete cleaned.title;
             return cleaned as MultiNookSlot;
           });
@@ -1321,6 +1354,7 @@ export const usemultiNookStore = create<MultiNookState>((set, get) => ({
       const cleaned = { ...s };
       delete cleaned.streamUrl;
       delete cleaned.loadError;
+      delete cleaned.offline;
       delete cleaned.title;
       delete cleaned.broadcasterType;
       delete cleaned.raid;

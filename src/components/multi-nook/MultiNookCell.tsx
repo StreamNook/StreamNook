@@ -25,7 +25,9 @@ import StreamTitleWithEmojis from '../StreamTitleWithEmojis';
 import { Tooltip } from '../ui/Tooltip';
 import { TwitchVerifiedMark } from '../ui/TwitchGlyph';
 import { ProviderLogo } from '../ProviderLogo';
-import { ArrowLeftRight, GripHorizontal, Undo2, Loader2, RefreshCcw, EyeOff, WifiOff, Maximize2, Minimize2, Plus, Check, Radio } from 'lucide-react';
+import { OfflineCard } from '../OfflineRoomScreen';
+import { useOfflineRoom } from '../../hooks/useOfflineRoom';
+import { ArrowLeftRight, GripHorizontal, Undo2, Loader2, Maximize2, Minimize2, Plus, Check, Radio } from 'lucide-react';
 import type { SizeTier } from './nookLayout';
 import { Heart, HeartBreak, X as XIcon } from 'phosphor-react';
 import { Logger } from '../../utils/logger';
@@ -91,6 +93,8 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
 
   // Offline tiles show the offline overlay instead of an endless loading spinner.
   const isLoading = !streamUrl && !loadError;
+  // What the offline card shows for a Twitch channel (cached in Rust).
+  const offlineRoom = useOfflineRoom(loadError && (provider ?? 'twitch') === 'twitch' ? channelLogin : null);
 
   // Whether the decoded picture is taller than it is wide, which decides how the
   // tile fits it. Seeded from the platform's usual shape so a portrait source
@@ -113,6 +117,39 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
     muted: muted || isAllMuted,
     isMinimized,
   });
+
+  // StreamNook watch time: Rust registers this tile as a source when its
+  // stream starts and drops it when the tile stops; the media element's
+  // play/pause is the one thing only the page knows. A pause reports after a
+  // grace window, like the main player, so a quality swap's transient pause
+  // never gates the minute off.
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el || !streamUrl) return;
+    let pausedTimer: ReturnType<typeof setTimeout> | null = null;
+    const onPlaying = () => {
+      if (pausedTimer) {
+        clearTimeout(pausedTimer);
+        pausedTimer = null;
+      }
+      invoke('report_player_playing', { playing: true, slot: id }).catch(() => {});
+    };
+    const onPause = () => {
+      if (pausedTimer) clearTimeout(pausedTimer);
+      pausedTimer = setTimeout(() => {
+        pausedTimer = null;
+        invoke('report_player_playing', { playing: false, slot: id }).catch(() => {});
+      }, 6000);
+    };
+    if (!el.paused && el.readyState > 2) onPlaying();
+    el.addEventListener('playing', onPlaying);
+    el.addEventListener('pause', onPause);
+    return () => {
+      if (pausedTimer) clearTimeout(pausedTimer);
+      el.removeEventListener('playing', onPlaying);
+      el.removeEventListener('pause', onPause);
+    };
+  }, [videoRef, streamUrl, id]);
 
   // Correct the seeded orientation from the real frame once one is decoded.
   useEffect(() => {
@@ -609,48 +646,24 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
         </div>
       )}
 
-      {/* Offline / unreachable: the proxy could not start (e.g. the streamer is
-          offline). Lets the user retry or hide the tile so it stops eating grid
-          space while the others play. */}
-      {loadError && !raid && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/85 backdrop-blur-sm z-30 px-4 text-center">
-          {profileImageUrl ? (
-            <img
-              src={profileImageUrl}
-              alt=""
-              className="w-12 h-12 rounded-full object-cover ring-2 ring-white/10 grayscale opacity-80"
-            />
-          ) : (
-            <div className="w-12 h-12 rounded-full bg-white/[0.06] flex items-center justify-center">
-              <WifiOff className="w-5 h-5 text-textMuted" />
-            </div>
-          )}
-          <div>
-            <p className="text-sm font-semibold text-white/90 truncate max-w-[220px]">
-              {channelName || channelLogin}
-            </p>
-            <p className="text-xs text-textMuted mt-0.5">Offline or unreachable</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Tooltip content="Try loading this stream again" delay={300} side="bottom">
-              <button
-                onClick={() => retrySlot(id)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg glass-button text-textSecondary hover:text-accent text-xs font-semibold"
-              >
-                <RefreshCcw className="w-3.5 h-3.5" /> Retry
-              </button>
-            </Tooltip>
-            <Tooltip content="Hide this stream (tuck it into the dock tray)" delay={300} side="bottom">
-              <button
-                onClick={() => dockSlot(id)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg glass-button text-textSecondary hover:text-white text-xs font-semibold"
-              >
-                <EyeOff className="w-3.5 h-3.5" /> Hide
-              </button>
-            </Tooltip>
-          </div>
-        </div>
-      )}
+      {/* Offline: the same card the main view shows, compact, over the
+          channel's own offline art. A Twitch tile starts its stream on its own
+          when the channel goes live (Rust's grid live check), so there is no
+          Retry; the toolbar's reload covers an unreachable tile. Chat keeps
+          working like any tile's. */}
+      <AnimatePresence>
+        {loadError && !raid && (
+          <OfflineCard
+            compact
+            room={offlineRoom}
+            fallbackName={channelName || channelLogin}
+            fallbackAvatar={profileImageUrl}
+            live={offlineRoom?.live ?? null}
+            joining={false}
+            onWatchLive={() => retrySlot(id)}
+          />
+        )}
+      </AnimatePresence>
 
       {error && !raid && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 z-10 text-rose-500 pointer-events-none">
