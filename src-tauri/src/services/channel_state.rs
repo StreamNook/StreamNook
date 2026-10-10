@@ -27,6 +27,7 @@ use tauri::{Emitter, Manager};
 use tokio::sync::RwLock;
 
 use crate::models::settings::AppState;
+use crate::models::stream::TwitchStream;
 use crate::services::collaboration::{self, Collaboration};
 use crate::services::twitch_service::TwitchService;
 
@@ -70,6 +71,11 @@ pub struct ChannelState {
     /// is often a glitch, so a live channel only reads offline after two.
     #[serde(skip)]
     offline_misses: u8,
+    /// Whether the viewer poll has answered for this channel yet. The first
+    /// answer is always emitted: an offline channel's state equals the empty
+    /// start, and without it the view could never tell offline from unknown.
+    #[serde(skip)]
+    answered: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -302,28 +308,38 @@ async fn refresh_viewers(inner: &Inner) {
     if by_login.is_empty() {
         return;
     }
-    let ids: Vec<String> = by_login.values().cloned().collect();
-    let live: HashMap<String, Live> = match TwitchService::get_streams_by_user_ids(&ids).await {
-        Ok(streams) => streams
-            .into_iter()
-            .map(|s| {
-                let some = |v: String| Some(v).filter(|v| !v.is_empty());
-                let live = Live {
-                    viewer_count: Some(s.viewer_count as u64),
-                    started_at: some(s.started_at),
-                    title: some(s.title),
-                    game_name: some(s.game_name),
-                };
-                (s.user_id, live)
-            })
-            .collect(),
-        Err(e) => {
-            debug!("[ChannelState] viewers: {e}");
-            return;
-        }
+    let ids: Vec<String> = by_login.values().filter(|id| !id.is_empty()).cloned().collect();
+    if ids.is_empty() {
+        return;
+    }
+    let streams = match TwitchService::get_streams_by_user_ids(&ids).await {
+        Ok(streams) => streams,
+        // Signed out (Helix needs an account): the public GQL answers the same.
+        Err(e) => match TwitchService::get_live_public(&ids, &[]).await {
+            Ok(streams) => streams,
+            Err(public) => {
+                debug!("[ChannelState] viewers: {e}; public: {public}");
+                return;
+            }
+        },
     };
+    let rows: HashMap<String, TwitchStream> = streams.into_iter().map(|s| (s.user_id.clone(), s)).collect();
+    let live: HashMap<String, Live> = rows
+        .iter()
+        .map(|(id, s)| {
+            let some = |v: &String| Some(v.clone()).filter(|v| !v.is_empty());
+            let live = Live {
+                viewer_count: Some(s.viewer_count as u64),
+                started_at: some(&s.started_at),
+                title: some(&s.title),
+                game_name: some(&s.game_name),
+            };
+            (id.clone(), live)
+        })
+        .collect();
     let at = now_secs();
     let mut changed: Vec<(String, Live)> = Vec::new();
+    let mut went_live: Vec<TwitchStream> = Vec::new();
     {
         let mut state = inner.state.write().await;
         for (login, id) in &by_login {
@@ -341,9 +357,15 @@ async fn refresh_viewers(inner: &Inner) {
                     title: s.title.clone(),
                     game_name: s.game_name.clone(),
                 };
-                if before != now {
+                if before != now || !s.answered {
                     changed.push((login.clone(), now.clone()));
                 }
+                if before.started_at.is_none() && now.started_at.is_some() {
+                    if let Some(row) = rows.get(id) {
+                        went_live.push(row.clone());
+                    }
+                }
+                s.answered = true;
                 s.viewer_count = now.viewer_count;
                 s.started_at = now.started_at;
                 s.title = now.title;
@@ -364,6 +386,10 @@ async fn refresh_viewers(inner: &Inner) {
                 at,
             },
         );
+    }
+    // An offline room waiting on one of these channels starts its stream.
+    for row in went_live {
+        crate::services::watch_session::on_channel_live(&inner.app, row);
     }
     let live_logins: Vec<String> = by_login
         .iter()

@@ -99,6 +99,13 @@ fn type_enabled(app: &AppHandle, n: &LiveNotification) -> bool {
         }
 }
 
+/// Whether this is the channel whose offline room is open: the room itself
+/// shows the go-live, so a notification would only repeat it.
+fn shown_by_room(n: &LiveNotification, room: Option<&str>) -> bool {
+    let parsed = crate::services::providers::key::parse_key(&n.streamer_login);
+    parsed.provider == "twitch" && room.is_some_and(|r| parsed.channel.eq_ignore_ascii_case(r))
+}
+
 /// Announce that a streamer went live, unless it is a repeat or switched off.
 pub fn announce(app: &AppHandle, notification: LiveNotification) {
     let now = chrono::Utc::now().timestamp_millis();
@@ -107,6 +114,9 @@ pub fn announce(app: &AppHandle, notification: LiveNotification) {
         Some((format!("live-test-{now}"), vec![provider], None))
     } else {
         if !type_enabled(app, &notification) {
+            return;
+        }
+        if shown_by_room(&notification, crate::services::watch_session::offline_room_login().as_deref()) {
             return;
         }
         let mut guard = GATE.lock().unwrap_or_else(|e| e.into_inner());
@@ -132,6 +142,14 @@ mod tests {
             is_test: false,
             source: None,
         }
+    }
+
+    #[test]
+    fn the_open_offline_room_is_not_announced_again() {
+        assert!(shown_by_room(&live("Shroud"), Some("shroud")));
+        assert!(!shown_by_room(&live("shroud"), None));
+        assert!(!shown_by_room(&live("xqc"), Some("shroud")));
+        assert!(!shown_by_room(&live("kick:shroud"), Some("shroud")), "another platform is another channel");
     }
 
     #[test]

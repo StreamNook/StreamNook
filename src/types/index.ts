@@ -854,6 +854,7 @@ export interface MultiNookSlot {
   gameName?: string;         // Current stream category (for rich presence majority game)
   quality?: string;          // Preferred Streamlink quality for this tile (defaults to 'best')
   loadError?: boolean;       // Ephemeral: the proxy failed to start (offline/unreachable). Not persisted.
+  offline?: boolean;         // Ephemeral: Rust's live check (Twitch tiles) says the channel is not streaming; undefined until it answers. Not persisted.
   title?: string;            // Ephemeral: current stream title, refreshed from Helix while the grid is open. Not persisted, since a saved title goes stale the moment the streamer edits it.
   broadcasterType?: string;  // Ephemeral: 'partner' | 'affiliate' | ''. Drives the verified mark on the tile. Resolved from helix/users, which every slot-creating path already calls.
   raid?: MultiNookRaid;      // Ephemeral: the channel this tile's streamer raided. Covers the tile with a card until dismissed. Not persisted.
@@ -1639,6 +1640,45 @@ export interface TwitchStream {
 
 /** Platform-neutral alias for new code; identical to `TwitchStream`. */
 export type Stream = TwitchStream;
+
+/** A Twitch channel's offline room (Rust `open_offline_room`): what the player
+ *  area shows while the channel is not streaming. */
+export interface OfflineRoom {
+  user_id: string;
+  login: string;
+  display_name: string;
+  avatar_url: string | null;
+  offline_image_url: string | null;
+  /** Streaming after all: the card that opened the room was stale. */
+  live: TwitchStream | null;
+  /** When the last broadcast ended (RFC 3339). */
+  last_live_at: string | null;
+  last_title: string | null;
+  last_category: string | null;
+  latest_vod: {
+    id: string;
+    title: string;
+    created_at: string;
+    length_seconds: number;
+    thumbnail_url: string;
+    category: string | null;
+  } | null;
+  next_stream: {
+    start_at: string;
+    end_at: string | null;
+    title: string | null;
+    category: string | null;
+  } | null;
+  /** peepoSad, waiting for them: 7TV's global one (seasonal when 7TV dresses
+   *  its globals up for a holiday), else FFZ's. */
+  sad_emote_url: string;
+  /** peepoHappy, for the moment they go live, chosen the same way. */
+  happy_emote_url: string;
+  /** A rare golden peepoSad (Rust rolls it per room). */
+  shiny: boolean;
+  /** People in the chat right now, waiting with you; refreshed while open. */
+  chatters: number | null;
+}
 
 export interface TwitchClip {
   id: string;

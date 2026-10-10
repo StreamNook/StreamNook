@@ -144,6 +144,7 @@ import { Logger } from '../utils/logger';
 const chatDrafts = new Map<string, string>();
 import { useVisibleInterval } from '../utils/useVisibleInterval';
 import { formatShortCount, formatUptimeClock, pickLiveStartedAt } from '../utils/streamStats';
+import { lastLiveLabel } from '../utils/lastLive';
 import { kickAppliedSeconds, kickTimeoutMinutes } from '../utils/kickTimeout';
 
 // Channel Points hover tooltip — portalled to document.body to escape overflow-hidden
@@ -1019,7 +1020,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
           language: 'en',
           thumbnail_url: '',
           tag_ids: [],
-          is_mature: false
+          is_mature: false,
+          // Rust's grid live check (Twitch tiles): an offline tile's chat says
+          // when it was last live, as everywhere else.
+          is_live: activeSlot.offline !== true,
         } as TwitchStream;
       }
     }
@@ -2272,6 +2276,20 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     currentStream?.started_at,
     playingRecording,
   );
+  // Known to be offline, never merely "not answered yet": the main view's
+  // offline room, or a docked / MultiChat channel Rust reported offline. The
+  // header then says when it was last live, worded like everywhere else.
+  const knownOffline = channelOverride
+    ? channelOverride.is_live === false
+    : isMultiNookActive
+      ? currentStream?.is_live === false
+      : currentMediaType === 'offline_chat';
+  const offlineChannelId = knownOffline ? (currentStream?.user_id ?? '') : '';
+  const lastLiveAt = useAppStore((s) => {
+    if (!offlineChannelId) return null;
+    if (!channelOverride && s.offlineRoom?.user_id === offlineChannelId) return s.offlineRoom.last_live_at;
+    return s.offlineLastBroadcasts[offlineChannelId] ?? null;
+  });
   // Shared Viewership: while the channel streams with others, the header shows
   // a Together chip beside the channel's own count.
   const collab = isTwitch ? (channelState?.collab ?? null) : null;
@@ -5010,6 +5028,19 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       }
                       allowMultiNook={!channelOverride}
                     />
+                  )}
+                  {/* Offline: when it was last live, in the live numbers' place. */}
+                  {knownOffline && viewerCount === null && !liveStartedAt && (
+                    <div className="chrome-glaze chrome-glaze--flat chat-header-stats chat-header-stats--uptime-only">
+                      <Tooltip
+                        content={lastLiveAt ? `Last live ${new Date(lastLiveAt).toLocaleString()}` : 'Not streaming right now'}
+                        side="bottom"
+                      >
+                        <span className="chat-header-stat cursor-default pointer-events-auto text-textSecondary">
+                          {lastLiveLabel(lastLiveAt)}
+                        </span>
+                      </Tooltip>
+                    </div>
                   )}
                   {/* The live numbers read as one object: viewers and uptime in a
                       single capsule, split by a hairline. */}

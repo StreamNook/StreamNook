@@ -40,6 +40,33 @@ pub(crate) fn normalize_gql_language(value: &str) -> String {
     value.to_ascii_lowercase().replace('_', "-")
 }
 
+/// A Helix-shaped live row from a public GQL `user` node, or `None` when the
+/// channel is not streaming. The thumbnail keeps Helix's `{width}x{height}`
+/// template so every surface sizes it the same way.
+pub(crate) fn live_row_from_gql(user: &serde_json::Value) -> Option<TwitchStream> {
+    let stream = user.get("stream").filter(|s| !s.is_null())?;
+    let s = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_str()).unwrap_or_default().to_string();
+    let login = s(user, "login");
+    let game = stream.get("game").filter(|g| !g.is_null());
+    Some(TwitchStream {
+        id: s(stream, "id"),
+        user_id: s(user, "id"),
+        user_name: s(user, "displayName"),
+        thumbnail_url: format!("https://static-cdn.jtvnw.net/previews-ttv/live_user_{login}-{{width}}x{{height}}.jpg"),
+        user_login: login,
+        title: s(stream, "title"),
+        viewer_count: stream.get("viewersCount").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        game_id: game.map(|g| s(g, "id")).unwrap_or_default(),
+        game_name: game.map(|g| s(g, "displayName")).unwrap_or_default(),
+        started_at: s(stream, "createdAt"),
+        broadcaster_type: None,
+        profile_image_url: Some(s(user, "profileImageURL")).filter(|u| !u.is_empty()),
+        is_live: Some(true),
+        tags: None,
+        language: None,
+    })
+}
+
 static GQL_DEVICE_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// Stable per-install device id for first-party GQL calls (recommendations,
@@ -324,7 +351,9 @@ impl TwitchService {
     }
 
     fn delete_token_file() -> Result<()> {
-        token_vault::remove(&Self::get_token_file_path()?)
+        let result = token_vault::remove(&Self::get_token_file_path()?);
+        crate::services::account_roster::set_twitch_identity(None);
+        result
     }
 
     /// Write a token to the primary slot. This is the single definition of
@@ -1156,7 +1185,9 @@ impl TwitchService {
 
     pub async fn get_user_info() -> Result<UserInfo> {
         let token = Self::get_token().await?;
-        Self::get_user_info_with_token(&token).await
+        let info = Self::get_user_info_with_token(&token).await?;
+        crate::services::account_roster::set_twitch_identity(Some(info.clone()));
+        Ok(info)
     }
 
     /// Fetch the Helix user profile for an arbitrary access token, not just the
@@ -2739,7 +2770,17 @@ impl TwitchService {
             request = request.header(AUTHORIZATION, format!("Bearer {}", token));
         }
 
-        let response = request.send().await?.json::<serde_json::Value>().await?;
+        let response = request.send().await?;
+        // A refusal (signed out, an expired token, a rate limit) carries no
+        // `data`; reading it as "offline" would call a live channel offline.
+        // The public GQL answers the same question without an account.
+        let status = response.status();
+        if !status.is_success() {
+            debug!("[TwitchService] stream check for {user_login}: HTTP {status}, asking the public GQL");
+            let rows = Self::get_live_public(&[], &[user_login.to_string()]).await?;
+            return Ok(rows.into_iter().next());
+        }
+        let response = response.json::<serde_json::Value>().await?;
 
         let data = response.get("data").and_then(|d| d.as_array());
 
@@ -2854,7 +2895,15 @@ impl TwitchService {
                 request = request.header(AUTHORIZATION, format!("Bearer {}", token));
             }
 
-            let response = request.send().await?.json::<serde_json::Value>().await?;
+            let response = request.send().await?;
+            // A refusal (signed out, an expired token) carries no `data`, which
+            // would read as every channel offline: ask the public GQL instead.
+            if !response.status().is_success() {
+                debug!("[TwitchService] streams batch: HTTP {}, asking the public GQL", response.status());
+                live.extend(Self::get_live_public(&[], chunk).await?);
+                continue;
+            }
+            let response = response.json::<serde_json::Value>().await?;
             if let Some(arr) = response.get("data").and_then(|d| d.as_array()) {
                 for item in arr {
                     if let Ok(stream) = serde_json::from_value::<TwitchStream>(item.clone()) {
@@ -3481,6 +3530,65 @@ impl TwitchService {
         });
         let resp = Self::gql_public_read(body).await?;
         Ok(resp.get("data").cloned().unwrap_or(serde_json::Value::Null))
+    }
+
+    /// Live rows for Twitch channels from the public GQL, with no account: the
+    /// signed-out stand-in for Helix `streams`. Pass ids or logins. Offline and
+    /// unknown channels are simply absent, like in Helix.
+    pub async fn get_live_public(ids: &[String], logins: &[String]) -> Result<Vec<TwitchStream>> {
+        let (arg, ty, keys) = if ids.is_empty() { ("logins", "String", logins) } else { ("ids", "ID", ids) };
+        let mut out = Vec::new();
+        for chunk in keys.chunks(100) {
+            let body = serde_json::json!({
+                "operationName": "StreamNookLivePublic",
+                "query": format!(
+                    "query StreamNookLivePublic($keys: [{ty}!]) {{ users({arg}: $keys) {{ id login displayName \
+                     profileImageURL(width: 70) stream {{ id type createdAt viewersCount title \
+                     game {{ id displayName }} }} }} }}"
+                ),
+                "variables": { "keys": chunk },
+            });
+            let resp = Self::gql_public_read(body).await?;
+            let users = resp.pointer("/data/users").and_then(|u| u.as_array()).cloned().unwrap_or_default();
+            out.extend(users.iter().filter_map(live_row_from_gql));
+        }
+        Ok(out)
+    }
+
+    /// How many people are in a channel's chat right now, live or offline, from
+    /// the public chatter list (the Android client id, which Twitch exempts from
+    /// the integrity check the web one fails here). No account needed.
+    pub async fn get_chatter_count(login: &str) -> Result<u64> {
+        let body = serde_json::json!({
+            "query": "query StreamNookChatterCount($login: String!) { channel(name: $login) { chatters { count } } }",
+            "variables": { "login": login.to_lowercase() },
+        });
+        let resp = Self::gql_public_read(body).await?;
+        resp.pointer("/data/channel/chatters/count")
+            .and_then(|c| c.as_u64())
+            .ok_or_else(|| anyhow::anyhow!("no chatter count for {login}"))
+    }
+
+    /// Everything a channel's offline room shows, in one public GQL read (no
+    /// account): who it is, its offline image, whether it is live after all,
+    /// the last broadcast, the latest archived VOD and the next scheduled
+    /// stream. The raw `user` node; `services::offline_room` reads it.
+    pub async fn get_offline_room(login: &str) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "operationName": "StreamNookOfflineRoom",
+            "query": "query StreamNookOfflineRoom($login: String!) { user(login: $login) { \
+                id login displayName profileImageURL(width: 150) offlineImageURL \
+                stream { id type createdAt viewersCount title game { id displayName } } \
+                lastBroadcast { startedAt title game { displayName } } \
+                videos(first: 1, type: ARCHIVE, sort: TIME) { edges { node { \
+                    id title createdAt lengthSeconds previewThumbnailURL(width: 440, height: 248) \
+                    game { displayName } } } } \
+                channel { schedule { nextSegment { startAt endAt title isCancelled categories { name } } } } \
+            } }",
+            "variables": { "login": login },
+        });
+        let resp = Self::gql_public_read(body).await?;
+        Ok(resp.pointer("/data/user").cloned().unwrap_or(serde_json::Value::Null))
     }
 
     /// The Shared Chat session a channel is in: its host and every participating
@@ -5980,6 +6088,21 @@ impl TwitchService {
 #[cfg(test)]
 mod discovery_tests {
     use super::*;
+
+    #[test]
+    fn public_gql_rows_read_like_helix() {
+        let user = serde_json::json!({
+            "id": "233741947", "login": "strogo", "displayName": "StRoGo", "profileImageURL": "https://x/a.png",
+            "stream": { "id": "317", "type": "live", "createdAt": "2026-10-09T07:59:52Z", "viewersCount": 38699,
+                        "title": "FURIA vs MOUZ", "game": { "id": "32399", "displayName": "Counter-Strike" } }
+        });
+        let row = live_row_from_gql(&user).expect("a live user is a row");
+        assert_eq!((row.user_id.as_str(), row.user_login.as_str(), row.viewer_count), ("233741947", "strogo", 38699));
+        assert_eq!((row.game_id.as_str(), row.game_name.as_str()), ("32399", "Counter-Strike"));
+        assert_eq!(row.started_at, "2026-10-09T07:59:52Z");
+        assert!(row.thumbnail_url.contains("live_user_strogo-{width}x{height}"));
+        assert!(live_row_from_gql(&serde_json::json!({ "id": "1", "login": "x", "stream": null })).is_none());
+    }
 
     #[test]
     fn gql_language_normalizes_to_helix_form() {

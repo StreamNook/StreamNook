@@ -13,7 +13,13 @@
 //! - `watch-session://redirect`      a raid to follow, with the target row
 //! - `watch-session://offline`       the watched stream looks offline; the view
 //!                                   asks `watch_session_resolve_offline`
-//! - `watch-session://went-live`     the watched channel just went live
+//! - `watch-session://went-live`     an offline room's channel went live and
+//!                                   is playable: `{ stream }`
+//!
+//! An offline room (`WatchTarget::offline`) is a session too: the view shows a
+//! channel's chat while it is not streaming, and the session waits for it to
+//! go live, through EventSub `stream.online` when signed in and the batched
+//! `channel_state` viewer poll always (which also covers signed-out viewers).
 //! - `watch-session://stream-update` fresh title / category / viewers
 //! - `watch-session://resolving`     an offline confirmation started / ended
 
@@ -36,6 +42,9 @@ pub const OFFLINE_EVENT: &str = "watch-session://offline";
 pub const WENT_LIVE_EVENT: &str = "watch-session://went-live";
 pub const STREAM_UPDATE_EVENT: &str = "watch-session://stream-update";
 pub const RESOLVING_EVENT: &str = "watch-session://resolving";
+/// An offline room's "N waiting": `{ login, count }`, about once a minute.
+pub const WAITING_EVENT: &str = "watch-session://waiting";
+const WAITING_POLL: Duration = Duration::from_secs(60);
 
 /// Helix keeps listing a dead stream for a while after `stream.offline`, so a
 /// fast double-check reads "still online" for a genuinely ended stream. Poll
@@ -75,6 +84,10 @@ pub struct WatchTarget {
     /// Whether a Twitch account is signed in (EventSub needs one).
     #[serde(default)]
     pub authenticated: bool,
+    /// An offline room: the channel is not streaming and the view shows its
+    /// chat. The session waits for it to go live instead of for it to end.
+    #[serde(default)]
+    pub offline: bool,
 }
 
 struct Session {
@@ -83,7 +96,15 @@ struct Session {
     tasks: Vec<tauri::async_runtime::JoinHandle<()>>,
     last_raid_ms: i64,
     resolving: bool,
+    /// An offline room already announced its channel going live.
+    live_sent: bool,
 }
+
+/// How long an offline room waits for a channel that announced `stream.online`
+/// to be listed live (and so playable): Twitch can announce before the stream
+/// is watchable, and starting it then fails into chat-only.
+const LIVE_CONFIRM_ATTEMPTS: usize = 8;
+const LIVE_CONFIRM_INTERVAL: Duration = Duration::from_secs(4);
 
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
 static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -101,9 +122,20 @@ fn with_session<R>(f: impl FnOnce(&mut Option<Session>) -> R) -> R {
 pub fn current_twitch_watch() -> Option<(String, String)> {
     with_session(|s| {
         s.as_ref()
-            .filter(|s| s.target.provider == "twitch")
+            .filter(|s| s.target.provider == "twitch" && !s.target.offline)
             .map(|s| (s.target.login.to_lowercase(), s.target.started_at.clone()))
     })
+}
+
+/// What the main window is watching, if anything. An offline room plays
+/// nothing, so it is not a target.
+pub fn current_target() -> Option<WatchTarget> {
+    with_session(|s| s.as_ref().filter(|s| !s.target.offline).map(|s| s.target.clone()))
+}
+
+/// The channel whose offline room is open, if one is.
+pub fn offline_room_login() -> Option<String> {
+    with_session(|s| s.as_ref().filter(|s| s.target.offline).map(|s| s.target.login.to_lowercase()))
 }
 
 /// The session's target, when `seq` is still the current session.
@@ -147,6 +179,14 @@ async fn publish_presence(app: &AppHandle, target: &WatchTarget) {
         return;
     }
     let name = if target.user_name.is_empty() { &target.login } else { &target.user_name };
+    if target.offline {
+        let started = u64::try_from(now_ms()).unwrap_or_default();
+        let small = format!("{}_logo", target.provider);
+        if let Err(e) = discord::watching(&format!("In {name}'s chat"), "Offline", &small, started, "", &watch_url(target), &state).await {
+            log::debug!("[WatchSession] Discord presence not updated (Discord may not be running): {e}");
+        }
+        return;
+    }
     let activity = if target.title.is_empty() {
         format!("Live on {}", provider_label(&target.provider))
     } else {
@@ -222,12 +262,24 @@ pub async fn start(app: AppHandle, target: WatchTarget) {
             tasks: Vec::new(),
             last_raid_ms,
             resolving: false,
+            live_sent: false,
         })
     });
     let previous_was_twitch = previous.as_ref().is_some_and(|p| p.target.provider == "twitch");
     if let Some(prev) = previous {
         release(prev);
     }
+    // StreamNook watch time counts a live channel on screen; an offline room
+    // shows chat only, so it clears the main source instead.
+    crate::services::watch_minutes::set_source(
+        crate::services::watch_minutes::MAIN,
+        (!target.offline).then(|| crate::services::watch_minutes::WatchedChannel {
+            platform: target.provider.clone(),
+            channel_id: target.user_id.clone(),
+            login: target.login.clone(),
+            name: if target.user_name.is_empty() { target.login.clone() } else { target.user_name.clone() },
+        }),
+    );
 
     let mut tasks = Vec::new();
     if target.provider == "twitch" {
@@ -241,13 +293,37 @@ pub async fn start(app: AppHandle, target: WatchTarget) {
             service.disconnect().await;
         }
         drop(service);
-        hype_train_watch::watch(
-            &app,
-            hype_train_watch::INTERNAL_OWNER,
-            &target.login,
-            Some(target.user_id.clone()),
-            &target.user_name,
-        );
+        if target.offline {
+            // The batched viewer poll notices the go-live too, signed in or
+            // not; a channel that is also docked costs no extra request.
+            if !target.user_id.is_empty() {
+                let known = crate::services::channel_state::watch(&target.login, &target.user_id, true).await;
+                // Another surface already watches it and knows it is live: no
+                // edge will come, so look now.
+                if known.started_at.is_some() {
+                    let (app, target) = (app.clone(), target.clone());
+                    tauri::async_runtime::spawn(async move {
+                        if let Some(row) = live_row(&target).await {
+                            announce_live(&app, seq, row);
+                        }
+                    });
+                }
+            }
+            tasks.push(tauri::async_runtime::spawn(poll_waiting(app.clone(), seq)));
+        } else {
+            hype_train_watch::watch(
+                &app,
+                hype_train_watch::INTERNAL_OWNER,
+                &target.login,
+                Some(target.user_id.clone()),
+                &target.user_name,
+            );
+        }
+    } else if target.offline {
+        // Offline rooms are Twitch-only; a stale subscription must still go.
+        if previous_was_twitch {
+            app.state::<EventSubServiceState>().0.read().await.disconnect().await;
+        }
     } else {
         // A Twitch subscription must not keep firing over a Kick stream.
         if previous_was_twitch {
@@ -274,6 +350,7 @@ pub async fn start(app: AppHandle, target: WatchTarget) {
 /// keeps its EventSub subscription and publishes its own presence.
 pub async fn stop(app: AppHandle, preserve_backend: bool) {
     let previous = with_session(|s| s.take());
+    crate::services::watch_minutes::set_source(crate::services::watch_minutes::MAIN, None);
     let Some(prev) = previous else { return };
     let was_twitch = prev.target.provider == "twitch";
     release(prev);
@@ -307,8 +384,16 @@ fn release(session: Session) {
     for task in session.tasks {
         task.abort();
     }
-    if session.target.provider == "twitch" {
+    if session.target.provider != "twitch" {
+        return;
+    }
+    if !session.target.offline {
         hype_train_watch::unwatch(hype_train_watch::INTERNAL_OWNER, &session.target.login);
+    } else if !session.target.user_id.is_empty() {
+        let login = session.target.login;
+        tauri::async_runtime::spawn(async move {
+            crate::services::channel_state::unwatch(&login, true).await;
+        });
     }
 }
 
@@ -367,10 +452,71 @@ pub fn on_offline(app: &AppHandle, broadcaster_id: &str, login: &str) {
     }
 }
 
+/// `stream.online` for the watched channel. Only an offline room acts on it,
+/// and only once the stream is listed live: Twitch can announce a stream
+/// before it is watchable.
 pub fn on_online(app: &AppHandle, online: &StreamOnlineEvent) {
-    if is_current_broadcaster(&online.broadcaster_user_id, &online.broadcaster_user_login).is_some() {
-        let _ = app.emit(WENT_LIVE_EVENT, online);
+    let Some(seq) = is_current_broadcaster(&online.broadcaster_user_id, &online.broadcaster_user_login) else {
+        return;
+    };
+    let Some(target) = current(seq).filter(|t| t.offline) else { return };
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        for attempt in 0..LIVE_CONFIRM_ATTEMPTS {
+            if attempt > 0 {
+                tokio::time::sleep(LIVE_CONFIRM_INTERVAL).await;
+            }
+            if current(seq).is_none() {
+                return;
+            }
+            if let Some(row) = live_row(&target).await {
+                announce_live(&app, seq, row);
+                return;
+            }
+        }
+        log::debug!("[WatchSession] {} announced online but was never listed live", target.login);
+    });
+}
+
+/// The batched viewer poll saw a channel go live (or found it live on its
+/// first look). An offline room on that channel starts it.
+pub fn on_channel_live(app: &AppHandle, row: TwitchStream) {
+    let Some(seq) = is_current_broadcaster(&row.user_id, &row.user_login) else { return };
+    if current(seq).is_some_and(|t| t.offline) {
+        announce_live(app, seq, row);
     }
+}
+
+/// The room's channel as a live row, or `None` while it is offline (or the
+/// check failed: a failed check is not evidence either way).
+async fn live_row(target: &WatchTarget) -> Option<TwitchStream> {
+    let rows = if target.user_id.is_empty() {
+        TwitchService::get_live_public(&[], &[target.login.clone()]).await
+    } else {
+        TwitchService::get_live_public(&[target.user_id.clone()], &[]).await
+    };
+    match rows {
+        Ok(rows) => rows.into_iter().next(),
+        Err(e) => {
+            log::debug!("[WatchSession] live check for {} failed: {e}", target.login);
+            None
+        }
+    }
+}
+
+/// Tell the view an offline room's channel is live, once per session.
+fn announce_live(app: &AppHandle, seq: u64, row: TwitchStream) {
+    let first = with_session(|s| match s.as_mut().filter(|s| s.seq == seq && s.target.offline) {
+        Some(session) if !session.live_sent => {
+            session.live_sent = true;
+            true
+        }
+        _ => false,
+    });
+    if !first {
+        return;
+    }
+    let _ = app.emit(WENT_LIVE_EVENT, json!({ "stream": row }));
 }
 
 pub fn on_channel_update(app: &AppHandle, update: &ChannelUpdateEvent) {
@@ -400,6 +546,25 @@ pub fn on_channel_update(app: &AppHandle, update: &ChannelUpdateEvent) {
 }
 
 // ---- Polls -----------------------------------------------------------------------
+
+/// How many are waiting in an offline room's chat, refreshed while the room is
+/// open (the room's own lookup gave the first count). Skipped while no window
+/// is on screen; ends with the session.
+async fn poll_waiting(app: AppHandle, seq: u64) {
+    loop {
+        tokio::time::sleep(WAITING_POLL).await;
+        let Some(target) = current(seq).filter(|t| t.offline) else { return };
+        if crate::services::window_visibility::all_hidden() {
+            continue;
+        }
+        if let Ok(count) = TwitchService::get_chatter_count(&target.login).await {
+            if current(seq).is_none() {
+                return;
+            }
+            let _ = app.emit(WAITING_EVENT, json!({ "login": target.login, "count": count }));
+        }
+    }
+}
 
 async fn poll_provider_live(app: AppHandle, seq: u64) {
     let mut strikes = 0;
@@ -496,6 +661,9 @@ pub async fn resolve_offline(app: AppHandle) -> OfflineDecision {
     };
     let started = with_session(|s| {
         let session = s.as_mut().filter(|s| s.target.provider == "twitch")?;
+        if session.target.offline {
+            return Some(Err("an offline room has no stream to end"));
+        }
         if session.resolving {
             return Some(Err("already resolving"));
         }
@@ -671,17 +839,33 @@ mod tests {
                     game_name: String::new(),
                     started_at: String::new(),
                     authenticated: true,
+                    offline: false,
                 },
                 tasks: Vec::new(),
                 last_raid_ms: 0,
                 resolving: false,
+                live_sent: false,
             })
         });
         assert_eq!(is_current_broadcaster("123", ""), Some(42));
         assert_eq!(is_current_broadcaster("", "CHAN"), Some(42));
         assert_eq!(is_current_broadcaster("999", "other"), None);
+        assert!(offline_room_login().is_none());
+        assert!(current_target().is_some());
+        with_session(|s| s.as_mut().unwrap().target.offline = true);
+        // An offline room still hears its channel, but plays nothing.
+        assert_eq!(is_current_broadcaster("123", ""), Some(42));
+        assert_eq!(offline_room_login().as_deref(), Some("chan"));
+        assert!(current_target().is_none());
+        assert!(current_twitch_watch().is_none());
         with_session(|s| *s = None);
         assert_eq!(is_current_broadcaster("123", "chan"), None);
+    }
+
+    #[test]
+    fn an_old_view_starts_a_live_session() {
+        let target: WatchTarget = serde_json::from_value(json!({ "provider": "twitch", "login": "chan" })).unwrap();
+        assert!(!target.offline, "a target without the flag is a live stream");
     }
 
     #[test]

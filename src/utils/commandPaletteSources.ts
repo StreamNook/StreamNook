@@ -1078,6 +1078,23 @@ function buildPlayerControlItems(): PaletteItem[] {
   ];
 }
 
+// Your own channel: its offline chat, or its stream when you are live (the
+// room starts the stream itself). Signed in only.
+function buildOwnChannelItems(): PaletteItem[] {
+  const { isAuthenticated, currentUser } = useAppStore.getState();
+  if (!isAuthenticated || !(currentUser?.login || currentUser?.username)) return [];
+  return [
+    {
+      id: 'nav.ownChannel',
+      section: 'Quick Actions',
+      title: 'Your channel',
+      subtitle: 'Open your own chat, live or offline',
+      keywords: 'my channel own chat offline room me mine self stream',
+      run: () => void useAppStore.getState().openOwnChannel(),
+    },
+  ];
+}
+
 export function getStaticItems(): PaletteItem[] {
   // Static-but-dynamic: quick actions + settings catalog are truly static,
   // sleep-timer subtitles are recomputed for live countdown text, snippets
@@ -1093,6 +1110,7 @@ export function getStaticItems(): PaletteItem[] {
   const platforms = buildPlatformItems();
   const items: PaletteItem[] = [
     ...platforms,
+    ...buildOwnChannelItems(),
     ...quick.map((it) => {
       if (it.id === 'qa.sleep15') return { ...it, subtitle: sleepTimerSubtitle(15) };
       if (it.id === 'qa.sleep30') return { ...it, subtitle: sleepTimerSubtitle(30) };

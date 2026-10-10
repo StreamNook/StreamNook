@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, emit } from '@tauri-apps/api/event';
-import type { Settings, TwitchUser, TwitchStream, UserInfo, TwitchCategory, HypeTrainData, TwitchVideo, ModLogEvent, DropProgressStatus, FavoriteChannel, VodStartInfo, LiveRewindInfo, HomeSnapshot, HomeSnapshotUpdate, HypeTrainBulkStatus, ContinueWatchingItem, FollowingLists, Collaboration, SharedChat } from '../types';
+import type { Settings, TwitchUser, TwitchStream, UserInfo, TwitchCategory, HypeTrainData, ModLogEvent, DropProgressStatus, FavoriteChannel, VodStartInfo, LiveRewindInfo, HomeSnapshot, HomeSnapshotUpdate, HypeTrainBulkStatus, ContinueWatchingItem, FollowingLists, Collaboration, SharedChat, OfflineRoom } from '../types';
 import { trackActivity } from '../services/logService';
 import { Logger, setDiagnosticsEnabled } from '../utils/logger';
 import { getAppVersion } from '../utils/appVersion';
@@ -265,6 +265,14 @@ interface AppState {
    *  chat and `currentMediaType: 'live'` stay on the live channel; only the
    *  relay plays the VOD, and the player offers "Back to live". */
   liveRewind: { channel: string; videoId: string } | null;
+  /** The open offline room (Rust `open_offline_room`) while the main view is a
+   *  channel's offline chat; null otherwise, or when the lookup failed. */
+  offlineRoom: OfflineRoom | null;
+  /** The room's channel is live but was not started (Auto-join is off, a VOD
+   *  is playing, or its playback failed): the live row the room offers. */
+  offlineRoomLive: TwitchStream | null;
+  /** The room is starting its now-live stream. */
+  offlineRoomJoining: boolean;
   /** Whether the current live broadcast can be rewound (the channel keeps
    *  VODs). null while unknown or not live; Rust answers once per live start
    *  from a cached lookup, so the player can say "VODs are off" up front. */
@@ -516,7 +524,16 @@ interface AppState {
   // `chatOnly` skips the VOD lookup and replay: used when the channel is LIVE
   // but playback failed, where loading a past broadcast would contradict what
   // the user was told and swap chat to historical replay.
-  startOfflineChat: (channel: string, streamInfo?: TwitchStream, opts?: { chatOnly?: boolean }) => Promise<void>;
+  // `playVod` opens the room and starts its latest broadcast (Home's "Watch VOD").
+  startOfflineChat: (channel: string, streamInfo?: TwitchStream, opts?: { chatOnly?: boolean; playVod?: boolean }) => Promise<void>;
+  /** Play the room's latest broadcast inside the room: chat, the session and
+   *  its go-live watch all stay. */
+  playOfflineRoomVod: () => Promise<void>;
+  /** Stop the room's VOD and return to the room screen. */
+  leaveOfflineRoomVod: () => Promise<void>;
+  /** The signed-in viewer's own channel: its offline room, which starts the
+   *  stream itself when the channel is live. */
+  openOwnChannel: () => Promise<void>;
   playMedia: (type: 'clip' | 'video', url: string, info: MediaInfo) => Promise<void>;
   stopStream: (options?: { preserveBackend?: boolean }) => Promise<void>;
   restartStream: () => Promise<void>;  // Restart current stream (stops and starts again)
@@ -734,25 +751,40 @@ function ensureWatchSessionListeners(set: StoreSet, get: StoreGet): void {
     void get().handleStreamOffline();
   });
 
-  // Parked in this channel's offline chat when it goes live: switch to it.
-  void listen<{ broadcaster_user_login: string; broadcaster_user_name: string; id: string; started_at: string }>(
-    'watch-session://went-live',
-    (event) => {
-      const online = event.payload;
-      const state = get();
-      if (state.currentStream?.user_login !== online.broadcaster_user_login) return;
-      if (state.currentMediaType !== 'offline_chat') return;
-      Logger.info(`[WatchSession] Switching from offline chat to newly live stream: ${online.broadcaster_user_login}`);
-      state.addToast(`${online.broadcaster_user_name} just went live! Seamlessly connecting...`, 'success');
-      const live: TwitchStream = {
-        ...state.currentStream,
-        id: online.id || state.currentStream.id,
-        is_live: true,
-        started_at: online.started_at || new Date().toISOString(),
-      };
-      void state.startStream(live.user_login, live, true);
-    },
-  );
+  // How many are waiting in the open offline room's chat (Rust, each minute).
+  void listen<{ login: string; count: number }>('watch-session://waiting', (event) => {
+    const { offlineRoom } = get();
+    if (!offlineRoom || offlineRoom.login !== event.payload.login.toLowerCase()) return;
+    if (offlineRoom.chatters === event.payload.count) return;
+    set({ offlineRoom: { ...offlineRoom, chatters: event.payload.count } });
+  });
+
+  // The offline room's channel went live and is playable (Rust confirmed it):
+  // the room starts it, as twitch.tv does. A VOD playing in the room is never
+  // interrupted; then the room only offers the stream.
+  void listen<{ stream: TwitchStream }>('watch-session://went-live', (event) => {
+    const { stream } = event.payload;
+    const state = get();
+    if (state.currentMediaType !== 'offline_chat') return;
+    if (state.currentStream?.user_login?.toLowerCase() !== stream.user_login.toLowerCase()) return;
+    const live: TwitchStream = {
+      ...stream,
+      profile_image_url: stream.profile_image_url || state.currentStream.profile_image_url,
+    };
+    const watchingVod = state.streamUrl !== 'offline' && !!state.vodPlayback;
+    if (watchingVod) {
+      set({ offlineRoomLive: live });
+      return;
+    }
+    Logger.info(`[WatchSession] Offline room joining its now-live stream: ${live.user_login}`);
+    set({ offlineRoomLive: live, offlineRoomJoining: true });
+    // You were here, waiting, when it started.
+    void import('../utils/offlineAccolades')
+      .then((m) => m.earnOfflineAccolade(m.WORTH_THE_WAIT_ACCOLADE_ID))
+      .catch(() => {});
+    // The room's chat is already the live room's chat: keep it.
+    void state.startStream(live.user_login, live, true);
+  });
 
   // Fresh title / category (Twitch channel.update) or viewers (other platforms'
   // live check). The live check falls back field by field: a poll that simply
@@ -1224,6 +1256,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   originalMediaUrl: null,
   vodPlayback: null,
   liveRewind: null,
+  offlineRoom: null,
+  offlineRoomLive: null,
+  offlineRoomJoining: false,
   liveRewindAvailable: null,
   liveRewindAnchor: null,
   clipModal: null,
@@ -2031,7 +2066,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch (e: unknown) {
       Logger.error(`Failed to start ${type}:`, e);
       get().addToast(`Failed to load ${type}: ${String(e)}`, 'error');
-      set({ isHomeActive: true, currentMediaType: null, currentStream: null, streamUrl: null, activeQuality: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null });
+      set({ isHomeActive: true, currentMediaType: null, currentStream: null, streamUrl: null, activeQuality: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false });
     } finally {
       set({ isLoading: false });
     }
@@ -2205,7 +2240,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }
 
-      set({ streamUrl: null, activeQuality: null, availableQualities: [], adSource: null, playbackKind: null, currentStream: null, currentMediaType: null, currentHypeTrain: null, streamOriginCategory: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null });
+      set({ streamUrl: null, activeQuality: null, availableQualities: [], adSource: null, playbackKind: null, currentStream: null, currentMediaType: null, currentHypeTrain: null, streamOriginCategory: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false });
 
 
     } catch (e) {
@@ -2694,7 +2729,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Same guard on the success path: a slow start that finally resolves
       // must not replace the stream the user has since switched to.
       if (superseded()) return;
-      set({ streamUrl: result.url, activeQuality: result.quality, adSource: adSourceFrom(result), availableQualities: result.available ?? [], playbackKind: 'hls', currentStream: info, currentMediaType: 'live', originalMediaUrl: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, isHomeActive: false });
+      set({ streamUrl: result.url, activeQuality: result.quality, adSource: adSourceFrom(result), availableQualities: result.available ?? [], playbackKind: 'hls', currentStream: info, currentMediaType: 'live', originalMediaUrl: null, vodPlayback: null, liveRewind: null, liveRewindAvailable: null, liveRewindAnchor: null, offlineRoom: null, offlineRoomLive: null, offlineRoomJoining: false, isHomeActive: false });
 
       // Can this broadcast be rewound? One cached Rust lookup per live start;
       // the player disables Rewind (with the reason) on a channel that keeps
@@ -2758,12 +2793,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         // about playback rather than claiming the channel is offline.
         live = true;
       }
-      get().addToast(
-        live
-          ? 'Playback unavailable - showing chat only'
-          : 'Channel is offline - showing chat',
-        live ? 'error' : 'info',
-      );
+      // Offline needs no toast: the room's own screen says so.
+      if (live) get().addToast('Playback unavailable - showing chat only', 'error');
       try {
         await get().startOfflineChat(channel, providedStreamInfo, { chatOnly: live });
       } catch (fallbackErr) {
@@ -2774,148 +2805,163 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   startOfflineChat: async (channel, providedStreamInfo?, opts?) => {
+    // Shares the Twitch start sequence: a newer stream start or room open wins,
+    // and this one then touches nothing.
+    const seq = ++twitchStartSeq;
+    const superseded = () => seq !== twitchStartSeq;
+    const login = parseKey(channel).channel;
     set({ isLoading: true });
-    trackActivity(`Joined offline chat: ${channel}`);
-    // Drop a previous replay first. When this channel resolves a VOD, a fresh
-    // session begins below; when it does not (chatOnly, or no VOD), the old
-    // one must not keep driving the panel.
+    trackActivity(`Joined offline chat: ${login}`);
+    // A replay from whatever played before must not keep driving the panel.
     import('./vodReplayStore')
       .then((m) => m.stopVodReplay())
       .catch(() => {});
     try {
-      // Use the provided stream info, or find it or construct it
-      let info: TwitchStream;
-      const followedStreamInfo = get().followedStreams.find(s => s.user_login.toLowerCase() === channel.toLowerCase());
-      
-      if (followedStreamInfo) {
-        info = followedStreamInfo;
-      } else if (providedStreamInfo && providedStreamInfo.user_id) {
-        info = providedStreamInfo;
-      } else {
-        try {
-          const rawInfo = await invoke<{ title?: string; game_name?: string; broadcaster_id?: string; broadcaster_name?: string }>('get_channel_info', { channelName: channel });
-          info = {
-            id: providedStreamInfo?.id || '',
-            user_id: rawInfo.broadcaster_id || '',
-            user_name: rawInfo.broadcaster_name || providedStreamInfo?.user_name || channel,
-            user_login: channel.toLowerCase(),
-            title: rawInfo.title || providedStreamInfo?.title || `Offline Chat: ${channel}`,
-            viewer_count: 0,
-            game_name: rawInfo.game_name || providedStreamInfo?.game_name || '',
-            thumbnail_url: providedStreamInfo?.thumbnail_url || '',
-            profile_image_url: providedStreamInfo?.profile_image_url || '',
-            started_at: providedStreamInfo?.started_at || new Date().toISOString(),
-          };
-        } catch (e) {
-          Logger.warn('Could not get channel info for offline chat:', e);
-          info = providedStreamInfo || {
-            id: '',
-            user_id: '',
-            user_name: channel,
-            user_login: channel.toLowerCase(),
-            title: `Offline Chat: ${channel}`,
-            viewer_count: 0,
-            game_name: '',
-            thumbnail_url: '',
-            started_at: new Date().toISOString(),
-          };
-        }
+      // Everything the room shows, in one Rust answer (cached, public, works
+      // signed out). A failed lookup still opens the room with what we have.
+      let room: OfflineRoom | null = null;
+      try {
+        room = await invoke<OfflineRoom>('open_offline_room', { login });
+      } catch (e) {
+        Logger.warn(`[Offline room] Could not load ${login}:`, e);
+      }
+      if (superseded()) return;
+
+      // The card that opened the room was stale and the channel is live: watch
+      // it. Not when its playback just failed (chatOnly), or this would loop.
+      if (room?.live && !opts?.chatOnly) {
+        await get().startStream(login, { ...room.live, profile_image_url: room.live.profile_image_url || room.avatar_url || undefined });
+        return;
       }
 
-      // Try to fetch the latest video for the streamer
-      let latestVideoUrl: string | null = null;
-      let resolvedStreamUrl: string | null = null;
-      let resolvedQuality: string | null = null;
-      // Rust's VOD description (status, length, resume position) for the
-      // auto-played latest broadcast; the player keys its VOD config and the
-      // position reporter on it exactly as for a VOD opened from a card.
-      let resolvedVod: VodStartInfo | null = null;
-      let streamContextForUI = { ...info };
-
-      // chatOnly: the channel is live and only playback broke, so there is no
-      // past broadcast to show and the live room is the chat we want.
-      if (info.user_id && !opts?.chatOnly) {
-        try {
-          const [videos] = await invoke<[TwitchVideo[], string | null]>('get_user_videos', {
-            userId: info.user_id,
-            sort: 'time',
-            limit: 1
-          });
-          if (videos && videos.length > 0) {
-            const latestVod = videos[0];
-            latestVideoUrl = `https://twitch.tv/videos/${latestVod.id}`;
-            Logger.debug(`[Offline Chat] Found recent VOD for ${channel}: ${latestVideoUrl}`);
-
-            // Enrich the stream UI context with accurate VOD metadata
-            streamContextForUI = {
-              ...info,
-              title: latestVod.title,
-              started_at: latestVod.created_at,
-              viewer_count: latestVod.view_count
-            };
-
-            // Resolve the actual playback URL through the native resolver
-            try {
-              const requestedQuality = get().settings.quality;
-              const result = await invoke<StreamStartResult>('start_stream', { url: latestVideoUrl, quality: requestedQuality });
-              resolvedStreamUrl = result.url;
-              resolvedQuality = result.quality;
-              resolvedVod = result.vod ?? null;
-              logQualityFallback(requestedQuality, result.quality);
-              Logger.debug(`[Offline Chat] Resolved VOD playback URL: ${resolvedStreamUrl}`);
-            } catch (resolveError) {
-              Logger.warn(`[Offline Chat] Could not resolve playback URL for VOD, falling back to banner:`, resolveError);
-            }
-          }
-        } catch (e) {
-          Logger.warn(`[Offline Chat] Failed to fetch recent video for ${channel}`, e);
-        }
+      // Whatever the main view was playing (an ended stream, another VOD) stops.
+      if (get().streamUrl && get().streamUrl !== 'offline') {
+        await invoke('stop_stream').catch((e) => Logger.warn('[Offline room] Error stopping playback:', e));
       }
 
+      const info: TwitchStream = {
+        id: '',
+        user_id: room?.user_id || providedStreamInfo?.user_id || '',
+        user_name: room?.display_name || providedStreamInfo?.user_name || login,
+        user_login: login,
+        title: room?.last_title || providedStreamInfo?.title || '',
+        viewer_count: 0,
+        game_name: room?.last_category || providedStreamInfo?.game_name || '',
+        thumbnail_url: '',
+        started_at: '',
+        profile_image_url: room?.avatar_url || providedStreamInfo?.profile_image_url || '',
+        is_live: false,
+      };
       set({
-        streamUrl: resolvedStreamUrl || 'offline',
-        activeQuality: resolvedQuality,
+        streamUrl: 'offline',
+        activeQuality: null,
+        availableQualities: [],
         adSource: null,
-        currentStream: streamContextForUI,
+        currentStream: info,
         currentMediaType: 'offline_chat',
-        originalMediaUrl: latestVideoUrl,
-        vodPlayback: resolvedVod,
+        originalMediaUrl: null,
+        vodPlayback: null,
         liveRewind: null,
         liveRewindAvailable: null,
         liveRewindAnchor: null,
-        isHomeActive: false
+        isHomeActive: false,
+        offlineRoom: room,
+        // chatOnly: live, but playback failed. The room offers it again.
+        offlineRoomLive: opts?.chatOnly ? (room?.live ?? null) : null,
+        offlineRoomJoining: false,
       });
-
-      // When a VOD actually resolved and is playing, default this view to the
-      // VOD's own chat (synced replay), with a toggle back to the channel's live
-      // chat. Skipped when no VOD played (streamUrl 'offline'), since there's no
-      // playhead to sync against.
-      if (resolvedStreamUrl) {
-        const replayVodId = latestVideoUrl?.match(/\/videos\/(\d+)/)?.[1];
-        if (replayVodId) {
-          import('./vodReplayStore')
-            .then((m) => m.beginVodReplay(replayVodId, channel.toLowerCase()))
-            .catch((e) => Logger.warn('[Offline Chat] could not start VOD replay:', e));
-        }
-      }
 
       // Warm up the chat bridge. claim:false for the same reason as the live
       // path: ChatWidget's acquireChannel registers the real consumer, and an
       // unreleased claim here would keep the room joined forever.
       if (get().isAuthenticated) {
         try {
-          await invoke('start_chat', { channel, claim: false });
-          Logger.debug(`[Offline Chat] Connected chat for ${channel}`);
+          await invoke('start_chat', { channel: login, claim: false });
         } catch (e) {
-          Logger.warn(`[Offline Chat] Could not connect chat for ${channel}:`, e);
+          Logger.warn(`[Offline room] Could not connect chat for ${login}:`, e);
         }
       }
+      if (superseded()) return;
+
+      // The session waits for the channel to go live (Rust: EventSub when
+      // signed in, the batched viewer poll always). Not for chatOnly: the
+      // channel is live already and its playback is what failed.
+      if (!opts?.chatOnly) {
+        ensureWatchSessionListeners(set, get);
+        await invoke('watch_session_start', {
+          target: { ...watchTargetOf(info, 'twitch', login, get().isAuthenticated), offline: true },
+        }).catch((e) => Logger.warn('[Offline room] Could not start the watch session:', e));
+      }
+
+      if (opts?.playVod && !superseded()) {
+        await get().playOfflineRoomVod();
+      }
     } catch (e) {
-      Logger.error('[Offline Chat] Failed to join offline chat:', e);
-      get().addToast(`Failed to join offline chat: ${e}`, 'error');
+      Logger.error('[Offline room] Failed to open:', e);
+      get().addToast(`Could not open ${login}'s chat`, 'error');
     } finally {
       set({ isLoading: false });
     }
+  },
+  playOfflineRoomVod: async () => {
+    const room = get().offlineRoom;
+    const vod = room?.latest_vod;
+    if (!room || !vod || get().currentMediaType !== 'offline_chat') return;
+    const url = `https://twitch.tv/videos/${vod.id}`;
+    set({ isLoading: true });
+    try {
+      const requestedQuality = get().settings.quality;
+      const result = await invoke<StreamStartResult>('start_stream', { url, quality: requestedQuality });
+      // Left the room while it resolved.
+      if (get().offlineRoom !== room || get().currentMediaType !== 'offline_chat') return;
+      logQualityFallback(requestedQuality, result.quality);
+      const cs = get().currentStream;
+      set({
+        streamUrl: result.url,
+        activeQuality: result.quality,
+        adSource: adSourceFrom(result),
+        availableQualities: result.available ?? [],
+        originalMediaUrl: url,
+        vodPlayback: result.vod ?? null,
+        // The overlay names what is playing; the login (and so the chat and the
+        // go-live watch) stays the room's.
+        currentStream: cs ? { ...cs, title: vod.title, game_name: vod.category || cs.game_name, started_at: vod.created_at } : cs,
+      });
+      // The VOD's own chat (synced replay) by default, with the toggle back to
+      // the channel's live chat.
+      import('./vodReplayStore')
+        .then((m) => m.beginVodReplay(vod.id, room.login))
+        .catch((e) => Logger.warn('[Offline room] could not start VOD replay:', e));
+    } catch (e) {
+      Logger.warn('[Offline room] Could not play the latest broadcast:', e);
+      get().addToast('Could not play the latest broadcast', 'error');
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+  openOwnChannel: async () => {
+    const { currentUser, isHomeActive, toggleHome } = get();
+    const login = currentUser?.login || currentUser?.username;
+    if (!login) return;
+    if (isHomeActive) toggleHome();
+    await get().startOfflineChat(login);
+  },
+  leaveOfflineRoomVod: async () => {
+    if (get().currentMediaType !== 'offline_chat' || get().streamUrl === 'offline') return;
+    import('./vodReplayStore')
+      .then((m) => m.stopVodReplay())
+      .catch(() => {});
+    await invoke('stop_stream').catch((e) => Logger.warn('[Offline room] Error stopping the VOD:', e));
+    const { currentStream: cs, offlineRoom: room } = get();
+    set({
+      streamUrl: 'offline',
+      activeQuality: null,
+      availableQualities: [],
+      adSource: null,
+      originalMediaUrl: null,
+      vodPlayback: null,
+      currentStream: cs ? { ...cs, title: room?.last_title || '', game_name: room?.last_category || '', started_at: '' } : cs,
+    });
   },
   openSettings: (initialTab?: SettingsTab, initialSection?: string) => {
     trackActivity('Opened Settings' + (initialTab ? ` (${initialTab})` : ''));

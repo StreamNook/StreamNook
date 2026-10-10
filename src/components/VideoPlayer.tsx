@@ -6,7 +6,7 @@ import Plyr from 'plyr';
 // Plyr's CSS ships once, layered, via globals.css (@import ... layer(vendor));
 // a second unlayered copy here would beat the app's control-bar overrides.
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, RefreshCcw, Home, LayoutGrid, Shield, ShieldCheck, ShieldAlert, Clapperboard, Music, Share2, Check, VolumeX } from 'lucide-react';
+import { Loader2, RefreshCcw, LayoutGrid, Shield, ShieldCheck, ShieldAlert, Clapperboard, Music, Share2, Check, VolumeX } from 'lucide-react';
 import { Heart, HeartBreak, ArrowLeft, X as XIcon } from 'phosphor-react';
 import { useAppStore } from '../stores/AppStore';
 import { streamProvider } from '../utils/streamProvider';
@@ -22,6 +22,7 @@ import { usemultiNookStore } from '../stores/multiNookStore';
 import { useChannelSocial } from '../hooks/useChannelSocial';
 import StreamTitleWithEmojis from './StreamTitleWithEmojis';
 import PlayerStatsOverlay from './PlayerStatsOverlay';
+import OfflineRoomScreen, { OfflineRoomLivePill } from './OfflineRoomScreen';
 import { useVodProgressReporter } from '../hooks/useVodProgressReporter';
 import { useMutedSegmentNotice } from '../hooks/useMutedSegmentNotice';
 import { formatVodTime } from '../utils/vodProgress';
@@ -197,7 +198,7 @@ const VideoPlayer = () => {
   // subscribing; state goes through a shallow-compared selector. This component
   // is mounted for the whole session, and a bare `useAppStore()` re-rendered it
   // on every unrelated store tick (toasts, mod logs, drops polling).
-  const { getAvailableQualities, changeStreamQuality, handleStreamOffline, reloadStreamAndChat, restartStream, exitStream, toggleHome, setHomeActiveTab, setHomeSelectedCategory, createClip, openStreamerMedia } = useAppStore.getState();
+  const { getAvailableQualities, changeStreamQuality, handleStreamOffline, reloadStreamAndChat, restartStream, exitStream, toggleHome, setHomeActiveTab, setHomeSelectedCategory, createClip, openStreamerMedia, leaveOfflineRoomVod } = useAppStore.getState();
   const { streamUrl, settings, activeQuality, adSource, isAutoSwitching, currentStream, isRestartingStream, isHomeActive, streamOriginCategory, isAuthenticated, currentMediaType, isCreatingClip, originalMediaUrl, vodPlayback, liveRewind, liveRewindAvailable, liveRewindAnchor } = useAppStore(
     useShallow((s) => ({
       streamUrl: s.streamUrl,
@@ -2781,23 +2782,22 @@ const VideoPlayer = () => {
   // because a healthy promotion playlist legitimately declares ~2-4s the player
   // cannot fetch yet; only a gap beyond that means the pipeline is actually stuck.
   // May this playback write a watch position? ONLY a VOD the viewer chose to
-  // open. `vodPlayback` has three writers (grep `vodPlayback:` in AppStore)
-  // and two of them are live sessions that must leave no trace, or Home's
-  // Continue Watching row fills up with every stream you ever watched:
+  // open. Of `vodPlayback`'s writers (grep `vodPlayback:` in AppStore), one
+  // is a live session that must leave no trace, or Home's Continue Watching
+  // row fills up with every stream you ever watched:
   //   - a live rewind (`rewound_from_live`), which the `seeking` handler in
   //     this file triggers by itself for any backward scrub over 3 s, so a
   //     casual "rewind ten seconds" would file a card;
-  //   - the offline-chat auto-play of a channel's latest broadcast, whose
-  //     dominant trigger is handleStreamOffline — the broadcast you were
-  //     watching ENDING — so every stream watched to the end would file a
-  //     card for itself.
+  // The offline room's latest broadcast counts: the room never auto-plays, so
+  // a VOD playing in it is one the viewer started (playOfflineRoomVod).
   // Anything new that sets `vodPlayback` must be audited against this.
   const isDeliberateVod =
-    currentMediaType === 'video' && !!vodPlayback && !vodPlayback.rewound_from_live;
-  // A real VOD timeline, which unlike the above DOES include the offline-chat
-  // auto-play: it renders Plyr's full VOD bar and muted marks are useful
-  // there. A rewind is excluded because it always plays a RECORDING VOD, for
-  // which Twitch reports no mute info at all (probed 2026-09-12).
+    (currentMediaType === 'video' || currentMediaType === 'offline_chat') &&
+    !!vodPlayback &&
+    !vodPlayback.rewound_from_live;
+  // A real VOD timeline: Plyr's full VOD bar, where muted marks are useful.
+  // A rewind is excluded because it always plays a RECORDING VOD, for which
+  // Twitch reports no mute info at all (probed 2026-09-12).
   const isVodTimeline = !!vodPlayback && !vodPlayback.rewound_from_live;
   const mutedRanges = isVodTimeline ? (vodPlayback.muted_segments ?? NO_MUTED_RANGES) : NO_MUTED_RANGES;
   const activeMute = useMutedSegmentNotice(videoRef, mutedRanges);
@@ -3170,54 +3170,13 @@ const VideoPlayer = () => {
         }}
       />
 
-      {/* Offline Banner (Fallback when no VOD exists) */}
+      {/* A channel's offline room: its offline art and a card that says when
+          it was last live, offers the latest broadcast, and turns into the
+          stream when the channel goes live. */}
       <AnimatePresence>
-        {streamUrl === 'offline' && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 z-30 flex flex-col items-center justify-center pointer-events-none"
-          >
-            {/* Background blur/gradient */}
-            <div className="absolute inset-0 bg-gradient-to-br from-purple-900/10 to-black backdrop-blur-3xl" />
-            
-            {/* Content card */}
-            <div className="relative z-10 p-8 rounded-2xl glass-panel border border-white/10 shadow-2xl flex flex-col items-center max-w-md text-center bg-black/40">
-              <div className="w-24 h-24 mb-6 rounded-full bg-glass flex items-center justify-center border border-white/20 shadow-[0_0_16px_rgba(145,70,255,0.25)]">
-                <span className="text-5xl drop-shadow-lg">😴</span>
-              </div>
-              <h2 className="text-2xl font-bold text-white mb-3 drop-shadow-md tracking-wide">
-                Stream Offline
-              </h2>
-              <p className="text-white/70 text-sm leading-relaxed mb-8">
-                Welcome to the offline chat room. <span className="font-semibold text-white">{currentStream?.user_name || 'The broadcaster'}</span> has no recent videos available to display, but you can still hang out and chat.
-              </p>
-              
-              <div className="flex gap-4 pointer-events-auto">
-                <button 
-                  onClick={() => {
-                    setHomeActiveTab(isAuthenticated ? 'following' : 'recommended');
-                    toggleHome();
-                  }}
-                  className="px-6 py-2.5 glass-button bg-accent/20 border border-accent/40 text-white rounded-lg hover:bg-accent/40 hover:border-accent/60 shadow-[0_0_15px_rgba(145,70,255,0.2)] transition-colors flex items-center gap-2 font-medium"
-                >
-                  <Home size={16} strokeWidth={2.5} /> Keep Browsing
-                </button>
-                <button 
-                  onClick={async () => {
-                    setHomeActiveTab(isAuthenticated ? 'following' : 'recommended');
-                    await exitStream();
-                  }}
-                  className="px-6 py-2.5 glass-button text-white/80 rounded-lg border border-white/10 hover:bg-white/10 hover:text-white transition-colors flex items-center gap-2 font-medium"
-                >
-                  <XIcon size={16} weight="bold" /> Exit Chat
-                </button>
-              </div>
-            </div>
-          </motion.div>
-        )}
+        {streamUrl === 'offline' && currentMediaType === 'offline_chat' && <OfflineRoomScreen />}
       </AnimatePresence>
+      <OfflineRoomLivePill />
 
       {/* Transient stream note — top-left. Replaces the per-stream toasts: how
           this stream is ad-free (your entitlement vs the proxy) plus any quality
@@ -3269,9 +3228,10 @@ const VideoPlayer = () => {
         )}
       </AnimatePresence>
 
-      {/* Stream Title Overlay — Top-left, shares hover timing with controls */}
+      {/* Stream Title Overlay — Top-left, shares hover timing with controls.
+          Not over the offline room's card, which already says who this is. */}
       <AnimatePresence>
-        {currentStream && showOverlay && (
+        {currentStream && showOverlay && !(currentMediaType === 'offline_chat' && streamUrl === 'offline') && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -3284,7 +3244,18 @@ const VideoPlayer = () => {
           <div className="relative px-4 pt-3 pb-6 flex items-start gap-2">
             {/* Back Arrow or Home Button (Only visible when Home is not active) */}
             {!isHomeActive && (
-              currentMediaType === 'clip' || currentMediaType === 'video' ? (
+              currentMediaType === 'offline_chat' && streamUrl !== 'offline' ? (
+                // The room's latest broadcast: back to the room, chat untouched.
+                <Tooltip content={`Back to ${currentStream.user_name || currentStream.user_login}'s chat`} side="bottom" delay={200}>
+                  <button
+                    onClick={() => void leaveOfflineRoomVod()}
+                    className="shrink-0 mt-0.5 p-2 glass-button rounded-lg pointer-events-auto"
+                    style={{ backdropFilter: 'blur(16px)' }}
+                  >
+                    <ArrowLeft size={16} weight="bold" className="text-white" />
+                  </button>
+                </Tooltip>
+              ) : currentMediaType === 'clip' || currentMediaType === 'video' ? (
                 // Clips/VODs: always show back arrow — stop playback and return to category
                 <Tooltip content={streamOriginCategory ? `Back to ${streamOriginCategory.name}` : 'Back'} side="bottom" delay={200}>
                   <button
@@ -3371,7 +3342,10 @@ const VideoPlayer = () => {
                     ? currentStream.game_name 
                     : streamUrl === 'offline' 
                       ? currentStream.game_name
-                      : `${currentStream.game_name} • ${currentStream.viewer_count?.toLocaleString() || 0} Views • ${new Date(currentStream.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`}
+                      : currentMediaType === 'offline_chat'
+                        // The room's latest broadcast carries no view count.
+                        ? [currentStream.game_name, currentStream.started_at && new Date(currentStream.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })].filter(Boolean).join(' • ')
+                        : `${currentStream.game_name} • ${currentStream.viewer_count?.toLocaleString() || 0} Views • ${new Date(currentStream.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`}
                 </p>
               )}
             </div>

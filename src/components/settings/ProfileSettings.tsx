@@ -9,7 +9,7 @@ import { MajorCologneChrome } from '../MajorCologneChrome';
 import { getPreviewEmotes, previewEmoteUrl, rollPreviewChat, type PreviewEmote } from '../../utils/previewChat';
 import { openBadgesWithPaintInMain, openBadgesOnStreamNookInMain } from '../../utils/openBadgesInMain';
 import streamNookLogo from '../../assets/streamnook-logo-128.webp';
-import { User, Link, Unlink, Image as ImageIcon, Film, Heart, Check, ExternalLink, Lock } from 'lucide-react';
+import { User, Link, Unlink, Image as ImageIcon, Film, Heart, Check, ExternalLink, Lock, MessageSquare } from 'lucide-react';
 import {
   computePaintStyle,
   getBadgeImageUrls,
@@ -1141,7 +1141,10 @@ const ProfileSettings = () => {
         )}
 
       {/* Inner Profile tabs: Overview (stats showcase) vs Customize (identity
-          editor). The profile card below stays visible on both. */}
+          editor). The profile card below stays visible on both. Beside them,
+          your own channel: its offline room, which starts your stream itself
+          when you are live. */}
+      <div className="flex items-center gap-2">
       <div className="flex w-fit items-center gap-1 rounded-lg border border-white/[0.06] bg-white/[0.03] p-1">
         {(['overview', 'customize'] as const).map((t) => (
           <button
@@ -1157,6 +1160,19 @@ const ProfileSettings = () => {
             {t}
           </button>
         ))}
+      </div>
+        <button
+          type="button"
+          onClick={() => {
+            const store = useAppStore.getState();
+            store.closeSettings();
+            void store.openOwnChannel();
+          }}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.06] bg-white/[0.03] px-3 py-[10px] text-[13px] font-medium text-textSecondary transition-colors hover:text-textPrimary"
+        >
+          <MessageSquare size={14} />
+          My channel
+        </button>
       </div>
 
       <div ref={profileCardRef} className="relative overflow-hidden flex items-center gap-8 p-6 glass-panel glaze-inset rounded-xl">

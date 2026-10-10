@@ -151,11 +151,19 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Player',
-    section: 'Auto-Switch',
-    sectionId: 'settings-section-auto-switch',
-    title: 'Stay in chat',
-    description: "Keeps you in the channel's chat when the stream goes offline instead of switching you away. Previously \"Stay in chat after the stream ends\"."
+    section: 'Offline Chat',
+    sectionId: 'settings-section-offline-chat',
+    title: 'Offline Chat',
+    description: "A channel's chat while it is not streaming: its offline screen, its latest broadcast, and the stream itself when it starts."
   },
+  {
+    tab: 'Player',
+    section: 'Offline Chat',
+    sectionId: 'settings-section-offline-chat',
+    title: 'Stay in chat',
+    description: "When the stream you are watching ends, you stay in the channel's chat instead of being switched away. Previously \"Stay in chat after the stream ends\"."
+  },
+
   {
     tab: 'Player',
     section: 'Streaming',

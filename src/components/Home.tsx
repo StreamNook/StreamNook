@@ -4,7 +4,7 @@ import { useAppStore, ensureHomeSnapshotSync, announceHome, clipSourceOf, HomeTa
 import { IS_LINUX, IS_MOBILE } from '../utils/platform';
 import { createPortal } from 'react-dom';
 import { glowThumbProps } from '../utils/mediaGlow';
-import { Search, Heart, X, Pickaxe, LayoutGrid, Flame, ArrowUpRight, Undo2, Users, User, Loader2, Clock, Play, Check, Plus, Compass, List } from 'lucide-react';
+import { Search, Heart, X, Pickaxe, LayoutGrid, Flame, ArrowUpRight, Undo2, Users, User, Loader2, Clock, Play, Check, Plus, Compass, List, MessageSquare } from 'lucide-react';
 import { Package, UsersThree } from 'phosphor-react';
 import { MediaCard } from './MediaCard';
 import ContinueWatchingRow from './ContinueWatchingRow';
@@ -27,6 +27,7 @@ import { WATCHABLE_PROVIDERS, PROVIDER_WATCH, providerLabel, type ProviderId, ty
 import { useFollowsStore } from '../stores/followsStore';
 import { favoriteIdOf, favoriteMetaOf } from '../utils/favorites';
 import { streamProvider, streamKey, followIdentifier, isTwitchStream } from '../utils/streamProvider';
+import { lastLiveLabel } from '../utils/lastLive';
 import { streamMiddleClickHandlers } from '../utils/openInMultiNook';
 import { isPortraitGrid, thumbFitFor } from '../utils/thumbFit';
 import { makeKey } from '../utils/providerKey';
@@ -2181,25 +2182,19 @@ const Home = () => {
                                         })();
     };
 
+    // An offline Twitch channel opens its offline room: the chat, the channel's
+    // offline screen, and the stream itself the moment it goes live.
+    const openOfflineRoom = (user: TwitchStream, playVod = false) => {
+        const store = useAppStore.getState();
+        if (store.isHomeActive) store.toggleHome();
+        void store.startOfflineChat(user.user_login, user, { playVod });
+    };
+
     // ONE offline-channel card, shared by the Offline Channels roster and the
     // Favourites section (a favourite is usually NOT live, and burying it in a
     // roster of hundreds of follows is indistinguishable from doing nothing).
     const renderOfflineCard = (user: TwitchStream) => {
                                                 const lastOnline = offlineLastBroadcasts[user.id];
-                                                let relativeTimeResult = '';
-                                                if (lastOnline) {
-                                                    const date = new Date(lastOnline);
-                                                    if (!isNaN(date.getTime())) {
-                                                        const diffInSeconds = Math.floor((new Date().getTime() - date.getTime()) / 1000);
-                                                        if (diffInSeconds < 60) relativeTimeResult = `${diffInSeconds}s ago`;
-                                                        else if (diffInSeconds < 3600) relativeTimeResult = `${Math.floor(diffInSeconds / 60)}m ago`;
-                                                        else if (diffInSeconds < 86400) relativeTimeResult = `${Math.floor(diffInSeconds / 3600)}h ago`;
-                                                        else if (diffInSeconds < 2592000) relativeTimeResult = `${Math.floor(diffInSeconds / 86400)}d ago`;
-                                                        else if (diffInSeconds < 31536000) relativeTimeResult = `${Math.floor(diffInSeconds / 2592000)}mo ago`;
-                                                        else relativeTimeResult = `${Math.floor(diffInSeconds / 31536000)}y ago`;
-                                                    }
-                                                }
-
                                                 return (
                                                     <div
                                                         // Composite key: this list now mixes platforms, and a bare
@@ -2232,7 +2227,7 @@ const Home = () => {
                                                                     {user.user_name}
                                                                 </h4>
                                                                 <p className="text-[10px] text-textSecondary truncate">
-                                                                    {relativeTimeResult ? `Last live ${relativeTimeResult}` : 'Offline'}
+                                                                    {lastLiveLabel(lastOnline)}
                                                                 </p>
                                                             </div>
                                                         </div>
@@ -2266,31 +2261,52 @@ const Home = () => {
                                                         })()}
 
                                                         {/* Action Overlay (Optimized - No blur on hidden elements).
-                                                            Twitch only: "Watch VOD" starts Twitch's offline-chat mode
-                                                            and the profile modal is Twitch-shaped, so neither works for
-                                                            a provider channel. Better no action than a broken one. */}
+                                                            Twitch only: the offline room and the profile modal are
+                                                            Twitch-shaped, so neither works for a provider channel.
+                                                            Better no action than a broken one. A click anywhere on
+                                                            the card opens the channel's offline room (its chat);
+                                                            "VOD" opens the room and plays the latest broadcast. */}
                                                         {streamProvider(user) === 'twitch' && (
-                                                        <div className="absolute inset-0 bg-[#0c0c0d]/90 opacity-0 group-hover:opacity-100 transition-all duration-200 flex items-center justify-center gap-2 z-10">
+                                                        <div
+                                                            role="button"
+                                                            tabIndex={0}
+                                                            aria-label={`Open ${user.user_name}'s chat`}
+                                                            onClick={() => openOfflineRoom(user)}
+                                                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openOfflineRoom(user); } }}
+                                                            className="absolute inset-0 bg-[#0c0c0d]/90 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-all duration-200 flex items-center justify-center gap-2 z-10 cursor-pointer"
+                                                        >
                                                             <button
                                                                 onClick={(e) => {
                                                                     e.stopPropagation();
-                                                                    const store = useAppStore.getState();
-                                                                    if (store.isHomeActive) store.toggleHome();
-                                                                    store.startOfflineChat(user.user_login, user);
+                                                                    openOfflineRoom(user);
                                                                 }}
-                                                                className="px-3 py-1.5 rounded-lg glass-button text-[12px] font-bold text-white hover:bg-white/20 transition-all border border-transparent shadow-lg flex items-center gap-1.5"
+                                                                // no-live-blur on all three: the overlay under them is 90% opaque,
+                                                                // so their blur draws nothing and costs a layer per card.
+                                                                className="no-live-blur px-3 py-1.5 rounded-lg glass-button text-[12px] font-bold text-white hover:bg-white/20 transition-all border border-transparent shadow-lg flex items-center gap-1.5"
                                                             >
-                                                                <Play size={14} strokeWidth={2.5} />
-                                                                <span>Watch VOD</span>
+                                                                <MessageSquare size={14} strokeWidth={2.5} />
+                                                                <span>Chat</span>
                                                             </button>
-                                                            
+                                                            <Tooltip content="Watch the latest broadcast" side="top">
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        openOfflineRoom(user, true);
+                                                                    }}
+                                                                    className="no-live-blur px-2.5 py-1.5 rounded-lg glass-button text-[12px] font-bold text-textSecondary hover:text-textPrimary hover:bg-white/20 transition-all border border-transparent shadow-lg flex items-center gap-1.5"
+                                                                >
+                                                                    <Play size={14} strokeWidth={2.5} />
+                                                                    <span>VOD</span>
+                                                                </button>
+                                                            </Tooltip>
+
                                                             <Tooltip content="Profile" side="top">
                                                                 <button
                                                                     onClick={(e) => {
                                                                         e.stopPropagation();
                                                                         setProfileModalUser(user);
                                                                     }}
-                                                                    className="p-[7px] rounded-lg glass-button text-textSecondary hover:text-textPrimary hover:bg-white/20 transition-all border border-transparent shadow-lg"
+                                                                    className="no-live-blur p-[7px] rounded-lg glass-button text-textSecondary hover:text-textPrimary hover:bg-white/20 transition-all border border-transparent shadow-lg"
                                                                 >
                                                                     <User size={14} strokeWidth={2.5} />
                                                                 </button>

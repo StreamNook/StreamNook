@@ -215,10 +215,17 @@ const PlayerSettings = () => {
           }
         />
 
+      </SettingsSection>
+
+      <SettingsSection
+        id="settings-section-offline-chat"
+        label="Offline Chat"
+        description="A channel's chat while it is not streaming: its offline screen, its latest broadcast, and the stream itself when it starts."
+      >
         <SettingsRow
           title="Stay in chat"
           onReset={resetFor(['auto_switch.stay_in_offline_chat', false])}
-          description="Keeps you in the channel's chat after the stream ends instead of switching you away."
+          description="When the stream you are watching ends, you stay in the channel's chat instead of being switched away."
           control={
             <Toggle
               enabled={autoSwitchOfflineChat}

@@ -51,6 +51,7 @@ import {
   Drumstick,
   TreePine,
   Flag,
+  Target,
   type LucideIcon,
 } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
@@ -70,6 +71,7 @@ import type { InventoryResponse, ChannelPointsBalance, IvrUserSummary } from '..
 import { pickHoursRoast, type PickedRoast } from '../../utils/hoursWatchedRoasts';
 import { SEASONAL_ACCOLADES, getActiveSeasonalAccoladeIds, isCakeDay, CAKE_DAY_ID } from '../../utils/seasonalAccolades';
 import { RESTLESS_ACCOLADE_ID } from '../../utils/notifAchievement';
+import { PERFECT_CORNER_ACCOLADE_ID, SHINY_ACCOLADE_ID, WORTH_THE_WAIT_ACCOLADE_ID } from '../../utils/offlineAccoladeIds';
 import { MAJOR_COLOGNE_ACCOLADE_ID } from '../../services/cologneEvent';
 import { GRAND_FINALE_ACCOLADE_ID, SEMIQUINCENTENNIAL_ACCOLADE_ID } from '../../services/semiquincentennialEvent';
 import SubscriptionsSection from './SubscriptionsSection';
@@ -524,6 +526,12 @@ const ProfileOverview = ({
     { id: 'nice', label: 'Nice', icon: Smile, grad: 'linear-gradient(140deg, #facc15, #ca8a04)', secret: true, earned: memberNo !== null && [69, 420, 666, 777, 1337].includes(memberNo), hint: 'Land on a number the internet never lets you forget.' },
     { id: RESTLESS_ACCOLADE_ID, label: 'Restless', icon: BellRing, grad: 'linear-gradient(140deg, #818cf8, #4338ca)', secret: true, earned: earnedAccolades.has(RESTLESS_ACCOLADE_ID), hint: "The test notification really wishes you'd stop." },
     { id: GRAND_FINALE_ACCOLADE_ID, label: 'Grand Finale', icon: Sparkles, grad: 'linear-gradient(140deg, #fcd34d, #dc3d55)', secret: true, earned: earnedAccolades.has(GRAND_FINALE_ACCOLADE_ID), hint: 'Stay a while under the anniversary sky.' },
+    // The offline room's moments (utils/offlineAccolades.ts grants them).
+    // Not secret: named from the start, their hints say plainly what to do.
+    // Listed here for the earned-state handling below, outside Completionist.
+    { id: PERFECT_CORNER_ACCOLADE_ID, label: 'Perfect Corner', icon: Target, grad: 'linear-gradient(140deg, #5eead4, #0f766e)', earned: earnedAccolades.has(PERFECT_CORNER_ACCOLADE_ID), hint: 'Wait in an offline chat long enough to see it land dead in the corner.' },
+    { id: SHINY_ACCOLADE_ID, label: 'Shiny', icon: Sparkles, grad: 'linear-gradient(140deg, #fde68a, #d97706)', earned: earnedAccolades.has(SHINY_ACCOLADE_ID), hint: 'Only a few of the sad frogs are golden.' },
+    { id: WORTH_THE_WAIT_ACCOLADE_ID, label: 'Worth the Wait', icon: Hourglass, grad: 'linear-gradient(140deg, #f9a8d4, #9333ea)', earned: earnedAccolades.has(WORTH_THE_WAIT_ACCOLADE_ID), hint: "Be waiting in a channel's offline chat when the stream finally starts." },
     // Same persisted-set fallback as the base accolades: an earned secret stays
     // lit even when its live source is absent — notably on the public/preview
     // view, which never fetches your drops or channel points (so Triple Threat's
