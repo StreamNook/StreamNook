@@ -95,6 +95,48 @@ impl HostInner {
             .any(|h| h.hooks.contains(event))
     }
 
+    /// Hands the stored drops settings to every running plugin that takes them
+    /// (`drops.configure`). The host owns this hand-off: it runs when such a
+    /// plugin finishes starting and after every drops-settings save, so the
+    /// plugin never runs on its defaults or on an older copy, and a page that
+    /// pushed too early (before the plugin was up) no longer matters. The
+    /// settings are read when the push runs, so overlapping pushes all carry
+    /// the latest copy.
+    pub async fn push_drops_settings(&self) {
+        use tauri::Manager;
+        let targets: Vec<mpsc::UnboundedSender<SupCmd>> = {
+            let running = self.running.read().await;
+            running
+                .values()
+                .filter(|h| h.actions.contains(DROPS_CONFIGURE_ACTION))
+                .map(|h| h.cmd_tx.clone())
+                .collect()
+        };
+        if targets.is_empty() {
+            return;
+        }
+        let Some(state) = self.app.try_state::<crate::models::settings::AppState>() else {
+            return;
+        };
+        let settings = state.drops_service.lock().await.get_settings().await;
+        let Ok(values) = serde_json::to_value(&settings) else {
+            return;
+        };
+        for tx in targets {
+            let (reply, rx) = oneshot::channel();
+            let sent = tx.send(SupCmd::Request {
+                method: "invoke_action".into(),
+                params: json!({ "action": DROPS_CONFIGURE_ACTION, "args": { "values": values } }),
+                reply,
+            });
+            if sent.is_ok() {
+                if let Ok(Err(e)) = rx.await {
+                    debug!("[PluginHost] drops settings push failed: {e}");
+                }
+            }
+        }
+    }
+
     /// Fans an event out to every running plugin that subscribed to it.
     pub async fn emit_event(&self, event: &str, params: Value) {
         let running = self.running.read().await;
@@ -225,11 +267,22 @@ fn migrate_credential_consent(registry: &mut Registry) -> bool {
     changed
 }
 
+/// The action a drops-automation plugin takes the stored drops settings
+/// through (`HostInner::push_drops_settings`).
+pub const DROPS_CONFIGURE_ACTION: &str = "drops.configure";
+
 pub struct PluginHost {
     inner: Arc<HostInner>,
 }
 
 impl PluginHost {
+    /// Pushes the stored drops settings to the plugin that runs drops
+    /// automation, without making the caller wait on that plugin.
+    pub fn push_drops_settings(&self) {
+        let inner = self.inner.clone();
+        tokio::spawn(async move { inner.push_drops_settings().await });
+    }
+
     pub fn new(app: AppHandle) -> Self {
         Self {
             inner: Arc::new(HostInner {

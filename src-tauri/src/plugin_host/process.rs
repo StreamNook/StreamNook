@@ -270,6 +270,13 @@ async fn run_once(host: &Arc<HostInner>, record: &InstalledPlugin) -> RunOutcome
         "[PluginHost] {} v{} initialized (hooks: {:?})",
         record.id, plugin_version, hooks
     );
+    // A drops-automation plugin gets the stored settings the moment it is up,
+    // so standing automation resumes on launch. The request queues on this
+    // plugin's channel and is served by the loop below.
+    if record.granted.actions.iter().any(|a| a == super::DROPS_CONFIGURE_ACTION) {
+        let host = host.clone();
+        tokio::spawn(async move { host.push_drops_settings().await });
+    }
 
     // Serve until shutdown, crash, or unresponsiveness.
     let ping_misses = Arc::new(AtomicU32::new(0));

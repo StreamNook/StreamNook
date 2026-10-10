@@ -18,6 +18,7 @@ import {
   SubControl,
   DropsSettingsTab,
 } from './settingsPageKit';
+import { GamePicker } from './GamePicker';
 import type { PanelChannel } from '../../types/plugins';
 
 export { Toggle };
@@ -293,6 +294,7 @@ export const UI_KIT = {
   PageRow,
   SegmentedSelect,
   PillList,
+  GamePicker,
   InlineSlider,
   SubControls,
   SubControl,

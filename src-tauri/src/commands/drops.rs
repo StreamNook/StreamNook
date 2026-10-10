@@ -163,6 +163,7 @@ async fn save_drops_settings(
         .await;
 
     let _ = app.emit(DROPS_SETTINGS_UPDATED_EVENT, &settings);
+    state.plugin_host.push_drops_settings();
     Ok(())
 }
 
@@ -176,6 +177,114 @@ pub async fn get_active_drop_campaigns(
         .get_all_active_campaigns_cached()
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Games for a game picker: the ones running drops now first, then Twitch's
+/// category search. Names come back exactly as Twitch writes them, which is
+/// what a games list must hold for a drop campaign to match it.
+#[tauri::command]
+pub async fn suggest_drop_games(
+    query: String,
+    limit: u32,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::services::game_suggest::GameSuggestion>, String> {
+    // Every drop game that matches is listed (an empty query lists them all);
+    // `limit` caps the whole list, Twitch's search adds at most 25 more.
+    let limit = limit.clamp(1, 300);
+    let drop_games = drop_games(&state).await;
+    let searched = if query.trim().chars().count() >= 2 {
+        crate::services::twitch_service::TwitchService::search_categories(query.trim(), 25)
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter_map(category_suggestion)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Ok(crate::services::game_suggest::rank(&query, &drop_games, searched, limit as usize))
+}
+
+/// The games a saved list names, in its order, with art and drop counts, so a
+/// picker can draw what is already picked. A name that is neither a drop game
+/// nor a Twitch category comes back with no id.
+#[tauri::command]
+pub async fn describe_games(
+    names: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::services::game_suggest::GameSuggestion>, String> {
+    let drop_games = drop_games(&state).await;
+    let unmatched: Vec<String> = names
+        .iter()
+        .filter(|n| !drop_games.iter().any(|g| g.name.eq_ignore_ascii_case(n)))
+        .cloned()
+        .collect();
+    let found: Vec<_> = if unmatched.is_empty() {
+        Vec::new()
+    } else {
+        crate::services::twitch_service::TwitchService::categories_by_name(&unmatched)
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter_map(category_suggestion)
+            .collect()
+    };
+    Ok(crate::services::game_suggest::describe(&names, &drop_games, &found))
+}
+
+/// Every game running drop campaigns now, one entry each, with the box art
+/// Twitch lists on its campaigns. Both of Twitch's drop lists count: a
+/// campaign without a category of its own (the Pokémon balls) is listed under
+/// the name the engine matches it by. Reads the campaign cache as it is, so a
+/// picker never refreshes the live progress the title bar shows; only an empty
+/// cache is filled.
+async fn drop_games(state: &State<'_, AppState>) -> Vec<crate::services::game_suggest::GameSuggestion> {
+    use crate::services::game_suggest::{sized_box_art, GameSuggestion};
+    let campaigns = {
+        let drops_service = state.drops_service.lock().await;
+        match drops_service.cached_campaigns_snapshot().await {
+            Some(c) if !c.is_empty() => c,
+            _ => match drops_service.fetch_all_active_campaigns_from_api().await {
+                Ok(c) => {
+                    drops_service.prime_campaign_cache(&c).await;
+                    c
+                }
+                Err(_) => Vec::new(),
+            },
+        }
+    };
+    let mut games: Vec<GameSuggestion> = Vec::new();
+    for c in campaigns.iter().filter(|c| !c.game_name.trim().is_empty()) {
+        match games.iter_mut().find(|g| g.name.eq_ignore_ascii_case(&c.game_name)) {
+            Some(g) => {
+                g.drop_campaigns += 1;
+                if g.box_art_url.is_empty() {
+                    g.box_art_url = sized_box_art(&c.image_url);
+                }
+            }
+            None => games.push(GameSuggestion {
+                // A category-less campaign's game_id only groups it for
+                // display; it still needs an id here to read as a real game.
+                id: if c.game_id.is_empty() { c.id.clone() } else { c.game_id.clone() },
+                name: c.game_name.clone(),
+                box_art_url: sized_box_art(&c.image_url),
+                drop_campaigns: 1,
+            }),
+        }
+    }
+    games
+}
+
+/// A Helix category (`{id, name, box_art_url}`) as a suggestion.
+fn category_suggestion(v: &serde_json::Value) -> Option<crate::services::game_suggest::GameSuggestion> {
+    Some(crate::services::game_suggest::GameSuggestion {
+        id: v.get("id")?.as_str()?.to_string(),
+        name: v.get("name")?.as_str()?.to_string(),
+        box_art_url: crate::services::game_suggest::sized_box_art(
+            v.get("box_art_url").and_then(|u| u.as_str()).unwrap_or_default(),
+        ),
+        drop_campaigns: 0,
+    })
 }
 
 /// Re-fetch active campaigns to pick up a fresh `is_account_connected` after the user connects
@@ -590,12 +699,28 @@ pub async fn update_monitoring_channel(
 
 /// Player playback state for the parity heartbeat: minute-watched events
 /// only send while the video is actually playing.
+///
+/// `slot` names a MultiNook tile's player instead of the main one. A tile
+/// counts toward StreamNook watch time only; the Twitch heartbeat follows the
+/// main player alone.
 #[tauri::command]
 pub async fn report_player_playing(
     playing: bool,
+    slot: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    if let Some(slot) = slot {
+        crate::services::watch_minutes::set_playing(
+            &crate::services::watch_minutes::tile_key(&slot),
+            playing,
+        );
+        if playing {
+            crate::commands::multi_nook::refresh_tile_watch(&state, &slot);
+        }
+        return Ok(());
+    }
     state.watch_heartbeat.set_playing(playing);
+    crate::services::watch_minutes::set_playing(crate::services::watch_minutes::MAIN, playing);
     Ok(())
 }
 
@@ -1195,25 +1320,35 @@ pub(crate) fn reward_availability(
         .map(|t| t.timestamp_millis())
         .filter(|&until| until > now_ms);
     let affordable = balance.map_or(true, |b| b >= i64::from(reward.cost));
+    // Custom rewards carry the viewer's text as the redeem's `textInput`; of
+    // the built-in input rewards only Highlight My Message has a sender.
     let input_supported = !reward.is_user_input_required
+        || reward.reward_type.is_none()
         || reward.reward_type.as_deref() == Some(HIGHLIGHTED_MESSAGE_REWARD);
     let stream_cap_reached = matches!(
         (reward.max_per_stream, reward.redemptions_redeemed_current_stream),
         (Some(max), Some(done)) if max > 0 && done >= max
     );
+    // Twitch turns `isInStock` off while a reward's global cooldown runs and
+    // leaves it off after the cooldown ends, so for a reward with a cooldown
+    // timestamp the stock flag only restates the cooldown (judged above from
+    // the timestamp itself). Twitch's own client reads it the same way.
+    let stock_held_by_cooldown =
+        reward.global_cooldown_seconds.is_some() && reward.cooldown_expires_at.is_some();
+    let out_of_stock = !reward.is_in_stock && !stock_held_by_cooldown;
 
     let reason = if !reward.is_enabled {
         Some(RewardBlock::Disabled)
     } else if reward.is_paused {
         Some(RewardBlock::Paused)
-    } else if !reward.is_in_stock {
-        Some(RewardBlock::OutOfStock)
-    } else if !input_supported {
-        Some(RewardBlock::InputNotSupported)
     } else if stream_cap_reached {
         Some(RewardBlock::MaxPerStreamReached)
     } else if cooldown_until_ms.is_some() {
         Some(RewardBlock::OnCooldown)
+    } else if out_of_stock {
+        Some(RewardBlock::OutOfStock)
+    } else if !input_supported {
+        Some(RewardBlock::InputNotSupported)
     } else if !affordable {
         Some(RewardBlock::NotEnoughPoints)
     } else {
@@ -1424,6 +1559,7 @@ pub async fn redeem_channel_reward(
     cost: i32,
     title: String,
     prompt: Option<String>,
+    text_input: Option<String>,
 ) -> Result<crate::models::drops::RedemptionResult, String> {
     use crate::services::drops_auth_service::DropsAuthService;
     use serde_json::json;
@@ -1446,6 +1582,21 @@ pub async fn redeem_channel_reward(
     let device_id = uuid::Uuid::new_v4().to_string().replace("-", "");
     let session_id = uuid::Uuid::new_v4().to_string().replace("-", "")[..16].to_string();
 
+    let mut input = json!({
+        "channelID": channel_id,
+        "cost": cost,
+        "pricingType": "POINTS",
+        "prompt": prompt.unwrap_or_default(),
+        "rewardID": reward_id,
+        "title": title,
+        "transactionID": transaction_id,
+    });
+    // `prompt` is the streamer's question, echoed back for the properties
+    // check; the viewer's answer to it travels as `textInput`.
+    if let Some(text) = text_input.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
+        input["textInput"] = json!(text);
+    }
+
     let response = client
         .post("https://gql.twitch.tv/gql")
         .header("Client-Id", CLIENT_ID)
@@ -1454,17 +1605,7 @@ pub async fn redeem_channel_reward(
         .header("Client-Session-Id", &session_id)
         .json(&json!({
             "operationName": "RedeemCustomReward",
-            "variables": {
-                "input": {
-                    "channelID": channel_id,
-                    "cost": cost,
-                    "pricingType": "POINTS",
-                    "prompt": prompt.unwrap_or_default(),
-                    "rewardID": reward_id,
-                    "title": title,
-                    "transactionID": transaction_id,
-                }
-            },
+            "variables": { "input": input },
             "extensions": {
                 "persistedQuery": {
                     "version": 1,
@@ -2446,13 +2587,41 @@ mod tests {
     }
 
     #[test]
-    fn only_highlight_my_message_input_is_supported() {
+    fn a_cooldown_is_not_out_of_stock() {
         let mut r = reward();
-        r.is_user_input_required = true;
+        r.is_in_stock = false;
+        r.global_cooldown_seconds = Some(60);
+        r.cooldown_expires_at = Some(iso(NOW_MS + 30_000));
         assert_eq!(
             reward_availability(&r, Some(1_000), NOW_MS).reason,
-            Some(RewardBlock::InputNotSupported)
+            Some(RewardBlock::OnCooldown)
         );
+        // Twitch still says out of stock once the cooldown has passed.
+        assert!(reward_availability(&r, Some(1_000), NOW_MS + 30_000).redeemable);
+    }
+
+    #[test]
+    fn out_of_stock_without_a_cooldown_still_blocks() {
+        let mut r = reward();
+        r.is_in_stock = false;
+        r.cooldown_expires_at = Some(iso(NOW_MS - 1_000));
+        assert_eq!(
+            reward_availability(&r, Some(1_000), NOW_MS).reason,
+            Some(RewardBlock::OutOfStock)
+        );
+    }
+
+    #[test]
+    fn custom_input_rewards_are_supported() {
+        let mut r = reward();
+        r.is_user_input_required = true;
+        assert!(reward_availability(&r, Some(1_000), NOW_MS).redeemable);
+    }
+
+    #[test]
+    fn only_highlight_my_message_built_in_input_is_supported() {
+        let mut r = reward();
+        r.is_user_input_required = true;
         r.reward_type = Some("SINGLE_MESSAGE_BYPASS_SUB_MODE".to_string());
         assert_eq!(
             reward_availability(&r, Some(1_000), NOW_MS).reason,

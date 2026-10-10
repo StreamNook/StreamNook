@@ -91,6 +91,7 @@ Native components plugins should reuse instead of rebuilding:
   - `PageRow` (`title`, `description`, `help`, `control`, `children`, `disabled`): the control sits on the right, and `children` go under the text.
   - `SegmentedSelect` (`value`, `options`, `onChange`).
   - `PillList` (`items`, `numbered`, `placeholder`, `onChange`): a short list of names edited in place.
+  - `GamePicker` (`items`, `numbered`, `placeholder`, `onChange`): a list of games added by search, never typed free-hand. Each pick is Twitch's exact game name. Saved games show as rows with box art and whether drops run for them now; `numbered` rows can move up and down. Games running drops now are suggested first. Older apps lack it, so fall back to `PillList`.
   - `InlineSlider` (`value`, `min`, `max`, `step`, `label`, `format`, `disabled`, `onChange`).
   - `SubControls` wrapping `SubControl` (`title`, `control`, `disabled`): the settings under a choice such as Custom.
 
