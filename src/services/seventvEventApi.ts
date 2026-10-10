@@ -38,6 +38,9 @@ export interface EmoteSetUpdatePayload {
    *  Rust holds no copy of the set (no chat open on it there); the window then
    *  refetches, and the Rust cache was invalidated for that. */
   composed?: { added: Emote[]; removed: { id: string; name: string }[] } | null;
+  /** Present when the channel switched to a different set altogether: that
+   *  set's name (empty when 7TV did not say). The whole set is refetched. */
+  switched_to?: string;
 }
 
 /**
@@ -82,6 +85,10 @@ export async function handleSeventvEmoteSetUpdate(payload: EmoteSetUpdatePayload
 
   const actor = actor_name || 'Someone';
   const source = systemSourceFor(chatKey);
+  if (payload.switched_to !== undefined) {
+    const setName = payload.switched_to ? ` to ${payload.switched_to}` : '';
+    injectSystemMessage(chatKey, `${actor} switched the 7TV emote set${setName}`, undefined, source);
+  }
   for (const name of added) {
     injectSystemMessage(chatKey, `${actor} added the emote ${name}`, undefined, source);
   }

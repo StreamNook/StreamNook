@@ -90,6 +90,12 @@ struct ChannelSub {
 enum Cmd {
     Subscribe(ChannelSub),
     Unsubscribe(ChannelSub),
+    /// The channel switched its active set: follow the new set's edits and,
+    /// when nothing else still uses it, stop following the old one's.
+    SwapSet {
+        unsubscribe: Option<String>,
+        subscribe: Option<String>,
+    },
 }
 
 struct Service {
@@ -329,13 +335,26 @@ fn unsubscribe_frames(sub: &ChannelSub) -> Vec<String> {
     frames_for(sub, OP_UNSUBSCRIBE)
 }
 
+fn set_frame(set_id: &str, op: u64) -> String {
+    json!({
+        "op": op,
+        "d": { "type": "emote_set.update", "condition": { "object_id": set_id } }
+    })
+    .to_string()
+}
+
 fn frames_for(sub: &ChannelSub, op: u64) -> Vec<String> {
     let mut frames = Vec::new();
     if let Some(set_id) = &sub.emote_set_id {
+        frames.push(set_frame(set_id, op));
+    }
+    // The owner's account: switching the active set to a different one is a
+    // `user.update` on the owner, not an edit of either set.
+    if let Some(user_id) = &sub.seventv_user_id {
         frames.push(
             json!({
                 "op": op,
-                "d": { "type": "emote_set.update", "condition": { "object_id": set_id } }
+                "d": { "type": "user.update", "condition": { "object_id": user_id } }
             })
             .to_string(),
         );
@@ -392,23 +411,23 @@ fn spawn_presence(http: reqwest::Client, sub: ChannelSub, session_id: Option<Str
 /// store does its own fetch and install.
 fn spawn_resync(sub: &ChannelSub, emote_service: Arc<RwLock<EmoteService>>) {
     let sub = sub.clone();
-    tokio::spawn(async move {
-        match sub.platform.as_str() {
-            "kick" => {
-                if let Ok(uid) = sub.channel_id.parse::<u64>() {
-                    super::providers::kick_emotes::refresh_after_edit(&sub.channel_name, uid).await;
-                }
-            }
-            "youtube" => {
-                super::providers::youtube_emotes::refresh_after_edit(&sub.channel_name, &sub.channel_id)
-                    .await;
-            }
-            _ => {
-                IrcService::resync_channel_emotes(&sub.channel_name, &sub.channel_id, emote_service)
-                    .await;
+    tokio::spawn(async move { resync(&sub, emote_service).await });
+}
+
+async fn resync(sub: &ChannelSub, emote_service: Arc<RwLock<EmoteService>>) {
+    match sub.platform.as_str() {
+        "kick" => {
+            if let Ok(uid) = sub.channel_id.parse::<u64>() {
+                super::providers::kick_emotes::refresh_after_edit(&sub.channel_name, uid).await;
             }
         }
-    });
+        "youtube" => {
+            super::providers::youtube_emotes::refresh_after_edit(&sub.channel_name, &sub.channel_id).await;
+        }
+        _ => {
+            IrcService::resync_channel_emotes(&sub.channel_name, &sub.channel_id, emote_service).await;
+        }
+    }
 }
 
 /// How one session ended, for the reconnect policy.
@@ -510,6 +529,14 @@ async fn apply_cmd(
         Cmd::Unsubscribe(sub) => {
             for frame in unsubscribe_frames(&sub) {
                 write.send(Message::text(frame)).await?;
+            }
+        }
+        Cmd::SwapSet { unsubscribe, subscribe } => {
+            if let Some(old) = unsubscribe {
+                write.send(Message::text(set_frame(&old, OP_UNSUBSCRIBE))).await?;
+            }
+            if let Some(new) = subscribe {
+                write.send(Message::text(set_frame(&new, OP_SUBSCRIBE))).await?;
             }
         }
     }
@@ -736,6 +763,10 @@ async fn handle_text(
                 if let Some(body) = d.get("body") {
                     handle_emote_set_update(body, app_handle, emote_service, subs).await;
                 }
+            } else if dispatch_type == "user.update" {
+                if let Some(body) = d.get("body") {
+                    handle_user_update(body, app_handle, emote_service, subs).await;
+                }
             } else if dispatch_type.starts_with("entitlement.") {
                 handle_entitlement(d, dispatch_type, app_handle);
             }
@@ -954,6 +985,175 @@ async fn handle_emote_set_update(
     }
 }
 
+/// The set a `user.update` switched a connection to. The change map nests it as
+/// `updated[] { key: "connections", value: [ { key: "emote_set", value: set } ] }`
+/// (the 7TV extension reads it the same way). `id` is None when the dispatch
+/// says the set changed without carrying the new one.
+#[derive(Debug, PartialEq)]
+struct SetSwitch {
+    id: Option<String>,
+    name: Option<String>,
+}
+
+fn set_switch(body: &Value) -> Option<SetSwitch> {
+    let fields = body
+        .get("updated")?
+        .as_array()?
+        .iter()
+        .filter(|u| u.get("key").and_then(Value::as_str) == Some("connections"))
+        .filter_map(|u| u.get("value").and_then(Value::as_array))
+        .flatten();
+    let mut found = None;
+    for f in fields {
+        match f.get("key").and_then(Value::as_str) {
+            Some("emote_set") => {
+                let set = f.get("value").filter(|v| !v.is_null());
+                return Some(SetSwitch {
+                    id: set.and_then(|s| s.get("id")).and_then(Value::as_str).map(String::from),
+                    name: set.and_then(|s| s.get("name")).and_then(Value::as_str).map(String::from),
+                });
+            }
+            Some("emote_set_id") => {
+                found = Some(SetSwitch {
+                    id: f.get("value").and_then(Value::as_str).map(String::from),
+                    name: None,
+                });
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+/// A subscribed channel's owner changed their 7TV account. The only change
+/// that matters here is a switch of the active emote set, which replaces the
+/// whole set at once; edits inside a set arrive as `emote_set.update`.
+async fn handle_user_update(
+    body: &Value,
+    app_handle: &AppHandle,
+    emote_service: &Arc<RwLock<EmoteService>>,
+    subs: &Arc<RwLock<HashMap<String, ChannelSub>>>,
+) {
+    let Some(user_id) = body.get("id").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(switch) = set_switch(body) else {
+        return;
+    };
+    let owned: Vec<ChannelSub> = subs
+        .read()
+        .await
+        .values()
+        .filter(|s| s.seventv_user_id.as_deref() == Some(user_id))
+        .cloned()
+        .collect();
+    if owned.is_empty() {
+        return;
+    }
+    let actor_name = body
+        .pointer("/actor/display_name")
+        .and_then(Value::as_str)
+        .or_else(|| body.pointer("/actor/username").and_then(Value::as_str))
+        .unwrap_or("Someone")
+        .to_string();
+    // The refetch takes seconds on a large set; never in the read loop.
+    let (app_handle, emote_service, subs, user_id) =
+        (app_handle.clone(), Arc::clone(emote_service), Arc::clone(subs), user_id.to_string());
+    tokio::spawn(async move {
+        let (set_id, set_name) = match switch.id {
+            Some(id) => (Some(id), switch.name),
+            None => active_set_of(&user_id).await,
+        };
+        for sub in owned {
+            follow_set_switch(sub, set_id.clone(), set_name.clone(), &actor_name, &app_handle, &emote_service, &subs)
+                .await;
+        }
+    });
+}
+
+/// The owner's active set as 7TV reports it now, for a switch dispatch that
+/// did not name the new set.
+async fn active_set_of(seventv_user_id: &str) -> (Option<String>, Option<String>) {
+    let body = json!({
+        "query": "query($id: Id!) { users { user(id: $id) { style { activeEmoteSet { id name } } } } }",
+        "variables": { "id": seventv_user_id }
+    });
+    let http = crate::services::http::client();
+    let Ok(resp) = http.post(SEVENTV_GQL_URL).json(&body).send().await else {
+        return (None, None);
+    };
+    let Ok(v) = resp.json::<Value>().await else {
+        return (None, None);
+    };
+    let set = v.pointer("/data/users/user/style/activeEmoteSet");
+    let field = |k: &str| set.and_then(|s| s.get(k)).and_then(Value::as_str).map(String::from);
+    (field("id"), field("name"))
+}
+
+/// Move one channel onto the set its owner switched to: follow the new set's
+/// edits, re-pull the channel's emotes (chat parse dictionary and picker
+/// cache), then tell every window, which refetches its own copy and posts the
+/// notice.
+async fn follow_set_switch(
+    sub: ChannelSub,
+    set_id: Option<String>,
+    set_name: Option<String>,
+    actor_name: &str,
+    app_handle: &AppHandle,
+    emote_service: &Arc<RwLock<EmoteService>>,
+    subs: &Arc<RwLock<HashMap<String, ChannelSub>>>,
+) {
+    if set_id.is_some() && set_id == sub.emote_set_id {
+        return; // a different connection's switch, or a replay of one we applied
+    }
+    let key = sub_key(&sub.channel_name, &sub.platform);
+    let cmd = {
+        let mut map = subs.write().await;
+        let Some(entry) = map.get_mut(&key) else {
+            return; // the chat closed meanwhile
+        };
+        let old = std::mem::replace(&mut entry.emote_set_id, set_id.clone());
+        let in_use = |id: &Option<String>, map: &HashMap<String, ChannelSub>, skip: &str| {
+            id.is_some() && map.iter().any(|(k, s)| k != skip && s.emote_set_id == *id)
+        };
+        Cmd::SwapSet {
+            unsubscribe: old.clone().filter(|_| !in_use(&old, &map, &key)),
+            subscribe: set_id.clone().filter(|_| !in_use(&set_id, &map, &key)),
+        }
+    };
+    if let Some(svc) = SERVICE.get() {
+        let _ = svc.cmd_tx.send(cmd);
+    }
+    emote_service::seventv_ids_store(
+        &sub.channel_id,
+        SeventvIds { emote_set_id: set_id.clone(), user_id: sub.seventv_user_id.clone() },
+    )
+    .await;
+    resync(&sub, Arc::clone(emote_service)).await;
+    let _ = app_handle.emit(
+        "7tv://emote-set-update",
+        json!({
+            "channel": sub.channel_name,
+            "channel_id": sub.channel_id,
+            "platform": sub.platform,
+            "actor_name": actor_name,
+            "added": [],
+            "removed": [],
+            "renamed": [],
+            // No delta: the whole set changed, so every window refetches.
+            "composed": null,
+            "switched_to": set_name.as_deref().unwrap_or(""),
+        }),
+    );
+    info!(
+        "[7TV EventAPI] {} switched emote set to {} ({}, by {})",
+        key,
+        set_name.as_deref().unwrap_or("?"),
+        set_id.as_deref().unwrap_or("none"),
+        actor_name
+    );
+}
+
 // A user's entitlement changed in a subscribed channel. Two kinds matter:
 //
 // EMOTE_SET: the user was granted (or lost) a 7TV personal emote set, usable in
@@ -1129,4 +1329,62 @@ fn enqueue_entitlement_fetch(twitch_id: String, set_id: String) {
 /// for the resource line.
 pub fn sub_count() -> Option<usize> {
     SERVICE.get()?.subs.try_read().ok().map(|s| s.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_set_switch_is_read_from_the_nested_connection_change() {
+        let body = json!({
+            "id": "01FE9DRF000009TR6M9N941CYW",
+            "actor": { "display_name": "xQc" },
+            "updated": [{
+                "key": "connections",
+                "index": 0,
+                "nested": true,
+                "value": [
+                    { "key": "emote_set", "old_value": { "id": "old", "name": "Main" },
+                      "value": { "id": "01J9MMS2R800036CR40E1041ED", "name": "Halloween Emotes 2026" } },
+                    { "key": "emote_set_id", "old_value": "old", "value": "01J9MMS2R800036CR40E1041ED" }
+                ]
+            }]
+        });
+        assert_eq!(
+            set_switch(&body),
+            Some(SetSwitch {
+                id: Some("01J9MMS2R800036CR40E1041ED".into()),
+                name: Some("Halloween Emotes 2026".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn a_bare_set_id_change_still_counts_and_other_edits_do_not() {
+        let id_only = json!({ "updated": [{ "key": "connections", "value": [
+            { "key": "emote_set_id", "value": "new" }
+        ] }] });
+        assert_eq!(set_switch(&id_only), Some(SetSwitch { id: Some("new".into()), name: None }));
+        let renamed = json!({ "updated": [{ "key": "display_name", "value": "x" }] });
+        assert_eq!(set_switch(&renamed), None);
+        let other_field = json!({ "updated": [{ "key": "connections", "value": [
+            { "key": "display_name", "value": "x" }
+        ] }] });
+        assert_eq!(set_switch(&other_field), None);
+    }
+
+    #[test]
+    fn the_owner_account_is_followed_for_set_switches() {
+        let sub = ChannelSub {
+            channel_name: "xqc".into(),
+            channel_id: "71092938".into(),
+            platform: "twitch".into(),
+            emote_set_id: Some("set".into()),
+            seventv_user_id: Some("owner".into()),
+        };
+        let frames = subscribe_frames(&sub);
+        assert!(frames.iter().any(|f| f.contains("\"user.update\"") && f.contains("\"owner\"")));
+        assert!(frames.iter().any(|f| f.contains("\"emote_set.update\"") && f.contains("\"set\"")));
+    }
 }
