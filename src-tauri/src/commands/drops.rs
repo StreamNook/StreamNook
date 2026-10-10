@@ -714,6 +714,8 @@ pub async fn report_player_playing(
             &crate::services::watch_minutes::tile_key(&slot),
             playing,
         );
+        // MultiNook (and its tiles) exists on desktop only.
+        #[cfg(desktop)]
         if playing {
             crate::commands::multi_nook::refresh_tile_watch(&state, &slot);
         }
