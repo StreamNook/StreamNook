@@ -1,3 +1,40 @@
+## [8.8.6] - 2026-10-09
+
+## 🎉 New: Knock, Knock
+> StreamNook's Halloween event is open at streamnook.app/events/knock-knock. Gift a StreamNook membership to earn a knock on the haunted house's door, and watch live streams in StreamNook to find what's waiting upstairs at 5 and 10 hours. Five hidden badges, each yours to keep once found.
+
+![Knock, Knock](https://raw.githubusercontent.com/StreamNook/StreamNook/main/.github/assets/release-8.8.6-knock-knock.webp)
+
+---
+
+### ✨ Features
+- Watching live streams in StreamNook now counts toward the Knock, Knock Halloween event at streamnook.app/events/knock-knock. Five hours and ten hours each find something upstairs.
+- Opening an offline channel takes you to its room: its chat, offline image, when it was last live, its latest broadcast (with a button to watch it), the next scheduled stream and how many people are waiting. The stream starts on its own when the channel goes live, signed in or not.
+- A My channel button and command palette entry open your own channel's room.
+- The title bar shows every account you've connected. Hover it to see them all, including Drops and 7TV, and to reconnect one that signed out. Drops sign-in lives there now too.
+- Offline favorites and follows can be added as docked chats, MultiChat panes and MultiNook tiles, most recently live first, with when each was last live.
+- Docked chat tabs show which channels are live.
+- An offline MultiNook tile shows the channel's card and starts playing on its own when they go live. A tile whose stream ends switches to the card.
+- Pin MultiNook's chat to one channel so it stays put while you focus, maximize or swap tiles.
+- Channel point rewards that ask for text can be redeemed, with the streamer's prompt shown.
+- When a streamer switches their 7TV emote set, chat picks up the new set right away and says so.
+- The emote menu marks emotes your personal 7TV emote replaces.
+- Drops plugins can show a game picker with box art, with games that have drops running listed first.
+- Three new achievements to find.
+
+### 🐛 Bug Fixes
+- Hours watched and your favorite channel count only while a live stream is playing. Kick, YouTube, TikTok and MultiNook watching count too, and the same minute on two devices counts once.
+- Rewards whose cooldown has ended no longer stay stuck on "out of stock".
+- Tab completion no longer previews a channel emote that your personal emote replaces.
+- Editing a chatter's nickname or color from a popout no longer wipes your other saved changes.
+- Chat headers no longer flash "offline" before the first live check.
+- Live checks no longer call a live channel offline when you're signed out or your session expired.
+- Drops plugins get your saved settings at launch and after every save.
+- Raid notices show as a card instead of a blank row.
+
+### ⚡ Performance
+- The Badges, Drops and Settings overlays draw with far fewer layers.
+
 ## [8.8.5] - 2026-10-06
 
 ### ✨ Features
