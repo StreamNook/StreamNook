@@ -54,10 +54,11 @@ function TwitchChatPane({ channel, channelId, channelName, isActive, filterId, o
   // The live broadcast (viewers, start, title, category) comes from Rust's
   // channel state, which this pane's ChatWidget watches: one Helix batch for
   // every channel any window shows, a live channel only reading offline after
-  // two missed polls. Until Rust answers, the channel reads offline, as it did
-  // before the first poll here.
+  // two missed polls. Rust always sends its first answer, offline included;
+  // until then the channel is unknown (not live, and not shown as offline).
   const live = useChannelState(channelKey);
   const isLive = !!live?.started_at;
+  const answered = live?.viewers_at != null;
 
   // Resolve channel-level metadata (display name, avatar, broadcaster type)
   // once per channel. Doesn't change between live/offline.
@@ -97,10 +98,10 @@ function TwitchChatPane({ channel, channelId, channelName, isActive, filterId, o
       started_at: live?.started_at ?? undefined,
       profile_image_url: userInfo?.profile_image_url,
       broadcaster_type: userInfo?.broadcaster_type,
-      is_live: isLive,
+      is_live: answered ? isLive : undefined,
       is_active: isActive,
     };
-  }, [live?.title, live?.game_name, live?.viewer_count, live?.started_at, isLive, userInfo, channelKey, channelId, channelName, isActive]);
+  }, [live?.title, live?.game_name, live?.viewer_count, live?.started_at, isLive, answered, userInfo, channelKey, channelId, channelName, isActive]);
 
   // Hype Train: show this channel's train (Rust polls it once for every surface
   // showing it) and surface its start + each level-up in the combined activity

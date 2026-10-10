@@ -8,6 +8,9 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue(null)
 vi.mock('../../stores/AppStore', () => ({
   useAppStore: Object.assign(vi.fn(), { getState: () => ({ addToast: vi.fn() }), setState: vi.fn(), subscribe: vi.fn() }),
 }));
+vi.mock('../../stores/favoritesStore', () => ({
+  useFavoritesStore: Object.assign(vi.fn(), { getState: () => ({ liveByKey: {} }), setState: vi.fn(), subscribe: vi.fn() }),
+}));
 vi.mock('../../stores/followsStore', () => ({
   useFollowsStore: Object.assign(vi.fn(), { getState: () => ({ liveByKey: {} }), setState: vi.fn(), subscribe: vi.fn() }),
 }));
@@ -20,9 +23,12 @@ import {
   parseTypedChannel,
   streamToItem,
   resultToItem,
+  offlineSuggestions,
   type ChannelItem,
 } from './channelSearch';
 import { makeKey } from '../../utils/providerKey';
+import type { FavoriteChannel, TwitchStream } from '../../types';
+import type { ProviderId } from '../../types/providers';
 
 function item(over: Partial<ChannelItem> & { login: string }): ChannelItem {
   return { id: over.login, displayName: over.login, isLive: true, source: 'search', ...over };
@@ -201,3 +207,54 @@ describe('rankResults', () => {
     expect(out.map((i) => i.login)).toEqual(['tw0', 'tw1', 'k']);
   });
 })
+
+describe('offlineSuggestions', () => {
+  const follow = (login: string, id: string): TwitchStream => ({
+    id: '', user_id: id, user_login: login, user_name: login.toUpperCase(), title: '', viewer_count: 0,
+    game_name: '', thumbnail_url: '', started_at: '', profile_image_url: `https://x/${login}.png`,
+  });
+  const base = {
+    favorites: [] as FavoriteChannel[],
+    offlineFollows: [] as TwitchStream[],
+    lastBroadcasts: {} as Record<string, string | null>,
+    liveKeys: new Set<string>(),
+    excludeKeys: new Set<string>(),
+    query: '',
+    providers: ['twitch', 'kick'] as ProviderId[],
+  };
+
+  it('puts the most recently live first and favorites win ties', () => {
+    const out = offlineSuggestions({
+      ...base,
+      favorites: [{ id: '1', provider: 'twitch', channel: 'fav' }, { id: 'kick:kfav', provider: 'kick', channel: 'kfav' }],
+      offlineFollows: [follow('old', '2'), follow('recent', '3'), follow('unknown', '4')],
+      lastBroadcasts: { '1': '2026-10-01T00:00:00Z', '2': '2026-09-01T00:00:00Z', '3': '2026-10-08T00:00:00Z' },
+    });
+    expect(out.map((i) => i.login)).toEqual(['recent', 'fav', 'old', 'kfav', 'unknown']);
+    expect(out.find((i) => i.login === 'kfav')?.provider).toBe('kick');
+    expect(out.find((i) => i.login === 'fav')?.id).toBe('1');
+  });
+
+  it('leaves out live, excluded and other-platform channels, in the composite key space', () => {
+    const out = offlineSuggestions({
+      ...base,
+      providers: ['twitch'],
+      favorites: [{ id: 'kick:k', provider: 'kick', channel: 'k' }, { id: '9', provider: 'twitch', channel: 'Live' }],
+      offlineFollows: [follow('docked', '5'), follow('keep', '6')],
+      liveKeys: new Set([makeKey('twitch', 'live')]),
+      excludeKeys: new Set([makeKey('twitch', 'docked')]),
+    });
+    expect(out.map((i) => i.login)).toEqual(['keep']);
+  });
+
+  it('a follow that is also a favorite appears once, and the query filters', () => {
+    const out = offlineSuggestions({
+      ...base,
+      favorites: [{ id: '6', provider: 'twitch', channel: 'keep', display_name: 'Keep' }],
+      offlineFollows: [follow('keep', '6'), follow('other', '7')],
+      query: 'kee',
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].displayName).toBe('Keep');
+  });
+});

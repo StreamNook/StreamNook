@@ -61,6 +61,7 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
     query,
     isSearching,
     followingItems,
+    offlineItems,
     searchItems,
     visibleItems,
     followedCount,
@@ -69,7 +70,9 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
     listRef,
     refreshFollowing,
     reset: resetSearch,
-  } = useChannelSearch({ excludeKeys: existingKeys, providers: GRID_PICKER_PROVIDERS });
+    // An offline channel is a tile too: it shows its offline card, keeps its
+    // chat, and starts playing when the channel goes live.
+  } = useChannelSearch({ excludeKeys: existingKeys, providers: GRID_PICKER_PROVIDERS, includeOffline: true });
 
   // Focus input when the panel opens, and refresh the live-following list so it's
   // current the moment the panel appears.
@@ -375,6 +378,33 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
                       </>
                     )}
 
+                    {/* Offline favorites and follows, most recently live first */}
+                    {offlineItems.length > 0 && (
+                      <>
+                        <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
+                          <span aria-hidden className="h-[7px] w-[7px] rounded-full border-[1.5px] border-textMuted" />
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-textMuted">Offline</span>
+                        </div>
+                        <div className="space-y-0.5">
+                          {offlineItems.map((item, i) => {
+                            const idx = followingItems.length + i;
+                            return (
+                              <ChannelResultRow
+                                key={`o-${itemKey(item)}`}
+                                item={item}
+                                index={idx}
+                                highlighted={highlightIndex === idx}
+                                disabled={isAdding}
+                                reason={gridRefusal(item.provider ?? 'twitch')}
+                                onSelect={handleSelectItem}
+                                onHover={setHighlightIndex}
+                              />
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+
                     {/* Channel search across every platform the grid accepts (debounced) */}
                     {query && (searchItems.length > 0 || isSearching) && (
                       <>
@@ -387,7 +417,7 @@ const MultiNookToolbar: React.FC<MultiNookToolbarProps> = ({
                         </div>
                         <div className="space-y-0.5">
                           {searchItems.map((item, i) => {
-                            const idx = followingItems.length + i;
+                            const idx = followingItems.length + offlineItems.length + i;
                             return (
                               <ChannelResultRow
                                 key={`s-${itemKey(item)}`}

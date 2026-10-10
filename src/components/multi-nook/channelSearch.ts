@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { searchPlatforms } from '../../services/platformSearch';
-import { TwitchStream } from '../../types';
+import type { FavoriteChannel, TwitchStream } from '../../types';
 import { useAppStore } from '../../stores/AppStore';
 import { useFollowsStore } from '../../stores/followsStore';
+import { useFavoritesStore } from '../../stores/favoritesStore';
 import { Logger } from '../../utils/logger';
 import { makeKey, parseKey } from '../../utils/providerKey';
 import { streamProvider } from '../../utils/streamProvider';
@@ -20,6 +21,8 @@ export interface ChannelItem {
   gameName?: string;
   source: 'following' | 'search';
   provider?: ProviderId;
+  /** An offline suggestion's last broadcast (RFC 3339), when known. */
+  lastLiveAt?: string | null;
 }
 
 /** The identity of a picker row. Composite ALWAYS, via makeKey, never streamKey:
@@ -94,6 +97,77 @@ export function filterFollowing(
   );
 }
 
+/** Channels you care about that are offline right now, as chat suggestions:
+ *  favorites on every platform and offline Twitch follows, the most recently
+ *  live first (favorites win ties), minus anything live, excluded or not
+ *  matching the query. Pure, so the key space and order are testable. */
+export function offlineSuggestions({
+  favorites,
+  offlineFollows,
+  lastBroadcasts,
+  liveKeys,
+  excludeKeys,
+  query,
+  providers,
+  limit = 5,
+}: {
+  favorites: FavoriteChannel[];
+  offlineFollows: TwitchStream[];
+  /** Twitch user id -> last broadcast, from the Home snapshot. */
+  lastBroadcasts: Record<string, string | null>;
+  /** Composite keys of channels live right now. */
+  liveKeys: Set<string>;
+  excludeKeys: Set<string>;
+  query: string;
+  providers: ProviderId[];
+  limit?: number;
+}): ChannelItem[] {
+  const byKey = new Map<string, ChannelItem & { favorite: boolean }>();
+  for (const f of favorites) {
+    if (!providers.includes(f.provider) || !f.channel) continue;
+    const twitch = f.provider === 'twitch';
+    const item = {
+      id: twitch ? f.id : f.channel,
+      login: f.channel,
+      displayName: f.display_name || f.channel,
+      avatarUrl: f.avatar,
+      isLive: false,
+      source: 'following' as const,
+      provider: twitch ? undefined : f.provider,
+      lastLiveAt: twitch ? (lastBroadcasts[f.id] ?? null) : null,
+      favorite: true,
+    };
+    byKey.set(itemKey(item), item);
+  }
+  if (providers.includes('twitch')) {
+    for (const s of offlineFollows) {
+      if (streamProvider(s) !== 'twitch' || !s.user_login) continue;
+      const key = makeKey('twitch', s.user_login);
+      if (byKey.has(key)) continue;
+      byKey.set(key, {
+        id: s.user_id,
+        login: s.user_login,
+        displayName: s.user_name || s.user_login,
+        avatarUrl: resolveAvatar(s.profile_image_url, s.thumbnail_url),
+        isLive: false,
+        source: 'following',
+        lastLiveAt: lastBroadcasts[s.user_id] ?? null,
+        favorite: false,
+      });
+    }
+  }
+  const time = (iso: string | null | undefined) => (iso ? Date.parse(iso) || 0 : 0);
+  return [...byKey.entries()]
+    .filter(([key]) => !liveKeys.has(key) && !excludeKeys.has(key))
+    .map(([, item]) => item)
+    .filter(
+      (it) => !query || it.login.toLowerCase().includes(query) || it.displayName.toLowerCase().includes(query),
+    )
+    .sort((a, b) => time(b.lastLiveAt) - time(a.lastLiveAt) || Number(b.favorite) - Number(a.favorite))
+    .slice(0, limit)
+    .map(({ favorite: _favorite, ...item }) => item);
+}
+
 /** Search results, minus anything excluded or already shown as a live follow. */
 export function filterSearch(
   items: ChannelItem[],
@@ -156,6 +230,9 @@ export interface ChannelSearchOptions {
   /** Platforms to search. Defaults to Twitch only, so a surface that has not
    *  opted in cannot start returning channels it has no way to handle. */
   providers?: ProviderId[];
+  /** Also suggest offline favorites and follows (chat pickers: offline chat
+   *  is the same room). Off for surfaces that need something to watch. */
+  includeOffline?: boolean;
 }
 
 /**
@@ -173,8 +250,12 @@ export interface ChannelSearchOptions {
  * composite is exactly the kind of change that must not compile until every
  * caller has been looked at.
  */
-export function useChannelSearch({ excludeKeys, providers = ['twitch'] }: ChannelSearchOptions) {
+export function useChannelSearch({ excludeKeys, providers = ['twitch'], includeOffline = false }: ChannelSearchOptions) {
   const followedStreams = useAppStore((s) => s.followedStreams);
+  const favoriteChannels = useAppStore((s) => (includeOffline ? s.settings.favorite_channels : undefined));
+  const offlineFollows = useAppStore((s) => (includeOffline ? s.offlineFollowedChannels : undefined));
+  const lastBroadcasts = useAppStore((s) => (includeOffline ? s.offlineLastBroadcasts : undefined));
+  const favoritesLive = useFavoritesStore((s) => (includeOffline ? s.liveByKey : undefined));
   const loadFollowedStreams = useAppStore((s) => s.loadFollowedStreams);
   const providerLive = useFollowsStore((s) => s.liveByKey);
 
@@ -211,18 +292,42 @@ export function useChannelSearch({ excludeKeys, providers = ['twitch'] }: Channe
     return filterFollowing([...twitch, ...others], excludeKeys, query);
   }, [followedStreams, providerLive, providerSig, wantsTwitch, excludeKeys, query]);
 
-  const searchItems = useMemo(() => {
-    const followingKeys = new Set(followingItems.map(itemKey));
-    return filterSearch(searchResults, excludeKeys, followingKeys);
-  }, [searchResults, followingItems, excludeKeys]);
+  const offlineItems = useMemo(() => {
+    if (!includeOffline) return [];
+    // Everything live anywhere we know of, so a favorite that went live is
+    // never offered as offline.
+    const liveKeys = new Set<string>([
+      ...followedStreams.map((s) => makeKey('twitch', s.user_login)),
+      ...Object.values(providerLive).filter((r) => r.is_live).map((r) => makeKey(r.provider, r.user_login)),
+      ...Object.values(favoritesLive ?? {}).map((r) => makeKey(r.provider, r.user_login)),
+    ]);
+    return offlineSuggestions({
+      favorites: favoriteChannels ?? [],
+      offlineFollows: offlineFollows ?? [],
+      lastBroadcasts: lastBroadcasts ?? {},
+      liveKeys,
+      excludeKeys,
+      query,
+      providers: providerSig.split(',') as ProviderId[],
+    });
+  }, [includeOffline, followedStreams, providerLive, favoritesLive, favoriteChannels, offlineFollows, lastBroadcasts, excludeKeys, query, providerSig]);
 
-  // Flat list backing keyboard navigation (following first, then search).
-  const visibleItems = useMemo(() => [...followingItems, ...searchItems], [followingItems, searchItems]);
+  const searchItems = useMemo(() => {
+    const followingKeys = new Set([...followingItems, ...offlineItems].map(itemKey));
+    return filterSearch(searchResults, excludeKeys, followingKeys);
+  }, [searchResults, followingItems, offlineItems, excludeKeys]);
+
+  // Flat list backing keyboard navigation (live follows, offline suggestions,
+  // then search), in the order the pickers draw them.
+  const visibleItems = useMemo(
+    () => [...followingItems, ...offlineItems, ...searchItems],
+    [followingItems, offlineItems, searchItems],
+  );
 
   // Reset the highlight whenever the result set changes shape.
   useEffect(() => {
     setHighlightIndex(0);
-  }, [query, followingItems.length, searchItems.length]);
+  }, [query, followingItems.length, offlineItems.length, searchItems.length]);
 
   // Keep the highlighted row scrolled into view during keyboard navigation.
   useEffect(() => {
@@ -298,6 +403,7 @@ export function useChannelSearch({ excludeKeys, providers = ['twitch'] }: Channe
     isSearching,
     // results
     followingItems,
+    offlineItems,
     searchItems,
     visibleItems,
     followedCount: followedStreams.length,

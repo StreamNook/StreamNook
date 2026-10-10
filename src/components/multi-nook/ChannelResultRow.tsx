@@ -3,6 +3,7 @@ import { Plus, Users } from 'lucide-react';
 import { ChannelItem, DEFAULT_AVATAR } from './channelSearch';
 import { ProviderLogo } from '../ProviderLogo';
 import { Tooltip } from '../ui/Tooltip';
+import { lastLiveLabel } from '../../utils/lastLive';
 
 /** One row in a channel smart-list. Renders live follows and search hits from
  *  every platform identically, with an optional trailing slot for a non-add
@@ -78,7 +79,13 @@ export const ChannelResultRow: React.FC<{
           <span className="truncate">{item.displayName}</span>
         </span>
         <span className="block text-[11px] text-textMuted truncate mt-0.5 leading-tight">
-          {item.isLive && item.gameName ? item.gameName : item.isLive ? 'Live' : item.login}
+          {item.isLive && item.gameName
+            ? item.gameName
+            : item.isLive
+              ? 'Live'
+              : item.lastLiveAt !== undefined
+                ? lastLiveLabel(item.lastLiveAt)
+                : item.login}
         </span>
       </div>
 

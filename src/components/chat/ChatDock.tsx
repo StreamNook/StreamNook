@@ -41,6 +41,7 @@ import {
 import { useChannelState } from '../../stores/channelStateStore';
 import { nameFloor, useCapsuleName, useDockView } from '../../hooks/useChatDock';
 import { formatViewerCount } from '../../utils/streamStats';
+import { lastLiveLabel } from '../../utils/lastLive';
 import { isTwitchLogin, parseChannelInput } from '../../utils/parseChannelInput';
 import { streamProvider } from '../../utils/streamProvider';
 import { useChannelSearch, type ChannelItem } from '../multi-nook/channelSearch';
@@ -199,22 +200,31 @@ interface RowProps {
   onDropOn: () => void;
 }
 
-function DockRow({ chat, active, focused, showPlatform, draggable, onShow, onDragStart, onDropOn }: RowProps) {
+/** A docked chat's live line, or null until its first answer. Twitch reads
+ *  Rust's channel state; other platforms read the dock's own poller
+ *  (chat_dock_live.rs). The list row and the tab read the same line. */
+function useDockedLine(chat: DockedChat) {
   const isTwitch = chat.provider === 'twitch';
-  // Twitch reads Rust's channel state; other platforms read the dock's own
-  // poller (chat_dock_live.rs). Either way the row shows the same live line.
   const state = useChannelState(isTwitch ? chat.login : null);
   const other = useChatDockStore((s) => (isTwitch ? undefined : s.live[chatKey(chat)]));
-  const activity = useChannelHeldActivity(chat.provider, chat.login);
-  const mentions = useChannelHeldMentions(chat.provider, chat.login);
-  const fresh = chat.light_on_new && activity >= 1;
-  const line = isTwitch
+  return isTwitch
     ? state?.viewers_at != null
       ? { live: !!state.started_at, category: state.game_name, title: state.title, viewers: state.viewer_count }
       : null
     : other
       ? { live: other.live, category: other.category, title: other.title, viewers: other.viewer_count }
       : null;
+}
+
+function DockRow({ chat, active, focused, showPlatform, draggable, onShow, onDragStart, onDropOn }: RowProps) {
+  const line = useDockedLine(chat);
+  // An offline Twitch chat says when it was last live, as everywhere else.
+  const lastLiveAt = useAppStore((s) =>
+    chat.provider === 'twitch' && chat.channel_id ? (s.offlineLastBroadcasts[chat.channel_id] ?? null) : null,
+  );
+  const activity = useChannelHeldActivity(chat.provider, chat.login);
+  const mentions = useChannelHeldMentions(chat.provider, chat.login);
+  const fresh = chat.light_on_new && activity >= 1;
   const live = !!line?.live;
   const offline = !!line && !line.live;
   const name = chat.display_name || chat.login;
@@ -223,7 +233,7 @@ function DockRow({ chat, active, focused, showPlatform, draggable, onShow, onDra
   const sub = live
     ? line?.category || line?.title || 'Live'
     : offline
-      ? 'Offline'
+      ? lastLiveLabel(lastLiveAt)
       : showPlatform
         ? NBSP
         : PROVIDERS[chat.provider]?.label ?? '';
@@ -380,7 +390,7 @@ function ResultRow({
   onAdd: () => void;
 }) {
   const provider = item.provider ?? 'twitch';
-  const sub = item.isLive ? item.gameName || 'Live' : 'Offline';
+  const sub = item.isLive ? item.gameName || 'Live' : lastLiveLabel(item.lastLiveAt);
   return (
     <div
       role="option"
@@ -463,7 +473,9 @@ function PanelBody({ top }: { top: number }) {
     if (live) keys.add(chatKey(live));
     return keys;
   }, [others, live]);
-  const search = useChannelSearch({ excludeKeys, providers: CHAT_PROVIDERS });
+  // Offline channels too: an offline chat is the same room, so favorites and
+  // follows that are not streaming are offered beside the live ones.
+  const search = useChannelSearch({ excludeKeys, providers: CHAT_PROVIDERS, includeOffline: true });
   const query = search.searchInput;
   const setQuery = search.setSearchInput;
   const [focus, setFocus] = useState(0);
@@ -517,9 +529,10 @@ function PanelBody({ top }: { top: number }) {
     () => (q ? others.filter((c) => c.login.toLowerCase().includes(q) || c.display_name.toLowerCase().includes(q)) : others),
     [others, q],
   );
-  const following = q ? search.followingItems.slice(0, 5) : [];
+  const following = search.followingItems.slice(0, 5);
+  const offline = search.offlineItems;
   const channels = q ? search.searchItems : [];
-  const results = [...following, ...channels];
+  const results = [...following, ...offline, ...channels];
   // Platform marks only where platforms mix, and then on every row.
   const openMixed = new Set([...(live ? [live.provider] : []), ...others.map((c) => c.provider)]).size > 1;
   const resultsMixed = new Set(results.map((it) => it.provider ?? 'twitch')).size > 1;
@@ -671,7 +684,7 @@ function PanelBody({ top }: { top: number }) {
 
         {others.length === 0 && !q && (
           <p className="px-3.5 pb-1 pt-2.5 text-[12px] leading-relaxed text-textSecondary">
-            Dock a chat to keep it open beside the stream. Type a channel above, or pick Dock this chat in any chat&apos;s menu.
+            Dock a chat to keep it open beside the stream, live or offline. Type a channel above, or pick Dock this chat in any chat&apos;s menu.
           </p>
         )}
 
@@ -690,9 +703,24 @@ function PanelBody({ top }: { top: number }) {
           </>
         )}
 
+        {offline.length > 0 && (
+          <>
+            <div className={`${SECTION_LABEL} ${docked.length + following.length > 0 ? SECTION_RULE : ''}`}>Offline</div>
+            {offline.map((item, i) => (
+              <ResultRow
+                key={`o-${item.provider ?? 'twitch'}:${item.login}`}
+                item={item}
+                focused={focused === resultBase + following.length + i}
+                showPlatform={resultsMixed}
+                onAdd={() => void addResult(item)}
+              />
+            ))}
+          </>
+        )}
+
         {q && (channels.length > 0 || search.isSearching) && (
           <>
-            <div className={`${SECTION_LABEL} ${docked.length + following.length > 0 ? SECTION_RULE : ''} flex items-center gap-1.5`}>
+            <div className={`${SECTION_LABEL} ${docked.length + following.length + offline.length > 0 ? SECTION_RULE : ''} flex items-center gap-1.5`}>
               All channels
               {search.isSearching && <CircleNotch size={11} className="animate-spin text-textSecondary" />}
             </div>
@@ -700,7 +728,7 @@ function PanelBody({ top }: { top: number }) {
               <ResultRow
                 key={`s-${item.provider ?? 'twitch'}:${item.login}`}
                 item={item}
-                focused={focused === resultBase + following.length + i}
+                focused={focused === resultBase + following.length + offline.length + i}
                 showPlatform={resultsMixed}
                 onAdd={() => void addResult(item)}
               />
@@ -776,6 +804,7 @@ function DockTab({
   const [over, setOver] = useState(false);
   const name = chat.display_name || chat.login;
   const key = chatKey(chat);
+  const live = !!useDockedLine(chat)?.live;
   return (
     <div
       role="tab"
@@ -806,7 +835,7 @@ function DockTab({
       className={`${TAB} ${tabTone(active, fresh || mentions > 0)}`}
     >
       {over && <span aria-hidden className="absolute -left-0.5 top-1 bottom-1 w-0.5 rounded-full bg-accent" />}
-      <TabFace src={chat.avatar_url} name={name} provider={showPlatform ? chat.provider : undefined} />
+      <TabFace src={chat.avatar_url} name={name} live={live} provider={showPlatform ? chat.provider : undefined} />
       {/* The mark, or a close button in its place while hovered, in one
           fixed-width slot: a tab that grew on hover reflowed every tab after
           it out from under the cursor. */}

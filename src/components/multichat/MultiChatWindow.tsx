@@ -28,6 +28,8 @@ import { ActivityFeedWidget } from '../activity/ActivityFeedWidget';
 import { startActivityNormalizer, stopActivityNormalizer } from '../../services/activityNormalizer';
 import { useActivityStore } from '../../stores/activityStore';
 import { makeKey, parseKey } from '../../utils/providerKey';
+import { offlineSuggestions } from '../multi-nook/channelSearch';
+import { lastLiveLabel } from '../../utils/lastLive';
 import {
   isYouTubeChannelId,
   isYouTubeLegacyPath,
@@ -1142,7 +1144,7 @@ export default function MultiChatWindow() {
         // channel is streaming (offline chat is the same room). This gives us the
         // broadcaster id + properly-cased name AND confirms the channel exists — a
         // failure here is the "that channel isn't real" gate. (An offline-but-valid
-        // channel still adds; the pane header shows "Offline chat" on its own.)
+        // channel still adds; the pane header then says when it was last live.)
         let channelId: string | null = null;
         let channelName = providedDisplayName ?? login;
         try {
@@ -3571,10 +3573,36 @@ function AddChannelPanel({
     });
   }, [followedStreams, query]);
 
+  // Offline favorites and follows: an offline chat is the same room, so they
+  // are offered under the live list, the most recently live first (the same
+  // suggestions the main window's chat dock offers).
+  const favoriteChannels = useAppStore((s) => s.settings.favorite_channels);
+  const offlineFollows = useAppStore((s) => s.offlineFollowedChannels);
+  const lastBroadcasts = useAppStore((s) => s.offlineLastBroadcasts);
+  const offline = useMemo(
+    () =>
+      provider === 'twitch'
+        ? offlineSuggestions({
+            favorites: favoriteChannels ?? [],
+            offlineFollows,
+            lastBroadcasts,
+            liveKeys: new Set(followedStreams.map((s) => makeKey('twitch', s.user_login))),
+            excludeKeys: alreadyAddedSet,
+            query,
+            providers: ['twitch'],
+          })
+        : [],
+    [provider, favoriteChannels, offlineFollows, lastBroadcasts, followedStreams, alreadyAddedSet, query],
+  );
+
   const exactFollowedMatch = useMemo(() => {
     if (!query) return null;
-    return followedStreams.find((s) => s.user_login.toLowerCase() === query) ?? null;
-  }, [followedStreams, query]);
+    return (
+      followedStreams.find((s) => s.user_login.toLowerCase() === query) ??
+      offline.find((it) => it.login.toLowerCase() === query) ??
+      null
+    );
+  }, [followedStreams, offline, query]);
 
   // Twitch matches the query against the live-following list; Kick has no public
   // search to autocomplete, so it's add-by-name (any non-empty query is addable).
@@ -3660,7 +3688,7 @@ function AddChannelPanel({
           disabled={busy}
           placeholder={
             provider === 'twitch'
-              ? 'Search your live following, or type any channel name'
+              ? 'Search your following, or type any channel name'
               : `Type a ${PROVIDERS[provider].label} channel name`
           }
           className="flex-1 rounded-md border border-borderSubtle bg-background px-3 py-1.5 text-xs text-textPrimary placeholder:text-textMuted focus:border-accent focus:outline-none disabled:opacity-60"
@@ -3679,12 +3707,16 @@ function AddChannelPanel({
       {error && <div className="px-3 pb-1.5 text-[11px] text-error">{error}</div>}
 
       <div className={`overflow-y-auto scrollbar-thin px-1 pb-2 ${isTwitch ? 'min-h-0 flex-1' : ''}`}>
-        {isTwitch && filtered.length === 0 && !showArbitraryAdd && (
+        {isTwitch && filtered.length === 0 && offline.length === 0 && !showArbitraryAdd && (
           <div className="px-3 py-4 text-center text-[11px] text-textMuted">
             {followedStreams.length === 0
               ? 'No live channels in your following right now. Type a channel name and press Enter.'
               : `No follows match "${query}". Press Enter to add anyway.`}
           </div>
+        )}
+
+        {isTwitch && filtered.length > 0 && offline.length > 0 && (
+          <div className="px-3 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-textMuted">Live</div>
         )}
 
         {!isTwitch && !showArbitraryAdd && (
@@ -3742,6 +3774,47 @@ function AddChannelPanel({
             </button>
           );
         })}
+
+        {offline.length > 0 && (
+          <>
+            <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-textMuted">Offline</div>
+            {offline.map((item) => (
+              <button
+                key={`offline-${item.login}`}
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  onSelectStream({
+                    id: '',
+                    user_id: item.id,
+                    user_login: item.login,
+                    user_name: item.displayName,
+                    title: '',
+                    viewer_count: 0,
+                    game_name: '',
+                    thumbnail_url: '',
+                    started_at: '',
+                    profile_image_url: item.avatarUrl,
+                    is_live: false,
+                  })
+                }
+                className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left transition-colors hover:bg-surface-hover"
+              >
+                {item.avatarUrl ? (
+                  <img src={item.avatarUrl} alt="" draggable={false} className="h-9 w-9 shrink-0 rounded-full object-cover opacity-80" />
+                ) : (
+                  <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-surface text-xs font-bold text-textMuted">
+                    {item.displayName.charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-semibold text-textSecondary">{item.displayName}</div>
+                  <div className="truncate text-[11px] text-textMuted">{lastLiveLabel(item.lastLiveAt)}</div>
+                </div>
+              </button>
+            ))}
+          </>
+        )}
 
         {showArbitraryAdd && (
           <button

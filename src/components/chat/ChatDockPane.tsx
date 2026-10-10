@@ -12,17 +12,21 @@
 import { useEffect, useMemo, useState } from 'react';
 import ChatWidget, { type ChatWidgetChannelOverride } from '../ChatWidget';
 import type { HypeTrainData } from '../../types';
-import type { DockedChat } from '../../stores/chatDockStore';
+import { chatKey, useChatDockStore, type DockedChat } from '../../stores/chatDockStore';
 import { useChannelState } from '../../stores/channelStateStore';
 import { watchHypeTrains } from '../../services/hypeTrainWatch';
 
 export default function ChatDockPane({ chat }: { chat: DockedChat }) {
   const isTwitch = chat.provider === 'twitch';
   const state = useChannelState(isTwitch ? chat.login : null);
-  // Unknown until Rust's first answer; treated as live so the header does not
-  // flash "offline" on a channel that is on air.
+  // Three states: unknown until Rust's first answer (which it always sends,
+  // offline included), then live or offline. Unknown is passed as unknown so
+  // the header neither flashes "offline" on an on-air channel nor shows live
+  // extras for one that is not.
   const answered = state?.viewers_at != null;
-  const live = answered ? !!state?.started_at : true;
+  const live = answered && !!state?.started_at;
+  // Kick / YouTube / TikTok: the dock's own poll (undefined until it answers).
+  const providerLive = useChatDockStore((s) => (isTwitch ? undefined : s.live[chatKey(chat)]?.live));
 
   const [hypeTrain, setHypeTrain] = useState<HypeTrainData | null>(null);
   const trainsOn = isTwitch && !!chat.channel_id && answered && live;
@@ -47,10 +51,10 @@ export default function ChatDockPane({ chat }: { chat: DockedChat }) {
       game_name: state?.game_name ?? undefined,
       viewer_count: state?.viewer_count ?? undefined,
       started_at: state?.started_at ?? undefined,
-      is_live: live,
+      is_live: isTwitch ? (answered ? live : undefined) : providerLive,
       is_active: true,
     }),
-    [chat, state?.title, state?.game_name, state?.viewer_count, state?.started_at, live],
+    [chat, state?.title, state?.game_name, state?.viewer_count, state?.started_at, live, answered, isTwitch, providerLive],
   );
 
   return <ChatWidget channelOverride={channelOverride} hypeTrainOverride={isTwitch ? hypeTrain : undefined} />;
