@@ -230,6 +230,7 @@ pub fn emit_platform_account_changed(providers: &[&str]) {
         let payload: Vec<String> = providers.iter().map(|p| p.to_string()).collect();
         let _ = app.emit("platform-account-changed", payload);
     }
+    crate::services::account_roster::notify();
 }
 
 /// Tell every window that a platform SESSION died on its own (expired or revoked),
@@ -237,6 +238,7 @@ pub fn emit_platform_account_changed(providers: &[&str]) {
 /// loud instead of quietly showing a connected account with nobody live.
 pub fn emit_platform_session_expired(provider: &str) {
     use tauri::Emitter;
+    crate::services::account_roster::mark_expired(provider);
     if let Some(app) = app_handle() {
         let _ = app.emit("platform-session-expired", provider.to_string());
     }

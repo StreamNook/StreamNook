@@ -6,6 +6,7 @@ import { useAppStore } from '../stores/AppStore';
 import { providerLabel, type ProviderId } from '../types/providers';
 import { useVisibleInterval } from '../utils/useVisibleInterval';
 import { Logger } from '../utils/logger';
+import type { AccountRoster } from '../stores/accountRosterStore';
 
 /**
  * Keeps `platformAccountStore` current without polling.
@@ -61,6 +62,16 @@ export function usePlatformAccountSync(): void {
       else unlisten = fn;
     });
 
+    // The whole roster, pushed by Rust whenever any credential changes,
+    // including Twitch, drops and 7TV, which have no event of their own here.
+    let unlistenRoster: (() => void) | undefined;
+    void listen<AccountRoster>('account-roster-changed', (e) => {
+      usePlatformAccountStore.getState().applyRoster(e.payload);
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlistenRoster = fn;
+    });
+
     // A session that died on its own (expired or revoked), as opposed to the
     // user signing out. Say so out loud: the silent version of this is the app
     // looking connected while nothing works, which reads as "nobody is live".
@@ -99,6 +110,7 @@ export function usePlatformAccountSync(): void {
       mounted -= 1;
       unlisten?.();
       unlistenExpired?.();
+      unlistenRoster?.();
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, []);

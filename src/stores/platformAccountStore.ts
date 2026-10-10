@@ -7,6 +7,7 @@ import { clearLinkedAccount, recordLinkedAccount } from '../services/supabaseSer
 import { invalidateMemberAliases } from '../services/memberAliasService';
 import { setMemberAliases } from '../utils/memberIdentity';
 import { Logger } from '../utils/logger';
+import { useAccountRosterStore, type AccountRoster, type RosterAccount } from './accountRosterStore';
 
 /**
  * Connection state for the platforms that have an account you can connect.
@@ -59,6 +60,8 @@ interface PlatformAccountStore {
   tiktok: PlatformAccountState;
   /** Re-read connection state from the backend for every platform. */
   refresh: () => Promise<void>;
+  /** Apply a roster Rust pushed on `account-roster-changed`. */
+  applyRoster: (roster: AccountRoster) => void;
   /** The one connect action for a platform. */
   connect: (provider: PlatformId) => Promise<void>;
   disconnect: (provider: PlatformId) => Promise<void>;
@@ -199,47 +202,64 @@ export const usePlatformAccountStore = create<PlatformAccountStore>((set, get) =
     });
   };
 
-  const refreshOne = async (provider: PlatformId) => {
-    try {
-      const connected = await platformAccounts.isConnected(provider);
-      if (!connected) {
-        const wasConnected = get()[provider].connected;
-        patch(provider, { connected, name: null, avatarUrl: null, id: null, handle: null });
-        // Deliberately NOT clearProvider here. A session dying mid-run must not
-        // blank the sidebar: Kick liveness never needed the login (the sweep
-        // runs on an app token) and the follow list survives backend-side for
-        // both platforms. Re-reading it keeps the view honest either way — an
-        // explicit disconnect purged it backend-side, so hydrate empties the
-        // list then; a mere token death leaves it intact and live. The
-        // user-facing "your session expired" signal is the dedicated
-        // platform-session-expired event, not a vanished sidebar.
-        if (wasConnected) void useFollowsStore.getState().hydrate();
-        report(provider, false, get()[provider]);
-        return;
-      }
-      const info = await platformAccounts.accountInfo(provider);
-      patch(provider, {
-        connected,
-        name: info.name,
-        avatarUrl: info.avatar_url,
-        id: info.id,
-        handle: info.handle ?? null,
-      });
-      report(provider, true, get()[provider]);
-    } catch (e) {
-      // Leave the previous state: an IPC failure is not evidence of a sign-out.
-      Logger.debug(`[platform] could not read ${provider} state:`, e);
+  /** Take one platform's row from the roster Rust built. */
+  const applyRow = (provider: PlatformId, row: RosterAccount | undefined) => {
+    if (!row) return;
+    const connected = row.status === 'connected';
+    if (!connected) {
+      const wasConnected = get()[provider].connected;
+      patch(provider, { connected, name: null, avatarUrl: null, id: null, handle: null });
+      // Deliberately NOT clearProvider here. A session dying mid-run must not
+      // blank the sidebar: Kick liveness never needed the login (the sweep
+      // runs on an app token) and the follow list survives backend-side for
+      // both platforms. Re-reading it keeps the view honest either way — an
+      // explicit disconnect purged it backend-side, so hydrate empties the
+      // list then; a mere token death leaves it intact and live. The
+      // user-facing "your session expired" signal is the dedicated
+      // platform-session-expired event, not a vanished sidebar.
+      if (wasConnected) void useFollowsStore.getState().hydrate();
+      report(provider, false, get()[provider]);
+      return;
+    }
+    patch(provider, {
+      connected,
+      name: row.name,
+      avatarUrl: row.avatar_url,
+      id: row.account_id,
+      handle: row.handle,
+    });
+    report(provider, true, get()[provider]);
+  };
+
+  /** The roster carries every platform at once, so one read serves all three
+   *  rows and the title bar alike. */
+  const applyRoster = (roster: AccountRoster) => {
+    useAccountRosterStore.getState().setRoster(roster);
+    for (const provider of ['kick', 'youtube', 'tiktok'] as const) {
+      applyRow(provider, roster.main.find((a) => a.id === provider));
     }
   };
+
+  const refreshAll = async () => {
+    try {
+      applyRoster(await platformAccounts.accountRoster());
+    } catch (e) {
+      // Leave the previous state: an IPC failure is not evidence of a sign-out.
+      Logger.debug('[platform] could not read the account roster:', e);
+    }
+  };
+
+  /** Kept by name for the connect/disconnect flows; the roster answers for
+   *  every platform in one read, so there is nothing per-provider left to ask. */
+  const refreshOne = (_provider: PlatformId) => refreshAll();
 
   return {
     kick: { ...IDLE },
     youtube: { ...IDLE },
     tiktok: { ...IDLE },
 
-    refresh: async () => {
-      await Promise.all([refreshOne('kick'), refreshOne('youtube'), refreshOne('tiktok')]);
-    },
+    refresh: refreshAll,
+    applyRoster,
 
     connect: async (provider) => {
       if (get()[provider].busy) return;

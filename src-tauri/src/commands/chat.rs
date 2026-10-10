@@ -571,6 +571,13 @@ pub async fn platform_account_info(provider: String) -> PlatformAccountInfo {
     }
 }
 
+/// Every account StreamNook is signed into, ready to render. Changes arrive on
+/// `account-roster-changed`; this is the first read.
+#[tauri::command]
+pub async fn get_account_roster() -> crate::services::account_roster::AccountRoster {
+    crate::services::account_roster::build().await
+}
+
 /// Which StreamNook member, if any, is behind each of these chat identities.
 ///
 /// The frontend collects the non-Twitch chatters it has seen and asks in waves;
@@ -639,6 +646,10 @@ pub async fn validate_platform_sessions(app: crate::rt::AppHandle) -> Vec<String
     // poll of its own.
     if !signed_out.is_empty() {
         let _ = app.emit("platform-account-changed", signed_out.clone());
+        // Revoked, not signed out: the title bar offers a reconnect.
+        for provider in &signed_out {
+            crate::services::account_roster::mark_expired(provider);
+        }
     }
     signed_out
 }

@@ -95,6 +95,7 @@ impl SevenTVAuthService {
         *cached = Some(storable_token);
 
         debug!("[7TV_AUTH] 7TV token stored successfully");
+        crate::services::account_roster::notify();
         Ok(())
     }
 
@@ -274,6 +275,7 @@ impl SevenTVAuthService {
         *cached = None;
 
         debug!("[7TV_AUTH] 7TV logout complete - token cleared");
+        crate::services::account_roster::notify();
         Ok(())
     }
 

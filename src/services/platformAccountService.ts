@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import type { AccountRoster } from '../stores/accountRosterStore';
 
 /**
  * Thin wrappers over the Kick / YouTube account commands, mirroring
@@ -56,6 +57,12 @@ export interface PlatformAccountInfo {
  */
 export function accountInfo(provider: PlatformId): Promise<PlatformAccountInfo> {
   return invoke<PlatformAccountInfo>('platform_account_info', { provider });
+}
+
+/** Every account StreamNook is signed into, as Rust built it. One read answers
+ *  for every platform, so nothing asks per provider. */
+export function accountRoster(): Promise<AccountRoster> {
+  return invoke<AccountRoster>('get_account_roster');
 }
 
 export function disconnect(provider: PlatformId): Promise<void> {

@@ -1,5 +1,5 @@
 import { Window } from '@tauri-apps/api/window';
-import { User, Settings, Proportions, MessageCircle, Pickaxe, Clock, Tv, Download, LogIn, Check, Pin, PinOff, Lightbulb } from 'lucide-react';
+import { Settings, Proportions, MessageCircle, Pickaxe, Clock, Tv, Download, Check, Pin, PinOff, Lightbulb } from 'lucide-react';
 import { Minus, X, CornersOut, CornersIn, ArrowsOut, ArrowsIn, Medal, Package, PuzzlePiece } from 'phosphor-react';
 import { IS_MAC, MAC_TRAFFIC_LIGHT_INSET_PX } from '../utils/platform';
 import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
@@ -11,6 +11,7 @@ import PenroseLogo from './PenroseLogo';
 import PlatformSwitcher from './PlatformSwitcher';
 import NavFlipper from './NavFlipper';
 import { MultiNookToggle, MultiChatButton } from './titlebar/WindowActions';
+import AccountStack from './titlebar/AccountStack';
 import AboutWidget from './AboutWidget';
 import UpdateOverlay, { type UpdatePhase } from './UpdateOverlay';
 import CompactStreamStats from './CompactStreamStats';
@@ -54,11 +55,9 @@ const TitleBar = () => {
   // subscribing; state goes through a shallow-compared selector. This was a
   // whole-store subscription, so the title bar re-rendered on every unrelated
   // store tick.
-  const { openSettings, setShowDropsOverlay, setShowMarketplaceOverlay, setShowBadgesOverlay, setShowWhispersOverlay, toggleTheaterMode, toggleWindowFullscreen, toggleKeepOnTop, addToast } = useAppStore.getState();
-  const { isAuthenticated, currentUser, dropProgressActive, dropProgressComplete, isTheaterMode, isWindowFullscreen, streamUrl, currentMediaType, settings, whisperImportState, updateInfo } = useAppStore(
+  const { openSettings, setShowDropsOverlay, setShowMarketplaceOverlay, setShowBadgesOverlay, setShowWhispersOverlay, toggleTheaterMode, toggleWindowFullscreen, toggleKeepOnTop } = useAppStore.getState();
+  const { dropProgressActive, dropProgressComplete, isTheaterMode, isWindowFullscreen, streamUrl, currentMediaType, settings, whisperImportState, updateInfo } = useAppStore(
     useShallow((s) => ({
-      isAuthenticated: s.isAuthenticated,
-      currentUser: s.currentUser,
       dropProgressActive: s.dropProgressActive,
       dropProgressComplete: s.dropProgressComplete,
       isTheaterMode: s.isTheaterMode,
@@ -82,11 +81,6 @@ const TitleBar = () => {
   const [showAbout, setShowAbout] = useState(false);
   const [, setShowSplash] = useState(false);
   const [dropsSettings, setDropsSettings] = useState<DropsSettings | null>(null);
-  // Whether the separate drops/points credential (its own Twitch sign-in) is
-  // present. null = not yet checked. Drives the drops button's "needs sign-in"
-  // cue — a logout (main or drops) clears this credential and swaps the gift for
-  // a sign-in button.
-  const [dropsAuthed, setDropsAuthed] = useState<boolean | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
   const prevDropProgressActive = useRef(dropProgressActive);
   
@@ -177,62 +171,8 @@ const TitleBar = () => {
   }, [loadDropsSettings]);
   useVisibleInterval(loadDropsSettings, 60 * 60 * 1000);
 
-  // Track the drops/points sign-in so the drops button can flag when it's gone.
-  // Re-checks on login changes, on a slow interval, and on window focus (which
-  // fires right after the drops-login window closes, clearing the cue promptly).
-  const checkDropsAuth = useCallback(async () => {
-    try {
-      setDropsAuthed(await invoke<boolean>('is_drops_authenticated'));
-    } catch {
-      setDropsAuthed(null);
-    }
-  }, []);
-  useEffect(() => {
-    checkDropsAuth();
-  }, [checkDropsAuth, isAuthenticated]);
-  useVisibleInterval(checkDropsAuth, 60 * 1000);
-  useEffect(() => {
-    const onFocus = () => checkDropsAuth();
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, [checkDropsAuth]);
-
-  // Start the drops/points (separate Twitch) sign-in directly from the title bar
-  // login button: open Twitch's device-code page, poll for the token, then clear
-  // the prompt. Mirrors the flow the Drops panel and setup wizard use.
-  const [isDropsLoggingIn, setIsDropsLoggingIn] = useState(false);
-  const handleDropsLogin = useCallback(async () => {
-    if (isDropsLoggingIn) return;
-    setIsDropsLoggingIn(true);
-    try {
-      const url = await invoke<string>('start_drops_login');
-      // Opened from Rust bound to the active account's web profile, so it reuses
-      // the main login's twitch.tv session — just authorize, no re-login.
-      await invoke('open_drops_login_window', { url });
-    } catch (e) {
-      Logger.error('[TitleBar] Drops login failed:', e);
-      // Say what actually went wrong: the generic line sent people reinstalling.
-      addToast(`Drops sign-in failed: ${e instanceof Error ? e.message : String(e)}`, 'error');
-      setIsDropsLoggingIn(false);
-    }
-  }, [isDropsLoggingIn, addToast]);
-
-  // The overlay reports completion, so the outcome arrives as an event rather
-  // than as the resolution of the call that started it.
-  useEffect(() => {
-    const uns: Array<() => void> = [];
-    listen('drops-login-complete', () => {
-      setIsDropsLoggingIn(false);
-      addToast('Signed in — drops & channel points enabled', 'success');
-      void checkDropsAuth();
-    }).then((u) => uns.push(u));
-    listen<string>('drops-login-error', (e) => {
-      setIsDropsLoggingIn(false);
-      Logger.error('[TitleBar] Drops login failed:', e.payload);
-      addToast(`Drops sign-in failed: ${e.payload}`, 'error');
-    }).then((u) => uns.push(u));
-    return () => uns.forEach((u) => u());
-  }, [addToast, checkDropsAuth]);
+  // The drops/points sign-in is a row in the account flyout (AccountStack),
+  // fed by the roster Rust pushes, so nothing here polls for it.
 
   // Seed the progress badge from the bridge-cached automation status (a plugin
   // powering automation reports through it). Live updates arrive on the
@@ -694,21 +634,12 @@ const TitleBar = () => {
               // "done" check instead of the idle gift. Active progress wins over it.
               const showCompleteBadge = dropProgressComplete && !dropProgressActive;
 
-              // Drops and channel points run off a separate Twitch sign-in that
-              // logout clears (signing out of the main account signs drops out
-              // too). Whenever that credential is missing, swap the gift for a
-              // sign-in button (clicking it starts the drops sign-in) — including
-              // after a full sign-out, not only while the main account is in.
-              const needsDropsAuth = dropsAuthed === false;
-
               // The drops button pulses while automation runs.
               // Silver = channel points only, Gold = drops only, Iridescent = both
               let automationTone: AutomationTone | null = null;
               let title = 'Drops & Points';
 
-              if (needsDropsAuth) {
-                title = 'Sign in to enable drops & channel points';
-              } else if (isBothActive) {
+              if (isBothActive) {
                 automationTone = 'iridescent';
                 title = 'Drops & Points (Both Active)';
               } else if (dropProgressActive) {
@@ -722,23 +653,6 @@ const TitleBar = () => {
               }
 
               const isAnyAutomationActive = dropProgressActive || channelPointsActive;
-
-              // Credential missing: the drops slot becomes a direct "Login"
-              // button rather than the gift, so the action is unmistakable.
-              if (needsDropsAuth) {
-                return (
-                  <Tooltip content={title} delay={200}>
-                    <button
-                      onClick={handleDropsLogin}
-                      disabled={isDropsLoggingIn}
-                      className="flex items-center gap-1 px-1.5 py-1 text-[11px] font-medium text-textSecondary hover:text-accent transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                    >
-                      <LogIn size={12} />
-                      {isDropsLoggingIn ? 'Signing in…' : 'Login'}
-                    </button>
-                  </Tooltip>
-                );
-              }
 
               return (
                 <Tooltip content={title} delay={200}>
@@ -1001,23 +915,8 @@ const TitleBar = () => {
             </button>
           </Tooltip>
 
-          {/* Profile Button */}
-          <Tooltip content={isAuthenticated ? 'Profile' : 'Sign in'} delay={200}>
-            <button
-              onClick={() => openSettings('Profile')}
-              className="titlebar-icon-btn"
-            >
-              {isAuthenticated && currentUser?.profile_image_url ? (
-                <img
-                  src={currentUser.profile_image_url}
-                  alt="Profile"
-                  className="w-[20px] h-[20px] rounded-full object-cover"
-                />
-              ) : (
-                <User size={20} />
-              )}
-            </button>
-          </Tooltip>
+          {/* Who you are signed in as, on every platform; hover lists them. */}
+          <AccountStack />
 
           {/* Compact View Button - only show when stream is playing */}
           {streamUrl && (

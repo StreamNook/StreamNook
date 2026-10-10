@@ -81,11 +81,14 @@ impl DropsAuthService {
         let path = Self::get_token_file_path()?;
         token_vault::store_json(&path, token)?;
         debug!("[DROPS_AUTH] Token sealed to {:?}", path);
+        crate::services::account_roster::notify();
         Ok(())
     }
 
     fn delete_token_file() -> Result<()> {
-        token_vault::remove(&Self::get_token_file_path()?)
+        let result = token_vault::remove(&Self::get_token_file_path()?);
+        crate::services::account_roster::notify();
+        result
     }
 
     fn load_token() -> Result<StorableDropsToken> {
