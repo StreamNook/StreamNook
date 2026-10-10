@@ -6,7 +6,7 @@ import { IS_MOBILE, isPortrait, onOrientationChange } from './utils/platform';
 import MobileNav from './components/mobile/MobileNav';
 import { useAppStore, type WhisperImportProgress, type SettingsTab } from './stores/AppStore';
 import { listenForSettingsUpdates } from './utils/settingsBroadcast';
-import { trackPresence, isSupabaseConfigured, incrementStat, incrementChannelWatch, subscribeToStreamNookRegistry, subscribeToCosmeticsRegistry, subscribeToAtmospheresRegistry, refreshEntitlementRegistries } from './services/supabaseService';
+import { trackPresence, isSupabaseConfigured, incrementStat, subscribeToStreamNookRegistry, subscribeToCosmeticsRegistry, subscribeToAtmospheresRegistry, refreshEntitlementRegistries } from './services/supabaseService';
 import { primeClientConfig } from './services/clientConfig';
 import { maybeClaimWatchRewards } from './services/watchRewards';
 import TitleBar from './components/TitleBar';
@@ -1562,21 +1562,14 @@ function App() {
       useAppStore.getState().currentStream?.game_name,
     );
 
-    // Accrue watch time every minute. Reads fresh state each tick so it follows
-    // the live user/channel even as other store fields churn.
+    // Watch time itself (hours_watched and the favourite-channel minutes) is
+    // reported by Rust (services/watch_minutes.rs) through the authenticated
+    // API, only while a live channel is actually playing. This tick only
+    // retries watch-to-earn reward claims. Reads fresh state each tick so it
+    // follows the live user/channel even as other store fields churn.
     const watchTimeInterval = setInterval(() => {
       const { isAuthenticated: stillAuth, currentUser: user, currentStream: cs } = useAppStore.getState();
       if (stillAuth && user?.user_id) {
-        // Increment by 1/60 of an hour (1 minute)
-        incrementStat(user.user_id, 'hours_watched', 1 / 60);
-        // Per-channel watch minute for the favorite-channel stat.
-        if (cs?.user_id) {
-          incrementChannelWatch(user.user_id, {
-            id: cs.user_id,
-            login: cs.user_login,
-            name: cs.user_name || cs.user_login,
-          });
-        }
         void maybeClaimWatchRewards(user.user_id, cs?.user_login, cs?.game_name);
       }
     }, 60000); // Every minute

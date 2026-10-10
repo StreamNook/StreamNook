@@ -73,7 +73,11 @@ pub async fn start_multi_nook(
     }
 
     if provider != "twitch" {
-        return start_provider_tile(&stream_id, &provider, &url, &quality, cap).await;
+        let proxy_url = start_provider_tile(&stream_id, &provider, &url, &quality, cap).await?;
+        if let Some(channel) = provider_channel_from_url(&provider, &url) {
+            register_tile_watch(&state, &stream_id, &provider, &channel);
+        }
+        return Ok(proxy_url);
     }
 
     let (channel, r) = resolve_twitch_tile(&state, &stream_id, &url, &quality).await?;
@@ -114,7 +118,70 @@ pub async fn start_multi_nook(
         stream_id, channel, proxy_url, r.status.mode
     );
 
+    register_tile_watch(&state, &stream_id, "twitch", &channel);
     Ok(proxy_url)
+}
+
+/// The channel a tile's watching is credited to. The saved slot carries the
+/// platform id and display name; it is used only while it names the same
+/// channel the tile started, so a slot saved for an earlier channel never lends
+/// its identity. Without it the login stands in for the name and the id stays
+/// empty until `refresh_tile_watch` finds the slot saved.
+fn tile_channel(
+    state: &AppState,
+    slot_id: &str,
+    provider: &str,
+    login: &str,
+) -> crate::services::watch_minutes::WatchedChannel {
+    let saved = state.settings.lock().ok().and_then(|settings| {
+        settings
+            .multi_nook_slots
+            .iter()
+            .find(|s| s.id == slot_id)
+            .filter(|s| {
+                s.provider.as_deref().unwrap_or("twitch") == provider
+                    && if provider == "twitch" {
+                        s.channel_login.eq_ignore_ascii_case(login)
+                    } else {
+                        s.channel_login == login
+                    }
+            })
+            .map(|s| (s.channel_id.clone(), s.channel_name.clone()))
+    });
+    let (channel_id, name) = saved.unwrap_or_default();
+    crate::services::watch_minutes::WatchedChannel {
+        platform: provider.to_string(),
+        channel_id: channel_id.unwrap_or_default(),
+        login: login.to_string(),
+        name: name.filter(|n| !n.is_empty()).unwrap_or_else(|| login.to_string()),
+    }
+}
+
+/// A tile's stream is serving: it becomes its own StreamNook watch-time source,
+/// counted once its player reports playing. Tiles start only for live channels
+/// (an offline channel fails to resolve and shows the offline card, and a tile
+/// whose channel ends is stopped), so a registered tile is always live.
+fn register_tile_watch(state: &AppState, slot_id: &str, provider: &str, login: &str) {
+    crate::services::watch_minutes::set_source(
+        &crate::services::watch_minutes::tile_key(slot_id),
+        Some(tile_channel(state, slot_id, provider, login)),
+    );
+}
+
+/// Fills in a registered tile's platform id and display name once its slot is
+/// saved: a new tile can start before the grid's save lands.
+pub fn refresh_tile_watch(state: &AppState, slot_id: &str) {
+    let key = crate::services::watch_minutes::tile_key(slot_id);
+    let Some(current) = crate::services::watch_minutes::source_channel(&key) else {
+        return;
+    };
+    if !current.channel_id.is_empty() {
+        return;
+    }
+    let channel = tile_channel(state, slot_id, &current.platform, &current.login);
+    if !channel.channel_id.is_empty() {
+        crate::services::watch_minutes::refresh_source(&key, channel);
+    }
 }
 
 /// What a tile's change of size did to its stream.
@@ -556,6 +623,7 @@ pub async fn stop_multi_nook(stream_id: String) -> Result<(), String> {
     crate::services::youtube_dash::stop(&stream_id).await;
     // Likewise for a TikTok tile's relay session.
     crate::services::tiktok_relay::stop(&stream_id);
+    crate::services::watch_minutes::remove_source(&crate::services::watch_minutes::tile_key(&stream_id));
     MultiNookServer::stop_instance(&stream_id)
         .await
         .map_err(|e| e.to_string())
@@ -573,6 +641,7 @@ pub async fn stop_all_multi_nooks() -> Result<(), String> {
     crate::services::tiktok_relay::stop_all_except(
         crate::services::stream_server::SOLO_STREAM_ID,
     );
+    crate::services::watch_minutes::clear_tiles();
     MultiNookServer::stop_all().await.map_err(|e| e.to_string())
 }
 
@@ -635,6 +704,8 @@ pub async fn promote_multi_nook_tile(
     crate::services::tiktok_relay::stop_all_except(
         crate::services::stream_server::SOLO_STREAM_ID,
     );
+    // The promoted channel's watching continues as the main player's session.
+    crate::services::watch_minutes::clear_tiles();
     MultiNookServer::stop_all().await.map_err(|e| e.to_string())?;
 
     // Register the solo session only once the relay is serving, matching

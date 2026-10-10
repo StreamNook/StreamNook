@@ -49,6 +49,10 @@ const ALLOWED_PATHS: &[&str] = &[
     // Which sections the member hides from their public profile. The member
     // comes from the token; the server refreshes their public page on save.
     "/api/v1/profile/prefs",
+    // One minute of live, playing watching, sent by the Rust watch-minute
+    // reporter. The server keys it on (member, minute), so a repeat or a
+    // second device in the same minute counts once.
+    "/api/v1/watch/minute",
 ];
 
 #[derive(Debug, Serialize)]

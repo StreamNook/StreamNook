@@ -1197,48 +1197,6 @@ export interface ChannelWatch {
     minutes: number;
 }
 
-/**
- * Add watch minutes to a channel for a user. Atomic via the
- * `increment_channel_watch` RPC, with a manual-upsert fallback. Fire-and-forget.
- */
-export const incrementChannelWatch = async (
-    userId: string,
-    channel: { id: string; login: string; name: string },
-    amount: number = 1,
-): Promise<void> => {
-    if (!supabase || !userId || !channel?.id) return;
-    try {
-        const { error } = await supabase.rpc('increment_channel_watch', {
-            p_user_id: userId,
-            p_channel_id: channel.id,
-            p_channel_login: channel.login,
-            p_channel_name: channel.name,
-            p_amount: amount,
-        });
-        if (!error) return;
-        const { data: existing } = await supabase
-            .from('user_channel_watch')
-            .select('minutes')
-            .eq('twitch_user_id', userId)
-            .eq('channel_id', channel.id)
-            .maybeSingle();
-        const newMinutes = ((existing as { minutes?: number } | null)?.minutes || 0) + amount;
-        await supabase.from('user_channel_watch').upsert(
-            {
-                twitch_user_id: userId,
-                channel_id: channel.id,
-                channel_login: channel.login,
-                channel_name: channel.name,
-                minutes: newMinutes,
-                updated_at: new Date().toISOString(),
-            },
-            { onConflict: 'twitch_user_id,channel_id' },
-        );
-    } catch (error) {
-        Logger.warn('[Supabase] incrementChannelWatch failed:', error);
-    }
-};
-
 /** The channel a user has spent the most time watching, or null. */
 export const getFavoriteChannel = async (userId: string): Promise<ChannelWatch | null> => {
     if (!supabase || !userId) return null;
