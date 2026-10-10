@@ -431,34 +431,48 @@ const providerGroupKey = (provider: unknown): string =>
   typeof provider === 'string' ? provider.toLowerCase() : '';
 
 // Inline editor for the nickname + color overrides we expose on each user.
-// Reads the current override from the settings store on mount (lazy init)
-// and on userId change. Nickname saves on blur or Enter; color saves on the
-// native color picker's change event.
+// Follows the stored override, so a popout card that is still loading settings
+// shows the saved nickname once they arrive, and an edit made in another window
+// shows up here. Nickname saves on blur or Enter; color saves on the native
+// color picker's change event.
 const NicknameEditor: React.FC<NicknameEditorProps> = ({ userId, username, displayName, twitchColor }) => {
-  const readCurrentNickname = () =>
-    useAppStore.getState().settings.chat_customization?.user_overrides?.[userId]?.nickname ?? '';
-  const readCurrentColor = () =>
-    useAppStore.getState().settings.chat_customization?.user_overrides?.[userId]?.color ?? '';
+  const storedNickname = useAppStore(
+    (s) => s.settings.chat_customization?.user_overrides?.[userId]?.nickname ?? '',
+  );
+  const storedColor = useAppStore(
+    (s) => s.settings.chat_customization?.user_overrides?.[userId]?.color ?? '',
+  );
 
-  const [draft, setDraft] = useState<string>(readCurrentNickname);
-  const [savedNickname, setSavedNickname] = useState<string>(readCurrentNickname);
+  const [draft, setDraft] = useState<string>(storedNickname);
+  const [savedNickname, setSavedNickname] = useState<string>(storedNickname);
   const [isEditing, setIsEditing] = useState<boolean>(false);
-  const [savedColor, setSavedColor] = useState<string>(readCurrentColor);
+  const [savedColor, setSavedColor] = useState<string>(storedColor);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const fallbackColor = normalizeHex(twitchColor);
   const pickerValue = normalizeHex(savedColor || twitchColor);
   const hasColorOverride = savedColor.trim().length > 0;
 
+  // A different chatter starts fresh from what is stored for them.
   useEffect(() => {
-    const nextNickname = readCurrentNickname();
-    const nextColor = readCurrentColor();
-    setDraft(nextNickname);
-    setSavedNickname(nextNickname);
-    setSavedColor(nextColor);
     setIsEditing(false);
+    setDraft(storedNickname);
+    setSavedNickname(storedNickname);
+    setSavedColor(storedColor);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
+
+  // A stored change (settings finished loading, another window edited) lands
+  // here too. An open edit keeps the viewer's draft.
+  useEffect(() => {
+    setSavedNickname(storedNickname);
+    if (!isEditing) setDraft(storedNickname);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storedNickname]);
+
+  useEffect(() => {
+    setSavedColor(storedColor);
+  }, [storedColor]);
 
   useEffect(() => {
     if (isEditing) {

@@ -1,10 +1,11 @@
 // Per-user chat overrides (nickname + color). Lookups are sync against the
 // `chat_customization.user_overrides` Record on the global settings store, so
-// callers can read inside render without effects. Writes go through
-// `useAppStore.getState().updateSettings` so they persist via the same path
-// every other setting uses.
+// callers can read inside render without effects. Writes go through Rust's
+// `set_chat_user_override` (see `writeOverride` below).
 
+import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../stores/AppStore';
+import { Logger } from './logger';
 import type { UserChatOverride } from '../types';
 
 type OverrideMap = Record<string, UserChatOverride>;
@@ -40,103 +41,41 @@ export function getColorOverride(
   return override?.color && override.color.trim().length > 0 ? override.color : null;
 }
 
-function readOverrides(): OverrideMap {
-  const state = useAppStore.getState();
-  return state.settings.chat_customization?.user_overrides ?? {};
-}
-
 // Snapshot of the current override map. Use sparingly — readers that
 // re-render on changes should pull from `settings` via the AppStore hook,
 // not from this getter (which is a one-shot read).
 export function snapshotOverrides(): OverrideMap {
-  return readOverrides();
+  return useAppStore.getState().settings.chat_customization?.user_overrides ?? {};
 }
 
-function writeOverrides(next: OverrideMap): void {
-  const state = useAppStore.getState();
-  state.updateSettings({
-    ...state.settings,
-    chat_customization: {
-      ...state.settings.chat_customization,
-      user_overrides: next,
-    },
-  });
-}
-
-// Idempotent — writes nothing if the override would be unchanged. Captures the
-// `username` field so the Settings UI can render "Bob → Robert" without an API
-// roundtrip.
-export function setUserNickname(
+// Every write is a read-modify-write in Rust on the canonical settings, never a
+// patch of this window's copy of the group: that copy can be stale (a popout
+// still loading settings, or an earlier edit still in flight), and the group
+// travels whole, so a stale copy erased every other saved override. Rust
+// announces the write and every window, this one included, reloads settings.
+function writeOverride(
   userId: string,
-  username: string,
-  nickname: string | null,
+  username: string | null,
+  field: 'nickname' | 'color' | null,
+  value: string | null,
 ): void {
   if (!userId) return;
-  const overrides = readOverrides();
-  const existing = overrides[userId];
-  const trimmed = nickname && nickname.trim().length > 0 ? nickname.trim() : null;
-
-  // If the only field that would change is nothing, bail.
-  if (existing && existing.nickname === trimmed && existing.username === username) return;
-
-  // If clearing the nickname AND there's no color, drop the whole entry.
-  if (trimmed === null && !(existing?.color)) {
-    if (!existing) return;
-    const next = { ...overrides };
-    delete next[userId];
-    writeOverrides(next);
-    return;
-  }
-
-  writeOverrides({
-    ...overrides,
-    [userId]: {
-      ...existing,
-      user_id: userId,
-      username,
-      nickname: trimmed,
-    },
-  });
+  invoke('set_chat_user_override', { userId, username, field, value }).catch((err) =>
+    Logger.warn('[UserOverrides] set_chat_user_override failed:', err),
+  );
 }
 
-// Item 4 will call this. Same shape as setUserNickname but for color.
-export function setUserColor(
-  userId: string,
-  username: string,
-  color: string | null,
-): void {
-  if (!userId) return;
-  const overrides = readOverrides();
-  const existing = overrides[userId];
-  const trimmed = color && color.trim().length > 0 ? color.trim() : null;
+// A blank nickname clears it. `username` is kept so the Settings UI can render
+// "Bob → Robert" without an API roundtrip.
+export function setUserNickname(userId: string, username: string, nickname: string | null): void {
+  writeOverride(userId, username, 'nickname', nickname);
+}
 
-  if (existing && existing.color === trimmed && existing.username === username) return;
-
-  if (trimmed === null && !(existing?.nickname)) {
-    if (!existing) return;
-    const next = { ...overrides };
-    delete next[userId];
-    writeOverrides(next);
-    return;
-  }
-
-  writeOverrides({
-    ...overrides,
-    [userId]: {
-      ...existing,
-      user_id: userId,
-      username,
-      color: trimmed,
-    },
-  });
+export function setUserColor(userId: string, username: string, color: string | null): void {
+  writeOverride(userId, username, 'color', color);
 }
 
 // Drops the entire override entry for a user.
 export function clearUserOverride(userId: string): void {
-  if (!userId) return;
-  const overrides = readOverrides();
-  if (!overrides[userId]) return;
-  const next = { ...overrides };
-  delete next[userId];
-  writeOverrides(next);
+  writeOverride(userId, null, null, null);
 }

@@ -271,6 +271,111 @@ fn with_chat_user_hidden(
     changed
 }
 
+/// Set or clear one chatter's nickname or color override, or (`field` None)
+/// drop their whole entry.
+///
+/// A read-modify-write on the canonical settings, for the same reason as
+/// `set_chat_user_hidden`: a patch from the page sends the whole
+/// `chat_customization` group from that window's copy, so a profile card popout
+/// that had not finished loading settings replaced every saved override with
+/// its one, and two quick edits (a nickname, then a color reset) each started
+/// from the same copy, so the second dropped the first.
+#[tauri::command]
+pub async fn set_chat_user_override(
+    app: AppHandle,
+    user_id: String,
+    username: Option<String>,
+    field: Option<String>,
+    value: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let field = match field.as_deref() {
+        None => None,
+        Some(f @ ("nickname" | "color")) => Some(f),
+        Some(other) => return Err(format!("Unknown chat override field: {other}")),
+    };
+    let settings = {
+        let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
+        let mut group = state_settings
+            .extra
+            .get("chat_customization")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        if !with_chat_user_override(&mut group, &user_id, username.as_deref(), field, value.as_deref()) {
+            return Ok(());
+        }
+        state_settings.extra.insert("chat_customization".to_string(), group);
+        state_settings.clone()
+    };
+    after_settings_change(&settings, false);
+    write_settings_to_disk(&settings)?;
+    let _ = app.emit(
+        SETTINGS_UPDATED_EVENT,
+        SettingsUpdated { source: None, keys: vec!["chat_customization".to_string()] },
+    );
+    Ok(())
+}
+
+/// Apply one override change to a `chat_customization` JSON group in place.
+/// A blank value clears the field, and an entry left with neither a nickname
+/// nor a color is removed. Returns false when there was nothing to change.
+fn with_chat_user_override(
+    group: &mut serde_json::Value,
+    user_id: &str,
+    username: Option<&str>,
+    field: Option<&str>,
+    value: Option<&str>,
+) -> bool {
+    if user_id.is_empty() {
+        return false;
+    }
+    if !group.is_object() {
+        *group = serde_json::json!({});
+    }
+    let overrides = group
+        .as_object_mut()
+        .expect("an object")
+        .entry("user_overrides")
+        .or_insert_with(|| serde_json::json!({}));
+    if !overrides.is_object() {
+        *overrides = serde_json::json!({});
+    }
+    let overrides = overrides.as_object_mut().expect("an object");
+
+    let Some(field) = field else {
+        return overrides.remove(user_id).is_some();
+    };
+    let value = value.map(str::trim).filter(|v| !v.is_empty());
+
+    let before = overrides.get(user_id).cloned();
+    let mut entry = match before.clone() {
+        Some(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    entry.insert("user_id".to_string(), serde_json::Value::String(user_id.to_string()));
+    if let Some(name) = username.filter(|n| !n.is_empty()) {
+        entry.insert("username".to_string(), serde_json::Value::String(name.to_string()));
+    }
+    match value {
+        Some(v) => {
+            entry.insert(field.to_string(), serde_json::Value::String(v.to_string()));
+        }
+        None => {
+            entry.remove(field);
+        }
+    }
+    let has = |key: &str| entry.get(key).and_then(|v| v.as_str()).is_some_and(|s| !s.trim().is_empty());
+    if !has("nickname") && !has("color") {
+        return overrides.remove(user_id).is_some();
+    }
+    let next = serde_json::Value::Object(entry);
+    if before.as_ref() == Some(&next) {
+        return false;
+    }
+    overrides.insert(user_id.to_string(), next);
+    true
+}
+
 fn apply_settings_patch(
     current: &Settings,
     patch: serde_json::Map<String, serde_json::Value>,
@@ -849,6 +954,43 @@ mod patch_tests {
         assert!(with_chat_user_hidden(&mut filters, "BOB", None, true));
         assert_eq!(filters["hidden_users"], serde_json::json!(["alice", "bob"]));
         assert!(!with_chat_user_hidden(&mut filters, "carol", None, false));
+    }
+
+    #[test]
+    fn one_override_edit_keeps_every_other_override() {
+        let mut group = json!({
+            "user_overrides": {
+                "1": { "user_id": "1", "username": "alice", "nickname": "Al" },
+                "kick:2": { "user_id": "kick:2", "username": "bob", "color": "#ff0000" }
+            }
+        });
+        assert!(with_chat_user_override(&mut group, "3", Some("carol"), Some("nickname"), Some("  Caz ")));
+        assert_eq!(group["user_overrides"]["3"]["nickname"], "Caz");
+        assert_eq!(group["user_overrides"]["1"]["nickname"], "Al");
+        assert_eq!(group["user_overrides"]["kick:2"]["color"], "#ff0000");
+
+        // A color on top of a nickname keeps the nickname; the same value again is a no-op.
+        assert!(with_chat_user_override(&mut group, "3", Some("carol"), Some("color"), Some("#00ff00")));
+        assert!(!with_chat_user_override(&mut group, "3", Some("carol"), Some("color"), Some("#00ff00")));
+        assert_eq!(group["user_overrides"]["3"]["nickname"], "Caz");
+
+        // Clearing one field keeps the other; clearing the last one drops the entry.
+        assert!(with_chat_user_override(&mut group, "3", None, Some("nickname"), Some("")));
+        assert!(group["user_overrides"]["3"].get("nickname").is_none());
+        assert!(with_chat_user_override(&mut group, "3", None, Some("color"), None));
+        assert!(group["user_overrides"].get("3").is_none());
+
+        // Dropping a whole entry, and dropping one that is not there.
+        assert!(with_chat_user_override(&mut group, "kick:2", None, None, None));
+        assert!(!with_chat_user_override(&mut group, "kick:2", None, None, None));
+        assert_eq!(group["user_overrides"]["1"]["nickname"], "Al");
+    }
+
+    #[test]
+    fn an_override_starts_a_missing_group() {
+        let mut group = serde_json::Value::Null;
+        assert!(with_chat_user_override(&mut group, "9", Some("dave"), Some("nickname"), Some("D")));
+        assert_eq!(group["user_overrides"]["9"]["username"], "dave");
     }
 
     fn patch(v: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
