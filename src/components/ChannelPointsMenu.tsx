@@ -7,6 +7,9 @@ import { Logger } from '../utils/logger';
 import { ChannelPointsIcon } from './ChannelPointsIcon';
 import { Tooltip } from './ui/Tooltip';
 
+/** The built-in reward whose text goes out through send_highlighted_message. */
+const HIGHLIGHTED_MESSAGE_REWARD = 'SEND_HIGHLIGHTED_MESSAGE';
+
 /** Opening a reward re-reads the list when it is older than this. */
 const REWARDS_STALE_MS = 30_000;
 /** setTimeout's ceiling; longer cooldowns re-arm after a refresh. */
@@ -68,10 +71,10 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     }
   };
 
-  // Highlighted message input modal state
-  const [showHighlightModal, setShowHighlightModal] = useState(false);
-  const [highlightMessage, setHighlightMessage] = useState('');
-  const [highlightReward, setHighlightReward] = useState<ChannelReward | null>(null);
+  // Typed-input modal state (Highlight My Message and custom input rewards)
+  const [showInputModal, setShowInputModal] = useState(false);
+  const [inputText, setInputText] = useState('');
+  const [inputReward, setInputReward] = useState<ChannelReward | null>(null);
 
   // Emote reveal popup state
   const [showEmoteReveal, setShowEmoteReveal] = useState(false);
@@ -279,11 +282,12 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     // fresh list as soon as it lands.
     void refreshIfStale();
 
-    // The only input reward the backend lets through is Highlight My Message.
+    // Input rewards the backend lets through: Highlight My Message and the
+    // streamer's custom rewards that ask for text.
     if (reward.is_user_input_required) {
-      setHighlightReward(reward);
-      setHighlightMessage('');
-      setShowHighlightModal(true);
+      setInputReward(reward);
+      setInputText('');
+      setShowInputModal(true);
       return;
     }
 
@@ -355,33 +359,45 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     setShowConfirmModal(true);
   };
 
-  const handleSendHighlightedMessage = async () => {
-    if (!highlightReward || !highlightMessage.trim()) {
+  const handleSendInput = async () => {
+    if (!inputReward || !inputText.trim()) {
       useAppStore.getState().addToast('Please enter a message', 'error');
       return;
     }
-    if (!liveOf(highlightReward).availability.redeemable) return;
+    if (!liveOf(inputReward).availability.redeemable) return;
 
-    setRedeemingId(highlightReward.id);
+    const isHighlight = inputReward.reward_type === HIGHLIGHTED_MESSAGE_REWARD;
+    setRedeemingId(inputReward.id);
     try {
-      const result = await invoke<RedemptionResult>('send_highlighted_message', {
-        channelId: channelId,
-        message: highlightMessage.trim(),
-        cost: highlightReward.cost,
-      });
+      const result = isHighlight
+        ? await invoke<RedemptionResult>('send_highlighted_message', {
+          channelId: channelId,
+          message: inputText.trim(),
+          cost: inputReward.cost,
+        })
+        : await invoke<RedemptionResult>('redeem_channel_reward', {
+          channelId: channelId,
+          rewardId: inputReward.id,
+          cost: inputReward.cost,
+          title: inputReward.title,
+          prompt: inputReward.prompt ?? '',
+          textInput: inputText.trim(),
+        });
 
       if (result.success) {
-        useAppStore.getState().addToast('Highlighted message sent!', 'success');
-        setShowHighlightModal(false);
-        setHighlightMessage('');
-        setHighlightReward(null);
+        useAppStore
+          .getState()
+          .addToast(isHighlight ? 'Highlighted message sent!' : `Redeemed: ${inputReward.title}`, 'success');
+        setShowInputModal(false);
+        setInputText('');
+        setInputReward(null);
         onBalanceUpdate(); // Refresh balance
         void refreshRewards(); // A redeem can start a cooldown or use up stock
       } else {
         useAppStore.getState().addToast(result.error_message || 'Failed to send', 'error');
       }
     } catch (err) {
-      Logger.error('[ChannelPointsMenu] Highlighted message error:', err);
+      Logger.error('[ChannelPointsMenu] Input reward error:', err);
       useAppStore.getState().addToast(typeof err === 'string' ? err : 'Failed to send', 'error');
     } finally {
       setRedeemingId(null);
@@ -549,11 +565,12 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
   };
 
   // Current verdicts for whichever confirm view is open.
-  const highlightAvail = highlightReward ? liveOf(highlightReward).availability : null;
+  const inputAvail = inputReward ? liveOf(inputReward).availability : null;
+  const inputIsHighlight = inputReward?.reward_type === HIGHLIGHTED_MESSAGE_REWARD;
   const pendingAvail = pendingReward ? liveOf(pendingReward).availability : null;
   const modifyAvail = modifyEmoteReward ? liveOf(modifyEmoteReward).availability : null;
   const chooseAvail = chooseEmoteReward ? liveOf(chooseEmoteReward).availability : null;
-  const highlightBlocked = highlightAvail ? blockedText(highlightAvail) : null;
+  const inputBlocked = inputAvail ? blockedText(inputAvail) : null;
   const pendingBlocked = pendingAvail ? blockedText(pendingAvail) : null;
   const modifyBlocked = modifyAvail ? blockedText(modifyAvail) : null;
   const chooseBlocked = chooseAvail ? blockedText(chooseAvail) : null;
@@ -705,8 +722,8 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
         )}
       </div>
 
-      {/* Highlighted Message Input Modal */}
-      {showHighlightModal && highlightReward && (
+      {/* Typed-input modal: Highlight My Message or a custom input reward */}
+      {showInputModal && inputReward && (
         <div 
           className="glass-panel animate-scale-in absolute inset-0 flex flex-col overflow-hidden z-50"
           style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, var(--glass-under, transparent))', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)' }}
@@ -714,8 +731,8 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
           {/* Modal Header */}
           <div className="px-4 py-3 border-b border-borderSubtle bg-black/20">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-yellow-400">
-                ✨ {highlightReward.title}
+              <span className={`text-sm font-medium truncate ${inputIsHighlight ? 'text-yellow-400' : 'text-textPrimary'}`}>
+                {inputIsHighlight ? `✨ ${inputReward.title}` : inputReward.title}
               </span>
               <div className="flex items-center gap-1.5">
                 {customPointsIconUrl ? (
@@ -724,59 +741,66 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                   <ChannelPointsIcon size={16} className="text-accent-neon" />
                 )}
                 <span className="text-base font-bold text-accent-neon">
-                  {highlightReward.cost.toLocaleString()}
+                  {inputReward.cost.toLocaleString()}
                 </span>
               </div>
             </div>
           </div>
 
           {/* Message Input */}
-          <div className="flex-1 p-4 flex flex-col gap-3">
+          <div className="flex-1 min-h-0 p-4 flex flex-col gap-3">
+            {!inputIsHighlight && inputReward.prompt && (
+              <p className="text-xs text-textSecondary whitespace-pre-wrap break-words max-h-20 overflow-y-auto custom-scrollbar">
+                {inputReward.prompt}
+              </p>
+            )}
             <textarea
-              value={highlightMessage}
-              onChange={(e) => setHighlightMessage(e.target.value)}
-              placeholder="Type your highlighted message..."
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              placeholder={inputIsHighlight ? 'Type your highlighted message...' : 'Type your answer...'}
               maxLength={500}
               autoFocus
               className="flex-1 w-full glass-input px-3 py-2 text-sm text-textPrimary placeholder-textMuted resize-none focus:outline-none"
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
-                  handleSendHighlightedMessage();
+                  handleSendInput();
                 }
                 if (e.key === 'Escape') {
-                  setShowHighlightModal(false);
+                  setShowInputModal(false);
                 }
               }}
             />
             <div className="flex items-center justify-between">
-              {highlightBlocked ? (
+              {inputBlocked ? (
                 <span className="text-xs text-yellow-400" role="status">
-                  {highlightBlocked}
+                  {inputBlocked}
                 </span>
               ) : (
                 <span className="text-xs text-textMuted">
-                  {highlightMessage.length}/500
+                  {inputText.length}/500
                 </span>
               )}
               <div className="flex gap-2">
                 <button
-                  onClick={() => setShowHighlightModal(false)}
+                  onClick={() => setShowInputModal(false)}
                   className="px-3 py-1.5 text-xs font-medium text-textSecondary hover:text-textPrimary transition-colors"
                 >
                   Cancel
                 </button>
                 <button
-                  onClick={handleSendHighlightedMessage}
-                  disabled={!highlightMessage.trim() || redeemingId === highlightReward.id || !highlightAvail?.redeemable}
+                  onClick={handleSendInput}
+                  disabled={!inputText.trim() || redeemingId === inputReward.id || !inputAvail?.redeemable}
                   className={`
                     px-4 py-1.5 text-xs font-semibold glass-button transition-all
-                    ${highlightMessage.trim() && redeemingId !== highlightReward.id && highlightAvail?.redeemable
-                      ? 'text-yellow-400 hover:text-yellow-300'
+                    ${inputText.trim() && redeemingId !== inputReward.id && inputAvail?.redeemable
+                      ? (inputIsHighlight ? 'text-yellow-400 hover:text-yellow-300' : 'text-accent hover:text-accent-neon')
                       : 'opacity-50 cursor-not-allowed'}
                   `}
                 >
-                  {redeemingId === highlightReward.id ? 'Sending...' : 'Send Highlighted'}
+                  {redeemingId === inputReward.id
+                    ? (inputIsHighlight ? 'Sending...' : 'Redeeming...')
+                    : (inputIsHighlight ? 'Send Highlighted' : 'Redeem')}
                 </button>
               </div>
             </div>
