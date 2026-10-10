@@ -21,7 +21,7 @@
 
 use serde::Serialize;
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
 use crate::models::settings::Settings;
@@ -32,6 +32,11 @@ pub const GLOBAL_EMOTE_TYPE: &str = "global";
 
 /// Marks a 7TV row from the viewer's own personal set, usable in every channel.
 pub const PERSONAL_EMOTE_TYPE: &str = "personal";
+
+/// A personal row whose name the channel also uses: the channel's emote is
+/// hidden behind it in the viewer's own messages.
+const PERSONAL_REPLACES_LABEL: &str = "7TV Personal, replaces channel's";
+const PERSONAL_REPLACES_DETAIL: &str = "Personal, replaces channel's";
 
 /// The most rows one call returns.
 pub const MAX_LIMIT: usize = 200;
@@ -172,6 +177,17 @@ struct Hit {
     at: Option<usize>,
     favorite: bool,
     seed: Seed,
+}
+
+impl Hit {
+    fn is_personal(&self) -> bool {
+        self.slot == Slot::SevenTv && self.seed.emote_type.as_deref() == Some(PERSONAL_EMOTE_TYPE)
+    }
+
+    /// A channel name lookup the sender's personal set is consulted before.
+    fn shadowable(&self) -> bool {
+        matches!(self.slot, Slot::SevenTv | Slot::Bttv | Slot::Ffz)
+    }
 }
 
 struct Ranked {
@@ -401,12 +417,33 @@ impl<'a> Collector<'a> {
     pub fn finish(self) -> (Vec<Row>, usize) {
         let match_len = (!self.needle.is_empty()).then(|| self.needle.len());
         let Collector { profile, order, limit, browse, mut hits, .. } = self;
+        // In the viewer's own messages a personal emote beats the channel's
+        // third-party emote of the same exact name (Twitch's own emotes are
+        // tagged by Twitch and still win). Offering the channel's row would
+        // preview art that never appears, so the personal row takes the name
+        // and says what it replaces.
+        let personal: HashMap<String, String> = hits
+            .iter()
+            .flatten()
+            .filter(|h| h.is_personal())
+            .map(|h| (h.name.clone(), h.seed.id.clone()))
+            .collect();
+        let mut replaced: HashSet<String> = HashSet::new();
         let mut seen: HashSet<String> = HashSet::new();
         let mut merged: Vec<Ranked> = Vec::new();
         // Walking in tier order is what makes the better provider keep a
         // name both of them define.
         for (tier, slot) in order.slots().iter().enumerate() {
             for hit in std::mem::take(&mut hits[slot.index()]) {
+                if hit.shadowable() && !hit.is_personal() {
+                    if let Some(mine) = personal.get(&hit.name) {
+                        // The same emote in both sets replaces nothing.
+                        if *mine != hit.seed.id {
+                            replaced.insert(hit.name);
+                        }
+                        continue;
+                    }
+                }
                 let key = match profile {
                     Profile::Cycle => hit.name.to_lowercase(),
                     Profile::Search => hit.name.clone(),
@@ -434,8 +471,9 @@ impl<'a> Collector<'a> {
             .into_iter()
             .map(|r| {
                 let h = r.hit;
-                let label = source_label(h.slot, &h.seed);
-                let detail = source_detail(h.slot, &h.seed);
+                let replaces = h.is_personal() && replaced.contains(&h.name);
+                let label = if replaces { PERSONAL_REPLACES_LABEL } else { source_label(h.slot, &h.seed) };
+                let detail = if replaces { PERSONAL_REPLACES_DETAIL } else { source_detail(h.slot, &h.seed) };
                 Row {
                     slot: h.slot,
                     group: browse.then(|| GROUPS[group_rank(&h) as usize]),
@@ -857,6 +895,45 @@ mod tests {
         );
         c.offer_emote(Slot::SevenTv, &emote(EmoteProvider::SevenTV, "p1", "myEmote", Some(PERSONAL_EMOTE_TYPE), None));
         assert_eq!(c.finish().0[0].source_label, "7TV Personal");
+    }
+
+    #[test]
+    fn a_personal_emote_takes_the_name_from_the_channel_emote_it_hides() {
+        let favorites = HashSet::new();
+        let globals = HashSet::new();
+        for profile in [Profile::Cycle, Profile::Search] {
+            let mut c = Collector::new(
+                Spec { query: "buh", profile, order: Order::Default, contains: false, limit: 10 },
+                Context { channel_id: Some("42"), favorites: &favorites, seventv_globals: &globals, ffz_subwoofer: false },
+            );
+            // The channel's rows are offered first, as they are in chat.
+            c.offer_emote(Slot::SevenTv, &emote(EmoteProvider::SevenTV, "pumpkin", "buh", None, None));
+            c.offer_emote(Slot::Bttv, &emote(EmoteProvider::BTTV, "b", "buh", None, None));
+            c.offer_emote(Slot::SevenTv, &emote(EmoteProvider::SevenTV, "s", "buhShakey", None, None));
+            c.offer_emote(Slot::SevenTv, &emote(EmoteProvider::SevenTV, "mine", "buh", Some(PERSONAL_EMOTE_TYPE), None));
+            let (rows, _) = c.finish();
+            let buh: Vec<&Row> = rows.iter().filter(|r| r.name == "buh").collect();
+            assert_eq!(buh.len(), 1, "{profile:?}");
+            assert_eq!(buh[0].id, "mine");
+            assert_eq!(buh[0].source_detail, "Personal, replaces channel's");
+            let shakey = rows.iter().find(|r| r.name == "buhShakey").unwrap();
+            assert_eq!(shakey.source_label, "7TV");
+        }
+    }
+
+    #[test]
+    fn a_twitch_emote_is_never_hidden_by_a_personal_one() {
+        let favorites = HashSet::new();
+        let globals = HashSet::new();
+        let mut c = Collector::new(
+            Spec { query: "Kappa", profile: Profile::Search, order: Order::TwitchFirst, contains: false, limit: 10 },
+            Context { channel_id: None, favorites: &favorites, seventv_globals: &globals, ffz_subwoofer: false },
+        );
+        c.offer_emote(Slot::Twitch, &emote(EmoteProvider::Twitch, "t1", "Kappa", Some("globals"), Some("0")));
+        c.offer_emote(Slot::SevenTv, &emote(EmoteProvider::SevenTV, "mine", "Kappa", Some(PERSONAL_EMOTE_TYPE), None));
+        let (rows, _) = c.finish();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "t1");
     }
 
     #[test]

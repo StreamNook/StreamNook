@@ -33,6 +33,7 @@ type EmojiData = {
 };
 let emojiDataCache: EmojiData | null = null;
 import { getAppleEmojiUrl } from '../../services/emojiService';
+import { personalEmoteOverrides, type PersonalOverride } from '../../services/emoteMatch';
 import {
   getGifPickerStatus,
   searchGifs,
@@ -75,6 +76,7 @@ const EmoteGridItem = memo(
     emote,
     isFavorited,
     still,
+    replacedBy,
     onInsert,
     onToggleFavorite,
   }: {
@@ -82,6 +84,8 @@ const EmoteGridItem = memo(
     isFavorited: boolean;
     /** Draw the first frame (see `LazyEmoteBlock`); hovering still animates it. */
     still: boolean;
+    /** Your personal emote that shows instead when you type this name. */
+    replacedBy?: PersonalOverride;
     onInsert: () => void;
     onToggleFavorite: () => void;
   }) => {
@@ -165,6 +169,12 @@ const EmoteGridItem = memo(
                   {emote.lockedLabel}
                 </span>
               )}
+              {replacedBy && (
+                <span className="flex items-center gap-1 mt-1 text-[10px] leading-tight text-white/70">
+                  <img src={replacedBy.url} alt="" className="h-4 w-auto object-contain" />
+                  Your personal {emote.name} shows instead
+                </span>
+              )}
             </div>
           </div>
         }
@@ -184,7 +194,7 @@ const EmoteGridItem = memo(
                 : emote.isZeroWidth
                   ? 'ring-1 ring-yellow-400/50 bg-yellow-400/10'
                   : ''
-            } ${lockedSub ? 'opacity-40 cursor-not-allowed' : ''}`}
+            } ${lockedSub ? 'opacity-40 cursor-not-allowed' : replacedBy ? 'opacity-50' : ''}`}
           >
             <img
               src={gridSrc}
@@ -372,7 +382,7 @@ export function EmotePickerPanel({
   isKick,
   isYouTube = false,
   channelId,
-  channelLogin: _channelLogin,
+  channelLogin,
   isLoadingEmotes = false,
   channelNameCache,
   onInsert,
@@ -489,6 +499,18 @@ export function EmotePickerPanel({
     },
     [channelId, searchQuery, sendingGifId, onClose],
   );
+
+  // Channel emotes your own 7TV personal emote of the same name replaces when
+  // you type them, so those tiles can say so. Asked again when the set changes.
+  const [overrides, setOverrides] = useState<Map<string, PersonalOverride> | null>(null);
+  useEffect(() => {
+    if (!open || !isTwitch || !channelLogin) return;
+    let cancelled = false;
+    void personalEmoteOverrides(channelLogin, channelId).then((map) => {
+      if (!cancelled) setOverrides(map);
+    });
+    return () => { cancelled = true; };
+  }, [open, isTwitch, channelLogin, channelId, emotes]);
 
   // Aggressive disk caching while the picker is open; polite trickle on close.
   useEffect(() => {
@@ -1084,6 +1106,7 @@ export function EmotePickerPanel({
                                 emote={emote}
                                 isFavorited={isFavorited}
                                 still={still}
+                                replacedBy={emote.provider !== 'twitch' ? overrides?.get(emote.name) : undefined}
                                 onInsert={() => onInsert(emote.insertText ?? emote.name)}
                                 onToggleFavorite={() => void toggleFavorite(emote, isFavorited)}
                               />

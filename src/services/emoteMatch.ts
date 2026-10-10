@@ -107,6 +107,32 @@ export async function matchEmotes(
   }
 }
 
+/** The viewer's personal 7TV emote that shows instead of a channel emote of
+ *  the same name in their own messages. */
+export interface PersonalOverride {
+  name: string;
+  id: string;
+  url: string;
+}
+
+/** Channel emote names the viewer's personal set replaces, keyed by name.
+ *  Twitch only (personal emotes are a Twitch feature); empty until Rust knows
+ *  both sets. */
+export async function personalEmoteOverrides(
+  channel: string,
+  channelId?: string | null,
+): Promise<Map<string, PersonalOverride>> {
+  try {
+    const list = await invoke<PersonalOverride[]>('personal_emote_overrides', {
+      channel,
+      channelId: channelId || null,
+    });
+    return new Map(list.map((o) => [o.name, o]));
+  } catch {
+    return new Map();
+  }
+}
+
 /** Rows as Tab-cycle candidates, in the order Rust ranked them. */
 export function rowsToTabCandidates(rows: EmoteMatchRow[]): EmoteTabCandidate[] {
   return rows.map((r, i) => ({
