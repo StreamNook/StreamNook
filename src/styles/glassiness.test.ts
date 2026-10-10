@@ -388,7 +388,7 @@ describe('Backdrop filters stay out of combinations WebView2 mispaints', () => {
     }
     for (const file of files.filter((f) => f.endsWith('.tsx') && !/\.test\.tsx$/.test(f))) {
       for (const el of parsed(file)) {
-        const has = (c: string) => new RegExp(`(?<![\w-])${c}(?![\w-])`).test(el.expr);
+        const has = (c: string) => new RegExp(String.raw`(?<![\w-])${c}(?![\w-])`).test(el.expr);
         const shaped = [...squircleClasses].find(has);
         if (!shaped) continue;
         if ((GLASS_CLASS.test(el.expr) || BLUR.test(el.expr)) && !has('no-live-blur')) {
@@ -398,6 +398,54 @@ describe('Backdrop filters stay out of combinations WebView2 mispaints', () => {
     }
     expect(bad, 'corner-shape: squircle and a backdrop filter on one element. Drop one of them ' +
       '(a class that needs both can switch the filter off in its own rule)').toEqual([]);
+  });
+
+  it('a light blur inside a heavy one is switched off', () => {
+    // globals.css strips light glass blurs inside heavily blurred surfaces (one
+    // blur per stack). A class added with a backdrop filter has to join the
+    // list its radius belongs in, or it quietly buys a layer that draws nothing.
+    const stack = rules.find((r) => /:is\([^)]*liquid-glass-panel[\s\S]*\)\s*:is\(/.test(r.selector));
+    expect(stack, 'the one-blur-per-stack rule moved; point this test at it').toBeTruthy();
+    const [heavyList, lightList] = [...stack!.selector.matchAll(/:is\(([^)]*)\)/g)].map((m) => m[1]);
+    const listed = (list: string, c: string) => new RegExp(`\\.${c}(?![\\w-])`).test(list);
+    // Light classes that stay out on purpose.
+    const LIGHT_EXEMPT: Record<string, string> = {
+      'glass-badge': 'a count chip over a thumbnail blurs real picture content',
+      'card-chip': 'a chip over card art blurs real picture content',
+      'atm-frost': 'atmospheres belong to a member, not to the interface',
+      'chrome-glaze': 'title-bar chrome, never nested in a heavy surface',
+      'chrome-glaze--dock': 'title-bar chrome, never nested in a heavy surface',
+      'chat-fullscreen-overlay': 'the full-screen chat column is a surface of its own',
+      'user-profile-card': 'a floating card, never nested in a heavy surface',
+      'stats-hud': 'sits over the video, never nested in a heavy surface',
+      'ghost-card': 'a placeholder tile in the Home grid',
+      'update-pill': 'a tint inside the title bar',
+      'hype-train-track': 'sits over the chat, never nested in a heavy surface',
+      'drops-preview-card-right': 'a floating preview card',
+      'sn-chapter-tip': 'a timeline tooltip over the video',
+      'sn-timeline__tip': 'a timeline tooltip over the video',
+      'glass-flyout': 'heavy in practice (it runs at 42px live), so it is a root',
+    };
+    const radius = (body: string) => {
+      const v = decl(body, 'backdrop-filter') ?? '';
+      const m = /blur\(\s*(?:calc\(\s*(?:var\([^,]+,\s*)?)?([\d.]+)px/.exec(v);
+      return m ? Number(m[1]) : null;
+    };
+    const bad: string[] = [];
+    for (const r of rules) {
+      if (!frosted(r.body)) continue;
+      const px = radius(r.body);
+      if (px === null) continue;
+      for (const sel of r.selector.split(',')) {
+        const c = /^\s*\.([\w-]+)\s*$/.exec(sel)?.[1];
+        if (!c) continue;
+        if (px >= 24 && !listed(heavyList, c)) bad.push(`.${c} (${px}px) belongs in the heavy list`);
+        if (px <= 16 && !listed(lightList, c) && !listed(heavyList, c) && !(c in LIGHT_EXEMPT)) {
+          bad.push(`.${c} (${px}px) belongs in the light list, or LIGHT_EXEMPT with a reason`);
+        }
+      }
+    }
+    expect([...new Set(bad)], 'Backdrop-filtered classes missing from the one-blur-per-stack rule in globals.css').toEqual([]);
   });
 
   it('chat link previews carry no live blur', () => {

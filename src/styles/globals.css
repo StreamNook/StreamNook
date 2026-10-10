@@ -7223,3 +7223,83 @@ html[data-os="linux"] .sn-chat-overlay-frame {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
+
+/* One blur per stack. A light control (8-16px) inside a heavily blurred
+   surface (24px and up) blurs a field that holds nothing sharp any more, so it
+   draws the same pixels and still costs a compositing layer. Measured by
+   screenshot A/B in the running app: the Badges overlay drops ~150 layers, the
+   Drops panel ~90, Settings a few per tab, all with no visible change.
+
+   Positioned descendants keep their blur: a chip or pill placed over a box
+   art or a thumbnail inside the surface blurs real picture content, and that
+   A/B showed a visible change. The heavy surface itself also keeps its blur
+   when it sits on a blurred scrim: blurring the scrim's output again is part
+   of the overlay look, also measured.
+
+   The first list holds every heavy surface, the second every light glass
+   class; glassiness.test.ts fails when a class with a backdrop filter is
+   missing from the list its blur radius belongs in. */
+:is(.liquid-glass-panel, .glass-flyout, .glass-modal, .sn-popover, .sn-glass-veil,
+  .settings-pinned-card, .backdrop-blur-ultra, .backdrop-blur-xl, .backdrop-blur-2xl, .backdrop-blur-3xl, [class*='backdrop-blur-['])
+  :is(.glass-button, .glass-button-static, .glass-button-active, .glass-button-secondary,
+  .glass-input, .glass-panel, .backdrop-blur, .backdrop-blur-sm, .backdrop-blur-md,
+  .backdrop-blur-lg):not(.absolute, .fixed, .sticky) {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* An offline channel's peepoSad, drifting around the player like an old DVD
+   logo while you wait for them. Two wrappers the size of the player, one per
+   axis, each translated by its own size minus the emote's: transform-only,
+   so it runs on the compositor with no layout or paint. 24 s across and 15 s
+   down meet at an end together every 120 s: a true corner hit, which
+   OfflineCard celebrates (keep its DRIFT_* constants in step). The -7 s start
+   puts it mid-path rather than in a corner. It sits under the offline card
+   and pauses with every animation while the window is hidden. */
+.offline-bounce-x,
+.offline-bounce-y {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.offline-bounce-x {
+  animation: offline-bounce-x 24s linear -7s infinite alternate;
+}
+.offline-bounce-y {
+  animation: offline-bounce-y 15s linear -7s infinite alternate;
+}
+@keyframes offline-bounce-x {
+  from { transform: translateX(0); }
+  to { transform: translateX(calc(100% - var(--bounce-w, 84px))); }
+}
+@keyframes offline-bounce-y {
+  from { transform: translateY(0); }
+  to { transform: translateY(calc(100% - var(--bounce-h, 56px))); }
+}
+/* The drift IS the feature, so the app's Motion preference does not stop it,
+   the same call the Penrose loader makes above: Off would otherwise squeeze it
+   to 0.001ms, which on an endless alternate flickers between corners. Timing
+   is restated so it outranks the kill (0,2,2 vs 0,2,1). The OS reduced-motion
+   setting is an accessibility signal and still stills it. */
+html[data-motion] div.offline-bounce-x {
+  animation-duration: 24s !important;
+  animation-delay: -7s !important;
+}
+html[data-motion] div.offline-bounce-y {
+  animation-duration: 15s !important;
+  animation-delay: -7s !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  html .offline-bounce-x,
+  html .offline-bounce-y {
+    animation: none !important;
+  }
+}
+
+/* The rare golden peepoSad: a static gold tint and glow on the drifting
+   emote. Static, so it is rasterized once with its layer and drifts as
+   cheaply as the plain one (no animated filter, which would repaint). */
+.offline-shiny {
+  filter: sepia(1) saturate(5) hue-rotate(-12deg) brightness(1.15)
+    drop-shadow(0 0 6px rgba(255, 205, 60, 0.85)) drop-shadow(0 2px 6px rgba(0, 0, 0, 0.55));
+}
