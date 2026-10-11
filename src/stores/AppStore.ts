@@ -1747,13 +1747,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       Logger.warn('[Playback] Failed to sync experimental low latency:', e);
     });
 
-    // Connect to Discord if enabled
+    // Connect to Discord if enabled. Fire-and-forget: boot waits on
+    // loadSettings, and a Discord whose pipe never answers must not hold the
+    // boot overlay up.
     if (settings.discord_rpc_enabled) {
-      try {
-        await invoke('connect_discord');
-      } catch (e) {
+      invoke('connect_discord').catch((e) => {
         Logger.warn('Could not connect to Discord:', e);
-      }
+      });
     }
 
   },
@@ -1786,31 +1786,32 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
     }
 
-    // Handle Discord enable/disable toggle
+    // Handle Discord enable/disable toggle. Not awaited: the settings write is
+    // done, and a slow Discord must not hold up whoever awaits this save.
     if (newSettings.discord_rpc_enabled !== oldSettings.discord_rpc_enabled) {
       if (newSettings.discord_rpc_enabled) {
-        try {
-          await invoke('connect_discord');
-          
-          let multiNookModule;
-          try { multiNookModule = await import('./multiNookStore'); } catch { /* ignore */ }
-          const multiNookState = multiNookModule ? multiNookModule.usemultiNookStore.getState() : null;
-          
-          if (multiNookState && multiNookState.isMultiNookActive && multiNookState.slots.length > 0) {
-            multiNookModule?.broadcastMultiNookPresence(multiNookState.slots);
-          } else {
-            // The watch session knows what is playing (or that nothing is).
-            invoke('watch_session_refresh_presence').catch(() => {});
+        void (async () => {
+          try {
+            await invoke('connect_discord');
+
+            let multiNookModule;
+            try { multiNookModule = await import('./multiNookStore'); } catch { /* ignore */ }
+            const multiNookState = multiNookModule ? multiNookModule.usemultiNookStore.getState() : null;
+
+            if (multiNookState && multiNookState.isMultiNookActive && multiNookState.slots.length > 0) {
+              multiNookModule?.broadcastMultiNookPresence(multiNookState.slots);
+            } else {
+              // The watch session knows what is playing (or that nothing is).
+              invoke('watch_session_refresh_presence').catch(() => {});
+            }
+          } catch (e) {
+            Logger.warn('Could not connect to Discord:', e);
           }
-        } catch (e) {
-          Logger.warn('Could not connect to Discord:', e);
-        }
+        })();
       } else {
-        try {
-          await invoke('disconnect_discord');
-        } catch (e) {
+        invoke('disconnect_discord').catch((e) => {
           Logger.warn('Could not disconnect from Discord:', e);
-        }
+        });
       }
     }
   },

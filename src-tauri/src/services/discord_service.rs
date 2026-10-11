@@ -34,6 +34,16 @@ const DISCORD_CLIENT_ID: &str = "1524098616648663110";
 // Where the rich-presence call-to-action button points.
 const DOWNLOAD_URL: &str = "https://streamnook.app";
 
+// Every Discord IPC call is synchronous and blocks until the pipe answers. A
+// Discord client whose pipe accepts but never replies would otherwise park a
+// runtime worker forever, so every call runs on the blocking pool under one of
+// these deadlines.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const IPC_CALL_TIMEOUT: Duration = Duration::from_secs(3);
+// After Discord fails to answer in time, no new connection is attempted for
+// this long, so presence updates do not each park another thread on a dead pipe.
+const UNANSWERED_BACKOFF: Duration = Duration::from_secs(60);
+
 pub struct DiscordService;
 
 struct DiscordState {
@@ -49,6 +59,13 @@ struct DiscordState {
     // READY frame. Used to personalize a few idle phrases. None until we connect
     // (or if Discord doesn't return one).
     discord_username: Option<String>,
+    // Bumped by `disconnect`. A connect that began under an older epoch closes
+    // its client instead of storing it, so a connect racing a disconnect can
+    // never resurrect the presence.
+    epoch: u64,
+    // Set when Discord accepted the pipe but did not answer in time. No connect
+    // is attempted before this instant.
+    connect_backoff_until: Option<Instant>,
 }
 
 lazy_static! {
@@ -60,6 +77,98 @@ lazy_static! {
             .as_secs() as i64,
         current_key: None,
         discord_username: None,
+        epoch: 0,
+        connect_backoff_until: None,
+    }));
+    // Serializes connection attempts without holding DISCORD_STATE, so two
+    // callers never both open a pipe and nobody waits longer than one
+    // CONNECT_TIMEOUT for an attempt already in flight.
+    static ref CONNECT_LOCK: Mutex<()> = Mutex::new(());
+}
+
+/// Why a connection could not be made.
+#[derive(Debug)]
+enum ConnectError {
+    /// Discord recently failed to answer; no attempt was made.
+    BackingOff,
+    /// The pipe was found but Discord did not finish the handshake in time.
+    Unanswered,
+    /// `disconnect` ran while the connection was being opened.
+    Superseded,
+    /// Discord is not running, or the pipe refused the connection.
+    Failed(String),
+}
+
+impl std::fmt::Display for ConnectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConnectError::BackingOff => {
+                write!(f, "Discord did not answer recently, waiting before retrying")
+            }
+            ConnectError::Unanswered => write!(
+                f,
+                "Discord did not answer within {} s",
+                CONNECT_TIMEOUT.as_secs()
+            ),
+            ConnectError::Superseded => write!(f, "Discord was disconnected while connecting"),
+            ConnectError::Failed(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// Why one IPC call on an open client failed. In both cases the client has
+/// left the state, so the next call reconnects.
+#[derive(Debug)]
+enum CallError {
+    Unanswered,
+    Failed(String),
+}
+
+impl std::fmt::Display for CallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CallError::Unanswered => write!(
+                f,
+                "Discord did not answer within {} s",
+                IPC_CALL_TIMEOUT.as_secs()
+            ),
+            CallError::Failed(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// Whether a connection attempt may start now, given the current backoff.
+fn connect_allowed(backoff_until: Option<Instant>, now: Instant) -> bool {
+    backoff_until.is_none_or(|until| now >= until)
+}
+
+/// The backoff to store after an attempt. Only an unanswered pipe backs off: a
+/// missing pipe fails instantly and costs nothing to retry, so Discord starting
+/// after StreamNook is still picked up on the next presence update.
+fn backoff_after(unanswered: bool, now: Instant) -> Option<Instant> {
+    unanswered.then(|| now + UNANSWERED_BACKOFF)
+}
+
+/// Run a blocking closure on the blocking pool, giving up after `limit`. On
+/// timeout the closure keeps its thread until the pipe returns, but its result
+/// (and anything it owns, such as a client) is simply dropped there and never
+/// reaches the shared state.
+async fn run_bounded<T, F>(limit: Duration, f: F) -> Option<std::result::Result<T, String>>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let handle = tauri::async_runtime::spawn_blocking(f);
+    match tokio::time::timeout(limit, handle).await {
+        Ok(joined) => Some(joined.map_err(|e| e.to_string())),
+        Err(_) => None,
+    }
+}
+
+/// Close a client on the blocking pool without waiting for it.
+fn close_detached(mut client: IpcClient) {
+    drop(tauri::async_runtime::spawn_blocking(move || {
+        let _ = client.close();
     }));
 }
 
@@ -196,33 +305,109 @@ impl DiscordService {
             return Ok(());
         }
 
-        let mut guard = DISCORD_STATE.lock().await;
-
-        // If already connected, just update to idle
-        if guard.client.is_some() {
-            return Self::set_idle_presence_internal(&mut guard).await;
+        if let Err(e) = Self::ensure_connected().await {
+            // The frontend logs this too, but only to the JS console. This
+            // is the copy that reaches streamnook.log, which is the file a
+            // user can actually send back.
+            match e {
+                ConnectError::BackingOff => log::debug!("[Discord] initial connect skipped: {e}"),
+                _ => log::warn!("[Discord] initial connect failed: {e}"),
+            }
+            return Err(anyhow::anyhow!("{e}"));
         }
 
-        // Create new connection
-        let (client, username) = match Self::connect_client() {
-            Ok(pair) => pair,
-            Err(e) => {
-                // The frontend logs this too, but only to the JS console. This
-                // is the copy that reaches streamnook.log, which is the file a
-                // user can actually send back.
-                log::warn!("[Discord] initial connect failed: {e}");
-                return Err(e);
-            }
-        };
-        guard.client = Some(client);
-        guard.discord_username = username;
-        guard.start_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        Self::set_idle_presence_internal().await
+    }
 
-        // Set initial idle presence
-        Self::set_idle_presence_internal(&mut guard).await
+    /// Make sure a client is stored, opening one if needed.
+    ///
+    /// The handshake runs off the async thread under CONNECT_TIMEOUT and
+    /// without DISCORD_STATE held, so a Discord that never answers can neither
+    /// park a runtime worker nor lock out every other presence call.
+    async fn ensure_connected() -> std::result::Result<(), ConnectError> {
+        let _connecting = CONNECT_LOCK.lock().await;
+
+        let epoch = {
+            let guard = DISCORD_STATE.lock().await;
+            if guard.client.is_some() {
+                return Ok(());
+            }
+            if !connect_allowed(guard.connect_backoff_until, Instant::now()) {
+                return Err(ConnectError::BackingOff);
+            }
+            guard.epoch
+        };
+
+        let outcome = run_bounded(CONNECT_TIMEOUT, Self::connect_client).await;
+
+        let mut guard = DISCORD_STATE.lock().await;
+        guard.connect_backoff_until = backoff_after(outcome.is_none(), Instant::now());
+        let (client, username) = match outcome {
+            None => return Err(ConnectError::Unanswered),
+            Some(Err(e)) => return Err(ConnectError::Failed(e)),
+            Some(Ok(Err(e))) => return Err(ConnectError::Failed(e.to_string())),
+            Some(Ok(Ok(pair))) => pair,
+        };
+
+        if guard.epoch != epoch {
+            drop(guard);
+            close_detached(client);
+            return Err(ConnectError::Superseded);
+        }
+        if guard.client.is_some() {
+            // Another path stored a client meanwhile; keep that one.
+            drop(guard);
+            close_detached(client);
+            return Ok(());
+        }
+
+        guard.client = Some(client);
+        if username.is_some() {
+            guard.discord_username = username;
+        }
+        Ok(())
+    }
+
+    /// Run one IPC call on the stored client, off the async thread and bounded
+    /// by IPC_CALL_TIMEOUT. The caller holds DISCORD_STATE, so presence writes
+    /// stay ordered, but never for longer than the deadline.
+    ///
+    /// The client goes back into the state only when the call succeeds. A
+    /// failed call closes it; an unanswered call leaves it with the parked
+    /// thread and starts the backoff. Either way the next call reconnects.
+    async fn call_client<F, E>(
+        guard: &mut tokio::sync::MutexGuard<'_, DiscordState>,
+        call: F,
+    ) -> std::result::Result<(), CallError>
+    where
+        F: FnOnce(&mut IpcClient) -> std::result::Result<(), E> + Send + 'static,
+        E: std::fmt::Display,
+    {
+        let Some(mut client) = guard.client.take() else {
+            return Err(CallError::Failed("not connected".to_string()));
+        };
+
+        let outcome = run_bounded(IPC_CALL_TIMEOUT, move || {
+            let result = call(&mut client).map_err(|e| e.to_string());
+            (client, result)
+        })
+        .await;
+
+        match outcome {
+            None => {
+                guard.connect_backoff_until = backoff_after(true, Instant::now());
+                Err(CallError::Unanswered)
+            }
+            Some(Err(e)) => Err(CallError::Failed(e)),
+            Some(Ok((client, Ok(())))) => {
+                guard.client = Some(client);
+                Ok(())
+            }
+            Some(Ok((client, Err(e)))) => {
+                close_detached(client);
+                Err(CallError::Failed(e))
+            }
+        }
     }
 
     /// Open an IPC connection and capture the logged-in user's display name.
@@ -232,6 +417,8 @@ impl DiscordService {
     /// user. We run the handshake by hand so we can keep the name for the
     /// personalized idle phrases. No OAuth or extra scopes are involved. The
     /// basic RPC handshake returns the current user on its own.
+    ///
+    /// Blocking: only ever called through `run_bounded`.
     fn connect_client() -> Result<(IpcClient, Option<String>)> {
         let mut client = IpcClient::new(DISCORD_CLIENT_ID);
         client.connect_ipc()?;
@@ -265,10 +452,25 @@ impl DiscordService {
 
     /// Disconnect from Discord
     pub async fn disconnect() -> Result<()> {
-        let mut guard = DISCORD_STATE.lock().await;
-        if let Some(mut client) = guard.client.take() {
-            let _ = client.clear_activity();
-            let _ = client.close();
+        let client = {
+            let mut guard = DISCORD_STATE.lock().await;
+            guard.epoch = guard.epoch.wrapping_add(1);
+            // Turning the feature off and on again is a deliberate retry.
+            guard.connect_backoff_until = None;
+            guard.client.take()
+        };
+        if let Some(mut client) = client {
+            let goodbye = run_bounded(IPC_CALL_TIMEOUT, move || {
+                let _ = client.clear_activity();
+                let _ = client.close();
+            })
+            .await;
+            if goodbye.is_none() {
+                log::warn!(
+                    "[Discord] disconnect: Discord did not answer within {} s",
+                    IPC_CALL_TIMEOUT.as_secs()
+                );
+            }
         }
         Ok(())
     }
@@ -284,13 +486,27 @@ impl DiscordService {
             return Ok(());
         }
 
-        let mut guard = DISCORD_STATE.lock().await;
-        Self::set_idle_presence_internal(&mut guard).await
+        // Discord may have started AFTER StreamNook, in which case the
+        // boot-time connect() found no socket. `update_presence` retries
+        // lazily; without the same retry here the idle line - the first
+        // presence a browsing user would ever see - never appears until a
+        // stream is opened and closed again. A missing Discord stays silent;
+        // an unanswered pipe is worth one line.
+        if let Err(e) = Self::ensure_connected().await {
+            match e {
+                ConnectError::Unanswered => log::warn!("[Discord] idle presence skipped: {e}"),
+                _ => log::debug!("[Discord] idle presence skipped: {e}"),
+            }
+        }
+
+        Self::set_idle_presence_internal().await
     }
 
-    async fn set_idle_presence_internal(
-        guard: &mut tokio::sync::MutexGuard<'_, DiscordState>,
-    ) -> Result<()> {
+    /// Show the idle line on the stored client, if there is one. Connecting is
+    /// the caller's job.
+    async fn set_idle_presence_internal() -> Result<()> {
+        let mut guard = DISCORD_STATE.lock().await;
+
         // Dropping back to idle clears the per-stream identity and restarts the
         // timer, so the next stream we open begins its "watching for" counter
         // from zero instead of inheriting a stale elapsed time.
@@ -301,29 +517,17 @@ impl DiscordService {
             .as_secs() as i64;
         let timestamp = guard.start_time;
 
-        // Discord may have started AFTER StreamNook, in which case the
-        // boot-time connect() found no socket and gave up for good.
-        // `update_presence` already retries lazily; without the same retry here
-        // the idle line - the first presence a browsing user would ever see -
-        // never appears until a stream is opened and closed again.
         if guard.client.is_none() {
-            if let Ok((client, name)) = Self::connect_client() {
-                guard.client = Some(client);
-                if name.is_some() {
-                    guard.discord_username = name;
-                }
-            }
+            return Ok(());
         }
 
-        let username = guard.discord_username.clone();
-
-        if let Some(client) = &mut guard.client {
+        // Single line only. Set `details` and leave `state` unset so we never
+        // show two unrelated random sayings stacked together. When we know
+        // the user's Discord name, half the time roast them by name instead.
+        // The RNG lives only in this block: it is not Send.
+        let phrase: String = {
             let mut rng = rand::rng();
-
-            // Single line only. Set `details` and leave `state` unset so we never
-            // show two unrelated random sayings stacked together. When we know
-            // the user's Discord name, half the time roast them by name instead.
-            let phrase: String = match &username {
+            match &guard.discord_username {
                 Some(name) if rng.random_bool(0.5) => PERSONALIZED_PHRASES
                     .choose(&mut rng)
                     .copied()
@@ -334,23 +538,27 @@ impl DiscordService {
                     .copied()
                     .unwrap_or("Browsing Twitch")
                     .to_string(),
-            };
+            }
+        };
 
-            let activity = Activity::new()
-                .details(phrase.as_str())
-                .assets(
-                    Assets::new()
-                        .large_image(DISCORD_LARGE_IMAGE)
-                        .large_text("StreamNook"),
-                )
-                .timestamps(Timestamps::new().start(timestamp))
-                .buttons(vec![Self::download_button()]);
+        let activity = Activity::new()
+            .details(phrase)
+            .assets(
+                Assets::new()
+                    .large_image(DISCORD_LARGE_IMAGE)
+                    .large_text("StreamNook"),
+            )
+            .timestamps(Timestamps::new().start(timestamp))
+            .buttons(vec![Self::download_button()]);
 
-            client
-                .set_activity(activity)
-                .map_err(|e| anyhow::anyhow!("Failed to set idle presence: {}", e))?;
-        }
-        Ok(())
+        Self::call_client(&mut guard, move |client| client.set_activity(activity))
+            .await
+            .map_err(|e| {
+                if matches!(e, CallError::Unanswered) {
+                    log::warn!("[Discord] idle presence: {e}");
+                }
+                anyhow::anyhow!("Failed to set idle presence: {}", e)
+            })
     }
 
     /// Update presence when watching a stream
@@ -382,25 +590,25 @@ impl DiscordService {
             None
         };
 
-        let mut guard = DISCORD_STATE.lock().await;
-
         // Ensure we're connected
-        if guard.client.is_none() {
-            match Self::connect_client() {
-                Ok((client, username)) => {
-                    guard.client = Some(client);
-                    if username.is_some() {
-                        guard.discord_username = username;
-                    }
+        if let Err(e) = Self::ensure_connected().await {
+            // Discord not running. Never block the stream on it, but do not
+            // swallow the reason either: this path failing without a trace is
+            // what made the macOS gap undiagnosable. A backoff already logged
+            // its cause when it started.
+            match e {
+                ConnectError::BackingOff => {
+                    log::debug!("[Discord] presence update skipped: {e}")
                 }
-                Err(e) => {
-                    // Discord not running. Never block the stream on it, but do
-                    // not swallow the reason either: this path failing without a
-                    // trace is what made the macOS gap undiagnosable.
-                    log::warn!("[Discord] presence update skipped, no IPC connection: {e}");
-                    return Ok(());
-                }
+                _ => log::warn!("[Discord] presence update skipped, no IPC connection: {e}"),
             }
+            return Ok(());
+        }
+
+        let mut guard = DISCORD_STATE.lock().await;
+        if guard.client.is_none() {
+            // Disconnected between connecting and here.
+            return Ok(());
         }
 
         // Reset the elapsed timer only when the activity identity changes (a
@@ -421,12 +629,13 @@ impl DiscordService {
         }
         let timestamp = guard.start_time;
 
-        // Build the activity
+        // Build the activity. Every string is owned so the activity can move
+        // onto the blocking pool.
         let mut assets = Assets::new();
 
-        if let Some(ref url) = game_image_url {
+        if let Some(url) = game_image_url {
             assets = assets.large_image(url);
-            assets = assets.large_text(game_name);
+            assets = assets.large_text(game_name.to_string());
         } else {
             // Fallback to the StreamNook icon only when there's no category at all.
             assets = assets.large_image(DISCORD_LARGE_IMAGE);
@@ -437,9 +646,9 @@ impl DiscordService {
         assets = assets.small_image("https://raw.githubusercontent.com/StreamNook/StreamNook/refs/heads/main/src-tauri/images/logo_1704751143960.JPG");
         assets = assets.small_text("Twitch");
 
-        let mut activity = Activity::new()
-            .details(details)
-            .state(state)
+        let mut activity: Activity<'static> = Activity::new()
+            .details(details.to_string())
+            .state(state.to_string())
             .assets(assets)
             .timestamps(Timestamps::new().start(timestamp))
             .activity_type(ActivityType::Watching); // Set activity type to "Watching"
@@ -447,48 +656,49 @@ impl DiscordService {
         // Add buttons - always include both if stream_url is available
         if !stream_url.is_empty() {
             activity = activity.buttons(vec![
-                Button::new("Watch Stream", stream_url),
+                Button::new("Watch Stream", stream_url.to_string()),
                 Self::download_button(),
             ]);
         }
 
         // Try to set activity, reconnect if IPC socket fails
-        if let Some(client) = &mut guard.client {
-            match client.set_activity(activity.clone()) {
-                Ok(_) => return Ok(()),
-                Err(e) => {
-                    // Connection lost - clear the broken client
-                    log::debug!("[Discord] set_activity failed, reconnecting: {e}");
-                    guard.client = None;
-                }
-            }
-        }
-
-        // Attempt reconnection once
-        match Self::connect_client() {
-            Ok((mut new_client, username)) => {
-                // Try to set activity on the new connection
-                match new_client.set_activity(activity) {
-                    Ok(_) => {
-                        guard.client = Some(new_client);
-                        if username.is_some() {
-                            guard.discord_username = username;
-                        }
-                        Ok(())
-                    }
-                    Err(e) => {
-                        // Reconnected and STILL refused. Distinct from "Discord
-                        // isn't running", and the only place it can be seen.
-                        log::warn!("[Discord] reconnected but set_activity failed: {e}");
-                        Ok(()) // Don't block the stream on a cosmetic feature
-                    }
-                }
+        let first = activity.clone();
+        match Self::call_client(&mut guard, move |client| client.set_activity(first)).await {
+            Ok(()) => return Ok(()),
+            Err(CallError::Unanswered) => {
+                // The pipe is wedged and the backoff has started; reconnecting
+                // now would only wedge again.
+                log::warn!("[Discord] presence update: {}", CallError::Unanswered);
+                return Ok(());
             }
             Err(e) => {
-                log::warn!("[Discord] reconnect failed: {e}");
-                Ok(()) // Don't propagate error - this is non-critical
+                // Connection lost - the broken client is already gone.
+                log::debug!("[Discord] set_activity failed, reconnecting: {e}");
             }
         }
+        drop(guard);
+
+        // Attempt reconnection once
+        if let Err(e) = Self::ensure_connected().await {
+            match e {
+                ConnectError::BackingOff => log::debug!("[Discord] reconnect skipped: {e}"),
+                _ => log::warn!("[Discord] reconnect failed: {e}"),
+            }
+            return Ok(()); // Don't propagate error - this is non-critical
+        }
+
+        let mut guard = DISCORD_STATE.lock().await;
+        if guard.client.is_none() {
+            return Ok(());
+        }
+        if let Err(e) =
+            Self::call_client(&mut guard, move |client| client.set_activity(activity)).await
+        {
+            // Reconnected and STILL refused. Distinct from "Discord isn't
+            // running", and the only place it can be seen.
+            log::warn!("[Discord] reconnected but set_activity failed: {e}");
+        }
+        Ok(()) // Don't block the stream on a cosmetic feature
     }
 
     /// Clear presence
@@ -503,12 +713,17 @@ impl DiscordService {
         }
 
         let mut guard = DISCORD_STATE.lock().await;
-        if let Some(client) = &mut guard.client {
-            client
-                .clear_activity()
-                .map_err(|e| anyhow::anyhow!("Failed to clear Discord activity: {}", e))?;
+        if guard.client.is_none() {
+            return Ok(());
         }
-        Ok(())
+        Self::call_client(&mut guard, |client| client.clear_activity())
+            .await
+            .map_err(|e| {
+                if matches!(e, CallError::Unanswered) {
+                    log::warn!("[Discord] clear presence: {e}");
+                }
+                anyhow::anyhow!("Failed to clear Discord activity: {}", e)
+            })
     }
 
     /// Resolve a Twitch category to a large-image URL for Discord.
@@ -717,3 +932,23 @@ impl DiscordService {
 
     // --- End: New Matching Logic ---
 } // End impl DiscordService
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discord_connect_backoff_gates_attempts() {
+        let now = Instant::now();
+        // No backoff stored: connect freely.
+        assert!(connect_allowed(None, now));
+        // An unanswered pipe blocks attempts until the backoff ends.
+        let until = backoff_after(true, now).expect("unanswered pipe backs off");
+        assert_eq!(until, now + UNANSWERED_BACKOFF);
+        assert!(!connect_allowed(Some(until), now));
+        assert!(!connect_allowed(Some(until), now + UNANSWERED_BACKOFF - Duration::from_secs(1)));
+        assert!(connect_allowed(Some(until), now + UNANSWERED_BACKOFF));
+        // A fast failure (Discord not running) or a success clears the backoff.
+        assert_eq!(backoff_after(false, now), None);
+    }
+}
