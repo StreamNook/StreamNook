@@ -654,9 +654,12 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
   // Native platform badges obey showBadges. Everything else — StreamNook member
   // badge, 7TV, FFZ, Chatterino, and the rest — obeys the showThirdPartyBadges
   // master AND a per-provider allowlist, each toggling independently by the
-  // badge's `source` ('streamnook' for the member badge).
+  // badge's `source` ('streamnook' for the member badge). A Homies custom badge
+  // (category 'homies-custom') has its own entry, apart from the Homies roles.
   const hiddenBadgeProviders = style.hiddenBadgeProviders ?? [];
   const badgeSourceHidden = (src?: string) => hiddenBadgeProviders.includes((src || '').toLowerCase());
+  const extraBadgeHidden = (b: { source?: string; category?: string }) =>
+    badgeSourceHidden(b.category === 'homies-custom' ? 'homies-custom' : b.source);
   const nativeBadgesOn = style.showBadges;
   const thirdPartyOn = style.showThirdPartyBadges !== false;
   // YouTube owners have no badge — their name renders in a gold pill instead — so
@@ -669,7 +672,7 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
   const showNativeBadges = nativeBadgesOn && nativeBadges.length > 0;
   const showSnBadge = thirdPartyOn && !badgeSourceHidden('streamnook') && message.streamNookUserNumber != null;
   const showSeventvBadge = thirdPartyOn && !!message.seventvBadgeUrl && !badgeSourceHidden('7tv');
-  const visibleExtraBadges = thirdPartyOn ? (message.extraBadges ?? []).filter((b) => !badgeSourceHidden(b.source)) : [];
+  const visibleExtraBadges = thirdPartyOn ? (message.extraBadges ?? []).filter((b) => !extraBadgeHidden(b)) : [];
   const showExtraBadges = visibleExtraBadges.length > 0;
   const anyBadge = showNativeBadges || showSnBadge || showSeventvBadge || showExtraBadges;
   // 'full' draws the context line above the message, 'mention' prefixes the body

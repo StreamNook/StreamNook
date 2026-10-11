@@ -93,6 +93,10 @@ pub struct ThirdPartyBadge {
     pub image1x: Option<String>,
     pub image2x: Option<String>,
     pub image4x: Option<String>,
+    /// The badge's wear category (its `set_id`): a chatter wears one badge per
+    /// category, and the badge picker switches within one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -573,6 +577,7 @@ async fn fetch_badge_data(
                 image1x: Some(b.badge_info.image_1x),
                 image2x: Some(b.badge_info.image_2x),
                 image4x: Some(b.badge_info.image_4x),
+                category: Some(b.badge_info.set_id),
             })
             .collect(),
     })

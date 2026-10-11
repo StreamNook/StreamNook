@@ -190,6 +190,58 @@ pub fn third_party_rank(provider_key: &str) -> usize {
     THIRD_PARTY_ORDER.iter().position(|p| *p == provider_key).unwrap_or(THIRD_PARTY_ORDER.len())
 }
 
+/// A third-party badge's `set_id` is its WEAR CATEGORY: what the provider
+/// itself treats as one separate thing. A chatter wears at most one badge per
+/// (provider, category) (`worn_third_party`), and the frontend receives it as
+/// the badge's `category` so the pickers and the member bundle follow the
+/// same rule.
+///
+/// - Homies: three, each drawn on its own by Homies' client: the custom badge
+///   (`HOMIES_CUSTOM_SET`), the `/badges` role list (`HOMIES_ROLES_SET`) and
+///   the `/badges2` staff list (`HOMIES_STAFF_SET`). A Homies holder wears up
+///   to three.
+/// - FFZ: its badge slot (`ffz_wear_set`); FFZ draws one badge per slot.
+/// - Every other provider: the provider's own id, so one badge.
+const HOMIES_CUSTOM_SET: &str = "homies-custom";
+const HOMIES_ROLES_SET: &str = "homies";
+const HOMIES_STAFF_SET: &str = "homies-staff";
+
+/// An FFZ badge's wear category: its slot, or plain `ffz` when the feed names
+/// none.
+fn ffz_wear_set(slot: Option<u32>) -> String {
+    slot.map(|s| format!("ffz-slot-{s}")).unwrap_or_else(|| "ffz".to_string())
+}
+
+/// What a chatter WEARS in chat: at most one badge per wear category (see
+/// `HOMIES_CUSTOM_SET`). The chat index stores a provider's badges best-first,
+/// so the first of each category is the one the provider's own client draws.
+/// What a user owns is unchanged; this only limits what is drawn beside their
+/// name.
+pub fn worn_third_party(badges: &[Arc<UserBadge>]) -> Vec<UserBadge> {
+    let mut seen: Vec<(&BadgeProvider, &str)> = Vec::new();
+    badges
+        .iter()
+        .filter(|b| {
+            let key = (&b.provider, b.badge_info.set_id.as_str());
+            if seen.contains(&key) {
+                return false;
+            }
+            seen.push(key);
+            true
+        })
+        .map(|b| (**b).clone())
+        .collect()
+}
+
+/// A Homies role badge's place among one holder's Homies badges (lower draws
+/// first; the custom badge is 0). Homies' client reads `/badges` and
+/// `/badges2` separately, keeps the LAST entry listing a user in each, and
+/// draws the `/badges` one first. `index` is the role's position in the
+/// combined list, whose `/badges2` entries all follow the `/badges` ones.
+fn homies_role_rank(roles: usize, index: usize, second_feed: bool) -> usize {
+    1 + if second_feed { roles } else { 0 } + roles.saturating_sub(1 + index)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserBadgesResponse {
     pub display_badges: Vec<UserBadge>,
@@ -235,6 +287,9 @@ struct FFZBadge {
     title: Option<String>,
     name: Option<String>,
     urls: HashMap<String, String>,
+    /// FFZ draws one badge per slot; badges sharing a slot replace each other.
+    #[serde(default)]
+    slot: Option<u32>,
 }
 
 /// FFZ's own name for its bot badge. Its holders are chat bots, and they get
@@ -410,6 +465,142 @@ struct HomiesBadge {
     image2: Option<String>,
     image3: Option<String>,
     users: Vec<String>,
+    /// True for an entry of the `/badges2` staff list. Homies' own client
+    /// draws a holder's `/badges` role and their `/badges2` badge as two
+    /// separate badges, `/badges` first, so each entry remembers its list
+    /// (see `homies_role_rank` and `HOMIES_STAFF_SET`).
+    #[serde(skip)]
+    second_feed: bool,
+}
+
+// Homies serves two kinds of badge from two hosts, and its own client loads
+// both. The role badges above (developer, supporter, founder, mod, bot) live on
+// `itzalex.github.io/badges` and `/badges2`, one entry per role with a holder
+// list. The CUSTOM badges, art a supporter uploads for themselves, live on
+// `chatterinohomies.com/api/badges/list`: one entry PER USER, keyed by Twitch
+// user id, about 9,500 entries and 4 MB (570 KB gzipped). Most holders only
+// have a custom badge and appear in no role list at all, so without this feed
+// their Homies badge never shows.
+//
+// Entry shape: `{badgeFileType, badgeId, image1, image2, image3, tooltip,
+// userId, username}`; images are 18/36/72 px (often animated) webp on
+// `cdn.chatterinohomies.com`, the tooltip is "<name> Badge". The list holds
+// only badges Homies has approved; `/api/v2/badges/{twitchId}` answers one
+// user and is what the website resolver uses.
+const HOMIES_CUSTOM_BADGES_URL: &str = "https://chatterinohomies.com/api/badges/list";
+/// New custom badges trickle in a few a day and the feed is 4 MB, so it gets
+/// its own clock instead of the shared 10-minute one (and its 60-second retry
+/// whenever any other provider is down).
+const HOMIES_CUSTOM_REFRESH: Duration = Duration::from_secs(60 * 60);
+/// A runaway feed cannot balloon the index past this many holders.
+const HOMIES_CUSTOM_MAX_ENTRIES: usize = 250_000;
+/// Every custom badge carries this one id: a user has at most one, so the
+/// member loadout key `homies:homies-custom` names it without depending on
+/// the tooltip, which follows the holder's display name.
+pub const HOMIES_CUSTOM_BADGE_ID: &str = "homies-custom";
+const HOMIES_CLICK_URL: &str = "https://chatterinohomies.com/";
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct HomiesCustomBadgesResponse {
+    #[serde(default)]
+    badges: Vec<HomiesCustomBadge>,
+}
+
+/// One user's custom badge. Every field is read leniently (a number or a
+/// null where a string belongs is taken, not fatal) so one odd entry never
+/// costs every holder their badge.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct HomiesCustomBadge {
+    #[serde(rename = "userId", default, deserialize_with = "lenient_string")]
+    user_id: String,
+    #[serde(default, deserialize_with = "lenient_string")]
+    tooltip: String,
+    #[serde(default, deserialize_with = "lenient_string")]
+    image1: String,
+    #[serde(default, deserialize_with = "lenient_string")]
+    image2: String,
+    #[serde(default, deserialize_with = "lenient_string")]
+    image3: String,
+}
+
+/// A string field that may arrive as a string, a number or null.
+fn lenient_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(match serde_json::Value::deserialize(d)? {
+        serde_json::Value::String(s) => s,
+        serde_json::Value::Number(n) => n.to_string(),
+        _ => String::new(),
+    })
+}
+
+/// Twitch user ids are 1-32 ASCII digits.
+fn is_twitch_user_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 32 && id.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// user id -> that user's custom badge, ready for the chat index. A later
+/// entry for the same user replaces an earlier one, as in Homies' own client;
+/// an entry without a numeric id or an image is skipped.
+fn homies_custom_index(feed: HomiesCustomBadgesResponse) -> HashMap<String, Arc<UserBadge>> {
+    let mut out = HashMap::with_capacity(feed.badges.len().min(HOMIES_CUSTOM_MAX_ENTRIES));
+    for entry in feed.badges.into_iter().take(HOMIES_CUSTOM_MAX_ENTRIES) {
+        let uid = entry.user_id.trim();
+        let x1 = entry.image1.trim();
+        if !is_twitch_user_id(uid) || x1.is_empty() {
+            continue;
+        }
+        let x2 = if entry.image2.trim().is_empty() { x1 } else { entry.image2.trim() };
+        let x4 = if entry.image3.trim().is_empty() { x2 } else { entry.image3.trim() };
+        let title = match entry.tooltip.trim() {
+            "" => "Homies Badge".to_string(),
+            t => t.to_string(),
+        };
+        let badge = UserBadge {
+            badge_info: BadgeInfo {
+                id: HOMIES_CUSTOM_BADGE_ID.to_string(),
+                set_id: HOMIES_CUSTOM_SET.to_string(),
+                version: "custom".to_string(),
+                title,
+                description: String::new(),
+                image_1x: x1.to_string(),
+                image_2x: x2.to_string(),
+                image_4x: x4.to_string(),
+                click_action: None,
+                click_url: Some(HOMIES_CLICK_URL.to_string()),
+            },
+            provider: BadgeProvider::Homies,
+        };
+        out.insert(uid.to_string(), Arc::new(badge));
+    }
+    out
+}
+
+/// The browse gallery's one tile for every Homies custom badge: thousands of
+/// one-holder badges would flood it. It shows the viewer's own art when they
+/// have one, and otherwise the art of the first holder by user id, so the
+/// tile does not change between refreshes.
+fn homies_custom_gallery_tile(
+    custom: &HashMap<String, Arc<UserBadge>>,
+    viewer_user_id: Option<&str>,
+) -> Option<ThirdPartyGalleryBadge> {
+    let own = viewer_user_id.and_then(|uid| custom.get(uid));
+    let shown = own.or_else(|| {
+        custom
+            .iter()
+            .min_by_key(|(uid, _)| (uid.len(), uid.as_str()))
+            .map(|(_, badge)| badge)
+    })?;
+    let info = &shown.badge_info;
+    Some(ThirdPartyGalleryBadge {
+        id: HOMIES_CUSTOM_BADGE_ID.to_string(),
+        provider: BadgeProvider::Homies,
+        title: "Homies Custom Badge".to_string(),
+        image_1x: info.image_1x.clone(),
+        image_2x: info.image_2x.clone(),
+        image_4x: info.image_4x.clone(),
+        user_count: custom.len(),
+        owned: own.is_some(),
+        click_url: Some(HOMIES_CLICK_URL.to_string()),
+    })
 }
 
 // Chatsen: GET https://api.chatsen.app/account/badges (bare JSON array, served as
@@ -646,6 +837,12 @@ struct ThirdPartyCache {
     bttv: Option<Vec<BttvBadge>>,
     chatterino: Option<ChatterinoBadgesResponse>,
     homies: Option<HomiesBadgesResponse>,
+    /// Homies custom badges, already in index form (user id -> badge): one
+    /// distinct badge per holder, so there is nothing to share and keeping
+    /// the raw 4 MB feed beside it would only double the memory.
+    homies_custom: Option<HashMap<String, Arc<UserBadge>>>,
+    /// Refreshed on its own clock (`HOMIES_CUSTOM_REFRESH`).
+    homies_custom_last_updated: SystemTime,
     chatsen: Option<Vec<ChatsenBadge>>,
     chatty: Option<Vec<ChattyBadge>>,
     dankchat: Option<Vec<DankChatBadge>>,
@@ -678,34 +875,64 @@ impl ThirdPartyCache {
     /// badge with the same title (case-insensitive), which reproduces the
     /// scan's keep-first title dedupe (FFZ badges re-hosted by Chatty,
     /// duplicate per-user feed entries sharing one title).
+    ///
+    /// The index holds every badge a user OWNS (the profile card and the
+    /// badge picker list them all), but within one provider they sit
+    /// best-first, so `worn_third_party` can keep the first of each wear
+    /// category (the badge's `set_id`, see `HOMIES_CUSTOM_SET`) for chat.
+    /// Each provider's "best" is the badge its own client draws first for
+    /// that user:
+    ///
+    /// - FFZ: one badge per slot (the slot is the category); the feed lists
+    ///   them in FFZ's own order, so within a slot the first listed wins.
+    /// - BetterTTV: the feed has one entry per user; the first one wins.
+    /// - Chatterino: its client keeps the LAST entry listing a user (each entry
+    ///   overwrites the user's slot as the feed is read), so the last wins.
+    /// - Homies: the custom badge, then the `/badges` role, then the
+    ///   `/badges2` staff badge, each its own category; within one list the
+    ///   last entry listing the user (Homies' client overwrites per list).
+    /// - Moltorino: the first tier in feed order (Moltorino's own rule).
+    /// - Chatsen, Chatty: the first entry in feed order.
+    /// - DankChat: the first entry listing the user, exactly as DankChat looks
+    ///   one up.
     fn build_by_user_index(&self) -> HashMap<String, Vec<Arc<UserBadge>>> {
-        let mut by_user: HashMap<String, Vec<Arc<UserBadge>>> = HashMap::new();
+        let mut by_user: HashMap<String, Vec<(Arc<UserBadge>, usize)>> = HashMap::new();
 
+        /// Add `badge` to a user's list unless they already carry a badge with
+        /// that title. `rank` orders badges of one provider (lower draws
+        /// first); ties keep feed order. Providers are walked one after
+        /// another, so a provider's badges are contiguous at the end of the
+        /// list while it is being indexed.
         fn push(
-            by_user: &mut HashMap<String, Vec<Arc<UserBadge>>>,
+            by_user: &mut HashMap<String, Vec<(Arc<UserBadge>, usize)>>,
             user_id: String,
             badge: &Arc<UserBadge>,
             title_lower: &str,
+            rank: usize,
         ) {
             let entry = by_user.entry(user_id).or_default();
             if entry
                 .iter()
-                .any(|b| b.badge_info.title.to_lowercase() == title_lower)
+                .any(|(b, _)| b.badge_info.title.to_lowercase() == title_lower)
             {
                 return;
             }
-            entry.push(Arc::clone(badge));
+            let at = entry
+                .iter()
+                .position(|(b, r)| b.provider == badge.provider && *r > rank)
+                .unwrap_or(entry.len());
+            entry.insert(at, (Arc::clone(badge), rank));
         }
 
         // FFZ. `users` is keyed by badge_id (as a string) -> [numeric user_id],
         // so the holder key is each numeric id rendered back to a String.
         if let Some(ffz) = &self.ffz {
-            for badge in ffz.badges.iter().filter(|b| !b.is_bot()) {
+            for (rank, badge) in ffz.badges.iter().filter(|b| !b.is_bot()).enumerate() {
                 let (image_1x, image_2x, image_4x) = badge.image_urls();
                 let arc = Arc::new(UserBadge {
                     badge_info: BadgeInfo {
                         id: format!("ffz-{}", badge.id),
-                        set_id: "ffz".to_string(),
+                        set_id: ffz_wear_set(badge.slot),
                         version: badge.id.to_string(),
                         title: badge
                             .title
@@ -724,7 +951,7 @@ impl ThirdPartyCache {
                 let title_lower = arc.badge_info.title.to_lowercase();
                 if let Some(holders) = ffz.users.get(&badge.id.to_string()) {
                     for uid in holders {
-                        push(&mut by_user, uid.to_string(), &arc, &title_lower);
+                        push(&mut by_user, uid.to_string(), &arc, &title_lower, rank);
                     }
                 }
             }
@@ -750,13 +977,14 @@ impl ThirdPartyCache {
                     provider: BadgeProvider::BTTV,
                 });
                 let title_lower = arc.badge_info.title.to_lowercase();
-                push(&mut by_user, badge.provider_id.clone(), &arc, &title_lower);
+                push(&mut by_user, badge.provider_id.clone(), &arc, &title_lower, 0);
             }
         }
 
         // Chatterino badges
         if let Some(chatterino) = &self.chatterino {
-            for badge in &chatterino.badges {
+            let chatterino_last = chatterino.badges.len().saturating_sub(1);
+            for (rank, badge) in chatterino.badges.iter().enumerate() {
                 let arc = Arc::new(UserBadge {
                     badge_info: BadgeInfo {
                         id: format!("chatterino-{}", badge.tooltip),
@@ -778,18 +1006,26 @@ impl ThirdPartyCache {
                 });
                 let title_lower = arc.badge_info.title.to_lowercase();
                 for uid in &badge.users {
-                    push(&mut by_user, uid.clone(), &arc, &title_lower);
+                    push(&mut by_user, uid.clone(), &arc, &title_lower, chatterino_last - rank);
                 }
             }
         }
 
-        // Homies badges
+        // Homies: the holder's custom badge first, as Homies' own client
+        // draws it, then their role badges.
+        if let Some(custom) = &self.homies_custom {
+            for (uid, arc) in custom {
+                let title_lower = arc.badge_info.title.to_lowercase();
+                push(&mut by_user, uid.clone(), arc, &title_lower, 0);
+            }
+        }
         if let Some(homies) = &self.homies {
-            for badge in &homies.badges {
+            let roles = homies.badges.len();
+            for (rank, badge) in homies.badges.iter().enumerate() {
                 let arc = Arc::new(UserBadge {
                     badge_info: BadgeInfo {
                         id: format!("homies-{}", badge.tooltip),
-                        set_id: "homies".to_string(),
+                        set_id: if badge.second_feed { HOMIES_STAFF_SET } else { HOMIES_ROLES_SET }.to_string(),
                         version: "1".to_string(),
                         title: badge.tooltip.clone(),
                         description: String::new(),
@@ -807,7 +1043,7 @@ impl ThirdPartyCache {
                 });
                 let title_lower = arc.badge_info.title.to_lowercase();
                 for uid in &badge.users {
-                    push(&mut by_user, uid.clone(), &arc, &title_lower);
+                    push(&mut by_user, uid.clone(), &arc, &title_lower, homies_role_rank(roles, rank, badge.second_feed));
                 }
             }
         }
@@ -820,7 +1056,7 @@ impl ThirdPartyCache {
         if let Some(moltorino) = &self.moltorino {
             let mut assigned: std::collections::HashSet<&str> = std::collections::HashSet::new();
             let mut assignments = 0usize;
-            for badge in moltorino.badges.iter().take(MOLTORINO_MAX_TIERS) {
+            for (rank, badge) in moltorino.badges.iter().take(MOLTORINO_MAX_TIERS).enumerate() {
                 let Some((x1, x2, x4)) = badge.image_urls() else {
                     continue;
                 };
@@ -849,14 +1085,14 @@ impl ThirdPartyCache {
                         continue;
                     }
                     assignments += 1;
-                    push(&mut by_user, uid.to_string(), &arc, &title_lower);
+                    push(&mut by_user, uid.to_string(), &arc, &title_lower, rank);
                 }
             }
         }
 
         // Chatsen badges
         if let Some(chatsen) = &self.chatsen {
-            for badge in chatsen {
+            for (rank, badge) in chatsen.iter().enumerate() {
                 let image = badge.mipmap.last().cloned().unwrap_or_default();
                 let arc = Arc::new(UserBadge {
                     badge_info: BadgeInfo {
@@ -875,14 +1111,14 @@ impl ThirdPartyCache {
                 });
                 let title_lower = arc.badge_info.title.to_lowercase();
                 for uid in &badge.users {
-                    push(&mut by_user, uid.clone(), &arc, &title_lower);
+                    push(&mut by_user, uid.clone(), &arc, &title_lower, rank);
                 }
             }
         }
 
         // Chatty (tduva) badges
         if let Some(chatty) = &self.chatty {
-            for badge in chatty.iter().filter(|b| !b.is_ffz_bot()) {
+            for (rank, badge) in chatty.iter().filter(|b| !b.is_ffz_bot()).enumerate() {
                 let (image_1x, image_2x, image_4x) = badge.image_urls();
                 let arc = Arc::new(UserBadge {
                     badge_info: BadgeInfo {
@@ -908,14 +1144,14 @@ impl ThirdPartyCache {
                 });
                 let title_lower = arc.badge_info.title.to_lowercase();
                 for uid in &badge.userids {
-                    push(&mut by_user, uid.clone(), &arc, &title_lower);
+                    push(&mut by_user, uid.clone(), &arc, &title_lower, rank);
                 }
             }
         }
 
         // DankChat (flex3r) badges
         if let Some(dankchat) = &self.dankchat {
-            for badge in dankchat {
+            for (rank, badge) in dankchat.iter().enumerate() {
                 let arc = Arc::new(UserBadge {
                     badge_info: BadgeInfo {
                         id: format!("dankchat-{}", badge.badge_type),
@@ -933,12 +1169,15 @@ impl ThirdPartyCache {
                 });
                 let title_lower = arc.badge_info.title.to_lowercase();
                 for uid in &badge.users {
-                    push(&mut by_user, uid.clone(), &arc, &title_lower);
+                    push(&mut by_user, uid.clone(), &arc, &title_lower, rank);
                 }
             }
         }
 
         by_user
+            .into_iter()
+            .map(|(uid, ranked)| (uid, ranked.into_iter().map(|(badge, _)| badge).collect()))
+            .collect()
     }
 }
 
@@ -960,6 +1199,8 @@ impl BadgeCache {
                 bttv: None,
                 chatterino: None,
                 homies: None,
+                homies_custom: None,
+                homies_custom_last_updated: UNIX_EPOCH,
                 chatsen: None,
                 chatty: None,
                 dankchat: None,
@@ -1131,6 +1372,12 @@ impl BadgeService {
             .elapsed()
             .map(|e| e >= MOLTORINO_REFRESH)
             .unwrap_or(true);
+        let homies_custom_due = cache
+            .third_party
+            .homies_custom_last_updated
+            .elapsed()
+            .map(|e| e >= HOMIES_CUSTOM_REFRESH)
+            .unwrap_or(true);
 
         drop(cache); // Release lock during network calls
 
@@ -1198,6 +1445,29 @@ impl BadgeService {
             .await;
 
         let homies_badges = Self::merge_homies_responses(homies1_result, homies2_result).await;
+
+        // Homies custom badges (one entry per holder, 4 MB), on their own clock.
+        // Indexed here, before the cache lock is taken again.
+        let homies_custom = if homies_custom_due {
+            match self.http_client.get(HOMIES_CUSTOM_BADGES_URL).send().await {
+                Ok(response) if response.status().is_success() => response
+                    .json::<HomiesCustomBadgesResponse>()
+                    .await
+                    .map_err(|e| log::warn!("[BadgeService] Homies custom badge list did not parse: {e}"))
+                    .ok()
+                    .map(homies_custom_index),
+                Ok(response) => {
+                    log::warn!("[BadgeService] Homies custom badge list returned {}", response.status());
+                    None
+                }
+                Err(e) => {
+                    log::warn!("[BadgeService] Homies custom badge list failed: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         // Fetch Chatsen badges (bare array; relies on the client's browser User-Agent
         // to avoid the 403 the endpoint returns for programmatic UAs).
@@ -1333,6 +1603,23 @@ impl BadgeService {
                 }
             }
         }
+        // Homies custom badges follow the same rule: keep the last good list,
+        // and a failure retries at the next 10-minute gate without back-dating
+        // the shared stamp (the 4 MB list must never ride the 60-second retry).
+        if homies_custom_due {
+            match homies_custom {
+                Some(index) => {
+                    log::debug!("[BadgeService] Homies custom badges: {} holders", index.len());
+                    cache.third_party.homies_custom = Some(index);
+                    cache.third_party.homies_custom_last_updated = SystemTime::now();
+                }
+                None => {
+                    cache.third_party.homies_custom_last_updated = SystemTime::now()
+                        .checked_sub(HOMIES_CUSTOM_REFRESH.saturating_sub(cache_duration))
+                        .unwrap_or(UNIX_EPOCH);
+                }
+            }
+        }
         // Rebuild the inverted per-user index once per refresh (~10 min) so
         // per-chatter lookups never scan the full holder lists.
         let by_user = cache.third_party.build_by_user_index();
@@ -1382,14 +1669,12 @@ impl BadgeService {
         if let Ok(response) = result2 {
             if response.status().is_success() {
                 if let Ok(data) = response.json::<HomiesBadgesResponse>().await {
-                    for badge in data.badges {
-                        if !all_badges.iter().any(|b| b.tooltip == badge.tooltip) {
-                            all_badges.push(badge);
-                        } else if let Some(existing) =
-                            all_badges.iter_mut().find(|b| b.tooltip == badge.tooltip)
-                        {
-                            existing.users.extend(badge.users);
-                        }
+                    // Kept apart from `/badges`: Homies draws a holder's
+                    // badge from each list separately, so a user listed in both
+                    // wears one of each.
+                    for mut badge in data.badges {
+                        badge.second_feed = true;
+                        all_badges.push(badge);
                     }
                 }
             }
@@ -1982,27 +2267,34 @@ impl BadgeService {
     /// are intentionally NOT included here: they live behind a per-user live
     /// socket lookup, the one thing that would reintroduce a per-chatter network
     /// cost, so Pro stays an opt-in identity badge resolved elsewhere.
+    ///
+    /// This is the chat path, so it answers what the chatter WEARS: one badge
+    /// per wear category (`worn_third_party`). The profile and picker paths below
+    /// list everything the user owns.
     pub async fn get_third_party_badges_only(&self, user_id: &str) -> UserBadgesResponse {
         UserBadgesResponse {
             display_badges: Vec::new(),
             earned_badges: Vec::new(),
-            third_party_badges: self.get_third_party_badges_for_user(user_id).await,
+            third_party_badges: self.get_third_party_badges_for_user_worn(user_id, true).await,
         }
     }
 
     async fn get_third_party_badges_for_user(&self, user_id: &str) -> Vec<UserBadge> {
+        self.get_third_party_badges_for_user_worn(user_id, false).await
+    }
+
+    async fn get_third_party_badges_for_user_worn(&self, user_id: &str, worn_only: bool) -> Vec<UserBadge> {
         // Single lookup in the inverted index built at feed-refresh time (see
         // ThirdPartyCache::build_by_user_index). Provider order and the
         // duplicate-title collapse are baked into the index, so this is just a
         // clone-out of the user's shared Arc entries.
         let mut badges: Vec<UserBadge> = {
             let cache = self.cache.read().await;
-            cache
-                .third_party
-                .by_user
-                .get(user_id)
-                .map(|arcs| arcs.iter().map(|arc| (**arc).clone()).collect())
-                .unwrap_or_default()
+            match cache.third_party.by_user.get(user_id) {
+                Some(entries) if worn_only => worn_third_party(entries),
+                Some(entries) => entries.iter().map(|b| (**b).clone()).collect(),
+                None => Vec::new(),
+            }
         };
         for badge in badges.iter_mut().filter(|b| b.provider == BadgeProvider::Chatty) {
             if let Some(painted) = self.painted_badge_image(&badge.badge_info.image_4x).await {
@@ -2159,6 +2451,9 @@ impl BadgeService {
                 });
             }
         }
+        if let Some(custom) = &cache.third_party.homies_custom {
+            out.extend(homies_custom_gallery_tile(custom, viewer_user_id));
+        }
 
         // Chatsen
         if let Some(chatsen) = &cache.third_party.chatsen {
@@ -2303,6 +2598,8 @@ impl BadgeService {
         cache.third_party.bttv = None;
         cache.third_party.chatterino = None;
         cache.third_party.homies = None;
+        cache.third_party.homies_custom = None;
+        cache.third_party.homies_custom_last_updated = UNIX_EPOCH;
         cache.third_party.chatsen = None;
         cache.third_party.chatty = None;
         cache.third_party.dankchat = None;
@@ -2339,12 +2636,15 @@ mod tests {
                     title: Some("Developer".to_string()),
                     name: None,
                     urls,
+                    slot: None,
                 }],
                 users,
             }),
             bttv: None,
             chatterino: None,
             homies: None,
+            homies_custom: None,
+            homies_custom_last_updated: UNIX_EPOCH,
             chatsen: None,
             chatty: None,
             dankchat: None,
@@ -2453,6 +2753,8 @@ mod tests {
             bttv: None,
             chatterino: None,
             homies: None,
+            homies_custom: None,
+            homies_custom_last_updated: UNIX_EPOCH,
             chatsen: None,
             chatty: None,
             dankchat: None,
@@ -2546,6 +2848,8 @@ mod tests {
             bttv: None,
             chatterino: None,
             homies: None,
+            homies_custom: None,
+            homies_custom_last_updated: UNIX_EPOCH,
             chatsen: None,
             chatty: None,
             dankchat: None,
@@ -2642,5 +2946,344 @@ mod tests {
                 provider
             );
         }
+    }
+
+    /// Trimmed from `itzalex.github.io/badges`: the role feed, ids as strings.
+    /// 67534991 (robits) is in neither role list.
+    const HOMIES_ROLES_FIXTURE: &str = r#"{
+       "badges":[
+          {
+             "id": "1",
+             "tooltip":"Homies Developer",
+             "image1":"https://itzalex.github.io/badgesusers/dev/badge.png",
+             "users":[ "59842770", "536387934" ],
+             "image2":"https://itzalex.github.io/badgesusers/dev/badge2x.png",
+             "image3":"https://itzalex.github.io/badgesusers/dev/badge3x.png"
+          },
+          {
+             "id": "3",
+             "tooltip":"Homies Supporter",
+             "image1":"https://itzalex.github.io/badgesusers/supporter2/badge.png",
+             "users":[ "95700563", "" ],
+             "image2":"https://itzalex.github.io/badgesusers/supporter2/badge2x.png",
+             "image3":"https://itzalex.github.io/badgesusers/supporter2/badge3x.png"
+          }
+       ]
+    }"#;
+
+    /// Trimmed from `chatterinohomies.com/api/badges/list`, plus two damaged
+    /// entries (a numeric id, and one with no image) that must not sink the rest.
+    const HOMIES_CUSTOM_FIXTURE: &str = r#"{"badges":[
+      {"badgeFileType":"image/webp","badgeId":"68d98dd23d60203ffbfdce6a","image1":"https://cdn.chatterinohomies.com/badges/90b5d49e-b5fd-4a0a-bc92-6a74408bee82/18.webp","image2":"https://cdn.chatterinohomies.com/badges/90b5d49e-b5fd-4a0a-bc92-6a74408bee82/36.webp","image3":"https://cdn.chatterinohomies.com/badges/90b5d49e-b5fd-4a0a-bc92-6a74408bee82/72.webp","tooltip":"usVesper Badge","userId":"95700563","username":"usVesper"},
+      {"badgeFileType":"image/webp","badgeId":"6ac28297411918ca99a0a2ba","image1":"https://cdn.chatterinohomies.com/badges/318e047d-a0c4-4bc1-aa01-12630be46ede/18.webp","image2":"https://cdn.chatterinohomies.com/badges/318e047d-a0c4-4bc1-aa01-12630be46ede/36.webp","image3":"https://cdn.chatterinohomies.com/badges/318e047d-a0c4-4bc1-aa01-12630be46ede/72.webp","tooltip":"Robits Badge","userId":"67534991","username":"Robits"},
+      {"badgeFileType":"image/webp","badgeId":"x1","image1":"https://cdn.chatterinohomies.com/badges/a/18.webp","image2":null,"image3":null,"tooltip":null,"userId":123456,"username":"numeric"},
+      {"badgeFileType":"image/webp","badgeId":"x2","image1":"","tooltip":"No Art Badge","userId":"222","username":"noart"}
+    ]}"#;
+
+    fn homies_cache(roles: &str, custom: Option<&str>) -> ThirdPartyCache {
+        ThirdPartyCache {
+            ffz: None,
+            bttv: None,
+            chatterino: None,
+            homies: Some(serde_json::from_str(roles).expect("role feed parses")),
+            homies_custom: custom.map(|c| homies_custom_index(serde_json::from_str(c).expect("custom feed parses"))),
+            homies_custom_last_updated: UNIX_EPOCH,
+            chatsen: None,
+            chatty: None,
+            dankchat: None,
+            moltorino: None,
+            moltorino_last_updated: UNIX_EPOCH,
+            by_user: HashMap::new(),
+            backdrops: HashMap::new(),
+            painted: HashMap::new(),
+            last_updated: UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn a_custom_only_homies_holder_had_no_badge_from_the_role_feeds() {
+        // The role feeds alone: robits, who only has a custom badge, gets nothing.
+        let index = homies_cache(HOMIES_ROLES_FIXTURE, None).build_by_user_index();
+        assert!(index.get("67534991").is_none());
+        assert_eq!(index.get("59842770").map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn homies_custom_badge_resolves_by_twitch_id() {
+        let index = homies_cache(HOMIES_ROLES_FIXTURE, Some(HOMIES_CUSTOM_FIXTURE)).build_by_user_index();
+
+        let robits = index.get("67534991").expect("robits' custom badge resolves");
+        assert_eq!(robits.len(), 1);
+        let info = &robits[0].badge_info;
+        assert_eq!(robits[0].provider, BadgeProvider::Homies);
+        assert_eq!(info.id, HOMIES_CUSTOM_BADGE_ID);
+        assert_eq!(info.title, "Robits Badge");
+        assert_eq!(
+            info.image_1x,
+            "https://cdn.chatterinohomies.com/badges/318e047d-a0c4-4bc1-aa01-12630be46ede/18.webp"
+        );
+        assert_eq!(
+            info.image_4x,
+            "https://cdn.chatterinohomies.com/badges/318e047d-a0c4-4bc1-aa01-12630be46ede/72.webp"
+        );
+
+        // A holder of both: the custom badge first, then the role badge.
+        let both: Vec<&str> = index
+            .get("95700563")
+            .expect("supporter resolves")
+            .iter()
+            .map(|b| b.badge_info.title.as_str())
+            .collect();
+        assert_eq!(both, ["usVesper Badge", "Homies Supporter"]);
+
+        // A numeric id is taken; missing sizes fall back and a null tooltip gets a title.
+        let numeric = &index.get("123456").expect("numeric id still resolves")[0].badge_info;
+        assert_eq!(numeric.title, "Homies Badge");
+        assert_eq!(numeric.image_4x, "https://cdn.chatterinohomies.com/badges/a/18.webp");
+        // An entry without art never reaches the index.
+        assert!(index.get("222").is_none());
+    }
+
+    #[test]
+    fn homies_custom_badges_are_one_gallery_tile() {
+        let custom = homies_custom_index(serde_json::from_str(HOMIES_CUSTOM_FIXTURE).unwrap());
+        assert_eq!(custom.len(), 3);
+
+        let mine = homies_custom_gallery_tile(&custom, Some("67534991")).expect("a tile");
+        assert_eq!(mine.id, HOMIES_CUSTOM_BADGE_ID);
+        assert_eq!(mine.provider, BadgeProvider::Homies);
+        assert_eq!(mine.user_count, 3);
+        assert!(mine.owned);
+        assert!(mine.image_2x.contains("318e047d"));
+
+        let theirs = homies_custom_gallery_tile(&custom, Some("1")).expect("a tile");
+        assert!(!theirs.owned);
+        // Stable pick: the shortest, then lowest, holder id.
+        assert!(theirs.image_1x.ends_with("/a/18.webp"));
+
+        assert!(homies_custom_gallery_tile(&HashMap::new(), None).is_none());
+    }
+
+    // One badge per wear category in chat.
+
+    fn empty_cache() -> ThirdPartyCache {
+        ThirdPartyCache {
+            ffz: None,
+            bttv: None,
+            chatterino: None,
+            homies: None,
+            homies_custom: None,
+            homies_custom_last_updated: UNIX_EPOCH,
+            chatsen: None,
+            chatty: None,
+            dankchat: None,
+            moltorino: None,
+            moltorino_last_updated: UNIX_EPOCH,
+            by_user: HashMap::new(),
+            backdrops: HashMap::new(),
+            painted: HashMap::new(),
+            last_updated: UNIX_EPOCH,
+        }
+    }
+
+    fn titles(badges: &[UserBadge]) -> Vec<&str> {
+        badges.iter().map(|b| b.badge_info.title.as_str()).collect()
+    }
+
+    fn owned(index: &HashMap<String, Vec<Arc<UserBadge>>>, uid: &str) -> Vec<UserBadge> {
+        index.get(uid).map(|v| v.iter().map(|e| (**e).clone()).collect()).unwrap_or_default()
+    }
+
+    fn worn(index: &HashMap<String, Vec<Arc<UserBadge>>>, uid: &str) -> Vec<UserBadge> {
+        index.get(uid).map(|v| worn_third_party(v)).unwrap_or_default()
+    }
+
+    /// Trimmed from `flxrs.com/api/badges`: two "DankChat Supporter" entries
+    /// (the same gnome art) around "DankChat Contributor".
+    const DANKCHAT_FIXTURE: &str = r#"[
+      {"type":"DuckerZ","url":"https://flxrs.com/dankchat/badges/ente.gif","users":["147950640"]},
+      {"type":"DankChat Supporter","url":"https://flxrs.com/dankchat/badges/dank.png","users":["11","147950640"]},
+      {"type":"DankChat Contributor","url":"https://flxrs.com/dankchat/badges/contributor.png","users":["11","22"]},
+      {"type":"DankChat Supporter","url":"https://flxrs.com/dankchat/badges/dank.png","users":["22"]}
+    ]"#;
+
+    #[test]
+    fn a_multi_tier_dankchat_holder_wears_one_badge() {
+        let mut cache = empty_cache();
+        cache.dankchat = Some(serde_json::from_str(DANKCHAT_FIXTURE).unwrap());
+        let index = cache.build_by_user_index();
+
+        // DankChat draws the first entry listing the user.
+        assert_eq!(titles(&owned(&index, "11")), ["DankChat Supporter", "DankChat Contributor"]);
+        assert_eq!(titles(&worn(&index, "11")), ["DankChat Supporter"]);
+        assert_eq!(titles(&worn(&index, "22")), ["DankChat Contributor"]);
+        assert_eq!(titles(&worn(&index, "147950640")), ["DuckerZ"]);
+    }
+
+    #[test]
+    fn a_homies_custom_and_role_holder_wears_both() {
+        let index = homies_cache(HOMIES_ROLES_FIXTURE, Some(HOMIES_CUSTOM_FIXTURE)).build_by_user_index();
+        // The custom badge and the role list are separate Homies categories.
+        assert_eq!(titles(&worn(&index, "95700563")), ["usVesper Badge", "Homies Supporter"]);
+    }
+
+    fn homies_role(tooltip: &str, users: &[&str], second_feed: bool) -> HomiesBadge {
+        HomiesBadge {
+            tooltip: tooltip.to_string(),
+            image1: format!("https://itzalex.github.io/{tooltip}.png"),
+            image2: None,
+            image3: None,
+            users: users.iter().map(|u| u.to_string()).collect(),
+            second_feed,
+        }
+    }
+
+    #[test]
+    fn a_homies_custom_role_and_staff_holder_wears_three() {
+        let mut cache = homies_cache(HOMIES_ROLES_FIXTURE, Some(HOMIES_CUSTOM_FIXTURE));
+        cache.homies = Some(HomiesBadgesResponse {
+            badges: vec![
+                homies_role("Homies Developer", &["95700563"], false),
+                homies_role("Homies Supporter", &["95700563"], false),
+                homies_role("Homies Mod", &["95700563"], true),
+                homies_role("Senior Homies Mod", &["95700563"], true),
+            ],
+        });
+        let index = cache.build_by_user_index();
+
+        // One from each list, in Homies' draw order: custom, /badges, /badges2,
+        // and within a list the last entry listing the user.
+        assert_eq!(
+            titles(&worn(&index, "95700563")),
+            ["usVesper Badge", "Homies Supporter", "Senior Homies Mod"]
+        );
+        // Everything owned is still listed.
+        assert_eq!(owned(&index, "95700563").len(), 5);
+    }
+
+    #[test]
+    fn two_homies_roles_from_one_list_wear_one() {
+        let mut cache = empty_cache();
+        cache.homies = Some(HomiesBadgesResponse {
+            badges: vec![
+                homies_role("Homies Developer", &["1", "2"], false),
+                homies_role("Homies Supporter", &["1"], false),
+                homies_role("Homies Founder", &["1"], false),
+                homies_role("Homies Mod", &["3"], true),
+                homies_role("Bot", &["3"], true),
+            ],
+        });
+        let index = cache.build_by_user_index();
+
+        assert_eq!(titles(&worn(&index, "1")), ["Homies Founder"]);
+        assert_eq!(titles(&worn(&index, "2")), ["Homies Developer"]);
+        assert_eq!(titles(&worn(&index, "3")), ["Bot"]);
+        assert_eq!(titles(&owned(&index, "1")), ["Homies Founder", "Homies Supporter", "Homies Developer"]);
+    }
+
+    #[test]
+    fn ffz_holders_wear_one_badge_per_slot() {
+        let badge = |id: u32, title: &str, slot: u32| FFZBadge {
+            id,
+            title: Some(title.to_string()),
+            name: None,
+            urls: HashMap::new(),
+            slot: Some(slot),
+        };
+        let mut users = HashMap::new();
+        for id in ["3", "1", "9"] {
+            users.insert(id.to_string(), vec![5u32]);
+        }
+        let mut cache = empty_cache();
+        cache.ffz = Some(FFZBadgesResponse {
+            badges: vec![badge(3, "FFZ Supporter", 5), badge(1, "FFZ Developer", 5), badge(9, "FFZ Event", 6)],
+            users,
+        });
+        let index = cache.build_by_user_index();
+
+        // Supporter and Developer share slot 5: the first listed is drawn.
+        assert_eq!(titles(&worn(&index, "5")), ["FFZ Supporter", "FFZ Event"]);
+        assert_eq!(owned(&index, "5").len(), 3);
+    }
+
+    #[test]
+    fn chatterino_keeps_the_last_entry_listing_a_user() {
+        let mut cache = empty_cache();
+        cache.chatterino = Some(
+            serde_json::from_str(
+                r#"{"badges":[
+                  {"tooltip":"Chatterino Supporter","image1":"a","image2":null,"image3":null,"users":["7"]},
+                  {"tooltip":"Chatterino Contributor","image1":"b","image2":null,"image3":null,"users":["7"]}
+                ]}"#,
+            )
+            .unwrap(),
+        );
+        let index = cache.build_by_user_index();
+        assert_eq!(titles(&worn(&index, "7")), ["Chatterino Contributor"]);
+    }
+
+    #[test]
+    fn different_providers_still_stack_one_each() {
+        let mut cache = empty_cache();
+        cache.dankchat = Some(
+            serde_json::from_str(
+                r#"[{"type":"DankChat Supporter","url":"d","users":["95700563"]},
+                    {"type":"DankChat Contributor","url":"c","users":["95700563"]}]"#,
+            )
+            .unwrap(),
+        );
+        // Chatty re-hosts FFZ's badge (dropped by its title, FFZ carries it)
+        // and adds the holder's FFZ:AP badge, a different thing from a
+        // different provider, so it stays beside FFZ's own.
+        cache.chatty = Some(
+            serde_json::from_str(
+                r#"[{"id":"ffz","version":"supporter","meta_title":"FFZ Supporter","image_url":"https://cdn.frankerfacez.com/badge/3/1","userids":["95700563"]},
+                    {"id":"ffzap","version":"95700563","meta_title":"FFZ:AP Supporter","image_url":"https://api.ffzap.com/v1/user/badge/95700563/1","userids":["95700563"]}]"#,
+            )
+            .unwrap(),
+        );
+        let mut ffz_users = HashMap::new();
+        ffz_users.insert("3".to_string(), vec![95700563u32]);
+        cache.ffz = Some(FFZBadgesResponse {
+            badges: vec![FFZBadge {
+                id: 3,
+                title: Some("FFZ Supporter".to_string()),
+                name: Some("supporter".to_string()),
+                urls: HashMap::new(),
+                slot: Some(5),
+            }],
+            users: ffz_users,
+        });
+        let index = cache.build_by_user_index();
+
+        let worn = worn(&index, "95700563");
+        assert_eq!(titles(&worn), ["FFZ Supporter", "FFZ:AP Supporter", "DankChat Supporter"]);
+        let providers: Vec<_> = worn.iter().map(|b| b.provider.as_key()).collect();
+        assert_eq!(providers, ["ffz", "chatty", "dankchat"]);
+    }
+
+    /// The badge services setting hides a Homies custom badge by the key
+    /// `homies-custom` (the frontend's `HOMIES_CUSTOM_SOURCE`), apart from
+    /// the Homies role and staff badges, and the frontend reads that key from
+    /// the badge's `set_id`. This pins the strings both sides compare.
+    #[test]
+    fn homies_custom_badges_carry_their_own_visibility_key() {
+        let mut cache = homies_cache(HOMIES_ROLES_FIXTURE, Some(HOMIES_CUSTOM_FIXTURE));
+        cache.homies.as_mut().unwrap().badges.push(homies_role("Homies Mod", &["95700563"], true));
+        let index = cache.build_by_user_index();
+        let sets: Vec<(String, String)> = owned(&index, "95700563")
+            .into_iter()
+            .map(|b| (b.badge_info.title, b.badge_info.set_id))
+            .collect();
+        assert_eq!(
+            sets,
+            [
+                ("usVesper Badge".to_string(), "homies-custom".to_string()),
+                ("Homies Supporter".to_string(), "homies".to_string()),
+                ("Homies Mod".to_string(), "homies-staff".to_string()),
+            ]
+        );
+        // Every one carries provider `homies`, so only the set_id tells them apart.
+        assert!(owned(&index, "95700563").iter().all(|b| b.provider == BadgeProvider::Homies));
     }
 }

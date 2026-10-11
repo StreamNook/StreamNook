@@ -31,6 +31,10 @@ export interface ThirdPartyBadge {
   image4x: string;
   provider: string;
   link?: string;
+  /** The wear category (the Rust badge's `set_id`): what the provider treats
+   *  as one separate thing. A chatter wears one badge per category. Absent
+   *  on badges built outside the Rust index; see `wearCategory`. */
+  category?: string;
 }
 
 export interface UserBadgesResponse {
@@ -119,6 +123,7 @@ export async function getAllUserBadges(
         image2x: b.badge_info.image_2x || imageUrl,
         image4x: b.badge_info.image_4x || imageUrl,
         provider: b.provider,
+        category: b.badge_info.set_id,
         link: b.badge_info.click_url,
       };
     });
@@ -175,6 +180,7 @@ export async function getAllUserBadgesWithEarned(
         image2x: b.badge_info.image_2x || imageUrl,
         image4x: b.badge_info.image_4x || imageUrl,
         provider: b.provider,
+        category: b.badge_info.set_id,
         link: b.badge_info.click_url,
       };
     });
@@ -220,6 +226,7 @@ export async function getGlobalThirdPartyBadges(userId: string): Promise<ThirdPa
         image2x: b.badge_info.image_2x || imageUrl,
         image4x: b.badge_info.image_4x || imageUrl,
         provider: b.provider,
+        category: b.badge_info.set_id,
         link: b.badge_info.click_url,
       };
     });

@@ -14,6 +14,7 @@ import {
   useChatConnectionStore,
 } from '../../stores/chatConnectionStore';
 import { makeKey, parseKey } from '../../utils/providerKey';
+import { badgeSourceKey, HOMIES_CUSTOM_SOURCE } from '../../utils/chatterBadges';
 import { parseBadges } from '../../services/twitchBadges';
 import { useChatUserStore } from '../../stores/chatUserStore';
 import { isStreamNookUser, getStreamNookUserNumber, getActiveCosmeticSlug } from '../../services/supabaseService';
@@ -115,7 +116,13 @@ function adapt(m: BackendChatMessage, users: UsersMap): OverlayMessage {
   const seventvBadge = user?.seventvBadge;
   const extraBadges = (user?.thirdPartyBadges ?? [])
     .filter((b) => b && b.imageUrl)
-    .map((b) => ({ url: b.imageUrl as string, title: b.title, source: b.provider }));
+    .map((b) => ({
+      url: b.imageUrl as string,
+      title: b.title,
+      source: b.provider,
+      // Lets the overlay's Homies custom entry hide this badge on its own.
+      category: badgeSourceKey(b) === HOMIES_CUSTOM_SOURCE ? HOMIES_CUSTOM_SOURCE : b.category,
+    }));
   // Membership is a Twitch id, so only a Twitch chatter can be looked up. Kick
   // ids are small integers from the same range as Twitch's, so passing one here
   // matches an unrelated member and paints their number and badge.

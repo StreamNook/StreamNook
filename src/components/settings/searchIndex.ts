@@ -1453,7 +1453,7 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Names & Badges',
     title: 'Services',
     parent: 'Add-on badges',
-    description: 'Turn individual badge services off: 7TV, FFZ, Chatterino, Homies and the rest. Badge services, badge providers.'
+    description: 'Turn individual badge services off: 7TV, FFZ, Chatterino, Homies, Homies custom badges and the rest. Badge services, badge providers.'
   },
   {
     tab: 'Chat',

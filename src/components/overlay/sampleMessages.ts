@@ -61,7 +61,7 @@ export type OverlayMessage = BackendChatMessage & {
   seventvBadgeUrl?: string;
   seventvBadgeTitle?: string;
   /** Resolved third-party (FFZ / Chatterino / Homies / …) badge images. */
-  extraBadges?: { url: string; title?: string; source?: string }[];
+  extraBadges?: { url: string; title?: string; source?: string; category?: string }[];
   /** StreamNook member number → renders the StreamNook identity badge. Null or
    *  absent means not a StreamNook member. */
   streamNookUserNumber?: number | null;

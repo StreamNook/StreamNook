@@ -67,6 +67,7 @@ import {
 } from '../../utils/shareProfile';
 import { clearCosmeticsMemoryCache, invalidateUserCosmetics, getCosmeticsWithFallback, applyLocalCosmeticSelection } from '../../services/cosmeticsCache';
 import { buildBttvProBadge, resolveBttvProUrl, withBttvPro } from '../../services/bttvProBadge';
+import { toggleLoadoutBadge, wearCategory, wearCategoryOfKey } from '../../utils/chatterBadges';
 import { invoke } from '@tauri-apps/api/core';
 import { Logger } from '../../utils/logger';
 import LinkedAccountsSection from './LinkedAccountsSection';
@@ -941,10 +942,14 @@ const ProfileSettings = () => {
   const shownThirdParty = allThirdParty.filter((b) => isThirdPartyShown(b));
   const toggleThirdParty = (b: { provider: string; id: string }) => {
     if (!currentUser?.user_id) return;
-    const key = tpKey(b);
-    const nextBadges = loadout.badges.includes(key)
-      ? loadout.badges.filter((k) => k !== key)
-      : [...loadout.badges, key];
+    // Chat shows one badge per category (Homies has three: custom, role,
+    // staff), so choosing one switches off the other badge of its category.
+    const categoryOf = new Map(allThirdParty.map((x) => [tpKey(x), wearCategory(x)]));
+    const nextBadges = toggleLoadoutBadge(
+      loadout.badges,
+      tpKey(b),
+      (k) => categoryOf.get(k) ?? wearCategoryOfKey(k),
+    );
     const next = { customized: true, badges: nextBadges };
     setLoadout(next);
     void setIdentity(currentUser.user_id, next.badges, null, true);

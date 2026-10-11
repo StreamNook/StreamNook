@@ -29,6 +29,7 @@ import {
   withBttvPro,
 } from '../services/bttvProBadge';
 import { snapshotOverrides } from '../utils/userChatOverrides';
+import { onePerCategory } from '../utils/chatterBadges';
 import { IS_MOBILE } from '../utils/platform';
 
 /**
@@ -221,8 +222,10 @@ function scheduleThirdPartyFlush() {
 // The resolve endpoint already ownership-checks and orders these; map its
 // minimal {key,provider,title,image_url} shape onto the ThirdPartyBadge shape
 // the chat badge row renders (it reads only id / imageUrl / title / provider).
+// A member wears one badge per category even when an older loadout chose two.
 function mapResolvedBadges(badges: ResolvedBadge[]): ThirdPartyBadge[] {
-  return badges.map((b) => ({
+  const withIds = badges.map((b) => ({ ...b, id: b.key.slice(b.key.indexOf(':') + 1) }));
+  return onePerCategory(withIds).map((b) => ({
     id: b.key,
     title: b.title,
     imageUrl: b.image_url,
@@ -230,6 +233,7 @@ function mapResolvedBadges(badges: ResolvedBadge[]): ThirdPartyBadge[] {
     image2x: b.image_url,
     image4x: b.image_url,
     provider: b.provider,
+    category: b.category,
   }));
 }
 
@@ -313,6 +317,9 @@ function mergeBttvPro(userId: string, badge: ThirdPartyBadge) {
     if (!u) return {};
     const existing = u.thirdPartyBadges ?? [];
     if (existing.some((b) => b.id === badge.id)) return {}; // already present
+    // One badge per category: BetterTTV draws a member's other BetterTTV badge
+    // before Pro, so that one is the badge they wear.
+    if (existing.some((b) => (b.provider ?? '').toLowerCase() === 'bttv')) return {};
     const newUsers = new Map(state.users);
     newUsers.set(userId, { ...u, thirdPartyBadges: withBttvPro(existing, badge) });
     return { users: newUsers };

@@ -350,6 +350,7 @@ const BADGE_PROVIDERS: { id: string; label: string }[] = [
   { id: 'bttv', label: 'BTTV' },
   { id: 'chatterino', label: 'Chatterino' },
   { id: 'homies', label: 'Homies' },
+  { id: 'homies-custom', label: 'Homies custom' },
   { id: 'moltorino', label: 'Moltorino' },
   { id: 'chatsen', label: 'Chatsen' },
   { id: 'chatty', label: 'Chatty' },

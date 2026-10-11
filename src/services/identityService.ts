@@ -160,6 +160,9 @@ export interface ResolvedBadge {
   provider: string;
   title: string;
   image_url: string;
+  /** The wear category, same vocabulary as the Rust `set_id` (see
+   *  `wearCategory`); absent from older Identity API answers. */
+  category?: string;
 }
 export interface ResolvedIdentity {
   twitch_user_id: string;
