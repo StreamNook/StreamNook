@@ -77,11 +77,13 @@ pub async fn modroom_disconnect() -> Result<(), String> {
     auth::disconnect().map_err(|e| e.to_string())
 }
 
-/// Broadcaster ids of every channel this account moderates. Empty if not
-/// connected; the UI then falls back to per-channel detection.
+/// Broadcaster ids of every channel this account moderates. An `Ok` list is
+/// complete, so the UI may drop cached channels missing from it; when not
+/// connected or Twitch fails part way, this errors and the UI keeps falling
+/// back to per-channel detection.
 #[tauri::command]
 pub async fn modroom_list_moderated() -> Result<Vec<String>, String> {
-    Ok(auth::list_moderated_channels().await.unwrap_or_default())
+    auth::list_moderated_channels().await.map_err(|e| e.to_string())
 }
 
 #[derive(Serialize)]

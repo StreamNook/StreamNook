@@ -388,7 +388,19 @@ export function loadModeratedChannelIds(force = false): Promise<string[]> {
   if (!moderatedPromise || force) {
     moderatedPromise = invoke<string[]>('modroom_list_moderated')
       .then((ids) => {
-        ids.forEach((id) => setCachedModerator(id, true));
+        // A resolved list is complete (Rust errors instead of returning a
+        // partial one), so it replaces the cache: a channel we were demoted in,
+        // or one flagged while a channel switch was still in flight, stops
+        // offering the toggle. Our own channel is not in it (a broadcaster is
+        // not their own moderator); its USERSTATE badge re-adds it on visit.
+        try {
+          localStorage.setItem(
+            MOD_CACHE_KEY,
+            JSON.stringify(Object.fromEntries(ids.map((id) => [id, true]))),
+          );
+        } catch {
+          // storage unavailable; the toggle just falls back to USERSTATE timing
+        }
         moderatedListeners.forEach((fn) => fn(ids));
         return ids;
       })

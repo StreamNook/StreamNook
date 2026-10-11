@@ -9,7 +9,7 @@ import { Logger } from '../../utils/logger';
 /** Mod powers are read off your own badges in that channel, same rule as desktop. */
 export function isModeratorFrom(userBadges: string | null | undefined): boolean {
   if (!userBadges) return false;
-  return userBadges.includes('moderator') || userBadges.includes('broadcaster');
+  return /(?:^|,)(?:moderator|broadcaster)\//.test(userBadges);
 }
 
 export async function deleteMessage(broadcasterId: string, messageId: string): Promise<boolean> {

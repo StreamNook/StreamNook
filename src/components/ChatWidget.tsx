@@ -888,10 +888,11 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const [youtubeCanModerate, setYoutubeCanModerate] = useState(false);
   const youtubeSlug = channelOverride?.user_login;
   const canModerateActive = provider === 'youtube' && youtubeConnected && !!youtubeSlug;
+  // Cleared on every channel change too: the previous channel's answer must not
+  // grant mod tools here while the new probe is in flight.
   useEffect(() => {
-    if (canModerateActive) return;
     setYoutubeCanModerate(false);
-  }, [canModerateActive]);
+  }, [canModerateActive, youtubeSlug]);
   useEffect(() => {
     if (!canModerateActive) return;
     let active = true;
@@ -1039,6 +1040,16 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // buffered and backfilled message exactly once.
   const [kickModDetected, setKickModDetected] = useState(false);
   const onKickModeratorDetected = useCallback(() => setKickModDetected(true), []);
+  // Our Twitch badges for the channel this pane SHOWS. `userBadges` from the
+  // chat hook follows the channel it has finished joining, which trails a
+  // switch by the whole JOIN round trip; read through it, the previous
+  // channel's moderator badge granted mod tools (and wrote the mod-room cache)
+  // in a channel where we are not a moderator. null until USERSTATE lands; ''
+  // once Twitch confirms we hold no badges here.
+  const twitchBadgeMeta = useChannelChatMeta(
+    isTwitch && chat !== replayChat ? currentStream?.user_login?.toLowerCase() ?? null : null,
+  );
+  const ownTwitchBadges = twitchBadgeMeta.userBadges;
   const isModerator = useMemo(() => {
     if (provider === 'youtube') return youtubeCanModerate;
     // The API answer wins once it arrives, but the badge heuristic stays as an OR:
@@ -1048,9 +1059,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       return kickCanModerate === null ? kickModDetected : kickCanModerate || kickModDetected;
     }
     if (!isTwitch) return false; // tiktok + other read-only providers: no mod actions
-    if (!userBadges) return false;
-    return userBadges.includes('moderator') || userBadges.includes('broadcaster');
-  }, [provider, youtubeCanModerate, isTwitch, kickModDetected, kickCanModerate, userBadges]);
+    if (!ownTwitchBadges) return false;
+    return /(?:^|,)(?:moderator|broadcaster)\//.test(ownTwitchBadges);
+  }, [provider, youtubeCanModerate, isTwitch, kickModDetected, kickCanModerate, ownTwitchBadges]);
   
   // UI state
   const [messageInput, setMessageInput] = useState('');
@@ -1120,10 +1131,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     // id into the Twitch mod-room cache (the id namespaces collide).
     if (!isTwitch) return;
     const id = currentStream?.user_id;
-    if (!id || !userBadges) return; // persist only once USERSTATE has resolved
+    // Persist only once USERSTATE has resolved for THIS channel. An empty badge
+    // list is an answer too (no badges here), and it must clear a stale flag.
+    if (!id || ownTwitchBadges == null) return;
     setCachedModerator(id, isModerator);
     setCachedMod(isModerator);
-  }, [isTwitch, isModerator, userBadges, currentStream?.user_id]);
+  }, [isTwitch, isModerator, ownTwitchBadges, currentStream?.user_id]);
   // Mod rooms are Twitch-only: without the isTwitch gate, a Kick/YouTube
   // moderator in an override pane would get a Mods toggle whose channel id
   // belongs to the wrong platform.

@@ -292,7 +292,9 @@ pub async fn list_moderated_channels() -> Result<Vec<String>> {
             .send()
             .await?;
         if !resp.status().is_success() {
-            break;
+            // A partial list must not pass for the whole one: callers drop
+            // every cached channel missing from it.
+            return Err(anyhow!("moderated channels: HTTP {}", resp.status()));
         }
         let body: ModChannelsResp = resp.json().await?;
         for c in body.data {

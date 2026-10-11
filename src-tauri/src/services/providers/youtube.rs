@@ -442,8 +442,13 @@ pub async fn unban_user(channel: &str, target_channel_id: &str) -> Result<()> {
 // moderation actions ONLY to someone who can moderate. So we POST a recent message's
 // context-menu params and check whether the response carries moderate endpoints.
 
-// Latest seen context-menu params per channel (any recent message works to probe).
-static CONTEXT_PARAMS: OnceLock<std::sync::Mutex<HashMap<String, String>>> = OnceLock::new();
+// Latest seen context-menu params per channel, with the message author's channel
+// id. Any recent message works to probe EXCEPT our own: YouTube offers everyone a
+// direct-endpoint Delete on their own message, which reads exactly like a
+// moderator's Remove, so probing our own message made every viewer who had
+// chatted a "moderator".
+static CONTEXT_PARAMS: OnceLock<std::sync::Mutex<HashMap<String, (String, String)>>> =
+    OnceLock::new();
 // Cached probe result per channel, so the gate doesn't re-probe every render.
 static CAN_MOD: OnceLock<std::sync::Mutex<HashMap<String, bool>>> = OnceLock::new();
 
@@ -457,13 +462,23 @@ static CAN_MOD: OnceLock<std::sync::Mutex<HashMap<String, bool>>> = OnceLock::ne
 static CAN_MOD_FAILED_AT: OnceLock<std::sync::Mutex<HashMap<String, Instant>>> = OnceLock::new();
 const CAN_MOD_RETRY_AFTER: Duration = Duration::from_secs(60);
 
-fn store_context_params(channel_key: &str, params: &str) {
+/// Whether `author_id` is the signed-in account's own channel. Unknown (identity
+/// not read yet) is not ours; `can_moderate` re-checks once it is known.
+fn is_own_author(author_id: &str) -> bool {
+    !author_id.is_empty()
+        && youtube_auth_service::account_channel_id().is_some_and(|own| own == author_id)
+}
+
+fn store_context_params(channel_key: &str, params: &str, author_id: &str) {
+    if is_own_author(author_id) {
+        return;
+    }
     let slug = key::parse_key(channel_key).channel;
     if let Ok(mut m) = CONTEXT_PARAMS
         .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
         .lock()
     {
-        m.insert(slug, params.to_string());
+        m.insert(slug, (params.to_string(), author_id.to_string()));
     }
 }
 
@@ -500,7 +515,7 @@ pub async fn can_moderate(channel: &str) -> bool {
     let Some(api_key) = meta.api_key.clone() else {
         return false;
     };
-    let Some(params) = CONTEXT_PARAMS
+    let Some((params, author_id)) = CONTEXT_PARAMS
         .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
         .lock()
         .ok()
@@ -508,6 +523,9 @@ pub async fn can_moderate(channel: &str) -> bool {
     else {
         return false; // no message seen yet — can't probe
     };
+    if is_own_author(&author_id) {
+        return false; // stored before our identity was known; wait for someone else's message
+    }
     let is_mod = match post_innertube_authed(
         "get_item_context_menu",
         &api_key,
@@ -2460,7 +2478,7 @@ fn base_message(
         .pointer("/contextMenuEndpoint/liveChatItemContextMenuEndpoint/params")
         .and_then(|x| x.as_str())
     {
-        store_context_params(channel_key, p);
+        store_context_params(channel_key, p, &user_id);
     }
 
     let mut tags = HashMap::new();
