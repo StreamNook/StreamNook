@@ -857,27 +857,26 @@ const DynamicIsland = () => {
         };
     }, [addNotification, playNotificationSound, notificationsEnabled, showGiftSubNotifications, soundEnabled, useDynamicIsland, useToast, addToast, sendNativeNotification]);
 
-    // Somebody gave this member a StreamNook membership. Raised by
-    // supabaseService off the cosmetics realtime channel, which already carries
-    // the grant, so there is no extra connection or poll behind this.
+    // Somebody gave this member a StreamNook membership. Raised by Rust's
+    // gift poll (services/membership_gifts.rs), once per gift, already worded.
     //
     // Gated on the master switch alone, with no per-type toggle: being given a
     // membership is rare and never unwanted, and a row nobody would turn off
     // does not earn a line in Settings.
     useEffect(() => {
-        const unlisten = listen<{ grantedAt: string; permanent: boolean }>(
+        const unlisten = listen<MembershipGiftNotificationData>(
             'membership-gift-received',
             (event) => {
                 if (!notificationsEnabled) return;
-                const { grantedAt, permanent } = event.payload;
+                const data = event.payload;
 
                 if (useDynamicIsland) {
                     addNotification({
-                        id: `membership-gift-${grantedAt}`,
+                        id: `membership-gift-${data.id ?? data.grantedAt}`,
                         type: 'membership_gift',
-                        timestamp: Date.parse(grantedAt) || Date.now(),
+                        timestamp: Date.parse(data.grantedAt) || Date.now(),
                         read: false,
-                        data: { grantedAt, permanent } as MembershipGiftNotificationData,
+                        data,
                     });
                 }
                 if (soundEnabled) {
@@ -895,7 +894,7 @@ const DynamicIsland = () => {
 
                 sendNativeNotification(
                     'StreamNook membership',
-                    'Somebody gave you a membership. Your perks are already active.',
+                    data.bodyPlain ?? 'Somebody gave you a membership. Your perks are already active.',
                 );
             },
         );
@@ -1977,10 +1976,11 @@ const DynamicIsland = () => {
                                                                         StreamNook membership
                                                                     </span>
                                                                 </div>
-                                                                <p className="text-white/50 text-sm truncate mt-0.5">
-                                                                    {(notification.data as MembershipGiftNotificationData).permanent
-                                                                        ? 'Somebody gave you a membership. It does not expire.'
-                                                                        : 'Somebody gave you a membership. Your perks are active now.'}
+                                                                <p className="text-white/50 text-sm line-clamp-2 mt-0.5">
+                                                                    {(notification.data as MembershipGiftNotificationData).bodyPlain
+                                                                        ?? ((notification.data as MembershipGiftNotificationData).permanent
+                                                                            ? 'Somebody gave you a membership. It does not expire.'
+                                                                            : 'Somebody gave you a membership. Your perks are active now.')}
                                                                 </p>
                                                             </div>
                                                         </>

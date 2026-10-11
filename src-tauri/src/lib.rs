@@ -1049,6 +1049,10 @@ pub fn run() {
             // re-read here rather than reusing the pre-setup load because
             // mobile only resolves app-data paths inside setup.
             services::onsite_notifications::init(app_handle.clone());
+            // StreamNook memberships somebody gave you, off streamnook.app.
+            services::membership_gifts::init(app_handle.clone());
+            // Paid or gifted, for the profile; fetched on demand.
+            services::membership_status::init(app_handle.clone());
             // Channel-points earns, announced once per burst.
             services::channel_points_summary::init(&app_handle);
             // The periodic update check (the phone has its own update path).
@@ -1056,6 +1060,7 @@ pub fn run() {
             services::update_watch::start(app_handle.clone());
             if let Ok(startup_settings) = load_settings_from_file() {
                 services::onsite_notifications::refresh(&startup_settings);
+                services::membership_gifts::refresh(&startup_settings);
                 // When reminders fire (timed triggers and chat keywords).
                 services::reminder_service::init(app_handle.clone(), &startup_settings);
             }
@@ -2117,6 +2122,8 @@ pub fn run() {
             set_streamnook_identity,
             // Authenticated writes to StreamNook's own API. One command, path-allowlisted.
             streamnook_api_post,
+            // The member's own membership status line (paid or gifted).
+            get_membership_status,
             // Hype Train commands
             get_bulk_hype_train_status,
             // Home snapshot (Rust-owned Home/Sidebar data)

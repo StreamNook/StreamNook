@@ -1,6 +1,5 @@
 import { createClient, RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
 import { invoke } from '@tauri-apps/api/core';
-import { emit } from '@tauri-apps/api/event';
 import type { TwitchUser } from '../types';
 import { getClientConfig } from './clientConfig';
 import { classifyLinkResponse, type LinkWriteResult } from './linkResponse';
@@ -188,19 +187,11 @@ const attachPresenceListeners = (channel: RealtimeChannel) => {
  *
  * @returns Unsubscribe function to clean up presence on unmount
  */
-/** The signed-in user, captured so `loadCosmetics` can pick our own row out
- *  of a registry-wide load. Null until presence starts. */
-let selfUserId: string | null = null;
-
-/** The badge a complimentary or gifted membership grants. */
-const SUBSCRIBER_COSMETIC = 'streamnook-subscriber';
-
 export const trackPresence = async (
     userId?: string,
     displayName?: string,
     appVersion?: string
 ): Promise<(() => void) | null> => {
-    if (userId) selfUserId = userId;
     if (!supabase) {
         Logger.debug('[Supabase] Skipping presence tracking - not configured');
         return null;
@@ -1705,50 +1696,6 @@ const bumpCosmeticsVersion = () => {
     }
 };
 
-/**
- * Tell the member that somebody gave them a membership.
- *
- * `gift_comp_membership` grants the subscriber badge as part of the same
- * transaction that writes the comp, and the cosmetics channel already
- * subscribes to every `user_cosmetics` change, so the signal arrives with no
- * backend work. `comp_memberships` itself is unreadable here (RLS is on with
- * no policies, deliberately), which is why the badge row is the seam.
- *
- * Requires `source === 'admin'`, the value both the paid-gift webhooks and the
- * admin tool write. A member who bought their own membership gets a different
- * source and is NOT told they were given one. A Discord boost cannot reach
- * here at all: it grants only the boost badge, never the subscriber one.
- *
- * The gifter is deliberately not named. `granted_by` lives on the row we
- * cannot read, so the copy must not promise one.
- */
-const announceMembershipGift = async (userId: string): Promise<void> => {
-    if (!supabase) return;
-    try {
-        const { data, error } = await supabase
-            .from('user_cosmetics')
-            .select('source, payment_id, created_at')
-            .eq('twitch_user_id', userId)
-            .eq('slug', SUBSCRIBER_COSMETIC)
-            .maybeSingle();
-        if (error) {
-            Logger.warn('[Supabase] membership gift source read failed:', error.message);
-            return;
-        }
-        const row = data as { source?: string; payment_id?: string; created_at?: string } | null;
-        // Unconfirmed means silent. Announcing a self-purchase as a gift is a
-        // worse failure than saying nothing.
-        if (!row || row.source !== 'admin') return;
-
-        await emit('membership-gift-received', {
-            grantedAt: row.created_at ?? new Date().toISOString(),
-            permanent: !row.payment_id?.includes(':grant:'),
-        });
-    } catch (e) {
-        Logger.warn('[Supabase] announceMembershipGift failed:', e);
-    }
-};
-
 const loadCosmetics = async (): Promise<void> => {
     if (!supabase) return;
     // A change that lands mid-load may postdate the rows this load already read,
@@ -1804,17 +1751,6 @@ const loadCosmetics = async (): Promise<void> => {
             const devActive = readDevActiveCosmetic();
             if (devActive) nextActive.set(devActive.userId, devActive.slug);
 
-            // Did WE just gain the subscriber badge? Compared before the
-            // swap, while the previous map is still the old one. Skipped on the
-            // very first load: every launch would otherwise re-announce a
-            // membership granted months ago, the same seeding rule the Twitch
-            // notification poll uses.
-            const newlySubscriber =
-                cosmeticsLoaded &&
-                !!selfUserId &&
-                !cosmeticsEntitlements.get(selfUserId)?.has(SUBSCRIBER_COSMETIC) &&
-                !!nextEnt.get(selfUserId)?.has(SUBSCRIBER_COSMETIC);
-
             cosmeticsCatalog = nextCatalog;
             cosmeticsEntitlements = nextEnt;
             cosmeticsActive = nextActive;
@@ -1825,7 +1761,6 @@ const loadCosmetics = async (): Promise<void> => {
                 userActive: nextActive.size,
             });
             bumpCosmeticsVersion();
-            if (newlySubscriber && selfUserId) void announceMembershipGift(selfUserId);
         } catch (e) {
             Logger.error('[Supabase] loadCosmetics exception:', e);
         } finally {

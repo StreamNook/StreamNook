@@ -53,6 +53,13 @@ const ALLOWED_PATHS: &[&str] = &[
     // reporter. The server keys it on (member, minute), so a repeat or a
     // second device in the same minute counts once.
     "/api/v1/watch/minute",
+    // The memberships this member was gifted, read by the Rust gift poll
+    // (services::membership_gifts). The member comes from the token.
+    "/api/v1/membership/gifts",
+    // The member's own membership status line (paid or gifted, and when their
+    // billing resumes), read by services::membership_status. The member comes
+    // from the token.
+    "/api/v1/membership/status",
 ];
 
 #[derive(Debug, Serialize)]
@@ -189,6 +196,18 @@ pub async fn streamnook_api_post(
     account_id: Option<String>,
 ) -> Result<ApiResponse, String> {
     post_json(&path, &body, account_id.as_deref()).await
+}
+
+/// The signed-in member's membership status line for their profile, as
+/// streamnook.app computes it. `force` skips the one-minute reuse window.
+/// None when nobody is signed in.
+#[tauri::command]
+pub async fn get_membership_status(
+    force: Option<bool>,
+) -> Result<Option<crate::services::membership_status::MembershipStatus>, String> {
+    crate::services::membership_status::get(force.unwrap_or(false))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

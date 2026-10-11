@@ -86,6 +86,8 @@ pub mod live_announce;
 pub mod live_notification_service;
 pub mod offline_room;
 pub mod onsite_notifications;
+pub mod membership_gifts;
+pub mod membership_status;
 pub mod provider_categories;
 pub mod provider_live_service;
 pub mod ll_origin;

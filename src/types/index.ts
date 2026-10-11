@@ -2172,6 +2172,14 @@ export interface MembershipGiftNotificationData {
   grantedAt: string;
   /** A permanent grant rather than a fixed term. */
   permanent: boolean;
+  /** The server's gift id. Absent on rows saved before gifts had ids. */
+  id?: number;
+  /** Months given; null for a permanent grant. */
+  termMonths?: number | null;
+  /** When the member's own paused billing resumes, if it was paused. */
+  billingResumesAt?: string | null;
+  /** The sentence Rust built for this gift. Absent on older saved rows. */
+  bodyPlain?: string;
 }
 
 /** A reward Twitch named for your account (badge earned, drop reward), off

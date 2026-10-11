@@ -4,11 +4,17 @@ import {
   getStreamNookMembership,
   type StreamNookMembership,
 } from '../../services/supabaseService';
+import {
+  getMembershipStatus,
+  membershipStatusCopy,
+  onMembershipStatusChanged,
+  type MembershipStatus,
+  type MembershipStatusCopy,
+} from '../../services/membershipStatus';
 
-// The member's own StreamNook membership: current subscription state (renewal
-// or end date, cancellation) plus lifetime tenure. Renders nothing for members
-// with no paid history. Gifted memberships are admin-only server-side, so a
-// gifted member sees tenure here without a billing status.
+// The member's own StreamNook membership: a status line (paid or gifted, when
+// a gift ends and when their own billing resumes, as streamnook.app computes
+// it) plus lifetime tenure. Renders nothing for members with neither.
 
 const dateLabel = (iso: string): string => new Date(iso).toLocaleDateString();
 
@@ -23,6 +29,12 @@ const STATUS_PILL: Record<string, { label: string; className: string }> = {
   canceled: { label: 'Canceled', className: 'bg-white/[0.06] text-textSecondary' },
 };
 
+const TONE_DOT: Record<MembershipStatusCopy['tone'], string> = {
+  gift: 'bg-accent',
+  ok: 'bg-emerald-400',
+  warn: 'bg-amber-300',
+};
+
 const Row = ({ label, value }: { label: string; value: string }) => (
   <div className="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 hover:bg-white/[0.03]">
     <span className="text-sm text-textSecondary">{label}</span>
@@ -30,8 +42,22 @@ const Row = ({ label, value }: { label: string; value: string }) => (
   </div>
 );
 
+/** A status is a fact, not a control: a dot and words. */
+const StatusLine = ({ copy }: { copy: MembershipStatusCopy }) => (
+  <div className="mb-3 px-2">
+    <div className="flex items-start gap-2">
+      <span aria-hidden className={`mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full ${TONE_DOT[copy.tone]}`} />
+      <span className="text-sm font-medium text-textPrimary">{copy.headline}</span>
+    </div>
+    {copy.detail && (
+      <p className="mt-0.5 pl-3.5 text-[12px] leading-snug text-textSecondary">{copy.detail}</p>
+    )}
+  </div>
+);
+
 const MembershipSection = ({ userId }: { userId: string }) => {
   const [membership, setMembership] = useState<StreamNookMembership | null>(null);
+  const [status, setStatus] = useState<MembershipStatus | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -41,12 +67,31 @@ const MembershipSection = ({ userId }: { userId: string }) => {
     return () => { alive = false; };
   }, [userId]);
 
-  if (!membership) return null;
+  // Rust fetches and caches the status; a gift arriving while the profile is
+  // open pushes the new one.
+  useEffect(() => {
+    let alive = true;
+    getMembershipStatus().then((s) => {
+      if (alive) setStatus(s);
+    });
+    const unlisten = onMembershipStatusChanged((s) => {
+      if (alive) setStatus(s);
+    });
+    return () => {
+      alive = false;
+      unlisten.then((fn) => fn()).catch(() => {});
+    };
+  }, [userId]);
+
+  const copy = status ? membershipStatusCopy(status) : null;
+  if (!membership && !copy) return null;
   const m = membership;
 
-  const live = m.status === 'active' || m.status === 'past_due' || m.status === 'trialing';
-  const pillKey = live && m.cancelAtPeriodEnd && m.status !== 'past_due' ? 'ending' : (m.status ?? '');
-  const pill = STATUS_PILL[pillKey] ?? null;
+  const live = m ? m.status === 'active' || m.status === 'past_due' || m.status === 'trialing' : false;
+  const pillKey = m && live && m.cancelAtPeriodEnd && m.status !== 'past_due' ? 'ending' : (m?.status ?? '');
+  // The status line replaces the pill and the renewal row when the server
+  // answered; both stay as the fallback for an older server or offline.
+  const pill = copy ? null : STATUS_PILL[pillKey] ?? null;
 
   return (
     <div className="glass-panel rounded-xl p-5">
@@ -62,30 +107,34 @@ const MembershipSection = ({ userId }: { userId: string }) => {
         )}
       </div>
 
-      <div className="space-y-1">
-        {m.firstSubscribedAt && (
-          <Row
-            label="Member since"
-            value={`${dateLabel(m.firstSubscribedAt)} · ${daysSince(m.firstSubscribedAt).toLocaleString()} days`}
-          />
-        )}
-        <Row label="Months supported" value={String(m.totalMonths)} />
-        {live && m.currentPeriodEnd && (
-          <Row
-            label={m.cancelAtPeriodEnd ? 'Ends on' : 'Renews on'}
-            value={dateLabel(m.currentPeriodEnd)}
-          />
-        )}
-        {!live && m.status === 'canceled' && (m.endedAt || m.currentPeriodEnd) && (
-          <Row label="Ended on" value={dateLabel((m.endedAt ?? m.currentPeriodEnd)!)} />
-        )}
-        {m.canceledAt && (
-          <Row label="Canceled on" value={dateLabel(m.canceledAt)} />
-        )}
-        {m.lastPaidAt && <Row label="Last payment" value={dateLabel(m.lastPaidAt)} />}
-      </div>
+      {copy && <StatusLine copy={copy} />}
 
-      {live && m.cancelAtPeriodEnd && m.currentPeriodEnd && (
+      {m && (
+        <div className="space-y-1">
+          {m.firstSubscribedAt && (
+            <Row
+              label="Member since"
+              value={`${dateLabel(m.firstSubscribedAt)} · ${daysSince(m.firstSubscribedAt).toLocaleString()} days`}
+            />
+          )}
+          <Row label="Months supported" value={String(m.totalMonths)} />
+          {!copy && live && m.currentPeriodEnd && (
+            <Row
+              label={m.cancelAtPeriodEnd ? 'Ends on' : 'Renews on'}
+              value={dateLabel(m.currentPeriodEnd)}
+            />
+          )}
+          {!live && m.status === 'canceled' && (m.endedAt || m.currentPeriodEnd) && (
+            <Row label="Ended on" value={dateLabel((m.endedAt ?? m.currentPeriodEnd)!)} />
+          )}
+          {m.canceledAt && (
+            <Row label="Canceled on" value={dateLabel(m.canceledAt)} />
+          )}
+          {m.lastPaidAt && <Row label="Last payment" value={dateLabel(m.lastPaidAt)} />}
+        </div>
+      )}
+
+      {!copy && m && live && m.cancelAtPeriodEnd && m.currentPeriodEnd && (
         <p className="mt-3 text-[11px] leading-snug text-textSecondary">
           Your subscription stays active through {dateLabel(m.currentPeriodEnd)}. Earned badges and
           unlocks are yours to keep either way.

@@ -409,6 +409,8 @@ fn after_settings_change(settings: &Settings, favorites_changed: bool) {
     // Spawns or aborts the gift-sub poll, so the toggle takes effect without a
     // restart and "off" costs no task at all.
     crate::services::onsite_notifications::refresh(settings);
+    // Spawns or aborts the gifted-membership poll with the master switch.
+    crate::services::membership_gifts::refresh(settings);
     crate::services::reminder_service::refresh(settings);
     // Home's unified Discover list leaves out live favourites, so a heart
     // toggled anywhere changes it. Unhearting in particular is announced by
