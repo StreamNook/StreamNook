@@ -519,6 +519,59 @@ pub fn print_credential_if_asked() {
     std::process::exit(code);
 }
 
+/// Builds the WebView2 browser-argument string from the app's own disabled
+/// features plus any switches inherited from the environment. Chromium honours
+/// only the last `--disable-features` switch it sees, so both feature lists are
+/// folded into one; every other inherited switch is appended unchanged.
+/// Switches are split on whitespace, so a switch value containing spaces is
+/// not supported.
+fn merge_webview_args(own_disabled_features: &str, inherited: Option<&str>) -> String {
+    let mut disabled: Vec<&str> = own_disabled_features
+        .split(',')
+        .filter(|f| !f.is_empty())
+        .collect();
+    let mut rest: Vec<&str> = Vec::new();
+    for switch in inherited.unwrap_or("").split_whitespace() {
+        match switch.strip_prefix("--disable-features=") {
+            Some(list) => {
+                for feature in list.split(',').filter(|f| !f.is_empty()) {
+                    if !disabled.contains(&feature) {
+                        disabled.push(feature);
+                    }
+                }
+            }
+            None => rest.push(switch),
+        }
+    }
+    let mut args = format!("--disable-features={}", disabled.join(","));
+    for switch in rest {
+        args.push(' ');
+        args.push_str(switch);
+    }
+    args
+}
+
+#[cfg(test)]
+mod webview_args_tests {
+    use super::merge_webview_args;
+
+    #[test]
+    fn keeps_own_features_without_inherited_args() {
+        assert_eq!(merge_webview_args("A,B", None), "--disable-features=A,B");
+    }
+
+    #[test]
+    fn folds_inherited_disable_features_into_one_switch() {
+        assert_eq!(
+            merge_webview_args(
+                "A,B",
+                Some("--force-color-profile=srgb --disable-features=B,C  --disable-direct-composition-video-overlays")
+            ),
+            "--disable-features=A,B,C --force-color-profile=srgb --disable-direct-composition-video-overlays"
+        );
+    }
+}
+
 /// Shared app entry point. Desktop's `main.rs` calls this directly; on mobile
 /// Tauri's generated Android/iOS project loads this library and invokes `run()`
 /// via the `mobile_entry_point` macro.
@@ -546,8 +599,18 @@ pub fn run() {
     // alt-tab/minimize freeze, which was the composited child-HWND webview and is fixed
     // by not enabling `tauri/unstable`. Disabling the occlusion calc only stops Chromium
     // throttling hidden windows, a negligible cost for one media window.
-    let mut webview_args = String::from(
-        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,AudioServiceOutOfProcess,CalculateNativeWinOcclusion",
+    //
+    // Switches already in WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS when the app
+    // starts are kept and merged in rather than overwritten, so a single launch
+    // can try a Chromium switch (video overlay, colour profile, decoder) on an
+    // affected machine without a rebuild. This is the variable WebView2 itself
+    // reads, so it grants nothing a plain WebView2 host would not.
+    let inherited_webview_args = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")
+        .ok()
+        .filter(|a| !a.trim().is_empty());
+    let mut webview_args = merge_webview_args(
+        "msWebOOUI,msPdfOOUI,msSmartScreenProtection,AudioServiceOutOfProcess,CalculateNativeWinOcclusion",
+        inherited_webview_args.as_deref(),
     );
     // Headless debugging: SN_CDP_PORT=<port> opens the webview's remote debug
     // port on localhost so tooling can inspect the live page (heap snapshots,
@@ -573,6 +636,9 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     for line in linux_cef::take_reports() {
         info!("{line}");
+    }
+    if let Some(extra) = inherited_webview_args.as_deref() {
+        info!("[WebView2] Extra browser arguments from the environment: {extra}");
     }
 
     // Every panic goes to streamnook.log. Without this, a panic on a
