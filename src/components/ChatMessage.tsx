@@ -14,15 +14,15 @@ import { mentionBoxClass, mentionBoxStyle, mentionLook, mentionTextStyle } from 
 // Emote previews open almost at once: a quick pass over an emote should still
 // show it (the shared tooltip default waits 250 ms).
 const EMOTE_TOOLTIP_DELAY_MS = 60;
-import { computePaintStyle, getBadgeImageUrl, getBadgeFallbackUrls, pickPaintLayerImage, queueCosmeticForCaching } from '../services/seventvService';
+import { computePaintStyle, getBadgeImageUrl, pickPaintLayerImage, queueCosmeticForCaching } from '../services/seventvService';
 import { StyledChatName } from './chat/StyledChatName';
+import { ChatBadgeIcons } from './chat/ChatBadgeIcons';
+import { visibleChatterBadges } from '../utils/chatterBadges';
 import { useDragModerationStore } from '../stores/dragModerationStore';
 import { usePinStore } from '../stores/pinStore';
-import { FallbackImage } from './FallbackImage';
 import { getCosmeticsWithFallback } from '../services/cosmeticsCache';
 import type { ThirdPartyBadge as ThirdPartyBadgeType } from '../services/badgeService';
 import { useAppStore } from '../stores/AppStore';
-import { openBadgesWithBadgeInMain } from '../utils/openBadgesInMain';
 import { openExternal } from '../utils/openExternal';
 import { useChatUserStore } from '../stores/chatUserStore';
 import { useShallow } from 'zustand/react/shallow';
@@ -31,11 +31,9 @@ import { useGiftBombRecipients } from '../stores/giftBombStore';
 import { useMessageRepeat } from '../stores/messageRepeatStore';
 import { ChannelPointsIcon } from './ChannelPointsIcon';
 import { useUserColor } from '../services/userColorCache';
-import { queueBadgeForCaching, getCachedBadgeUrl } from '../services/badgeImageCacheService';
 import { memberIdFor } from '../utils/memberIdentity';
 import { isStreamNookUser, getStreamNookUserNumber, subscribeStreamNookRegistryVersion, getStreamNookRegistryVersion } from '../services/supabaseService';
 import { MemberReveal, MEMBER_REVEAL_CARD_CLASS } from './StreamNookBadge';
-import { StreamNookBadge } from './StreamNookBadge';
 import { AtmosphereBackground } from './AtmosphereBackground';
 import { MajorCologneChrome } from './MajorCologneChrome';
 import { getAtmosphere } from '../services/atmospheres';
@@ -51,12 +49,12 @@ import type { ProviderId } from '../types/providers';
 import { isHomeRow, rowProvider } from '../utils/chatAuthority';
 import { ProviderLogo } from './ProviderLogo';
 import { getDisplayedName, getColorOverride } from '../utils/userChatOverrides';
+import { overrideKey, rowOverrideKey, rowSenderNames, rowShownName, stripLeadingName, withShownSender } from '../utils/chatterName';
 import { useNameColorAdjust } from '../hooks/useNameColor';
 import { vendorEmojiUrl } from '../services/emojiService';
 import { categoryOf, chatEventTemplateContext } from '../utils/chatEvents';
 import { renderEventTemplate } from './overlay/overlayConfig';
 import { convert as convertMoney, formatMoney, preloadRates, symbolToCode } from '../services/currencyService';
-import { CHANNEL_SPECIFIC_TWITCH_BADGES } from '../utils/badgeOrder';
 import { LinkPreviewCard } from './chat/LinkPreviewCard';
 import { SongCard } from './chat/SongCard';
 import { extractPreviewUrls, prettyUrlLabel } from '../services/linkPreviewService';
@@ -374,44 +372,6 @@ const parseTextWithEmoteSets = (text: string, emotes?: EmoteSet | null): EmoteSe
 const channelNameCache = new Map<string, string>();
 const channelProfileImageCache = new Map<string, string>();
 
-/**
- * Get the best URL for a Twitch badge, with reactive caching.
- * - Channel-specific badges (subscriber, bits, etc.) are never cached to avoid cross-channel pollution
- * - Global badges are cached locally for faster loading
- */
-function getTwitchBadgeUrl(badgeKey: string, badgeInfo: { localUrl?: string; url?: string; image_url_4x?: string; image_url_2x?: string; image_url_1x?: string }): string {
-  // If already has a local URL, use it
-  if (badgeInfo.localUrl) {
-    return badgeInfo.localUrl;
-  }
-
-  // Extract set ID from badge key (format: "set/version")
-  const setId = badgeKey.split('/')[0];
-  
-  // Channel-specific badges are never cached - always use remote URL
-  // This prevents cross-channel pollution where one streamer's sub badge appears in another's chat
-  if (CHANNEL_SPECIFIC_TWITCH_BADGES.has(setId)) {
-    return badgeInfo.image_url_4x || badgeInfo.image_url_1x || '';
-  }
-
-  // Global badges can be cached safely
-  const cacheId = `twitch-${badgeKey}`;
-  
-  // Check if we have a cached version
-  const cachedUrl = getCachedBadgeUrl(cacheId);
-  if (cachedUrl) {
-    return cachedUrl;
-  }
-
-  // Not cached - queue for caching and return remote 4x URL
-  const remoteUrl = badgeInfo.image_url_4x;
-  if (remoteUrl) {
-    queueBadgeForCaching(cacheId, remoteUrl);
-  }
-
-  return remoteUrl || badgeInfo.image_url_1x || '';
-}
-
 import { BackendChatMessage } from '../services/twitchChat';
 
 import { Logger } from '../utils/logger';
@@ -653,8 +613,6 @@ const chatMessageAreEqual = (prevProps: ChatMessageProps, nextProps: ChatMessage
 // selector returns the same array identity for every non-member chatter (a
 // fresh [] each render would re-render every row on any store change).
 const EMPTY_THIRD_PARTY: ThirdPartyBadgeType[] = [];
-const EMPTY_HIDDEN_PROVIDERS: string[] = [];
-const EMPTY_TWITCH_BADGES: never[] = [];
 
 // Memoized ChatMessage component to prevent unnecessary re-renders
 // This is critical for preventing animation restarts when new messages arrive
@@ -1078,28 +1036,21 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // person) and in the IRC mention insertion path (Twitch only resolves real
   // @logins, never nicknames). Render path swaps in the nickname.
   const userOverrides = chatCustomization?.user_overrides;
-  const originalDisplayName = useMemo(
-    () => parsed.tags.get('display-name') || parsed.displayName || parsed.username,
-    [parsed.tags, parsed.displayName, parsed.username],
-  );
+  // The one author name every layout below renders (plain row, sub, watch
+  // streak, raid, cheer, donation): Rust's stamped name, under the viewer's
+  // nickname for this chatter when one is set.
   const effectiveDisplayName = useMemo(
-    () => getDisplayedName(cosmeticsKey ?? userId, originalDisplayName, userOverrides),
-    [cosmeticsKey, userId, originalDisplayName, userOverrides],
+    // Same key the profile card saves under (rowOverrideKey / overrideKey).
+    () => rowShownName(parsed, rowOverrideKey(parsed as never), userOverrides),
+    [parsed, userOverrides],
   );
-  // The author name shown on a normal message. Twitch keeps its exact existing
-  // value (its `username` already holds the cased display name), so Twitch
-  // rendering is unchanged. Non-Twitch providers (Kick) put the lowercase slug
-  // in `username`, so render their cased display name instead.
   const showAtSign = chatDesign?.show_at_sign === true;
   const renderedName = useMemo(
-    () => {
-      const base =
-        parsed.provider && parsed.provider !== 'twitch'
-          ? parsed.tags.get('display-name') || parsed.displayName || parsed.username
-          : parsed.username;
-      return showAtSign && base && !base.startsWith('@') ? `@${base}` : base;
-    },
-    [parsed.provider, parsed.tags, parsed.displayName, parsed.username, showAtSign],
+    () =>
+      showAtSign && effectiveDisplayName && !effectiveDisplayName.startsWith('@')
+        ? `@${effectiveDisplayName}`
+        : effectiveDisplayName,
+    [effectiveDisplayName, showAtSign],
   );
   // Color override layers under the user's 7TV paint when one is selected
   // (the paint computes against this base color), or replaces parsed.color
@@ -1110,7 +1061,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   const replyMentionNode =
     replyStyle === 'mention' && parsed.replyInfo ? (
       <span className="font-semibold opacity-85">
-        @{getDisplayedName(parsed.replyInfo.parentUserId, parsed.replyInfo.parentDisplayName, userOverrides)}{' '}
+        @{getDisplayedName(overrideKey(parsed.replyInfo.parentUserId, parsed.provider ?? 'twitch'), parsed.replyInfo.parentShownName || parsed.replyInfo.parentDisplayName, userOverrides)}{' '}
       </span>
     ) : null;
   const giantJustify =
@@ -1168,21 +1119,35 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     }),
   );
   const seventvPaint = seventvPaintRaw as SevenTVPaintWithSelection | null | undefined;
-  // Badge controls. Filtered HERE, at the source, so the five badge render
-  // sites below all follow without each knowing why.
-  const badgesOn = chatDesign?.show_badges !== false;
-  const thirdPartyBadgesOn = chatDesign?.show_third_party_badges !== false;
-  const hiddenBadgeProviders = chatDesign?.hidden_badge_providers ?? EMPTY_HIDDEN_PROVIDERS;
-  const badgeSourceHidden = (src?: string) => hiddenBadgeProviders.includes((src || '').toLowerCase());
-  const visibleBadges = badgesOn ? parsed.badges : EMPTY_TWITCH_BADGES;
-  const seventvBadgeAll = seventvBadgeRaw as SevenTVBadgeWithSelection | null | undefined;
-  const seventvBadge = thirdPartyBadgesOn && !badgeSourceHidden('7tv') ? seventvBadgeAll : null;
-  const thirdPartyBadges = useMemo(
-    () => (thirdPartyBadgesOn ? thirdPartyBadgesAll.filter((b) => !badgeSourceHidden(b.provider)) : EMPTY_THIRD_PARTY),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [thirdPartyBadgesAll, thirdPartyBadgesOn, hiddenBadgeProviders],
+  // Badge controls. Filtered HERE, at the source, so every badge render site
+  // below follows without each knowing why. The same helper filters the pinned
+  // message, so a hidden provider is hidden there too.
+  const {
+    twitch: visibleBadges,
+    seventv: seventvBadge,
+    thirdParty: thirdPartyBadges,
+    streamNook: snBadgeOn,
+  } = useMemo(
+    () =>
+      visibleChatterBadges(
+        {
+          show_badges: chatDesign?.show_badges,
+          show_third_party_badges: chatDesign?.show_third_party_badges,
+          hidden_badge_providers: chatDesign?.hidden_badge_providers,
+        },
+        parsed.badges,
+        seventvBadgeRaw as SevenTVBadgeWithSelection | null | undefined,
+        thirdPartyBadgesAll,
+      ),
+    [
+      chatDesign?.show_badges,
+      chatDesign?.show_third_party_badges,
+      chatDesign?.hidden_badge_providers,
+      parsed.badges,
+      seventvBadgeRaw,
+      thirdPartyBadgesAll,
+    ],
   );
-  const snBadgeOn = thirdPartyBadgesOn && !badgeSourceHidden('streamnook');
   const atmosphere = atmosphereId ? getAtmosphere(atmosphereId) : null;
   // Frost behind the text only when the atmosphere declares it needs it (busy
   // washes); subtle ones render the text bare. A backdrop-filter per message row
@@ -1400,7 +1365,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         {
           userId: dragUserId,
           login: parsed.username,
-          displayName: parsed.tags.get('display-name') || parsed.username,
+          displayName: parsed.displayName || parsed.tags.get('display-name') || parsed.username,
           color: effectiveColor,
           messageId: parsed.tags.get('id') || undefined,
           broadcasterId,
@@ -2211,19 +2176,23 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   const eventCardClass = (gradient: string) => eventCardClassFor(chatEvents, gradient);
   const eventCardStyle = eventCardStyleFor(chatEvents);
   // Custom wording for an event category, or null to keep the platform's.
+  // `{username}` is the name the card shows (nickname first), and `{default}`,
+  // Twitch's own sentence, has its leading author name swapped for it: that
+  // sentence names the chatter by raw login on some notices (watch streaks).
   const eventTemplateFor = (category: 'subscription' | 'gift' | 'cheer' | 'milestone' | 'raid'): string | null => {
     const template = chatEvents?.event_templates?.[category];
     if (!template) return null;
+    const platformText = parsed.tags.get('system-msg')?.replace(/\\s/g, ' ');
     return renderEventTemplate(
       template,
       chatEventTemplateContext(parsed.tags, category, {
         username: parsed.username,
-        displayName: parsed.tags.get('display-name') || parsed.displayName || parsed.username,
+        displayName: effectiveDisplayName,
         provider: parsed.provider ?? 'twitch',
         bits: bitsAmount ? parseInt(bitsAmount, 10) : undefined,
         channel: (parsed.channel ?? '').split(':').pop() || undefined,
         time: parsed.metadata?.formatted_timestamp || undefined,
-        defaultText: parsed.tags.get('system-msg')?.replace(/\\s/g, ' ') || undefined,
+        defaultText: platformText ? withShownSender(platformText, parsed, effectiveDisplayName) : undefined,
       }),
     );
   };
@@ -2434,56 +2403,14 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
 
       return (
         <span className="sn-badge-strip mr-1.5">
-          {visibleBadges.map((badge, idx) => {
-            // Handle both old format (key/info) and new format (name/version)
-            if (!badge.info) return null;
-            return (
-              <Tooltip key={`bits-badge-${badge.key}-${idx}`} content={badge.info.title} side="top">
-                <img
-                  src={getTwitchBadgeUrl(badge.key, badge.info)}
-                  alt={badge.info.title}
-                  className="sn-chat-badge inline-block cursor-pointer hover:scale-110 transition-transform"
-                  onClick={() => onBadgeClick?.(badge.key, badge.info)}
-                  onError={(e) => {
-                    Logger.warn('[Badge] Failed to load badge:', badge.key, badge.info.image_url_1x);
-                    e.currentTarget.style.display = 'none';
-                  }}
-                />
-              </Tooltip>
-            );
-          })}
-          {seventvBadge && (
-            <Tooltip content={`Click for details: ${seventvBadge.description || seventvBadge.name}`} side="top">
-              <button
-                onClick={() => openBadgesWithBadgeInMain(seventvBadge.id)}
-                // A flex box around a block image: an inline-block button put the
-                // image on its text baseline, which sat it lower than the badges
-                // beside it.
-                className="inline-flex items-center cursor-pointer hover:scale-110 transition-transform"
-              >
-                <FallbackImage
-                  src={getBadgeImageUrl(seventvBadge)}
-                  fallbackUrls={getBadgeFallbackUrls(seventvBadge.id).slice(1)}
-                  alt={seventvBadge.description || seventvBadge.name}
-                  className="sn-chat-badge block"
-                />
-              </button>
-            </Tooltip>
-          )}
-          {thirdPartyBadges.filter(badge => badge && badge.imageUrl).map((badge, idx) => (
-            <Tooltip key={`bits-tp-badge-${badge.id}-${idx}`} content={`${badge.title} (${badge.provider.toUpperCase()})`} side="top">
-              <img
-                // 2x, not imageUrl's 4x; see the default layout's badge row.
-                src={badge.image2x || badge.imageUrl}
-                alt={badge.title}
-                className="sn-chat-badge block object-contain"
-                onError={(e) => {
-                  e.currentTarget.style.display = 'none';
-                }}
-              />
-            </Tooltip>
-          ))}
-          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge sn-chat-badge--sn block object-contain" />}
+          <ChatBadgeIcons
+            twitchBadges={visibleBadges}
+            seventvBadge={seventvBadge}
+            thirdPartyBadges={thirdPartyBadges}
+            streamNookMemberId={isSN && snBadgeOn ? senderUserId : null}
+            onBadgeClick={onBadgeClick}
+            keyPrefix="ev0"
+          />
         </span>
       );
     };
@@ -2515,7 +2442,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                 <span style={{ color: bitsTierColor }} className="font-bold">{cheerTemplate}</span>
               ) : (
                 <>
-                  {renderClickableUsername(parsed.username, parsed.tags.get('display-name') || parsed.username)}
+                  {renderClickableUsername(parsed.username, parsed.displayName || parsed.tags.get('display-name') || parsed.username)}
                   <span style={{ color: bitsTierColor }} className="font-bold"> cheered {formattedBits} bits</span>
                 </>
               )}
@@ -2627,55 +2554,14 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
 
       return (
         <span className="sn-badge-strip mr-1.5">
-          {visibleBadges.map((badge, idx) => {
-            if (!badge.info) return null;
-            return (
-              <Tooltip key={`donation-badge-${badge.key}-${idx}`} content={badge.info.title} side="top">
-                <img
-                  src={getTwitchBadgeUrl(badge.key, badge.info)}
-                  alt={badge.info.title}
-                  className="sn-chat-badge inline-block cursor-pointer hover:scale-110 transition-transform"
-                  onClick={() => onBadgeClick?.(badge.key, badge.info)}
-                  onError={(e) => {
-                    Logger.warn('[Badge] Failed to load badge:', badge.key, badge.info.image_url_1x);
-                    e.currentTarget.style.display = 'none';
-                  }}
-                />
-              </Tooltip>
-            );
-          })}
-          {seventvBadge && (
-            <Tooltip content={`Click for details: ${seventvBadge.description || seventvBadge.name}`} side="top">
-              <button
-                onClick={() => openBadgesWithBadgeInMain(seventvBadge.id)}
-                // A flex box around a block image: an inline-block button put the
-                // image on its text baseline, which sat it lower than the badges
-                // beside it.
-                className="inline-flex items-center cursor-pointer hover:scale-110 transition-transform"
-              >
-                <FallbackImage
-                  src={getBadgeImageUrl(seventvBadge)}
-                  fallbackUrls={getBadgeFallbackUrls(seventvBadge.id).slice(1)}
-                  alt={seventvBadge.description || seventvBadge.name}
-                  className="sn-chat-badge block"
-                />
-              </button>
-            </Tooltip>
-          )}
-          {thirdPartyBadges.filter(badge => badge && badge.imageUrl).map((badge, idx) => (
-            <Tooltip key={`donation-tp-badge-${badge.id}-${idx}`} content={`${badge.title} (${badge.provider.toUpperCase()})`} side="top">
-              <img
-                // 2x, not imageUrl's 4x; see the default layout's badge row.
-                src={badge.image2x || badge.imageUrl}
-                alt={badge.title}
-                className="sn-chat-badge block object-contain"
-                onError={(e) => {
-                  e.currentTarget.style.display = 'none';
-                }}
-              />
-            </Tooltip>
-          ))}
-          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge sn-chat-badge--sn block object-contain" />}
+          <ChatBadgeIcons
+            twitchBadges={visibleBadges}
+            seventvBadge={seventvBadge}
+            thirdPartyBadges={thirdPartyBadges}
+            streamNookMemberId={isSN && snBadgeOn ? senderUserId : null}
+            onBadgeClick={onBadgeClick}
+            keyPrefix="ev1"
+          />
         </span>
       );
     };
@@ -2735,7 +2621,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           >
             <p className="text-white font-semibold leading-relaxed">
               {renderBadges()}
-              {renderClickableUsername(parsed.username, parsed.tags.get('display-name') || parsed.username)}
+              {renderClickableUsername(parsed.username, parsed.displayName || parsed.tags.get('display-name') || parsed.username)}
               {isSuperChat ? (
                 <span className="text-success font-bold">
                   {formattedAmount
@@ -2774,7 +2660,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     // Get watch streak details
     const streakValue = parsed.tags.get('msg-param-value'); // Number of consecutive streams
     const channelPointsReward = parsed.tags.get('msg-param-copoReward'); // Channel points earned
-    const displayName = parsed.tags.get('display-name') || parsed.username;
+    const displayName = parsed.displayName || parsed.tags.get('display-name') || parsed.username;
 
     // Helper function to render username as clickable
     const renderClickableUsername = (username: string, displayNameProp?: string) => {
@@ -2813,55 +2699,14 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
 
       return (
         <span className="sn-badge-strip mr-0.5">
-          {visibleBadges.map((badge, idx) => {
-            if (!badge.info) return null;
-            return (
-              <Tooltip key={`watchstreak-badge-${badge.key}-${idx}`} content={badge.info.title} side="top">
-                <img
-                  src={getTwitchBadgeUrl(badge.key, badge.info)}
-                  alt={badge.info.title}
-                  className="sn-chat-badge inline-block cursor-pointer hover:scale-110 transition-transform"
-                  onClick={() => onBadgeClick?.(badge.key, badge.info)}
-                  onError={(e) => {
-                    Logger.warn('[Badge] Failed to load badge:', badge.key, badge.info.image_url_1x);
-                    e.currentTarget.style.display = 'none';
-                  }}
-                />
-              </Tooltip>
-            );
-          })}
-          {seventvBadge && (
-            <Tooltip content={`Click for details: ${seventvBadge.description || seventvBadge.name}`} side="top">
-              <button
-                onClick={() => openBadgesWithBadgeInMain(seventvBadge.id)}
-                // A flex box around a block image: an inline-block button put the
-                // image on its text baseline, which sat it lower than the badges
-                // beside it.
-                className="inline-flex items-center cursor-pointer hover:scale-110 transition-transform"
-              >
-                <FallbackImage
-                  src={getBadgeImageUrl(seventvBadge)}
-                  fallbackUrls={getBadgeFallbackUrls(seventvBadge.id).slice(1)}
-                  alt={seventvBadge.description || seventvBadge.name}
-                  className="sn-chat-badge block"
-                />
-              </button>
-            </Tooltip>
-          )}
-          {thirdPartyBadges.filter(badge => badge && badge.imageUrl).map((badge, idx) => (
-            <Tooltip key={`watchstreak-tp-badge-${badge.id}-${idx}`} content={`${badge.title} (${badge.provider.toUpperCase()})`} side="top">
-              <img
-                // 2x, not imageUrl's 4x; see the default layout's badge row.
-                src={badge.image2x || badge.imageUrl}
-                alt={badge.title}
-                className="sn-chat-badge block object-contain"
-                onError={(e) => {
-                  e.currentTarget.style.display = 'none';
-                }}
-              />
-            </Tooltip>
-          ))}
-          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge sn-chat-badge--sn block object-contain" />}
+          <ChatBadgeIcons
+            twitchBadges={visibleBadges}
+            seventvBadge={seventvBadge}
+            thirdPartyBadges={thirdPartyBadges}
+            streamNookMemberId={isSN && snBadgeOn ? senderUserId : null}
+            onBadgeClick={onBadgeClick}
+            keyPrefix="ev2"
+          />
         </span>
       );
     };
@@ -2897,7 +2742,14 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               )}
             </p>
             <p className="text-textSecondary mt-0.5 leading-relaxed break-words">
-              {eventTemplateFor('milestone') ?? `Watched ${streakValue} consecutive streams and sparked a watch streak!`}
+              {/* The header already names the chatter, so custom wording that
+                  opens with the name (`{username} ...`, `{default}`) drops it here. */}
+              {(() => {
+                const custom = eventTemplateFor('milestone');
+                return custom
+                  ? stripLeadingName(custom, [effectiveDisplayName, ...rowSenderNames(parsed)])
+                  : `Watched ${streakValue} consecutive streams and sparked a watch streak!`;
+              })()}
             </p>
             {parsed.content && (
               <p className="text-textPrimary mt-1 leading-relaxed break-words">
@@ -2934,55 +2786,14 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
 
       return (
         <span className="sn-badge-strip mr-1.5">
-          {visibleBadges.map((badge, idx) => {
-            if (!badge.info) return null;
-            return (
-              <Tooltip key={`sub-badge-${badge.key}-${idx}`} content={badge.info.title} side="top">
-                <img
-                  src={getTwitchBadgeUrl(badge.key, badge.info)}
-                  alt={badge.info.title}
-                  className="sn-chat-badge inline-block cursor-pointer hover:scale-110 transition-transform"
-                  onClick={() => onBadgeClick?.(badge.key, badge.info)}
-                  onError={(e) => {
-                    Logger.warn('[Badge] Failed to load badge:', badge.key, badge.info.image_url_1x);
-                    e.currentTarget.style.display = 'none';
-                  }}
-                />
-              </Tooltip>
-            );
-          })}
-          {seventvBadge && (
-            <Tooltip content={`Click for details: ${seventvBadge.description || seventvBadge.name}`} side="top">
-              <button
-                onClick={() => openBadgesWithBadgeInMain(seventvBadge.id)}
-                // A flex box around a block image: an inline-block button put the
-                // image on its text baseline, which sat it lower than the badges
-                // beside it.
-                className="inline-flex items-center cursor-pointer hover:scale-110 transition-transform"
-              >
-                <FallbackImage
-                  src={getBadgeImageUrl(seventvBadge)}
-                  fallbackUrls={getBadgeFallbackUrls(seventvBadge.id).slice(1)}
-                  alt={seventvBadge.description || seventvBadge.name}
-                  className="sn-chat-badge block"
-                />
-              </button>
-            </Tooltip>
-          )}
-          {thirdPartyBadges.filter(badge => badge && badge.imageUrl).map((badge, idx) => (
-            <Tooltip key={`sub-tp-badge-${badge.id}-${idx}`} content={`${badge.title} (${badge.provider.toUpperCase()})`} side="top">
-              <img
-                // 2x, not imageUrl's 4x; see the default layout's badge row.
-                src={badge.image2x || badge.imageUrl}
-                alt={badge.title}
-                className="sn-chat-badge block object-contain"
-                onError={(e) => {
-                  e.currentTarget.style.display = 'none';
-                }}
-              />
-            </Tooltip>
-          ))}
-          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge sn-chat-badge--sn block object-contain" />}
+          <ChatBadgeIcons
+            twitchBadges={visibleBadges}
+            seventvBadge={seventvBadge}
+            thirdPartyBadges={thirdPartyBadges}
+            streamNookMemberId={isSN && snBadgeOn ? senderUserId : null}
+            onBadgeClick={onBadgeClick}
+            keyPrefix="ev3"
+          />
         </span>
       );
     };
@@ -2991,18 +2802,26 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     const parseSystemMessageWithClickableNames = (message: string) => {
       if (!message) return null;
 
-      // Pattern to match usernames in the system message
-      // This will match the subscriber's name and recipient names
-      const usernamePattern = /\b([A-Za-z0-9_]{3,25})\b/g;
-      const parts: (string | JSX.Element)[] = [];
-      let lastIndex = 0;
-      let match;
-      let keyIndex = 0;
-
       // Get recipient info from tags
       const recipientUserId = parsed.tags.get('msg-param-recipient-id');
       const recipientUserName = parsed.tags.get('msg-param-recipient-user-name');
       const recipientDisplayName = msgParamRecipientDisplayName;
+
+      // The notice names the sender and recipient by display name, which can
+      // be localized (any script), or by login. Match exactly those names: an
+      // ASCII-word scan never finds a localized one, so it stayed plain text.
+      // The shown name too: custom wording writes it in place of the platform's.
+      const senderNames = [effectiveDisplayName, ...rowSenderNames(parsed)].filter((n): n is string => !!n);
+      const recipientNames = [recipientDisplayName, recipientUserName].filter((n): n is string => !!n);
+      const alternatives = [...senderNames, ...recipientNames]
+        .sort((x, y) => y.length - x.length)
+        .map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      if (alternatives.length === 0) return message;
+      const usernamePattern = new RegExp(`(?<![\\p{L}\\p{N}_])(${alternatives.join('|')})(?![\\p{L}\\p{N}_])`, 'giu');
+      const parts: (string | JSX.Element)[] = [];
+      let lastIndex = 0;
+      let match;
+      let keyIndex = 0;
 
       while ((match = usernamePattern.exec(message)) !== null) {
         const matchedName = match[1];
@@ -3013,9 +2832,10 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         }
 
         // Check if this is the subscriber's username or recipient's username
-        const isSubscriber = matchedName.toLowerCase() === parsed.username.toLowerCase();
+        const matchedLower = matchedName.toLowerCase();
+        const isSubscriber = senderNames.some((n) => n.toLowerCase() === matchedLower);
         const isRecipient = recipientUserName &&
-          matchedName.toLowerCase() === recipientUserName.toLowerCase();
+          recipientNames.some((n) => n.toLowerCase() === matchedLower);
 
         if (isSubscriber) {
           // Gifter with their badges and cosmetics
@@ -3035,7 +2855,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                       onUsernameClick(
                         userId,
                         parsed.username,
-                        parsed.tags.get('display-name') || parsed.username,
+                        parsed.displayName || parsed.tags.get('display-name') || parsed.username,
                         parsed.color,
                         parsed.badges,
                         e
@@ -3196,7 +3016,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // raider's name and nothing else. The card says who raided and with how many.
   if (msgId === 'raid' || sourceMsgId === 'raid') {
     const messageId = parsed.tags.get('id') || `raid-${parsed.username}-${parsed.tags.get('tmi-sent-ts') ?? ''}`;
-    const displayName = parsed.tags.get('display-name') || parsed.username;
+    const displayName = parsed.displayName || parsed.tags.get('display-name') || parsed.username;
     const raidViewers = parseInt(parsed.tags.get('msg-param-viewerCount') || '', 10);
     const raidTemplate = eventTemplateFor('raid');
 
@@ -3208,51 +3028,14 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
 
       return (
         <span className="sn-badge-strip mr-1.5">
-          {visibleBadges.map((badge, idx) => {
-            if (!badge.info) return null;
-            return (
-              <Tooltip key={`raid-badge-${badge.key}-${idx}`} content={badge.info.title} side="top">
-                <img
-                  src={getTwitchBadgeUrl(badge.key, badge.info)}
-                  alt={badge.info.title}
-                  className="sn-chat-badge inline-block cursor-pointer hover:scale-110 transition-transform"
-                  onClick={() => onBadgeClick?.(badge.key, badge.info)}
-                  onError={(e) => {
-                    Logger.warn('[Badge] Failed to load badge:', badge.key, badge.info.image_url_1x);
-                    e.currentTarget.style.display = 'none';
-                  }}
-                />
-              </Tooltip>
-            );
-          })}
-          {seventvBadge && (
-            <Tooltip content={`Click for details: ${seventvBadge.description || seventvBadge.name}`} side="top">
-              <button
-                onClick={() => openBadgesWithBadgeInMain(seventvBadge.id)}
-                className="inline-flex items-center cursor-pointer hover:scale-110 transition-transform"
-              >
-                <FallbackImage
-                  src={getBadgeImageUrl(seventvBadge)}
-                  fallbackUrls={getBadgeFallbackUrls(seventvBadge.id).slice(1)}
-                  alt={seventvBadge.description || seventvBadge.name}
-                  className="sn-chat-badge block"
-                />
-              </button>
-            </Tooltip>
-          )}
-          {thirdPartyBadges.filter(badge => badge && badge.imageUrl).map((badge, idx) => (
-            <Tooltip key={`raid-tp-badge-${badge.id}-${idx}`} content={`${badge.title} (${badge.provider.toUpperCase()})`} side="top">
-              <img
-                src={badge.image2x || badge.imageUrl}
-                alt={badge.title}
-                className="sn-chat-badge block object-contain"
-                onError={(e) => {
-                  e.currentTarget.style.display = 'none';
-                }}
-              />
-            </Tooltip>
-          ))}
-          {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge sn-chat-badge--sn block object-contain" />}
+          <ChatBadgeIcons
+            twitchBadges={visibleBadges}
+            seventvBadge={seventvBadge}
+            thirdPartyBadges={thirdPartyBadges}
+            streamNookMemberId={isSN && snBadgeOn ? senderUserId : null}
+            onBadgeClick={onBadgeClick}
+            keyPrefix="ev4"
+          />
         </span>
       );
     };
@@ -3563,7 +3346,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               <svg className="flex-shrink-0" style={{ width: '1.1em', height: '1.1em' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
               </svg>
-              <span className="font-semibold">{getDisplayedName(parsed.replyInfo.parentUserId, parsed.replyInfo.parentDisplayName, userOverrides)}</span>
+              <span className="font-semibold">{getDisplayedName(overrideKey(parsed.replyInfo.parentUserId, parsed.provider ?? 'twitch'), parsed.replyInfo.parentShownName || parsed.replyInfo.parentDisplayName, userOverrides)}</span>
               <span className="truncate flex-1">
                 {replyPreviewSegments
                   ? replyPreviewSegments.map((seg, i) =>
@@ -3674,62 +3457,14 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                   />
                 </Tooltip>
               )}
-              {/* Twitch badges, in the order Rust set (chat_layout::twitch_badge_rank):
-                  roles, then subscription, then earned in the channel, then global. */}
-              {visibleBadges.map((badge, idx) => {
-                if (!badge.info) return null;
-                return (
-                  <Tooltip key={`${badge.key}-${idx}`} content={badge.info.title} side="top">
-                    <img
-                      src={getTwitchBadgeUrl(badge.key, badge.info)}
-                      alt={badge.info.title}
-                      className="sn-chat-badge cursor-pointer hover:scale-110 transition-transform"
-                      onClick={() => onBadgeClick?.(badge.key, badge.info)}
-                      onError={(e) => {
-                        // Hide broken badge images
-                        Logger.warn('[Badge] Failed to load badge:', badge.key, badge.info.image_url_1x);
-                        e.currentTarget.style.display = 'none';
-                      }}
-                    />
-                  </Tooltip>
-                );
-              })}
-              {seventvBadge && (
-                <Tooltip content={`Click for details: ${seventvBadge.description || seventvBadge.name}`} side="top">
-                  <button
-                    onClick={() => openBadgesWithBadgeInMain(seventvBadge.id)}
-                    // Flex around a block image, as in the event layouts: an
-                    // inline-block button sat the badge on its text baseline.
-                    className="inline-flex items-center cursor-pointer hover:scale-110 transition-transform"
-                  >
-                    <FallbackImage
-                      src={getBadgeImageUrl(seventvBadge)}
-                      fallbackUrls={getBadgeFallbackUrls(seventvBadge.id).slice(1)}
-                      alt={seventvBadge.description || seventvBadge.name}
-                      className="sn-chat-badge block"
-                    />
-                  </button>
-                </Tooltip>
-              )}
-              {/* Third-party badges (FFZ, Chatterino, Homies, Moltorino, ...). The
-                  row is a 20px box, so the 2x variant is the right one: `imageUrl`
-                  is the 4x file, which for Moltorino is a 72px, 120-frame, ~960KB
-                  animated webp per badge. Member-loadout badges carry one URL for
-                  every size, so the fallback keeps them unchanged. */}
-              {thirdPartyBadges.filter(badge => badge && badge.imageUrl).map((badge, idx) => (
-                <Tooltip key={`tp-badge-${badge.id}-${idx}`} content={`${badge.title} (${badge.provider.toUpperCase()})`} side="top">
-                  <img
-                    src={badge.image2x || badge.imageUrl}
-                    alt={badge.title}
-                    className="sn-chat-badge block object-contain"
-                    onError={(e) => {
-                      e.currentTarget.style.display = 'none';
-                    }}
-                  />
-                </Tooltip>
-              ))}
-              {/* StreamNook identity badge sits rightmost, next to the name (see utils/badgeOrder). */}
-              {isSN && snBadgeOn && <StreamNookBadge userId={senderUserId} className="sn-chat-badge sn-chat-badge--sn block object-contain" />}
+              <ChatBadgeIcons
+                twitchBadges={visibleBadges}
+                seventvBadge={seventvBadge}
+                thirdPartyBadges={thirdPartyBadges}
+                streamNookMemberId={isSN && snBadgeOn ? senderUserId : null}
+                onBadgeClick={onBadgeClick}
+                keyPrefix="badge"
+              />
             </span>
           ) : null}
 
@@ -3750,7 +3485,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                     className="cursor-pointer hover:underline inline-block"
                     onClick={(e) => {
                       const userId = clickUserId;
-                      const displayName = parsed.tags.get('display-name') || parsed.username;
+                      const displayName = parsed.displayName || parsed.tags.get('display-name') || parsed.username;
                       if (userId && onUsernameClick) {
                         onUsernameClick(
                           userId,
@@ -3798,7 +3533,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                   interactive
                   onClick={(e) => {
                     const userId = clickUserId;
-                    const displayName = parsed.tags.get('display-name') || parsed.username;
+                    const displayName = parsed.displayName || parsed.tags.get('display-name') || parsed.username;
                     if (userId && onUsernameClick) {
                       onUsernameClick(
                         userId,

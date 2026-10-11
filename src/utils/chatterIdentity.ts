@@ -44,6 +44,17 @@ export function historyKey(userId: string, provider: ProviderId = 'twitch'): str
 }
 
 /**
+ * The key a chatter's cosmetics live under in chatUserStore (7TV paint and
+ * badge, third-party badges, atmosphere): the bare id for Twitch, `provider:id`
+ * for every other platform, the same as a chat row's `cosmeticsKey`. A raw id
+ * alone would let a Kick chatter wear the cosmetics of the Twitch user who
+ * happens to share their number.
+ */
+export function cosmeticsKey(userId: string, provider: ProviderId = 'twitch'): string {
+  return provider === 'twitch' ? userId : `${provider}:${userId}`;
+}
+
+/**
  * The key a chatter's name is indexed under.
  *
  * `userId` is already namespaced (`kick:676`; Twitch stays bare), so the

@@ -1350,6 +1350,7 @@ fn parse_chat_message(frame: &Value, channel_key: &str) -> Option<ChatMessage> {
                     .map(|c| parse_segments(c, &slug).0),
                 parent_user_id: parent_id,
                 parent_user_login: parent_name.to_lowercase(),
+                parent_shown_name: String::new(),
             }
         })
     } else {

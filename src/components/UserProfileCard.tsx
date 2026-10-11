@@ -5,6 +5,7 @@ import { buildShareUrl, buildProfileUrl } from '../utils/shareLink';
 import { providerLabel, type ProviderId } from '../types/providers';
 import { motion, AnimatePresence, useScroll, useTransform, useReducedMotion, useMotionValue, animate } from 'framer-motion';
 import { setUserNickname, setUserColor } from '../utils/userChatOverrides';
+import { overrideKey } from '../utils/chatterName';
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../stores/AppStore';
@@ -2592,12 +2593,16 @@ const UserProfileCard = ({
                 is the namespaced cosmetics key for a provider chatter and the bare
                 id for Twitch. Writing a bare Kick/YouTube id here would save an
                 override that could never be found again. */}
-            <NicknameEditor
-              userId={provider && provider !== 'twitch' ? `${provider}:${userId}` : userId}
-              username={username}
-              displayName={displayName}
-              twitchColor={color}
-            />
+            {/* No id, no key: a nickname typed here could never be saved, yet the
+                editor would show it as set until the card closed. */}
+            {userId && (
+              <NicknameEditor
+                userId={overrideKey(userId, provider || 'twitch')}
+                username={username}
+                displayName={displayName}
+                twitchColor={color}
+              />
+            )}
 
             {!isMemberCard && actionsBlock}
 

@@ -113,6 +113,9 @@ pub struct ReplyInfo {
     pub parent_msg_body: String,
     pub parent_user_id: String,
     pub parent_user_login: String,
+    /// The parent author's name as rows show it (`services::chatter_name`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub parent_shown_name: String,
     /// The quoted parent tokenized the way its own row would be: with the
     /// channel and platform it was said in. The page has only the home
     /// channel's sets, so in combined chat it could not do this for a reply
@@ -184,6 +187,10 @@ pub struct MessageMetadata {
     /// dim scrollback (`chat_design.backfill_opacity`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub from_backfill: bool,
+    /// The author's name as every row type shows it, before the viewer's own
+    /// nickname override (`services::chatter_name`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub shown_name: String,
 }
 
 /// A matched highlight rule, stamped by the Rust rule engine.

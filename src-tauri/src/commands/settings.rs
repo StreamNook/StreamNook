@@ -987,6 +987,19 @@ mod patch_tests {
     }
 
     #[test]
+    fn a_localized_chatters_override_is_keyed_by_id_not_name() {
+        let mut group = json!({});
+        assert!(with_chat_user_override(&mut group, "700700", Some("もちパンダ"), Some("nickname"), Some("Cake")));
+        let overrides = group["user_overrides"].as_object().unwrap();
+        assert_eq!(overrides.keys().collect::<Vec<_>>(), ["700700"]);
+        assert_eq!(group["user_overrides"]["700700"]["nickname"], "Cake");
+        // Saving again with the login as the remembered name edits the same entry.
+        assert!(with_chat_user_override(&mut group, "700700", Some("mochi_panda"), Some("color"), Some("#ff69b4")));
+        assert_eq!(group["user_overrides"].as_object().unwrap().len(), 1);
+        assert_eq!(group["user_overrides"]["700700"]["nickname"], "Cake");
+    }
+
+    #[test]
     fn an_override_starts_a_missing_group() {
         let mut group = serde_json::Value::Null;
         assert!(with_chat_user_override(&mut group, "9", Some("dave"), Some("nickname"), Some("D")));

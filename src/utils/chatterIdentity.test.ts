@@ -14,7 +14,7 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 
-import { historyKey, chatterProvider, chatterId } from './chatterIdentity.ts';
+import { historyKey, chatterProvider, chatterId, cosmeticsKey } from './chatterIdentity.ts';
 import { rowProvider } from './chatAuthority.ts';
 import type { BackendChatMessage } from '../services/twitchChat.ts';
 
@@ -52,4 +52,13 @@ test('a chatter id comes from the tag on Twitch and the struct elsewhere', () =>
   assert.equal(chatterId({ provider: 'kick', tags: new Map(), providerUserId: '676' }), '676');
   assert.equal(chatterId({ provider: 'kick', tags: new Map([['user-id', '5']]) }), undefined);
   assert.equal(chatterProvider({ tags: new Map() }), 'twitch', 'a bare row is Twitch');
+});
+
+test('a cosmetics key keeps Twitch bare and names every other platform', () => {
+  // The pinned message warms and reads chatUserStore through this key, so a
+  // Kick pin must never land on the Twitch user who shares its number.
+  assert.equal(cosmeticsKey('676'), '676');
+  assert.equal(cosmeticsKey('676', 'twitch'), '676');
+  assert.equal(cosmeticsKey('676', 'kick'), 'kick:676');
+  assert.equal(cosmeticsKey('UCabc', 'youtube'), 'youtube:UCabc');
 });

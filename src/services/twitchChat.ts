@@ -22,6 +22,8 @@ export interface BackendReplyInfo {
   parent_msg_body: string;
   parent_user_id: string;
   parent_user_login: string;
+  /** The parent author's name as rows show it, stamped by Rust. */
+  parent_shown_name?: string;
   /** The quoted parent tokenized by Rust with the channel it was said in. */
   parent_segments?: MessageSegment[];
 }
@@ -66,6 +68,9 @@ export interface MessageMetadata {
   suspicious?: 'monitored' | 'restricted' | string;
   /** Row came from a history backfill rather than live delivery. */
   from_backfill?: boolean;
+  /** The author's name as every row type shows it, stamped by Rust (the
+   *  viewer's nickname override is applied on top at render). */
+  shown_name?: string;
 }
 
 /** A matched highlight rule, stamped by the Rust rule engine. */
@@ -134,6 +139,8 @@ export interface ReplyInfo {
   parentMsgBody: string;
   parentUserId: string;
   parentUserLogin: string;
+  /** The parent author's shown name, when Rust stamped one. */
+  parentShownName?: string;
   /** Rust's segments for the quoted parent, when the row carries them. */
   parentSegments?: MessageSegment[];
 }
@@ -204,6 +211,7 @@ const parseMessageUncached = (raw: string | BackendChatMessage, channelId?: stri
         parentMsgBody: ri.parent_msg_body,
         parentUserId: ri.parent_user_id,
         parentUserLogin: ri.parent_user_login,
+        parentShownName: ri.parent_shown_name,
         parentSegments: ri.parent_segments,
       };
     } else {
@@ -287,17 +295,19 @@ const parseMessageUncached = (raw: string | BackendChatMessage, channelId?: stri
   const isUserNotice = message.includes('USERNOTICE');
 
   // Parse IRC message format: :user!user@user.tmi.twitch.tv PRIVMSG #channel :message
-  // Extract username from prefix or tags
-  let username = tags.get('display-name') || tags.get('login') || 'unknown';
+  // `username` is the login, as on structured rows; the display name is its
+  // own field. A PRIVMSG carries the login in its prefix, a USERNOTICE in `login`.
+  let username = tags.get('login') || '';
   if (message.startsWith(':')) {
     const prefixEnd = message.indexOf(' ');
     const prefix = message.slice(1, prefixEnd);
     const userMatch = prefix.match(/^([^!]+)!/);
-    if (userMatch && username === 'unknown') {
-      username = userMatch[1];
+    if (userMatch && !username) {
+      username = userMatch[1].toLowerCase();
     }
     message = message.slice(prefixEnd + 1);
   }
+  if (!username) username = tags.get('display-name')?.toLowerCase() || 'unknown';
 
   // Extract the actual message content
   let content = '';

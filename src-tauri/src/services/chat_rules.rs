@@ -1009,6 +1009,9 @@ impl ChatRules {
     /// the verdict; the caller decides whether a dropped message still feeds
     /// logs and history (it does: the record is not the display).
     pub fn evaluate(msg: &mut ChatMessage, rules: &CompiledRules) -> Verdict {
+        // Every row a window receives passes here, so the author's shown name
+        // is settled here too (before the facts read the display name).
+        crate::services::chatter_name::stamp(msg);
         let ev = {
             let facts = MessageFacts::from_message(msg);
             let ev = Self::evaluate_facts(&facts, rules);

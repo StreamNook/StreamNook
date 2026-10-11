@@ -3926,6 +3926,24 @@ impl IrcService {
         ))
     }
 
+    /// The login in a PRIVMSG's `:login!login@login.tmi.twitch.tv` prefix.
+    /// Read from the prefix itself, after the tags: tag values (a reply body,
+    /// a system message) may contain `!` too.
+    fn privmsg_prefix_login(raw: &str) -> Option<String> {
+        let after_tags = if raw.starts_with('@') {
+            &raw[raw.find(' ')? + 1..]
+        } else {
+            raw
+        };
+        let prefix = after_tags.strip_prefix(':')?.split(' ').next()?;
+        let login = prefix.split('!').next()?;
+        if login.is_empty() || login.contains('.') {
+            // A server prefix (`tmi.twitch.tv`) names no chatter.
+            return None;
+        }
+        Some(login.to_lowercase())
+    }
+
     fn parse_privmsg(raw: &str) -> Option<ChatMessage> {
         let tags = if raw.starts_with('@') {
             let tag_end = raw.find(' ')?;
@@ -3942,29 +3960,14 @@ impl IrcService {
             }
         }
 
-        // Parsing similar to frontend logic
-        let username = tag_map
-            .get("display-name")
-            .map(|s| s.to_string())
-            .or_else(|| {
-                // extract from :user!user@...
-                if let Some(idx) = raw.find(" PRIVMSG") {
-                    let prefix = &raw[..idx];
-                    if let Some(excl) = prefix.find('!') {
-                        // find start of prefix (after tags space)
-                        let start = raw.find(' ').map(|i| i + 1).unwrap_or(0);
-                        if start < excl {
-                            Some(prefix[start + 1..excl].to_string())
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
+        // `username` is the LOGIN, as on every other row type: rules, plugins,
+        // moderation and mentions all treat it as one. The display name (which
+        // can be localized and differ from the login beyond case) is its own
+        // field below. A PRIVMSG carries the login in its prefix.
+        let username = Self::privmsg_prefix_login(raw)
+            .or_else(|| tag_map.get("login").map(|s| s.to_string()))
+            .or_else(|| tag_map.get("display-name").map(|s| s.to_lowercase()))
+            .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "unknown".to_string());
 
         // Content - check for ACTION message (/me command)
@@ -4121,6 +4124,7 @@ impl IrcService {
                     .map(|s| s.to_string())
                     .unwrap_or_default(),
                 parent_user_login: reply_parent_user_login.clone().unwrap_or_default(),
+                parent_shown_name: String::new(),
             });
 
         // Strip redundant @mention from reply messages BEFORE parsing segments.
@@ -5032,7 +5036,7 @@ fn redemption_message(r: &RedemptionRow, segments: Vec<MessageSegment>, timestam
     let (formatted_timestamp, formatted_timestamp_with_seconds) =
         IrcService::format_timestamp(&timestamp);
 
-    ChatMessage {
+    let mut msg = ChatMessage {
         id,
         user_id: r.user_id.clone(),
         username: login.clone(),
@@ -5052,7 +5056,10 @@ fn redemption_message(r: &RedemptionRow, segments: Vec<MessageSegment>, timestam
             formatted_timestamp_with_seconds,
             ..Default::default()
         },
-    }
+    };
+    // Redemption rows skip the rule engine, so they settle their name here.
+    crate::services::chatter_name::stamp(&mut msg);
+    msg
 }
 
 /// The badges a sent row carries: the channel's USERSTATE badges from the
@@ -5258,6 +5265,29 @@ mod own_message_tests {
         let line = own_message_line(&own("hi", None), "", 1000);
         assert!(line.contains("display-name=Me\\sMe;"));
         assert!(line.ends_with("PRIVMSG #chan :hi"));
+    }
+
+    const LOCALIZED_PRIVMSG: &str = "@badge-info=;badges=subscriber/3;color=#FF69B4;display-name=もちパンダ;emotes=;id=a1;reply-parent-msg-body=wow!\\sok;room-id=1;tmi-sent-ts=1000;user-id=700700 :mochi_panda!mochi_panda@mochi_panda.tmi.twitch.tv PRIVMSG #chan :こんにちは";
+    const LOGIN_ONLY_WATCH_STREAK: &str = "@badge-info=;badges=subscriber/3;color=#FF69B4;display-name=mochi_panda;emotes=;id=a2;login=mochi_panda;msg-id=viewermilestone;msg-param-category=watch-streak;msg-param-copoReward=350;msg-param-value=3;room-id=1;system-msg=mochi_panda\\swatched\\s3\\sconsecutive\\sstreams\\sand\\ssparked\\sa\\swatch\\sstreak!;tmi-sent-ts=2000;user-id=700700 :tmi.twitch.tv USERNOTICE #chan :yay";
+
+    #[test]
+    fn a_privmsg_username_is_the_login_not_the_display_name() {
+        let msg = IrcService::parse_privmsg(LOCALIZED_PRIVMSG).expect("parses");
+        assert_eq!(msg.username, "mochi_panda");
+        assert_eq!(msg.display_name, "もちパンダ");
+        assert_eq!(IrcService::privmsg_prefix_login(":tmi.twitch.tv USERNOTICE #c"), None);
+    }
+
+    #[test]
+    fn a_localized_chatter_shows_one_name_on_message_and_watch_streak_rows() {
+        let rules = ChatRules::snapshot();
+        let mut privmsg = IrcService::parse_privmsg(LOCALIZED_PRIVMSG).expect("parses");
+        let _ = ChatRules::evaluate(&mut privmsg, &rules);
+        let mut streak = IrcService::parse_usernotice(LOGIN_ONLY_WATCH_STREAK).expect("parses");
+        let _ = ChatRules::evaluate(&mut streak, &rules);
+        assert_eq!(privmsg.metadata.shown_name, "もちパンダ (mochi_panda)");
+        assert_eq!(streak.metadata.shown_name, privmsg.metadata.shown_name);
+        assert_eq!(streak.username, privmsg.username);
     }
 
     fn redemption(title: &str) -> RedemptionRow {
