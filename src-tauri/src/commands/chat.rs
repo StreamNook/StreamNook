@@ -712,8 +712,9 @@ pub async fn send_chat_message(
     broadcaster_id: Option<String>,
     sender_id: Option<String>,
     sender_account_id: Option<String>,
-) -> Result<SendResult, String> {
-    ChatService::send_message(
+    pin_after_send: Option<bool>,
+) -> Result<SentMessage, String> {
+    let sent = ChatService::send_message(
         &message,
         reply_parent_msg_id.as_deref(),
         target_channel.as_deref(),
@@ -722,7 +723,43 @@ pub async fn send_chat_message(
         sender_account_id.as_deref(),
     )
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    let pin_error = if pin_after_send.unwrap_or(false) {
+        pin_sent(&sent, broadcaster_id.as_deref()).await.err()
+    } else {
+        None
+    };
+    Ok(SentMessage { sent, pin_error })
+}
+
+/// A send's outcome, plus why the pin failed when one was asked for. Without a
+/// pin the wire shape is exactly `SendResult`.
+#[derive(serde::Serialize)]
+pub struct SentMessage {
+    #[serde(flatten)]
+    sent: SendResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pin_error: Option<String>,
+}
+
+/// Pins a message this app just sent (`/pin <text>`). A dropped message is not
+/// pinned and is no pin error: the send outcome already says why it was
+/// dropped. Pinning needs the id Helix returns; a send that fell back to IRC
+/// has none.
+async fn pin_sent(sent: &SendResult, broadcaster_id: Option<&str>) -> Result<(), String> {
+    if !sent.is_sent {
+        return Ok(());
+    }
+    let broadcaster_id = broadcaster_id
+        .filter(|id| !id.is_empty())
+        .ok_or("Sent, but not pinned: the channel is unknown")?;
+    let message_id = sent
+        .message_id
+        .as_deref()
+        .ok_or("Sent, but not pinned: Twitch did not return the message id")?;
+    crate::commands::twitch::pin_chat_message(broadcaster_id.to_string(), message_id.to_string(), None)
+        .await
+        .map_err(|e| format!("Sent, but not pinned: {e}"))
 }
 
 #[tauri::command]

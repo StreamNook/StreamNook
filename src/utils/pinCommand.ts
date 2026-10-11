@@ -1,22 +1,26 @@
 // Argument resolution for /pin.
 //
-// Two shapes, matching how people actually reach for it:
+// Three shapes, matching how people actually reach for it:
 //   /pin <message id> [duration]   pin a specific message
 //   /pin @user | user [duration]   pin that person's most recent message
+//   /pin <text>                    send <text> as your message and pin it
 //
-// A send-and-pin form is deliberately left out. It needs the id of the message
-// you just sent, and while the Helix send path does return one, sendChannelMessage
-// currently discards it (Promise<void>). Threading it back is a change to the
-// hottest path in the app, so it is deliberately left out rather than shipped
-// as a form that always fails.
+// A name only means "their latest message" when nothing but an optional
+// duration follows it; "/pin @bob nice play" sends that text. A bare word that
+// is nobody's recent message is text too. The send form takes no duration,
+// because a trailing "5m" in a sentence ("back in 5m") is part of the message.
 
 import { useChatConnectionStore } from '../stores/chatConnectionStore';
+import { sliceLookupKey } from './providerKey';
 
-export interface PinTarget {
-  messageId: string;
-  /** null = pin until manually removed, which is Twitch's default. */
-  durationSeconds: number | null;
-}
+export type PinTarget =
+  | {
+      kind: 'message';
+      messageId: string;
+      /** null = pinned until the stream ends, which is Twitch's default. */
+      durationSeconds: number | null;
+    }
+  | { kind: 'send'; text: string };
 
 const UNITS: Record<string, number> = { s: 1, m: 60, h: 3600 };
 
@@ -37,36 +41,59 @@ function looksLikeMessageId(token: string): boolean {
 
 /** Most recent message from a login in the local buffer, newest first. */
 function latestMessageIdFrom(channel: string, login: string): string | null {
-  const slice = useChatConnectionStore.getState().channels.get(channel.toLowerCase());
+  const slice = useChatConnectionStore.getState().channels.get(sliceLookupKey('twitch', channel));
   if (!slice) return null;
-  const wanted = login.replace(/^@/, '').toLowerCase();
+  const wanted = login.toLowerCase();
   for (let i = slice.messages.length - 1; i >= 0; i--) {
     const m = slice.messages[i];
-    if (typeof m === 'string' || !m) continue;
-    if (!m.id || !m.username) continue;
-    if (m.username.toLowerCase() === wanted) return m.id;
+    if (!m) continue;
+    // Raw IRC rows (some backfill) carry the login in the prefix and the id in
+    // the tags; structured rows carry both as fields.
+    const login =
+      typeof m === 'string' ? m.match(/ :([^!\s]+)![^ ]+ PRIVMSG /)?.[1] : m.username;
+    const id = typeof m === 'string' ? m.match(/(?:^@|;)id=([^;\s]+)/)?.[1] : m.id;
+    // An own message still waiting for its echo has a local id Twitch never issued.
+    if (!id || !login || id.startsWith('local-')) continue;
+    if (login.toLowerCase() === wanted) return id;
   }
   return null;
+}
+
+/** Resolve /pin arguments. `latestFrom` answers "the newest message id from
+ *  this login in this chat", or null when they have none. */
+export function resolvePinArgs(
+  args: string[],
+  latestFrom: (login: string) => string | null,
+): PinTarget | { error: string } {
+  const tokens = args.filter(Boolean);
+  if (tokens.length === 0) {
+    return { error: '/pin needs a message id, a username or a message to send' };
+  }
+
+  const [first, ...rest] = tokens;
+
+  if (looksLikeMessageId(first)) {
+    return { kind: 'message', messageId: first, durationSeconds: parseDuration(rest[0]) };
+  }
+
+  const nameOnly = rest.length === 0 || (rest.length === 1 && parseDuration(rest[0]) !== null);
+  if (nameOnly) {
+    const name = first.replace(/^@/, '');
+    const found = name ? latestFrom(name) : null;
+    if (found) {
+      return { kind: 'message', messageId: found, durationSeconds: parseDuration(rest[0]) };
+    }
+    if (first.startsWith('@')) {
+      return { error: `No recent message from ${name || first} in this chat` };
+    }
+  }
+
+  return { kind: 'send', text: tokens.join(' ') };
 }
 
 export function resolvePinTarget(
   channel: string,
   args: string[],
 ): PinTarget | { error: string } {
-  const tokens = args.filter(Boolean);
-  if (tokens.length === 0) {
-    return { error: '/pin needs a message id or a username' };
-  }
-
-  const [first, ...rest] = tokens;
-
-  if (looksLikeMessageId(first)) {
-    return { messageId: first, durationSeconds: parseDuration(rest[0]) };
-  }
-
-  const found = latestMessageIdFrom(channel, first);
-  if (!found) {
-    return { error: `No recent message from ${first.replace(/^@/, '')} in this chat` };
-  }
-  return { messageId: found, durationSeconds: parseDuration(rest[0]) };
+  return resolvePinArgs(args, (login) => latestMessageIdFrom(channel, login));
 }

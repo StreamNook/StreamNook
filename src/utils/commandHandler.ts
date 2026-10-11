@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { ensureLastWhisperListener, getLastWhisperFrom } from './lastWhisper';
 import { open as openExternalUrl } from '@tauri-apps/plugin-shell';
 import { useAppStore } from '../stores/AppStore';
+import { usePinStore } from '../stores/pinStore';
 import { Logger } from './logger';
 import {
   expandUserCommand,
@@ -1112,12 +1113,58 @@ export const handleSlashCommand = async (
           addToast(resolved.error, 'error');
           return true;
         }
+        if (resolved.kind === 'send') {
+          // Sent through the normal path (optimistic row, own-message
+          // reconciliation); Rust pins it once Twitch has given it an id.
+          const user = useAppStore.getState().currentUser;
+          if (!user) {
+            addToast('/pin: sign in to send a message', 'error');
+            return true;
+          }
+          try {
+            const { sendChannelMessage } = await import('../stores/chatConnectionStore');
+            const outcome = await sendChannelMessage(
+              broadcasterLogin,
+              resolved.text,
+              {
+                username: user.login || user.username,
+                displayName: user.display_name || user.username,
+                userId: user.user_id,
+                color: undefined,
+                badges: '',
+              },
+              undefined,
+              null,
+              { pinAfterSend: true },
+            );
+            if (!outcome) {
+              addToast('/pin: chat is not connected', 'error');
+              return true;
+            }
+            // A dropped message is not pinned; a reason, when Twitch gave one,
+            // is already shown in chat.
+            if (!outcome.is_sent) {
+              if (!outcome.drop_reason) addToast('Message not sent, so nothing was pinned', 'error');
+              return true;
+            }
+            if (outcome.pin_error) {
+              addToast(outcome.pin_error, 'error');
+              return true;
+            }
+            usePinStore.getState().requestRefresh();
+            addToast('Sent and pinned', 'success');
+          } catch (err: unknown) {
+            addToast(typeof err === 'string' ? err : '/pin failed', 'error');
+          }
+          return true;
+        }
         try {
           await invoke('pin_chat_message', {
             broadcasterId,
             messageId: resolved.messageId,
             durationSeconds: resolved.durationSeconds,
           });
+          usePinStore.getState().requestRefresh();
           addToast(
             resolved.durationSeconds
               ? `Pinned for ${resolved.durationSeconds}s`
@@ -1139,7 +1186,9 @@ export const handleSlashCommand = async (
           return true;
         }
         try {
+          // No message id: Rust unpins whatever is pinned in this channel.
           await invoke('unpin_chat_message', { broadcasterId });
+          usePinStore.getState().requestRefresh();
           addToast('Message unpinned', 'success');
         } catch (err: unknown) {
           addToast(typeof err === 'string' ? err : '/unpin failed', 'error');

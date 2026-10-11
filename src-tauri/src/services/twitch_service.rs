@@ -2427,6 +2427,10 @@ impl TwitchService {
         // Batch fetch profile images via Helix API for all unique user IDs
         let mut avatar_map: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
+        // Logins from the same lookup: the pin names its sender by display
+        // name only, and the shown name needs the login beside it.
+        let mut login_map: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         if !user_ids.is_empty() {
             if let Ok(helix_token) = Self::get_token().await {
                 let ids: Vec<&str> = user_ids.iter().map(|s| s.as_str()).collect();
@@ -2448,6 +2452,12 @@ impl TwitchService {
                     if let Ok(data) = resp.json::<serde_json::Value>().await {
                         if let Some(users) = data.get("data").and_then(|v| v.as_array()) {
                             for user in users {
+                                if let (Some(id), Some(login)) = (
+                                    user.get("id").and_then(|v| v.as_str()),
+                                    user.get("login").and_then(|v| v.as_str()),
+                                ) {
+                                    login_map.insert(id.to_string(), login.to_string());
+                                }
                                 if let (Some(id), Some(img)) = (
                                     user.get("id").and_then(|v| v.as_str()),
                                     user.get("profile_image_url").and_then(|v| v.as_str()),
@@ -2462,7 +2472,9 @@ impl TwitchService {
         }
 
         // Build final response with avatars
-        let pinned_messages: Vec<serde_json::Value> = raw_pins.iter().map(|(node, sender_id, pinned_by_id, badges)| {
+        let mut pinned_messages: Vec<serde_json::Value> = raw_pins.iter().map(|(node, sender_id, pinned_by_id, badges)| {
+            let sender_name = node.pointer("/pinnedMessage/sender/displayName").and_then(|v| v.as_str()).unwrap_or("Unknown");
+            let sender_login = login_map.get(sender_id).map(String::as_str).unwrap_or("");
             serde_json::json!({
                 "id": node.get("id").and_then(|v| v.as_str()).unwrap_or(""),
                 // The underlying chat message id (NOT the pin-record id above), so the
@@ -2471,7 +2483,10 @@ impl TwitchService {
                 "type": node.get("type").and_then(|v| v.as_str()).unwrap_or("MOD"),
                 "message_text": node.pointer("/pinnedMessage/content/text").and_then(|v| v.as_str()).unwrap_or(""),
                 "sender_id": sender_id,
-                "sender_name": node.pointer("/pinnedMessage/sender/displayName").and_then(|v| v.as_str()).unwrap_or("Unknown"),
+                "sender_name": sender_name,
+                "sender_login": sender_login,
+                // The same name the sender's chat rows show.
+                "sender_shown_name": crate::services::chatter_name::shown_name("twitch", sender_login, sender_name),
                 "sender_color": node.pointer("/pinnedMessage/sender/chatColor").and_then(|v| v.as_str()).unwrap_or("#FFFFFF"),
                 "sender_avatar": avatar_map.get(sender_id).cloned().unwrap_or_default(),
                 "sender_badges": badges,
@@ -2481,6 +2496,7 @@ impl TwitchService {
                 "started_at": node.get("startsAt").and_then(|v| v.as_str()).unwrap_or(""),
             })
         }).collect();
+        newest_pin_first(&mut pinned_messages);
 
         debug!(
             "[get_pinned_chat] Found {} pinned messages for channel {}",
@@ -4413,13 +4429,15 @@ impl TwitchService {
     /// and the body is empty. Uses the `moderator:manage:chat_messages` scope,
     /// the SAME scope `delete_chat_message` already holds, so no re-auth is
     /// needed. Only one mod-pinned message is active at a time; pinning a new one
-    /// replaces the prior pin. `duration_seconds` is optional (Twitch applies its
-    /// own default when omitted).
+    /// replaces the prior pin. `duration_seconds` is optional (omitted, the pin
+    /// lasts until the stream ends); when given, Twitch only accepts
+    /// `PIN_DURATION_RANGE` and answers anything else with a bare 400.
     pub async fn pin_chat_message(
         broadcaster_id: &str,
         message_id: &str,
         duration_seconds: Option<u32>,
     ) -> Result<()> {
+        check_pin_duration(duration_seconds)?;
         let token = Self::get_token().await?;
         let client = crate::services::http::client().clone();
         let user_info = Self::get_user_info().await?;
@@ -4462,8 +4480,16 @@ impl TwitchService {
     /// Helix `DELETE /helix/chat/pins?broadcaster_id=..&moderator_id=..&message_id=..`
     /// — `message_id` IS required (Twitch returns 400 "Missing required parameter
     /// message_id" without it). Same `moderator:manage:chat_messages` scope as
-    /// pin/delete.
-    pub async fn unpin_chat_message(broadcaster_id: &str, message_id: &str) -> Result<()> {
+    /// pin/delete. Callers that only know the channel (`/unpin`, the moderator
+    /// menu) pass `None` and the current pin is looked up here. Returns the
+    /// chat message id that was unpinned.
+    pub async fn unpin_chat_message(broadcaster_id: &str, message_id: Option<&str>) -> Result<String> {
+        let message_id = match message_id.filter(|id| !id.is_empty()) {
+            Some(id) => id.to_string(),
+            None => Self::current_pinned_message_id(broadcaster_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Nothing is pinned right now"))?,
+        };
         let token = Self::get_token().await?;
         let client = crate::services::http::client().clone();
         let user_info = Self::get_user_info().await?;
@@ -4495,7 +4521,18 @@ impl TwitchService {
             ));
         }
 
-        Ok(())
+        Ok(message_id)
+    }
+
+    /// The chat message id of the channel's active pin, if there is one.
+    async fn current_pinned_message_id(broadcaster_id: &str) -> Result<Option<String>> {
+        let pins = Self::get_pinned_chat_messages(broadcaster_id).await?;
+        Ok(pins.iter().find_map(|p| {
+            p.get("message_id")
+                .and_then(|v| v.as_str())
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+        }))
     }
 
     /// Ban or timeout a user
@@ -6082,6 +6119,58 @@ impl TwitchService {
         }
 
         Ok(())
+    }
+}
+
+/// Orders pins newest first. Only one mod pin is active at a time, but the
+/// read can list more than one entry (a pin it has not dropped yet beside the
+/// one replacing it), and the banner shows the first.
+fn newest_pin_first(pins: &mut [serde_json::Value]) {
+    pins.sort_by(|a, b| {
+        let at = |p: &serde_json::Value| {
+            p.get("started_at")
+                .and_then(|v| v.as_str())
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        };
+        at(b).cmp(&at(a))
+    });
+}
+
+/// Pin lengths Helix accepts, in seconds (30 s to 30 min).
+const PIN_DURATION_RANGE: std::ops::RangeInclusive<u32> = 30..=1800;
+
+fn check_pin_duration(duration_seconds: Option<u32>) -> Result<()> {
+    match duration_seconds {
+        Some(d) if !PIN_DURATION_RANGE.contains(&d) => Err(anyhow::anyhow!(
+            "A pin can last 30 seconds to 30 minutes; leave the length off to keep it until the stream ends"
+        )),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod pin_tests {
+    use super::{check_pin_duration, newest_pin_first};
+
+    #[test]
+    fn the_newest_pin_comes_first() {
+        let mut pins = vec![
+            serde_json::json!({"message_id": "old", "started_at": "2026-01-01T10:00:00Z"}),
+            serde_json::json!({"message_id": "none", "started_at": ""}),
+            serde_json::json!({"message_id": "new", "started_at": "2026-01-01T10:05:00.5Z"}),
+        ];
+        newest_pin_first(&mut pins);
+        let order: Vec<&str> = pins.iter().map(|p| p["message_id"].as_str().unwrap()).collect();
+        assert_eq!(order, ["new", "old", "none"]);
+    }
+
+    #[test]
+    fn pin_length_follows_helix_bounds() {
+        assert!(check_pin_duration(None).is_ok());
+        assert!(check_pin_duration(Some(30)).is_ok());
+        assert!(check_pin_duration(Some(1800)).is_ok());
+        assert!(check_pin_duration(Some(29)).is_err());
+        assert!(check_pin_duration(Some(3600)).is_err());
     }
 }
 

@@ -12,22 +12,32 @@
 import React from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { CaretDown, PushPin } from 'phosphor-react';
+import { PinnedChatter } from '../../components/chat/PinnedChatter';
 
 export interface PinnedItem {
   id: string;
   message_id: string;
   message_text: string;
+  sender_id?: string;
   sender_name: string;
+  sender_login?: string;
+  sender_shown_name?: string;
   sender_color: string;
+  sender_badges?: Array<{ set_id: string; version: string }>;
 }
 
 interface Props {
   pins: PinnedItem[];
   expanded: boolean;
   onToggle: () => void;
+  /** Broadcaster id, so subscriber and bits badges resolve to this channel. */
+  channelId?: string;
 }
 
-export const PinnedBanner: React.FC<Props> = ({ pins, expanded, onToggle }) => {
+// Lifts an unpainted name off the glass; a 7TV paint brings its own shadow.
+const NAME_SHADOW = { textShadow: '0 1px 2px rgba(0,0,0,0.8)' } as const;
+
+export const PinnedBanner: React.FC<Props> = ({ pins, expanded, onToggle, channelId }) => {
   if (pins.length === 0) return null;
   const [first, ...rest] = pins;
 
@@ -40,16 +50,27 @@ export const PinnedBanner: React.FC<Props> = ({ pins, expanded, onToggle }) => {
         className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left active:opacity-80"
       >
         <PushPin size={12} weight="fill" className="text-accent shrink-0" />
-        <span
-          className="text-[12px] font-bold shrink-0 max-w-[38%] truncate"
-          style={{ color: first.sender_color || undefined, textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}
-        >
-          {first.sender_name}
+        {/* Badges and name as the chat row draws them. Badges that do not
+            fit hide whole, so the header stays one line. */}
+        <span className="text-[12px] flex items-center gap-1 min-w-0 shrink">
+          <PinnedChatter
+            variant="line"
+            provider="twitch"
+            userId={first.sender_id ?? ''}
+            name={first.sender_name}
+            login={first.sender_login}
+            shownName={first.sender_shown_name}
+            color={first.sender_color}
+            badges={first.sender_badges}
+            channelId={channelId}
+            nameClassName="font-bold shrink-0 max-w-[8rem] truncate"
+            plainNameStyle={NAME_SHADOW}
+          />
         </span>
         {/* Collapsed shows a one-line preview. Expanded drops it, because the
             full text appears directly below and the header already carries the
             name. */}
-        <span className="text-[12px] text-textPrimary/85 truncate min-w-0 flex-1">
+        <span className="text-[12px] text-textPrimary/85 truncate min-w-[25%] flex-1">
           {expanded ? '' : first.message_text}
         </span>
         {pins.length > 1 && (
@@ -87,14 +108,20 @@ export const PinnedBanner: React.FC<Props> = ({ pins, expanded, onToggle }) => {
               {rest.length > 0 && <div className="h-px bg-borderSubtle" />}
               {rest.map((pin) => (
                 <div key={pin.id} className="text-[13px] leading-relaxed">
-                  <span
-                    className="font-bold"
-                    style={{
-                      color: pin.sender_color || undefined,
-                      textShadow: '0 1px 2px rgba(0,0,0,0.8)',
-                    }}
-                  >
-                    {pin.sender_name}
+                  <span className="inline-flex items-center gap-1 align-middle max-w-full">
+                    <PinnedChatter
+                      variant="line"
+                      provider="twitch"
+                      userId={pin.sender_id ?? ''}
+                      name={pin.sender_name}
+                      login={pin.sender_login}
+                      shownName={pin.sender_shown_name}
+                      color={pin.sender_color}
+                      badges={pin.sender_badges}
+                      channelId={channelId}
+                      nameClassName="font-bold shrink-0"
+                      plainNameStyle={NAME_SHADOW}
+                    />
                   </span>
                   <span className="text-textPrimary">: {pin.message_text}</span>
                 </div>

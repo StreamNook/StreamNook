@@ -2,7 +2,6 @@ import React, { useEffect, useLayoutEffect, useRef, useState, useMemo, useCallba
 import { createPortal, flushSync } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import ChatMessageList from './ChatMessageList';
-import { readableNameColor } from '../hooks/useNameColor';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { openProfilePopup } from '../utils/openProfilePopup';
@@ -54,6 +53,7 @@ import { useFollowsStore } from '../stores/followsStore';
 import { incrementStat } from '../services/supabaseService';
 import { trackEmoteUsage } from '../utils/trackEmoteUsage';
 import { LinkPreviewCard } from './chat/LinkPreviewCard';
+import { PinnedChatter } from './chat/PinnedChatter';
 import { extractPreviewUrls } from '../services/linkPreviewService';
 import UserProfileCard from './UserProfileCard';
 import ErrorBoundary from './ErrorBoundary';
@@ -77,7 +77,6 @@ import { Emote, EmoteSet, queueChannelEmotesForCaching, setEmoteCacheBurst, youT
 import { useEmoteOwnerNames } from '../hooks/useEmoteOwnerNames';
 import { useEmotePalette, type PaletteChannel } from '../hooks/useEmotePalette';
 import { prefetchChannelBadges } from '../services/badgeService';
-import { parseBadges } from '../services/twitchBadges';
 import { initializeBadgeImageCache } from '../services/badgeImageCacheService';
 import { parseMessage } from '../services/twitchChat';
 import { loadFavoriteEmotes } from '../services/favoriteEmoteService';
@@ -340,6 +339,9 @@ const USER_HISTORY_MAX_USERS = 300;
  *  fresh `[]` while blend is off would re-run a walk of every open chat slice on
  *  every render of the widget. */
 const NO_BLEND_SOURCES: BlendCompanion[] = [];
+
+// Lifts an unpainted pinned name off the glass; a 7TV paint brings its own shadow.
+const PIN_NAME_SHADOW = { textShadow: '0 1px 2px rgba(0,0,0,0.8)' } as const;
 
 interface ChatMessagesPanelProps {
   /** Live slice key (bare Twitch login / composite provider key); ignored when
@@ -1780,6 +1782,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     message_text: string;
     sender_id: string;
     sender_name: string;
+    sender_login?: string;
+    sender_shown_name?: string;
     sender_color: string;
     sender_avatar: string;
     sender_badges: Array<{ set_id: string; version: string }>;
@@ -2717,16 +2721,15 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     setPinnedMessages(messages);
     usePinStore.getState().setPinnedIds(messages.map((m) => m.message_id).filter(Boolean));
   }, [isTwitch, channelState?.pinned, channelState?.pinned_at]);
-  // Real-time refresh: any pin/unpin action bumps refreshNonce, so the pin shows
-  // up immediately instead of after the 30s poll. A short second pass covers
-  // Twitch's brief propagation lag (the Helix 204 can land just before GQL
-  // GetPinnedChat reflects it). Skips the initial mount (nonce 0).
+  // Any pin/unpin action bumps refreshNonce for an immediate read. Rust's
+  // pin and unpin commands keep re-reading on their own until Twitch's pinned
+  // chat reflects the change (it lags the Helix answer, longer when a pin
+  // replaces another), so no timed second pass is needed here. Skips the
+  // initial mount (nonce 0).
   const pinRefreshNonce = usePinStore((s) => s.refreshNonce);
   useEffect(() => {
     if (pinRefreshNonce === 0) return;
     fetchPinnedMessages();
-    const t = setTimeout(() => fetchPinnedMessages(), 1200);
-    return () => clearTimeout(t);
   }, [pinRefreshNonce, fetchPinnedMessages]);
   // Non-Twitch (e.g. Kick) pins are pushed over the chat bus into the channel
   // slice, not fetched — feed that into the same pinned banner.
@@ -5181,7 +5184,29 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   animate={{ opacity: 1, y: 0, scale: 1, height: 'auto' }}
                   exit={{ opacity: 0, y: -10, scale: 0.96, height: 0 }}
                   transition={{ duration: 0.3, ease: [0.175, 0.885, 0.32, 1.2] }}
-                  className="sn-popover w-full max-w-sm mt-2 pointer-events-auto overflow-hidden origin-top"
+                  className="sn-popover w-full max-w-sm mt-2 pointer-events-auto overflow-hidden origin-top cursor-pointer"
+                  // Clicking the open pin folds it back to the bar, the same
+                  // gesture that opened it. Interactive children (unpin, links,
+                  // preview cards) keep their own click, and a drag that selected
+                  // text is a copy, not a collapse.
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={true}
+                  aria-label="Collapse pinned message"
+                  onClick={(e) => {
+                    const target = e.target as HTMLElement;
+                    if (target.closest('button, a, input, textarea, select, video, [role="button"]:not([data-pin-card]), [data-no-pin-toggle]')) return;
+                    if ((window.getSelection()?.toString() ?? '').length > 0) return;
+                    setIsPinnedExpanded(false);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return;
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setIsPinnedExpanded(false);
+                    }
+                  }}
+                  data-pin-card=""
                 >
                 {pinnedMessages.map((pin, i) => {
                   // Same link-preview pipeline the main chat uses, applied to the
@@ -5254,29 +5279,23 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       <div className="flex-1 min-w-0 pt-0.5">
                         {/* Name + badges row */}
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          {/* Badges — resolved from in-memory badge cache */}
-                          {(() => {
-                            const badgeStr = pin.sender_badges?.map(b => `${b.set_id}/${b.version}`).join(',') || '';
-                            if (!badgeStr) return null;
-                            const resolved = parseBadges(badgeStr, currentStream?.user_id);
-                            return resolved.map((badge: { key: string; info: { image_url_1x?: string; image_url_2x?: string; title?: string } | null }, bi: number) => (
-                              badge.info?.image_url_1x ? (
-                                <Tooltip key={`${badge.key}-${bi}`} content={badge.info.title || badge.key}>
-                                <img
-                                  src={badge.info.image_url_2x || badge.info.image_url_1x}
-                                  alt={badge.info.title || badge.key}
-                                  className="w-4 h-4 flex-shrink-0 drop-shadow-sm"
-                                />
-                                </Tooltip>
-                              ) : null
-                            ));
-                          })()}
-                          <span
-                            className="text-sm font-bold tracking-tight"
-                            style={{ color: readableNameColor(pin.sender_color), textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}
-                          >
-                            {pin.sender_name}
-                          </span>
+                          {/* Badges and name exactly as a chat row draws them:
+                              chat-order badges, 7TV, third-party, StreamNook,
+                              then the name in its paint. */}
+                          <PinnedChatter
+                            variant="card"
+                            provider={provider}
+                            userId={pin.sender_id}
+                            name={pin.sender_name}
+                            login={pin.sender_login}
+                            shownName={pin.sender_shown_name}
+                            color={pin.sender_color}
+                            badges={pin.sender_badges}
+                            channelId={currentStream?.user_id}
+                            onBadgeClick={handleBadgeClick}
+                            nameClassName="text-sm font-bold tracking-tight"
+                            plainNameStyle={PIN_NAME_SHADOW}
+                          />
                         </div>
                         {/* Message text with clickable links. Trusted carded
                             links are suppressed in clean mode (the card is the
@@ -5338,7 +5357,16 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                           />
                         )}
                         <span className="text-[11px] text-textSecondary uppercase tracking-wide font-medium">
-                          Pinned by <span className="font-bold text-textPrimary/80 ml-0.5 capitalize">{pin.pinned_by}</span>
+                          Pinned by{' '}
+                          <span className="inline-flex items-center gap-1 align-middle ml-0.5">
+                            <PinnedChatter
+                              variant="line"
+                              provider={provider}
+                              userId={pin.pinned_by_id}
+                              name={pin.pinned_by}
+                              nameClassName="font-bold text-textPrimary/80"
+                            />
+                          </span>
                         </span>
                       </div>
                     )}
@@ -5370,13 +5398,22 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     <svg className="w-3.5 h-3.5 text-accent flex-shrink-0" fill="currentColor" viewBox="0 0 16 16">
                       <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5a.5.5 0 0 1-1 0V10h-4A.5.5 0 0 1 3 9.5c0-.973.64-1.725 1.17-2.189A5.921 5.921 0 0 1 5 6.708V2.277a2.77 2.77 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354z"/>
                     </svg>
-                    <span
-                      className="text-[13px] font-bold flex-shrink-0 max-w-[35%] truncate"
-                      style={{ color: readableNameColor(pin.sender_color), textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}
-                    >
-                      {pin.sender_name}
+                    <span className="text-[13px] flex items-center gap-1.5 min-w-0 shrink">
+                      <PinnedChatter
+                        variant="line"
+                        provider={provider}
+                        userId={pin.sender_id}
+                        name={pin.sender_name}
+                        login={pin.sender_login}
+                        shownName={pin.sender_shown_name}
+                        color={pin.sender_color}
+                        badges={pin.sender_badges}
+                        channelId={currentStream?.user_id}
+                        nameClassName="font-bold flex-shrink-0 max-w-[9rem] truncate"
+                        plainNameStyle={PIN_NAME_SHADOW}
+                      />
                     </span>
-                    <span className="text-[13px] text-textPrimary/85 truncate min-w-0 flex-1">
+                    <span className="text-[13px] text-textPrimary/85 truncate min-w-[25%] flex-1">
                       {renderPinTextWithEmotes(pin.message_text, `pinbar-${pin.id}`, 'h-5 max-w-[80px] -my-0.5')}
                     </span>
                     {pinnedMessages.length > 1 && (

@@ -67,6 +67,12 @@ pub struct ChannelState {
     pub pinned_at: Option<u64>,
     pub collab: Option<Collaboration>,
     pub collab_at: Option<u64>,
+    /// Numbers each pinned fetch as it starts. Fetches overlap (the poll, a
+    /// refresh after a pin, the follow-up checks), and only the newest one to
+    /// start may write, so a slow answer from before a pin can never put the
+    /// replaced pin back on screen.
+    #[serde(skip)]
+    pinned_seq: u64,
     /// Polls in a row a live channel was missing from Helix's answer. One miss
     /// is often a glitch, so a live channel only reads offline after two.
     #[serde(skip)]
@@ -524,6 +530,12 @@ async fn refresh_pinned(inner: &Inner, login: &str) {
         Some(w) => w.channel_id.clone(),
         None => return,
     };
+    let seq = {
+        let mut state = inner.state.write().await;
+        let Some(s) = state.get_mut(login) else { return };
+        s.pinned_seq += 1;
+        s.pinned_seq
+    };
     let pinned = match TwitchService::get_pinned_chat_messages(&channel_id).await {
         Ok(p) => p,
         Err(e) => {
@@ -535,6 +547,10 @@ async fn refresh_pinned(inner: &Inner, login: &str) {
     let changed = {
         let mut state = inner.state.write().await;
         let Some(s) = state.get_mut(login) else { return };
+        if s.pinned_seq != seq {
+            // A newer fetch started while this one was in flight; its answer wins.
+            return;
+        }
         let changed = s.pinned != pinned;
         s.pinned = pinned.clone();
         s.pinned_at = Some(at);
@@ -543,6 +559,71 @@ async fn refresh_pinned(inner: &Inner, login: &str) {
     if changed {
         emit(&inner.app, ChannelUpdate::Pinned { login: login.to_string(), pinned, at });
     }
+}
+
+/// What a pin action should leave on screen.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PinChange {
+    /// This chat message is now the pin.
+    Pinned(String),
+    /// This chat message (or, with `None`, whatever was pinned) is gone.
+    Unpinned(Option<String>),
+}
+
+/// Waits between follow-up reads after a pin action, in milliseconds. Twitch
+/// answers the Helix pin before its pinned-chat read reflects it, and a pin
+/// that replaces another can take several seconds to show there. The checks
+/// stop as soon as the read agrees with the action.
+const PIN_SETTLE_STEPS_MS: [u64; 7] = [0, 700, 1300, 2000, 3000, 4000, 6000];
+
+fn message_id_of(pin: &serde_json::Value) -> &str {
+    pin.get("message_id").and_then(|v| v.as_str()).unwrap_or("")
+}
+
+/// Whether a pinned-chat read already shows `change`. A new pin must be the
+/// one on top, since the banner shows the first entry.
+fn pin_settled(pinned: &[serde_json::Value], change: &PinChange) -> bool {
+    match change {
+        PinChange::Pinned(id) => pinned.first().is_some_and(|p| message_id_of(p) == id),
+        PinChange::Unpinned(Some(id)) => !pinned.iter().any(|p| message_id_of(p) == id),
+        PinChange::Unpinned(None) => pinned.is_empty(),
+    }
+}
+
+/// After a pin or unpin by this app, re-read the channel's pins until they
+/// show the change (or the steps run out), so every window watching it updates
+/// within a moment of Twitch reflecting the action instead of at the next poll.
+pub fn settle_pin(channel_id: &str, change: PinChange) {
+    let Some(inner) = SERVICE.get().cloned() else { return };
+    let channel_id = channel_id.to_string();
+    tauri::async_runtime::spawn(async move {
+        for step in PIN_SETTLE_STEPS_MS {
+            tokio::time::sleep(Duration::from_millis(step)).await;
+            let logins: Vec<String> = inner
+                .watched
+                .read()
+                .await
+                .iter()
+                .filter(|(_, w)| w.full_refs > 0 && w.channel_id == channel_id)
+                .map(|(login, _)| login.clone())
+                .collect();
+            if logins.is_empty() {
+                return;
+            }
+            let mut settled = true;
+            for login in &logins {
+                refresh_pinned(&inner, login).await;
+                let state = inner.state.read().await;
+                if !state.get(login).is_some_and(|s| pin_settled(&s.pinned, &change)) {
+                    settled = false;
+                }
+            }
+            if settled {
+                return;
+            }
+        }
+        debug!("[ChannelState] pins for {channel_id} still do not show {change:?}");
+    });
 }
 
 #[cfg(test)]
@@ -557,6 +638,26 @@ mod tests {
         assert_eq!(hold_live(true, true, 1), (false, 0), "back in the answer resets");
         assert_eq!(hold_live(false, false, 0), (false, 0), "an offline channel stays offline");
         assert_eq!(hold_live(false, true, 0), (false, 0), "going live shows at once");
+    }
+
+    #[test]
+    fn a_replacing_pin_settles_only_once_it_is_on_top() {
+        let old = json!({"message_id": "old"});
+        let new = json!({"message_id": "new"});
+        let pinned = PinChange::Pinned("new".into());
+        assert!(!pin_settled(&[old.clone()], &pinned), "the replaced pin is still shown");
+        assert!(!pin_settled(&[old.clone(), new.clone()], &pinned), "the new pin is not on top");
+        assert!(pin_settled(&[new.clone(), old.clone()], &pinned));
+        assert!(!pin_settled(&[], &pinned));
+
+        let unpin_new = PinChange::Unpinned(Some("new".into()));
+        assert!(!pin_settled(&[new.clone()], &unpin_new));
+        assert!(pin_settled(&[old.clone()], &unpin_new));
+        assert!(pin_settled(&[], &unpin_new));
+
+        let unpin_any = PinChange::Unpinned(None);
+        assert!(!pin_settled(&[old], &unpin_any));
+        assert!(pin_settled(&[], &unpin_any));
     }
 
     #[test]

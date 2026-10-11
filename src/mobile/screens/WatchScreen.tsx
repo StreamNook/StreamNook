@@ -70,8 +70,10 @@ interface PinnedMessage {
   id: string;
   message_id: string;
   message_text: string;
+  sender_id: string;
   sender_name: string;
   sender_color: string;
+  sender_badges: Array<{ set_id: string; version: string }>;
 }
 
 const MINI_W = 200;
@@ -1161,6 +1163,7 @@ export const WatchScreen: React.FC = () => {
               />
               <PinnedBanner
                 pins={pinned}
+                channelId={chatChannelId ?? undefined}
                 expanded={pinsOpen}
                 onToggle={() => setPinsOpen((v) => !v)}
               />

@@ -2292,14 +2292,21 @@ pub async fn pin_chat_message(
 ) -> Result<(), String> {
     TwitchService::pin_chat_message(&broadcaster_id, &message_id, duration_seconds)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    crate::services::channel_state::settle_pin(&broadcaster_id, crate::services::channel_state::PinChange::Pinned(message_id));
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn unpin_chat_message(broadcaster_id: String, message_id: String) -> Result<(), String> {
-    TwitchService::unpin_chat_message(&broadcaster_id, &message_id)
+pub async fn unpin_chat_message(
+    broadcaster_id: String,
+    message_id: Option<String>,
+) -> Result<(), String> {
+    let unpinned = TwitchService::unpin_chat_message(&broadcaster_id, message_id.as_deref())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    crate::services::channel_state::settle_pin(&broadcaster_id, crate::services::channel_state::PinChange::Unpinned(Some(unpinned)));
+    Ok(())
 }
 
 #[tauri::command]

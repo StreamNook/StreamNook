@@ -7,6 +7,7 @@ import { GlassSelect } from '../ui/GlassSelect';
 import { invoke } from '@tauri-apps/api/core';
 import { Logger } from '../../utils/logger';
 import { useAppStore } from '../../stores/AppStore';
+import { usePinStore } from '../../stores/pinStore';
 
 interface ModeratorMenuProps {
   broadcasterId: string;
@@ -386,6 +387,7 @@ const ModeratorMenu: React.FC<ModeratorMenuProps> = ({
                   setIsPending(true);
                   try {
                     await invoke('unpin_chat_message', { broadcasterId });
+                    usePinStore.getState().requestRefresh();
                     addToast('Message unpinned', 'success');
                   } catch (err) {
                     Logger.error('[ModeratorMenu] Failed to unpin:', err);

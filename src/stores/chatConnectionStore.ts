@@ -3430,15 +3430,27 @@ function replyParentFor(slice: ChannelSlice, parentId: string) {
   return { id: parentId, display_name: p.display_name || '', login: p.username || '', user_id: p.user_id || '', body: p.content || '' };
 }
 
+/** What Twitch made of a send. `pin_error` is set only when a pin was asked
+ *  for and failed after the message went out. */
+export interface SendChannelOutcome {
+  message_id: string | null;
+  is_sent: boolean;
+  drop_reason: string | null;
+  pin_error?: string;
+}
+
 /** Send a message to `channel`. The row shown for it is built by Rust with
- *  channel-correct room-id and badge metadata. */
+ *  channel-correct room-id and badge metadata. `pinAfterSend` has Rust pin the
+ *  message once Twitch accepts it (`/pin <text>`). Resolves with the outcome,
+ *  or null when nothing was sent (empty text, chat not connected). */
 export async function sendChannelMessage(
   channel: string,
   rawText: string,
   userInfo: SendUserInfo,
   replyParentMsgId?: string,
   senderAccount?: SendAsAccount | null,
-): Promise<void> {
+  options?: { pinAfterSend?: boolean },
+): Promise<SendChannelOutcome | null> {
   // Trailing whitespace never survives the round trip: Twitch's echo comes
   // back without it (and the Rust parser trim_end()s the payload), while the
   // emote picker always leaves "name " in the compose box. An optimistic row
@@ -3449,10 +3461,10 @@ export async function sendChannelMessage(
   // will echo. (The duplicate-bypass suffix ends in U+E0000, which is not
   // whitespace, so it is untouched.)
   const text = rawText.trimEnd();
-  if (!text.trim()) return;
+  if (!text.trim()) return null;
   const key = channel.toLowerCase();
   const slice = useChatConnectionStore.getState().channels.get(key);
-  if (!slice || !slice.isConnected) return;
+  if (!slice || !slice.isConnected) return null;
 
   // currentUserId tracks the PRIMARY (the IRC-connected reader), regardless of
   // which account we're sending as.
@@ -3504,17 +3516,14 @@ export async function sendChannelMessage(
     Logger.warn('[ChatStore] could not build the sent row:', err);
     return null;
   });
-  const sending = invoke<{
-      message_id: string | null;
-      is_sent: boolean;
-      drop_reason: string | null;
-    }>('send_chat_message', {
+  const sending = invoke<SendChannelOutcome>('send_chat_message', {
       message: text,
       replyParentMsgId: replyParentMsgId || null,
       targetChannel: key,
       broadcasterId: slice.channelId || null,
       senderId: senderUserId || null,
       senderAccountId: sendingAsSecondary ? senderUserId : null,
+      pinAfterSend: options?.pinAfterSend ? true : null,
     });
   // Awaited below; this only stops a fast failure reporting as unhandled while
   // the row is still being built.
@@ -3545,7 +3554,7 @@ export async function sendChannelMessage(
       if (result.drop_reason) {
         injectSystemMessage(key, `Your message was not sent: ${result.drop_reason}`);
       }
-      return;
+      return result;
     }
 
     // Helix returns the authoritative message id. Stamp it onto the optimistic
@@ -3573,6 +3582,7 @@ export async function sendChannelMessage(
         bumpRevisionFor([key]);
       }
     }
+    return result ?? null;
   } catch (err) {
     Logger.error('[ChatStore] send_chat_message failed:', err);
     slice.messages = slice.messages.filter((m) => {
