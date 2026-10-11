@@ -1,3 +1,26 @@
+## [8.8.7] - 2026-10-10
+
+### ✨ Features
+- Type `/pin` followed by your own message to send it and pin it in one go. `/pin @name` still pins that person's latest message.
+- When somebody gives you a StreamNook membership, StreamNook tells you. That now works for past members too, and for gifts that arrived while the app was closed.
+- Your profile's membership card has a status line: paid or gifted, when a gift ends, and when your own billing starts again after a gift paused it.
+- Homies custom badges show in chat, with their own switch under Settings > Chat > Names & Badges > Add-on badges and in chat overlays.
+- Pinned messages show the sender and the moderator who pinned them with their 7TV paints and the badges they wear in chat.
+- Click an open pinned message to fold it back into the bar.
+
+### 🐛 Bug Fixes
+- Mod tools and the mod room button no longer show up in channels you don't moderate. On Twitch they could carry over from the channel you just left, and on YouTube having chatted in a stream was enough to show them.
+- `/unpin` and Unpin in the moderator menu work again.
+- A pin that replaces another one shows up within seconds, and the old pin no longer comes back.
+- Pin lengths outside Twitch's 30 seconds to 30 minutes get a clear message instead of a failed pin.
+- A chatter whose display name is in another script shows the same name on every row (messages, subs, watch streaks, raids, redemptions and replies), with their login beside it so you can still @ them.
+- Nicknames you've set show on plain chat messages too, and `{default}` in your custom event wording uses the same name.
+- Chat shows one badge per category from each badge service, the one the chatter actually wears, so someone holding several tiers no longer shows a row of them. Picking a badge for your own profile swaps out the other one in its category.
+- StreamNook no longer sits on its loading screen when Discord is running but not answering.
+
+### 🔧 Maintenance
+- Chromium switches set in `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` are kept and merged with StreamNook's own instead of being replaced.
+
 ## [8.8.6] - 2026-10-09
 
 ## 🎉 New: Knock, Knock
