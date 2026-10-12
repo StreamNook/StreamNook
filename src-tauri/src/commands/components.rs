@@ -1393,6 +1393,9 @@ pub async fn restart_to_apply_update(app_handle: crate::rt::AppHandle) -> Result
         let staged = temp_dir.join("extracted").join("StreamNook.app");
         if staged.is_dir() {
             let current = running_app_bundle()?;
+            crate::services::app_exit::record(
+                "update: macOS bundle swap staged, exiting so the helper can replace the app",
+            );
             flush_stores_before_hard_exit(&app_handle);
             let request = crate::platform::app_update::SwapRequest {
                 current: current.clone(),
@@ -1402,7 +1405,7 @@ pub async fn restart_to_apply_update(app_handle: crate::rt::AppHandle) -> Result
             };
             crate::platform::app_update::swap_and_relaunch(&request)
                 .map_err(|e| format!("Failed to start the bundle swap: {}", e))?;
-            std::process::exit(0);
+            crate::services::app_exit::process_exit(0, "update: bundle swap helper started");
         }
     }
 
@@ -1413,6 +1416,9 @@ pub async fn restart_to_apply_update(app_handle: crate::rt::AppHandle) -> Result
         let staged = temp_dir.join("extracted").join(LINUX_BUNDLE_NAME);
         if staged.is_file() {
             let current = running_appimage()?;
+            crate::services::app_exit::record(
+                "update: AppImage swap staged, exiting so the helper can replace the app",
+            );
             flush_stores_before_hard_exit(&app_handle);
             let request = crate::platform::app_update::SwapRequest {
                 current: current.clone(),
@@ -1422,7 +1428,7 @@ pub async fn restart_to_apply_update(app_handle: crate::rt::AppHandle) -> Result
             };
             crate::platform::app_update::swap_and_relaunch(&request)
                 .map_err(|e| format!("Failed to start the AppImage swap: {}", e))?;
-            std::process::exit(0);
+            crate::services::app_exit::process_exit(0, "update: AppImage swap helper started");
         }
     }
 
@@ -1433,13 +1439,19 @@ pub async fn restart_to_apply_update(app_handle: crate::rt::AppHandle) -> Result
             .arg(&vbs_path)
             .spawn()
             .map_err(|e| format!("Failed to run update script: {}", e))?;
+        crate::services::app_exit::record(
+            "update: update_launcher.vbs started, exiting so it can swap the exe",
+        );
         flush_stores_before_hard_exit(&app_handle);
-        std::process::exit(0);
+        crate::services::app_exit::process_exit(0, "update: stores flushed for the exe swap");
     }
 
     // No exe-swap launcher staged (a component-only update already wrote its
     // files in place); a plain relaunch is enough to pick them up.
-    app_handle.restart();
+    crate::services::app_exit::restart(
+        &app_handle,
+        "update: component-only update applied (no exe swap staged)",
+    );
 }
 
 #[cfg(test)]

@@ -1599,7 +1599,7 @@ pub async fn redeem_channel_reward(
         status,
         channel_id,
         reward_id,
-        &response_text[..response_text.len().min(2000)]
+        response_text.chars().take(2000).collect::<String>()
     );
 
     let result: serde_json::Value = match serde_json::from_str(&response_text) {
@@ -1608,7 +1608,7 @@ pub async fn redeem_channel_reward(
             log::error!(
                 "redeem_channel_reward: failed to parse body as JSON: {} | body: {}",
                 e,
-                &response_text[..response_text.len().min(2000)]
+                response_text.chars().take(2000).collect::<String>()
             );
             return Err(format!("Failed to parse redemption response: {}", e));
         }

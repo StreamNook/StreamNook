@@ -21,7 +21,7 @@ fn main() {
         }
         streamnook_lib::linux_cef::Entry::NoDisplay => {
             eprintln!("{}", streamnook_lib::linux_cef::NO_DISPLAY_MESSAGE);
-            std::process::exit(1);
+            streamnook_lib::exit_before_start(1, "no display to open a window on");
         }
         streamnook_lib::linux_cef::Entry::Browser => {}
     }

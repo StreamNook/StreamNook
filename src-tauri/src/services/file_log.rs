@@ -147,6 +147,107 @@ pub fn log_file_path() -> anyhow::Result<PathBuf> {
     Ok(logs.join("streamnook.log"))
 }
 
+/// Write a panic record to disk NOW, bypassing the queue, into both
+/// streamnook.log and errors.log.
+///
+/// The writer drains every 300 ms. A panic that ends the process (one on the
+/// main thread, which unwinds out of the event loop and exits, or one inside a
+/// Windows or WebView2 callback, which cannot unwind and aborts) kills it
+/// before the next drain, so the queued record and the lines leading up to it
+/// were lost and the crash left nothing on disk. Called only from the panic
+/// hook: synchronous file I/O is fine for an event this rare.
+pub fn record_panic(summary: &str, backtrace: &str) {
+    record_now("Panic", summary, "Backtrace", backtrace);
+}
+
+/// `record_panic`'s writer, for any event that may be the last thing the
+/// process does (a panic, a WebView2 process failure): written synchronously
+/// as `ERROR [<category>] <summary>` with a titled detail section.
+pub fn record_now(category: &str, summary: &str, detail_title: &str, detail: &str) {
+    let stamp = chrono::Utc::now();
+    // try_lock: the panic may have happened while this thread held the queue.
+    let pending = QUEUE
+        .try_lock()
+        .map(|mut q| std::mem::take(&mut *q))
+        .unwrap_or_default();
+    if let Ok(path) = log_file_path() {
+        let mut out = String::new();
+        for l in &pending {
+            out.push_str(l);
+            out.push('\n');
+        }
+        out.push_str(&format!(
+            "{} ERROR [{}] {}\n-- {} --\n{}\n",
+            stamp.format("%Y-%m-%dT%H:%M:%S%.3fZ"),
+            category,
+            summary,
+            detail_title,
+            detail
+        ));
+        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = f.write_all(out.as_bytes());
+            let _ = f.flush();
+        }
+    }
+    // errors.log is the file people are asked for first, in the block format
+    // LogService writes there.
+    if let Ok(dir) = crate::services::cache_service::get_app_data_dir() {
+        let block = format!(
+            "\n========== {} ==========\nApp {} on {}\nERROR [{}] {}\n\n-- {} --\n{}\n",
+            stamp.to_rfc3339(),
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            category,
+            summary,
+            detail_title,
+            detail
+        );
+        if let Ok(mut f) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("logs").join("errors.log"))
+        {
+            let _ = f.write_all(block.as_bytes());
+            let _ = f.flush();
+        }
+    }
+}
+
+/// One `streamnook.log` line written NOW, behind whatever the queue still
+/// holds, for an event that may be the last thing the process does (a
+/// deliberate exit). The line carries the usual stamp, level and target, so it
+/// reads like any other record; it skips the Diagnostics level gate on
+/// purpose, since an exit with no record is the thing this exists to prevent.
+/// Before the process is armed (a secondary instance, or a run that never
+/// reached setup) the queue is left alone and only the line is written.
+pub fn record_line_now(level: log::Level, target: &str, message: &str) {
+    let pending = if ARMED.load(Ordering::Acquire) {
+        QUEUE
+            .try_lock()
+            .map(|mut q| std::mem::take(&mut *q))
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let Ok(path) = log_file_path() else { return };
+    let mut out = String::new();
+    for l in &pending {
+        out.push_str(l);
+        out.push('\n');
+    }
+    out.push_str(&format!(
+        "{} {:<5} {} {}\n",
+        chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ"),
+        level,
+        target,
+        scrub(message)
+    ));
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = f.write_all(out.as_bytes());
+        let _ = f.flush();
+    }
+}
+
 fn enqueue(line: String) {
     if let Ok(mut q) = QUEUE.lock() {
         if q.len() < MAX_QUEUE_LINES {
