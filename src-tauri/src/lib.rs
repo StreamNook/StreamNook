@@ -141,6 +141,7 @@ fn reveal_main_window(app: crate::rt::AppHandle) {
         }
         let _ = window.show();
         let _ = window.set_focus();
+        services::app_exit::note_main_shown();
     }
 }
 
@@ -164,6 +165,7 @@ fn arm_reveal_failsafe(handle: crate::rt::AppHandle) {
             if !window.is_visible().unwrap_or(false) {
                 warn!("[Main] reveal failsafe fired: frontend never signaled first paint");
                 let _ = window.show();
+                services::app_exit::note_main_shown();
             }
         }
     });
@@ -210,6 +212,7 @@ fn show_main_window(app: &crate::rt::AppHandle) {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
+        services::app_exit::note_main_shown();
         #[cfg(target_os = "linux")]
         commands::twitch::linux_overlays::show_with_main(app);
         return;
@@ -253,6 +256,7 @@ fn show_main_window(app: &crate::rt::AppHandle) {
     match main_window_chrome(builder).build() {
         Ok(win) => {
             debug!("[Main] Recreated main window on demand");
+            services::app_exit::note_main_shown();
             {
                 use tauri_plugin_window_state::{StateFlags, WindowExt};
                 let _ = win.restore_state(
@@ -516,7 +520,22 @@ pub fn print_credential_if_asked() {
             2
         }
     };
-    std::process::exit(code);
+    services::app_exit::process_exit(
+        code,
+        &format!(
+            "credential CLI (--print-credential) finished in its own process (pid {}), not the app",
+            std::process::id()
+        ),
+    );
+}
+
+/// Ends the process before the app starts (`main.rs`), recording why in the
+/// app log first.
+pub fn exit_before_start(code: i32, reason: &str) -> ! {
+    services::app_exit::process_exit(
+        code,
+        &format!("{reason} (pid {}, before the app started)", std::process::id()),
+    )
 }
 
 /// Builds the WebView2 browser-argument string from the app's own disabled
@@ -581,6 +600,7 @@ pub fn run() {
     // hand-off all happened in `linux_cef::enter` before this function was
     // called (CEF re-executes this binary for its helpers, which must never
     // reach the code below). Only the log lines it produced are left to write.
+    services::app_exit::note_started();
 
     // Apply WebView2 browser arguments uniformly to every webview in the process.
     // Setting them via this env var (inherited by the msedgewebview2.exe child)
@@ -641,7 +661,8 @@ pub fn run() {
         info!("[WebView2] Extra browser arguments from the environment: {extra}");
     }
 
-    // Every panic goes to streamnook.log. Without this, a panic on a
+    // Every panic goes to streamnook.log and errors.log, with a backtrace.
+    // Without this, a panic on a
     // background thread prints to stderr, which nobody sees in a release
     // build, and the thread simply disappears: if it was the log writer or
     // the UI-hang watchdog, the session loses logging or hang detection with
@@ -662,7 +683,14 @@ pub fn run() {
                 .map(|s| s.to_string())
                 .or_else(|| info.payload().downcast_ref::<String>().cloned())
                 .unwrap_or_else(|| "non-string panic payload".to_string());
-            error!("[Panic] thread '{name}' panicked at {location}: {message}");
+            // Straight to disk, not through the queued logger: a panic that
+            // ends the process does so before the queue's next drain.
+            let backtrace = std::backtrace::Backtrace::force_capture().to_string();
+            let backtrace: String = backtrace.lines().take(120).collect::<Vec<_>>().join("\n");
+            services::file_log::record_panic(
+                &format!("thread '{name}' panicked at {location}: {message}"),
+                &backtrace,
+            );
             default_hook(info);
         }));
     }
@@ -987,6 +1015,9 @@ pub fn run() {
                     if let Ok(hwnd) = main.hwnd() {
                         services::ui_hang_watchdog::start_for_hwnd(hwnd.0 as isize);
                     }
+                    // A crashed renderer or browser process leaves the window
+                    // dead with nothing on disk; record it, reload a renderer.
+                    services::webview2_failures::watch(&main);
                 }
             }
             // Aspect-ratio lock. Attached at window creation, inert until the
@@ -1385,8 +1416,16 @@ pub fn run() {
             let tray_builder = TrayIconBuilder::new()
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false)
-                .tooltip("StreamNook")
-                .icon(app.default_window_icon().unwrap().clone());
+                .tooltip("StreamNook");
+            // A panic in setup ends the process before a window shows; a tray
+            // without the icon is the lesser failure.
+            let tray_builder = match app.default_window_icon() {
+                Some(icon) => tray_builder.icon(icon.clone()),
+                None => {
+                    error!("[Main] no default window icon for the tray");
+                    tray_builder
+                }
+            };
 
             // macOS menu-bar icons are TEMPLATE images: the system uses only the
             // alpha channel and paints the result itself, so the icon tracks the
@@ -1423,7 +1462,7 @@ pub fn run() {
                         }
                     }
                     "quit" => {
-                        app_handle.exit(0);
+                        services::app_exit::exit(app_handle, 0, "tray menu Quit");
                     }
                     _ => {}
                 })
@@ -1848,6 +1887,7 @@ pub fn run() {
             debug_list_twitch_badges,
             debug_compare_badge_sources,
             fetch_channel_badges,
+            get_ffz_room_role_art,
             // Rust makes every Helix read the page needs; the page never holds
             // the token (get_twitch_credentials retired 2026-09-07).
             helix_get,
@@ -2252,9 +2292,10 @@ pub fn run() {
         //    `.run()` below keeps the process alive for that case.
         //
         // 2. Popout destroyed: when a popout closes, if it was the last
-        //    popout AND the main window is currently hidden (i.e. the user
-        //    previously closed main to the tray expecting the popouts to keep
-        //    the app alive), exit the process. Otherwise the app keeps
+        //    popout AND the main window is in the tray (the user closed it
+        //    there after it had been on screen, expecting the popouts to keep
+        //    the app alive), exit the process. A main still hidden behind the
+        //    first-paint gate is not in the tray. Otherwise the app keeps
         //    running until the user picks "Quit" from the tray.
         .on_window_event(|window, event| {
             // Window-event handling (close-to-tray, MultiChat popout lifecycle) is
@@ -2270,6 +2311,7 @@ pub fn run() {
             }
 
             if let WindowEvent::Destroyed = event {
+                services::app_exit::note_window_destroyed(&label);
                 // A destroyed webview never runs its React cleanup, so any
                 // chat consumer claims it still holds would pin those channels
                 // JOINed (and their IRC traffic flowing) forever. Sweep them;
@@ -2304,6 +2346,8 @@ pub fn run() {
                 // Back from the tray or a minimize, where nothing was fetched:
                 // the Discover lists refetch what went stale.
                 if let WindowEvent::Focused(true) = event {
+                    // Focus means on screen, whichever path showed it.
+                    services::app_exit::note_main_shown();
                     services::home_snapshot::note_main_window_focused();
                     // Whatever brought it back (tray, a popout, the page), the
                     // overlays hidden with it come back too.
@@ -2345,6 +2389,7 @@ pub fn run() {
                             #[cfg(target_os = "linux")]
                             commands::twitch::linux_overlays::hide_with_main(&app_handle);
                             let _ = main_win.hide();
+                            services::app_exit::note_main_hidden_to_tray();
                         }
                     }
                 }
@@ -2379,18 +2424,43 @@ pub fn run() {
                         // the JS listener destroys it to free memory, so "main is
                         // None" is the ordinary Always tray state, not a stranded
                         // process. The tray recreates it on demand.
-                        let always_tray = app_handle
+                        //
+                        // "Hidden" must mean the user's close put it in the
+                        // tray. Main is also hidden from launch until the
+                        // frontend's first paint (the reveal gate), and that
+                        // is no reason to quit: services::app_exit decides.
+                        let close_mode = app_handle
                             .try_state::<AppState>()
                             .and_then(|s| s.settings.lock().ok().map(|g| g.close_to_tray))
-                            .unwrap_or_default()
-                            == CloseToTrayMode::Always;
-                        let should_exit = match app_handle.get_webview_window("main") {
-                            Some(main_win) => !main_win.is_visible().unwrap_or(true) && !always_tray,
-                            None => !always_tray,
+                            .unwrap_or_default();
+                        let always_tray = close_mode == CloseToTrayMode::Always;
+                        use services::app_exit::MainWindow;
+                        let main = match app_handle.get_webview_window("main") {
+                            Some(main_win) if main_win.is_visible().unwrap_or(true) => {
+                                MainWindow::Visible
+                            }
+                            Some(_) => MainWindow::Hidden,
+                            None => MainWindow::Gone,
                         };
-                        if should_exit {
-                            debug!("[Main] Last MultiChat closed while main hidden/closed — exiting");
-                            app_handle.exit(0);
+                        let revealed = services::app_exit::main_revealed();
+                        let in_tray = services::app_exit::main_in_tray();
+                        if services::app_exit::exit_when_last_popout_closes(
+                            main,
+                            revealed,
+                            in_tray,
+                            always_tray,
+                        ) {
+                            services::app_exit::exit(
+                                &app_handle,
+                                0,
+                                &format!(
+                                    "last popout '{label}' closed while main was put away (main {main:?}, revealed={revealed}, in_tray={in_tray}, close_to_tray={close_mode:?})"
+                                ),
+                            );
+                        } else if main != MainWindow::Visible {
+                            info!(
+                                "[Main] last popout '{label}' closed; staying open (main {main:?}, revealed={revealed}, in_tray={in_tray}, close_to_tray={close_mode:?})"
+                            );
                         }
                     }
                 }
@@ -2410,19 +2480,22 @@ pub fn run() {
             // (and with it the tray icon) alive; the tray recreates main on
             // demand via `show_main_window`. Tray Quit and the updater still
             // exit because they pass an exit code.
-            #[cfg(desktop)]
-            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = &event {
-                let always_tray = app_handle
+            if let tauri::RunEvent::ExitRequested { code, api, .. } = &event {
+                let close_mode = app_handle
                     .try_state::<AppState>()
                     .and_then(|s| s.settings.lock().ok().map(|g| g.close_to_tray))
-                    .unwrap_or_default()
-                    == CloseToTrayMode::Always;
-                if always_tray {
+                    .unwrap_or_default();
+                let prevented =
+                    cfg!(desktop) && code.is_none() && close_mode == CloseToTrayMode::Always;
+                if prevented {
                     debug!("[Main] Last window closed under Always close mode — staying in the tray");
                     api.prevent_exit();
                 }
+                services::app_exit::on_exit_requested(*code, prevented, &format!("{close_mode:?}"));
             }
             if let tauri::RunEvent::Exit = event {
+                services::app_exit::on_run_exit();
+                let shutdown_started = std::time::Instant::now();
                 // Flush every debounced store before the process dies; each is
                 // a no-op when nothing is dirty.
                 let _ = commands::settings::flush_settings_now();
@@ -2437,30 +2510,34 @@ pub fn run() {
                 // Ask running plugin processes to shut down before the app
                 // process dies, waiting briefly so well-behaved plugins exit
                 // gracefully (stragglers are killed with the supervisor).
-                let state = app_handle.state::<AppState>();
-                let host = state.plugin_host.clone();
-                // Bounded on purpose: this runs on the UI thread after the last
-                // window is gone, so an open-ended wait is a beachballing Dock
-                // icon and, on macOS, a Force Quit. A std channel rather than a
-                // tokio timeout because block_on from this thread does not drive
-                // tokio's timer.
-                let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
-                tauri::async_runtime::spawn(async move {
-                    host.shutdown_all().await;
-                    for _ in 0..20 {
-                        if !host.has_running().await {
-                            break;
+                // try_state: an exit before setup managed AppState (a setup
+                // failure) must not panic here on its way out.
+                if let Some(state) = app_handle.try_state::<AppState>() {
+                    let host = state.plugin_host.clone();
+                    // Bounded on purpose: this runs on the UI thread after the last
+                    // window is gone, so an open-ended wait is a beachballing Dock
+                    // icon and, on macOS, a Force Quit. A std channel rather than a
+                    // tokio timeout because block_on from this thread does not drive
+                    // tokio's timer.
+                    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+                    tauri::async_runtime::spawn(async move {
+                        host.shutdown_all().await;
+                        for _ in 0..20 {
+                            if !host.has_running().await {
+                                break;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                         }
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        let _ = done_tx.send(());
+                    });
+                    if done_rx
+                        .recv_timeout(std::time::Duration::from_secs(3))
+                        .is_err()
+                    {
+                        warn!("[Main] plugin shutdown did not finish within 3 s; exiting anyway");
                     }
-                    let _ = done_tx.send(());
-                });
-                if done_rx
-                    .recv_timeout(std::time::Duration::from_secs(3))
-                    .is_err()
-                {
-                    warn!("[Main] plugin shutdown did not finish within 3 s; exiting anyway");
                 }
+                services::app_exit::on_shutdown_complete(shutdown_started.elapsed().as_millis());
             }
         });
 }

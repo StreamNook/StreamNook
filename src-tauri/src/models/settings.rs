@@ -1060,6 +1060,11 @@ pub struct Settings {
     /// a new field persists; unknown keys inside the group ride its own `extra`.
     #[serde(default)]
     pub cosmetics: CosmeticsSettings,
+    /// The message box's own preferences. Typed so a new field persists and
+    /// its default comes from here; the composer keys this struct does not
+    /// name ride its own `extra`.
+    #[serde(default)]
+    pub chat_input: ChatInputSettings,
     /// `/spam` and `/pyramid`: the pause between lines and whether repeats
     /// are varied. Typed because the Rust runner reads it.
     #[serde(default)]
@@ -1157,24 +1162,94 @@ pub struct CustomSnippet {
     pub keywords: Option<String>,
 }
 
-/// 7TV cosmetic display. Mirrors the frontend `CosmeticsSettings`.
+/// The message box. Mirrors the frontend `ChatInputSettings`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
+pub struct ChatInputSettings {
+    /// Show the channel's chat modes (emote-only, followers-only, slow mode
+    /// and the rest) in the message box while they are on.
+    pub show_room_modes: bool,
+    /// The composer keys this struct does not name (placeholder, buttons,
+    /// spellcheck, tab completion, ...), kept verbatim.
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
+impl Default for ChatInputSettings {
+    fn default() -> Self {
+        Self { show_room_modes: true, extra: HashMap::new() }
+    }
+}
+
+/// 7TV cosmetic display. Mirrors the frontend `CosmeticsSettings`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(from = "CosmeticsSettingsFile")]
 pub struct CosmeticsSettings {
     /// Paint drop shadows: "all", "one" or "none"; unset draws them all.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub paint_shadows: Option<String>,
-    /// Show the profile picture someone set on 7TV in place of their platform
-    /// picture.
-    pub seventv_profile_pictures: bool,
+    /// Whose picture a person shows: "seventv" (the picture they set on 7TV,
+    /// otherwise their platform's) or "twitch" (always the platform's own,
+    /// and no 7TV picture is ever looked up).
+    pub profile_picture_source: String,
+    /// When a 7TV picture moves: "always", "hover" (focal surfaces move,
+    /// lists on hover) or "never". Separate from the Motion setting.
+    pub profile_picture_animation: String,
     /// Keys the frontend adds to this group before this struct names them.
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
 }
 
+pub const PROFILE_PICTURE_SOURCE_SEVENTV: &str = "seventv";
+pub const PROFILE_PICTURE_SOURCE_TWITCH: &str = "twitch";
+
+impl CosmeticsSettings {
+    /// Whether 7TV profile pictures are shown, so looked up at all.
+    pub fn shows_seventv_pictures(&self) -> bool {
+        self.profile_picture_source != PROFILE_PICTURE_SOURCE_TWITCH
+    }
+}
+
 impl Default for CosmeticsSettings {
     fn default() -> Self {
-        Self { paint_shadows: None, seventv_profile_pictures: true, extra: HashMap::new() }
+        Self {
+            paint_shadows: None,
+            profile_picture_source: PROFILE_PICTURE_SOURCE_SEVENTV.to_string(),
+            profile_picture_animation: "always".to_string(),
+            extra: HashMap::new(),
+        }
+    }
+}
+
+/// `CosmeticsSettings` as a file may hold it, including the on/off switch the
+/// source choice replaced (`seventv_profile_pictures`): a file that turned
+/// 7TV pictures off reads as the Twitch source, and the old key is not kept.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct CosmeticsSettingsFile {
+    paint_shadows: Option<String>,
+    profile_picture_source: Option<String>,
+    seventv_profile_pictures: Option<bool>,
+    profile_picture_animation: Option<String>,
+    #[serde(flatten)]
+    extra: HashMap<String, serde_json::Value>,
+}
+
+impl From<CosmeticsSettingsFile> for CosmeticsSettings {
+    fn from(file: CosmeticsSettingsFile) -> Self {
+        let defaults = Self::default();
+        let source = match file.profile_picture_source.as_deref() {
+            Some(PROFILE_PICTURE_SOURCE_TWITCH) => PROFILE_PICTURE_SOURCE_TWITCH,
+            Some(_) => PROFILE_PICTURE_SOURCE_SEVENTV,
+            None if file.seventv_profile_pictures == Some(false) => PROFILE_PICTURE_SOURCE_TWITCH,
+            None => PROFILE_PICTURE_SOURCE_SEVENTV,
+        };
+        Self {
+            paint_shadows: file.paint_shadows,
+            profile_picture_source: source.to_string(),
+            profile_picture_animation: file.profile_picture_animation.unwrap_or(defaults.profile_picture_animation),
+            extra: file.extra,
+        }
     }
 }
 
@@ -1310,6 +1385,7 @@ impl Default for Settings {
             chat_blend: ChatBlendSettings::first_run(),
             snippets: SnippetSettings::default(),
             cosmetics: CosmeticsSettings::default(),
+            chat_input: ChatInputSettings::default(),
             chat_burst: ChatBurstSettings::default(),
             chat_design: ChatDesignSettings::first_run(),
             live_notifications: LiveNotificationSettings::default(),
@@ -1876,8 +1952,10 @@ mod backup_persistence_tests {
     #[test]
     fn cosmetics_are_modelled_and_an_old_file_keeps_its_paint_shadows() {
         let defaults = Settings::default();
-        assert!(defaults.cosmetics.seventv_profile_pictures, "7TV profile pictures default on");
+        assert_eq!(defaults.cosmetics.profile_picture_source, "seventv", "7TV profile pictures are the default source");
+        assert!(defaults.cosmetics.shows_seventv_pictures());
         assert_eq!(defaults.cosmetics.paint_shadows, None);
+        assert_eq!(defaults.cosmetics.profile_picture_animation, "always", "every install starts on Always");
 
         // A file written while `cosmetics` rode the top-level catch-all.
         let mut value = serde_json::to_value(Settings::default()).unwrap();
@@ -1885,13 +1963,66 @@ mod backup_persistence_tests {
         let parsed: Settings = serde_json::from_value(value).unwrap();
         assert!(!parsed.extra.contains_key("cosmetics"));
         assert_eq!(parsed.cosmetics.paint_shadows.as_deref(), Some("none"));
-        assert!(parsed.cosmetics.seventv_profile_pictures, "a missing field takes the default");
+        assert_eq!(parsed.cosmetics.profile_picture_source, "seventv", "a missing field takes the default");
+        assert_eq!(parsed.cosmetics.profile_picture_animation, "always", "a missing choice is Always");
 
         let mut off = parsed.clone();
-        off.cosmetics.seventv_profile_pictures = false;
+        off.cosmetics.profile_picture_source = "twitch".to_string();
+        off.cosmetics.profile_picture_animation = "never".to_string();
         let back: Settings = serde_json::from_value(serde_json::to_value(&off).unwrap()).unwrap();
-        assert!(!back.cosmetics.seventv_profile_pictures);
+        assert_eq!(back.cosmetics.profile_picture_source, "twitch");
+        assert!(!back.cosmetics.shows_seventv_pictures());
+        assert_eq!(back.cosmetics.profile_picture_animation, "never");
         assert_eq!(back.cosmetics.extra.get("future_key"), Some(&serde_json::json!(3)));
+    }
+
+    /// `chat_input` used to ride the top-level catch-all whole. Typed now, its
+    /// other keys must survive a load and save, and a file without the room
+    /// modes switch shows them.
+    #[test]
+    fn chat_input_is_modelled_and_keeps_its_other_keys() {
+        assert!(Settings::default().chat_input.show_room_modes, "room modes show by default");
+
+        let mut value = serde_json::to_value(Settings::default()).unwrap();
+        value["chat_input"] = serde_json::json!({ "hide_placeholder": true, "emote_tab_complete_match_mode": "includes" });
+        let parsed: Settings = serde_json::from_value(value).unwrap();
+        assert!(!parsed.extra.contains_key("chat_input"));
+        assert!(parsed.chat_input.show_room_modes, "a missing switch takes the default");
+        assert_eq!(parsed.chat_input.extra.get("hide_placeholder"), Some(&serde_json::json!(true)));
+
+        let mut off = parsed.clone();
+        off.chat_input.show_room_modes = false;
+        let out = serde_json::to_value(&off).unwrap();
+        assert_eq!(out["chat_input"]["show_room_modes"], false);
+        assert_eq!(out["chat_input"]["emote_tab_complete_match_mode"], "includes", "flattened back in place");
+        let back: Settings = serde_json::from_value(out).unwrap();
+        assert!(!back.chat_input.show_room_modes);
+    }
+
+    /// The on/off switch the source choice replaced: a file that turned 7TV
+    /// pictures off keeps platform pictures, one that left them on keeps 7TV,
+    /// a saved source wins over the old switch, and the old key is dropped.
+    #[test]
+    fn the_old_seventv_picture_switch_reads_as_a_source() {
+        let read = |cosmetics: serde_json::Value| -> CosmeticsSettings {
+            let mut value = serde_json::to_value(Settings::default()).unwrap();
+            value["cosmetics"] = cosmetics;
+            serde_json::from_value::<Settings>(value).unwrap().cosmetics
+        };
+        let off = read(serde_json::json!({ "seventv_profile_pictures": false, "profile_picture_animation": "hover" }));
+        assert_eq!(off.profile_picture_source, "twitch");
+        assert_eq!(off.profile_picture_animation, "hover");
+        assert!(!off.extra.contains_key("seventv_profile_pictures"), "the old key is not carried along");
+        assert_eq!(read(serde_json::json!({ "seventv_profile_pictures": true })).profile_picture_source, "seventv");
+        assert_eq!(
+            read(serde_json::json!({ "seventv_profile_pictures": false, "profile_picture_source": "seventv" })).profile_picture_source,
+            "seventv",
+            "a saved source wins"
+        );
+        assert_eq!(read(serde_json::json!({ "profile_picture_source": "bogus" })).profile_picture_source, "seventv");
+        let written = serde_json::to_value(&off).unwrap();
+        assert_eq!(written["profile_picture_source"], "twitch");
+        assert!(written.get("seventv_profile_pictures").is_none());
     }
 
     #[test]

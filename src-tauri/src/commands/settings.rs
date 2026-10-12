@@ -926,14 +926,16 @@ start "" "{}"
 
     // Launch the batch script hidden
     std::process::Command::new("cmd")
-        .args(&["/C", "start", "/min", "/b", batch_path.to_str().unwrap()])
+        .args(["/C", "start", "/min", "/b"])
+        .arg(&batch_path)
         .spawn()
         .map_err(|e| format!("Failed to launch update script: {}", e))?;
 
     // Exit the application after a short delay to allow the script to start
+    let reason = format!("update: update_streamnook.bat started for {version}, exiting so it can swap the exe");
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(1));
-        app_handle.exit(0);
+        crate::services::app_exit::exit(&app_handle, 0, &reason);
     });
 
     Ok(version.to_string())

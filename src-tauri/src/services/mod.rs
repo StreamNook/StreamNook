@@ -32,6 +32,7 @@ pub mod chat_bridge_route;
 pub mod chat_history;
 pub mod chat_rules;
 pub mod chat_send_limiter;
+pub mod room_modes;
 pub mod chatter_name;
 pub mod chat_burst;
 pub mod chat_service;
@@ -46,6 +47,9 @@ pub mod suspicious_users;
 pub mod user_notes;
 pub mod diagnostic_logger;
 pub mod hls_projection;
+pub mod hls_seq_ids;
+#[cfg(windows)]
+pub mod webview2_failures;
 // Desktop-only: Discord Rich Presence (IPC to a running Discord client).
 #[cfg(desktop)]
 pub mod discord_service;
@@ -70,6 +74,7 @@ pub mod eventsub_moderation;
 pub mod eventsub_service;
 pub mod ffz_room_badges;
 pub mod file_log;
+pub mod app_exit;
 pub mod http;
 pub mod hype_train_watch;
 pub mod irc_service;

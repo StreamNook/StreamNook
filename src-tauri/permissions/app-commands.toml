@@ -339,6 +339,7 @@ allow = [
   "debug_list_twitch_badges",
   "debug_compare_badge_sources",
   "fetch_channel_badges",
+  "get_ffz_room_role_art",
   "helix_get",
   "streamnook_api_request",
   "export_overlay_file",

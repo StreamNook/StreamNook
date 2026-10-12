@@ -738,6 +738,12 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Chat',
     section: 'Chat Input',
+    title: 'Chat modes',
+    description: 'Show when a channel limits who can chat in the message box: emote-only, followers-only, subscriber-only, slow mode and unique chat, with a countdown on the send button during slow mode. Room mode bar, chat restrictions, emote only chat, follower only, sub only.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Chat Input',
     title: 'Hide placeholder',
     description: 'Leave the message box empty instead of prompting you to send a message. Notices you can act on, like read-only or subscriber-only mode, still show. Previously "Hide the placeholder text".'
   },
@@ -984,8 +990,15 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Chat',
     section: 'Names & Badges',
-    title: '7TV profile pictures',
-    description: 'People who set a picture on 7TV show it instead of their platform picture: moving on profile cards, pins and the channel header, still in lists until you hover. Animated avatars, custom avatar, pfp.'
+    title: 'Profile pictures',
+    description: "Choose whose picture shows across the app: 7TV (the picture someone set on 7TV, otherwise their platform's) or Twitch (always the platform's own picture, no 7TV lookups). Previously \"7TV profile pictures\". Picture source, animated avatars, custom avatar, pfp, Twitch pfp, 7TV pfp."
+  },
+  {
+    tab: 'Chat',
+    section: 'Names & Badges',
+    title: 'Animation',
+    parent: 'Profile pictures',
+    description: 'Animate profile pictures: Always moves every 7TV picture, On hover moves profile cards and moves a list picture while you point at its card, Never keeps them all still. Separate from the Motion setting. Animated avatars, moving pfp, GIF avatars.'
   },
   {
     tab: 'Chat',
@@ -1497,8 +1510,8 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Chat',
     section: 'Names & Badges',
-    title: 'Profile pictures',
-    description: "On YouTube and TikTok, the chatter's picture leads their message. Profile pictures beside names, avatars, pfp."
+    title: 'Pictures in chat',
+    description: "On YouTube and TikTok, the chatter's picture leads their message. Previously \"Profile pictures\". Profile pictures beside names, avatars, pfp in chat."
   },
   {
     tab: 'Chat',
@@ -1694,6 +1707,12 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Stream Overlay',
     title: 'Overlay profiles',
     description: 'Run multiple overlays in different styles, each with its own OBS link. Create, duplicate, rename, and delete overlay profiles.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Stream Overlay',
+    title: 'Undo and redo',
+    description: 'Step back through your overlay edits, and forward again. Put back a value you changed. Ctrl+Z, Ctrl+Shift+Z, Ctrl+Y, history, revert.'
   },
   {
     tab: 'Overlay',
@@ -1907,6 +1926,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     title: 'Twitch badges',
     parent: 'Badges',
     description: 'Hide kinds of Twitch badges on the overlay: subscriber and founder, prediction, gifted subs, bits and cheer, Blossom, Bloom, mod and VIP, and everything else. Hide prediction badges, badge categories.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Emotes & Badges',
+    title: 'Custom mod & VIP badges',
+    parent: 'Badges',
+    description: "Show your channel's own FrankerFaceZ moderator and VIP badge art on the overlay. Off shows Twitch's standard moderator and VIP badges. FFZ mod badge, custom VIP badge, room badges."
   },
   {
     tab: 'Overlay',
@@ -2141,6 +2167,12 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Events',
     title: 'Cheers',
     description: 'Show a Twitch cheer on the overlay inline like a normal message, or promote it to an event card like subs and raids. Bits, cheer, gem, tier. Previously "Bits messages".'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Events',
+    title: 'Emote changes',
+    description: 'Show a row on the overlay when an emote is added to, removed from or renamed in your 7TV emote set, with who made the change. 7TV emote set, added emote, removed emote.'
   },
   {
     tab: 'Overlay',

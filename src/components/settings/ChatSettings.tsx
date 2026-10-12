@@ -75,6 +75,14 @@ import { getUserCosmetics, computePaintStyle } from '../../services/seventvServi
 import { StyledChatName, type NameSeparator, type NameStyle } from '../chat/StyledChatName';
 import type { DeletedMessageStyle } from '../chat/deletedMessage';
 import { DeletedMessagePreview, EventRowPreview, MentionPreview, MessageLayoutPreview, SettingPreview } from './ChatPreview';
+import { ProfilePicturePreview } from './ProfilePicturePreview';
+import {
+  DEFAULT_PROFILE_PICTURE_ANIMATION,
+  DEFAULT_PROFILE_PICTURE_SOURCE,
+  profilePictureSource,
+  type ProfilePictureAnimation,
+  type ProfilePictureSource,
+} from '../../services/sevenTvPictures';
 import { SoundVolume } from './SoundControls';
 import { InlineSlider, SubControl, SubControls } from '../plugins/settingsPageKit';
 import { useSoundOptions } from '../../hooks/useSoundOptions';
@@ -389,6 +397,9 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
   const mentionSoundOptions = useSoundOptions({ noneLabel: 'No sound' });
   const [eventStyleHover, setEventStyleHover] = useState<'cards' | 'outline' | 'plain' | null>(null);
   const [glintHover, setGlintHover] = useState<'none' | 'sheen' | 'pulse' | 'chase' | null>(null);
+  const [pictureAnimationHover, setPictureAnimationHover] = useState<ProfilePictureAnimation | null>(null);
+  const [pictureSourceHover, setPictureSourceHover] = useState<ProfilePictureSource | null>(null);
+  const pictureSource = profilePictureSource(settings.cosmetics?.profile_picture_source);
   const [commandDraft, setCommandDraft] = useState('');
   const [commandMode, setCommandMode] = useState<'prefix' | 'exact'>('prefix');
   const commandFilters: CommandFilter[] = settings.chat_filters?.command_filters ?? [];
@@ -1607,22 +1618,55 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
 
         <SettingsRow
           title="Profile pictures"
+          onReset={resetFor(['cosmetics.profile_picture_source', DEFAULT_PROFILE_PICTURE_SOURCE])}
+          description="7TV shows the picture someone set on 7TV when they have one; Twitch always shows the platform's own, across the app."
+          help="Twitch shows each platform's own picture (Kick and YouTube included) and never asks 7TV for one; paints and badges stay. Animation has its own choice below and does not follow your Motion setting."
+        >
+          <div className="space-y-3">
+            <SegmentedSelect<ProfilePictureSource>
+              value={pictureSource}
+              onChange={(value) => setCosmetics({ profile_picture_source: value })}
+              onPreview={setPictureSourceHover}
+              options={[
+                { value: 'seventv', label: '7TV' },
+                { value: 'twitch', label: 'Twitch' },
+              ]}
+            />
+            <ProfilePicturePreview
+              source={pictureSourceHover ?? pictureSource}
+              animation={
+                pictureAnimationHover ??
+                ((settings.cosmetics?.profile_picture_animation ?? DEFAULT_PROFILE_PICTURE_ANIMATION) as ProfilePictureAnimation)
+              }
+            />
+          </div>
+          {pictureSource === 'seventv' && (
+            <SubControls>
+              <SubControl
+                title="Animation"
+                onReset={resetFor(['cosmetics.profile_picture_animation', DEFAULT_PROFILE_PICTURE_ANIMATION])}
+                control={
+                  <SegmentedSelect<ProfilePictureAnimation>
+                    value={(settings.cosmetics?.profile_picture_animation ?? DEFAULT_PROFILE_PICTURE_ANIMATION) as ProfilePictureAnimation}
+                    onChange={(value) => setCosmetics({ profile_picture_animation: value })}
+                    onPreview={setPictureAnimationHover}
+                    options={[
+                      { value: 'always', label: 'Always' },
+                      { value: 'hover', label: 'On hover' },
+                      { value: 'never', label: 'Never' },
+                    ]}
+                  />
+                }
+              />
+            </SubControls>
+          )}
+        </SettingsRow>
+
+        <SettingsRow
+          title="Pictures in chat"
           onReset={resetFor(['chat_design.show_avatars', true])}
           description="On platforms that send one (YouTube, TikTok), the chatter's picture leads their message."
           control={<Toggle enabled={cd.show_avatars} onChange={() => setDesign({ show_avatars: !cd.show_avatars })} />}
-        />
-
-        <SettingsRow
-          title="7TV profile pictures"
-          onReset={resetFor(['cosmetics.seventv_profile_pictures', true])}
-          description="People who set a picture on 7TV show it instead of their platform picture: moving on profile cards, pins and the channel header, still in lists until you hover."
-          help="Follows your Motion setting: with reduced or no motion, every picture stays still."
-          control={
-            <Toggle
-              enabled={settings.cosmetics?.seventv_profile_pictures ?? true}
-              onChange={() => setCosmetics({ seventv_profile_pictures: !(settings.cosmetics?.seventv_profile_pictures ?? true) })}
-            />
-          }
         />
 
         <SettingsRow
@@ -2230,6 +2274,18 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             </SubControls>
           )}
         </SettingsRow>
+        <SettingsRow
+          title="Chat modes"
+          onReset={resetFor(['chat_input.show_room_modes', true])}
+          description="Shows when a channel limits who can chat, like emote-only, followers-only or slow mode. The message box names the mode and keeps a small icon for it while you type."
+          help="Hover the icons for what each mode means and whether you can still chat, for example as a moderator. During slow mode the send button counts down until you can send again. Shown for Twitch and Kick."
+          control={
+            <Toggle
+              enabled={settings.chat_input?.show_room_modes ?? true}
+              onChange={() => setInput({ show_room_modes: !(settings.chat_input?.show_room_modes ?? true) })}
+            />
+          }
+        />
         <SettingsRow
           title="Hide placeholder"
           onReset={resetFor(['chat_input.hide_placeholder', false])}

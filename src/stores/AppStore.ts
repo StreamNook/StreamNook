@@ -496,7 +496,7 @@ interface AppState {
   patchCurrentStream: (partial: Partial<TwitchStream>) => void;
   /** `sticky` keeps the toast on screen until it is dismissed or removed by
    *  id; pass `id` to be able to remove it. */
-  addToast: (message: string | React.ReactNode, type: 'info' | 'success' | 'warning' | 'error' | 'live' | 'channel_points', action?: { label: string; onClick: () => void }, options?: { skipIsland?: boolean; alwaysShow?: boolean; avatarUrl?: string; source?: 'plugin'; sticky?: boolean; id?: number }) => void;
+  addToast: (message: string | React.ReactNode, type: 'info' | 'success' | 'warning' | 'error' | 'live' | 'channel_points', action?: { label: string; onClick: () => void }, options?: { skipIsland?: boolean; alwaysShow?: boolean; avatarUrl?: string; avatarSevenTvId?: string; source?: 'plugin'; sticky?: boolean; id?: number }) => void;
   removeToast: (id: number) => void;
   loadSettings: () => Promise<void>;
   updateSettings: (newSettings: Settings) => Promise<void>;
@@ -1599,6 +1599,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           // Only the callers that are about a PERSON pass this; everything else
           // keeps the level glyph.
           avatarUrl: options?.avatarUrl,
+          // That person's cosmetics id, so the entry draws their 7TV picture.
+          avatarSevenTvId: options?.avatarSevenTvId,
           source: options?.source,
         }).catch(() => {});
       }
@@ -3476,6 +3478,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         whenBootSettled(() =>
           get().addToast(`Welcome back, ${userInfo.display_name}!`, 'success', undefined, {
             avatarUrl: userInfo.profile_image_url,
+            avatarSevenTvId: userInfo.id,
           }),
         );
       }

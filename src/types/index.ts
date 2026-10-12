@@ -581,9 +581,15 @@ export interface RemindersSettings {
 // busy). 'none' = no shadows (cleanest, best on busy backgrounds).
 export interface CosmeticsSettings {
   paint_shadows?: 'all' | 'one' | 'none';
-  // Show the profile picture someone set on 7TV in place of their platform
-  // picture. Default true. Mirrored in models/settings.rs (CosmeticsSettings).
-  seventv_profile_pictures?: boolean;
+  // Whose picture a person shows: 'seventv' (the picture they set on 7TV,
+  // otherwise their platform's) or 'twitch' (always the platform's own; no
+  // 7TV picture is looked up). Default 'seventv'. Replaces the old
+  // seventv_profile_pictures switch, which Rust reads as the source on load.
+  // Mirrored in models/settings.rs (CosmeticsSettings).
+  profile_picture_source?: 'seventv' | 'twitch';
+  // When a 7TV picture moves: 'always', 'hover' (focal surfaces move, lists
+  // on hover) or 'never'. Default 'always'. Separate from motion_mode.
+  profile_picture_animation?: 'always' | 'hover' | 'never';
 }
 
 // /spam and /pyramid. Mirrored in models/settings.rs (ChatBurstSettings).
@@ -661,6 +667,10 @@ export interface ChatInputSettings {
   // Show the channel points balance beside the points button instead of only
   // on hover. Ignored while hide_points_balance is on.
   show_points_balance_inline?: boolean;
+  // Show the channel's chat modes (emote-only, followers-only, slow mode...)
+  // in the message box while they are on. Typed in Rust
+  // (models/settings.rs ChatInputSettings), which owns the default: on.
+  show_room_modes?: boolean;
 }
 
 // Screen anchor a toast popup appears at. Mirrors the Rust `toast_position`
@@ -1614,6 +1624,8 @@ export interface ContinueWatchingItem {
   partner: boolean;
   /** Category of the broadcast; empty until Rust's hydrate has seen it. */
   game_name: string;
+  /** The channel's Twitch user id; empty until Rust's hydrate has seen it. */
+  channel_id?: string;
 }
 
 /** One changed section, the payload of the `home-snapshot` event. */
@@ -2294,6 +2306,8 @@ export interface SystemNotificationData {
    *  absent the row falls back to the level glyph, which is right for the ones
    *  that really are just status. */
   avatar_url?: string;
+  /** The cosmetics id of whoever `avatar_url` shows, for their 7TV picture. */
+  avatar_seventv_id?: string;
   title: string;
   message: string;
   icon?: string;

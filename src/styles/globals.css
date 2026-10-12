@@ -1958,6 +1958,25 @@ html[data-motion="off"] .sn-bulb-rainbow stop {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* The room's chat modes at the field's trailing edge (chat/RoomModeIndicator).
+   The field, its overlays and the length count read `--sn-room-pad`, so the
+   icons' width is reserved inside the box and nothing outside it moves when a
+   mode switches. A narrow row keeps the first icon and a "+N" count. */
+.sn-composer-field {
+  --sn-room-pad: 12px;
+}
+.sn-composer-field[data-room-modes] {
+  --sn-room-pad: var(--sn-room-pad-wide, 12px);
+}
+.sn-composer-row[data-narrow] .sn-composer-field[data-room-modes] {
+  --sn-room-pad: var(--sn-room-pad-narrow, 12px);
+}
+.sn-composer-row[data-narrow] .sn-room-modes [data-room-mode-rest] {
+  display: none;
+}
+.sn-composer-row:not([data-narrow]) .sn-room-modes [data-room-mode-count] {
+  display: none;
+}
 
 /* macOS overlay scrollbars take no width and show only while in use, so the
    ticks there come and go with the bar (ScrollbarMarks `overlay`) instead of
