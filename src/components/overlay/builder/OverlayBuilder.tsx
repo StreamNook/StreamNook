@@ -9,7 +9,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { RotateCcw, RefreshCw, Link2, Plus, X, AlertTriangle, Play, Pause, Copy, Trash2, Pencil, Check, ChevronRight, LogIn } from 'lucide-react';
+import { RotateCcw, RefreshCw, Link2, Plus, X, AlertTriangle, Play, Pause, Copy, Trash2, Pencil, Check, ChevronRight, LogIn, Download, Upload } from 'lucide-react';
 import { Tooltip } from '../../ui/Tooltip';
 import { Dropdown } from '../../ui/Dropdown';
 import { SettingsSection, SettingsRow, SettingsSubGroup, SegmentedSelect } from '../../settings/_primitives';
@@ -18,7 +18,7 @@ import { SevenTVLogo } from '../../emotesets/SevenTVLogo';
 import streamNookLogo from '../../../assets/streamnook-logo.png';
 import { OverlayChat } from '../OverlayChat';
 import { ProviderIcon } from '../ProviderIcon';
-import { SAMPLE_MESSAGES, randomSampleMessage, seedFlowMessages, type OverlayMessage } from '../sampleMessages';
+import { hasSampleFocus, randomSampleMessage, samplesFocusing, seedFlowMessages, type OverlayMessage } from '../sampleMessages';
 import {
   BUBBLE_SHAPES,
   CATEGORY_TEMPLATE_TOKENS,
@@ -39,11 +39,15 @@ import {
   OVERLAY_ENTRANCES,
   OVERLAY_LIMITS,
   OVERLAY_TEXT_ALIGNS,
+  OVERLAY_TEXT_ENTRY_MAX,
   OVERLAY_TEXT_WEIGHTS,
   PROVIDER_CATEGORY_LABELS,
   PROVIDER_EVENT_CATEGORIES,
   THIRD_PARTY_BADGE_PROVIDERS,
+  TWITCH_BADGE_CATEGORIES,
   clampOverlayStyle,
+  overlayFontStack,
+  overlayStyleTooLarge,
   type EventCategory,
   type OverlayStyle,
 } from '../overlayConfig';
@@ -61,7 +65,22 @@ import {
   parseYouTubeIdentifier,
 } from '../../../utils/parseChannelInput';
 import { useOverlayHost } from './overlayHost';
-import { newProfileUid, profileFromServer, reconcileProfiles, type OverlayProfile, type OverlaySource, type ServerOverlay } from './profileSync';
+import {
+  MAX_OVERLAY_FILE_BYTES,
+  OVERLAY_FILE_EXTENSION,
+  buildOverlayFile,
+  newProfileUid,
+  overlayFileName,
+  overlaySaveSnapshot,
+  parseOverlayFile,
+  profileFromImport,
+  profileFromServer,
+  reconcileProfiles,
+  type ImportedOverlayFile,
+  type OverlayProfile,
+  type OverlaySource,
+  type ServerOverlay,
+} from './profileSync';
 
 const STORAGE_KEY = 'sn_overlay_style_v1';
 const SOURCES_KEY = 'sn_overlay_sources_v1';
@@ -73,6 +92,9 @@ const OVERLAY_ID_KEY = 'sn_overlay_id_v1';
 // makes the calls: on desktop Rust holds the token, on the site the session
 // cookie proves the account.
 const PUBLISH_PATH = '/api/overlays';
+// The server refuses a style over OVERLAY_STYLE_MAX_CHARS; the long lists are
+// what get a style there.
+const TOO_LARGE_TO_SAVE = 'This overlay is too large to save. Remove some hidden phrases or command filters.';
 const SOURCE_PROVIDERS: ProviderId[] = ['twitch', 'kick', 'youtube', 'tiktok'];
 
 function loadOverlayId(): string | null {
@@ -257,7 +279,7 @@ const SCENE_STYLES: Record<SceneBg, CSSProperties> = {
 // like a live chat. OverlayChat caps to what fits and animates each new row, so
 // this just grows the list (bounded) and lets the renderer do the rest.
 const SampleFlowFeed = ({ style }: { style: OverlayStyle }) => {
-  const [msgs, setMsgs] = useState<OverlayMessage[]>(() => seedFlowMessages(8));
+  const [msgs, setMsgs] = useState<OverlayMessage[]>(() => seedFlowMessages(16));
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
     const tick = () => {
@@ -536,6 +558,7 @@ const CommandFilterEditor = ({ filters, onAdd, onRemove }: {
           value={val}
           onChange={(e) => setVal(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}
+          maxLength={OVERLAY_TEXT_ENTRY_MAX}
           placeholder={mode === 'prefix' ? '! or #' : '!title'}
           className="flex-1 min-w-0 rounded-lg bg-glass border border-borderLight px-3 py-1.5 text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:border-accent/60"
         />
@@ -577,6 +600,7 @@ const PhraseEditor = ({ phrases, onAdd, onRemove }: {
           value={val}
           onChange={(e) => setVal(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}
+          maxLength={OVERLAY_TEXT_ENTRY_MAX}
           placeholder="Word or phrase to hide"
           className="flex-1 min-w-0 rounded-lg bg-glass border border-borderLight px-3 py-1.5 text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:border-accent/60"
         />
@@ -605,6 +629,64 @@ const sourceKey = (s: OverlaySource) => `${s.provider}:${s.channel.toLowerCase()
 const CUSTOM_FONT = '__custom__';
 const CUSTOM_FONT_STARTER = "'Poppins', sans-serif";
 const primaryFamilyName = (ff: string) => (ff || '').split(',')[0].trim().replace(/^["']|["']$/g, '');
+
+// Overlay files where the host has no file dialogs of its own (the web
+// builder): a browser download, and the browser's file picker.
+const downloadOverlayFile = (name: string, style: OverlayStyle): string => {
+  const fileName = overlayFileName(name);
+  const url = URL.createObjectURL(new Blob([buildOverlayFile(name, style)], { type: 'application/json' }));
+  // In the document while it is clicked: some browsers ignore a click on a
+  // detached link.
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return fileName;
+};
+// Settles exactly once: the chosen file (checked), null when the streamer
+// cancelled, or an Error whose message is a line for the builder.
+const pickOverlayFileInBrowser = (): Promise<ImportedOverlayFile | null> =>
+  new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = `.${OVERLAY_FILE_EXTENSION},.json,application/json`;
+    input.style.display = 'none';
+    let settled = false;
+    const finish = (settle: () => void) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('focus', onFocus);
+      input.remove();
+      settle();
+    };
+    // Browsers without the input's cancel event: the window gets focus back
+    // when the picker closes. A chosen file's change event can arrive just
+    // after that focus, so only an input still empty a moment later is a cancel.
+    const onFocus = () => {
+      setTimeout(() => {
+        if (!input.files?.length) finish(() => resolve(null));
+      }, 1000);
+    };
+    input.addEventListener('cancel', () => finish(() => resolve(null)));
+    input.addEventListener('change', () => {
+      const file = input.files?.[0];
+      if (!file) return finish(() => resolve(null));
+      if (file.size > MAX_OVERLAY_FILE_BYTES) {
+        return finish(() => reject(new Error('That file is too large to be an overlay file.')));
+      }
+      // parseOverlayFile throws a builder line for anything that is not an
+      // overlay file; chained this way the throw rejects the picker.
+      const read = file.text().then(parseOverlayFile);
+      finish(() => read.then(resolve, reject));
+    });
+    document.body.appendChild(input);
+    window.addEventListener('focus', onFocus);
+    input.click();
+  });
 
 // A few sample emoji shown in the Emoji-style dropdown so users can compare vendor
 // styles at a glance. Built from codepoints (no literal emoji in source).
@@ -637,6 +719,11 @@ const OverlayEditor = () => {
     return () => clearTimeout(t);
   }, [resetArmed]);
   const [flow, setFlow] = useState(false);
+  // The last edited setting whose sample sits above the visible tail (the giant
+  // emote, a YouTube avatar). The static sample brings that row into view, and
+  // keeps it there until another such setting is edited.
+  const [sampleFocus, setSampleFocus] = useState<string | null>(null);
+  const sampleFeed = useMemo(() => samplesFocusing(sampleFocus), [sampleFocus]);
   const [sources, setSources] = useState<OverlaySource[]>(initial.profiles[initial.active].sources);
   const [sceneBg, setSceneBg] = useState<SceneBg>('scene');
   const [previewMode, setPreviewMode] = useState<'sample' | 'live'>('sample');
@@ -694,10 +781,13 @@ const OverlayEditor = () => {
 
   // The working state (style/sources/id) IS the active profile: mirror every
   // change into the profiles list, and keep writing the legacy single-overlay
-  // keys so anything still reading them sees the overlay being edited.
+  // keys so anything still reading them sees the overlay being edited. Matched
+  // by uid, not position, so a list that changed under the editor (an import
+  // landing while the account list refreshes) can never take another
+  // overlay's look.
   useEffect(() => {
     setProfiles((list) =>
-      list.map((p, i) => (i === activeIdx ? { ...p, style, sources } : p)),
+      list.map((p) => (p.uid === activeUidRef.current ? { ...p, style, sources } : p)),
     );
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(style));
@@ -712,8 +802,10 @@ const OverlayEditor = () => {
     } catch { /* ignore */ }
   }, [profiles, activeIdx]);
 
-  const set = <K extends keyof OverlayStyle>(key: K, val: OverlayStyle[K]) =>
+  const set = <K extends keyof OverlayStyle>(key: K, val: OverlayStyle[K]) => {
     setStyle((s) => ({ ...s, [key]: val }));
+    if (hasSampleFocus(key)) setSampleFocus(key);
+  };
 
   // Per-row reset. Returns undefined while every key it covers still matches the
   // StreamNook default, so SettingsRow shows nothing — the icon appearing IS the
@@ -740,6 +832,12 @@ const OverlayEditor = () => {
     setStyle((s) => {
       const hidden = s.hiddenBadgeProviders ?? [];
       return { ...s, hiddenBadgeProviders: hidden.includes(id) ? hidden.filter((k) => k !== id) : [...hidden, id] };
+    });
+
+  const toggleTwitchBadgeCategory = (id: string) =>
+    setStyle((s) => {
+      const hidden = s.hiddenTwitchBadgeCategories ?? [];
+      return { ...s, hiddenTwitchBadgeCategories: hidden.includes(id) ? hidden.filter((k) => k !== id) : [...hidden, id] };
     });
 
   const toggleSourceFilter = (id: ProviderId) =>
@@ -880,22 +978,35 @@ const OverlayEditor = () => {
   // The debounced auto-save, holding exactly what it will send, so switching
   // overlays or closing the builder can send it now instead of dropping it.
   const pendingSaveRef = useRef<{ timer: ReturnType<typeof setTimeout>; profile: OverlayProfile } | null>(null);
-  // Loading an overlay (on open, on switch, or a newer copy from the account)
-  // changes the editor without the user editing anything; that must not count
-  // as an edit and save straight back. True at mount for the same reason.
-  const skipSaveRef = useRef(true);
+  // Each overlay's look and sources as last saved or loaded (by uid). Loading
+  // an overlay (on open, on switch, or a newer copy from the account) changes
+  // the editor without the user editing anything, and an effect can run twice
+  // on mount; neither differs from this, so neither saves straight back.
+  const savedSnapshotsRef = useRef(
+    new Map<string, string>(initial.profiles.map((p) => [p.uid, overlaySaveSnapshot(p.style, p.sources)])),
+  );
   const profilesRef = useRef(profiles);
   useEffect(() => {
     profilesRef.current = profiles;
   }, [profiles]);
+  // The list position follows the overlay being edited (by uid), so the picker
+  // and the per-overlay actions point at it even after the list moved under it.
+  useEffect(() => {
+    const i = profiles.findIndex((p) => p.uid === activeUidRef.current);
+    if (i >= 0 && i !== activeIdx) setActiveIdx(i);
+  }, [profiles, activeIdx]);
   // A line under the publish controls when the account's copy replaced this one.
   const [notice, setNotice] = useState<string | null>(null);
+  // The notice a failed auto-save put up, so the next save that lands can take
+  // it down again.
+  const saveFailNoticeRef = useRef<string | null>(null);
 
   const saveError = (err?: string, status?: number): string =>
     err === 'unauthenticated' ? 'Sign in to Twitch to publish an overlay.'
       : err === 'no_channels' ? 'Add at least one source first.'
         : err === 'overlay_limit' ? 'Overlay limit reached (10 per account). Delete one you no longer use first.'
-          : `Publish failed (${err || status}).`;
+          : err === 'style_too_large' ? TOO_LARGE_TO_SAVE
+            : `Publish failed (${err || status}).`;
 
   // Save one overlay. `copy` = the manual publish action (copies the OBS link and
   // shows state); auto-save passes false to update the same link silently, so the
@@ -913,15 +1024,18 @@ const OverlayEditor = () => {
     inFlightRef.current.add(forUid);
     if (copy) { setPublishState('publishing'); setPublishError(null); setNotice(null); }
     try {
+      // The name rides inside the style so the other surfaces show it. A style
+      // the server would refuse is not sent at all.
+      const sentStyle = { ...forProfile.style, profileName: forProfile.name };
+      if (overlayStyleTooLarge(sentStyle)) throw new Error(TOO_LARGE_TO_SAVE);
       // Always `create`: an unusable id mints a fresh overlay rather than folding
-      // this one into another overlay on the account. The name rides inside the
-      // style so the other surfaces show it.
+      // this one into another overlay on the account.
       const res = await apiRequest('POST', PUBLISH_PATH, undefined, {
         id: forProfile.id ?? undefined,
         create: true,
         base_updated_at: forProfile.id ? versionsRef.current.get(forUid) ?? undefined : undefined,
         channels: forProfile.sources,
-        style: { ...forProfile.style, profileName: forProfile.name },
+        style: sentStyle,
       });
       if (res.status === 409) {
         const body = res.json<{ error?: string; overlay?: ServerOverlay }>();
@@ -931,6 +1045,7 @@ const OverlayEditor = () => {
           if (theirs) {
             againRef.current.delete(forUid);
             versionsRef.current.set(forUid, theirs.version);
+            savedSnapshotsRef.current.set(forUid, overlaySaveSnapshot(theirs.style, theirs.sources));
             setProfiles((list) => list.map((p) => (p.uid === forUid ? theirs : p)));
             if (activeUidRef.current === forUid) {
               applyProfile(theirs);
@@ -952,6 +1067,7 @@ const OverlayEditor = () => {
       if (!data?.id || !data?.url) throw new Error('Publish failed (bad reply).');
       versionsRef.current.set(forUid, data.updated_at ?? null);
       idsRef.current.set(forUid, data.id);
+      savedSnapshotsRef.current.set(forUid, overlaySaveSnapshot(forProfile.style, forProfile.sources));
       // Stamp the id and version onto the overlay this save was for, and strip
       // the id from any other entry that claims the same overlay.
       setProfiles((list) =>
@@ -965,6 +1081,12 @@ const OverlayEditor = () => {
         overlayIdRef.current = data.id;
         try { localStorage.setItem(OVERLAY_ID_KEY, data.id); } catch { /* ignore */ }
         setPublishedUrl(data.url);
+        // A save went through, so an earlier failed auto-save's line is stale.
+        const stale = saveFailNoticeRef.current;
+        if (stale) {
+          saveFailNoticeRef.current = null;
+          setNotice((n) => (n === stale ? null : n));
+        }
         if (copy) {
           try { await navigator.clipboard.writeText(data.url); } catch { /* clipboard may be blocked; URL still shown */ }
           setPublishState('done');
@@ -975,9 +1097,16 @@ const OverlayEditor = () => {
         setPublishState('idle');
       }
     } catch (e) {
+      const message = e instanceof Error ? e.message : 'Publish failed.';
       if (copy && activeUidRef.current === forUid) {
-        setPublishError(e instanceof Error ? e.message : 'Publish failed.');
+        setPublishError(message);
         setPublishState('error');
+      } else if (!copy && activeUidRef.current === forUid) {
+        // An auto-save that fails would otherwise leave OBS behind the builder
+        // without a word.
+        const line = message === TOO_LARGE_TO_SAVE ? message : `Your latest change did not reach the OBS link. ${message}`;
+        saveFailNoticeRef.current = line;
+        setNotice(line);
       }
     } finally {
       inFlightRef.current.delete(forUid);
@@ -1014,7 +1143,7 @@ const OverlayEditor = () => {
       host.signIn();
       return;
     }
-    const p = profiles[activeIdx];
+    const p = profiles.find((x) => x.uid === activeUidRef.current);
     if (!p) return;
     cancelPendingSave(p.uid);
     void pushProfile({ ...p, style, sources }, true);
@@ -1023,12 +1152,19 @@ const OverlayEditor = () => {
   // Keep the published link a LIVE MIRROR of the builder: once published, save
   // any style/source change (debounced), so the streamer never has to re-copy.
   useEffect(() => {
-    if (skipSaveRef.current) {
-      skipSaveRef.current = false;
+    // The overlay being edited, by uid: auto-save never sends this look to
+    // another overlay's link, even if the list moved under the editor.
+    const p = profiles.find((x) => x.uid === activeUidRef.current);
+    if (!p?.id) return;
+    // Only a real edit saves: the editor differs from what this overlay last
+    // saved or loaded. An edit put back before the debounce sends nothing.
+    if (overlaySaveSnapshot(style, sources) === savedSnapshotsRef.current.get(p.uid)) {
+      if (pendingSaveRef.current?.profile.uid === p.uid) {
+        clearTimeout(pendingSaveRef.current.timer);
+        pendingSaveRef.current = null;
+      }
       return;
     }
-    const p = profiles[activeIdx];
-    if (!p?.id) return;
     if (pendingSaveRef.current) clearTimeout(pendingSaveRef.current.timer);
     const profile = { ...p, style, sources };
     const timer = setTimeout(() => {
@@ -1043,7 +1179,7 @@ const OverlayEditor = () => {
 
   // Load an overlay's saved state into the working editor state.
   const applyProfile = (p: OverlayProfile) => {
-    skipSaveRef.current = true;
+    savedSnapshotsRef.current.set(p.uid, overlaySaveSnapshot(p.style, p.sources));
     activeUidRef.current = p.uid;
     overlayIdRef.current = p.id;
     setStyle(clampOverlayStyle({ ...DEFAULT_OVERLAY_STYLE, ...p.style } as OverlayStyle));
@@ -1075,8 +1211,12 @@ const OverlayEditor = () => {
     setNotice(message);
   };
 
+  // Set while an overlay file is being saved or opened. The list stays put
+  // meanwhile: no switching, new, duplicate or delete.
+  const [fileBusy, setFileBusy] = useState(false);
+
   const switchProfile = (idx: number) => {
-    if (idx === activeIdx || !profiles[idx]) return;
+    if (fileBusy || idx === activeIdx || !profiles[idx]) return;
     // Send the overlay being left if it has an edit waiting, then load the new one.
     flushPendingSave();
     setNotice(null);
@@ -1084,8 +1224,8 @@ const OverlayEditor = () => {
     applyProfile(profiles[idx]);
   };
 
-  const uniqueProfileName = (base: string): string => {
-    const names = new Set(profiles.map((p) => p.name.toLowerCase()));
+  const uniqueProfileName = (base: string, list: OverlayProfile[] = profiles): string => {
+    const names = new Set(list.map((p) => p.name.toLowerCase()));
     if (!names.has(base.toLowerCase())) return base;
     for (let n = 2; ; n++) if (!names.has(`${base} ${n}`.toLowerCase())) return `${base} ${n}`;
   };
@@ -1095,6 +1235,7 @@ const OverlayEditor = () => {
   // same chat in different styles). Either way it is a draft on this device
   // until its first publish mints its own link.
   const addProfile = (duplicate: boolean) => {
+    if (fileBusy) return;
     flushPendingSave();
     setNotice(null);
     const p: OverlayProfile = {
@@ -1111,6 +1252,52 @@ const OverlayEditor = () => {
     applyProfile(p);
   };
 
+  // Export: this overlay's look to a file anyone can open. Import: a shared
+  // file as a NEW draft overlay (its own link on first publish), keeping this
+  // streamer's sources. Neither touches a published overlay.
+  const exportOverlay = async () => {
+    const name = profiles[activeIdx]?.name ?? 'Overlay';
+    setFileBusy(true);
+    try {
+      const saved = host.exportOverlayFile ? await host.exportOverlayFile(name, style) : downloadOverlayFile(name, style);
+      if (saved) setNotice(`Saved "${name}" to ${saved}. Anyone can open it with Import.`);
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFileBusy(false);
+    }
+  };
+  const importOverlay = async () => {
+    setFileBusy(true);
+    let file: ImportedOverlayFile | null;
+    try {
+      file = host.importOverlayFile ? await host.importOverlayFile() : await pickOverlayFileInBrowser();
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : String(e));
+      return;
+    } finally {
+      setFileBusy(false);
+    }
+    if (!file) return;
+    flushPendingSave();
+    // The dialog was open a while, and the account list can refresh when the
+    // window gets focus back: read the list and the overlay being edited as
+    // they are now, not as they were at the click.
+    const list = profilesRef.current;
+    const current = list.find((x) => x.uid === activeUidRef.current) ?? { sources, style };
+    const p = profileFromImport(file, uniqueProfileName(file.name, list), { sources: current.sources, style: current.style });
+    setProfiles((l) => [...l, p]);
+    setActiveIdx(list.length);
+    applyProfile(p);
+    const skipped = file.dropped.length;
+    const tooLarge = overlayStyleTooLarge({ ...p.style, profileName: p.name });
+    setNotice(
+      `Imported "${p.name}" as a new overlay.`
+        + (skipped ? ` ${skipped} setting${skipped === 1 ? '' : 's'} in the file could not be used.` : '')
+        + (tooLarge ? ' It is too large to publish as it is: remove some hidden phrases or command filters first.' : ''),
+    );
+  };
+
   const commitRename = () => {
     const name = renameValue.trim();
     setRenaming(false);
@@ -1121,7 +1308,7 @@ const OverlayEditor = () => {
   };
 
   const deleteProfile = async () => {
-    if (profiles.length <= 1) return;
+    if (fileBusy || profiles.length <= 1) return;
     // Local state math runs synchronously BEFORE the request below, so a save
     // response landing meanwhile can't be clobbered by a stale list.
     const victim = profiles[activeIdx];
@@ -1320,6 +1507,7 @@ const OverlayEditor = () => {
               value={String(activeIdx)}
               options={profiles.map((p, i) => ({ value: String(i), label: p.name }))}
               onChange={(v) => switchProfile(parseInt(v, 10))}
+              disabled={fileBusy}
               className="max-w-[200px]"
             />
           )}
@@ -1333,20 +1521,31 @@ const OverlayEditor = () => {
             <Tooltip content="Rename">
               <button
                 onClick={() => { setRenameValue(profiles[activeIdx]?.name ?? ''); setRenaming(true); }}
-                className="glass-button rounded-md p-1.5 text-textSecondary hover:text-textPrimary transition-colors"
+                disabled={fileBusy}
+                className="glass-button rounded-md p-1.5 text-textSecondary hover:text-textPrimary transition-colors disabled:opacity-50"
               >
                 <Pencil size={13} />
               </button>
             </Tooltip>
           )}
           <Tooltip content="New overlay">
-            <button onClick={() => addProfile(false)} className="glass-button rounded-md p-1.5 text-textSecondary hover:text-textPrimary transition-colors">
+            <button onClick={() => addProfile(false)} disabled={fileBusy} className="glass-button rounded-md p-1.5 text-textSecondary hover:text-textPrimary transition-colors disabled:opacity-50">
               <Plus size={13} />
             </button>
           </Tooltip>
           <Tooltip content="Duplicate">
-            <button onClick={() => addProfile(true)} className="glass-button rounded-md p-1.5 text-textSecondary hover:text-textPrimary transition-colors">
+            <button onClick={() => addProfile(true)} disabled={fileBusy} className="glass-button rounded-md p-1.5 text-textSecondary hover:text-textPrimary transition-colors disabled:opacity-50">
               <Copy size={13} />
+            </button>
+          </Tooltip>
+          <Tooltip content="Export to a file you can share">
+            <button onClick={() => void exportOverlay()} disabled={fileBusy} className="glass-button rounded-md p-1.5 text-textSecondary hover:text-textPrimary transition-colors disabled:opacity-50">
+              <Download size={13} />
+            </button>
+          </Tooltip>
+          <Tooltip content="Import a shared file as a new overlay">
+            <button onClick={() => void importOverlay()} disabled={fileBusy} className="glass-button rounded-md p-1.5 text-textSecondary hover:text-textPrimary transition-colors disabled:opacity-50">
+              <Upload size={13} />
             </button>
           </Tooltip>
           {profiles.length > 1 && (
@@ -1358,7 +1557,8 @@ const OverlayEditor = () => {
                   void deleteProfile();
                 }}
                 onBlur={() => setConfirmDelete(false)}
-                className={`glass-button rounded-md p-1.5 transition-colors ${confirmDelete ? 'text-error' : 'text-textSecondary hover:text-error'}`}
+                disabled={fileBusy}
+                className={`glass-button rounded-md p-1.5 transition-colors disabled:opacity-50 ${confirmDelete ? 'text-error' : 'text-textSecondary hover:text-error'}`}
               >
                 <Trash2 size={13} />
               </button>
@@ -1381,7 +1581,10 @@ const OverlayEditor = () => {
                   setResetArmed(false);
                   setStyle({ ...DEFAULT_OVERLAY_STYLE });
                 }}
-                className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] transition-colors flex-shrink-0 ${
+                // Like every other action in this row, held while the export or
+                // import file dialog is open.
+                disabled={fileBusy}
+                className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] transition-colors flex-shrink-0 disabled:opacity-50 ${
                   resetArmed ? 'text-error' : 'text-textMuted hover:text-textPrimary'
                 }`}
               >
@@ -1401,7 +1604,7 @@ const OverlayEditor = () => {
             >
               <button
                 onClick={publish}
-                disabled={publishState === 'publishing' || (!!host.accountId && sources.length === 0)}
+                disabled={fileBusy || publishState === 'publishing' || (!!host.accountId && sources.length === 0)}
                 // Accent on GLASS, not a filled accent slab. Publish does need to
                 // outrank the four icon buttons beside it (it is the action you
                 // come back to after every tweak, and as a plain glass button it
@@ -1591,7 +1794,7 @@ const OverlayEditor = () => {
                   value={primaryFamilyName(style.fontFamily)}
                   onChange={(e) => set('fontFamily', `'${e.target.value.replace(/['"]/g, '')}', sans-serif`)}
                   placeholder="e.g. Poppins"
-                  style={{ fontFamily: style.fontFamily }}
+                  style={{ fontFamily: overlayFontStack(style.fontFamily) }}
                   className="w-full min-w-0 rounded-lg bg-glass border border-borderLight px-3 py-1.5 text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:border-accent/60"
                 />
                 <p className="text-[12px] leading-relaxed text-textMuted">
@@ -1648,9 +1851,34 @@ const OverlayEditor = () => {
               <SegmentedSelect value={style.giantEmoteAlign ?? 'center'} onChange={(v) => set('giantEmoteAlign', v)} options={GIANT_EMOTE_ALIGNS} />
             </SettingsRow>
           </SettingsSubGroup>
-          <SettingsRow onReset={resetFor('showGifs')} title="GIFs" titleBadge={<SourceScope sources={['twitch']} />} description="GIFs that Tier 2 and Tier 3 subscribers post in chat, drawn big like a gigantified emote." help="Follows the giant emote Placement: Left, Center and Right give each GIF its own line below the message, Inline leaves it where it was typed. Off shows the short description Twitch sends in its place." control={<Toggle enabled={style.showGifs !== false} onChange={() => set('showGifs', style.showGifs === false)} />} />
+          <SettingsRow onReset={resetFor('showGifs')} title="GIFs" titleBadge={<SourceScope sources={['twitch']} />} description="GIFs that Tier 2 and Tier 3 subscribers post in chat, drawn big like a gigantified emote." help="Each GIF sits right after the name, where it was typed, like the words of a message. Off shows the short description Twitch sends in its place." control={<Toggle enabled={style.showGifs !== false} onChange={() => set('showGifs', style.showGifs === false)} />} />
+          <SettingsSubGroup>
+            <SettingsRow onReset={resetFor('gifScale')} title="Size" description="How big GIFs draw on your overlay." help="1.00x is the size GIFs have always drawn at. It sits on top of Emote size, so a bigger Emote size makes GIFs bigger too." disabled={style.showGifs === false}>
+              <Slider value={style.gifScale ?? 1} min={OVERLAY_LIMITS.gifScale.min} max={OVERLAY_LIMITS.gifScale.max} step={0.05} onChange={(v) => set('gifScale', v)} format={(v) => `${v.toFixed(2)}x`} />
+            </SettingsRow>
+          </SettingsSubGroup>
           <SettingsRow onReset={resetFor('showPersonalEmotes')} title="Personal emotes" titleBadge={<SourceScope sources={['twitch']} />} description="Emotes a 7TV subscriber brings into every channel from their personal set." help="A subscriber's personal 7TV set works in every channel, so chatters can show emotes your channel never added. Off renders those as the word that was typed. Your channel's own 7TV emotes are unaffected." control={<Toggle enabled={style.showPersonalEmotes !== false} onChange={() => set('showPersonalEmotes', style.showPersonalEmotes === false)} />} />
           <SettingsRow onReset={resetFor('showBadges')} title="Badges" description="Badges the platform sends: subscriber, moderator, VIP, and the rest." help="These arrive with each message from Twitch, Kick, YouTube and TikTok. Chat-client badges and the StreamNook member badge are separate, on the Add-on badges switch below, so turning this off leaves those showing." control={<Toggle enabled={style.showBadges} onChange={() => set('showBadges', !style.showBadges)} />} />
+          <SettingsSubGroup>
+          <SettingsRow onReset={resetFor('hiddenTwitchBadgeCategories')} title="Twitch badges" titleBadge={<SourceScope sources={['twitch']} />} description="Pick which kinds of Twitch badges show." help="Prediction is every blue, pink and gray pick. Gifted subs is gift leaders and sub gifter badges. Bits is bits leaders and cheer badges. Authority roles is lead mod, mod and VIP. Everything else covers Prime, Turbo, and event and game badges. Your own broadcaster badge always shows." disabled={!style.showBadges}>
+            <div className="flex flex-wrap gap-2">
+              {TWITCH_BADGE_CATEGORIES.map((c) => {
+                const on = style.showBadges && !(style.hiddenTwitchBadgeCategories ?? []).includes(c.id);
+                return (
+                  <button
+                    key={c.id}
+                    onClick={() => toggleTwitchBadgeCategory(c.id)}
+                    disabled={!style.showBadges}
+                    style={{ borderRadius: 8 }}
+                    className={`px-2.5 py-1.5 text-[13px] font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed ${on ? 'glass-input text-textPrimary' : 'glass-button text-textSecondary hover:text-textPrimary'}`}
+                  >
+                    {c.label}
+                  </button>
+                );
+              })}
+            </div>
+          </SettingsRow>
+          </SettingsSubGroup>
           {/* Scales every badge in the row, not just the platform ones, so this
               only goes dead when BOTH badge switches are off. */}
           <SettingsRow onReset={resetFor('badgeScale')} title="Badge size" disabled={!style.showBadges && style.showThirdPartyBadges === false}>
@@ -2008,7 +2236,7 @@ const OverlayEditor = () => {
                 flow ? (
                   <SampleFlowFeed style={style} />
                 ) : (
-                  <OverlayChat messages={SAMPLE_MESSAGES} style={style} superSample={2} />
+                  <OverlayChat messages={sampleFeed} style={style} superSample={2} />
                 )
               ) : (
                 // Kept mounted through all add/remove/swap so the feed diffs

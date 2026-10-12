@@ -228,6 +228,9 @@ export interface OverlayStyle {
    *  '7tv'). Each provider toggles independently, on top of the global
    *  showThirdPartyBadges master. See THIRD_PARTY_BADGE_PROVIDERS. */
   hiddenBadgeProviders: string[];
+  /** Twitch badge categories to hide, by id (e.g. 'predictions', 'roles'), on top
+   *  of the showBadges master. See TWITCH_BADGE_CATEGORIES. */
+  hiddenTwitchBadgeCategories: string[];
   /** How unicode emoji render. 'system' uses the OS/font emoji (varies by machine);
    *  the vendor styles re-render EVERY emoji from every platform as that one style's
    *  images, so a merged overlay looks consistent regardless of platform or OS. */
@@ -327,9 +330,12 @@ export interface OverlayStyle {
   /** Where the gigantified emote lands. See GiantEmoteAlign. */
   giantEmoteAlign: GiantEmoteAlign;
   /** Twitch chat GIFs (GIPHY-backed, Tier 2/3 subscribers): draw them at the
-   *  gigantified size with the same placement. Off shows the description
+   *  gigantified size, inline after the name. Off shows the description
    *  Twitch puts in the message text instead. */
   showGifs: boolean;
+  /** Chat GIF size multiplier on top of the gigantified size (which already
+   *  follows emoteScale). 1 = the size GIFs have always drawn at. */
+  gifScale: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -587,6 +593,35 @@ export const THIRD_PARTY_BADGE_PROVIDERS: { id: string; label: string }[] = [
   { id: 'dankchat', label: 'DankChat' },
 ];
 
+// Twitch badge categories a streamer can hide, each listing its Twitch badge SET
+// ids. The same table as TWITCH_BADGE_CATEGORY_SETS in the backend's
+// models/chat_layout.rs: the hosted overlay page has no backend, so the renderer
+// classifies by itself, and twitchBadgeCategories.test.ts fails when the two
+// tables differ. 'other' is every remaining set; the broadcaster and staff
+// badges sit in no category and follow only the Badges switch.
+export const TWITCH_BADGE_CATEGORIES: { id: string; label: string; sets: string[] }[] = [
+  { id: 'subscriber', label: 'Subscriber', sets: ['subscriber', 'founder'] },
+  { id: 'predictions', label: 'Prediction', sets: ['predictions'] },
+  { id: 'gifted-subs', label: 'Gifted subs', sets: ['sub-gifter', 'sub-gift-leader'] },
+  { id: 'bits', label: 'Bits', sets: ['bits', 'bits-leader', 'bits-charity', 'anonymous-cheerer'] },
+  { id: 'blossom', label: 'Blossom', sets: ['blossom-badge'] },
+  { id: 'bloom', label: 'Bloom', sets: ['bloom-badge'] },
+  { id: 'roles', label: 'Authority roles', sets: ['lead_moderator', 'moderator', 'vip'] },
+  { id: 'other', label: 'Everything else', sets: [] },
+];
+
+const TWITCH_BADGE_SETS_NEVER_CATEGORISED = new Set(['broadcaster', 'staff', 'admin', 'global_mod']);
+const TWITCH_BADGE_CATEGORY_BY_SET = new Map(
+  TWITCH_BADGE_CATEGORIES.flatMap((c) => c.sets.map((set) => [set, c.id] as const)),
+);
+
+/** The hide category of one Twitch badge set id, or null for a set no category
+ *  covers (the broadcaster and staff badges, or an empty id). */
+export function twitchBadgeCategory(setId: string | null | undefined): string | null {
+  if (!setId || TWITCH_BADGE_SETS_NEVER_CATEGORISED.has(setId)) return null;
+  return TWITCH_BADGE_CATEGORY_BY_SET.get(setId) ?? 'other';
+}
+
 // Font choices mirror the app's Theme › Font list so an overlay can match the
 // streamer's in-app look. Values are CSS font-family strings.
 // Unicode emoji rendering styles. 'system' = the OS/font emoji; the rest are image
@@ -651,6 +686,7 @@ export const DEFAULT_OVERLAY_STYLE: OverlayStyle = {
   showThirdPartyBadges: true,
   showAtmospheres: true,
   hiddenBadgeProviders: [],
+  hiddenTwitchBadgeCategories: [],
   emojiStyle: 'apple',
   bubble: false,
   bubbleShape: 'rounded',
@@ -684,6 +720,7 @@ export const DEFAULT_OVERLAY_STYLE: OverlayStyle = {
   giantEmotes: true,
   giantEmoteAlign: 'center',
   showGifs: true,
+  gifScale: 1,
 };
 
 // Clamp ranges so a builder (or a hand-edited saved config) can't produce a
@@ -698,6 +735,7 @@ export const OVERLAY_LIMITS = {
   lineHeight: { min: 1, max: 2.2 },
   messageGap: { min: 0, max: 28 },
   emoteScale: { min: 0.5, max: 3 },
+  gifScale: { min: 0.5, max: 2 },
   badgeScale: { min: 0.5, max: 2.5 },
   fontWeight: { min: 300, max: 700 },
   textShadowSize: { min: 0, max: 12 },
@@ -708,6 +746,24 @@ export const OVERLAY_LIMITS = {
   maxMessageAgeSec: { min: 0, max: 600 },
   maxMessageLines: { min: 0, max: 6 },
 } as const;
+
+/** Longest hidden phrase or command filter the builder accepts as a new entry. */
+export const OVERLAY_TEXT_ENTRY_MAX = 200;
+
+/** Longest hidden phrase or command filter an overlay file carries. Entries
+ *  saved before new ones were capped at OVERLAY_TEXT_ENTRY_MAX can be longer;
+ *  they travel whole up to this length, and a longer one is left out and
+ *  reported. The desktop file reader (overlay_file.rs) uses the same number. */
+export const OVERLAY_FILE_TEXT_ENTRY_MAX = 1000;
+
+/** The most characters a published overlay's style may serialize to. The
+ *  overlay server refuses a bigger one (style_too_large), measuring it as the
+ *  length of JSON.stringify of the style it receives. */
+export const OVERLAY_STYLE_MAX_CHARS = 16_000;
+
+/** Whether a style, exactly as it is sent to the server, is over the server's cap. */
+export const overlayStyleTooLarge = (style: unknown): boolean =>
+  JSON.stringify(style ?? {}).length > OVERLAY_STYLE_MAX_CHARS;
 
 // Coerce commandFilters into valid { value, mode } entries. Repairs legacy shapes
 // (a plain string from an earlier version → inferred mode) and drops empties, so a
@@ -770,6 +826,11 @@ export const clampOverlayStyle = (s: OverlayStyle): OverlayStyle => {
     hidePhrases: phrases,
     hiddenEvents: [],
     hiddenProviderEvents: Array.from(providerEvents),
+    // Absent on configs saved before badge categories existed → every badge shows.
+    hiddenTwitchBadgeCategories: Array.from(new Set(
+      (Array.isArray(s.hiddenTwitchBadgeCategories) ? s.hiddenTwitchBadgeCategories : [])
+        .filter((id) => TWITCH_BADGE_CATEGORIES.some((c) => c.id === id)),
+    )),
     bubbleOpacity: clamp(s.bubbleOpacity ?? 0.55, OVERLAY_LIMITS.bubbleOpacity.min, OVERLAY_LIMITS.bubbleOpacity.max),
     bubbleRadius: Math.round(clamp(s.bubbleRadius ?? 10, OVERLAY_LIMITS.bubbleRadius.min, OVERLAY_LIMITS.bubbleRadius.max)),
     maxMessageAgeSec: Math.round(clamp(s.maxMessageAgeSec ?? 0, OVERLAY_LIMITS.maxMessageAgeSec.min, OVERLAY_LIMITS.maxMessageAgeSec.max)),
@@ -792,6 +853,12 @@ export const clampOverlayStyle = (s: OverlayStyle): OverlayStyle => {
         : 'center',
     // Absent on configs saved before chat GIFs existed → on, like Twitch.
     showGifs: s.showGifs !== false,
+    // Absent on configs saved before the GIF size existed → 1, today's size.
+    gifScale: clamp(
+      Number.isFinite(s.gifScale) ? s.gifScale : 1,
+      OVERLAY_LIMITS.gifScale.min,
+      OVERLAY_LIMITS.gifScale.max,
+    ),
     textAlign: s.textAlign === 'center' || s.textAlign === 'right' ? s.textAlign : 'left',
     cheerDisplay: s.cheerDisplay === 'event' ? 'event' : 'message',
     fontWeight:
@@ -819,3 +886,116 @@ export const clampOverlayStyle = (s: OverlayStyle): OverlayStyle => {
     eventTemplates: sanitizeEventTemplates(s.eventTemplates),
   };
 };
+
+// ---------------------------------------------------------------------------
+// Fonts
+// ---------------------------------------------------------------------------
+// Installed fonts, matched by every name a streamer might type.
+//
+// CSS `font-family` only ever matches an installed font by its FAMILY name
+// ("Montserrat"). The names Windows shows in its font viewer and in file names
+// are often FACE names ("Montserrat Bold", "Uni Sans Heavy Caps") or PostScript
+// names ("Montserrat-Bold"), and Chromium (OBS's browser source, WebView2,
+// every browser) never matches those as a family, so the overlay fell back to
+// sans-serif. `local()` inside an @font-face does match full face names and
+// PostScript names. So a custom font gets an alias family whose sources are
+// local() lookups under each of those spellings, placed right after the typed
+// name in the stack: a real family name (installed or a webfont) still wins,
+// and a face or PostScript name resolves too.
+
+/** Generic CSS family keywords: never a webfont load, never an alias. */
+const GENERIC_FONT_FAMILIES = new Set([
+  'system-ui', 'ui-sans-serif', 'ui-monospace', 'ui-serif', 'sans-serif', 'serif',
+  'monospace', 'cursive', 'fantasy', '-apple-system', 'blinkmacsystemfont',
+  'inherit', 'initial', 'unset',
+]);
+
+/** A font-family list split into its families at the commas outside quotes,
+ *  each trimmed, or null when a quote never closes. */
+export function splitFontFamilies(ff: string): string[] | null {
+  const parts: string[] = [];
+  let cur = '';
+  let quote: string | null = null;
+  for (let i = 0; i < ff.length; i++) {
+    const c = ff[i];
+    if (quote) {
+      cur += c;
+      if (c === '\\' && i + 1 < ff.length) cur += ff[++i];
+      else if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+      cur += c;
+    } else if (c === ',') {
+      parts.push(cur.trim());
+      cur = '';
+    } else {
+      cur += c;
+    }
+  }
+  if (quote) return null;
+  parts.push(cur.trim());
+  return parts.filter(Boolean);
+}
+
+/** First family in a font-family string, unquoted. */
+export const primaryFontFamily = (ff: string): string => {
+  const first = (splitFontFamilies(ff || '') ?? [(ff || '').split(',')[0]])[0] ?? '';
+  const quoted = /^(["'])([\s\S]*)\1$/.exec(first.trim());
+  return quoted ? quoted[2] : first.trim().replace(/^["']|["']$/g, '');
+};
+
+/** A named family rather than a generic keyword. */
+export const isCustomFontFamily = (fam: string): boolean =>
+  !!fam && !GENERIC_FONT_FAMILIES.has(fam.toLowerCase());
+
+/** FNV-1a over the name's UTF-16 code units, in base 36. */
+const shortHash = (s: string): string => {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+};
+
+/** The alias family that finds an installed font by its face or PostScript name.
+ *  The readable part keeps only ASCII letters and digits, so the hash of the
+ *  full name keeps two names apart that share it (every Japanese name, or
+ *  "游ゴシック Medium" and "游明朝 Medium"). */
+export const localFontAlias = (family: string): string => {
+  const slug = family.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40).replace(/^-+|-+$/g, '');
+  return `sn-local-${slug ? `${slug}-` : ''}${shortHash(family)}`;
+};
+
+const cssString = (s: string): string =>
+  `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/[\n\r\f]/g, ' ')}'`;
+
+/** The @font-face rule behind localFontAlias: local() under the typed name, its
+ *  Regular face, and the PostScript spellings (spaces dropped, "-Regular"). The
+ *  face claims every weight, so a name typed as a Bold face draws bold names
+ *  in that face as it is instead of thickening it a second time. */
+export function localFontFaceCss(family: string): string {
+  const compact = family.replace(/\s+/g, '');
+  const names = Array.from(new Set([family, `${family} Regular`, compact, `${compact}-Regular`]));
+  return `@font-face{font-family:${cssString(localFontAlias(family))};src:${names.map((n) => `local(${cssString(n)})`).join(',')};font-weight:100 900;}`;
+}
+
+/** The alias families to keep declared after `family` was used: most recently
+ *  used last, at most `max`, so the oldest gives way first. */
+export function touchLocalFontAliases(current: readonly string[], family: string, max: number): string[] {
+  const next = current.filter((f) => f !== family);
+  next.push(family);
+  return next.length > max ? next.slice(next.length - max) : next;
+}
+
+/** The font-family stack the overlay renders with: the chosen stack with the
+ *  installed-font alias right after its first family. Generic stacks
+ *  ('system-ui, sans-serif') and lists with an unclosed quote come back
+ *  unchanged. */
+export function overlayFontStack(fontFamily: string): string {
+  const parts = splitFontFamilies(fontFamily || '');
+  if (!parts || parts.length === 0) return fontFamily;
+  const fam = primaryFontFamily(fontFamily);
+  if (!isCustomFontFamily(fam)) return fontFamily;
+  return [parts[0], `'${localFontAlias(fam)}'`, ...parts.slice(1)].join(', ');
+}

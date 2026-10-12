@@ -1,0 +1,223 @@
+{
+  "base": {
+    "width": 720,
+    "height": 1100,
+    "sources": [
+      "twitch",
+      "youtube"
+    ],
+    "sourceTag": "icon",
+    "fontFamily": "'CaskaydiaCove NF Bold', sans-serif",
+    "fontSize": 22.5,
+    "lineHeight": 1.75,
+    "messageGap": 12.5,
+    "emoteScale": 2.25,
+    "badgeScale": 1.75,
+    "showBadges": false,
+    "showTimestamps": true,
+    "bodyTextColor": "#ffd166",
+    "textShadow": false,
+    "textShadowColor": "#123456",
+    "textShadowSize": 7.5,
+    "textShadowOpacity": 0.35,
+    "textAlign": "center",
+    "fontWeight": 700,
+    "textItalic": true,
+    "textStrikethrough": true,
+    "background": "solid",
+    "backgroundColor": "#202040",
+    "backgroundOpacity": 0.45,
+    "eventStyle": "outline",
+    "eventFill": true,
+    "eventAnimation": "chase",
+    "eventAnimateRepeat": true,
+    "cheerDisplay": "event",
+    "hideBots": true,
+    "hiddenEvents": [],
+    "hiddenProviderEvents": [
+      "twitch:raid",
+      "twitch:milestone",
+      "kick:follow",
+      "youtube:cheer",
+      "tiktok:gift"
+    ],
+    "superchatCurrency": "EUR",
+    "hideCommands": true,
+    "commandFilters": [
+      {
+        "value": "!",
+        "mode": "prefix"
+      },
+      {
+        "value": "#",
+        "mode": "prefix"
+      },
+      {
+        "value": "!title",
+        "mode": "exact"
+      },
+      {
+        "value": "!longcommand abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefg",
+        "mode": "exact"
+      }
+    ],
+    "showPaints": false,
+    "showThirdPartyBadges": false,
+    "showAtmospheres": false,
+    "hiddenBadgeProviders": [
+      "7tv",
+      "ffz",
+      "homies-custom",
+      "dankchat"
+    ],
+    "hiddenTwitchBadgeCategories": [
+      "subscriber",
+      "predictions",
+      "gifted-subs",
+      "bits",
+      "blossom",
+      "bloom",
+      "roles",
+      "other"
+    ],
+    "emojiStyle": "google",
+    "showAvatars": false,
+    "showAtSign": false,
+    "readableNameColors": false,
+    "showReplies": false,
+    "replyStyle": "mention",
+    "linkStyle": "plain",
+    "linkColor": "#00ffaa",
+    "linkUnderline": false,
+    "showPersonalEmotes": false,
+    "eventTemplates": {
+      "subscription": "{username} subscribed for {months} months!",
+      "gift": "{username} gifted {count} subs",
+      "raid": "{username} raided with {viewers} viewers",
+      "cheer": "{username} cheered {amount}",
+      "milestone": "{username} hit a milestone",
+      "redemption": "{username} redeemed {reward}",
+      "follow": "{username} followed",
+      "announcement": "Announcement from {username}: abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghij"
+    },
+    "firstTimeStyle": "streamnook",
+    "firstTimeFill": true,
+    "firstTimeAnimation": "pulse",
+    "firstTimeAnimateRepeat": true,
+    "direction": "newTop",
+    "entrance": "stamp",
+    "bubble": true,
+    "bubbleShape": "speech",
+    "bubbleRadius": 18,
+    "bubbleColor": "#331144",
+    "bubbleOpacity": 0.9,
+    "firstTimeColor": "#ff00ff",
+    "eventOutlineColor": "#00ccff",
+    "hidePhrases": [
+      "spoiler",
+      "Ünïcode phrase ✨",
+      "a long phrase abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdef"
+    ],
+    "maxMessageAgeSec": 45,
+    "maxMessageLines": 3,
+    "restoreOnReload": true,
+    "loadRecentChat": true,
+    "modCommands": false,
+    "giantEmotes": false,
+    "giantEmoteAlign": "inline",
+    "showGifs": false,
+    "gifScale": 1.5
+  },
+  "variants": [
+    {
+      "sourceTag": "none",
+      "textAlign": "right",
+      "eventStyle": "streamnook",
+      "eventAnimation": "sheen",
+      "emojiStyle": "system",
+      "replyStyle": "off",
+      "firstTimeStyle": "twitch",
+      "firstTimeAnimation": "sheen",
+      "entrance": "none",
+      "bubbleShape": "pill",
+      "giantEmoteAlign": "left",
+      "fontWeight": 300
+    },
+    {
+      "sourceTag": "label",
+      "eventAnimation": "pulse",
+      "emojiStyle": "twitter",
+      "firstTimeAnimation": "chase",
+      "entrance": "slide",
+      "giantEmoteAlign": "right",
+      "fontWeight": 500,
+      "superchatCurrency": "JPY",
+      "linkColor": "",
+      "firstTimeColor": "",
+      "eventOutlineColor": ""
+    },
+    {
+      "emojiStyle": "facebook",
+      "entrance": "drift",
+      "fontWeight": 600,
+      "textShadowColor": "rgba(0, 0, 0, 0.8)",
+      "bodyTextColor": "#fff"
+    },
+    {
+      "entrance": "rise",
+      "eventAnimation": "none",
+      "firstTimeAnimation": "none"
+    },
+    {
+      "entrance": "pop"
+    },
+    {
+      "width": 160,
+      "height": 80,
+      "fontSize": 10,
+      "lineHeight": 1,
+      "messageGap": 0,
+      "emoteScale": 0.5,
+      "gifScale": 0.5,
+      "badgeScale": 0.5,
+      "textShadowSize": 0,
+      "textShadowOpacity": 0,
+      "backgroundOpacity": 0,
+      "bubbleOpacity": 0.05,
+      "bubbleRadius": 0,
+      "maxMessageAgeSec": 0,
+      "maxMessageLines": 0,
+      "fontWeight": 300
+    },
+    {
+      "width": 900,
+      "height": 1600,
+      "fontSize": 48,
+      "lineHeight": 2.2,
+      "messageGap": 28,
+      "emoteScale": 3,
+      "gifScale": 2,
+      "badgeScale": 2.5,
+      "textShadowSize": 12,
+      "textShadowOpacity": 1,
+      "backgroundOpacity": 1,
+      "bubbleOpacity": 1,
+      "bubbleRadius": 24,
+      "maxMessageAgeSec": 600,
+      "maxMessageLines": 6,
+      "fontWeight": 700
+    },
+    {
+      "sources": [
+        "kick",
+        "tiktok"
+      ],
+      "hiddenProviderEvents": [],
+      "commandFilters": [],
+      "hidePhrases": [],
+      "hiddenBadgeProviders": [],
+      "hiddenTwitchBadgeCategories": [],
+      "eventTemplates": {}
+    }
+  ]
+}

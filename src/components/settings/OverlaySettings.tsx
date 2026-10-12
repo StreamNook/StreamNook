@@ -13,6 +13,7 @@ import { useAppStore } from '../../stores/AppStore';
 import { LiveOverlayFeed } from '../overlay/LiveOverlayFeed';
 import { OverlayBuilder } from '../overlay/builder/OverlayBuilder';
 import { OverlayHostProvider, type OverlayApiResponse, type OverlayHost } from '../overlay/builder/overlayHost';
+import type { ImportedOverlayFile } from '../overlay/builder/profileSync';
 import { lookupError, resolveKickSlug, resolveYouTubeIdentifier, youTubeChannelTitle } from '../../services/channelLookup';
 
 interface ApiResult {
@@ -60,6 +61,9 @@ const OverlaySettings = () => {
       resolveKickSlug,
       youTubeChannelTitle,
       lookupError,
+      // Rust shows the file dialogs and checks every field of an opened file.
+      exportOverlayFile: (name, style) => invoke<string | null>('export_overlay_file', { name, style }),
+      importOverlayFile: () => invoke<ImportedOverlayFile | null>('import_overlay_file'),
       LivePreview: LiveOverlayFeed,
     }),
     [accountId, loginToTwitch],

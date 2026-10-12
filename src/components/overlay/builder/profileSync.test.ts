@@ -7,7 +7,7 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 
-import { reconcileProfiles, type OverlayProfile } from './profileSync';
+import { overlaySaveSnapshot, profileFromServer, reconcileProfiles, type OverlayProfile } from './profileSync';
 import { DEFAULT_OVERLAY_STYLE } from '../overlayConfig';
 
 const local = (uid: string, name: string, id: string | null, fontSize = 15, channel = 'winters27'): OverlayProfile => ({
@@ -73,4 +73,40 @@ test('the list is never empty', () => {
 test('two local copies claiming one overlay collapse to one', () => {
   const { profiles } = reconcileProfiles([local('u1', 'Main', 'A'), local('u2', 'Main copy', 'A')], [row('A', 'Main', 15)]);
   assert.deepEqual(profiles.map((p) => p.uid), ['u1']);
+});
+
+// Auto-save sends only a real edit. A one-shot "skip the load" flag is not
+// enough: StrictMode runs the effect twice on mount, the second run saved the
+// overlay as loaded, and the only thing that wrote was a default (gifScale: 1)
+// the server copy lacked. Comparing snapshots holds however often it runs.
+test('an overlay as loaded gives the same save snapshot however its look is spelled', () => {
+  // The server copy predates gifScale; the editor holds it filled out.
+  const server = profileFromServer(
+    { id: 'A', channels: [{ provider: 'twitch', channel: 'winters27' }], style: { profileName: 'Main', fontSize: 18 }, updated_at: 'v1' },
+    'Main',
+    'u1',
+  ) as OverlayProfile;
+  const stored = { profileName: 'Main', fontSize: 18 } as Partial<OverlayProfile['style']>;
+  assert.equal(server.style.gifScale, 1);
+  assert.equal(overlaySaveSnapshot(server.style, server.sources), overlaySaveSnapshot(stored, server.sources));
+  // Key order is not content.
+  const reordered = Object.fromEntries(Object.entries(server.style).reverse()) as OverlayProfile['style'];
+  assert.equal(overlaySaveSnapshot(reordered, server.sources), overlaySaveSnapshot(server.style, server.sources));
+  // Nothing beyond provider and channel rides on a source.
+  const extra = [{ provider: 'twitch' as const, channel: 'winters27', note: 'x' }];
+  assert.equal(overlaySaveSnapshot(server.style, extra), overlaySaveSnapshot(server.style, server.sources));
+});
+
+test('a real edit to the look or the sources changes the save snapshot', () => {
+  const p = local('u1', 'Main', 'A', 15);
+  const saved = overlaySaveSnapshot(p.style, p.sources);
+  assert.notEqual(overlaySaveSnapshot({ ...p.style, fontSize: 16 }, p.sources), saved);
+  assert.notEqual(overlaySaveSnapshot({ ...p.style, gifScale: 1.5 }, p.sources), saved);
+  assert.notEqual(overlaySaveSnapshot(p.style, [...p.sources, { provider: 'kick', channel: 'winters27' }]), saved);
+  assert.notEqual(overlaySaveSnapshot(p.style, []), saved);
+  // Put back, it is the saved copy again: nothing to send.
+  assert.equal(overlaySaveSnapshot({ ...p.style, fontSize: 15 }, p.sources), saved);
+  // Setting a value to its default IS an edit when the saved copy held another.
+  const big = overlaySaveSnapshot({ ...p.style, gifScale: 2 }, p.sources);
+  assert.notEqual(overlaySaveSnapshot({ ...p.style, gifScale: 1 }, p.sources), big);
 });

@@ -60,3 +60,48 @@ export function overlayBackdropIsDark(style: OverlayStyle): boolean {
         : '#000000';
   return nameColorReadsLight(backdrop) !== true;
 }
+
+/**
+ * Which line of a message a GIF starts on, 0 being the name's line, from the
+ * boxes of everything drawn before it in the row and the GIF's own top.
+ *
+ * The GIF hangs from the top of its line (text-top), so a box whose middle is
+ * above that top sits on an earlier line, and everything on the GIF's own line
+ * (text, middle-aligned badges and emotes) has its middle below it. Boxes that
+ * share a line overlap, so they are counted once: a new line starts where a
+ * box's middle falls below every box seen so far on the current one.
+ */
+export function gifLineIndex(before: ReadonlyArray<{ top: number; bottom: number }>, gifTop: number): number {
+  const above = before
+    .filter((r) => r.bottom > r.top && (r.top + r.bottom) / 2 < gifTop)
+    .slice()
+    .sort((a, b) => a.top - b.top);
+  let lines = 0;
+  let lineBottom = Number.NEGATIVE_INFINITY;
+  for (const r of above) {
+    if ((r.top + r.bottom) / 2 > lineBottom) {
+      lines++;
+      lineBottom = r.bottom;
+    } else {
+      lineBottom = Math.max(lineBottom, r.bottom);
+    }
+  }
+  return lines;
+}
+
+/** The highest Max lines the overlay applies, whatever a config says. */
+export const MAX_MESSAGE_LINES_CAP = 6;
+
+/**
+ * The line cap for a message row under Max lines (0 when Max lines is off).
+ * A GIF too wide for what is left of the name's line wraps below it, and a
+ * plain cap would then cut the GIF's whole line away. So a GIF's line always
+ * counts as one line of the cap and the text clamps around it: the cap reaches
+ * at least as far as the line the GIF starts on (`gifLine`, from
+ * `gifLineIndex`; 0 for a row without one).
+ */
+export function messageLineClamp(maxMessageLines: number | undefined, gifLine = 0): number {
+  const lines = Math.round(maxMessageLines ?? 0);
+  if (!(lines >= 1)) return 0;
+  return Math.max(Math.min(MAX_MESSAGE_LINES_CAP, lines), gifLine + 1);
+}

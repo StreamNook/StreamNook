@@ -82,6 +82,95 @@ mod badge_order_tests {
     }
 }
 
+/// Twitch badge SET ids grouped into the categories a streamer can hide from
+/// the OBS overlay, by category id. A set listed here belongs to exactly one
+/// category. The overlay renderer carries the same table in
+/// `src/components/overlay/overlayConfig.ts` (`TWITCH_BADGE_CATEGORIES`),
+/// because the hosted overlay page runs without this backend; a vitest gate
+/// reads this table and fails when the two differ, so edit both together.
+pub const TWITCH_BADGE_CATEGORY_SETS: &[(&str, &[&str])] = &[
+    ("subscriber", &["subscriber", "founder"]),
+    ("predictions", &["predictions"]),
+    ("gifted-subs", &["sub-gifter", "sub-gift-leader"]),
+    ("bits", &["bits", "bits-leader", "bits-charity", "anonymous-cheerer"]),
+    ("blossom", &["blossom-badge"]),
+    ("bloom", &["bloom-badge"]),
+    ("roles", &["lead_moderator", "moderator", "vip"]),
+];
+
+/// The catch-all category: every other Twitch set (Prime, Turbo, event and
+/// game badges, hype train, clips leader, and the rest).
+pub const TWITCH_BADGE_CATEGORY_OTHER: &str = "other";
+
+/// Sets that never fall in a category, so no category switch can hide them:
+/// the channel owner and Twitch's own staff. They follow only the overlay's
+/// Badges switch.
+const TWITCH_BADGE_SETS_NEVER_CATEGORISED: &[&str] = &["broadcaster", "staff", "admin", "global_mod"];
+
+/// The hide category of one Twitch badge set id, or `None` for a set no
+/// category covers (the broadcaster and staff badges, or an empty id).
+pub fn twitch_badge_category(set_id: &str) -> Option<&'static str> {
+    if set_id.is_empty() || TWITCH_BADGE_SETS_NEVER_CATEGORISED.contains(&set_id) {
+        return None;
+    }
+    for (category, sets) in TWITCH_BADGE_CATEGORY_SETS {
+        if sets.contains(&set_id) {
+            return Some(category);
+        }
+    }
+    Some(TWITCH_BADGE_CATEGORY_OTHER)
+}
+
+#[cfg(test)]
+mod badge_category_tests {
+    use super::*;
+
+    #[test]
+    fn set_ids_map_to_their_category() {
+        let cases = [
+            ("subscriber", Some("subscriber")),
+            ("founder", Some("subscriber")),
+            ("predictions", Some("predictions")),
+            ("sub-gifter", Some("gifted-subs")),
+            ("sub-gift-leader", Some("gifted-subs")),
+            ("bits", Some("bits")),
+            ("bits-leader", Some("bits")),
+            ("bits-charity", Some("bits")),
+            ("anonymous-cheerer", Some("bits")),
+            ("blossom-badge", Some("blossom")),
+            ("bloom-badge", Some("bloom")),
+            ("lead_moderator", Some("roles")),
+            ("moderator", Some("roles")),
+            ("vip", Some("roles")),
+            ("premium", Some("other")),
+            ("turbo", Some("other")),
+            ("hype-train", Some("other")),
+            ("clips-leader", Some("other")),
+            ("glhf-pledge", Some("other")),
+            ("broadcaster", None),
+            ("staff", None),
+            ("admin", None),
+            ("global_mod", None),
+            ("", None),
+        ];
+        for (set_id, want) in cases {
+            assert_eq!(twitch_badge_category(set_id), want, "set id {set_id:?}");
+        }
+    }
+
+    #[test]
+    fn every_set_sits_in_one_category() {
+        let mut seen = std::collections::HashSet::new();
+        for (category, sets) in TWITCH_BADGE_CATEGORY_SETS {
+            assert_ne!(*category, TWITCH_BADGE_CATEGORY_OTHER);
+            for set in *sets {
+                assert!(seen.insert(*set), "{set} is listed twice");
+                assert!(!TWITCH_BADGE_SETS_NEVER_CATEGORISED.contains(set));
+            }
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EmotePos {
     pub id: String,
@@ -191,6 +280,24 @@ pub struct MessageMetadata {
     /// nickname override (`services::chatter_name`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub shown_name: String,
+    /// The tick this row puts on the chat scrollbar, so a viewer scrolled away
+    /// can see where the pings, subs and announcements are. Stamped by the
+    /// rule engine with the rest of the highlight verdict; the page only draws.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scrollbar_mark: Option<ScrollbarMark>,
+}
+
+/// One row's scrollbar tick, stamped by the rule engine.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ScrollbarMark {
+    /// "mention" | "reply" | "highlight" | "announcement" | "sub" | "redeem"
+    /// | "raid" | "first_time". Pinned rows are marked by the page from the
+    /// channel's pinned-message ids, which arrive after the row does.
+    pub kind: String,
+    /// The colour the row itself is tinted with, where the user or the
+    /// message chose one. Absent means the kind's theme colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 /// A matched highlight rule, stamped by the Rust rule engine.

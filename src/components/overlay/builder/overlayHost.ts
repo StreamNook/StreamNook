@@ -9,6 +9,7 @@
 
 import { createContext, useContext, type ComponentType } from 'react';
 import type { OverlayStyle } from '../overlayConfig';
+import type { ImportedOverlayFile } from './profileSync';
 import type { ProviderId } from '../../../types/providers';
 
 export interface OverlaySourceRef {
@@ -40,6 +41,13 @@ export interface OverlayHost {
   youTubeChannelTitle(channelId: string): Promise<string | null>;
   /** A lookup's rejection as a line for the add box. */
   lookupError(err: unknown, platform: string): string;
+  /** Save an overlay's settings to a shareable file. Resolves to the saved
+   *  file's name, or null when the streamer cancelled. Absent: the builder
+   *  hands the file to the browser as a download. */
+  exportOverlayFile?(name: string, style: OverlayStyle): Promise<string | null>;
+  /** Open a shared overlay file, its settings already checked. Null when the
+   *  streamer cancelled. Absent: the builder uses the browser's file picker. */
+  importOverlayFile?(): Promise<ImportedOverlayFile | null>;
   /** The live-chat preview feed. `overlayId` is the published overlay being
    *  edited, when there is one (the site's relay feed is keyed by it). */
   LivePreview: ComponentType<{
