@@ -1745,17 +1745,34 @@ fn build_roomstate(s: &Value, channel_key: &str) -> String {
             .or_else(|| s.get(flat).and_then(|x| x.as_u64()))
             .unwrap_or(0)
     };
+    let slow = if on("slow_mode") { num("slow_mode", "message_interval", "message_interval") } else { 0 };
+    // -1 is "off" and 0 is "any follower", matching Twitch's followers-only tag.
+    let followers_only = if on("followers_mode") {
+        num("followers_mode", "min_duration", "following_min_duration") as i64
+    } else {
+        -1
+    };
+    // The modes in words for the message box. Kick says nothing about the
+    // viewer's standing on this event, so the words claim nothing about it.
+    let modes = crate::services::room_modes::describe(
+        &crate::services::room_modes::ModesIn {
+            slow_seconds: slow,
+            followers_only_minutes: followers_only,
+            subs_only: on("subscribers_mode"),
+            emote_only: on("emotes_mode"),
+            unique: false,
+        },
+        crate::services::room_modes::Standing::Unknown,
+    );
     json!({
         "type": "ROOMSTATE",
         "provider": "kick",
         "channel": channel_key,
-        "slow": if on("slow_mode") { num("slow_mode", "message_interval", "message_interval") } else { 0 },
+        "slow": slow,
         "subs_only": on("subscribers_mode"),
-        // -1 is "off" and 0 is "any follower", matching Twitch's followers-only tag.
-        "followers_only": if on("followers_mode") {
-            num("followers_mode", "min_duration", "following_min_duration") as i64
-        } else { -1 },
+        "followers_only": followers_only,
         "emote_only": on("emotes_mode"),
+        "modes": modes,
     })
     .to_string()
 }
@@ -2372,6 +2389,19 @@ mod roomstate_tests {
         // Kick has no unique-chat mode; sending r9k would clear a value the
         // store merges from elsewhere.
         assert!(out.get("r9k").is_none());
+        // The same modes in words for the message box, claiming nothing about
+        // the viewer's standing.
+        let kinds: Vec<&str> = out["modes"]["modes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["kind"].as_str().unwrap())
+            .collect();
+        assert_eq!(kinds, vec!["subs_only", "followers_only", "slow"]);
+        assert_eq!(out["modes"]["modes"][1]["label"], "Followers-only chat (10 minutes)");
+        assert_eq!(out["modes"]["prompt"], "Subscriber-only");
+        assert_eq!(out["modes"]["prompt_short"], "Sub-only");
+        assert_eq!(out["modes"]["standing"], Value::Null);
     }
 
     #[test]

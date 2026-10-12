@@ -158,11 +158,18 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
   // Only asked when follower mode is actually on, so an unrestricted room costs
   // nothing. -1 is off; 0 and above are some flavour of followers-only.
   const isFollowing = useFollowStatus(broadcasterId, (roomState?.followersOnly ?? -1) >= 0);
+  // The room's chat modes in Rust's words (services/room_modes.rs), shown in
+  // the composer while the setting is on.
+  const showRoomModes = useAppStore((s) => s.settings.chat_input?.show_room_modes ?? true);
+  const roomModes =
+    showRoomModes && roomState?.modes && roomState.modes.modes.length > 0 ? roomState.modes : null;
   const gating = useMemo(() => {
     const g = deriveChatGating(roomState, userBadges, isFollowing);
+    // The chat menu lists the modes in the same words as the composer.
+    const labels = roomState?.modes ? roomState.modes.modes.map((m) => m.label) : g.labels;
     // Badge-based blocking reads Twitch IRC badges. A Kick room has none, so it
     // would lock subscribers out of a subs-only room. Show the room state, never block.
-    return isTwitchRoom ? g : { ...g, blocked: null, reason: null };
+    return isTwitchRoom ? { ...g, labels } : { ...g, labels, blocked: null, reason: null };
   }, [roomState, userBadges, isFollowing, isTwitchRoom]);
   // Moderator tools are ON wherever you have the badge. A mod opening their own
   // channel expects their tools, and making them hunt for a toggle every time is
@@ -684,6 +691,7 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
           channelId={broadcasterId}
           channelLabel={activeTab?.label ?? null}
           gating={gating}
+          roomModes={roomModes}
           emotes={emotes}
           replyTo={replyTo}
           onCancelReply={handleCancelReply}

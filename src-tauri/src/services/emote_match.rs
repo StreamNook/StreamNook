@@ -118,9 +118,9 @@ static CONTAINS_MODE: AtomicBool = AtomicBool::new(false);
 /// Pick up the match mode from saved settings. Runs on boot and every save.
 pub fn refresh_settings(settings: &Settings) {
     let includes = settings
+        .chat_input
         .extra
-        .get("chat_input")
-        .and_then(|v| v.get("emote_tab_complete_match_mode"))
+        .get("emote_tab_complete_match_mode")
         .and_then(|v| v.as_str())
         == Some("includes");
     CONTAINS_MODE.store(includes, AtomicOrdering::Relaxed);

@@ -739,6 +739,18 @@ pub async fn cache_provider_room_state(channel_key: &str, frame: String) {
         .insert(channel_key.to_lowercase(), frame);
 }
 
+/// Hand a window that claims an already-JOINed channel the room as last known.
+/// Twitch sends ROOMSTATE only on the JOIN itself and on a change, so a chat
+/// opened on a channel the connection already holds (another window's, or one
+/// kept joined) would otherwise never learn its modes. A fresh JOIN has
+/// nothing cached yet; its ROOMSTATE comes from the server.
+async fn replay_room_state(key: &str) {
+    let frame = get_room_state_cache().lock().await.get(key).cloned();
+    if let Some(frame) = frame {
+        send_to_bridge(BridgeFrame::channel(key, frame), false).await;
+    }
+}
+
 /// Drop a provider's cached ROOMSTATE when its channel is released, mirroring the
 /// Twitch PART cleanup so a parted channel can't leak a stale entry.
 pub async fn remove_provider_room_state(channel_key: &str) {
@@ -2385,6 +2397,11 @@ impl IrcService {
                         r9k: tag_u8("r9k"),
                     },
                 );
+                // Ship the merged room, with its modes in words, so the page
+                // and the replay cache never hold a partial frame.
+                if let Some(fields) = crate::services::chat_send_limiter::room_state_fields(ch) {
+                    room_state.extend(fields);
+                }
             }
 
             let room_state_str = serde_json::Value::Object(room_state).to_string();
@@ -2437,7 +2454,19 @@ impl IrcService {
                 );
                 if let Some(ref ch) = channel_name {
                     crate::services::channel_rewards::note_viewer_badges(ch, &badges);
-                    crate::services::chat_send_limiter::note_own_badges(ch, &badges);
+                    // A new role (or subscribing) changes what the room's
+                    // modes mean for the account: resend the room in words.
+                    if crate::services::chat_send_limiter::note_own_badges(ch, &badges) {
+                        if let Some(fields) = crate::services::chat_send_limiter::room_state_fields(ch) {
+                            let mut frame = serde_json::Map::new();
+                            frame.insert("type".into(), serde_json::json!("ROOMSTATE"));
+                            frame.insert("channel".into(), serde_json::json!(ch));
+                            frame.extend(fields);
+                            let frame = serde_json::Value::Object(frame).to_string();
+                            get_room_state_cache().lock().await.insert(ch.clone(), frame.clone());
+                            send_to_bridge(BridgeFrame::channel(ch, frame), false).await;
+                        }
+                    }
                     get_user_badges_cache()
                         .lock()
                         .await
@@ -3122,7 +3151,9 @@ impl IrcService {
             // two set lookups, but for a channel whose JOIN the server silently
             // dropped it re-issues the JOIN — which is what turns the user's
             // refresh into a real recovery instead of an IRC no-op.
-            return Self::ensure_joined(&key).await;
+            Self::ensure_joined(&key).await?;
+            replay_room_state(&key).await;
+            return Ok(());
         }
 
         // Make sure the channel is actually JOINed (no-op when another window
@@ -3132,6 +3163,7 @@ impl IrcService {
             release_channel_claim(&mut *get_channel_consumers().lock().await, &key, window);
             return Err(e);
         }
+        replay_room_state(&key).await;
 
         Ok(())
     }

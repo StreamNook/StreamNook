@@ -30,6 +30,8 @@
 //! - `record_sent(channel, text)`: count a send that did not go through `acquire`
 //!   (`ChatService::send_message` calls it for every Twitch send).
 //! - `budget(channel)`: the role, limits and room modes in force, for sizing a job.
+//! - `room_state_fields(channel)`: the merged room modes plus their words for
+//!   the message box (`room_modes`), shipped on every ROOMSTATE frame.
 //! - `note_room_state` / `note_own_badges`: fed by the IRC reader.
 //!
 //! Channels are bare lowercase Twitch logins (no `#`).
@@ -39,6 +41,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
+
+use crate::services::room_modes::{describe, ModesIn, Standing};
 
 /// Twitch's rolling window for the message budget.
 pub const WINDOW: Duration = Duration::from_secs(30);
@@ -348,6 +352,60 @@ impl Limiter {
         self.insert_send(now, limit);
     }
 
+    /// The account's standing in `channel` for the room-mode words: unknown
+    /// until USERSTATE says, except in the account's own channel.
+    fn standing(&self, channel: &str) -> Standing {
+        let k = key(channel);
+        let facts = self.channels.get(&k);
+        let role = facts
+            .and_then(|f| f.role)
+            .or_else(|| (self.own_login.as_deref() == Some(k.as_str())).then_some(Role::Broadcaster));
+        match role {
+            None => Standing::Unknown,
+            Some(Role::Broadcaster) => Standing::Broadcaster,
+            Some(Role::Moderator) => Standing::Moderator,
+            Some(Role::Vip) => Standing::Vip,
+            Some(Role::Viewer) => Standing::Viewer { is_sub: facts.map(|f| f.viewer_is_sub).unwrap_or(false) },
+        }
+    }
+
+    /// The room's merged ROOMSTATE fields and their words (`modes`), or `None`
+    /// before any ROOMSTATE arrived for `channel`.
+    fn room_fields(&self, channel: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
+        let m = self.channels.get(&key(channel))?.modes;
+        if m == RoomModes::default() {
+            return None;
+        }
+        let mut out = serde_json::Map::new();
+        if let Some(v) = m.followers_only_minutes {
+            out.insert("followers_only".into(), v.into());
+        }
+        if let Some(v) = m.slow_seconds {
+            out.insert("slow".into(), v.into());
+        }
+        if let Some(v) = m.subs_only {
+            out.insert("subs_only".into(), v.into());
+        }
+        if let Some(v) = m.emote_only {
+            out.insert("emote_only".into(), v.into());
+        }
+        if let Some(v) = m.r9k {
+            out.insert("r9k".into(), v.into());
+        }
+        let view = describe(
+            &ModesIn {
+                slow_seconds: m.slow_seconds.unwrap_or(0),
+                followers_only_minutes: m.followers_only_minutes.unwrap_or(-1),
+                subs_only: m.subs_only.unwrap_or(false),
+                emote_only: m.emote_only.unwrap_or(false),
+                unique: m.r9k.unwrap_or(false),
+            },
+            self.standing(channel),
+        );
+        out.insert("modes".into(), serde_json::to_value(view).unwrap_or_default());
+        Some(out)
+    }
+
     fn budget(&mut self, channel: &str, now: Instant) -> Budget {
         self.prune(now);
         let k = key(channel);
@@ -448,14 +506,30 @@ pub fn note_room_state(channel: &str, update: RoomModes) {
     }
 }
 
-/// The account's own badges in `channel`, from USERSTATE.
-pub fn note_own_badges(channel: &str, badges: &str) {
+/// The account's own badges in `channel`, from USERSTATE. True when the
+/// account's standing there changed (a new role, or subscribed or not).
+pub fn note_own_badges(channel: &str, badges: &str) -> bool {
     let mut l = limiter();
     let facts = l.facts(channel);
-    facts.role = Some(Role::from_badges(badges));
-    facts.viewer_is_sub = badges
+    let role = Some(Role::from_badges(badges));
+    let is_sub = badges
         .split(',')
         .any(|b| b.starts_with("subscriber/") || b.starts_with("founder/"));
+    let changed = facts.role != role || facts.viewer_is_sub != is_sub;
+    facts.role = role;
+    facts.viewer_is_sub = is_sub;
+    changed
+}
+
+/// The room's ROOMSTATE fields as merged so far, plus `modes`: the active
+/// modes in words and what they mean for the signed-in account
+/// (`room_modes::RoomModeView`). `None` before any ROOMSTATE for `channel`.
+/// The IRC reader ships this on every ROOMSTATE frame, so the page never has
+/// to merge partial frames to know the room.
+pub fn room_state_fields(channel: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let mut l = limiter();
+    own_login_hint(&mut l);
+    l.room_fields(channel)
 }
 
 /// The signed-in account changed: roles and history belong to the old one.
@@ -747,5 +821,53 @@ mod tests {
         assert_eq!(b.slow_seconds, 5);
         assert_eq!(b.followers_only_minutes, 10);
         assert!(b.r9k);
+    }
+
+    #[test]
+    fn room_fields_merge_partial_frames_and_word_them_for_the_account() {
+        let mut l = lim();
+        assert!(l.room_fields("chan").is_none(), "nothing before a ROOMSTATE");
+        // The full frame on join, then a partial one turning slow mode on.
+        l.facts("chan").modes = RoomModes {
+            slow_seconds: Some(0),
+            followers_only_minutes: Some(10),
+            subs_only: Some(false),
+            emote_only: Some(false),
+            r9k: Some(false),
+        };
+        l.facts("chan").modes.slow_seconds = Some(30);
+        let f = l.room_fields("#Chan").unwrap();
+        assert_eq!(f["followers_only"], 10);
+        assert_eq!(f["slow"], 30);
+        assert_eq!(f["r9k"], false);
+        let modes = &f["modes"];
+        assert_eq!(modes["prompt"], "Followers-only (10m)");
+        assert_eq!(modes["prompt_short"], "Followers 10m");
+        assert_eq!(modes["modes"][0]["kind"], "followers_only");
+        assert_eq!(modes["modes"][1]["kind"], "slow");
+        assert_eq!(modes["modes"][0]["applies_to_you"], serde_json::Value::Null, "role unknown before USERSTATE");
+        assert_eq!(modes["slow_seconds"], 30);
+
+        note_role(&mut l, "chan", "moderator/1");
+        let f = l.room_fields("chan").unwrap();
+        assert_eq!(f["modes"]["standing"], "You can chat as a moderator");
+        assert_eq!(f["modes"]["prompt"], serde_json::Value::Null);
+        assert_eq!(f["modes"]["slow_seconds"], 0);
+
+        note_role(&mut l, "chan", "subscriber/3");
+        let f = l.room_fields("chan").unwrap();
+        assert_eq!(f["modes"]["modes"][1]["applies_to_you"], true, "slow mode holds a viewer back");
+        assert_eq!(f["modes"]["slow_seconds"], 30);
+    }
+
+    #[test]
+    fn the_own_channel_reads_as_the_broadcaster_in_room_words() {
+        let mut l = lim();
+        l.own_login = Some("me".into());
+        l.facts("me").modes.emote_only = Some(true);
+        let f = l.room_fields("me").unwrap();
+        assert_eq!(f["modes"]["standing"], "You can chat as the broadcaster");
+        assert_eq!(f["emote_only"], true);
+        assert!(f.get("slow").is_none(), "a tag never seen is left out");
     }
 }

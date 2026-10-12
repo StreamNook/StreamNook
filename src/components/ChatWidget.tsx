@@ -53,7 +53,6 @@ import { useAppStore } from '../stores/AppStore';
 import { useChannelState, watchChannel, unwatchChannel, refreshChannelState } from '../stores/channelStateStore';
 import { useProviderEmoteStore } from '../stores/providerEmoteStore';
 import { usePlatformAccountStore } from '../stores/platformAccountStore';
-import { useFollowsStore } from '../stores/followsStore';
 import { incrementStat } from '../services/supabaseService';
 import { trackEmoteUsage } from '../utils/trackEmoteUsage';
 import { EmoteText, buildEmoteNameMap } from '../utils/emoteText';
@@ -134,6 +133,8 @@ import { getRemindFlowSuggestions, tokenizeRemindOverlay } from '../utils/remind
 import { BackendChatMessage } from '../services/twitchChat';
 import { registerChatModController, getChatModController, type ChatModController } from '../keybindings';
 import { Tooltip } from './ui/Tooltip';
+import { RoomModeIndicator } from './chat/RoomModeIndicator';
+import { roomModesFieldStyle } from './chat/roomModeLayout';
 
 interface ParsedMessage {
   username: string;
@@ -317,22 +318,6 @@ const EMPTY_EMOTE_SET = Object.freeze({
   kick: [],
   youtube: [],
 }) as unknown as EmoteSet;
-
-/** A follower-mode minimum, in minutes, as something readable.
- *  Kick states these in minutes and they get large — xqc's is 5760, which as
- *  "5760m" is a number you have to do arithmetic on to understand. */
-function formatFollowAge(minutes: number): string {
-  if (minutes >= 10080 && minutes % 10080 === 0) return `${minutes / 10080}w`;
-  if (minutes >= 1440) {
-    const days = Math.round(minutes / 1440);
-    return `${days}d`;
-  }
-  if (minutes >= 60) {
-    const hours = Math.round(minutes / 60);
-    return `${hours}h`;
-  }
-  return `${minutes}m`;
-}
 
 // C7 checkpoint B: the message-list subtree owns its own per-channel chat
 // subscription. While the parent still holds its own subscription this is
@@ -1897,47 +1882,17 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // reliably whether YOU are exempt (the subscription list is an imported
   // snapshot that goes stale), and locking out a real subscriber is worse than
   // letting the platform refuse the message, which is now surfaced with its
-  // reason. The mode still shows in the indicator row below.
+  // reason. The mode still shows in the message box.
   const isInputDisabled =
     !canSendHere || !isConnected || (isTwitch && isSubOnly && !canBypassSubOnly) || twitchSignInOwed;
-  // Room modes worth telling the viewer about before they type. Twitch renders
-  // none of these today, so this stays provider-only to keep it byte-identical.
-  //
-  // Only modes that actually GATE YOU are listed. Telling a follower the channel
-  // is followers-only describes a restriction they already satisfy, which is
-  // noise rather than information — the point of the row is "here is why your
-  // message may not send", not an inventory of the channel's settings.
-  const providerChannel = channelOverride?.user_login?.toLowerCase();
-  const followsThis = useFollowsStore((s) =>
-    !isTwitch && providerChannel ? s.isFollowed(provider, providerChannel) : false,
-  );
-  const subscribesToThis = useFollowsStore((s) =>
-    !isTwitch && providerChannel ? s.isSubscribed(provider, providerChannel) : false,
-  );
-  const providerRoomModes: string[] = [];
-  if (!isTwitch && roomState && !isModerator) {
-    // Slow and emote-only bind everyone who is not a moderator.
-    if (roomState.slow > 0) providerRoomModes.push(`Slow mode · ${roomState.slow}s`);
-    if (roomState.emoteOnly) providerRoomModes.push('Emote-only');
-    // Kick tells us exactly when we started following, so we can decide whether
-    // the requirement actually binds instead of naming it defensively.
-    const followedMinutes =
-      kickViewer?.following_since != null
-        ? (Date.now() - new Date(kickViewer.following_since).getTime()) / 60000
-        : followsThis
-          ? Number.POSITIVE_INFINITY // following per our own list, age unknown
-          : -1;
-    const meetsFollowRule =
-      followedMinutes >= 0 && followedMinutes >= (roomState.followersOnly ?? 0);
-    if ((roomState.followersOnly ?? -1) >= 0 && !meetsFollowRule) {
-      providerRoomModes.push(
-        roomState.followersOnly > 0
-          ? `Followers-only · ${formatFollowAge(roomState.followersOnly)}`
-          : 'Followers-only',
-      );
-    }
-    if (roomState.subsOnly && !subscribesToThis) providerRoomModes.push('Subscriber-only');
-  }
+  // The room's chat modes, worded by Rust (services/room_modes.rs) and shipped
+  // on the ROOMSTATE frame, for every platform that reports them. While the
+  // setting is on, the prompt names them and their icons sit at the end of
+  // the field, where they stay while you type.
+  const roomModes =
+    (settings.chat_input?.show_room_modes ?? true) && roomState?.modes && roomState.modes.modes.length > 0
+      ? roomState.modes
+      : null;
   const chatPlaceholder = isReplayReadOnly
     ? 'Viewing chat replay (read-only)'
     : !canSendHere
@@ -1952,7 +1907,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     ? 'Sign in again to chat'
     : isWatchStreakMode
     ? "Add a message (optional)..."
-    : (isSubOnly && !canBypassSubOnly ? "Subscriber-Only Mode" : "Send a message");
+    : roomModes?.prompt ?? (isSubOnly && !canBypassSubOnly ? "Subscriber-Only Mode" : "Send a message");
   // The same prompt in a word or two for a narrow composer row, where the
   // full one is cut mid-word: Chromium draws no ellipsis on a textarea
   // placeholder. utils/composerNarrow.ts swaps between the two.
@@ -1966,17 +1921,18 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     ? 'Sign in'
     : isWatchStreakMode
     ? 'Message'
-    : (isSubOnly && !canBypassSubOnly ? 'Sub-only' : 'Message');
+    : roomModes?.prompt_short ?? (isSubOnly && !canBypassSubOnly ? 'Sub-only' : 'Message');
 
   // Optional composer chrome. The placeholder keeps its text whenever it is
   // saying something the user can act on (read-only, connect your account,
-  // sub-only), so hiding it only ever drops the idle "Send a message" prompt.
+  // sub-only, a room mode), so hiding it only ever drops the idle "Send a
+  // message" prompt.
   const chatInputPrefs = settings.chat_input;
   const showEmoteButton = !chatInputPrefs?.hide_emote_button;
   const showPointsBalance = !chatInputPrefs?.hide_points_balance;
   const pointsBalanceInline = !!chatInputPrefs?.show_points_balance_inline;
   const visiblePlaceholder =
-    chatInputPrefs?.hide_placeholder && !isInputDisabled && !isWatchStreakMode
+    chatInputPrefs?.hide_placeholder && !isInputDisabled && !isWatchStreakMode && !roomModes?.prompt
       ? ''
       : chatPlaceholder;
   const visiblePlaceholderNarrow = visiblePlaceholder ? chatPlaceholderNarrow : '';
@@ -2214,7 +2170,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     setMessageInput(restored);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panelChannelKey]);
-  const slowSeconds = roomState?.slow ?? 0;
+  // Rust's words carry the wait that applies to you (none for a VIP); a frame
+  // without words (a YouTube send cooldown) carries only the raw wait.
+  const slowSeconds = roomState?.modes ? roomState.modes.slow_seconds : (roomState?.slow ?? 0);
   const slowRemaining =
     slowSeconds > 0 && lastSentAt > 0 && !isModerator
       ? Math.max(0, Math.ceil((lastSentAt + slowSeconds * 1000 - slowNow) / 1000))
@@ -5827,17 +5785,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   </span>
                 </div>
               )}
-              {/* Active chat modes on a provider channel. Twitch shows none of
-                  these today, so this is provider-only. Informational: the
-                  platform enforces the rules, and a refused send now explains
-                  itself rather than being silently swallowed. */}
-              {providerRoomModes.length > 0 && (
-                <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-textSecondary">
-                  {providerRoomModes.map((mode) => (
-                    <span key={mode}>{mode}</span>
-                  ))}
-                </div>
-              )}
               {replyingTo && !isResubMode && !isWatchStreakMode && (
                 <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-glass rounded-lg border border-borderSubtle">
                   <svg className="w-4 h-4 text-accent flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
@@ -6002,8 +5949,13 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     />
                   </div>
                 )}
-                {/* Input container with emoji button inset on the left */}
-                <div className="relative flex-1 min-w-0 flex items-center">
+                {/* Input container with emoji button inset on the left and
+                    the room's chat modes inset on the right. */}
+                <div
+                  className="sn-composer-field relative flex-1 min-w-0 flex items-center"
+                  data-room-modes={roomModes ? '' : undefined}
+                  style={roomModesFieldStyle(roomModes)}
+                >
                   {/* Command menu button, first inset on the left */}
                   {showCommandButton && (
                   <Tooltip content={showCommandMenu ? 'Close commands' : 'Commands'} side="top">
@@ -6123,7 +6075,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                         paddingTop: '8px',
                         paddingBottom: '8px',
                         paddingLeft: composerPaddingLeft,
-                        paddingRight: '12px',
+                        paddingRight: 'var(--sn-room-pad, 12px)',
                         color: 'var(--color-text-primary)',
                         wordSpacing: '0.4em',
                       }}
@@ -6186,7 +6138,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       paddingTop: '8px',
                       paddingBottom: '8px',
                       paddingLeft: composerPaddingLeft,
-                      paddingRight: '12px',
+                      paddingRight: 'var(--sn-room-pad, 12px)',
                       ...(remindOverlayActive ? {
                         // The backdrop above renders the surface + chipped text;
                         // the textarea goes transparent and only carries the caret
@@ -6230,13 +6182,15 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       if (emoteList) closeEmoteList();
                     }}
                   />
-                  {/* Length label and slow-mode countdown, bottom-right of the field. */}
-                  {(messageInput.length > 0 || slowRemaining > 0) && (
-                    <span className="pointer-events-none absolute bottom-1 right-2 z-10 flex items-center gap-1.5 text-[10px] tabular-nums text-textSecondary/70">
-                      {slowRemaining > 0 && <span className="text-amber-300/80">slow {slowRemaining}s</span>}
-                      {messageInput.length > 0 && (
-                        <span className={messageInput.length > 500 ? 'text-error' : ''}>{messageInput.length}/500</span>
-                      )}
+                  {/* The room's chat modes, at the field's right edge. */}
+                  {roomModes && <RoomModeIndicator view={roomModes} />}
+                  {/* Length label, bottom-right of the field, clear of the mode icons. */}
+                  {messageInput.length > 0 && (
+                    <span
+                      className="pointer-events-none absolute bottom-1 z-10 flex items-center text-[10px] tabular-nums text-textSecondary/70"
+                      style={{ right: 'calc(var(--sn-room-pad, 12px) - 4px)' }}
+                    >
+                      <span className={messageInput.length > 500 ? 'text-error' : ''}>{messageInput.length}/500</span>
                     </span>
                   )}
                   {/* Squiggles go over the textarea, not under it — the input's
@@ -6252,12 +6206,21 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                         paddingTop: '8px',
                         paddingBottom: '8px',
                         paddingLeft: composerPaddingLeft,
-                        paddingRight: '12px',
+                        paddingRight: 'var(--sn-room-pad, 12px)',
                       }}
                     />
                   )}
                 </div>
-                <Tooltip content={isWatchStreakMode ? "Share Watch Streak" : "Send message"} side="top">
+                <Tooltip
+                  content={
+                    isWatchStreakMode
+                      ? "Share Watch Streak"
+                      : slowRemaining > 0
+                        ? `Slow mode: you can send again in ${slowRemaining}s`
+                        : "Send message"
+                  }
+                  side="top"
+                >
                 <button
                   onClick={() => handleSendMessage()}
                   disabled={(!messageInput.trim() && !isWatchStreakMode && !isResubMode) || isInputDisabled} 
@@ -6267,7 +6230,15 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       : 'glass-button'
                   }`}
                 >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
+                  {/* While a slow-mode wait runs, the seconds left stand in for
+                      the arrow, in the same 36px button. */}
+                  {slowRemaining > 0 && !isWatchStreakMode ? (
+                    <span className="text-[13px] font-semibold tabular-nums leading-none text-textPrimary" aria-label={`Send again in ${slowRemaining} seconds`}>
+                      {slowRemaining}
+                    </span>
+                  ) : (
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
+                  )}
                 </button>
                 </Tooltip>
               </div>

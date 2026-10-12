@@ -36,6 +36,8 @@ import { MobileCommandSheet } from './MobileCommandSheet';
 import { handleSlashCommand } from '../../utils/commandHandler';
 import { StreakBanners } from './StreakBanners';
 import type { ChatGating } from './chatGating';
+import type { RoomModeView } from '../../stores/chatConnectionStore';
+import { RoomModeIndicator } from '../../components/chat/RoomModeIndicator';
 import type { ProviderId } from '../../types/providers';
 import { isTwitchStream } from '../../utils/streamProvider';
 import { usePlatformAccountStore } from '../../stores/platformAccountStore';
@@ -66,6 +68,8 @@ interface Props {
   channelId: string | null;
   channelLabel: string | null;
   gating: ChatGating;
+  /** The room's chat modes in Rust's words, or null while hidden or none. */
+  roomModes?: RoomModeView | null;
   emotes: EmoteSet | null;
   replyTo?: { messageId: string; username: string } | null;
   onCancelReply?: () => void;
@@ -89,6 +93,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
   channelId,
   channelLabel,
   gating,
+  roomModes = null,
   emotes,
   replyTo,
   onCancelReply,
@@ -451,7 +456,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
                   void send();
                 }
               }}
-              placeholder={gating.blocked ? (gating.reason ?? 'Chat restricted') : 'Send a message'}
+              placeholder={
+                gating.blocked ? (gating.reason ?? 'Chat restricted') : (roomModes?.prompt ?? 'Send a message')
+              }
               // Typing is switched off, not just discouraged, when the badges prove
               // the send would be rejected. The amber placeholder says why.
               disabled={!!gating.blocked}
@@ -463,6 +470,11 @@ const MobileChatInputImpl: React.FC<Props> = ({
               }`}
               enterKeyHint="send"
             />
+          )}
+          {/* The room's chat modes, staying while you type. A tap opens the
+              chat menu, which lists them in full. */}
+          {roomModes && !needsKickSignIn && (
+            <RoomModeIndicator view={roomModes} inline onActivate={() => setMenuOpen(true)} />
           )}
           {/* Icon only. The balance was briefly shown here to prove earning was
               happening, and once proven it went back: it cost the message field

@@ -44,6 +44,7 @@ import { giftBombOriginOf, isGiftBombAnnouncement, isGiftBombChild } from '../ut
 import { useMessageRepeatStore, type RepeatParticipant } from './messageRepeatStore';
 import { normalizeForRepeat, isPrivilegedChatter } from '../utils/messageRepeat';
 import type { SongMatch } from '../utils/songId';
+import type { SeventvEmoteChange } from '../components/overlay/overlayConfig';
 import type { BackendChatMessage } from '../services/twitchChat';
 
 // Hard caps borrowed from the prior single-channel hook. Keeping them as
@@ -80,6 +81,38 @@ export interface RoomState {
   subsOnly: boolean;
   emoteOnly: boolean;
   r9k: boolean;
+  /** The active modes in words, written by Rust (services/room_modes.rs) and
+   *  shipped whole on the ROOMSTATE frame. Null until a frame carries them. */
+  modes: RoomModeView | null;
+}
+
+export type RoomModeKind = 'subs_only' | 'emote_only' | 'followers_only' | 'slow' | 'unique';
+
+/** One active room mode, worded by Rust. */
+export interface RoomMode {
+  kind: RoomModeKind;
+  /** "Followers-only chat (10 minutes)" */
+  label: string;
+  /** "Followers-only (10m)" */
+  compact: string;
+  /** "Followers 10m" */
+  short: string;
+  /** One sentence on what the mode does. */
+  detail: string;
+  /** false: this mode does not hold you back. null: not known. */
+  applies_to_you: boolean | null;
+}
+
+/** Mirrors Rust `room_modes::RoomModeView`. */
+export interface RoomModeView {
+  modes: RoomMode[];
+  /** Replaces "Send a message" while a mode may hold you back. */
+  prompt: string | null;
+  prompt_short: string | null;
+  /** "You can chat as a moderator" when every mode spares you. */
+  standing: string | null;
+  /** The slow-mode wait that applies to you; 0 when none does. */
+  slow_seconds: number;
 }
 
 export const EMPTY_ROOM_STATE: RoomState = {
@@ -88,6 +121,7 @@ export const EMPTY_ROOM_STATE: RoomState = {
   subsOnly: false,
   emoteOnly: false,
   r9k: false,
+  modes: null,
 };
 
 export interface SendUserInfo {
@@ -2532,6 +2566,8 @@ function handleWsMessage(raw: string) {
             subsOnly: parsed.subs_only ?? slice.roomState.subsOnly,
             emoteOnly: parsed.emote_only ?? slice.roomState.emoteOnly,
             r9k: parsed.r9k ?? slice.roomState.r9k,
+            // Whole, never merged: Rust words the merged room every time.
+            modes: parsed.modes !== undefined ? (parsed.modes as RoomModeView | null) : slice.roomState.modes,
           };
         };
         if (ch) {
@@ -3710,6 +3746,9 @@ export function injectSystemMessage(
   // unchanged; a provider pane passes its own so the row doesn't sign itself
   // "Twitch" on a Kick or YouTube channel.
   source?: { label: string; color: string },
+  // A 7TV emote set change, carried whole so a stream overlay can draw it as
+  // a 7TV event instead of reading this row's text.
+  seventvEmoteChange?: SeventvEmoteChange,
 ): void {
   const sysMsgId = `sys-cmd-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   withSlice(channel, (slice) => {
@@ -3729,6 +3768,7 @@ export function injectSystemMessage(
       is_mentioned: false,
       is_from_shared_chat: false,
       songCard,
+      ...(seventvEmoteChange ? { seventvEmoteChange } : {}),
       tags: new Map([
         ['user-id', 'tw-system'],
         ['id', sysMsgId],
