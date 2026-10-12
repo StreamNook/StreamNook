@@ -505,8 +505,8 @@ pub async fn get_youtube_channel_emotes(
 }
 
 #[tauri::command]
-pub async fn stop_chat() -> Result<(), String> {
-    ChatService::stop().await.map_err(|e| e.to_string())
+pub async fn stop_chat(window: crate::rt::Window) -> Result<bool, String> {
+    ChatService::stop(window.label()).await.map_err(|e| e.to_string())
 }
 
 /// Who is signed in on a platform: display name, profile picture, and the id
@@ -977,16 +977,23 @@ pub async fn load_channel_history(
     // dictionary, never the providers (the refresh follows in the background,
     // so a down provider still cannot blank the chat). Bounded, because a
     // backlog with names beats no backlog.
-    let seeded = crate::services::irc_service::with_channel_emotes(&key, |_| ())
-        .await
-        .is_some();
+    use crate::services::irc_service::with_channel_emotes;
+    let mut seeded = with_channel_emotes(&key, |_| ()).await.is_some();
     if !seeded {
         let seed = IrcService::seed_emotes_deferring_refresh(&key, state.emote_service.clone());
         if tokio::time::timeout(HISTORY_EMOTE_SEED_WAIT, seed).await.is_err() {
             log::debug!("[ChatHistory] {key}: emote seed slower than the wait, parsing without it");
         }
+        seeded = with_channel_emotes(&key, |_| ()).await.is_some();
     }
+    // A first visit has no saved dictionary, so the backlog parses before the
+    // providers answer. It shows now and is re-stamped when the table lands
+    // (`spawn_history_restamp`), rather than waiting for a slow provider.
+    let restamp_lines = (!seeded).then(|| raw.clone());
     let parsed = IrcService::parse_historical_messages(raw).await;
+    if let Some(lines) = restamp_lines {
+        IrcService::spawn_history_restamp(&key, lines, &parsed);
+    }
     log::debug!(
         "[ChatHistory] {key}: {} rows in {} ms{}",
         parsed.len(),

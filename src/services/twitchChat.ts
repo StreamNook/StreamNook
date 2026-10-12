@@ -71,6 +71,28 @@ export interface MessageMetadata {
   /** The author's name as every row type shows it, stamped by Rust (the
    *  viewer's nickname override is applied on top at render). */
   shown_name?: string;
+  /** The tick this row puts on the chat scrollbar, stamped by Rust. */
+  scrollbar_mark?: ScrollbarMarkStamp;
+}
+
+/** Kinds a chat row can be marked with on the scrollbar. Rust stamps every
+ *  kind but `pinned`, which the page adds from the channel's pinned ids. */
+export type ScrollbarMarkKind =
+  | 'mention'
+  | 'reply'
+  | 'highlight'
+  | 'pinned'
+  | 'announcement'
+  | 'sub'
+  | 'redeem'
+  | 'raid'
+  | 'first_time';
+
+/** A row's scrollbar tick, stamped by the Rust rule engine. */
+export interface ScrollbarMarkStamp {
+  kind: ScrollbarMarkKind;
+  /** The row's own tint colour; absent means the kind's theme colour. */
+  color?: string;
 }
 
 /** A matched highlight rule, stamped by the Rust rule engine. */

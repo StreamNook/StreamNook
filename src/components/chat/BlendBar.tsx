@@ -33,6 +33,7 @@ import {
 } from '../../services/channelLookup';
 import { searchPlatforms } from '../../services/platformSearch';
 import type { BlendCompanion, LinkSuggestion } from '../../hooks/useBlendCompanions';
+import { isImeComposing } from '../../utils/imeComposing';
 
 /** The platforms whose chat can be combined, in the order the picker lists them. */
 const COMBINABLE: ProviderId[] = ['kick', 'youtube', 'tiktok', 'twitch'];
@@ -349,6 +350,7 @@ function LinkEditor({
               if (lp && options.includes(lp)) setPicked(lp);
             }}
             onKeyDown={(e) => {
+              if (isImeComposing(e)) return;
               if (e.key === 'Enter') void submit();
               if (e.key === 'Escape') onClose();
             }}

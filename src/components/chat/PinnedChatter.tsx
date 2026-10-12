@@ -1,13 +1,18 @@
 // A pinned message's sender, or the moderator who pinned it, drawn the way a
 // chat row draws them: Twitch badges in chat order, the 7TV badge, the other
 // third-party badges, the StreamNook badge, then the name in its 7TV paint.
+// The collapsed pin bar is the exception: a single line has room for the name
+// and the message, so it keeps only the sender's role badge.
 import { useMemo, type CSSProperties } from 'react';
 import { parseBadges } from '../../services/twitchBadges';
 import { useChatterLook } from '../../hooks/useChatterLook';
+import { pickRoleBadge } from '../../utils/chatterBadges';
 import { ChatBadgeIcons, type ResolvedTwitchBadge, type TwitchBadgeInfo } from './ChatBadgeIcons';
+import type { ThirdPartyBadge } from '../../services/badgeService';
 import type { ProviderId } from '../../types/providers';
 
 const NO_BADGES: ResolvedTwitchBadge[] = [];
+const NO_THIRD_PARTY: ThirdPartyBadge[] = [];
 
 interface PinnedChatterProps {
   provider: ProviderId;
@@ -25,11 +30,14 @@ interface PinnedChatterProps {
   channelId?: string;
   /**
    * `card`: the open pin; badges are clickable like a chat row's.
-   * `line`: one line inside another control (the collapsed bar, a byline).
+   * `line`: one line inside another control (a byline, the open phone header).
    * Badges are inert, and the ones that do not fit are hidden whole instead
    * of wrapping, so the line never grows a second row.
+   * `bar`: the collapsed pin bar. The name in its paint plus at most one
+   * badge, the sender's Twitch role (broadcaster, staff, moderator, VIP);
+   * no subscription, earned, global or third-party badges.
    */
-  variant: 'card' | 'line';
+  variant: 'card' | 'line' | 'bar';
   nameClassName?: string;
   /** Extra style for an unpainted name (a paint brings its own shadow). */
   plainNameStyle?: CSSProperties;
@@ -59,11 +67,26 @@ export function PinnedChatter({
     [badgeTag, channelId],
   );
   const look = useChatterLook({ provider, userId, name, login, shownName, color, twitchBadges });
+  const isBar = variant === 'bar';
   const isLine = variant === 'line';
+  const roleBadge = useMemo(() => (isBar ? pickRoleBadge(look.twitchBadges) : null), [isBar, look.twitchBadges]);
+  const barBadges = useMemo(() => (roleBadge ? [roleBadge] : NO_BADGES), [roleBadge]);
 
   return (
     <>
-      {look.hasBadges && (
+      {isBar && roleBadge && (
+        <span className={`sn-badge-strip shrink-0 ${badgeClassName}`} style={{ verticalAlign: 'middle' }}>
+          <ChatBadgeIcons
+            twitchBadges={barBadges}
+            seventvBadge={null}
+            thirdPartyBadges={NO_THIRD_PARTY}
+            streamNookMemberId={null}
+            interactive={false}
+            keyPrefix="pinbar"
+          />
+        </span>
+      )}
+      {!isBar && look.hasBadges && (
         <span
           className={`sn-badge-strip ${isLine ? 'min-w-0 shrink flex-wrap overflow-hidden' : ''} ${badgeClassName}`}
           // A line strip is exactly one badge tall: badges that do not fit wrap

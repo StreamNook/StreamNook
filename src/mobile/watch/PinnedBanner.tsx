@@ -50,11 +50,14 @@ export const PinnedBanner: React.FC<Props> = ({ pins, expanded, onToggle, channe
         className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left active:opacity-80"
       >
         <PushPin size={12} weight="fill" className="text-accent shrink-0" />
-        {/* Badges and name as the chat row draws them. Badges that do not
-            fit hide whole, so the header stays one line. */}
-        <span className="text-[12px] flex items-center gap-1 min-w-0 shrink">
+        {/* Collapsed: the name in its paint and at most the sender's role
+            badge, so the name and preview keep the one line; the cap only
+            stops a very long name from eating the preview. Expanded: this
+            header is the open pin's author, so every badge shows as a chat
+            row draws them, and badges that do not fit hide whole. */}
+        <span className={`text-[12px] flex items-center gap-1 min-w-0 shrink ${expanded ? '' : 'max-w-[50%]'}`}>
           <PinnedChatter
-            variant="line"
+            variant={expanded ? 'line' : 'bar'}
             provider="twitch"
             userId={first.sender_id ?? ''}
             name={first.sender_name}
@@ -63,14 +66,14 @@ export const PinnedBanner: React.FC<Props> = ({ pins, expanded, onToggle, channe
             color={first.sender_color}
             badges={first.sender_badges}
             channelId={channelId}
-            nameClassName="font-bold shrink-0 max-w-[8rem] truncate"
+            nameClassName={expanded ? 'font-bold shrink-0 max-w-[8rem] truncate' : 'font-bold min-w-0 truncate'}
             plainNameStyle={NAME_SHADOW}
           />
         </span>
         {/* Collapsed shows a one-line preview. Expanded drops it, because the
             full text appears directly below and the header already carries the
             name. */}
-        <span className="text-[12px] text-textPrimary/85 truncate min-w-[25%] flex-1">
+        <span className="text-[12px] text-textPrimary/85 truncate min-w-0 flex-1">
           {expanded ? '' : first.message_text}
         </span>
         {pins.length > 1 && (

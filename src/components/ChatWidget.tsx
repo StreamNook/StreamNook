@@ -42,7 +42,11 @@ import { ChatDockPanel, ChatDockSwitcher, ChatDockTabs } from './chat/ChatDock';
 import { useDockSwitcherFloor } from '../hooks/useChatDock';
 import ChatHeaderMenu, { type ChatHeaderMenuItem } from './chat/ChatHeaderMenu';
 import { dockChat, setDockPanelOpen, undockChat, useChatDockStore } from '../stores/chatDockStore';
+import { passesLocalViews, useLocalViewFilterIds } from '../stores/localChatViewStore';
 import { PlatformAccountChip } from './PlatformAccountChip';
+import { PlatformLoginButton } from './PlatformLoginButton';
+import { useAccountRosterStore } from '../stores/accountRosterStore';
+import { signInReasonText, twitchSignInReason } from '../utils/twitchSignIn';
 import { ProviderLogo } from './ProviderLogo';
 import { TogetherChip } from './SharedViewers';
 import { useAppStore } from '../stores/AppStore';
@@ -52,8 +56,12 @@ import { usePlatformAccountStore } from '../stores/platformAccountStore';
 import { useFollowsStore } from '../stores/followsStore';
 import { incrementStat } from '../services/supabaseService';
 import { trackEmoteUsage } from '../utils/trackEmoteUsage';
+import { EmoteText, buildEmoteNameMap } from '../utils/emoteText';
+import { isImeComposing } from '../utils/imeComposing';
+import { syncComposerPlaceholder, trackComposerWidth } from '../utils/composerNarrow';
 import { LinkPreviewCard } from './chat/LinkPreviewCard';
 import { PinnedChatter } from './chat/PinnedChatter';
+import { SevenTvAvatar } from './SevenTvAvatar';
 import { extractPreviewUrls } from '../services/linkPreviewService';
 import UserProfileCard from './UserProfileCard';
 import ErrorBoundary from './ErrorBoundary';
@@ -73,7 +81,7 @@ import ChannelPointsMenu from './ChannelPointsMenu';
 import ModeratorMenu from './chat/ModeratorMenu';
 import ResubNotificationBanner, { ResubNotification } from './ResubNotificationBanner';
 import WatchStreakBanner, { WatchStreakMilestone } from './WatchStreakBanner';
-import { Emote, EmoteSet, queueChannelEmotesForCaching, setEmoteCacheBurst, youTubeChannelEmojiRows, type YouTubeChannelEmoji } from '../services/emoteService';
+import { EmoteSet, queueChannelEmotesForCaching, setEmoteCacheBurst, youTubeChannelEmojiRows, type YouTubeChannelEmoji } from '../services/emoteService';
 import { useEmoteOwnerNames } from '../hooks/useEmoteOwnerNames';
 import { useEmotePalette, type PaletteChannel } from '../hooks/useEmotePalette';
 import { prefetchChannelBadges } from '../services/badgeService';
@@ -114,8 +122,13 @@ import {
   matchPlainTextUserCommand,
   expandUserCommand,
   findUserCommand,
+  customCommandWins,
+  rankCommandMatches,
+  resolveCommandAlias,
 } from '../utils/chatCommands';
 import { buildTemplateContext, handleSlashCommand } from '../utils/commandHandler';
+import { PLATFORM_NEUTRAL, runExtendedCommand } from '../utils/extendedCommands';
+import ChatBurstStatus from './chat/ChatBurstStatus';
 import { getRemindFlowSuggestions, tokenizeRemindOverlay } from '../utils/reminderEngine';
 
 import { BackendChatMessage } from '../services/twitchChat';
@@ -382,6 +395,8 @@ interface ChatMessagesPanelProps {
   headerSpaceReserved?: boolean;
   /** The floating header's measured height, for when nothing else cleared it. */
   headerInset?: number;
+  /** This channel's pinned message ids, for the scrollbar's pinned marks. */
+  pinnedIds?: ReadonlySet<string>;
 }
 
 /** How many consecutive untagged messages end the shared-chat indicator. */
@@ -420,18 +435,26 @@ const ChatMessagesPanel = ({
   filterId,
   headerSpaceReserved,
   headerInset,
+  pinnedIds,
 }: ChatMessagesPanelProps) => {
   const live = useChannelChat(override ? null : channelKey);
   const src: ChatMessagesPanelSource = override ?? live;
   // A saved filter narrows this pane to rows the Rust rule engine stamped
   // with its id (metadata.filter_ids). Render-time only, so switching the
   // filter never drops history; O(buffer) per flush, and the buffer is capped.
+  // Local views (/localmod, /localsub, /localascii) narrow it further, on the
+  // built-in ids the same engine stamps on every message.
+  const localViewKey = useLocalViewFilterIds(channelKey).join(',');
   const shownMessages = useMemo(() => {
-    if (!filterId) return src.messages;
-    return src.messages.filter(
-      (m) => typeof m !== 'string' && !!m.metadata?.filter_ids?.includes(filterId),
-    );
-  }, [src.messages, filterId]);
+    const base = filterId
+      ? src.messages.filter(
+          (m) => typeof m !== 'string' && !!m.metadata?.filter_ids?.includes(filterId),
+        )
+      : src.messages;
+    if (!localViewKey) return base;
+    const required = localViewKey.split(',');
+    return base.filter((m) => passesLocalViews(m, required));
+  }, [src.messages, filterId, localViewKey]);
   const addUser = useChatUserStore((state) => state.addUser);
   /** Consecutive Twitch messages seen with no source-room-id tag. Drives the
    *  shared-chat session-end detection below. */
@@ -541,6 +564,11 @@ const ChatMessagesPanel = ({
               sharedRoomsRef.current.add(srcRoom);
               prefetchChannelBadges(srcRoom).catch((err) =>
                 Logger.warn('[ChatWidget] Failed to prefetch badges for shared channel:', srcRoom, err),
+              );
+              // Rows from the guest channel resolve against its own badge set
+              // (its sub badges, its moderator / VIP art), so index it too.
+              void import('../services/twitchBadges').then(({ initializeBadgeCache }) =>
+                initializeBadgeCache(srcRoom),
               );
             }
           } else if (srcRoom) {
@@ -691,6 +719,7 @@ const ChatMessagesPanel = ({
             homeProvider={provider}
             headerSpaceReserved={headerSpaceReserved}
             headerInset={headerInset}
+            pinnedIds={pinnedIds}
           />
         </ErrorBoundary>
       )}
@@ -866,6 +895,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // used to be a 5s `kick_is_connected` poll PER PANE, reading a pure in-memory
   // bool that only ever changes when the user connects or disconnects.
   const kickConnected = usePlatformAccountStore((s) => provider === 'kick' && s.kick.connected);
+  // Set when StreamNook signed you out of Twitch itself: Twitch sends wait on a
+  // new sign-in, and the composer says so instead of swallowing input.
+  const twitchSignInOwedFor = useAccountRosterStore((s) => (isTwitch ? twitchSignInReason(s.roster) : null));
+  const twitchSignInOwed = twitchSignInOwedFor !== null;
   // The connected Kick account's username, lowercased — used to spot our OWN
   // (badged) messages so we can tell whether we may moderate this Kick channel
   // (Kick gives no Twitch-style USERSTATE with our role).
@@ -1074,6 +1107,30 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // the remaining wait while roomState.slow is on.
   const [lastSentAt, setLastSentAt] = useState(0);
   const [slowNow, setSlowNow] = useState(0);
+  // A YouTube send whose answer came back without its posted row counts as
+  // sent. Rust watches chat for the row and says so here when it never came,
+  // so the text can be put back and sent again.
+  useEffect(() => {
+    if (!providerKey) return;
+    const key = providerKey.toLowerCase();
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<{ channel: string; text: string }>('provider-send-unconfirmed', (event) => {
+      if (event.payload.channel.toLowerCase() !== key) return;
+      const text = event.payload.text;
+      useAppStore.getState().addToast("Your YouTube message may not have posted", 'warning', {
+        label: 'Restore',
+        onClick: () => setMessageInput((prev) => (prev.trim() ? `${prev} ${text}` : text)),
+      });
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [providerKey]);
   const [activeView, setActiveView] = useState<'chat' | 'viewers' | 'modroom'>('chat');
   // Streamer mode (Rust-owned flag): hides the viewer count here.
   const streamerModeActive = useStreamerMode((st) => st.active);
@@ -1793,43 +1850,31 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     started_at: string;
   }
   const [pinnedMessages, setPinnedMessages] = useState<PinnedMessage[]>([]);
+  // The scrollbar's pinned marks find their rows by these ids.
+  const pinnedIds = useMemo(
+    () => new Set(pinnedMessages.map((m) => m.message_id).filter(Boolean)),
+    [pinnedMessages],
+  );
   const [isPinnedExpanded, setIsPinnedExpanded] = useState(
     () => !(useAppStore.getState().settings.chat_design?.pinned_start_collapsed ?? true),
   );
   const seenPinIdRef = useRef<string | null>(null);
 
   // Name -> emote lookup for pinned-message bodies. GQL pins arrive as plain
-  // text with no emote ranges, so emotes are matched per whitespace word.
-  // Insertion order is reverse priority so the chat's precedence holds:
-  // 7TV > BTTV > FFZ > Twitch (later inserts overwrite earlier ones).
-  const pinEmoteMap = useMemo(() => {
-    const map = new Map<string, Emote>();
-    if (!emotes) return map;
-    for (const list of [emotes.twitch, emotes.ffz, emotes.bttv, emotes['7tv']]) {
-      for (const e of list) map.set(e.name, e);
-    }
-    return map;
-  }, [emotes]);
+  // text with no emote ranges, so emotes are matched per whitespace word, with
+  // the chat's precedence: a Twitch emote wins a name, then 7TV > BTTV > FFZ.
+  const pinEmoteMap = useMemo(() => buildEmoteNameMap(emotes), [emotes]);
 
   // Render a plain-text chunk of a pinned message with emote words swapped for
   // inline images. `emoteClass` sets the image size (expanded body vs collapsed bar).
-  const renderPinTextWithEmotes = (text: string, keyPrefix: string, emoteClass: string) => {
-    const tokens = text.split(/(\s+)/);
-    return tokens.map((tok, i) => {
-      const emote = pinEmoteMap.get(tok);
-      if (!emote) return <span key={`${keyPrefix}-${i}`}>{tok}</span>;
-      return (
-        <Tooltip key={`${keyPrefix}-${i}`} content={emote.name}>
-          <img
-            src={emote.url}
-            alt={emote.name}
-            className={`inline-block align-middle object-contain ${emoteClass}`}
-            loading="lazy"
-          />
-        </Tooltip>
-      );
-    });
-  };
+  const renderPinTextWithEmotes = (text: string, keyPrefix: string, emoteClass: string) => (
+    <EmoteText
+      text={text}
+      emoteMap={pinEmoteMap}
+      keyPrefix={keyPrefix}
+      imgClassName={`inline-block align-middle object-contain ${emoteClass}`}
+    />
+  );
 
 
   // Dynamic chat privileges based on IRC badge context & room state
@@ -1854,7 +1899,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // letting the platform refuse the message, which is now surfaced with its
   // reason. The mode still shows in the indicator row below.
   const isInputDisabled =
-    !canSendHere || !isConnected || (isTwitch && isSubOnly && !canBypassSubOnly);
+    !canSendHere || !isConnected || (isTwitch && isSubOnly && !canBypassSubOnly) || twitchSignInOwed;
   // Room modes worth telling the viewer about before they type. Twitch renders
   // none of these today, so this stays provider-only to keep it byte-identical.
   //
@@ -1903,9 +1948,25 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       : provider === 'tiktok'
       ? 'Connect your TikTok account to send'
       : "Read-only — sending isn't available yet"
+    : twitchSignInOwed
+    ? 'Sign in again to chat'
     : isWatchStreakMode
     ? "Add a message (optional)..."
     : (isSubOnly && !canBypassSubOnly ? "Subscriber-Only Mode" : "Send a message");
+  // The same prompt in a word or two for a narrow composer row, where the
+  // full one is cut mid-word: Chromium draws no ellipsis on a textarea
+  // placeholder. utils/composerNarrow.ts swaps between the two.
+  const chatPlaceholderNarrow = isReplayReadOnly
+    ? 'Read-only'
+    : !canSendHere
+    ? provider === 'kick' || provider === 'youtube' || provider === 'tiktok'
+      ? 'Sign in'
+      : 'Read-only'
+    : twitchSignInOwed
+    ? 'Sign in'
+    : isWatchStreakMode
+    ? 'Message'
+    : (isSubOnly && !canBypassSubOnly ? 'Sub-only' : 'Message');
 
   // Optional composer chrome. The placeholder keeps its text whenever it is
   // saying something the user can act on (read-only, connect your account,
@@ -1918,6 +1979,14 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     chatInputPrefs?.hide_placeholder && !isInputDisabled && !isWatchStreakMode
       ? ''
       : chatPlaceholder;
+  const visiblePlaceholderNarrow = visiblePlaceholder ? chatPlaceholderNarrow : '';
+  // A render that changes the prompt writes the full one onto the field; put
+  // the short one back while the row is narrow (the row's width observer
+  // covers resizes).
+  useLayoutEffect(() => {
+    const row = inputRef.current?.closest<HTMLElement>('.sn-composer-row');
+    if (row) syncComposerPlaceholder(row);
+  }, [visiblePlaceholder, visiblePlaceholderNarrow]);
   // 36px clears the inset emote button; 12px is the plain input inset once it's
   // hidden. The /remind highlight backdrop reuses this so its text stays
   // pixel-aligned with the real textarea underneath it.
@@ -2369,8 +2438,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   }, [isMainSurface, dockHeld, currentStream?.user_login, clearUsers]);
 
   useEffect(() => {
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-
     // Late-arriving room id: same login, but user_id changed from empty to
     // populated. Re-call connectChat so chatConnectionStore can register the
     // real broadcaster_id (which it needs to populate the Twitch badge cache).
@@ -2440,46 +2507,13 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       // Reset to chat view when switching channels
       setActiveView('chat');
       
-      // Hot-swap backend tracking context if inside MultiNook.
-      //
-      // Intentionally skipped in popout mode (`channelOverride` set):
-      //   • drops monitoring: popouts are chat-only, not "actively
-      //     watching", so we don't collect drops for them.
-      //   • EventSub disconnect+reconnect — the EventSub service is single-
-      //     broadcaster today. Letting the popout reconnect it would steal
-      //     the connection from the main app's stream and break hype train /
-      //     raid / pin events there. Multi-broadcaster EventSub is its own
-      //     follow-up; until then, popouts piggyback on whatever EventSub
-      //     the main app has connected, or get nothing if main isn't
-      //     watching this channel.
-      //   • register_active_channel — same reason: this marks the "active"
-      //     viewing context for backend bookkeeping (drops, automation,
-      //     analytics). Popouts aren't an active viewing context.
+      // MultiNook moved the chat to another tile: drop the banner of the train
+      // it was showing. The watch EventSub socket, drops monitoring and the
+      // predictions set follow the grid's focus in Rust, declared by
+      // MultiNookView (set_multi_nook_focus). Popouts (`channelOverride`)
+      // never move them: a chat-only window is not a viewing context.
       if (isMultiNookActive && !channelOverride) {
-        Logger.info(`[MultiNook] Hot-swapping backend tracking for ${currentStream.user_login}...`);
-
-        // Immediate clean up front-end state
         useAppStore.getState().setCurrentHypeTrain(null);
-
-        const channelId = currentStream.user_id;
-        const channelName = currentStream.user_login;
-
-        if (channelId) {
-          // Debounce the backend network shifting (250ms) to prevent UI spamming
-          timeoutId = setTimeout(() => {
-            invoke('start_drops_monitoring', { channelId, channelName }).catch(e => Logger.warn('[Drops] Failed to hot-swap', e));
-            invoke('register_active_channel', { channelId }).catch(() => {});
-
-            invoke('disconnect_eventsub')
-              .then(() => {
-                // Delay reconnection by 150ms to ensure the OS socket closes safely
-                setTimeout(() => {
-                  invoke('connect_eventsub', { broadcasterId: channelId }).catch(e => Logger.warn('[EventSub] Failed to hot-swap', e));
-                }, 150);
-              })
-              .catch(() => {});
-          }, 250);
-        }
       }
     }
     
@@ -2501,7 +2535,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
     return () => {
       if (currentStream?.user_login !== connectedChannelRef.current) connectedChannelRef.current = null;
-      if (timeoutId) clearTimeout(timeoutId);
     };
   }, [currentStream?.user_login, currentStream?.user_id, isMultiNookActive, channelOverride, setChatPaused, isVodReplay, chatMode]);
 
@@ -2957,6 +2990,18 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     return () => window.removeEventListener('streamnook-open-user-card', handler);
   }, []);
 
+  // /redeem opens this channel's rewards, the same menu as the points button.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const channel = (e as CustomEvent<{ channel?: string }>).detail?.channel?.toLowerCase();
+      if (!isTwitch || !currentStream?.user_login) return;
+      if (channel && channel !== currentStream.user_login.toLowerCase()) return;
+      setShowChannelPointsMenu(true);
+    };
+    window.addEventListener('streamnook-open-channel-points', handler);
+    return () => window.removeEventListener('streamnook-open-channel-points', handler);
+  }, [isTwitch, currentStream?.user_login]);
+
   // Maintain the "N new since paused" badge off the monotonic live-message
   // counter. Anchor the baseline exactly on the not-paused -> paused edge (so a
   // brief pause flicker can't corrupt it), zero it while live, and recompute the
@@ -3327,7 +3372,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   // and raw IRC end to end, so nothing here may fall through to it. Moderation
   // verbs map onto the provider's own commands; everything else says so out
   // loud rather than silently doing nothing (or worse, hitting Twitch).
-  const handleProviderSlashCommand = async (raw: string) => {
+  const handleProviderSlashCommand = async (raw: string, depth = 0) => {
     const notice = (text: string) => {
       if (!providerKey) return;
       injectSystemMessage(providerKey, text, undefined, systemSourceFor(providerKey));
@@ -3338,12 +3383,11 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     const args = parts.slice(1);
 
     // User-defined text macros are platform-neutral, so they keep working here
-    // exactly as they do on Twitch (same lookup and expansion as commandHandler).
-    const userCommand = findUserCommand(
-      cmd,
-      useAppStore.getState().settings.chat_commands?.user_commands,
-      true,
-    );
+    // exactly as they do on Twitch (same lookup, precedence and expansion as
+    // commandHandler).
+    const userCommand = customCommandWins(cmd)
+      ? findUserCommand(cmd, useAppStore.getState().settings.chat_commands?.user_commands, true)
+      : undefined;
     if (userCommand) {
       const ctx = buildTemplateContext(
         args,
@@ -3442,7 +3486,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       }
     };
 
-    switch (cmd) {
+    // `/b`, `/u` and `/p` mean the same here as on Twitch.
+    const canonical = resolveCommandAlias(cmd);
+    switch (canonical) {
       case 'ban':
         await runModeration('ban', null);
         return;
@@ -3451,11 +3497,36 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         await runModeration('timeout', Number.isFinite(secs) && secs > 0 ? secs : 600);
         return;
       }
+      // Clears their messages with the shortest timeout the platform has
+      // (a minute on Kick).
+      case 'purge':
+        await runModeration('timeout', 1);
+        return;
       case 'unban':
       case 'untimeout':
         await runModeration('unban', null);
         return;
       default:
+        // Commands that need no Twitch API (text tools, timers, settings)
+        // work in any chat.
+        if (PLATFORM_NEUTRAL.has(canonical)) {
+          await runExtendedCommand({
+            command: canonical,
+            typed: cmd,
+            args,
+            rest: raw.slice(1).trim().slice(cmd.length).trim(),
+            broadcasterId: '',
+            broadcasterLogin: providerKey ?? '',
+            send: (msg) => void sendMessage(msg),
+            depth,
+            dispatch: async (line) => {
+              if (line.startsWith('/')) await handleProviderSlashCommand(line, depth + 1);
+              else await sendMessage(line);
+              return true;
+            },
+          });
+          return;
+        }
         notice(`/${cmd} isn't available on ${PROVIDERS[provider].label}.`);
     }
   };
@@ -3705,8 +3776,11 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
-    // Emote list navigation. Skipped mid-composition so an IME keeps its keys.
-    if (emoteList && !e.nativeEvent.isComposing) {
+    // An IME composing owns every key until it commits: Enter confirms the
+    // candidate (it must not send or pick a suggestion), arrows walk candidates.
+    if (isImeComposing(e)) return;
+    // Emote list navigation.
+    if (emoteList) {
       if (e.key === 'Escape') {
         e.preventDefault();
         e.stopPropagation();
@@ -3936,8 +4010,14 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     // Temporarily set overflow hidden to get accurate scrollHeight
     textarea.style.overflow = 'hidden';
     textarea.style.height = 'auto'; // Reset to calculate new height
+    // An empty field is one line tall whatever its placeholder: a placeholder
+    // wrapped by a narrow column counts toward scrollHeight and grew the field
+    // a line per word.
+    const placeholder = textarea.value ? '' : textarea.placeholder;
+    if (placeholder) textarea.placeholder = '';
     const maxHeight = 120; // ~5 lines max
     const newHeight = Math.min(textarea.scrollHeight, maxHeight);
+    if (placeholder) textarea.placeholder = placeholder;
     textarea.style.height = `${newHeight}px`;
     // Enable scrolling only if we hit max height
     textarea.style.overflow = newHeight >= maxHeight ? 'auto' : 'hidden';
@@ -4024,7 +4104,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         const userCommands = buildUserCommandDefinitions(settings.chat_commands?.user_commands);
         const allCommands = [...availableCommands, ...userCommands];
 
-        const matches = allCommands.filter(cmd => cmd.name.toLowerCase().startsWith(query));
+        // The command the typed name runs comes first, so Enter picks it.
+        const matches = rankCommandMatches(allCommands, query);
         setMatchingCommands(matches);
         flowReplaceFromRef.current = null; // completing a command name, not a /remind arg
         setShowCommandAutocomplete(matches.length > 0);
@@ -5263,8 +5344,11 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     <div className="flex items-start gap-3">
                       {/* Sender avatar */}
                       {pin.sender_avatar ? (
-                        <img
+                        <SevenTvAvatar
+                          cosmeticsId={provider === 'twitch' ? pin.sender_id : `${provider}:${pin.sender_id}`}
                           src={pin.sender_avatar}
+                          px={36}
+                          motion="animate"
                           alt={pin.sender_name}
                           className="w-9 h-9 rounded-full flex-shrink-0 object-cover border border-white/5"
                         />
@@ -5350,8 +5434,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                           <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5a.5.5 0 0 1-1 0V10h-4A.5.5 0 0 1 3 9.5c0-.973.64-1.725 1.17-2.189A5.921 5.921 0 0 1 5 6.708V2.277a2.77 2.77 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354z"/>
                         </svg>
                         {pin.pinned_by_avatar && (
-                          <img
+                          <SevenTvAvatar
+                            cosmeticsId={provider === 'twitch' ? pin.pinned_by_id : `${provider}:${pin.pinned_by_id}`}
                             src={pin.pinned_by_avatar}
+                            px={16}
                             alt={pin.pinned_by}
                             className="w-4 h-4 rounded-full object-cover border border-white/10"
                           />
@@ -5398,9 +5484,12 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     <svg className="w-3.5 h-3.5 text-accent flex-shrink-0" fill="currentColor" viewBox="0 0 16 16">
                       <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5a.5.5 0 0 1-1 0V10h-4A.5.5 0 0 1 3 9.5c0-.973.64-1.725 1.17-2.189A5.921 5.921 0 0 1 5 6.708V2.277a2.77 2.77 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354z"/>
                     </svg>
-                    <span className="text-[13px] flex items-center gap-1.5 min-w-0 shrink">
+                    {/* Sender: the name in its paint and at most the role
+                        badge, so the name and preview keep the line. The cap
+                        only stops a very long name from eating the preview. */}
+                    <span className="text-[13px] flex items-center gap-1.5 min-w-0 max-w-[50%] shrink">
                       <PinnedChatter
-                        variant="line"
+                        variant="bar"
                         provider={provider}
                         userId={pin.sender_id}
                         name={pin.sender_name}
@@ -5409,11 +5498,11 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                         color={pin.sender_color}
                         badges={pin.sender_badges}
                         channelId={currentStream?.user_id}
-                        nameClassName="font-bold flex-shrink-0 max-w-[9rem] truncate"
+                        nameClassName="font-bold min-w-0 truncate"
                         plainNameStyle={PIN_NAME_SHADOW}
                       />
                     </span>
-                    <span className="text-[13px] text-textPrimary/85 truncate min-w-[25%] flex-1">
+                    <span className="text-[13px] text-textPrimary/85 truncate min-w-0 flex-1">
                       {renderPinTextWithEmotes(pin.message_text, `pinbar-${pin.id}`, 'h-5 max-w-[80px] -my-0.5')}
                     </span>
                     {pinnedMessages.length > 1 && (
@@ -5551,6 +5640,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             hoveringRef={isHoveringChatRef}
             headerSpaceReserved={blendEnabled}
             headerInset={chromeHeight}
+            pinnedIds={pinnedIds}
           />
         )}
         {/* AutoMod held-message queue (moderators, Twitch). Rust owns the
@@ -5707,6 +5797,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   }}
                 />
               )}
+              {isTwitch && currentStream?.user_login && (
+                <ChatBurstStatus key={currentStream.user_login} channelLogin={currentStream.user_login} />
+              )}
               {/* /nuke dry run. Transient — it only exists while the command is
                   in the box, so it can't add permanent height to this shelf. */}
               {nukePreview && (
@@ -5786,7 +5879,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                 </div>
               )}
 
-              <div className="flex items-center gap-2 min-w-0">
+              {/* In a narrow chat column the tools compress in place so the
+                  field keeps a usable width (utils/composerNarrow.ts). */}
+              <div ref={trackComposerWidth} className="sn-composer-row flex items-center gap-2 min-w-0">
                 {/* Channel Points button. Opens the rewards menu, balance on
                     hover. While the watched channel has a bonus chest ready
                     and auto-claim is off, it becomes the claim control.
@@ -5805,7 +5900,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                         onClick={() => claimWatchedChest(availableClaim.id, availableClaim.channelId)}
                         disabled={claimingChest}
                         aria-label="Claim channel points bonus"
-                        className="chest-attention flex items-center justify-center w-9 h-9 text-accent-neon transition-opacity duration-200 disabled:opacity-50"
+                        className="sn-composer-tool chest-attention flex items-center justify-center w-9 h-9 text-accent-neon transition-opacity duration-200 disabled:opacity-50"
                       >
                         <svg width={18} height={18} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                           <path fillRule="evenodd" clipRule="evenodd" d="M2 22v-9l2.417-4.029A2 2 0 0 1 6.132 8h11.736a2 2 0 0 1 1.715.971L22 13v9H2Zm18-2v-5h-7v2h-2v-2H4v5h16Zm-2.132-10 1.8 3H4.332l1.8-3h11.736Z" />
@@ -5815,7 +5910,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   ) : (
                     <button
                       onClick={() => setShowChannelPointsMenu(!showChannelPointsMenu)}
-                      className={`group flex items-center justify-center h-9 gap-1.5 transition-all duration-200 ${pointsBalanceInline && channelPoints !== null ? 'px-1.5' : 'w-9'} ${showChannelPointsMenu ? 'text-accent-neon' : channelPoints !== null ? 'text-accent-neon' : 'text-textSecondary hover:text-accent-neon'}`}
+                      className={`sn-composer-tool group flex items-center justify-center h-9 gap-1.5 transition-all duration-200 ${pointsBalanceInline && channelPoints !== null ? 'px-1.5' : 'w-9'} ${showChannelPointsMenu ? 'text-accent-neon' : channelPoints !== null ? 'text-accent-neon' : 'text-textSecondary hover:text-accent-neon'}`}
                     >
                       {customPointsIconUrl ? (
                         <img
@@ -5828,7 +5923,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       )}
                       {/* Short form beside the icon; the hover bubble keeps the exact number. */}
                       {pointsBalanceInline && channelPoints !== null && (
-                        <span className="text-[12px] font-semibold tabular-nums leading-none whitespace-nowrap">
+                        <span className="sn-composer-points-count text-[12px] font-semibold tabular-nums leading-none whitespace-nowrap">
                           {formatShortCount(channelPoints)}
                         </span>
                       )}
@@ -5867,7 +5962,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   <Tooltip content="Start a poll or prediction" side="top">
                     <button
                       onClick={() => setComposerKind((k) => (k ? null : 'poll'))}
-                      className={`flex items-center justify-center w-9 h-9 flex-shrink-0 self-center transition-colors duration-200 ${
+                      className={`sn-composer-tool flex items-center justify-center w-9 h-9 flex-shrink-0 self-center transition-colors duration-200 ${
                         composerKind ? 'text-accent-neon' : 'text-textSecondary hover:text-accent-neon'
                       }`}
                       aria-label="Start a poll or prediction"
@@ -5884,7 +5979,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   <button
                     onClick={handleToggleAutomation}
                     disabled={isLoadingDrops}
-                    className={`group flex-shrink-0 flex items-center justify-center self-center w-9 h-9 transition-all duration-200 ${isDropProgressing
+                    className={`sn-composer-tool group flex-shrink-0 flex items-center justify-center self-center w-9 h-9 transition-all duration-200 ${isDropProgressing
                       ? 'text-green-400 hover:text-red-400'
                       : 'text-textSecondary hover:text-accent'
                       }`}
@@ -5895,7 +5990,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                 )}
                 {/* Moderator Dashboard */}
                 {isModerator && currentStream && (
-                  <div className="flex-shrink-0 self-center z-20">
+                  <div className="sn-composer-tool-wrap flex-shrink-0 self-center z-20">
                     {/* currentStream is synthesized from channelOverride in a
                         MultiChat pane, so these are this pane's channel, not
                         the main window's. */}
@@ -6075,8 +6170,10 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       }
                     }}
                     placeholder={visiblePlaceholder}
+                    data-placeholder-wide={visiblePlaceholder}
+                    data-placeholder-narrow={visiblePlaceholderNarrow}
                     // glass-exempt: the input is clear on purpose; the highlight layer under it carries the surface.
-                    className={`relative w-full text-sm placeholder-textSecondary resize-none overflow-hidden scrollbar-thin leading-[1.4] self-center transition-all duration-300 ${remindOverlayActive ? '' : 'glass-input'} ${
+                    className={`sn-composer-input relative w-full text-sm placeholder-textSecondary resize-none overflow-hidden scrollbar-thin leading-[1.4] self-center transition-all duration-300 ${remindOverlayActive ? '' : 'glass-input'} ${
                       isWatchStreakMode 
                         ? 'ring-2 ring-amber-500/50 bg-amber-500/5 shadow-[0_0_15px_color-mix(in_srgb,var(--color-warning)_15%,transparent)] placeholder-amber-500/60 text-textPrimary'
                         : (commandState.isValid && !remindOverlayActive)
@@ -6164,7 +6261,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                 <button
                   onClick={() => handleSendMessage()}
                   disabled={(!messageInput.trim() && !isWatchStreakMode && !isResubMode) || isInputDisabled} 
-                  className={`flex-shrink-0 flex items-center justify-center self-center w-9 h-9 text-white rounded transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed ${
+                  className={`sn-composer-tool flex-shrink-0 flex items-center justify-center self-center w-9 h-9 text-white rounded transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed ${
                     isWatchStreakMode 
                       ? 'bg-amber-500 hover:bg-amber-400 shadow-[0_0_12px_color-mix(in_srgb,var(--color-warning)_30%,transparent)]'
                       : 'glass-button'
@@ -6176,6 +6273,21 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
               </div>
             </div>
             {!isConnected && <p className="text-xs text-yellow-400 mt-2">Chat is not connected. Messages cannot be sent.</p>}
+            {/* Why Twitch sends are off, beside the same sign-in Home runs.
+                Main app only, like the connect chips below. */}
+            {isMainSurface && twitchSignInOwedFor && (
+              <div className="mt-2 flex items-center justify-end gap-2.5">
+                <span className="min-w-0 text-right text-[11px] leading-[14px] text-textMuted">
+                  {signInReasonText(twitchSignInOwedFor)}
+                </span>
+                <PlatformLoginButton
+                  provider="twitch"
+                  onClick={() => void useAppStore.getState().loginToTwitch()}
+                  label="Sign in"
+                  size="sm"
+                />
+              </div>
+            )}
             {/* Connect chips only in the MAIN app — either watching Twitch (no
                 override at all) or watching a provider stream in the main window
                 (`context: 'main'`). In a MultiChat popout sign-in lives in Account

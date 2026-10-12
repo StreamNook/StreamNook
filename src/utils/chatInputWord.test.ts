@@ -137,6 +137,15 @@ test('the cycle never grows past its limit', () => {
   assert.equal(out.length, TAB_CYCLE_LIMIT);
 });
 
+test('the limit never splits names that differ only by case', () => {
+  // Rust sends LULE right after lule; with lule on the last row, LULE comes too.
+  const emotes = Array.from({ length: TAB_CYCLE_LIMIT - 1 }, (_, i) => ({ name: `e${i}`, priority: i }));
+  emotes.push({ name: 'lule', priority: 98 }, { name: 'LULE', priority: 99 }, { name: 'zz', priority: 100 });
+  const out = withChatterCandidates(emotes, 'e', [{ username: 'eve' }], 'starts_with');
+  assert.deepEqual(out.slice(-2).map((c) => c.name), ['lule', 'LULE']);
+  assert.equal(out.length, TAB_CYCLE_LIMIT + 1);
+});
+
 // The emote menu (in the chat or popped out into its own window) puts its
 // pick where the caret was left, not at the end of the message.
 test('insertAtCaret spaces the pick from its neighbours', () => {

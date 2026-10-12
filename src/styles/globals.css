@@ -1899,6 +1899,86 @@ html[data-motion="off"] .sn-bulb-rainbow stop {
   overflow-anchor: auto;
 }
 
+/* Scrollbar marks (chat/ScrollbarMarks.tsx): ticks over a chat's 8px scrollbar
+   where mentions, subs, announcements and the like sit. A decoration, never a
+   surface: small solid bars, no fill behind them, no blur, and clicks go
+   through to the scrollbar. Ticks are written by script (transform + height),
+   never animated. A tick's own colour (the row's tint) is inline; these are
+   the theme colours for kinds that have none. Phones draw no scrollbar and
+   mount no ticks. */
+.sn-scroll-marks {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  pointer-events: none;
+  z-index: 1;
+  contain: strict;
+}
+.sn-scroll-marks > i {
+  position: absolute;
+  top: 0;
+  left: 1px;
+  right: 1px;
+  border-radius: 1px;
+  background-color: var(--color-highlight-blue);
+  box-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.35);
+}
+.sn-scroll-marks > i[data-kind='mention'] { background-color: var(--color-highlight-red); }
+.sn-scroll-marks > i[data-kind='reply'] { background-color: var(--color-highlight-red); }
+.sn-scroll-marks > i[data-kind='highlight'] { background-color: var(--color-highlight-yellow); }
+.sn-scroll-marks > i[data-kind='pinned'] { background-color: var(--color-text-primary); }
+.sn-scroll-marks > i[data-kind='sub'] { background-color: var(--color-highlight-purple); }
+.sn-scroll-marks > i[data-kind='redeem'] { background-color: var(--color-highlight-cyan); }
+.sn-scroll-marks > i[data-kind='raid'] { background-color: var(--color-highlight-orange); }
+.sn-scroll-marks > i[data-kind='first_time'] { background-color: var(--color-highlight-green); }
+/* Chat composer row (ChatWidget). In a narrow chat column (`data-narrow`, set
+   by utils/composerNarrow.ts) the tools beside the field compress in place:
+   tighter gaps, 28px buttons, the inline points balance folds into the icon
+   (its hover bubble keeps the number). The field keeps a usable width and
+   nothing moves to a second row. */
+.sn-composer-row[data-narrow] {
+  gap: 0.25rem;
+}
+.sn-composer-row[data-narrow] .sn-composer-tool {
+  width: 1.75rem;
+  padding-left: 0;
+  padding-right: 0;
+}
+.sn-composer-row[data-narrow] .sn-composer-points-count {
+  display: none;
+}
+.sn-composer-row[data-narrow] .sn-composer-tool-wrap button {
+  padding: 0.25rem;
+}
+/* The placeholder stays on one line, cut with an ellipsis, at any width. */
+.sn-composer-input::placeholder {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* macOS overlay scrollbars take no width and show only while in use, so the
+   ticks there come and go with the bar (ScrollbarMarks `overlay`) instead of
+   sitting on the message text. Opacity only. */
+.sn-scroll-marks[data-overlay] {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.sn-scroll-marks[data-overlay][data-show] {
+  opacity: 1;
+  transition-duration: 0.1s;
+}
+html[data-motion="reduced"] .sn-scroll-marks[data-overlay] {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sn-scroll-marks[data-overlay] {
+    transition: none;
+  }
+}
+
 /* ===== Sidebar layering =====
    Which of the two is on top depends on which one the sidebar currently IS, and
    the states want opposite answers.
@@ -2886,6 +2966,31 @@ html[data-blur="off"] .atm-frost {
   background-color: rgba(5, 6, 13, 0.66);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
+}
+
+/* ===== Full-screen layers =====
+   One scale for everything that has to paint over the player's own full
+   screen. Plyr's CSS full screen pins the player over the whole window, so its
+   overlays, the title bar out over it, the bar's menus and tooltips all have to
+   agree on order. Every value below is defined here; the rules further down
+   and the components read these, never their own numbers.
+
+   The top of the range is deliberately left free: the player's own overlays
+   used to sit AT 2147483646/7, which left nothing above them, and a tie at the
+   max is decided by DOM order, where the player (later in the page) beats the
+   title bar. */
+:root {
+  --sn-z-player-fs: 10000000;          /* .plyr in full screen */
+  --sn-z-player-fs-osd: 10000001;      /* volume readout */
+  --sn-z-player-fs-chat: 10000002;     /* the full-screen chat column */
+  --sn-z-player-fs-popover: 10000003;  /* player panels opened in full screen (Audio Boost, chapters, stats), over the chat column */
+  --sn-z-player-fs-tile: 2147483000;   /* a full-screen MultiNook cell over its siblings */
+  --sn-z-player-fs-title: 2147483000;  /* stream title overlay */
+  --sn-z-player-fs-badge: 2147483001;  /* subscribe overlay */
+  --sn-z-titlebar-over-player: 2147483100; /* the title bar lifted over the player: its full screen, or the tucking layout */
+  --sn-z-titlebar-menu: 2147483200;    /* menus and popovers the bar opens */
+  --sn-z-tooltip: 2147483300;          /* tooltips, over the menus they explain */
+  --sn-z-titlebar-edge: 2147483400;    /* the reveal strip at the top edge */
 }
 
 /* ===== Motion preferences (Interface > Motion) =====
@@ -4704,7 +4809,7 @@ html[data-watching] .drops-progress-inline {
   inset: 0 !important;
   width: 100% !important;
   height: 100% !important;
-  z-index: 10000000 !important;
+  z-index: var(--sn-z-player-fs) !important;
 }
 
 .video-player-container:has(.plyr--fullscreen-fallback) {
@@ -4719,7 +4824,7 @@ html[data-watching] .drops-progress-inline {
      subtree — the fixed .plyr plus the title/subscribe overlays — above all
      other tiles regardless of DOM order. Only applies while a tile is fullscreen;
      harmless for the single player, which has no sibling tiles. */
-  z-index: 2147483646 !important;
+  z-index: var(--sn-z-player-fs-tile) !important;
 }
 
 /* The wheel/middle-click volume readout. It normally sits inside the player box,
@@ -4729,7 +4834,7 @@ html[data-watching] .drops-progress-inline {
 .video-player-container:has(.plyr--fullscreen-fallback) .player-volume-osd {
   position: fixed;
   inset: 0;
-  z-index: 10000001;
+  z-index: var(--sn-z-player-fs-osd);
 }
 
 /* A MultiNook tile's Audio Boost panel, for the same reason: pinned above the
@@ -4738,57 +4843,77 @@ html[data-watching] .drops-progress-inline {
   position: fixed;
   bottom: 4.5rem;
   right: 0.75rem;
-  z-index: 10000001;
+  z-index: var(--sn-z-player-fs-popover);
   max-height: calc(100vh - 6rem) !important;
+}
+
+/* The single player's panels (Audio Boost, the chapter list, the stats panel)
+   are siblings of .plyr, not inside it, so the full-screen .plyr covered them:
+   they opened, and every click on them landed on the poster. Pinned to the
+   screen at the offsets they use in the window, which in full screen is the
+   player's own box, and over the full-screen chat column. */
+.video-player-container:has(.plyr--fullscreen-fallback) .player-fs-popover {
+  position: fixed;
+  z-index: var(--sn-z-player-fs-popover);
 }
 
 /* Custom overlay positioning for Plyr fullscreen mode */
 /* When Plyr goes fullscreen, ensure our custom overlays are still visible */
-.video-player-container:fullscreen .subscribe-overlay,
-.video-player-container:-webkit-full-screen .subscribe-overlay,
-.video-player-container:-moz-full-screen .subscribe-overlay,
-.video-player-container:-ms-fullscreen .subscribe-overlay,
-.plyr--fullscreen-active ~ .subscribe-overlay,
-.plyr:fullscreen ~ .subscribe-overlay,
-.plyr:-webkit-full-screen ~ .subscribe-overlay {
+/* Unprefixed :fullscreen only, and never in the same list as a selector that
+   must always apply. A browser drops a whole selector list if any selector in
+   it is unknown: Chromium (WebView2, and CEF on Linux) does not know the -moz-
+   or -ms- variants, and the WKWebView macOS 11 to 13.2 ships (WebKit before
+   Safari 16.4) does not know unprefixed :fullscreen. So the class Plyr sets in
+   either kind of full screen has rules of its own, which every engine keeps.
+   Autoprefixer deletes a rule that still carries the outdated
+   :-webkit-full-screen when a later rule uses :fullscreen, again taking every
+   other selector in its list along. */
+.plyr--fullscreen-active ~ .subscribe-overlay {
   position: fixed;
   top: 12px;
   right: 12px;
-  z-index: 2147483647;
+  z-index: var(--sn-z-player-fs-badge);
 }
 
-.video-player-container:fullscreen .stream-title-overlay,
-.video-player-container:-webkit-full-screen .stream-title-overlay,
-.video-player-container:-moz-full-screen .stream-title-overlay,
-.video-player-container:-ms-fullscreen .stream-title-overlay,
-.plyr--fullscreen-active ~ .stream-title-overlay,
-.plyr:fullscreen ~ .stream-title-overlay,
-.plyr:-webkit-full-screen ~ .stream-title-overlay {
+.video-player-container:fullscreen .subscribe-overlay,
+.plyr:fullscreen ~ .subscribe-overlay {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: var(--sn-z-player-fs-badge);
+}
+
+.plyr--fullscreen-active ~ .stream-title-overlay {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
-  z-index: 2147483646;
+  z-index: var(--sn-z-player-fs-title);
+}
+
+.video-player-container:fullscreen .stream-title-overlay,
+.plyr:fullscreen ~ .stream-title-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: var(--sn-z-player-fs-title);
 }
 
 /* Alternative approach: Target elements when document has fullscreen element */
-:fullscreen .subscribe-overlay,
-:-webkit-full-screen .subscribe-overlay,
-:-moz-full-screen .subscribe-overlay {
+:fullscreen .subscribe-overlay {
   position: fixed !important;
   top: 12px !important;
   right: 12px !important;
-  z-index: 2147483647 !important;
+  z-index: var(--sn-z-player-fs-badge) !important;
 }
 
-:fullscreen .stream-title-overlay,
-:-webkit-full-screen .stream-title-overlay,
-:-moz-full-screen .stream-title-overlay {
+:fullscreen .stream-title-overlay {
   position: fixed !important;
   top: 0 !important;
   left: 0 !important;
   right: 0 !important;
-  z-index: 2147483646 !important;
+  z-index: var(--sn-z-player-fs-title) !important;
 }
 
 /* PIP mode */
@@ -6779,7 +6904,7 @@ html[data-motion="reduced"] .sn-ffz-anim-leave {
   bottom: 0 !important;
   height: 100vh !important;
   width: var(--fs-chat-width, 340px) !important;
-  z-index: 10000002 !important;
+  z-index: var(--sn-z-player-fs-chat) !important;
   background: color-mix(in srgb, var(--color-background) var(--fs-chat-opacity, 55%), transparent) !important;
   transition: opacity 0.2s ease, transform 0.25s ease;
 }
@@ -7302,4 +7427,51 @@ html[data-motion] div.offline-bounce-y {
 .offline-shiny {
   filter: sepia(1) saturate(5) hue-rotate(-12deg) brightness(1.15)
     drop-shadow(0 0 6px rgba(255, 205, 60, 0.85)) drop-shadow(0 2px 6px rgba(0, 0, 0, 0.55));
+}
+
+/* Settings > Player > "Hide title bar while watching" preview. A 4.8s loop:
+   the pointer climbs to the top edge, the bar slides down, the pointer leaves,
+   the bar slides away a beat later. Transform and opacity only. */
+.sn-tbt-picture {
+  background:
+    radial-gradient(120% 95% at 28% 72%, color-mix(in srgb, var(--color-accent) 55%, transparent), transparent 70%),
+    radial-gradient(80% 70% at 85% 30%, color-mix(in srgb, var(--color-accent) 25%, transparent), transparent 70%),
+    linear-gradient(160deg, #1b1f2e, #07080d);
+}
+.sn-tbt-bar {
+  animation: sn-tbt-bar 4.8s ease-in-out infinite;
+}
+.sn-tbt-pointer {
+  animation: sn-tbt-pointer 4.8s ease-in-out infinite;
+}
+@keyframes sn-tbt-bar {
+  0%, 30% { transform: translateY(-100%); opacity: 0; }
+  38%, 72% { transform: translateY(0); opacity: 1; }
+  80%, 100% { transform: translateY(-100%); opacity: 0; }
+}
+@keyframes sn-tbt-pointer {
+  0% { transform: translate(110px, 62px); }
+  28%, 64% { transform: translate(58px, 2px); }
+  78%, 100% { transform: translate(110px, 62px); }
+}
+/* Reduced drops decorative loops (see the Motion preferences block), so the
+   preview rests on its revealed frame there as well as with motion off. */
+html[data-motion="off"] .sn-tbt-bar,
+html[data-motion="off"] .sn-tbt-pointer,
+html[data-motion="reduced"] .sn-tbt-bar,
+html[data-motion="reduced"] .sn-tbt-pointer {
+  animation: none;
+}
+html[data-motion="off"] .sn-tbt-pointer,
+html[data-motion="reduced"] .sn-tbt-pointer {
+  transform: translate(58px, 2px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .sn-tbt-bar,
+  .sn-tbt-pointer {
+    animation: none;
+  }
+  .sn-tbt-pointer {
+    transform: translate(58px, 2px);
+  }
 }

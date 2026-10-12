@@ -65,13 +65,15 @@ const cachedEmoteFiles: Map<string, string> = new Map();
 // Lazily-built per-set name indexes, keyed by set identity. Emote sets are only
 // ever replaced wholesale (never mutated in place), so a WeakMap entry lives
 // exactly as long as its set and a refresh/channel switch drops it with the
-// old object. Insertion is first-wins in the same provider order as the
-// name-lookup chains this replaces.
+// old object. Insertion is first-wins. Twitch's own emotes come first: a name
+// Twitch would tag is Twitch's emote, whatever a third-party set calls the
+// same name (Rust's parser applies the same rule to tagged spans), then the
+// third-party sets in 7TV > BTTV > FFZ order.
 const emoteLookupCache = new WeakMap<
   EmoteSet,
   { byName: Map<string, Emote>; lowerNames: Set<string> }
 >();
-const LOOKUP_ORDER = ['7tv', 'bttv', 'ffz', 'twitch', 'kick', 'youtube'] as const;
+const LOOKUP_ORDER = ['twitch', '7tv', 'bttv', 'ffz', 'kick', 'youtube'] as const;
 
 export function getEmoteLookup(set: EmoteSet): { byName: Map<string, Emote>; lowerNames: Set<string> } {
   let entry = emoteLookupCache.get(set);

@@ -328,8 +328,9 @@ const parseTextWithEmoteSets = (text: string, emotes?: EmoteSet | null): EmoteSe
   words.forEach((word, i) => {
     if (i > 0) segments.push({ type: 'text', content: ' ' });
 
-    // Per-set name index (7tv > bttv > ffz > twitch > kick > youtube,
-    // first-wins - same order the old find() chain searched). Kick/YouTube
+    // Per-set name index (twitch > 7tv > bttv > ffz > kick > youtube,
+    // first-wins: a Twitch emote is never replaced by a same-name
+    // third-party one, as in Rust's parser). Kick/YouTube
     // matter here because a Kick reply preview arrives as plain text with its
     // emote tokens already reduced to names. This runs per word of every reply
     // preview, so the old six-array linear scan was O(words x set size).
@@ -373,6 +374,7 @@ const channelNameCache = new Map<string, string>();
 const channelProfileImageCache = new Map<string, string>();
 
 import { BackendChatMessage } from '../services/twitchChat';
+import { SevenTvAvatar } from './SevenTvAvatar';
 
 import { Logger } from '../utils/logger';
 import { kickTimeoutMinutes } from '../utils/kickTimeout';
@@ -408,6 +410,10 @@ interface ChatMessageProps {
    *  streamer's other platforms, and `isModerator` / `broadcasterId` describe
    *  this one only. */
   homeProvider?: ProviderId;
+  /** Blended feed: the row's platform logo, drawn at the start of the name
+   *  line on every row type, so it sits beside the name whatever is above it
+   *  (a reply, a redemption header, a timestamp). */
+  sourceMark?: ProviderId;
 }
 
 /**
@@ -585,10 +591,16 @@ const chatMessageAreEqual = (prevProps: ChatMessageProps, nextProps: ChatMessage
     // If objects, compare IDs
     if (typeof prevProps.message !== 'string' && typeof nextProps.message !== 'string') {
       if (prevProps.message.id !== nextProps.message.id) return false;
+      // Same row, new segments: a re-stamp from Rust (a backlog parsed before
+      // the channel's emotes landed, a late 7TV personal set). A row object
+      // that is only copied keeps its segments array, so this costs nothing
+      // on the hot path.
+      if (prevProps.message.segments !== nextProps.message.segments) return false;
     } else {
       return false;
     }
   }
+  if (prevProps.sourceMark !== nextProps.sourceMark) return false;
   // messageIndex is intentionally NOT compared. It is the array position, which
   // shifts by N on every flush once the list sits at its cap (busy channel), so
   // comparing it re-rendered EVERY visible row on EVERY flush — the main-thread
@@ -732,7 +744,7 @@ function presetsFromSetting(raw: number[] | undefined): Array<{ label: string; v
   return (list.length > 0 ? list : DEFAULT_TIMEOUT_PRESETS).map((val) => ({ label: formatTimeoutLabel(val), val }));
 }
 
-const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, onReplyClick, isHighlighted = false, moderationContext = null, onEmoteRightClick, onMessageCopy, onUsernameRightClick, onBadgeClick, emotes, isModerator = false, broadcasterId, homeProvider = 'twitch' }: ChatMessageProps) {
+const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, onReplyClick, isHighlighted = false, moderationContext = null, onEmoteRightClick, onMessageCopy, onUsernameRightClick, onBadgeClick, emotes, isModerator = false, broadcasterId, homeProvider = 'twitch', sourceMark }: ChatMessageProps) {
   // Field selectors, NOT a whole-store subscription. This component is mounted
   // once per chat row, so subscribing to the entire store made every row
   // re-render on every unrelated store tick (hours-watched, viewer count, etc.).
@@ -1329,6 +1341,21 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   const rowSourceProvider = rowProvider(message, homeProvider);
   const showPlatformMark =
     rowSourceProvider !== homeProvider && chatBlend?.show_platform_badge !== false;
+  // Blended feed: every row leads its name line with its platform's logo. It
+  // is drawn inside that line, so a reply quote, a redemption header or a
+  // timestamp above the name never pulls it off the name. Centred on the text
+  // the way the badge strip is (see .sn-badge-strip): an image-only
+  // inline-flex box sits on its bottom edge, lifted until its middle meets
+  // the text's.
+  const sourceMarkPx = Math.round((chatDesign?.font_size ?? 14) * 1.2);
+  const sourceMarkEl = sourceMark ? (
+    <span
+      className="mr-1.5 inline-flex flex-shrink-0"
+      style={{ verticalAlign: `calc(0.38em - ${sourceMarkPx / 2}px)` }}
+    >
+      <ProviderLogo provider={sourceMark} size={sourceMarkPx} />
+    </span>
+  ) : null;
   const bodyDragEnabled = canModerateThisRow && (modActionStyle === 'drag' || modActionStyle === 'both');
   const showModButtons = modActionStyle === 'buttons' || modActionStyle === 'both';
   // The inline Pin button is ALWAYS available to moderators so a pin can never go
@@ -1784,8 +1811,13 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             loading="lazy"
             decoding="async"
             referrerPolicy="no-referrer"
-            className={`inline-block h-20 w-auto max-w-full rounded-md ${inGrid ? '' : 'align-middle'} ${marginClass}`}
-            style={gridStyle}
+            // text-top: the GIF's top sits on the name's line, so the name
+            // stays on the first line instead of dropping to the GIF's middle
+            // (the same placement as the stream overlay). Height is the 5rem
+            // (80px) base times the GIF size setting, which ChatMessageList
+            // carries as --sn-gif-scale (layout_service.rs uses the same base).
+            className={`inline-block w-auto max-w-full rounded-md object-contain ${inGrid ? '' : 'align-text-top'} ${marginClass}`}
+            style={{ ...gridStyle, height: 'calc(5rem * var(--sn-gif-scale, 1))' }}
             onError={(e) => {
               // Asset gone: keep the description Twitch sent instead of a blank.
               e.currentTarget.style.display = 'none';
@@ -2437,6 +2469,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             style={{ fontSize: `${chatDesign?.font_size ?? 14}px` }}
           >
             <p className="text-white font-semibold leading-relaxed">
+              {sourceMarkEl}
               {renderBadges()}
               {cheerTemplate ? (
                 <span style={{ color: bitsTierColor }} className="font-bold">{cheerTemplate}</span>
@@ -2620,6 +2653,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             style={{ fontSize: `${chatDesign?.font_size ?? 14}px` }}
           >
             <p className="text-white font-semibold leading-relaxed">
+              {sourceMarkEl}
               {renderBadges()}
               {renderClickableUsername(parsed.username, parsed.displayName || parsed.tags.get('display-name') || parsed.username)}
               {isSuperChat ? (
@@ -2728,6 +2762,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             style={{ fontSize: `${chatDesign?.font_size ?? 14}px` }}
           >
             <p className="text-white font-semibold leading-relaxed flex items-center flex-wrap gap-1">
+              {sourceMarkEl}
               {renderBadges()}
               {renderClickableUsername(parsed.username, displayName)}
               {channelPointsReward && (
@@ -2975,6 +3010,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             style={{ fontSize: `${chatDesign?.font_size ?? 14}px` }}
           >
             <p className="text-white font-semibold leading-relaxed">
+              {sourceMarkEl}
               {parseSystemMessageWithClickableNames(displayMessage)}
             </p>
             {(subMsgId === 'submysterygift' || subMsgId === 'anonsubmysterygift') && giftRecipients.length > 0 && (
@@ -3055,6 +3091,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
             style={{ fontSize: `${chatDesign?.font_size ?? 14}px` }}
           >
             <p className="text-white font-semibold leading-relaxed">
+              {sourceMarkEl}
               {raidTemplate ? (
                 <span className="text-highlight-red font-bold">{raidTemplate}</span>
               ) : (
@@ -3112,6 +3149,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-warning font-medium text-xs leading-relaxed">
+              {sourceMarkEl}
               {renderContent(contentWithEmotes)}
             </p>
           </div>
@@ -3401,18 +3439,23 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               it — and because a mark that has to be hunted for between badges
               is not doing its one job. Small on purpose: it is a marker, not a
               badge, and most rows in a merged feed do not carry one at all. */}
-          {showPlatformMark && (
+          {sourceMarkEl ?? (showPlatformMark && (
             <ProviderLogo
               provider={rowSourceProvider}
               size={Math.round((chatDesign?.font_size ?? 14) * 0.85)}
               className="mr-1 inline-block align-middle"
             />
-          )}
+          ))}
           {/* YouTube / TikTok native inline avatar — leads the row (before badges)
               so it shows even for chatters with no badges. The picture rides every
               message (those adapters stamp it onto the `avatar` tag). */}
           {chatDesign?.show_avatars !== false && (parsed.provider === 'youtube' || parsed.provider === 'tiktok') && parsed.tags.get('avatar') && (
-            <img
+            // A 7TV picture (YouTube chatters can link one) draws as a still
+            // here: a chat row is the densest list there is.
+            <SevenTvAvatar
+              cosmeticsId={cosmeticsKey}
+              ask={false}
+              px={Math.round((chatDesign?.font_size ?? 14) * 1.4)}
               src={parsed.tags.get('avatar')}
               alt=""
               className="inline-block rounded-full mr-1.5 align-middle object-cover"

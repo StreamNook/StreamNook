@@ -13,6 +13,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { motion } from 'framer-motion';
 import { Search, X } from 'lucide-react';
 import { Logger } from '../../utils/logger';
+import { isImeComposing } from '../../utils/imeComposing';
 
 export interface ChatSearchHit {
   id: string;
@@ -126,6 +127,7 @@ export default function ChatSearchBar({ channelKey, onJumpTo, onClose }: ChatSea
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (isImeComposing(e)) return;
     if (e.key === 'Escape') {
       e.preventDefault();
       onClose();

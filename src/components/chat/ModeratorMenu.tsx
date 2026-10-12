@@ -8,6 +8,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Logger } from '../../utils/logger';
 import { useAppStore } from '../../stores/AppStore';
 import { usePinStore } from '../../stores/pinStore';
+import { isImeComposing } from '../../utils/imeComposing';
 
 interface ModeratorMenuProps {
   broadcasterId: string;
@@ -50,7 +51,7 @@ const ModeratorMenu: React.FC<ModeratorMenuProps> = ({
   // Helix endpoint moderators can use. Mod View can do it because it goes
   // through GQL. Showing these to a moderator would only ever produce a 401.
   const [livePoll, setLivePoll] = useState<{ id: string } | null>(null);
-  const [livePrediction, setLivePrediction] = useState<{ prediction_id: string } | null>(null);
+  const [livePrediction, setLivePrediction] = useState<{ id: string; status: string } | null>(null);
 
   useEffect(() => {
     if (!isOpen || !channelLogin) return;
@@ -62,9 +63,7 @@ const ModeratorMenu: React.FC<ModeratorMenuProps> = ({
       void invoke<{ id: string } | null>('get_active_poll', { broadcasterId })
         .then((p) => alive && setLivePoll(p))
         .catch(() => alive && setLivePoll(null));
-      void invoke<{ prediction_id: string } | null>('get_active_prediction', {
-        channelLogin,
-      })
+      void invoke<{ id: string; status: string } | null>('get_open_prediction', { broadcasterId })
         .then((p) => alive && setLivePrediction(p))
         .catch(() => alive && setLivePrediction(null));
     }
@@ -316,37 +315,39 @@ const ModeratorMenu: React.FC<ModeratorMenuProps> = ({
               {/* Live prediction. Resolving needs a winning outcome, which is a
                   choice this menu is too small for — that stays on
                   /completeprediction and the banner itself. */}
-              {isBroadcaster && livePrediction?.prediction_id && (
+              {isBroadcaster && livePrediction && (
                 <div className="px-2.5 py-2 flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2.5 min-w-0">
                     <div className="flex items-center justify-center text-accent flex-shrink-0">
                       <Trophy size={14} />
                     </div>
-                    <span className="text-sm text-white/70 truncate">Prediction running</span>
+                    <span className="text-sm text-white/70 truncate">
+                      {livePrediction.status === 'LOCKED' ? 'Prediction locked' : 'Prediction running'}
+                    </span>
                   </div>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
+                    {livePrediction.status !== 'LOCKED' && (
+                      <button
+                        disabled={isPending}
+                        onClick={() =>
+                          runLiveAction('Prediction locked', 'finish_prediction', {
+                            broadcasterId,
+                            action: 'lock',
+                            outcome: null,
+                          }, () => setLivePrediction({ ...livePrediction, status: 'LOCKED' }))
+                        }
+                        className="px-2 py-1 text-[11px] font-semibold bg-white/10 hover:bg-white/20 text-white/80 rounded transition-colors disabled:opacity-50"
+                      >
+                        Lock
+                      </button>
+                    )}
                     <button
                       disabled={isPending}
                       onClick={() =>
-                        runLiveAction('Prediction locked', 'end_prediction', {
+                        runLiveAction('Prediction cancelled, points refunded', 'finish_prediction', {
                           broadcasterId,
-                          predictionId: livePrediction.prediction_id,
-                          status: 'LOCKED',
-                          winningOutcomeId: null,
-                        }, () => setLivePrediction(null))
-                      }
-                      className="px-2 py-1 text-[11px] font-semibold bg-white/10 hover:bg-white/20 text-white/80 rounded transition-colors disabled:opacity-50"
-                    >
-                      Lock
-                    </button>
-                    <button
-                      disabled={isPending}
-                      onClick={() =>
-                        runLiveAction('Prediction cancelled, points refunded', 'end_prediction', {
-                          broadcasterId,
-                          predictionId: livePrediction.prediction_id,
-                          status: 'CANCELED',
-                          winningOutcomeId: null,
+                          action: 'cancel',
+                          outcome: null,
                         }, () => setLivePrediction(null))
                       }
                       className="px-2 py-1 text-[11px] font-semibold bg-red-500/15 hover:bg-red-500/25 text-red-300 rounded transition-colors disabled:opacity-50"
@@ -416,7 +417,7 @@ const ModeratorMenu: React.FC<ModeratorMenuProps> = ({
                   value={blockTerm}
                   onChange={(e) => setBlockTerm(e.target.value)}
                   onKeyDown={async (e) => {
-                    if (e.key !== 'Enter') return;
+                    if (e.key !== 'Enter' || isImeComposing(e)) return;
                     const phrase = blockTerm.trim();
                     if (!phrase || isPending || !broadcasterId) return;
                     setIsPending(true);

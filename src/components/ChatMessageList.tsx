@@ -7,8 +7,10 @@ import { ModerationContext } from '../hooks/useTwitchChat';
 import { useAppStore } from '../stores/AppStore';
 import { useStreamerMode } from '../utils/streamerMode';
 import { useChatUserStore } from '../stores/chatUserStore';
-import { ProviderLogo } from './ProviderLogo';
 import type { ProviderId } from '../types/providers';
+import { ScrollbarMarks } from './chat/ScrollbarMarks';
+import { collectMarks, FALLBACK_MARK_KINDS } from './chat/scrollbarMarkLayout';
+import { IS_MAC, IS_MOBILE } from '../utils/platform';
 
 /**
  * How many of the newest rows always paint (see MessageRow). Enough to fill
@@ -38,8 +40,8 @@ interface MessageRowProps {
   /** One of the newest rows, which are on screen whenever the list follows. */
   isNewest: boolean;
   intrinsicSizeCSS: string;
+  /** Blended feed: the platform logo ChatMessage draws in the name line. */
   sourceProvider: ProviderId | undefined;
-  sourceLogoSize: number;
   message: string | BackendChatMessage;
   isHighlighted: boolean;
   moderationContext: ModerationContext | null;
@@ -71,11 +73,12 @@ const messageRowAreEqual = (prev: MessageRowProps, next: MessageRowProps): boole
   if (prev.isNewest !== next.isNewest) return false;
   if (prev.intrinsicSizeCSS !== next.intrinsicSizeCSS) return false;
   if (prev.sourceProvider !== next.sourceProvider) return false;
-  if (prev.sourceLogoSize !== next.sourceLogoSize) return false;
   if (prev.message !== next.message) {
     if (typeof prev.message === 'string' || typeof next.message === 'string') return false;
     if (!prev.message.id || !next.message.id) return false;
     if (prev.message.id !== next.message.id) return false;
+    // Same row re-stamped by Rust with new segments (see chatMessageAreEqual).
+    if (prev.message.segments !== next.message.segments) return false;
   }
   if (prev.isHighlighted !== next.isHighlighted) return false;
   if (prev.moderationContext?.type !== next.moderationContext?.type ||
@@ -94,7 +97,6 @@ const MessageRow = memo(function MessageRow({
   isNewest,
   intrinsicSizeCSS,
   sourceProvider,
-  sourceLogoSize,
   message,
   isHighlighted,
   moderationContext,
@@ -133,23 +135,6 @@ const MessageRow = memo(function MessageRow({
     }),
     [paintAlways, intrinsicSizeCSS],
   );
-  const chatMessageEl = (
-    <ChatMessage
-      message={message}
-      onUsernameClick={onUsernameClick}
-      onReplyClick={onReplyClick}
-      onMessageCopy={onMessageCopy}
-      isHighlighted={isHighlighted}
-      moderationContext={moderationContext}
-      onEmoteRightClick={onEmoteRightClick}
-      onUsernameRightClick={onUsernameRightClick}
-      onBadgeClick={onBadgeClick}
-      emotes={emotes}
-      isModerator={isModerator}
-      broadcasterId={broadcasterId}
-      homeProvider={homeProvider}
-    />
-  );
   return (
     <div
       data-message-id={messageId || undefined}
@@ -158,14 +143,22 @@ const MessageRow = memo(function MessageRow({
       }`}
       style={style}
     >
-      {sourceProvider ? (
-        <div className="flex items-center gap-1.5 pl-1">
-          <ProviderLogo provider={sourceProvider} size={sourceLogoSize} />
-          <div className="min-w-0 flex-1">{chatMessageEl}</div>
-        </div>
-      ) : (
-        chatMessageEl
-      )}
+      <ChatMessage
+        message={message}
+        onUsernameClick={onUsernameClick}
+        onReplyClick={onReplyClick}
+        onMessageCopy={onMessageCopy}
+        isHighlighted={isHighlighted}
+        moderationContext={moderationContext}
+        onEmoteRightClick={onEmoteRightClick}
+        onUsernameRightClick={onUsernameRightClick}
+        onBadgeClick={onBadgeClick}
+        emotes={emotes}
+        isModerator={isModerator}
+        broadcasterId={broadcasterId}
+        homeProvider={homeProvider}
+        sourceMark={sourceProvider}
+      />
     </div>
   );
 }, messageRowAreEqual);
@@ -230,6 +223,8 @@ interface ChatMessageListProps {
   /** How tall the floating header over this list is, measured by the host (a
    *  hype train makes it much taller). Defaults to the plain header's 40px. */
   headerInset?: number;
+  /** Ids of this channel's pinned messages, for the scrollbar's pinned marks. */
+  pinnedIds?: ReadonlySet<string>;
 }
 
 /**
@@ -267,6 +262,7 @@ const ChatMessageList = memo(function ChatMessageList({
   showSource,
   headerSpaceReserved,
   headerInset = 40,
+  pinnedIds,
 }: ChatMessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   // Inner messages-wrapper div. We observe its size with a ResizeObserver so
@@ -312,11 +308,6 @@ const ChatMessageList = memo(function ChatMessageList({
     return `auto ${total}px`;
   }, [chatDesign?.font_size, chatDesign?.message_spacing, chatDesign?.show_timestamps]);
 
-  // Source provider logo (blended feed): a touch larger than the text and scaling
-  // with the chat font size — like inline emotes — so it stays legible as the user
-  // sizes the chat up.
-  const sourceLogoSize = Math.round((chatDesign?.font_size ?? 14) * 1.2);
-  
   // Track if user explicitly scrolled UP via wheel (negative deltaY = scroll up)
   // This is the ONLY reliable way to detect user scroll intent
   // Flag persists until user scrolls DOWN or reaches bottom
@@ -612,140 +603,160 @@ const ChatMessageList = memo(function ChatMessageList({
   // Fresh per render.
   const renderedIds = new Set<string>();
 
+  // Scrollbar marks: Rust stamps which rows are marked; this keeps the ones the
+  // viewer chose to see. One pass per feed change, no row re-renders. A phone
+  // draws no scrollbar, so there is nothing for the ticks to sit on.
+  const marksOn = !IS_MOBILE && (chatDesign?.scrollbar_marks ?? true);
+  const markKinds = chatDesign?.scrollbar_mark_kinds;
+  const shownKinds = useMemo(
+    () => new Set<string>(marksOn ? (markKinds ?? FALLBACK_MARK_KINDS) : []),
+    [marksOn, markKinds],
+  );
+  const marks = useMemo(
+    () => collectMarks(messages, getMessageId, shownKinds, pinnedIds),
+    [messages, getMessageId, shownKinds, pinnedIds],
+  );
+
   return (
-    <div
-      ref={containerRef}
-      className="h-full overflow-y-auto overflow-x-hidden scrollbar-thin"
-      onScroll={handleScroll}
-      onWheel={handleWheel}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      style={{
-        overflowAnchor: 'auto',
-        '--sn-emote-scale': emoteScale,
-        '--sn-emote-margin': `${emoteMargin}rem`,
-        '--sn-backfill-opacity': Math.max(0.3, Math.min(1, (chatDesign?.backfill_opacity ?? 100) / 100)),
-        '--sn-badge-scale': Math.max(0.5, Math.min(2.5, chatDesign?.badge_scale ?? 1)),
-      } as React.CSSProperties}
-    >
-      {/* Messages container with native virtualization. The top padding clears
-          the chat header, which floats OVER this column rather than sitting
-          above it, so the space has to be reserved here — inside the scroll
-          content — or the oldest message hides behind it at the top of
-          scrollback. When something above already reserved it (the
-          combined-chat bar sits below the header and pushes this list down),
-          reserving it twice leaves a dead gap instead.
-          data-entrance drives a CSS-only arrival animation on live rows
-          (history rows carry .is-backfill and are excluded by the selector). */}
+    <div className="relative h-full">
       <div
-        ref={contentRef}
-        className={`flex flex-col min-h-full justify-end${chatDesign?.alternating_backgrounds ? ' chat-striped' : ''}`}
-        style={headerSpaceReserved ? undefined : { paddingTop: headerInset }}
-        data-entrance={chatDesign?.message_entrance && chatDesign.message_entrance !== 'none' ? chatDesign.message_entrance : undefined}
+        ref={containerRef}
+        className="h-full overflow-y-auto overflow-x-hidden scrollbar-thin"
+        onScroll={handleScroll}
+        onWheel={handleWheel}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        style={{
+          overflowAnchor: 'auto',
+          '--sn-emote-scale': emoteScale,
+          // Chat GIF size (ChatMessage); Rust holds the saved value to 0.5-2.
+          '--sn-gif-scale': chatDesign?.gif_scale ?? 1,
+          '--sn-emote-margin': `${emoteMargin}rem`,
+          '--sn-backfill-opacity': Math.max(0.3, Math.min(1, (chatDesign?.backfill_opacity ?? 100) / 100)),
+          '--sn-badge-scale': Math.max(0.5, Math.min(2.5, chatDesign?.badge_scale ?? 1)),
+        } as React.CSSProperties}
       >
-        {messages.map((message, index) => {
-          const messageId = getMessageId(message);
-          // Event categories the viewer turned off for this platform.
-          if (typeof message !== 'string' && isHiddenEvent(message, hiddenEvents)) return null;
+        {/* Messages container with native virtualization. The top padding clears
+            the chat header, which floats OVER this column rather than sitting
+            above it, so the space has to be reserved here — inside the scroll
+            content — or the oldest message hides behind it at the top of
+            scrollback. When something above already reserved it (the
+            combined-chat bar sits below the header and pushes this list down),
+            reserving it twice leaves a dead gap instead.
+            data-entrance drives a CSS-only arrival animation on live rows
+            (history rows carry .is-backfill and are excluded by the selector). */}
+        <div
+          ref={contentRef}
+          className={`flex flex-col min-h-full justify-end${chatDesign?.alternating_backgrounds ? ' chat-striped' : ''}`}
+          style={headerSpaceReserved ? undefined : { paddingTop: headerInset }}
+          data-entrance={chatDesign?.message_entrance && chatDesign.message_entrance !== 'none' ? chatDesign.message_entrance : undefined}
+        >
+          {messages.map((message, index) => {
+            const messageId = getMessageId(message);
+            // Event categories the viewer turned off for this platform.
+            if (typeof message !== 'string' && isHiddenEvent(message, hiddenEvents)) return null;
 
-          // Render each id at most once. If the array somehow holds a duplicate
-          // (e.g. an own message present both as the stamped optimistic copy and
-          // a backfilled/echoed copy), drop the later one so React never sees a
-          // duplicate key. See renderedIds note above.
-          if (messageId) {
-            if (renderedIds.has(messageId)) return null;
-            renderedIds.add(messageId);
-          }
-
-          // /clearmessages — skip rendering entirely for messages snapshotted
-          // into the locally-hidden set. Distinct from the deleted/moderated
-          // path below, which renders strikethrough chrome.
-          if (messageId && hiddenMessageIds?.has(messageId)) {
-            return null;
-          }
-
-          // Sender user-id — used both for cleared-user moderation context and
-          // for the per-row Atmosphere lookup in MessageRow below.
-          const userId = typeof message !== 'string'
-            ? message.user_id
-            : message.match(/(?:^@|;)user-id=([^;]+)/)?.[1];
-
-          // Check if message is deleted/moderated
-          let moderationContext: ModerationContext | null = null;
-
-          if (messageId && deletedMessageIds.has(messageId)) {
-            // Single message deleted by mod
-            moderationContext = { type: 'deleted' };
-          } else if (messageId) {
-            if (userId && clearedUserContexts.has(userId)) {
-              const entry = clearedUserContexts.get(userId)!;
-              if (entry.affectedMessageIds.has(messageId)) {
-                moderationContext = entry.context;
-              }
+            // Render each id at most once. If the array somehow holds a duplicate
+            // (e.g. an own message present both as the stamped optimistic copy and
+            // a backfilled/echoed copy), drop the later one so React never sees a
+            // duplicate key. See renderedIds note above.
+            if (messageId) {
+              if (renderedIds.has(messageId)) return null;
+              renderedIds.add(messageId);
             }
-          }
 
-          // Deleted message style: 'hidden' suppresses the row entirely.
-          // Other styles (strikethrough/dimmed/keep) fall through to ChatMessage.
-          if (moderationContext && deletedStyle === 'hidden') {
-            return null;
-          }
-          if (
-            streamerModeActive &&
-            typeof message !== 'string' &&
-            message.metadata?.suspicious === 'restricted'
-          ) {
-            return null;
-          }
-          // Hide shared-chat-flagged messages if the user opted in.
-          if (hideSharedChat && typeof message !== 'string') {
-            const srcRoom = message.tags?.['source-room-id'] as string | undefined;
-            const curRoom = message.tags?.['room-id'] as string | undefined;
-            if (srcRoom && curRoom && srcRoom !== curRoom) {
+            // /clearmessages — skip rendering entirely for messages snapshotted
+            // into the locally-hidden set. Distinct from the deleted/moderated
+            // path below, which renders strikethrough chrome.
+            if (messageId && hiddenMessageIds?.has(messageId)) {
               return null;
             }
-          }
-          // 'keep' style nukes the moderation context so ChatMessage renders
-          // as if nothing happened.
-          if (moderationContext && deletedStyle === 'keep') {
-            moderationContext = null;
-          }
 
-          // Blended feed: prefix each message with its source platform's logo so
-          // a merged multi-source feed is readable at a glance. Only when
-          // showSource is on (and the row is a structured message carrying a
-          // provider) — otherwise render unchanged.
-          const sourceProvider =
-            showSource && typeof message !== 'string'
-              ? ((message as BackendChatMessage).provider as ProviderId | undefined)
-              : undefined;
-          return (
-            <MessageRow
-              key={messageId || `msg-${index}`}
-              messageId={messageId}
-              userId={userId}
-              isModFocus={!!modFocusId && messageId === modFocusId}
-              isNewest={index >= messages.length - NEWEST_ROWS_PAINTED}
-              intrinsicSizeCSS={intrinsicSizeCSS}
-              sourceProvider={sourceProvider}
-              sourceLogoSize={sourceLogoSize}
-              message={message}
-              isHighlighted={highlightedMessageId === messageId}
-              moderationContext={moderationContext}
-              emotes={emotes}
-              isModerator={isModerator}
-              broadcasterId={broadcasterId}
-              homeProvider={homeProvider}
-              onUsernameClick={onUsernameClick}
-              onReplyClick={onReplyClick}
-              onMessageCopy={onMessageCopy}
-              onEmoteRightClick={onEmoteRightClick}
-              onUsernameRightClick={onUsernameRightClick}
-              onBadgeClick={onBadgeClick}
-            />
-          );
-        })}
+            // Sender user-id — used both for cleared-user moderation context and
+            // for the per-row Atmosphere lookup in MessageRow below.
+            const userId = typeof message !== 'string'
+              ? message.user_id
+              : message.match(/(?:^@|;)user-id=([^;]+)/)?.[1];
+
+            // Check if message is deleted/moderated
+            let moderationContext: ModerationContext | null = null;
+
+            if (messageId && deletedMessageIds.has(messageId)) {
+              // Single message deleted by mod
+              moderationContext = { type: 'deleted' };
+            } else if (messageId) {
+              if (userId && clearedUserContexts.has(userId)) {
+                const entry = clearedUserContexts.get(userId)!;
+                if (entry.affectedMessageIds.has(messageId)) {
+                  moderationContext = entry.context;
+                }
+              }
+            }
+
+            // Deleted message style: 'hidden' suppresses the row entirely.
+            // Other styles (strikethrough/dimmed/keep) fall through to ChatMessage.
+            if (moderationContext && deletedStyle === 'hidden') {
+              return null;
+            }
+            if (
+              streamerModeActive &&
+              typeof message !== 'string' &&
+              message.metadata?.suspicious === 'restricted'
+            ) {
+              return null;
+            }
+            // Hide shared-chat-flagged messages if the user opted in.
+            if (hideSharedChat && typeof message !== 'string') {
+              const srcRoom = message.tags?.['source-room-id'] as string | undefined;
+              const curRoom = message.tags?.['room-id'] as string | undefined;
+              if (srcRoom && curRoom && srcRoom !== curRoom) {
+                return null;
+              }
+            }
+            // 'keep' style nukes the moderation context so ChatMessage renders
+            // as if nothing happened.
+            if (moderationContext && deletedStyle === 'keep') {
+              moderationContext = null;
+            }
+
+            // Blended feed: each message leads its name line with its source
+            // platform's logo so a merged multi-source feed is readable at a
+            // glance. Only when showSource is on (and the row is a structured
+            // message carrying a provider); otherwise render unchanged.
+            const sourceProvider =
+              showSource && typeof message !== 'string'
+                ? ((message as BackendChatMessage).provider as ProviderId | undefined)
+                : undefined;
+            return (
+              <MessageRow
+                key={messageId || `msg-${index}`}
+                messageId={messageId}
+                userId={userId}
+                isModFocus={!!modFocusId && messageId === modFocusId}
+                isNewest={index >= messages.length - NEWEST_ROWS_PAINTED}
+                intrinsicSizeCSS={intrinsicSizeCSS}
+                sourceProvider={sourceProvider}
+                message={message}
+                isHighlighted={highlightedMessageId === messageId}
+                moderationContext={moderationContext}
+                emotes={emotes}
+                isModerator={isModerator}
+                broadcasterId={broadcasterId}
+                homeProvider={homeProvider}
+                onUsernameClick={onUsernameClick}
+                onReplyClick={onReplyClick}
+                onMessageCopy={onMessageCopy}
+                onEmoteRightClick={onEmoteRightClick}
+                onUsernameRightClick={onUsernameRightClick}
+                onBadgeClick={onBadgeClick}
+              />
+            );
+          })}
+        </div>
       </div>
+      {marksOn && (
+        <ScrollbarMarks scrollerRef={containerRef} contentRef={contentRef} marks={marks} overlay={IS_MAC} />
+      )}
     </div>
   );
 });

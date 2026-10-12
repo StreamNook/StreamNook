@@ -1666,7 +1666,7 @@ impl EmoteService {
         // was created with, so a renamed Twitch channel 404s by login; the
         // Twitch id is stable, and the login is only the fallback when no
         // Twitch id is known.
-        let room_url = match (twitch_id, channel_name) {
+        let room_url = match (&twitch_id, &channel_name) {
             (Some(id), _) => Some(format!("https://api.frankerfacez.com/v1/room/id/{}", id)),
             (None, Some(name)) => Some(format!("https://api.frankerfacez.com/v1/room/{}", name)),
             (None, None) => None,
@@ -1681,6 +1681,9 @@ impl EmoteService {
                 Ok(response) if response.status().is_success() => {
                     match response.json::<serde_json::Value>().await {
                         Ok(json) => {
+                            // The same payload carries the channel's own
+                            // moderator / VIP badge art.
+                            crate::services::ffz_room_badges::note_room_payload(&json);
                             if let Some(sets) = json.get("sets").and_then(|v| v.as_object()) {
                                 for (_set_id, set_data) in sets {
                                     if let Some(emoticons) =
@@ -1703,7 +1706,11 @@ impl EmoteService {
                     }
                 }
                 // The channel has no FFZ room: a definitive empty answer.
-                Ok(response) if response.status() == reqwest::StatusCode::NOT_FOUND => {}
+                Ok(response) if response.status() == reqwest::StatusCode::NOT_FOUND => {
+                    if let Some(id) = twitch_id.as_deref() {
+                        crate::services::ffz_room_badges::note_no_room(id);
+                    }
+                }
                 Ok(response) => {
                     warn!("[EmoteService] FFZ room: status {}", response.status());
                     complete = false;

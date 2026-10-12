@@ -118,6 +118,9 @@ impl ChatService {
                     .await
                 {
                     Ok((message_id, true, _)) => {
+                        if let Some(ch) = target_channel {
+                            crate::services::chat_send_limiter::record_sent(ch, message);
+                        }
                         // Authoritative id straight from the send; deletes no
                         // longer depend on catching the IRC echo.
                         return Ok(SendResult {
@@ -146,6 +149,9 @@ impl ChatService {
         // IRC path: slash-commands, or Helix unavailable / errored. No id here, so
         // the optimistic copy keeps its local id and relies on echo matching.
         IrcService::send_message(message, reply_parent_msg_id, target_channel).await?;
+        if let Some(ch) = target_channel {
+            crate::services::chat_send_limiter::record_sent(ch, message);
+        }
         Ok(SendResult {
             message_id: None,
             is_sent: true,
@@ -162,12 +168,37 @@ impl ChatService {
     ///
     /// Recovery from a WEDGED backend is a different intent and must NOT come
     /// through here: it needs the unconditional teardown. See `restart_bridge`.
-    pub async fn stop() -> Result<()> {
-        if crate::services::providers::has_active_bridge_users() {
-            IrcService::stop_twitch_only().await;
-            return Ok(());
+    ///
+    /// `window` is the caller. While another window still holds a Twitch channel
+    /// (a floating chat, a MultiChat window) the connection is theirs too and
+    /// stays up; the caller's own channels PART through its releases. With
+    /// providers on the bridge the stop would be Twitch-only and leave every
+    /// socket open, so no store would notice and claim again: then the caller's
+    /// own held channels (docked chats) keep the connection up as well. A full
+    /// stop closes the sockets and each store re-claims on reconnect.
+    ///
+    /// Returns whether the connection actually went down (false = kept).
+    pub async fn stop(window: &str) -> Result<bool> {
+        let providers = crate::services::providers::has_active_bridge_users();
+        let kept_for = if IrcService::held_by_other_windows(window).await {
+            Some("another window holds a channel")
+        } else if providers && IrcService::held_by_window(window).await {
+            Some("this window still holds a channel")
+        } else {
+            None
+        };
+        if let Some(why) = kept_for {
+            crate::services::irc_service::record_lifecycle(&format!(
+                "stop_chat from {} kept the connection: {}",
+                window, why
+            ));
+            return Ok(false);
         }
-        IrcService::stop().await
+        if providers {
+            IrcService::stop_twitch_only().await;
+            return Ok(true);
+        }
+        IrcService::stop().await.map(|_| true)
     }
 
     /// Force the one true teardown, bridge included, regardless of provider

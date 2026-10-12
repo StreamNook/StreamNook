@@ -47,6 +47,14 @@ import { streamProvider } from '../../utils/streamProvider';
 import { useChannelSearch, type ChannelItem } from '../multi-nook/channelSearch';
 import { PROVIDERS, type ProviderId } from '../../types/providers';
 import { Logger } from '../../utils/logger';
+import { SevenTvAvatar } from '../SevenTvAvatar';
+import { sevenTvIdForStream } from '../../services/sevenTvPictures';
+import { isImeComposing } from '../../utils/imeComposing';
+
+/** A docked chat's 7TV id. Kick is left out: a docked chat's `channel_id` is
+ *  not guaranteed to be the broadcaster's user id 7TV keys Kick on. */
+const dockSevenTvId = (chat: DockedChat): string | null =>
+  chat.provider === 'kick' ? null : sevenTvIdForStream({ provider: chat.provider, user_id: chat.channel_id });
 
 // ---------------------------------------------------------------------------
 // Shared bits
@@ -58,6 +66,7 @@ function Avatar({
   live,
   size,
   provider,
+  sevenTvId,
 }: {
   src: string | null | undefined;
   name: string;
@@ -65,6 +74,8 @@ function Avatar({
   size: number;
   /** The platform mark, given only where the list mixes platforms. */
   provider?: ProviderId;
+  /** The channel's 7TV id, where it is known; draws their 7TV picture still. */
+  sevenTvId?: string | null;
 }) {
   return (
     <span className="relative flex-shrink-0" style={{ width: size, height: size }}>
@@ -73,7 +84,9 @@ function Avatar({
         style={{ fontSize: Math.round(size * 0.45) }}
       >
         {src ? (
-          <img
+          <SevenTvAvatar
+            cosmeticsId={sevenTvId}
+            px={size}
             src={src}
             alt=""
             draggable={false}
@@ -269,7 +282,7 @@ function DockRow({ chat, active, focused, showPlatform, draggable, onShow, onDra
       } ${offline ? 'opacity-60' : ''}`}
     >
       {over && <span aria-hidden className="absolute -top-px left-3 right-3 h-0.5 rounded-full bg-accent" />}
-      <Avatar src={chat.avatar_url} name={name} size={26} live={live} provider={showPlatform ? chat.provider : undefined} />
+      <Avatar src={chat.avatar_url} name={name} size={26} live={live} provider={showPlatform ? chat.provider : undefined} sevenTvId={dockSevenTvId(chat)} />
       <span className="min-w-0 flex-1">
         <span className={`block truncate text-[13px] font-semibold ${active || fresh || mentions > 0 ? 'text-textPrimary' : 'text-textSecondary'}`}>
           {name}
@@ -343,7 +356,7 @@ function WatchingRow({
         active ? 'bg-white/[0.08]' : focused ? 'bg-white/[0.05]' : 'hover:bg-white/[0.04]'
       }`}
     >
-      <Avatar src={stream.profile_image_url} name={name} size={26} live provider={showPlatform ? provider : undefined} />
+      <Avatar src={stream.profile_image_url} name={name} size={26} live provider={showPlatform ? provider : undefined} sevenTvId={sevenTvIdForStream(stream)} />
       <span className="min-w-0 flex-1">
         <span className={`block truncate text-[13px] font-semibold ${active || activity > 0 ? 'text-textPrimary' : 'text-textSecondary'}`}>
           {name}
@@ -615,6 +628,7 @@ function PanelBody({ top }: { top: number }) {
         visibility: place ? 'visible' : 'hidden',
       }}
       onKeyDown={(e) => {
+        if (isImeComposing(e)) return;
         if (e.key === 'Escape') {
           e.stopPropagation();
           if (query) setQuery('');
@@ -773,10 +787,22 @@ const tabTone = (active: boolean, lit: boolean) =>
  *  platforms (two chats of the same name on different platforms are told
  *  apart by it), then the name. Inline rather than on the picture's corner,
  *  where the row's sideways scroller would clip it. */
-function TabFace({ src, name, live, provider }: { src: string | null | undefined; name: string; live?: boolean; provider?: ProviderId }) {
+function TabFace({
+  src,
+  name,
+  live,
+  provider,
+  sevenTvId,
+}: {
+  src: string | null | undefined;
+  name: string;
+  live?: boolean;
+  provider?: ProviderId;
+  sevenTvId?: string | null;
+}) {
   return (
     <>
-      <Avatar src={src} name={name} size={18} live={live} />
+      <Avatar src={src} name={name} size={18} live={live} sevenTvId={sevenTvId} />
       {provider && <ProviderLogo provider={provider} size={11} className="flex-shrink-0" />}
       <span className="min-w-0 truncate">{name}</span>
     </>
@@ -835,7 +861,7 @@ function DockTab({
       className={`${TAB} ${tabTone(active, fresh || mentions > 0)}`}
     >
       {over && <span aria-hidden className="absolute -left-0.5 top-1 bottom-1 w-0.5 rounded-full bg-accent" />}
-      <TabFace src={chat.avatar_url} name={name} live={live} provider={showPlatform ? chat.provider : undefined} />
+      <TabFace src={chat.avatar_url} name={name} live={live} provider={showPlatform ? chat.provider : undefined} sevenTvId={dockSevenTvId(chat)} />
       {/* The mark, or a close button in its place while hovered, in one
           fixed-width slot: a tab that grew on hover reflowed every tab after
           it out from under the cursor. */}
@@ -875,7 +901,7 @@ function WatchingTab({ active, showPlatform }: { active: boolean; showPlatform: 
       onClick={() => void showDockedChat(null)}
       className={`${TAB} ${tabTone(active, activity >= 1 || mentions > 0)}`}
     >
-      <TabFace src={stream.profile_image_url} name={name} live provider={showPlatform ? provider : undefined} />
+      <TabFace src={stream.profile_image_url} name={name} live provider={showPlatform ? provider : undefined} sevenTvId={sevenTvIdForStream(stream)} />
       <Mark mentions={mentions} fresh={activity >= 1} />
     </div>
   );

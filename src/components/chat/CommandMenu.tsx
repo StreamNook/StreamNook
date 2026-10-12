@@ -39,6 +39,7 @@ import {
 import type { CommandDefinition } from '../../utils/chatCommands';
 import { renderCommandUsage } from './CommandAutocomplete';
 import { Tooltip } from '../ui/Tooltip';
+import { isImeComposing } from '../../utils/imeComposing';
 
 type Category = CommandDefinition['category'];
 type RailKey = 'all' | Category;
@@ -214,6 +215,7 @@ const CommandMenuPanel = ({
   };
 
   const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (isImeComposing(e)) return;
     if (e.key === 'Escape') {
       e.preventDefault();
       onClose();

@@ -211,6 +211,9 @@ let ws: WebSocket | null = null;
 // socket stayed null forever). Concurrent callers await this promise and then
 // verify the socket really opened.
 let wsConnectPromise: Promise<void> | null = null;
+// The channel that connect claims in Rust: a caller that rides it for another
+// channel still has to claim its own.
+let wsConnectChannel: string | null = null;
 
 // Bumped whenever the last channel is released. A connect captures this on entry
 // and discards its socket if the value moved, because a connect can easily
@@ -1271,6 +1274,80 @@ async function repaintPersonalEmotes(channel: string, userId: string, messageIds
   });
 }
 
+type RowSegments = NonNullable<BackendChatMessage['segments']>;
+
+/** One backlog row Rust parsed again once its channel's emote table landed. */
+interface HistorySegmentsRow {
+  id: string;
+  segments: RowSegments;
+  parent_segments?: RowSegments | null;
+}
+
+/** Re-stamps that arrived before their backlog merged (the merge also waits
+ *  on the channel's badge cache), applied when it does. */
+const pendingHistorySegments = new Map<string, { at: number; rows: Map<string, HistorySegmentsRow> }>();
+const PENDING_HISTORY_SEGMENTS_MS = 60_000;
+
+function withHistorySegments(m: BackendChatMessage, row: HistorySegmentsRow): BackendChatMessage {
+  const replyInfo = m.metadata?.reply_info;
+  return {
+    ...m,
+    segments: row.segments,
+    ...(m.metadata && replyInfo && row.parent_segments
+      ? { metadata: { ...m.metadata, reply_info: { ...replyInfo, parent_segments: row.parent_segments } } }
+      : {}),
+  };
+}
+
+/**
+ * A first visit's backlog is parsed before the channel's emote table exists,
+ * so its 7TV/BTTV/FFZ emotes show as words. Rust parses the same lines again
+ * once the table lands and names the rows that changed (`HISTORY_SEGMENTS`);
+ * each is swapped in place. Rows this window has not merged yet wait for the
+ * backlog.
+ */
+function applyHistorySegments(channel: string, rows: unknown[]): void {
+  const key = channel.toLowerCase();
+  if (!key) return;
+  const byId = new Map<string, HistorySegmentsRow>();
+  for (const r of rows) {
+    const row = r as HistorySegmentsRow | null;
+    if (row && typeof row.id === 'string' && Array.isArray(row.segments)) byId.set(row.id, row);
+  }
+  if (byId.size === 0) return;
+  if (getSlice(key)) {
+    withSlice(key, (s) => {
+      let next: ChannelSlice['messages'] | null = null;
+      for (let i = 0; i < s.messages.length; i++) {
+        const m = s.messages[i];
+        if (typeof m !== 'object' || m === null) continue;
+        const row = byId.get((m as BackendChatMessage).id);
+        if (!row) continue;
+        next ??= s.messages.slice();
+        next[i] = withHistorySegments(m as BackendChatMessage, row);
+        byId.delete(row.id);
+      }
+      if (next) s.messages = next;
+    });
+  }
+  if (byId.size === 0) return;
+  const now = Date.now();
+  for (const [k, v] of pendingHistorySegments) {
+    if (now - v.at > PENDING_HISTORY_SEGMENTS_MS) pendingHistorySegments.delete(k);
+  }
+  const held = pendingHistorySegments.get(key)?.rows ?? new Map<string, HistorySegmentsRow>();
+  for (const [id, row] of byId) held.set(id, row);
+  pendingHistorySegments.set(key, { at: now, rows: held });
+}
+
+/** The re-stamps waiting for `key`'s backlog, taken once. */
+function takePendingHistorySegments(key: string): Map<string, HistorySegmentsRow> | null {
+  const held = pendingHistorySegments.get(key);
+  if (!held) return null;
+  pendingHistorySegments.delete(key);
+  return Date.now() - held.at <= PENDING_HISTORY_SEGMENTS_MS ? held.rows : null;
+}
+
 function setAllChannelsConnected(connected: boolean) {
   for (const slice of useChatConnectionStore.getState().channels.values()) {
     slice.isConnected = connected;
@@ -1655,19 +1732,32 @@ async function connectBridgeForFirstChannel(
   // Bounded so a pathological chain of connects cannot spin here.
   for (let waited = 0; wsConnectPromise && waited < 3; waited += 1) {
     const inflight = wsConnectPromise;
+    const inflightChannel = wsConnectChannel;
     try {
       await inflight;
     } catch {
       // Whoever started that attempt reports its own failure.
     }
-    if (socketIsOpen()) return;
+    if (socketIsOpen()) {
+      // The socket is that connect's, and so is the one claim it made in Rust.
+      // This channel is another one, or the same one released in between (a
+      // remount, or closing a window's only chat and opening it again), whose
+      // release reached Rust after that claim and PARTed it. Rust JOINs only
+      // what some window claims, so claim this channel here; a repeat claim is
+      // a no-op.
+      const ok = await connectChannel(channel, provider, bareChannel ?? channel, 'start');
+      if (ok && provider === 'twitch' && inflightChannel !== channel) void preloadChannel(channel, channelId);
+      return;
+    }
   }
   const attempt = connectBridgeInner(channel, channelId, reattach, provider, bareChannel);
   wsConnectPromise = attempt;
+  wsConnectChannel = channel;
   try {
     await attempt;
   } finally {
     wsConnectPromise = null;
+    wsConnectChannel = null;
   }
 }
 
@@ -1957,6 +2047,8 @@ async function preloadChannel(
         if (eid) existingIds.add(eid);
       }
       const filtered: any[] = [];
+      // Emote re-stamps Rust sent before this backlog got here.
+      const restamped = takePendingHistorySegments(key);
       // Structured backfill rows arrive through Rust's parse path, where the
       // rule engine already dropped hidden users, bots and ignored phrases.
       for (const msg of source) {
@@ -1966,7 +2058,8 @@ async function preloadChannel(
           if (slice.seenMessageIds.has(id) || existingIds.has(id)) continue;
           slice.seenMessageIds.add(id);
         }
-        filtered.push(msg);
+        const row = id && typeof msg !== 'string' ? restamped?.get(id) : undefined;
+        filtered.push(row ? withHistorySegments(msg, row) : msg);
       }
 
       // Initial load prepends (history belongs above the live stream that
@@ -2231,6 +2324,10 @@ function handleWsMessage(raw: string) {
       }
       if (parsed.type === 'PERSONAL_EMOTES' && Array.isArray(parsed.message_ids)) {
         void repaintPersonalEmotes(String(parsed.channel ?? ''), String(parsed.user_id ?? ''), parsed.message_ids);
+        return;
+      }
+      if (parsed.type === 'HISTORY_SEGMENTS' && Array.isArray(parsed.rows)) {
+        applyHistorySegments(String(parsed.channel ?? ''), parsed.rows);
         return;
       }
       if (parsed.type === 'CLEARMSG' && parsed.target_msg_id) {

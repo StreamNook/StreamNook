@@ -164,8 +164,7 @@ pub async fn match_emote_tokens(
         "twitch" => {
             // The viewer's own 7TV personal emotes work in every Twitch channel,
             // and in their own messages they render in place of a channel emote
-            // of the same name. Offered first, so they also keep a name that
-            // differs from a channel one only by case.
+            // of the exactly same name; the collector drops that channel row.
             if let Some(me) = AccountStore::primary() {
                 irc_service::with_personal_emotes(&me.user_id, |map| {
                     for (name, e) in map {

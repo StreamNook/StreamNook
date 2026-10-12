@@ -98,7 +98,13 @@ export function withChatterCandidates(
   users: ReadonlyArray<{ username: string; displayName?: string }>,
   mode: EmoteTabMatchMode,
 ): EmoteTabCandidate[] {
-  const out = emotes.slice(0, TAB_CYCLE_LIMIT);
+  // Rust's cap never splits names that differ only by case (LULE and lule),
+  // and neither does this one: a pair on the last row comes along whole.
+  let end = Math.min(TAB_CYCLE_LIMIT, emotes.length);
+  while (end > 0 && end < emotes.length && emotes[end].name.toLowerCase() === emotes[end - 1].name.toLowerCase()) {
+    end++;
+  }
+  const out = emotes.slice(0, end);
   if (word.startsWith(':') || out.length >= TAB_CYCLE_LIMIT) return out;
   const isAt = word.startsWith('@');
   const q = (isAt ? word.slice(1) : word).toLowerCase();
