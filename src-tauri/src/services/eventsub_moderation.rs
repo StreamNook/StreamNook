@@ -6,7 +6,8 @@
 // a chat open in, driven by the IRC channel refcount in irc_service (join 0->1
 // -> subscribe_channel, leave 1->0 -> unsubscribe_channel), exactly like the 7TV
 // EventAPI client. One shared connection for the whole app; it self-heals on
-// disconnect by re-subscribing the tracked set. It emits the SAME
+// disconnect by re-subscribing the tracked set, and follows Twitch's
+// session_reconnect URL without re-subscribing anything. It emits the SAME
 // `eventsub://channel-moderate` event the frontend already consumes, so the mod
 // log enriches with the acting moderator's identity wherever chat is open
 // (single, offline, MultiNook, popout), with no stream required.
@@ -29,13 +30,13 @@ use crate::rt::AppHandle;
 use tauri::Emitter;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{sleep, timeout, Duration};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::tungstenite::Message;
 
+use crate::services::eventsub_service::{EventSubService, LiveSession, PendingSession, SeenMessages, SocketOwner};
 use crate::services::twitch_service::TwitchService;
 
 const EVENTSUB_URL: &str = "wss://eventsub.wss.twitch.tv/ws";
 const RECONNECT_DELAY_SECS: u64 = 5;
-const WELCOME_TIMEOUT_SECS: u64 = 15;
 
 #[derive(Clone)]
 struct ChannelSub {
@@ -292,46 +293,14 @@ async fn connect_and_run(
     subs: &Arc<RwLock<HashMap<String, ChannelSub>>>,
     cmd_rx: &mut mpsc::UnboundedReceiver<Cmd>,
 ) -> Result<()> {
-    let (ws, _) = connect_async(EVENTSUB_URL).await?;
+    let (ws, session) = EventSubService::open_session(EVENTSUB_URL.to_string()).await?;
     let (mut write, mut read) = ws.split();
-
-    // Wait for session_welcome -> session id + keepalive timeout.
-    let mut session_id: Option<String> = None;
-    let mut keepalive_secs: u64 = 30;
-    while session_id.is_none() {
-        match timeout(Duration::from_secs(WELCOME_TIMEOUT_SECS), read.next()).await {
-            Ok(Some(Ok(Message::Text(txt)))) => {
-                if let Ok(v) = serde_json::from_str::<Value>(&txt) {
-                    if v.pointer("/metadata/message_type").and_then(|s| s.as_str())
-                        == Some("session_welcome")
-                    {
-                        session_id = v
-                            .pointer("/payload/session/id")
-                            .and_then(|s| s.as_str())
-                            .map(String::from);
-                        if let Some(k) = v
-                            .pointer("/payload/session/keepalive_timeout_seconds")
-                            .and_then(|s| s.as_u64())
-                        {
-                            keepalive_secs = k;
-                        }
-                    }
-                }
-            }
-            Ok(Some(Ok(Message::Ping(d)))) => {
-                write.send(Message::Pong(d)).await?;
-            }
-            Ok(Some(Ok(Message::Close(_)))) | Ok(None) => return Ok(()),
-            Ok(Some(Err(e))) => return Err(e.into()),
-            Err(_) => {
-                warn!("[EventSub Mod] no welcome in {}s", WELCOME_TIMEOUT_SECS);
-                return Ok(());
-            }
-            _ => {}
-        }
-    }
-    let session_id = session_id.unwrap();
+    let mut session_id = session.id;
+    let mut keepalive_secs = session.keepalive_timeout_seconds.unwrap_or(30);
     debug!("[EventSub Mod] connected (session {})", session_id);
+    // Registered before the first subscribe, so the watch socket's connect
+    // cleanup never deletes what this session creates.
+    let mut live = LiveSession::open(SocketOwner::Moderation, &session_id);
 
     // The moderator_user_id condition = the authenticated user.
     let moderator_user_id = TwitchService::get_user_info()
@@ -365,9 +334,14 @@ async fn connect_and_run(
         return Ok(());
     }
 
-    let read_timeout = Duration::from_secs(keepalive_secs + 10);
+    // The new connection Twitch asked for, opening while this one keeps
+    // delivering. Twitch's rule: close the old one only after the new
+    // welcome arrives; the subscriptions carry over, so nothing is re-posted.
+    let mut migrating: Option<PendingSession> = None;
+    let mut seen = SeenMessages::new();
 
     loop {
+        let read_timeout = Duration::from_secs(keepalive_secs + 10);
         tokio::select! {
             read_res = timeout(read_timeout, read.next()) => {
                 match read_res {
@@ -377,8 +351,11 @@ async fn connect_and_run(
                     }
                     Ok(None) => return Ok(()),
                     Ok(Some(Ok(Message::Text(txt)))) => {
-                        if handle_text(&txt, app_handle) {
-                            return Ok(()); // server asked us to reconnect
+                        if let Some(url) = handle_text(&txt, app_handle, &mut seen) {
+                            if migrating.is_none() {
+                                debug!("[EventSub Mod] server asked to reconnect, moving to the new URL");
+                                migrating = Some(Box::pin(EventSubService::open_session(url)));
+                            }
                         }
                     }
                     Ok(Some(Ok(Message::Ping(d)))) => {
@@ -387,6 +364,28 @@ async fn connect_and_run(
                     Ok(Some(Ok(Message::Close(_)))) => return Ok(()),
                     Ok(Some(Err(e))) => return Err(e.into()),
                     Ok(Some(Ok(_))) => {}
+                }
+            }
+            moved = async { migrating.as_mut().expect("guarded by is_some").await }, if migrating.is_some() => {
+                migrating = None;
+                match moved {
+                    Ok((ws, session)) => {
+                        let _ = write.send(Message::Close(None)).await;
+                        (write, read) = ws.split();
+                        keepalive_secs = session.keepalive_timeout_seconds.unwrap_or(keepalive_secs);
+                        if session.id != session_id {
+                            // Register the new id before the old guard drops.
+                            drop(std::mem::replace(
+                                &mut live,
+                                LiveSession::open(SocketOwner::Moderation, &session.id),
+                            ));
+                            session_id = session.id;
+                        }
+                        debug!("[EventSub Mod] moved to the reconnect URL, subscriptions carried over");
+                    }
+                    Err(e) => {
+                        warn!("[EventSub Mod] reconnect URL failed, staying on the old connection until it closes: {}", e);
+                    }
                 }
             }
             cmd = cmd_rx.recv() => {
@@ -417,10 +416,11 @@ async fn connect_and_run(
     }
 }
 
-/// Handle one server frame. Returns true if the server asked us to reconnect.
-fn handle_text(txt: &str, app_handle: &AppHandle) -> bool {
+/// Handle one server frame. Returns the reconnect URL when Twitch sends
+/// `session_reconnect`.
+fn handle_text(txt: &str, app_handle: &AppHandle, seen: &mut SeenMessages) -> Option<String> {
     let Ok(v) = serde_json::from_str::<Value>(txt) else {
-        return false;
+        return None;
     };
     match v
         .pointer("/metadata/message_type")
@@ -428,12 +428,17 @@ fn handle_text(txt: &str, app_handle: &AppHandle) -> bool {
         .unwrap_or("")
     {
         "notification" => {
+            let message_id = v.pointer("/metadata/message_id").and_then(|s| s.as_str()).unwrap_or("");
+            if !seen.first_time(message_id) {
+                debug!("[EventSub Mod] dropped a repeated notification {}", message_id);
+                return None;
+            }
             let sub_type = v
                 .pointer("/metadata/subscription_type")
                 .and_then(|s| s.as_str())
                 .unwrap_or("");
             let Some(event) = v.pointer("/payload/event") else {
-                return false;
+                return None;
             };
             match sub_type {
                 "channel.moderate" => {
@@ -489,16 +494,21 @@ fn handle_text(txt: &str, app_handle: &AppHandle) -> bool {
                 }
                 _ => {}
             }
-            false
+            None
         }
         "session_reconnect" => {
             debug!("[EventSub Mod] server requested reconnect");
-            true
+            let payload = v.get("payload").cloned().unwrap_or_default();
+            let url = EventSubService::reconnect_url(payload).ok().flatten();
+            if url.is_none() {
+                warn!("[EventSub Mod] session_reconnect without a usable URL: {}", txt);
+            }
+            url
         }
         "revocation" => {
             warn!("[EventSub Mod] subscription revoked: {}", txt);
-            false
+            None
         }
-        _ => false, // session_keepalive, etc.
+        _ => None, // session_keepalive, etc.
     }
 }

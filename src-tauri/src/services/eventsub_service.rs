@@ -1,18 +1,204 @@
 use crate::services::twitch_service::TwitchService;
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
-use log::{debug, error};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use crate::rt::AppHandle;
 use tauri::Emitter;
 use tokio::sync::{mpsc, RwLock};
-use tokio::time::{interval, Duration};
+use tokio::time::{sleep, timeout, Duration, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 
 const EVENTSUB_URL: &str = "wss://eventsub.wss.twitch.tv/ws";
-const SUBSCRIPTION_DELAY_MS: u64 = 500; // Delay between subscription requests
+/// Wait before the one retry of a subscription that failed in transit, was
+/// rate limited, or hit a Twitch server error.
+const SUBSCRIBE_RETRY: Duration = Duration::from_secs(1);
+const WELCOME_TIMEOUT_SECS: u64 = 15;
+/// Wait before a fresh reconnect after the socket ends; doubles per failure.
+const RECONNECT_MIN_SECS: u64 = 5;
+const RECONNECT_MAX_SECS: u64 = 300;
+/// A connection that ends sooner than this counts as a failure for the
+/// backoff, so a socket Twitch keeps closing cannot spin.
+const HEALTHY_CONNECTION: Duration = Duration::from_secs(60);
+
+pub(crate) type WsStream =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+/// A reconnect-URL connection still waiting for its welcome. All three
+/// sockets hold one while the old connection keeps delivering.
+pub(crate) type PendingSession = Pin<Box<dyn Future<Output = Result<(WsStream, Session)>> + Send>>;
+
+/// The wait before the next fresh reconnect, and the wait after that.
+fn reconnect_backoff(retry_secs: u64, healthy: bool) -> (u64, u64) {
+    if healthy {
+        (RECONNECT_MIN_SECS, RECONNECT_MIN_SECS)
+    } else {
+        (retry_secs, (retry_secs * 2).min(RECONNECT_MAX_SECS))
+    }
+}
+
+/// The app's EventSub sockets. Twitch allows three sockets with enabled
+/// subscriptions per user token and the app runs one of each, all listed by
+/// the same `GET /eventsub/subscriptions`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketOwner {
+    /// This service: the watched stream (raid, online/offline, update, hype train).
+    Watch,
+    /// `eventsub_moderation`: mod log, AutoMod and suspicious users per open chat.
+    Moderation,
+    /// `whisper_service`: `user.whisper.message`.
+    Whispers,
+}
+
+impl SocketOwner {
+    fn label(self) -> &'static str {
+        match self {
+            SocketOwner::Watch => "watch",
+            SocketOwner::Moderation => "moderation",
+            SocketOwner::Whispers => "whispers",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct KnownSession {
+    id: String,
+    owner: SocketOwner,
+    live: bool,
+}
+
+/// Every session this process opened: the live ones, and the last few that
+/// ended so their owner still recognises its leftovers on the next connect.
+static SESSIONS: std::sync::Mutex<Vec<KnownSession>> = std::sync::Mutex::new(Vec::new());
+const RETIRED_SESSIONS_KEPT: usize = 16;
+
+fn known_sessions() -> Vec<KnownSession> {
+    SESSIONS.lock().unwrap_or_else(|p| p.into_inner()).clone()
+}
+
+/// Marks an EventSub session live for as long as the guard lives. Hold it in
+/// the connection's own scope so every exit (close, error, a cancelled
+/// future) retires the session.
+pub struct LiveSession {
+    id: String,
+}
+
+impl LiveSession {
+    pub fn open(owner: SocketOwner, id: &str) -> Self {
+        let mut book = SESSIONS.lock().unwrap_or_else(|p| p.into_inner());
+        book.retain(|s| s.id != id);
+        book.push(KnownSession {
+            id: id.to_string(),
+            owner,
+            live: true,
+        });
+        Self { id: id.to_string() }
+    }
+}
+
+impl Drop for LiveSession {
+    fn drop(&mut self) {
+        let mut book = SESSIONS.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(s) = book.iter_mut().find(|s| s.id == self.id) {
+            s.live = false;
+        }
+        // Oldest first, so the earliest retired entries go.
+        let mut excess = book
+            .iter()
+            .filter(|s| !s.live)
+            .count()
+            .saturating_sub(RETIRED_SESSIONS_KEPT);
+        book.retain(|s| {
+            if !s.live && excess > 0 {
+                excess -= 1;
+                false
+            } else {
+                true
+            }
+        });
+    }
+}
+
+/// Aborts a spawned task when its owner goes away, so a connection's helper
+/// task cannot outlive the connection.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Message ids a socket already handled. Twitch may deliver a message more
+/// than once, around a reconnect-URL move in particular, and its docs say to
+/// drop a repeated `message_id`. One per connection, carried across a move.
+pub(crate) struct SeenMessages {
+    order: VecDeque<String>,
+    ids: HashSet<String>,
+}
+
+impl SeenMessages {
+    const KEEP: usize = 256;
+
+    pub(crate) fn new() -> Self {
+        Self { order: VecDeque::new(), ids: HashSet::new() }
+    }
+
+    /// True the first time `id` is seen. An empty id is always new.
+    pub(crate) fn first_time(&mut self, id: &str) -> bool {
+        if id.is_empty() {
+            return true;
+        }
+        if !self.ids.insert(id.to_string()) {
+            return false;
+        }
+        self.order.push_back(id.to_string());
+        if self.order.len() > Self::KEEP {
+            if let Some(oldest) = self.order.pop_front() {
+                self.ids.remove(&oldest);
+            }
+        }
+        true
+    }
+}
+
+/// What the connect-time cleanup does with one listed subscription.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CleanupVerdict {
+    /// Bound to a socket that is open in this process.
+    KeepLive(SocketOwner),
+    /// Twitch still lists it enabled and no socket here owns it: another app
+    /// instance or device signed in as this user, or another socket's session
+    /// Twitch has not marked closed yet.
+    KeepUnowned,
+    /// Left behind by an earlier session of the socket that is connecting.
+    DropOwn,
+    /// Twitch reports its session gone (any status other than `enabled`).
+    DropDead,
+}
+
+/// Judge one subscription for the socket `me`. `None` for transports other
+/// than websocket, which no socket here created.
+fn cleanup_verdict(
+    sub: &SubscriptionInfo,
+    sessions: &[KnownSession],
+    me: SocketOwner,
+) -> Option<CleanupVerdict> {
+    if sub.transport.method != "websocket" {
+        return None;
+    }
+    let session_id = sub.transport.session_id.as_deref().unwrap_or("");
+    Some(match sessions.iter().find(|s| s.id == session_id) {
+        Some(s) if s.live => CleanupVerdict::KeepLive(s.owner),
+        Some(s) if s.owner == me => CleanupVerdict::DropOwn,
+        _ if sub.status != "enabled" => CleanupVerdict::DropDead,
+        _ => CleanupVerdict::KeepUnowned,
+    })
+}
 
 #[derive(Debug, Deserialize)]
 struct EventSubMessage {
@@ -37,11 +223,12 @@ struct SessionPayload {
 }
 
 #[derive(Debug, Deserialize)]
-struct Session {
-    id: String,
+pub(crate) struct Session {
+    pub(crate) id: String,
     status: String,
     connected_at: String,
-    keepalive_timeout_seconds: u64,
+    // Null in `session_reconnect`; only the welcome carries it.
+    pub(crate) keepalive_timeout_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reconnect_url: Option<String>,
 }
@@ -137,114 +324,18 @@ pub struct ChannelUpdateEvent {
     pub content_classification_labels: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChannelPointsRedemptionEvent {
-    pub id: String,
-    pub broadcaster_user_id: String,
-    pub broadcaster_user_name: String,
-    pub user_id: String,
-    pub user_name: String,
-    pub user_input: String,
-    pub status: String,
-    pub reward: RewardInfo,
-    pub redeemed_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RewardInfo {
-    pub id: String,
-    pub title: String,
-    pub cost: i32,
-    pub prompt: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WhisperReceivedEvent {
-    pub from_user_id: String,
-    pub from_user_login: String,
-    pub from_user_name: String,
-    pub to_user_id: String,
-    pub to_user_login: String,
-    pub to_user_name: String,
-    pub whisper_id: String,
-    pub whisper: WhisperContent,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WhisperContent {
-    pub text: String,
-}
-
-// Hype Train Event Structures (V2)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HypeTrainContributor {
-    pub user_id: String,
-    pub user_login: String,
-    pub user_name: String,
-    #[serde(rename = "type")]
-    pub contribution_type: String, // "bits" | "subscription" | "other"
-    pub total: i32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HypeTrainBeginEvent {
-    pub id: String,
-    pub broadcaster_user_id: String,
-    pub broadcaster_user_login: String,
-    pub broadcaster_user_name: String,
-    pub total: i32,
-    pub progress: i32,
-    pub goal: i32,
-    pub top_contributions: Vec<HypeTrainContributor>,
-    pub last_contribution: HypeTrainContributor,
-    pub level: i32,
-    pub started_at: String,
-    pub expires_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HypeTrainProgressEvent {
-    pub id: String,
-    pub broadcaster_user_id: String,
-    pub broadcaster_user_login: String,
-    pub broadcaster_user_name: String,
-    pub level: i32,
-    pub total: i32,
-    pub progress: i32,
-    pub goal: i32,
-    pub top_contributions: Vec<HypeTrainContributor>,
-    pub last_contribution: HypeTrainContributor,
-    pub started_at: String,
-    pub expires_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HypeTrainEndEvent {
-    pub id: String,
-    pub broadcaster_user_id: String,
-    pub broadcaster_user_login: String,
-    pub broadcaster_user_name: String,
-    pub level: i32,
-    pub total: i32,
-    pub top_contributions: Vec<HypeTrainContributor>,
-    pub started_at: String,
-    pub ended_at: String,
-    pub cooldown_ends_at: String,
-}
-
 pub struct EventSubService {
     connected: Arc<RwLock<bool>>,
     session_id: Arc<RwLock<Option<String>>>,
-    subscriptions: Arc<RwLock<Vec<String>>>,
-    // Extra channels (besides the main stream) the user moderates and currently
-    // has open in MultiNook. We subscribe channel.moderate for each so the mod
-    // view lights up there too. This SET is the desired state, re-applied on every
-    // (re)connect by subscribe_to_events. `mod_sub_ids` maps broadcaster_id -> the
-    // live subscription id so we can tear a single one down between reconnects.
-    mod_channels: Arc<RwLock<HashSet<String>>>,
-    mod_sub_ids: Arc<RwLock<HashMap<String, String>>>,
+    // The broadcaster the running task follows (connected, connecting or
+    // waiting to reconnect), with the generation that started it. None once
+    // the task has stopped: shut down, or given up after a sign-out.
+    following: Arc<RwLock<Option<(u64, String)>>>,
     // Shutdown signal sender - when dropped or sent, the background task will stop
     shutdown_tx: Arc<RwLock<Option<mpsc::Sender<()>>>>,
+    // Bumped by every connect. A replaced connection's task only resets the
+    // shared status when no newer connection has started since.
+    generation: Arc<AtomicU64>,
 }
 
 impl EventSubService {
@@ -252,11 +343,15 @@ impl EventSubService {
         Self {
             connected: Arc::new(RwLock::new(false)),
             session_id: Arc::new(RwLock::new(None)),
-            subscriptions: Arc::new(RwLock::new(Vec::new())),
-            mod_channels: Arc::new(RwLock::new(HashSet::new())),
-            mod_sub_ids: Arc::new(RwLock::new(HashMap::new())),
+            following: Arc::new(RwLock::new(None)),
             shutdown_tx: Arc::new(RwLock::new(None)),
+            generation: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// The broadcaster a running watch socket follows, if one runs.
+    pub async fn following(&self) -> Option<String> {
+        self.following.read().await.as_ref().map(|(_, id)| id.clone())
     }
 
     pub async fn is_connected(&self) -> bool {
@@ -267,7 +362,11 @@ impl EventSubService {
         self.session_id.read().await.clone()
     }
 
-    /// Clean up any existing WebSocket subscriptions from Twitch API
+    /// Delete the subscriptions this socket is entitled to remove before it
+    /// connects: leftovers from its own earlier sessions, and any whose
+    /// session Twitch reports gone. The list covers every socket on this user
+    /// token, so subscriptions bound to the live moderation and whisper
+    /// sockets (or another instance's) are left alone.
     async fn cleanup_existing_subscriptions() {
         debug!("Cleaning up existing EventSub subscriptions...");
 
@@ -315,43 +414,66 @@ impl EventSubService {
             subscriptions.total, subscriptions.total_cost, subscriptions.max_total_cost
         );
 
-        // Delete ALL WebSocket-based subscriptions to prevent "Too Many Requests" errors
-        // This ensures we start fresh with each connection
-        let mut deleted = 0;
-        for sub in subscriptions.data {
-            // Only clean up websocket subscriptions
-            if sub.transport.method != "websocket" {
+        let sessions = known_sessions();
+        let mut kept_live: HashMap<&'static str, usize> = HashMap::new();
+        let (mut kept_unowned, mut own, mut dead, mut deleted) = (0, 0, 0, 0);
+        for sub in &subscriptions.data {
+            let Some(verdict) = cleanup_verdict(sub, &sessions, SocketOwner::Watch) else {
                 continue;
-            }
-
-            // Delete ALL websocket subscriptions to ensure clean slate
-            // This prevents "number of websocket transports limit exceeded" errors
-            {
-                if let Err(e) = client
-                    .delete(format!(
-                        "https://api.twitch.tv/helix/eventsub/subscriptions?id={}",
-                        sub.id
-                    ))
-                    .header("Client-ID", client_id)
-                    .header("Authorization", format!("Bearer {}", token))
-                    .send()
-                    .await
-                {
-                    error!("Failed to delete subscription {}: {}", sub.id, e);
-                } else {
-                    deleted += 1;
+            };
+            debug!(
+                "[EventSub] cleanup: {} ({}) on session {} -> {:?}",
+                sub.subscription_type,
+                sub.status,
+                sub.transport.session_id.as_deref().unwrap_or("-"),
+                verdict
+            );
+            match verdict {
+                CleanupVerdict::KeepLive(owner) => {
+                    *kept_live.entry(owner.label()).or_default() += 1;
+                    continue;
                 }
-
-                // Small delay between deletions to avoid rate limits
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                CleanupVerdict::KeepUnowned => {
+                    kept_unowned += 1;
+                    continue;
+                }
+                CleanupVerdict::DropOwn => own += 1,
+                CleanupVerdict::DropDead => dead += 1,
             }
+
+            if let Err(e) = client
+                .delete(format!(
+                    "https://api.twitch.tv/helix/eventsub/subscriptions?id={}",
+                    sub.id
+                ))
+                .header("Client-ID", client_id)
+                .header("Authorization", format!("Bearer {}", token))
+                .send()
+                .await
+            {
+                error!("Failed to delete subscription {}: {}", sub.id, e);
+            } else {
+                deleted += 1;
+            }
+
+            // Small delay between deletions to avoid rate limits
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
-        if deleted > 0 {
-            debug!(" Deleted {} orphaned subscriptions", deleted);
-        }
+        let mut live: Vec<String> = kept_live
+            .iter()
+            .map(|(owner, n)| format!("{owner} {n}"))
+            .collect();
+        live.sort();
+        info!(
+            "[EventSub] watch connect cleanup: deleted {deleted} (own old sessions {own}, dead {dead}); kept on live sockets [{}], unowned enabled {kept_unowned}",
+            live.join(", ")
+        );
     }
 
+    /// Follow `broadcaster_id` on a fresh connection. Returns at once: the
+    /// cleanup, connect and subscribes run on the spawned task, which keeps
+    /// the socket up until `disconnect` or the next call.
     pub async fn connect_and_listen(
         &self,
         broadcaster_id: String,
@@ -360,14 +482,12 @@ impl EventSubService {
         // First, stop any existing connection
         self.disconnect().await;
 
-        // Clean up orphaned subscriptions from previous sessions
-        Self::cleanup_existing_subscriptions().await;
-
         let connected = self.connected.clone();
         let session_id = self.session_id.clone();
-        let subscriptions = self.subscriptions.clone();
-        let mod_channels = self.mod_channels.clone();
-        let mod_sub_ids = self.mod_sub_ids.clone();
+        let following = self.following.clone();
+        let generation = self.generation.clone();
+        let my_generation = generation.fetch_add(1, Ordering::SeqCst) + 1;
+        *following.write().await = Some((my_generation, broadcaster_id.clone()));
 
         // Create a shutdown channel
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
@@ -379,38 +499,35 @@ impl EventSubService {
         }
 
         tokio::spawn(async move {
-            // Run once - no automatic reconnection loop
-            // The frontend will handle reconnection when needed
+            // Runs until shutdown (disconnect, or the next connect_and_listen),
+            // or until the user signs out.
             tokio::select! {
                 _ = shutdown_rx.recv() => {
                     debug!("EventSub shutdown signal received");
                 }
-                result = Self::run_connection(
-                    broadcaster_id.clone(),
-                    app_handle.clone(),
-                    connected.clone(),
-                    session_id.clone(),
-                    subscriptions.clone(),
-                    mod_channels.clone(),
-                    mod_sub_ids.clone(),
-                ) => {
-                    match result {
-                        Ok(_) => {
-                            debug!("EventSub connection closed normally");
-                        }
-                        Err(e) => {
-                            error!("EventSub connection error: {}", e);
-                        }
-                    }
-                }
+                _ = Self::connection_loop(
+                    &broadcaster_id,
+                    &app_handle,
+                    &connected,
+                    &session_id,
+                    &generation,
+                    my_generation,
+                ) => {}
             }
 
-            // Mark as disconnected
-            {
+            // Mark as disconnected, unless a newer connection owns the status now.
+            if generation.load(Ordering::SeqCst) == my_generation {
                 let mut conn = connected.write().await;
                 *conn = false;
                 let mut sess = session_id.write().await;
                 *sess = None;
+            }
+            // Checked under the lock: a newer connect may have set it already.
+            {
+                let mut follows = following.write().await;
+                if follows.as_ref().is_some_and(|(g, _)| *g == my_generation) {
+                    *follows = None;
+                }
             }
 
             debug!("EventSub task ended");
@@ -419,91 +536,101 @@ impl EventSubService {
         Ok(())
     }
 
-    async fn run_connection(
-        broadcaster_id: String,
-        app_handle: AppHandle,
-        connected: Arc<RwLock<bool>>,
-        session_id: Arc<RwLock<Option<String>>>,
-        subscriptions: Arc<RwLock<Vec<String>>>,
-        mod_channels: Arc<RwLock<HashSet<String>>>,
-        mod_sub_ids: Arc<RwLock<HashMap<String, String>>>,
-    ) -> Result<()> {
-        debug!("Connecting to Twitch EventSub...");
-
-        let (ws_stream, _) = connect_async(EVENTSUB_URL).await?;
-        let (mut write, mut read) = ws_stream.split();
-
-        debug!("Connected to Twitch EventSub, waiting for welcome message...");
-
-        // Wait for welcome message
-        let welcome_msg = read
-            .next()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("Connection closed before welcome message"))??;
-
-        // Handle different message types and extract text
-        let welcome_text = match &welcome_msg {
-            Message::Text(text) => {
-                debug!("Received text message");
-                text.to_string()
-            }
-            Message::Binary(data) => {
-                let text = String::from_utf8(data.to_vec())
-                    .map_err(|e| anyhow::anyhow!("Failed to decode binary message: {}", e))?;
-                debug!("Received binary message (decoded)");
-                text
-            }
-            Message::Close(frame) => {
-                debug!("Received close frame: {:?}", frame);
-                return Err(anyhow::anyhow!("Connection closed by server"));
-            }
-            Message::Ping(_) | Message::Pong(_) => {
-                debug!("Received ping/pong, waiting for welcome message...");
-                let next_msg = read
-                    .next()
-                    .await
-                    .ok_or_else(|| anyhow::anyhow!("Connection closed after ping/pong"))??;
-                match &next_msg {
-                    Message::Text(text) => text.to_string(),
-                    _ => return Err(anyhow::anyhow!("Unexpected message type after ping/pong")),
+    /// Keep the watch socket up until shutdown drops this future. A
+    /// `session_reconnect` moves to the new edge inside `run_connection`
+    /// without losing subscriptions; any other end reconnects fresh and
+    /// resubscribes, with backoff. Stops only when the user signs out.
+    async fn connection_loop(
+        broadcaster_id: &str,
+        app_handle: &AppHandle,
+        connected: &Arc<RwLock<bool>>,
+        session_id: &Arc<RwLock<Option<String>>>,
+        generation: &Arc<AtomicU64>,
+        my_generation: u64,
+    ) {
+        let mut retry = RECONNECT_MIN_SECS;
+        loop {
+            // This socket's leftovers from earlier sessions go before it
+            // subscribes again, so they never count against the cost budget.
+            Self::cleanup_existing_subscriptions().await;
+            let healthy = match Self::run_connection(broadcaster_id, app_handle, connected, session_id).await
+            {
+                Ok(lasted) => lasted >= HEALTHY_CONNECTION,
+                Err(e) => {
+                    error!("EventSub connection error: {}", e);
+                    false
                 }
+            };
+
+            if generation.load(Ordering::SeqCst) == my_generation {
+                *connected.write().await = false;
+                *session_id.write().await = None;
             }
-            Message::Frame(_) => {
+
+            let (wait, next) = reconnect_backoff(retry, healthy);
+            retry = next;
+            info!("[EventSub] watch socket ended, reconnecting in {}s", wait);
+            sleep(Duration::from_secs(wait)).await;
+
+            if TwitchService::get_token().await.is_err() {
+                debug!("[EventSub] signed out, watch socket stays down");
+                return;
+            }
+        }
+    }
+
+    /// Connect to `url` and wait for its `session_welcome`. Shared by all
+    /// three sockets, for the first connect and for a reconnect-URL move.
+    pub(crate) async fn open_session(url: String) -> Result<(WsStream, Session)> {
+        let (mut ws, _) = connect_async(url.as_str()).await?;
+        loop {
+            let frame = timeout(Duration::from_secs(WELCOME_TIMEOUT_SECS), ws.next())
+                .await
+                .map_err(|_| anyhow::anyhow!("No welcome message in {}s", WELCOME_TIMEOUT_SECS))?
+                .ok_or_else(|| anyhow::anyhow!("Connection closed before welcome message"))??;
+            let text = match frame {
+                Message::Text(text) => text.to_string(),
+                Message::Binary(data) => String::from_utf8(data.to_vec())
+                    .map_err(|e| anyhow::anyhow!("Failed to decode binary message: {}", e))?,
+                Message::Close(frame) => {
+                    return Err(anyhow::anyhow!("Connection closed by server: {:?}", frame));
+                }
+                // Ping, pong and raw frames: keep waiting for the welcome.
+                _ => continue,
+            };
+            let welcome: EventSubMessage = serde_json::from_str(&text).map_err(|e| {
+                error!("Raw message: {}", text);
+                anyhow::anyhow!("Failed to parse welcome message: {}", e)
+            })?;
+            if welcome.metadata.message_type != "session_welcome" {
                 return Err(anyhow::anyhow!(
-                    "Received raw frame instead of welcome message"
+                    "Expected session_welcome message, got: {}",
+                    welcome.metadata.message_type
                 ));
             }
-        };
-
-        // Parse the welcome message
-        let welcome: EventSubMessage = match serde_json::from_str(&welcome_text) {
-            Ok(msg) => msg,
-            Err(e) => {
-                error!("Failed to parse welcome message: {}", e);
-                error!("Raw message: {}", welcome_text);
-                return Err(anyhow::anyhow!("Failed to parse welcome message: {}", e));
-            }
-        };
-
-        if welcome.metadata.message_type != "session_welcome" {
-            error!(
-                "Expected session_welcome, got: {}",
-                welcome.metadata.message_type
-            );
-            return Err(anyhow::anyhow!(
-                "Expected session_welcome message, got: {}",
-                welcome.metadata.message_type
-            ));
+            let payload: SessionPayload = serde_json::from_value(welcome.payload)?;
+            return Ok((ws, payload.session));
         }
+    }
 
-        let session_payload: SessionPayload = serde_json::from_value(welcome.payload)?;
-        let session_info = session_payload.session;
-        let keepalive_timeout = session_info.keepalive_timeout_seconds;
+    /// One connection, from welcome until it ends. Returns how long it was up.
+    async fn run_connection(
+        broadcaster_id: &str,
+        app_handle: &AppHandle,
+        connected: &Arc<RwLock<bool>>,
+        session_id: &Arc<RwLock<Option<String>>>,
+    ) -> Result<Duration> {
+        debug!("Connecting to Twitch EventSub...");
+        let (ws_stream, session_info) = Self::open_session(EVENTSUB_URL.to_string()).await?;
+        let started = Instant::now();
+        let (mut write, mut read) = ws_stream.split();
+        let mut keepalive_timeout = session_info.keepalive_timeout_seconds.unwrap_or(10);
+        let mut current_id = session_info.id.clone();
 
         // Store session ID
         {
             let mut sess = session_id.write().await;
-            *sess = Some(session_info.id.clone());
+            *sess = Some(current_id.clone());
         }
 
         // Mark as connected
@@ -512,82 +639,83 @@ impl EventSubService {
             *conn = true;
         }
 
-        debug!("EventSub session established: {}", session_info.id);
+        debug!("EventSub session established: {}", current_id);
         debug!(" Keepalive timeout: {} seconds", keepalive_timeout);
+        let mut live = LiveSession::open(SocketOwner::Watch, &current_id);
 
-        // Subscribe to events using the session ID
-        let sess_id = session_info.id.clone();
+        // Subscribe right away (the welcome means the session is ready).
+        // Aborted with this connection, so a replaced session stops posting
+        // subscriptions.
+        let sess_id = current_id.clone();
+        let broadcaster = broadcaster_id.to_string();
         let app_handle_subs = app_handle.clone();
-        tokio::spawn(async move {
-            // Wait a moment for the connection to stabilize
-            tokio::time::sleep(Duration::from_secs(1)).await;
-
-            if let Err(e) = Self::subscribe_to_events(
-                &broadcaster_id,
-                &sess_id,
-                &app_handle_subs,
-                mod_channels,
-                mod_sub_ids,
-            )
-            .await
-            {
+        let _subscriber = AbortOnDrop(tokio::spawn(async move {
+            if let Err(e) = Self::subscribe_to_events(&broadcaster, &sess_id, &app_handle_subs).await {
                 error!("Failed to subscribe to EventSub events: {}", e);
             }
-        });
+        }));
 
-        // Start keepalive monitoring
-        let last_message_time = Arc::new(RwLock::new(std::time::Instant::now()));
-        let last_message_clone = last_message_time.clone();
-        let connected_clone = connected.clone();
+        // The new connection Twitch asked for, opening while this one keeps
+        // delivering. Twitch's rule: close the old one only after the new
+        // welcome arrives.
+        let mut migrating: Option<PendingSession> = None;
+        let mut seen = SeenMessages::new();
 
-        tokio::spawn(async move {
-            // 5s granularity: the deadline itself is keepalive_timeout + 5 (>=15s),
-            // so a 1Hz tick bought nothing but wakeups. Worst added detection
-            // latency is one tick.
-            let mut check_interval = interval(Duration::from_secs(5));
-            loop {
-                check_interval.tick().await;
-
-                // Check if we should stop
-                if !*connected_clone.read().await {
-                    break;
+        // The keepalive deadline is enforced on this connection's own reads.
+        // Every connection shares the `connected` flag, so a separate task
+        // polling it can outlive its connection and switch the next one off.
+        // Shutdown arrives by dropping this future (see connect_and_listen),
+        // so the loop never reads that flag either.
+        loop {
+            let keepalive_deadline = Duration::from_secs(keepalive_timeout + 5);
+            let frame = tokio::select! {
+                frame = timeout(keepalive_deadline, read.next()) => frame,
+                moved = async { migrating.as_mut().expect("guarded by is_some").await }, if migrating.is_some() => {
+                    migrating = None;
+                    match moved {
+                        Ok((ws_stream, session)) => {
+                            let _ = write.send(Message::Close(None)).await;
+                            (write, read) = ws_stream.split();
+                            keepalive_timeout = session.keepalive_timeout_seconds.unwrap_or(keepalive_timeout);
+                            if session.id != current_id {
+                                // Register the new id before the old guard drops.
+                                live = LiveSession::open(SocketOwner::Watch, &session.id);
+                                current_id = session.id;
+                                *session_id.write().await = Some(current_id.clone());
+                            }
+                            info!("[EventSub] watch socket moved to the reconnect URL, subscriptions carried over");
+                        }
+                        Err(e) => {
+                            warn!("[EventSub] reconnect URL failed, staying on the old connection until it closes: {}", e);
+                        }
+                    }
+                    continue;
                 }
+            };
 
-                let elapsed = last_message_clone.read().await.elapsed();
-                if elapsed > Duration::from_secs(keepalive_timeout + 5) {
+            let msg = match frame {
+                Ok(Some(msg)) => msg,
+                Ok(None) => break,
+                Err(_) => {
                     error!(
                         "No message received for {} seconds, connection may be dead",
-                        elapsed.as_secs()
+                        keepalive_deadline.as_secs()
                     );
-                    let mut conn = connected_clone.write().await;
-                    *conn = false;
                     break;
                 }
-            }
-        });
-
-        // Listen for messages
-        while let Some(msg) = read.next().await {
-            // Check if we should stop
-            if !*connected.read().await {
-                debug!("Connection marked as disconnected, stopping listener");
-                break;
-            }
+            };
 
             match msg {
-                Ok(Message::Text(text)) => {
-                    // Update last message time
-                    {
-                        let mut last_msg = last_message_time.write().await;
-                        *last_msg = std::time::Instant::now();
+                Ok(Message::Text(text)) => match Self::handle_message(&text, app_handle, &mut seen).await {
+                    Ok(Some(reconnect_url)) if migrating.is_none() => {
+                        info!("[EventSub] Twitch asked the watch socket to reconnect, moving to the new URL");
+                        migrating = Some(Box::pin(Self::open_session(reconnect_url)));
                     }
-
-                    if let Err(e) = Self::handle_message(&text, &app_handle).await {
-                        error!("Error handling message: {}", e);
-                    }
-                }
-                Ok(Message::Close(_)) => {
-                    debug!("EventSub connection closed by server");
+                    Ok(_) => {}
+                    Err(e) => error!("Error handling message: {}", e),
+                },
+                Ok(Message::Close(frame)) => {
+                    warn!("EventSub connection closed by server: {:?}", frame);
                     break;
                 }
                 Ok(Message::Ping(data)) => {
@@ -607,15 +735,24 @@ impl EventSubService {
 
         // Send close frame to properly close the connection
         let _ = write.send(Message::Close(None)).await;
+        drop(live);
 
-        Ok(())
+        Ok(started.elapsed())
     }
 
-    async fn handle_message(text: &str, app_handle: &AppHandle) -> Result<()> {
+    /// The URL from a `session_reconnect` payload.
+    pub(crate) fn reconnect_url(payload: serde_json::Value) -> Result<Option<String>> {
+        let session_payload: SessionPayload = serde_json::from_value(payload)?;
+        Ok(session_payload.session.reconnect_url)
+    }
+
+    /// Handle one server frame. Returns the reconnect URL when Twitch sends
+    /// `session_reconnect`.
+    async fn handle_message(text: &str, app_handle: &AppHandle, seen: &mut SeenMessages) -> Result<Option<String>> {
         // Handle potential empty messages
         if text.trim().is_empty() {
             debug!("Received empty message, ignoring");
-            return Ok(());
+            return Ok(None);
         }
 
         let message: EventSubMessage = match serde_json::from_str(text) {
@@ -635,16 +772,16 @@ impl EventSubService {
                 debug!("Received keepalive");
             }
             "notification" => {
+                if !seen.first_time(&message.metadata.message_id) {
+                    debug!("[EventSub] dropped a repeated notification {}", message.metadata.message_id);
+                    return Ok(None);
+                }
                 let notification: NotificationPayload = serde_json::from_value(message.payload)?;
                 Self::handle_notification(notification, app_handle).await?;
             }
             "session_reconnect" => {
                 debug!("Server requested reconnection");
-                let session_payload: SessionPayload = serde_json::from_value(message.payload)?;
-                if let Some(reconnect_url) = session_payload.session.reconnect_url {
-                    debug!("Reconnect URL: {}", reconnect_url);
-                    // TODO: Implement reconnection logic
-                }
+                return Self::reconnect_url(message.payload);
             }
             "revocation" => {
                 debug!(" Subscription revoked");
@@ -656,7 +793,7 @@ impl EventSubService {
             }
         }
 
-        Ok(())
+        Ok(None)
     }
 
     async fn handle_notification(
@@ -721,91 +858,6 @@ impl EventSubService {
                     crate::services::watch_session::on_channel_update(app_handle, &update_event);
                 }
             }
-            "channel.moderate" => {
-                // Handle moderation events (pass raw JSON through to frontend)
-                debug!(
-                    "Moderation action: {}",
-                    notification
-                        .event
-                        .get("action")
-                        .and_then(|a| a.as_str())
-                        .unwrap_or("unknown")
-                );
-                let _ = app_handle.emit("eventsub://channel-moderate", &notification.event);
-            }
-            "channel.channel_points_automatic_reward_redemption.add" => {
-                // Handle automatic channel points rewards
-                debug!("Automatic channel points reward redeemed");
-                let _ = app_handle.emit("channel-points-automatic-reward", &notification.event);
-            }
-            "channel.channel_points_custom_reward_redemption.add" => {
-                // Handle custom channel points reward redemptions
-                if let Ok(redemption) = serde_json::from_value::<ChannelPointsRedemptionEvent>(
-                    notification.event.clone(),
-                ) {
-                    debug!(
-                        "Custom reward redeemed: {} by {}",
-                        redemption.reward.title, redemption.user_name
-                    );
-                    let _ = app_handle.emit("channel-points-redemption", &redemption);
-                }
-            }
-            "user.whisper.message" => {
-                // Handle incoming whisper messages
-                if let Ok(whisper_event) =
-                    serde_json::from_value::<WhisperReceivedEvent>(notification.event.clone())
-                {
-                    debug!(
-                        "Whisper received from {} (@{}): {}",
-                        whisper_event.from_user_name,
-                        whisper_event.from_user_login,
-                        whisper_event.whisper.text
-                    );
-
-                    let whisper_data = serde_json::json!({
-                        "from_user_id": whisper_event.from_user_id,
-                        "from_user_login": whisper_event.from_user_login,
-                        "from_user_name": whisper_event.from_user_name,
-                        "to_user_id": whisper_event.to_user_id,
-                        "to_user_login": whisper_event.to_user_login,
-                        "to_user_name": whisper_event.to_user_name,
-                        "whisper_id": whisper_event.whisper_id,
-                        "text": whisper_event.whisper.text
-                    });
-
-                    let _ = app_handle.emit("whisper-received", &whisper_data);
-                }
-            }
-            "channel.hype_train.begin" => {
-                if let Ok(event) =
-                    serde_json::from_value::<HypeTrainBeginEvent>(notification.event.clone())
-                {
-                    debug!(
-                        "Hype Train started! Level {} - Goal: {}/{}",
-                        event.level, event.progress, event.goal
-                    );
-                    let _ = app_handle.emit("eventsub://hype-train-begin", &event);
-                }
-            }
-            "channel.hype_train.progress" => {
-                if let Ok(event) =
-                    serde_json::from_value::<HypeTrainProgressEvent>(notification.event.clone())
-                {
-                    debug!(
-                        "Hype Train progress: Level {} - {}/{}",
-                        event.level, event.progress, event.goal
-                    );
-                    let _ = app_handle.emit("eventsub://hype-train-progress", &event);
-                }
-            }
-            "channel.hype_train.end" => {
-                if let Ok(event) =
-                    serde_json::from_value::<HypeTrainEndEvent>(notification.event.clone())
-                {
-                    debug!("Hype Train ended at Level {}!", event.level);
-                    let _ = app_handle.emit("eventsub://hype-train-end", &event);
-                }
-            }
             _ => {
                 debug!(
                     "Unhandled subscription type: {}",
@@ -821,25 +873,13 @@ impl EventSubService {
         broadcaster_id: &str,
         session_id: &str,
         app_handle: &AppHandle,
-        mod_channels: Arc<RwLock<HashSet<String>>>,
-        mod_sub_ids: Arc<RwLock<HashMap<String, String>>>,
     ) -> Result<()> {
         let token = TwitchService::get_token().await?;
         let client_id = env!("TWITCH_APP_CLIENT_ID");
         let client = crate::services::http::client().clone();
 
-        // Get the current user's ID for user-specific subscriptions
-        let current_user_id = match TwitchService::get_user_info().await {
-            Ok(user) => user.id,
-            Err(e) => {
-                error!("Failed to get current user info: {}", e);
-                String::new()
-            }
-        };
-
-        // List of subscriptions to create
-        #[allow(clippy::useless_vec)]
-        let subscriptions = vec![
+        // Cost 1 each: 4 of the user token's budget of 10.
+        let subscriptions = [
             // Raid events (when streamer raids OUT to another channel)
             (
                 "channel.raid",
@@ -878,32 +918,16 @@ impl EventSubService {
             // the IRC refcount) so the mod view follows chat, not the watched
             // stream, and works in offline chat / MultiNook / popouts. Keeping it
             // here too would double-subscribe the watched channel (409).
-            // Hype Train events (V2)
-            (
-                "channel.hype_train.begin",
-                "2",
-                serde_json::json!({
-                    "broadcaster_user_id": broadcaster_id
-                }),
-            ),
-            (
-                "channel.hype_train.progress",
-                "2",
-                serde_json::json!({
-                    "broadcaster_user_id": broadcaster_id
-                }),
-            ),
-            (
-                "channel.hype_train.end",
-                "2",
-                serde_json::json!({
-                    "broadcaster_user_id": broadcaster_id
-                }),
-            ),
+            // NOTE: no channel.hype_train.* either. Those need the
+            // broadcaster's own token, so they fail for any other channel, and
+            // every hype-train banner comes from the GQL poll in
+            // hype_train_watch.rs.
         ];
 
-        // Subscribe to each event with delays
-        for (i, (event_type, version, condition)) in subscriptions.iter().enumerate() {
+        // Each subscription stands alone: one that fails does not stop the
+        // rest. A request with no answer, a 429 or a 5xx is retried once; any
+        // other refusal is final.
+        for (event_type, version, condition) in &subscriptions {
             let subscription_body = serde_json::json!({
                 "type": event_type,
                 "version": version,
@@ -914,229 +938,65 @@ impl EventSubService {
                 }
             });
 
-            let response = client
-                .post("https://api.twitch.tv/helix/eventsub/subscriptions")
-                .header("Client-ID", client_id)
-                .header("Authorization", format!("Bearer {}", token))
-                .header("Content-Type", "application/json")
-                .json(&subscription_body)
-                .send()
-                .await?;
-
-            if response.status().is_success() {
-                debug!("Subscribed to {}", event_type);
-            } else {
-                let status = response.status();
-                let error_text = response.text().await?;
-
-                // Hype Train events require moderator access - silently skip if 403
-                if event_type.starts_with("channel.hype_train") && status.as_u16() == 403 {
-                    // This is expected when not a moderator of the channel
-                    debug!("Skipped {} (requires moderator access)", event_type);
-                } else {
-                    error!("Failed to subscribe to {}: {}", event_type, error_text);
-                    // Surface the failure to the UI so a silently-broken feed
-                    // (e.g. channel.moderate missing a scope) isn't invisible.
-                    let _ = app_handle.emit(
-                        "eventsub://subscription-failed",
-                        serde_json::json!({
-                            "type": event_type,
-                            "status": status.as_u16(),
-                            "error": error_text,
-                        }),
-                    );
+            let mut failure: Option<(u16, String)> = None;
+            for attempt in 0..2 {
+                if attempt > 0 {
+                    sleep(SUBSCRIBE_RETRY).await;
                 }
-            }
-
-            // Add delay between subscriptions (except after the last one)
-            if i < subscriptions.len() - 1 {
-                tokio::time::sleep(Duration::from_millis(SUBSCRIPTION_DELAY_MS)).await;
-            }
-        }
-
-        // Subscribe to whisper messages if we have a user ID
-        if !current_user_id.is_empty() {
-            tokio::time::sleep(Duration::from_millis(SUBSCRIPTION_DELAY_MS)).await;
-
-            let whisper_subscription_body = serde_json::json!({
-                "type": "user.whisper.message",
-                "version": "1",
-                "condition": {
-                    "user_id": current_user_id
-                },
-                "transport": {
-                    "method": "websocket",
-                    "session_id": session_id
-                }
-            });
-
-            let response = client
-                .post("https://api.twitch.tv/helix/eventsub/subscriptions")
-                .header("Client-ID", client_id)
-                .header("Authorization", format!("Bearer {}", token))
-                .header("Content-Type", "application/json")
-                .json(&whisper_subscription_body)
-                .send()
-                .await?;
-
-            if response.status().is_success() {
-                debug!(
-                    "Subscribed to whisper messages for user {}",
-                    current_user_id
-                );
-            } else {
-                let error_text = response.text().await?;
-                error!("Failed to subscribe to whispers: {}", error_text);
-            }
-        }
-
-        // Extra channel.moderate subscriptions for other channels the user
-        // moderates and currently has open (MultiNook). Re-applied here on every
-        // (re)connect. The main broadcaster is already covered above. A 403 just
-        // means you don't moderate that channel, so subscribe_channel_moderate
-        // skips it silently (no error toast, unlike the main-stream sub).
-        if !current_user_id.is_empty() {
-            let extras: Vec<String> = mod_channels.read().await.iter().cloned().collect();
-            for extra_id in extras {
-                if extra_id.is_empty() || extra_id.as_str() == broadcaster_id {
-                    continue;
-                }
-                tokio::time::sleep(Duration::from_millis(SUBSCRIPTION_DELAY_MS)).await;
-                if let Some(sub_id) =
-                    Self::subscribe_channel_moderate(&extra_id, &current_user_id, session_id).await
-                {
-                    mod_sub_ids.write().await.insert(extra_id, sub_id);
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Subscribe to channel.moderate v2 for a single broadcaster on the given
-    /// session. Returns Some(subscription_id) on success, or None on any failure.
-    /// A 403 means you don't moderate that channel (expected), so we stay quiet
-    /// and do NOT surface it the way the main-stream sub does.
-    async fn subscribe_channel_moderate(
-        broadcaster_id: &str,
-        moderator_user_id: &str,
-        session_id: &str,
-    ) -> Option<String> {
-        if broadcaster_id.is_empty() || moderator_user_id.is_empty() {
-            return None;
-        }
-
-        let token = TwitchService::get_token().await.ok()?;
-        let client_id = env!("TWITCH_APP_CLIENT_ID");
-        let client = crate::services::http::client().clone();
-
-        let body = serde_json::json!({
-            "type": "channel.moderate",
-            "version": "2",
-            "condition": {
-                "broadcaster_user_id": broadcaster_id,
-                "moderator_user_id": moderator_user_id
-            },
-            "transport": { "method": "websocket", "session_id": session_id }
-        });
-
-        let response = client
-            .post("https://api.twitch.tv/helix/eventsub/subscriptions")
-            .header("Client-ID", client_id)
-            .header("Authorization", format!("Bearer {}", token))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .ok()?;
-
-        if response.status().is_success() {
-            let json: serde_json::Value = response.json().await.ok()?;
-            let id = json
-                .get("data")
-                .and_then(|d| d.get(0))
-                .and_then(|s| s.get("id"))
-                .and_then(|i| i.as_str())
-                .map(|s| s.to_string());
-            debug!(
-                "Subscribed to channel.moderate for broadcaster {}",
-                broadcaster_id
-            );
-            id
-        } else {
-            debug!(
-                "Skipped channel.moderate for broadcaster {} (HTTP {})",
-                broadcaster_id,
-                response.status().as_u16()
-            );
-            None
-        }
-    }
-
-    /// Track a channel the user moderates and, if a session is live, subscribe to
-    /// its moderation events now. Idempotent (re-adding a tracked channel is a
-    /// no-op). Persisted in `mod_channels` so it's re-subscribed on every
-    /// reconnect by `subscribe_to_events`.
-    pub async fn add_mod_channel(&self, broadcaster_id: String) {
-        if broadcaster_id.is_empty() {
-            return;
-        }
-        {
-            let mut set = self.mod_channels.write().await;
-            if !set.insert(broadcaster_id.clone()) {
-                return; // already tracked
-            }
-        }
-
-        // If a session is live right now, subscribe immediately; otherwise it gets
-        // picked up the next time a session connects.
-        let session_id = self.session_id.read().await.clone();
-        if let Some(sess_id) = session_id {
-            let moderator_user_id = TwitchService::get_user_info()
-                .await
-                .map(|u| u.id)
-                .unwrap_or_default();
-            if let Some(sub_id) =
-                Self::subscribe_channel_moderate(&broadcaster_id, &moderator_user_id, &sess_id)
-                    .await
-            {
-                self.mod_sub_ids
-                    .write()
-                    .await
-                    .insert(broadcaster_id, sub_id);
-            }
-        }
-    }
-
-    /// Stop tracking a moderated channel and tear down its live subscription.
-    pub async fn remove_mod_channel(&self, broadcaster_id: String) {
-        self.mod_channels.write().await.remove(&broadcaster_id);
-        let sub_id = self.mod_sub_ids.write().await.remove(&broadcaster_id);
-        if let Some(sub_id) = sub_id {
-            if let Ok(token) = TwitchService::get_token().await {
-                let client_id = env!("TWITCH_APP_CLIENT_ID");
-                let client = crate::services::http::client().clone();
-                let _ = client
-                    .delete(format!(
-                        "https://api.twitch.tv/helix/eventsub/subscriptions?id={}",
-                        sub_id
-                    ))
+                let sent = client
+                    .post("https://api.twitch.tv/helix/eventsub/subscriptions")
                     .header("Client-ID", client_id)
                     .header("Authorization", format!("Bearer {}", token))
+                    .header("Content-Type", "application/json")
+                    .json(&subscription_body)
                     .send()
                     .await;
-                debug!(
-                    "Removed channel.moderate sub for broadcaster {}",
-                    broadcaster_id
+                match sent {
+                    Ok(response) if response.status().is_success() => {
+                        debug!("Subscribed to {}", event_type);
+                        failure = None;
+                        break;
+                    }
+                    Ok(response) => {
+                        let status = response.status();
+                        let error_text = response.text().await.unwrap_or_default();
+                        failure = Some((status.as_u16(), error_text));
+                        if status.as_u16() != 429 && !status.is_server_error() {
+                            break;
+                        }
+                    }
+                    Err(e) => failure = Some((0, e.to_string())),
+                }
+            }
+
+            if let Some((status, error_text)) = failure {
+                error!("Failed to subscribe to {}: {}", event_type, error_text);
+                // Surface the failure to the UI so a silently-broken feed
+                // (e.g. a token missing a scope) isn't invisible. Status 0
+                // means the request never got an answer.
+                let _ = app_handle.emit(
+                    "eventsub://subscription-failed",
+                    serde_json::json!({
+                        "type": event_type,
+                        "status": status,
+                        "error": error_text,
+                    }),
                 );
             }
         }
+
+        // NOTE: user.whisper.message is not here either. whisper_service owns
+        // it on its own always-on socket, which also files each whisper in
+        // the inbox; a second subscription here would deliver whispers that
+        // bypass the inbox and die with the watched stream.
+
+        Ok(())
     }
 
     pub async fn disconnect(&self) {
         debug!("Disconnecting EventSub...");
 
-        // Mark as disconnected first to stop all loops
+        // Status only; the shutdown signal below is what ends the connection.
         {
             let mut conn = self.connected.write().await;
             *conn = false;
@@ -1150,28 +1010,220 @@ impl EventSubService {
             }
         }
 
-        // Clear session and subscriptions
+        // Clear the session and what it followed
         {
             let mut sess = self.session_id.write().await;
             *sess = None;
         }
-
-        {
-            let mut subs = self.subscriptions.write().await;
-            subs.clear();
-        }
-
-        // Live moderation sub ids belong to the session that's going away; drop
-        // them. The desired channel set in `mod_channels` is intentionally kept so
-        // those channels are re-subscribed when a new session connects.
-        {
-            let mut sub_ids = self.mod_sub_ids.write().await;
-            sub_ids.clear();
-        }
-
-        // Give the task a moment to clean up
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        *self.following.write().await = None;
 
         debug!("EventSub disconnected");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `GET /helix/eventsub/subscriptions` page as Twitch returns it for a
+    /// user token: the three sockets' subscriptions side by side, plus
+    /// leftovers, another instance's session and a webhook.
+    const FIXTURE: &str = r#"{
+        "data": [
+            {"id": "watch-old-online", "status": "websocket_disconnected", "type": "stream.online", "version": "1",
+             "condition": {"broadcaster_user_id": "100"}, "created_at": "2026-01-01T00:00:00Z", "cost": 1,
+             "transport": {"method": "websocket", "session_id": "S_watch_old", "connected_at": "2026-01-01T00:00:00Z", "disconnected_at": "2026-01-01T00:05:00Z"}},
+            {"id": "watch-old-raid", "status": "enabled", "type": "channel.raid", "version": "1",
+             "condition": {"from_broadcaster_user_id": "100"}, "created_at": "2026-01-01T00:00:00Z", "cost": 1,
+             "transport": {"method": "websocket", "session_id": "S_watch_old", "connected_at": "2026-01-01T00:00:00Z"}},
+            {"id": "mod-moderate", "status": "enabled", "type": "channel.moderate", "version": "2",
+             "condition": {"broadcaster_user_id": "200", "moderator_user_id": "1"}, "created_at": "2026-01-01T00:00:00Z", "cost": 0,
+             "transport": {"method": "websocket", "session_id": "S_mod_live", "connected_at": "2026-01-01T00:00:00Z"}},
+            {"id": "mod-automod", "status": "enabled", "type": "automod.message.hold", "version": "2",
+             "condition": {"broadcaster_user_id": "200", "moderator_user_id": "1"}, "created_at": "2026-01-01T00:00:00Z", "cost": 0,
+             "transport": {"method": "websocket", "session_id": "S_mod_live", "connected_at": "2026-01-01T00:00:00Z"}},
+            {"id": "whisper", "status": "enabled", "type": "user.whisper.message", "version": "1",
+             "condition": {"user_id": "1"}, "created_at": "2026-01-01T00:00:00Z", "cost": 0,
+             "transport": {"method": "websocket", "session_id": "S_whisper_live", "connected_at": "2026-01-01T00:00:00Z"}},
+            {"id": "mod-old-closed", "status": "websocket_disconnected", "type": "channel.moderate", "version": "2",
+             "condition": {"broadcaster_user_id": "300", "moderator_user_id": "1"}, "created_at": "2026-01-01T00:00:00Z", "cost": 0,
+             "transport": {"method": "websocket", "session_id": "S_mod_old", "connected_at": "2026-01-01T00:00:00Z", "disconnected_at": "2026-01-01T00:01:00Z"}},
+            {"id": "mod-old-lagging", "status": "enabled", "type": "channel.moderate", "version": "2",
+             "condition": {"broadcaster_user_id": "301", "moderator_user_id": "1"}, "created_at": "2026-01-01T00:00:00Z", "cost": 0,
+             "transport": {"method": "websocket", "session_id": "S_mod_old", "connected_at": "2026-01-01T00:00:00Z"}},
+            {"id": "other-instance", "status": "enabled", "type": "stream.online", "version": "1",
+             "condition": {"broadcaster_user_id": "400"}, "created_at": "2026-01-01T00:00:00Z", "cost": 1,
+             "transport": {"method": "websocket", "session_id": "S_other_instance", "connected_at": "2026-01-01T00:00:00Z"}},
+            {"id": "previous-run", "status": "websocket_failed_ping_pong", "type": "user.whisper.message", "version": "1",
+             "condition": {"user_id": "1"}, "created_at": "2026-01-01T00:00:00Z", "cost": 0,
+             "transport": {"method": "websocket", "session_id": "S_previous_run", "connected_at": "2026-01-01T00:00:00Z", "disconnected_at": "2026-01-01T00:02:00Z"}},
+            {"id": "webhook", "status": "enabled", "type": "stream.online", "version": "1",
+             "condition": {"broadcaster_user_id": "500"}, "created_at": "2026-01-01T00:00:00Z", "cost": 1,
+             "transport": {"method": "webhook", "callback": "https://example.com/eventsub"}}
+        ],
+        "total": 10,
+        "total_cost": 4,
+        "max_total_cost": 10,
+        "pagination": {}
+    }"#;
+
+    fn session(id: &str, owner: SocketOwner, live: bool) -> KnownSession {
+        KnownSession {
+            id: id.to_string(),
+            owner,
+            live,
+        }
+    }
+
+    /// This process: the watch socket reconnecting (its old session retired),
+    /// the moderation socket live after one earlier reconnect of its own, and
+    /// the whisper socket live.
+    fn book() -> Vec<KnownSession> {
+        vec![
+            session("S_watch_old", SocketOwner::Watch, false),
+            session("S_mod_old", SocketOwner::Moderation, false),
+            session("S_mod_live", SocketOwner::Moderation, true),
+            session("S_whisper_live", SocketOwner::Whispers, true),
+        ]
+    }
+
+    fn verdicts(me: SocketOwner) -> Vec<(String, Option<CleanupVerdict>)> {
+        let list: SubscriptionListResponse = serde_json::from_str(FIXTURE).unwrap();
+        let sessions = book();
+        list.data
+            .iter()
+            .map(|sub| (sub.id.clone(), cleanup_verdict(sub, &sessions, me)))
+            .collect()
+    }
+
+    fn deleted(me: SocketOwner) -> Vec<String> {
+        verdicts(me)
+            .into_iter()
+            .filter(|(_, v)| matches!(v, Some(CleanupVerdict::DropOwn | CleanupVerdict::DropDead)))
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    #[test]
+    fn watch_reconnect_never_touches_live_sockets() {
+        use CleanupVerdict::*;
+        let got: HashMap<String, Option<CleanupVerdict>> = verdicts(SocketOwner::Watch).into_iter().collect();
+        assert_eq!(got["watch-old-online"], Some(DropOwn));
+        // Its own retired session goes even while Twitch still lists it enabled.
+        assert_eq!(got["watch-old-raid"], Some(DropOwn));
+        assert_eq!(got["mod-moderate"], Some(KeepLive(SocketOwner::Moderation)));
+        assert_eq!(got["mod-automod"], Some(KeepLive(SocketOwner::Moderation)));
+        assert_eq!(got["whisper"], Some(KeepLive(SocketOwner::Whispers)));
+        assert_eq!(got["mod-old-closed"], Some(DropDead));
+        // Another socket's retired session is not ours to judge until Twitch
+        // marks it closed.
+        assert_eq!(got["mod-old-lagging"], Some(KeepUnowned));
+        assert_eq!(got["other-instance"], Some(KeepUnowned));
+        assert_eq!(got["previous-run"], Some(DropDead));
+        assert_eq!(got["webhook"], None);
+    }
+
+    #[test]
+    fn each_socket_deletes_only_its_own_and_dead_sessions() {
+        assert_eq!(
+            deleted(SocketOwner::Watch),
+            ["watch-old-online", "watch-old-raid", "mod-old-closed", "previous-run"]
+        );
+        // Seen from the moderation socket, its own lagging leftover goes and
+        // the watch socket's enabled leftover stays.
+        assert_eq!(
+            deleted(SocketOwner::Moderation),
+            ["watch-old-online", "mod-old-closed", "mod-old-lagging", "previous-run"]
+        );
+        for me in [SocketOwner::Watch, SocketOwner::Moderation, SocketOwner::Whispers] {
+            let gone = deleted(me);
+            for live in ["mod-moderate", "mod-automod", "whisper", "other-instance", "webhook"] {
+                assert!(!gone.iter().any(|id| id == live), "{me:?} deleted {live}");
+            }
+        }
+    }
+
+    /// `session_reconnect` in the shape Twitch documents: the keepalive is
+    /// null there, which a plain `u64` field refused to parse.
+    #[test]
+    fn reconnect_frame_yields_its_url() {
+        let frame = r#"{
+            "metadata": {"message_id": "84c1e79a-2a4b-4c13-ba0b-4312293e9308", "message_type": "session_reconnect",
+                         "message_timestamp": "2022-11-18T09:10:11.634234626Z"},
+            "payload": {"session": {"id": "AQoQexAWVYKSTIu4ec_2VAxyuhAB", "status": "reconnecting",
+                                    "keepalive_timeout_seconds": null,
+                                    "reconnect_url": "wss://eventsub.wss.twitch.tv/ws?reconnect_token=abc",
+                                    "connected_at": "2022-11-16T10:11:12.634234626Z"}}
+        }"#;
+        let message: EventSubMessage = serde_json::from_str(frame).unwrap();
+        assert_eq!(message.metadata.message_type, "session_reconnect");
+        assert_eq!(
+            EventSubService::reconnect_url(message.payload).unwrap().as_deref(),
+            Some("wss://eventsub.wss.twitch.tv/ws?reconnect_token=abc")
+        );
+    }
+
+    #[test]
+    fn welcome_frame_carries_id_and_keepalive() {
+        let frame = r#"{
+            "metadata": {"message_id": "96a3f3b5-5dec-4eed-908e-e11ee657416c", "message_type": "session_welcome",
+                         "message_timestamp": "2023-07-19T14:56:51.634234626Z"},
+            "payload": {"session": {"id": "AQoQILE98gtqShGmLD7AM6yJThAB", "status": "connected",
+                                    "connected_at": "2023-07-19T14:56:51.616329898Z",
+                                    "keepalive_timeout_seconds": 10, "reconnect_url": null}}
+        }"#;
+        let message: EventSubMessage = serde_json::from_str(frame).unwrap();
+        let session = serde_json::from_value::<SessionPayload>(message.payload).unwrap().session;
+        assert_eq!(session.id, "AQoQILE98gtqShGmLD7AM6yJThAB");
+        assert_eq!(session.keepalive_timeout_seconds, Some(10));
+        assert_eq!(session.reconnect_url, None);
+    }
+
+    #[test]
+    fn reconnect_backoff_doubles_to_the_cap_and_resets_when_healthy() {
+        let mut retry = RECONNECT_MIN_SECS;
+        let mut waits = Vec::new();
+        for _ in 0..8 {
+            let (wait, next) = reconnect_backoff(retry, false);
+            waits.push(wait);
+            retry = next;
+        }
+        assert_eq!(waits, [5, 10, 20, 40, 80, 160, 300, 300]);
+        assert_eq!(reconnect_backoff(retry, true), (RECONNECT_MIN_SECS, RECONNECT_MIN_SECS));
+    }
+
+    #[test]
+    fn live_session_guard_retires_on_drop_and_caps_history() {
+        let in_book = |id: &str| known_sessions().into_iter().find(|s| s.id == id);
+        {
+            let _live = LiveSession::open(SocketOwner::Whispers, "T_guard_whispers");
+            let s = in_book("T_guard_whispers").unwrap();
+            assert!(s.live);
+            assert_eq!(s.owner, SocketOwner::Whispers);
+        }
+        assert!(!in_book("T_guard_whispers").unwrap().live);
+
+        for i in 0..RETIRED_SESSIONS_KEPT + 4 {
+            drop(LiveSession::open(SocketOwner::Watch, &format!("T_guard_cap_{i}")));
+        }
+        assert!(in_book("T_guard_whispers").is_none());
+        assert!(in_book("T_guard_cap_0").is_none());
+        assert!(in_book(&format!("T_guard_cap_{}", RETIRED_SESSIONS_KEPT + 3)).is_some());
+        assert!(known_sessions().iter().filter(|s| !s.live).count() <= RETIRED_SESSIONS_KEPT);
+    }
+
+    #[test]
+    fn a_repeated_message_id_is_dropped_within_the_window() {
+        let mut seen = SeenMessages::new();
+        assert!(seen.first_time("m1"));
+        assert!(!seen.first_time("m1"), "a redelivery is dropped");
+        assert!(seen.first_time(""), "a frame without an id always passes");
+        assert!(seen.first_time(""));
+        for i in 0..SeenMessages::KEEP {
+            assert!(seen.first_time(&format!("fill{i}")));
+        }
+        // m1 has aged out of the window; the newest are still remembered.
+        assert!(seen.first_time("m1"));
+        assert!(!seen.first_time(&format!("fill{}", SeenMessages::KEEP - 1)));
     }
 }

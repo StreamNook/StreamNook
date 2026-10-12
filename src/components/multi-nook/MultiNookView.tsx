@@ -27,7 +27,7 @@ import { MultiNookCell } from './MultiNookCell';
 import MultiNookToolbar from './MultiNookToolbar';
 import { MultiNookTutorial } from './MultiNookTutorial';
 import { MultiNookTileMenu } from './MultiNookTileMenu';
-import { usemultiNookStore } from '../../stores/multiNookStore';
+import { activeChatSlot, usemultiNookStore } from '../../stores/multiNookStore';
 import { useTutorialStore } from '../../stores/tutorialStore';
 import { acquireChannel, releaseChannel } from '../../stores/chatConnectionStore';
 import { Logger } from '../../utils/logger';
@@ -214,6 +214,29 @@ export const MultiNookView: React.FC = () => {
       invoke('set_multi_nook_meta_channels', { logins: [] }).catch(() => {});
     };
   }, []);
+
+  // The tile whose chat is shown carries the watch EventSub socket, drops
+  // monitoring and the predictions set; Rust moves all three
+  // (services/watch_session.rs). This only declares the tile, keyed on its
+  // identity so a volume drag never re-sends it. Only this grid declares: a
+  // popout chat is not a viewing context and must not take the socket.
+  const activeChatChannelId = usemultiNookStore((s) => s.activeChatChannelId);
+  const focusTile = useMemo(() => activeChatSlot(slots, activeChatChannelId), [slots, activeChatChannelId]);
+  const focusProvider = focusTile?.provider ?? 'twitch';
+  const focusLogin = focusTile?.channelLogin ?? '';
+  const focusId = focusTile?.channelId ?? '';
+  useEffect(() => {
+    invoke('set_multi_nook_focus', {
+      focus: focusLogin ? { provider: focusProvider, login: focusLogin, user_id: focusId } : null,
+    }).catch((err) => Logger.warn('[MultiNook] focus update failed:', err));
+  }, [focusProvider, focusLogin, focusId]);
+  useEffect(
+    () => () => {
+      // Leaving MultiNook hands the socket back to the solo stream, if any.
+      invoke('set_multi_nook_focus', { focus: null }).catch(() => {});
+    },
+    [],
+  );
 
   // Stable DOM order: sort visible slots by id so DOM nodes never move on reorder.
   const stableDomSlots = useMemo(

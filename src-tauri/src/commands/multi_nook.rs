@@ -753,6 +753,14 @@ pub fn set_multi_nook_meta_channels(app: AppHandle, logins: Vec<String>) {
     crate::services::multi_nook_meta::set_channels(&app, logins);
 }
 
+/// The tile whose chat the grid shows, or None when the grid closes or
+/// empties. The watch EventSub socket, drops monitoring and the predictions
+/// set follow it (services::watch_session::set_grid_focus).
+#[tauri::command]
+pub fn set_multi_nook_focus(app: AppHandle, focus: Option<crate::services::watch_session::GridFocus>) {
+    crate::services::watch_session::set_grid_focus(app, focus);
+}
+
 /// The delay a Resync lines MultiNook tiles up at (seconds behind live), or
 /// None when no sync is held. Tile playlists then reach back that far, so
 /// hls.js never snaps a held tile forward to live.

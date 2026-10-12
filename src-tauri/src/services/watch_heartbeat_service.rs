@@ -11,10 +11,9 @@
 //! on-screen stream. It never reports more than one channel, never reports
 //! an off-screen channel, and never claims anything.
 //!
-//! The target follows the active-channel chokepoints the frontend already
-//! drives (stream start, channel hot-swap, stream stop), which also track
-//! the focused chat in the multi-stream grid, so grid viewing reports the
-//! focused tile only. Playback state is optimistic on a new target (streams
+//! The target follows the active-channel chokepoints (stream start and stop,
+//! and MultiNook's focused tile through `watch_session::set_grid_focus`), so
+//! grid viewing reports the focused tile only. Playback state is optimistic on a new target (streams
 //! autoplay) and corrected by the player's playing and pause events.
 
 use anyhow::{anyhow, Result};

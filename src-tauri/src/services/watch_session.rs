@@ -20,6 +20,10 @@
 //! channel's chat while it is not streaming, and the session waits for it to
 //! go live, through EventSub `stream.online` when signed in and the batched
 //! `channel_state` viewer poll always (which also covers signed-out viewers).
+//!
+//! The watch EventSub socket (services/eventsub_service.rs) is aimed only from
+//! here: at MultiNook's focused Twitch tile while the grid is open
+//! (`set_grid_focus`), else at the watched Twitch channel.
 //! - `watch-session://stream-update` fresh title / category / viewers
 //! - `watch-session://resolving`     an offline confirmation started / ended
 
@@ -265,7 +269,6 @@ pub async fn start(app: AppHandle, target: WatchTarget) {
             live_sent: false,
         })
     });
-    let previous_was_twitch = previous.as_ref().is_some_and(|p| p.target.provider == "twitch");
     if let Some(prev) = previous {
         release(prev);
     }
@@ -280,19 +283,12 @@ pub async fn start(app: AppHandle, target: WatchTarget) {
             name: if target.user_name.is_empty() { target.login.clone() } else { target.user_name.clone() },
         }),
     );
+    // This channel's EventSub, unless MultiNook's focused tile holds the
+    // socket. A Twitch subscription must not keep firing over a Kick stream.
+    aim_watch_socket(&app).await;
 
     let mut tasks = Vec::new();
     if target.provider == "twitch" {
-        let eventsub = app.state::<EventSubServiceState>().0.clone();
-        let service = eventsub.read().await;
-        if target.authenticated && !target.user_id.is_empty() {
-            if let Err(e) = service.connect_and_listen(target.user_id.clone(), app.clone()).await {
-                log::warn!("[WatchSession] EventSub could not connect: {e}");
-            }
-        } else {
-            service.disconnect().await;
-        }
-        drop(service);
         if target.offline {
             // The batched viewer poll notices the go-live too, signed in or
             // not; a channel that is also docked costs no extra request.
@@ -319,16 +315,8 @@ pub async fn start(app: AppHandle, target: WatchTarget) {
                 &target.user_name,
             );
         }
-    } else if target.offline {
-        // Offline rooms are Twitch-only; a stale subscription must still go.
-        if previous_was_twitch {
-            app.state::<EventSubServiceState>().0.read().await.disconnect().await;
-        }
-    } else {
-        // A Twitch subscription must not keep firing over a Kick stream.
-        if previous_was_twitch {
-            app.state::<EventSubServiceState>().0.read().await.disconnect().await;
-        }
+    } else if !target.offline {
+        // Offline rooms are Twitch-only.
         tasks.push(tauri::async_runtime::spawn(poll_provider_live(app.clone(), seq)));
     }
     publish_presence(&app, &target).await;
@@ -346,20 +334,19 @@ pub async fn start(app: AppHandle, target: WatchTarget) {
     }
 }
 
-/// End the session. `preserve_backend` hands the channel to MultiNook, which
-/// keeps its EventSub subscription and publishes its own presence.
+/// End the session. `preserve_backend` hands the channel to MultiNook: the
+/// watch socket stays on it until the grid declares its focus
+/// (`set_grid_focus`), and the grid publishes its own presence.
 pub async fn stop(app: AppHandle, preserve_backend: bool) {
     let previous = with_session(|s| s.take());
     crate::services::watch_minutes::set_source(crate::services::watch_minutes::MAIN, None);
     let Some(prev) = previous else { return };
-    let was_twitch = prev.target.provider == "twitch";
     release(prev);
     if preserve_backend {
         return;
     }
-    if was_twitch {
-        app.state::<EventSubServiceState>().0.read().await.disconnect().await;
-    }
+    // Down, unless MultiNook's focused tile holds the socket.
+    aim_watch_socket(&app).await;
     let state = app.state::<AppState>();
     if let Err(e) = discord::idle(&state).await {
         log::debug!("[WatchSession] Could not set idle Discord presence: {e}");
@@ -395,6 +382,184 @@ fn release(session: Session) {
             crate::services::channel_state::unwatch(&login, true).await;
         });
     }
+}
+
+// ---- The watch socket and MultiNook's focus ----------------------------------------
+
+/// The MultiNook tile whose chat the grid shows, as the grid declares it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GridFocus {
+    /// "twitch", "kick", "youtube", "tiktok".
+    pub provider: String,
+    pub login: String,
+    /// Empty while the tile's channel id is not known yet.
+    #[serde(default)]
+    pub user_id: String,
+}
+
+/// A Twitch channel the grid's focus settled on.
+#[derive(Debug, Clone, PartialEq)]
+struct FocusedChannel {
+    id: String,
+    login: String,
+}
+
+/// MultiNook while it is open. `twitch` is the last Twitch tile the focus
+/// settled on: a Kick, YouTube or TikTok tile has no Twitch events, so
+/// focusing one leaves the socket, drops and the predictions set where they
+/// were.
+#[derive(Default)]
+struct Grid {
+    twitch: Option<FocusedChannel>,
+}
+
+static GRID: Mutex<Option<Grid>> = Mutex::new(None);
+/// Bumped by every Twitch focus and by the grid closing, so a focus still
+/// settling gives way to a newer one.
+static GRID_SEQ: AtomicU64 = AtomicU64::new(0);
+/// Clicking through tiles moves the focus several times a second; the socket
+/// follows the tile it settles on.
+const GRID_SETTLE: Duration = Duration::from_millis(250);
+
+/// Every aim runs under this lock, so a session start and a grid focus never
+/// replace each other's connection halfway through its subscribes.
+static SOCKET_AIM: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn with_grid<R>(f: impl FnOnce(&mut Option<Grid>) -> R) -> R {
+    let mut guard = GRID.lock().unwrap_or_else(|e| e.into_inner());
+    f(&mut guard)
+}
+
+/// Whose broadcaster the watch socket follows.
+#[derive(Debug, PartialEq)]
+enum SocketTarget {
+    /// MultiNook's focused Twitch tile.
+    Grid(String),
+    /// The watched Twitch channel (an offline room too: it waits on
+    /// `stream.online`).
+    Session(String),
+}
+
+/// The grid's focused Twitch tile wins while the grid is open: it is what is
+/// on screen, over any solo stream kept behind the grid. EventSub needs a
+/// signed-in user either way.
+fn socket_target(grid_focus: Option<&str>, signed_in: bool, session: Option<&WatchTarget>) -> Option<SocketTarget> {
+    if let Some(id) = grid_focus {
+        return signed_in.then(|| SocketTarget::Grid(id.to_string()));
+    }
+    session
+        .filter(|t| t.provider == "twitch" && t.authenticated && !t.user_id.is_empty())
+        .map(|t| SocketTarget::Session(t.user_id.clone()))
+}
+
+/// Point the watch socket at what it should follow now. A socket that already
+/// follows the right broadcaster is left alone, connected or waiting out a
+/// reconnect: it keeps its subscriptions and heals itself. One that stopped
+/// (a sign-out ends it) no longer counts as following anything.
+async fn aim_watch_socket(app: &AppHandle) {
+    let _serial = SOCKET_AIM.lock().await;
+    let grid_focus = with_grid(|g| g.as_ref().and_then(|g| g.twitch.as_ref()).map(|c| c.id.clone()));
+    let signed_in = grid_focus.is_some() && TwitchService::get_token().await.is_ok();
+    let session = with_session(|s| s.as_ref().map(|s| s.target.clone()));
+    let target = socket_target(grid_focus.as_deref(), signed_in, session.as_ref());
+    let (wanted, from) = match target {
+        Some(SocketTarget::Grid(id)) => (Some(id), "MultiNook's focused tile"),
+        Some(SocketTarget::Session(id)) => (Some(id), "the watched channel"),
+        None => (None, ""),
+    };
+    let eventsub = app.state::<EventSubServiceState>().0.clone();
+    let service = eventsub.read().await;
+    if service.following().await == wanted {
+        return;
+    }
+    match wanted {
+        Some(id) => {
+            log::info!("[WatchSession] watch socket follows {from} ({id})");
+            if let Err(e) = service.connect_and_listen(id, app.clone()).await {
+                log::warn!("[WatchSession] EventSub could not connect: {e}");
+            }
+        }
+        None => {
+            log::info!("[WatchSession] watch socket closed: nothing to follow");
+            service.disconnect().await;
+        }
+    }
+}
+
+/// Record a Twitch focus that settled. `Some(moved)` while the grid is open,
+/// `None` once it has closed.
+fn settle_focus(grid: &mut Option<Grid>, channel: FocusedChannel) -> Option<bool> {
+    let grid = grid.as_mut()?;
+    let moved = grid.twitch.as_ref() != Some(&channel);
+    grid.twitch = Some(channel);
+    Some(moved)
+}
+
+/// MultiNook's chat moved to `focus`, or the grid closed or emptied (`None`).
+/// The watch socket, drops monitoring and the predictions set follow the
+/// grid's focused Twitch tile; closing hands the socket back to the watched
+/// stream, or takes it down. Only the main window's grid declares a focus: a
+/// popout is a chat-only window, not a viewing context, and must not pull the
+/// socket off the stream on screen.
+pub fn set_grid_focus(app: AppHandle, focus: Option<GridFocus>) {
+    let Some(focus) = focus else {
+        let seq = GRID_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+        with_grid(|g| *g = None);
+        // Settles too: a grid that remounts declares its tile again at once,
+        // and the socket should not drop and come back for it.
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(GRID_SETTLE).await;
+            if GRID_SEQ.load(Ordering::Acquire) == seq {
+                aim_watch_socket(&app).await;
+            }
+        });
+        return;
+    };
+    with_grid(|g| {
+        g.get_or_insert_with(Grid::default);
+    });
+    let login = focus.login.trim().to_lowercase();
+    if focus.provider != "twitch" || login.is_empty() {
+        return;
+    }
+    let seq = GRID_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(GRID_SETTLE).await;
+        if GRID_SEQ.load(Ordering::Acquire) != seq {
+            return;
+        }
+        // The grid unregisters a tile from the predictions set by the id it
+        // knows, so only an id it gave is registered there.
+        let declared = !focus.user_id.trim().is_empty();
+        let id = match focus.user_id.trim() {
+            "" => TwitchService::get_user_by_login(&login).await.ok().map(|u| u.id),
+            id => Some(id.to_string()),
+        };
+        let Some(id) = id.filter(|id| !id.is_empty()) else {
+            log::debug!("[WatchSession] MultiNook focus {login} has no channel id");
+            return;
+        };
+        let channel = FocusedChannel { id, login };
+        let moved = with_grid(|g| {
+            if GRID_SEQ.load(Ordering::Acquire) != seq {
+                return None;
+            }
+            settle_focus(g, channel.clone())
+        });
+        let Some(moved) = moved else { return };
+        aim_watch_socket(&app).await;
+        if moved {
+            crate::commands::drops::monitor_watched_channel(&app, channel.id.clone(), channel.login.clone()).await;
+        }
+        if moved && declared {
+            let ws = {
+                let state = app.state::<AppState>();
+                let background = state.background_service.lock().await;
+                background.websocket_service.clone()
+            };
+            ws.lock().await.register_active_channel(&channel.id).await;
+        }
+    });
 }
 
 // ---- EventSub, as it concerns the watched channel ----------------------------------
@@ -860,6 +1025,40 @@ mod tests {
         assert!(current_twitch_watch().is_none());
         with_session(|s| *s = None);
         assert_eq!(is_current_broadcaster("123", "chan"), None);
+    }
+
+    fn target(provider: &str, user_id: &str, authenticated: bool) -> WatchTarget {
+        serde_json::from_value(json!({
+            "provider": provider, "login": "chan", "user_id": user_id, "authenticated": authenticated,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_grid_focus_holds_the_socket_over_the_watched_channel() {
+        let solo = target("twitch", "1", true);
+        assert_eq!(socket_target(Some("2"), true, Some(&solo)), Some(SocketTarget::Grid("2".into())));
+        // No focused Twitch tile (a closed grid, or only Kick focused): the
+        // watched channel has it.
+        assert_eq!(socket_target(None, false, Some(&solo)), Some(SocketTarget::Session("1".into())));
+        // Nothing to subscribe with when signed out.
+        assert_eq!(socket_target(Some("2"), false, Some(&solo)), None);
+        assert_eq!(socket_target(None, false, Some(&target("twitch", "1", false))), None);
+        assert_eq!(socket_target(None, false, Some(&target("twitch", "", true))), None);
+        assert_eq!(socket_target(None, false, Some(&target("kick", "1", true))), None);
+        assert_eq!(socket_target(None, false, None), None);
+    }
+
+    #[test]
+    fn a_settled_focus_moves_only_on_a_new_channel_of_an_open_grid() {
+        let chan = |id: &str| FocusedChannel { id: id.into(), login: format!("c{id}") };
+        let mut grid = None;
+        assert_eq!(settle_focus(&mut grid, chan("1")), None, "a closed grid takes no focus");
+        grid = Some(Grid::default());
+        assert_eq!(settle_focus(&mut grid, chan("1")), Some(true));
+        assert_eq!(settle_focus(&mut grid, chan("1")), Some(false));
+        assert_eq!(settle_focus(&mut grid, chan("2")), Some(true));
+        assert_eq!(grid.unwrap().twitch, Some(chan("2")));
     }
 
     #[test]
