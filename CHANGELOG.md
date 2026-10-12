@@ -1,3 +1,23 @@
+## [8.8.9] - 2026-10-12
+
+### ✨ Features
+- Chat modes show inside the message box. Emote-only, followers-only, sub-only, slow mode and unique chat each get a small icon, the placeholder names the one that limits you, and hovering explains them and says when your role lets you chat anyway. A slow-mode wait counts down on the send button. You can turn this off in Settings > Chat > Chat Input.
+- 7TV profile pictures show everywhere someone has one, and animated ones play by default. In Settings > Chat > Names & Badges, Profile pictures picks 7TV or Twitch pictures and Animation picks Always, On hover or Never.
+- Undo and redo in the stream overlay builder, with Ctrl+Z and Ctrl+Shift+Z.
+- 7TV emote changes show on the stream overlay as their own event, with the emote and who changed it. They can be hidden.
+- The stream overlay has a switch for a channel's custom moderator and VIP badge art. It starts off, so overlays show Twitch's standard badges.
+
+### 🐛 Bug Fixes
+- Kick streams no longer stall every few minutes when Kick refreshes its playlist. TikTok streams got the same fix.
+- The stream overlay in OBS shows the same StreamNook, FrankerFaceZ and other add-on badges as the preview, and a badge changed mid-stream reaches OBS within a few minutes.
+- The overlay preview shows every StreamNook badge instead of the default logo.
+- Renaming a published overlay saves again.
+- Chats opened on a channel you were already in now pick up its chat modes.
+- Profile pictures on Home animate.
+
+### 🔧 Maintenance
+- When StreamNook closes unexpectedly, it writes the reason to its log, so crash reports can be traced.
+
 ## [8.8.8] - 2026-10-12
 
 ### ✨ Features
