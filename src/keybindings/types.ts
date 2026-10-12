@@ -55,4 +55,9 @@ export interface BindableCommand {
    *  false/omitted, key auto-repeat is swallowed so a held key fires once —
    *  important for toggles like mute/play-pause/theatre. */
   repeatable?: boolean;
+  /** For a key the page answers too (Esc closes whatever is open): the
+   *  command runs only after the page has had the key, and only when nothing on
+   *  the way marked it handled (preventDefault or stopPropagation). The key is
+   *  never swallowed for it. */
+  deferred?: boolean;
 }

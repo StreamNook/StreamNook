@@ -11,7 +11,9 @@
 //
 // Hovering opens the flyout; clicking goes straight to Settings > Profile, as
 // the Profile button always did. Connect flows are never run from here except
-// the drops sign-in, which was already a one-click action in this bar.
+// the drops sign-in, which was already a one-click action in this bar, and the
+// Twitch sign-in StreamNook itself asked for: while Rust holds a reason for it,
+// the button says "Sign in again" and a click starts the normal Twitch sign-in.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -26,6 +28,7 @@ import { ProviderMark } from '../ProviderLogo';
 import { SevenTVLogo } from '../emotesets/SevenTVLogo';
 import { providerLabel } from '../../types/providers';
 import { deckGeometry } from '../../utils/markDeck';
+import { signInReasonText, twitchSignInReason } from '../../utils/twitchSignIn';
 import { Logger } from '../../utils/logger';
 
 const FLYOUT_WIDTH = 252;
@@ -76,6 +79,7 @@ export default function AccountStack() {
   const roster = useAccountRosterStore((s) => s.roster);
   const openSettings = useAppStore((s) => s.openSettings);
   const addToast = useAppStore((s) => s.addToast);
+  const loginToTwitch = useAppStore((s) => s.loginToTwitch);
   // The picture already on screen before the roster's first read lands, so the
   // face never blinks to a placeholder at boot.
   const fallbackAvatar = useAppStore((s) => (s.isAuthenticated ? s.currentUser?.profile_image_url : null));
@@ -159,6 +163,12 @@ export default function AccountStack() {
     setOpen(false);
     openSettings('Profile');
   };
+  // The same sign-in Home and Settings run, nothing extra.
+  const signInToTwitch = () => {
+    cancelClose();
+    setOpen(false);
+    void loginToTwitch();
+  };
 
   const main = roster?.main ?? [];
   const extras = roster?.extras ?? [];
@@ -166,18 +176,24 @@ export default function AccountStack() {
   const connectedMain = main.filter((a) => a.status === 'connected');
   const twitchConnected = twitch ? twitch.status === 'connected' : !!fallbackAvatar;
   const avatar = twitch?.status === 'connected' ? twitch.avatar_url : fallbackAvatar;
+  // StreamNook signed you out of Twitch itself and Rust says why.
+  const signInReason = twitchSignInReason(roster);
   // The face is Twitch's; with Twitch signed out, the first connected
-  // platform's picture stands in so the button still says who you are.
-  const face = avatar ?? connectedMain[0]?.avatar_url ?? null;
+  // platform's picture stands in so the button still says who you are. Not
+  // while it says "Sign in again": that is about Twitch, and another
+  // platform's face beside it would point at the wrong account.
+  const face = signInReason ? null : (avatar ?? connectedMain[0]?.avatar_url ?? null);
 
   const drops = extras.find((a) => a.id === 'twitch_drops');
   const anyExpired = main.some((a) => a.status === 'expired');
   const dropsMissing = twitchConnected && drops?.status === 'not_connected';
   const needsAttention = anyExpired || dropsMissing;
 
-  const tooltip = connectedMain.length
-    ? `Signed in to ${connectedMain.map((a) => providerLabel(a.id)).join(', ')}`
-    : 'Sign in';
+  const tooltip = signInReason
+    ? signInReasonText(signInReason)
+    : connectedMain.length
+      ? `Signed in to ${connectedMain.map((a) => providerLabel(a.id)).join(', ')}`
+      : 'Sign in';
 
   return (
     <div
@@ -206,7 +222,7 @@ export default function AccountStack() {
       <button
         ref={anchorRef}
         type="button"
-        onClick={goToProfile}
+        onClick={signInReason ? signInToTwitch : goToProfile}
         aria-label={tooltip}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -226,6 +242,11 @@ export default function AccountStack() {
             />
           )}
         </span>
+        {/* The amber dot plus words: a status, not a chip. The words say what
+            a click does, so a click does exactly that. */}
+        {signInReason && (
+          <span className="whitespace-nowrap pr-0.5 text-[11px] font-medium leading-none">Sign in again</span>
+        )}
         {/* Marks only where platforms mix: one account needs no logo to say
             which platform it is. */}
         {connectedMain.length > 1 && <ConnectedDeck accounts={connectedMain} />}
@@ -244,7 +265,7 @@ export default function AccountStack() {
                 top: menuPos.top,
                 left: menuPos.left,
                 width: FLYOUT_WIDTH,
-                zIndex: 9999,
+                zIndex: 'var(--sn-z-titlebar-menu)',
                 transformOrigin: 'top right',
               }}
               onMouseEnter={cancelClose}
@@ -266,6 +287,7 @@ export default function AccountStack() {
                   const connected = a.status === 'connected';
                   const expired = a.status === 'expired';
                   const label = providerLabel(a.id);
+                  const owed = a.id === 'twitch' ? signInReason : null;
                   return (
                     <div key={a.id} role="menuitem" className="flex items-center gap-2.5 px-2.5 py-[6px]">
                       <ProviderMark provider={a.id} size={12} />
@@ -291,8 +313,20 @@ export default function AccountStack() {
                         {connected && a.handle && a.handle.toLowerCase() !== a.name?.toLowerCase() && (
                           <span className="block truncate text-[10.5px] leading-[14px] text-textMuted">@{a.handle}</span>
                         )}
+                        {/* Why, under the name it is about. Wraps rather than
+                            truncates: the reason is the point of the row. */}
+                        {owed && (
+                          <span className="mt-[2px] flex items-start gap-1.5 text-[10.5px] leading-[14px] text-textMuted">
+                            <span className="mt-[4px] flex flex-shrink-0">
+                              <StatusDot tone="warn" />
+                            </span>
+                            {signInReasonText(owed, 'short')}
+                          </span>
+                        )}
                       </span>
-                      {expired ? (
+                      {owed ? (
+                        <RowAction label="Sign in" onClick={signInToTwitch} />
+                      ) : expired ? (
                         <>
                           <span className="flex flex-shrink-0 items-center gap-1.5 text-[10.5px] leading-none text-textMuted">
                             <StatusDot tone="warn" />

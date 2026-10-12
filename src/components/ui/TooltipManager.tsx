@@ -133,7 +133,7 @@ export const TooltipManager = () => {
 
   return createPortal(
     <div
-      className="pointer-events-none fixed inset-0 z-[99999]"
+      className="pointer-events-none fixed inset-0 z-[var(--sn-z-tooltip)]"
       style={{ isolation: "isolate" }}
     >
       <AnimatePresence>

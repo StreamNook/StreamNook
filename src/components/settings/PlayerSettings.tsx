@@ -17,6 +17,7 @@ import { reportCodecPreference } from '../../utils/codecPreference';
 import { invoke } from '@tauri-apps/api/core';
 import { thenRun, useSettingReset } from './settingReset';
 import { AUTO_GAP } from '../../utils/latency';
+import { TitleBarTuckPreview } from './TitleBarTuckPreview';
 
 const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
   <button
@@ -663,6 +664,31 @@ const PlayerSettings = () => {
               />
             }
           />
+        )}
+
+        {/* Desktop only: the phone has no title bar to hide. */}
+        {!IS_MOBILE && (
+          <SettingsRow
+            title="Title bar auto-hide"
+            onReset={resetFor(['video_player.hide_title_bar_while_watching', false])}
+            description="Slides away while a stream plays, so the picture fills the window; move the mouse to the top edge to bring it back."
+            control={
+              <Toggle
+                enabled={videoPlayer?.hide_title_bar_while_watching ?? false}
+                onChange={() =>
+                  updateSettings({
+                    ...settings,
+                    video_player: {
+                      ...videoPlayer,
+                      hide_title_bar_while_watching: !(videoPlayer?.hide_title_bar_while_watching ?? false),
+                    },
+                  })
+                }
+              />
+            }
+          >
+            <TitleBarTuckPreview />
+          </SettingsRow>
         )}
 
         {/* The phone's player does not sample the picture (per-frame readback

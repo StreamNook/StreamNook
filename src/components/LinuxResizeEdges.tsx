@@ -21,10 +21,12 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Logger } from '../utils/logger';
 import type { WindowFlags } from '../utils/windowFrameState';
+import { LINUX_RESIZE_CORNER_PX, LINUX_RESIZE_EDGE_PX } from '../utils/windowResizeEdges';
 
-/** How many CSS pixels of the window's edge answer as the border. */
-const EDGE = 6;
-const CORNER = 12;
+/** How many CSS pixels of the window's edge answer as the border. Shared, so
+ *  the title bar's top-edge reveal can reach past it. */
+const EDGE = LINUX_RESIZE_EDGE_PX;
+const CORNER = LINUX_RESIZE_CORNER_PX;
 
 /** `startResizeDragging`'s argument; the API declares the type but does not export it. */
 type ResizeDirection = Parameters<ReturnType<typeof getCurrentWindow>['startResizeDragging']>[0];

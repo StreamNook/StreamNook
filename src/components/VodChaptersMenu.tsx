@@ -34,7 +34,7 @@ const VodChaptersMenu = forwardRef<
       data-no-wheel-volume
       role="menu"
       aria-label="Chapters"
-      className="stats-hud absolute bottom-16 left-3 z-[60] w-80 max-h-[60%] overflow-y-auto scrollbar-thin rounded-xl p-2"
+      className="player-fs-popover stats-hud absolute bottom-16 left-3 z-[60] w-80 max-h-[60%] overflow-y-auto scrollbar-thin rounded-xl p-2"
     >
       <div className="px-2 pb-1.5 pt-1 text-[11px] font-semibold uppercase tracking-wider text-textSecondary">
         Chapters

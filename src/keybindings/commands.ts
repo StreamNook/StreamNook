@@ -12,6 +12,8 @@ import { getChatModController } from './chatModController';
 import { getChatSearchController } from './chatSearchController';
 import { getPaneFocusController } from './paneFocusController';
 import { IS_MAC } from '../utils/platform';
+import { exitPlayerFullscreen } from '../utils/windowFullscreen';
+import { escapeHasOwner } from './escapeOwner';
 import type { BindableCommand } from './types';
 
 const app = () => useAppStore.getState();
@@ -156,7 +158,9 @@ function build(): BindableCommand[] {
       // Cmd (see chord.ts), and modifier order is Ctrl, Alt, Shift, Meta.
       defaultBindings: IS_MAC ? ['Ctrl+Meta+F'] : ['F11'],
       keywords: 'fullscreen full screen borderless taskbar immersive window maximize theater theatre cinema',
-      run: () => app().toggleWindowFullscreen(),
+      // In the player's own full screen the window is full screen through the
+      // player, so leave through the player and the two stay in step.
+      run: () => (app().isPlayerFullscreen ? exitPlayerFullscreen() : app().toggleWindowFullscreen()),
     },
     {
       id: 'window.toggleKeepOnTop',
@@ -284,6 +288,23 @@ function build(): BindableCommand[] {
       keywords: 'fullscreen full screen',
       isAvailable: isPlayerControllable,
       run: () => pc()?.toggleFullscreen(),
+    },
+    {
+      id: 'player.exitFullscreen',
+      label: 'Exit full screen',
+      description: "Leave the player's full screen. An open menu, dialog or text field keeps Esc for itself.",
+      category: 'Player',
+      // Global rather than player: a MultiNook tile's full screen has no
+      // single player behind the player context, and Esc has to leave it too.
+      context: 'global',
+      defaultBindings: ['Esc'],
+      keywords: 'escape exit leave fullscreen full screen',
+      // Plyr's own Esc goes with its keyboard handling, which StreamNook turns
+      // off (it owns the player keys). Deferred, so whatever else is open and
+      // answers Esc (a menu, a popover, a dialog) gets the press first.
+      deferred: true,
+      isAvailable: () => app().isPlayerFullscreen && !escapeHasOwner(),
+      run: () => exitPlayerFullscreen(),
     },
     {
       id: 'cs.toggleTheatre',

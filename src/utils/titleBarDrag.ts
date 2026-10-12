@@ -2,6 +2,7 @@ import type React from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Logger } from './logger';
+import { shouldDoubleClickMaximize, shouldStartWindowDrag } from './titleBarTuck';
 
 /**
  * Pixels the pointer must travel before a MAXIMIZED window is handed to the OS drag
@@ -56,6 +57,7 @@ const beginDrag = () => {
 export const handleTitleBarMouseDown = (
   event: React.MouseEvent<HTMLElement>,
   isMaximized: boolean,
+  { fullscreen = false }: { fullscreen?: boolean } = {},
 ) => {
   if (event.button !== 0) return;
   if (event.target !== event.currentTarget) return;
@@ -63,11 +65,14 @@ export const handleTitleBarMouseDown = (
   event.preventDefault();
 
   if (event.detail === 2) {
+    if (!shouldDoubleClickMaximize({ fullscreen })) return;
     import('@tauri-apps/api/window')
       .then(({ getCurrentWindow }) => getCurrentWindow().toggleMaximize())
       .catch((error) => Logger.error('[TitleBar] Failed to toggle maximize:', error));
     return;
   }
+
+  if (!shouldStartWindowDrag({ fullscreen })) return;
 
   if (!isMaximized) {
     beginDrag();

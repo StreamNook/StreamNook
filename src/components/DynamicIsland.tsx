@@ -6,6 +6,8 @@ import { X, SpeakerSlash, Trash, PuzzlePiece, Package, Gift, Sparkle } from 'pho
 import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../stores/AppStore';
+import { useTitleBarLifted } from '../hooks/useTitleBarAutoHide';
+import { exitPlayerFullscreenForBarAction } from '../utils/windowFullscreen';
 import { requestChangelog } from '../utils/changelogEvents';
 import { Logger } from '../utils/logger';
 import { formatBadgeDateInfo } from '../utils/badgeWindow';
@@ -14,6 +16,8 @@ import { playNotificationSound as playGatedNotificationSound } from '../utils/no
 import { liveActivityText } from '../utils/liveActivity';
 import { Tooltip } from './ui/Tooltip';
 import { ProviderIcon } from './overlay/ProviderIcon';
+import { SevenTvAvatar } from './SevenTvAvatar';
+import { islandSurfaceGeometry } from '../utils/islandGeometry';
 import type { ProviderId } from '../types/providers';
 import type {
     DynamicIslandNotification,
@@ -78,6 +82,8 @@ interface LiveNotificationFromBackend {
     notification_id: string;
     providers: ProviderId[];
     merge_into: string | null;
+    /** The streamer's 7TV cosmetics id, keyed by Rust for their platform. */
+    seventv_id?: string | null;
 }
 
 interface BundleUpdateStatus {
@@ -185,13 +191,14 @@ const renderPreviewIcon = (n: DynamicIslandNotification): React.ReactNode => {
         case 'live': {
             const d = n.data as LiveNotificationData;
             return d.streamer_avatar
-                ? <img src={d.streamer_avatar} alt="" className="w-4 h-4 rounded-full object-cover flex-shrink-0" />
+                ? <SevenTvAvatar cosmeticsId={d.seventv_id} px={16} src={d.streamer_avatar} alt="" className="w-4 h-4 rounded-full object-cover flex-shrink-0" />
                 : <div className="w-1.5 h-1.5 bg-red-500 rounded-full flex-shrink-0" />;
         }
         case 'whisper': {
             const d = n.data as WhisperNotificationData;
+            // Whispers are Twitch's, so the sender id is a bare Twitch id.
             return d.profile_image_url
-                ? <img src={d.profile_image_url} alt="" className="w-4 h-4 rounded-full object-cover flex-shrink-0" />
+                ? <SevenTvAvatar cosmeticsId={d.from_user_id} px={16} src={d.profile_image_url} alt="" className="w-4 h-4 rounded-full object-cover flex-shrink-0" />
                 : <MessageCircle size={11} className="text-purple-400 flex-shrink-0" />;
         }
         case 'update':
@@ -286,6 +293,11 @@ const DynamicIsland = () => {
     const { startStream, openWhisperWithUser, openSettings, addToast, setShowDropsOverlay, setShowBadgesOverlay } = useAppStore.getState();
     const settings = useAppStore((s) => s.settings);
     const isSettingsOpen = useAppStore((s) => s.isSettingsOpen);
+    const isPlayerFullscreen = useAppStore((s) => s.isPlayerFullscreen);
+    // The bar lifts over the player in its tucking modes and in the player's
+    // full screen; the surface grows out of the bar's door, so it lifts with
+    // it or the door would draw over it.
+    const barLifted = useTitleBarLifted();
 
     // Two homes, and which one is right changes as you navigate.
     //
@@ -325,6 +337,16 @@ const DynamicIsland = () => {
             const gap = bar ? parseFloat(getComputedStyle(bar).columnGap) || 0 : 0;
             const roomLeft = leftCluster ? leftCluster.getBoundingClientRect().right + gap : 8;
             const roomRight = rightCluster ? rightCluster.getBoundingClientRect().left - gap : window.innerWidth - 8;
+            // The title bar slides up out of sight while it is tucked, and a rect
+            // read then carries that slide, which opened the surface above the
+            // window. Measure against where the bar rests instead: its layout box
+            // (offsetTop ignores transforms) against where it is painted now.
+            const titleBar = slot.closest<HTMLElement>('[data-titlebar]');
+            const barShift = titleBar
+                ? titleBar.getBoundingClientRect().top
+                    - titleBar.offsetTop
+                    - (titleBar.offsetParent?.getBoundingClientRect().top ?? 0)
+                : 0;
             // Joined into the strip, the thing being filled is the STRIP, so the
             // geometry is the strip's pill and not the trigger's own box: same
             // top, same height, and `cover` is its full width. Anchoring to the
@@ -342,7 +364,7 @@ const DynamicIsland = () => {
             const pillR = pill?.getBoundingClientRect();
             if (pillR && pillR.width > 0) {
                 setAnchor({
-                    left: pillR.left, top: pillR.top,
+                    left: pillR.left, top: pillR.top - barShift,
                     width: Math.max(0, r.right - pillR.left),
                     height: pillR.height,
                     cover: pillR.width,
@@ -356,7 +378,7 @@ const DynamicIsland = () => {
                 return;
             }
             setAnchor({
-                left: r.left, top: r.top,
+                left: r.left, top: r.top - barShift,
                 width: r.width || 72, height: r.height || 34,
                 cover: 0,
                 radius: 0,
@@ -653,6 +675,7 @@ const DynamicIsland = () => {
                             stream_title: data.stream_title,
                             is_live: true,
                             providers: data.providers,
+                            seventv_id: data.seventv_id ?? undefined,
                         } as LiveNotificationData,
                     });
                 }
@@ -1278,7 +1301,7 @@ const DynamicIsland = () => {
         };
     }, [notificationsEnabled, showFavoriteDropsNotifications, useDynamicIsland, useToast, addNotification, addToast, soundEnabled, playNotificationSound, setShowDropsOverlay, sendNativeNotification]);
 
-    // Click outside to close
+    // Click outside, or Esc, to close
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
             // The trigger lives in the title bar now, outside islandRef, so
@@ -1290,12 +1313,34 @@ const DynamicIsland = () => {
             }
         };
 
+        // Esc closes it too, unless the key belongs to a text field outside
+        // the panel. Marked handled, so nothing else that answers Esc (leaving
+        // the player's full screen) takes the same press.
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key !== 'Escape' || event.defaultPrevented) return;
+            const target = event.target;
+            const inPanel = target instanceof Node && !!islandRef.current?.contains(target);
+            if (
+                !inPanel &&
+                target instanceof HTMLElement &&
+                (target.isContentEditable || !!target.closest('input, textarea, select'))
+            ) {
+                return;
+            }
+            event.preventDefault();
+            setIsExpanded(false);
+            // Keyboard focus inside the panel goes back to the door it opened from.
+            if (islandRef.current?.contains(document.activeElement)) triggerRef.current?.focus();
+        };
+
         if (isExpanded) {
             document.addEventListener('mousedown', handleClickOutside);
+            document.addEventListener('keydown', handleKeyDown);
         }
 
         return () => {
             document.removeEventListener('mousedown', handleClickOutside);
+            document.removeEventListener('keydown', handleKeyDown);
         };
     }, [isExpanded]);
 
@@ -1492,26 +1537,32 @@ const DynamicIsland = () => {
         const t = setTimeout(() => setSurfaceShown(false), 340);
         return () => clearTimeout(t);
     }, [wantsSurface]);
-    // The surface never runs over the title bar's icon clusters. Covering the
-    // strip it already has the strip's bounds. Standalone it grows from the
-    // door's centre, so its width is capped at the room between the clusters,
-    // and when the door sits off-centre in that room (a wide left cluster
-    // pushes it right) the surface slides back inside rather than shrinking to
-    // twice the short side.
+    // In the bar row the surface never runs over the title bar's icon
+    // clusters. Covering the strip it already has the strip's bounds.
+    // Standalone it grows from the door's centre, so its width is capped at the
+    // room between the clusters, and when the door sits off-centre in that room
+    // (a wide left cluster pushes it right) the surface slides back inside
+    // rather than shrinking to twice the short side. Open as a list where that
+    // room is too narrow to read (a narrow window, Compact View), it drops below
+    // the bar row at a usable width instead (utils/islandGeometry.ts).
     const surfaceTargetWidth = isExpanded
         ? (anchor?.cover || expandedWidth)
         : wantsSurface
             ? getCollapsedWidth()
             : (anchor?.width ?? 72);
-    let surfaceWidth = surfaceTargetWidth;
-    let surfaceShift = 0;
-    if (anchor && !anchor.cover) {
-        const room = Math.max(anchor.width, anchor.roomRight - anchor.roomLeft);
-        surfaceWidth = Math.min(surfaceTargetWidth, room);
-        const centredLeft = anchor.left + anchor.width / 2 - surfaceWidth / 2;
-        const left = Math.max(anchor.roomLeft, Math.min(centredLeft, anchor.roomRight - surfaceWidth));
-        surfaceShift = left - centredLeft;
-    }
+    const {
+        width: surfaceWidth,
+        shift: surfaceShift,
+        drop: surfaceDrop,
+        maxHeight: surfaceMaxHeight,
+    } = islandSurfaceGeometry({
+        anchor,
+        targetWidth: surfaceTargetWidth,
+        expanded: isExpanded,
+        panelWidth: expandedWidth,
+        viewportWidth: windowSize.width,
+        viewportHeight: windowSize.height,
+    });
 
     const shown = notifications.slice(0, 3);
     const hasSeveralDays = new Set(notifications.map((n) => groupLabel(n.timestamp))).size > 1;
@@ -1527,6 +1578,7 @@ const DynamicIsland = () => {
                         ref={triggerRef}
                         type="button"
                         aria-label="Notifications"
+                        aria-expanded={isExpanded}
                         data-tauri-drag-region="false"
                         onClick={() => setIsExpanded((v) => !v)}
                         className={
@@ -1586,7 +1638,14 @@ const DynamicIsland = () => {
                 // trapped in the title bar's stacking context, and still lifted
                 // to z-[55] over the settings blur overlay.
                 className={`fixed ${isSettingsOpen ? 'z-[55]' : 'z-50'}`}
+                // While the bar is lifted over the player the surface takes the
+                // bar's menu layer, above the door it grows from. Over the
+                // player's full screen only the open panel does (previews stay
+                // under the video), and anything in it that navigates leaves
+                // full screen first, like the bar itself.
+                onClickCapture={isPlayerFullscreen ? (e) => exitPlayerFullscreenForBarAction(e.target) : undefined}
                 style={{
+                    zIndex: barLifted && (isExpanded || !isPlayerFullscreen) ? 'var(--sn-z-titlebar-menu)' : undefined,
                     // Anchored to the trigger's LEFT edge only when there is a
                     // nav to the right of it to take over: that is the whole
                     // point of growing that way. In a stream view Home is
@@ -1635,14 +1694,16 @@ const DynamicIsland = () => {
                         // shrinks back INTO it rather than blinking out.
                         width: surfaceWidth,
                         // Only ever non-zero standalone, where the surface is
-                        // held inside the room between the clusters. The same
-                        // spring as the width, so the two travel as one.
+                        // held inside the room between the clusters, or for a
+                        // list that opens below the bar row. The same spring as
+                        // the width, so they travel as one.
                         x: surfaceShift,
+                        y: surfaceDrop,
                         // Collapsed pill sits centered in the title bar. The bar is
                         // h-[40px] (less a 1px bottom border); container at top-1.5 (6px)
                         // + a 28px pill leaves an even gap above and below.
                         height: isExpanded
-                            ? Math.min(maxHeight, 64 + notifications.length * itemHeight)
+                            ? Math.min(maxHeight, surfaceMaxHeight ?? Infinity, 64 + notifications.length * itemHeight)
                             : (anchor?.height ?? 28),
                     }}
                     // One spring, both directions. The collapse was never the
@@ -1769,6 +1830,9 @@ const DynamicIsland = () => {
                                                 }}
                                                 className="sn-notif-action"
                                                 aria-label="Mark all read"
+                                                // Changes nothing on screen behind the
+                                                // panel, so it keeps the player's full screen.
+                                                data-keeps-player-fullscreen
                                             >
                                                 <CheckCheck size={15} />
                                             </button>
@@ -1784,6 +1848,7 @@ const DynamicIsland = () => {
                                                 }}
                                                 className="sn-notif-action sn-notif-action--danger"
                                                 aria-label="Clear all"
+                                                data-keeps-player-fullscreen
                                             >
                                                 <Trash size={15} />
                                             </button>
@@ -1822,6 +1887,17 @@ const DynamicIsland = () => {
                                                     animate={{ opacity: 1, y: 0 }}
                                                     exit={{ opacity: 0, x: -100 }}
                                                     onClick={() => handleNotificationClick(notification)}
+                                                    // A row is a control: it opens what it
+                                                    // announces. As a button it is reachable
+                                                    // by keyboard, and a click on it leaves
+                                                    // the player's full screen first.
+                                                    role="button"
+                                                    tabIndex={0}
+                                                    onKeyDown={(e) => {
+                                                        if (e.key !== 'Enter' && e.key !== ' ') return;
+                                                        e.preventDefault();
+                                                        void handleNotificationClick(notification);
+                                                    }}
                                                     className={`sn-notif-row group ${
                                                         notification.read ? '' : 'sn-notif-row--unread'
                                                     }`}
@@ -1831,7 +1907,10 @@ const DynamicIsland = () => {
                                                             {/* Live notification */}
                                                             <div className="relative flex-shrink-0">
                                                                 {(notification.data as LiveNotificationData).streamer_avatar ? (
-                                                                    <img
+                                                                    <SevenTvAvatar
+                                                                        cosmeticsId={(notification.data as LiveNotificationData).seventv_id}
+                                                                        px={34}
+                                                                        motion="hover"
                                                                         src={(notification.data as LiveNotificationData).streamer_avatar}
                                                                         alt=""
                                                                         className="w-[34px] h-[34px] rounded-full object-cover"
@@ -1875,7 +1954,10 @@ const DynamicIsland = () => {
                                                             {/* Whisper notification */}
                                                             <div className="relative flex-shrink-0">
                                                                 {(notification.data as WhisperNotificationData).profile_image_url ? (
-                                                                    <img
+                                                                    <SevenTvAvatar
+                                                                        cosmeticsId={(notification.data as WhisperNotificationData).from_user_id}
+                                                                        px={34}
+                                                                        motion="hover"
                                                                         src={(notification.data as WhisperNotificationData).profile_image_url}
                                                                         alt=""
                                                                         className="w-[34px] h-[34px] rounded-full object-cover"

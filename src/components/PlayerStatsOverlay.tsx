@@ -291,7 +291,7 @@ const PlayerStatsOverlay = ({ hlsRef, videoRef, open, onToggle, onGoLive, adSour
       // Opt this panel out of the player's wheel/middle-click volume handling —
       // it's a draggable HUD, not part of the video surface.
       data-no-wheel-volume
-      className={`absolute z-50 w-56 pointer-events-auto ${pos ? '' : 'bottom-16 left-4'}`}
+      className={`player-fs-popover absolute z-50 w-56 pointer-events-auto ${pos ? '' : 'bottom-16 left-4'}`}
       style={pos ? { left: pos.x, top: pos.y } : undefined}
     >
       <div className="stats-hud px-3.5 py-3 text-xs text-textPrimary">

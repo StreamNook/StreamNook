@@ -1,18 +1,21 @@
+import { invoke } from '@tauri-apps/api/core';
 import { Logger } from './logger';
-import { IS_MAC } from './platform';
 import type Plyr from 'plyr';
+import { barClickExitsPlayerFullscreen } from './titleBarTuck';
 
-// Win32 quirk: a borderless window (decorations: false) that is WS_MAXIMIZE
-// keeps its maximized chrome/taskbar visible even after setFullscreen(true).
-// Track whether the window was maximized going in so we can restore it on exit.
-//
-// macOS never takes this path. There the window is decorated and
-// `toggleFullScreen:` is an animated transition AppKit owns: zooming the
-// window right before or right after it fights that transition, and when
-// AppKit refuses the entry the window keeps reporting itself full screen
-// while it is not, so every later toggle does nothing until the green
-// button is used.
-let restoreMaximizedAfterFullscreen = false;
+/**
+ * Put the window into full screen or take it out (no argument toggles), and
+ * resolve to whether it is full screen afterwards.
+ *
+ * Rust owns the trip (`set_window_fullscreen`, commands/window_state.rs) for
+ * both of the app's full screens, so the window comes back maximized if it
+ * went in maximized whichever full screen it leaves from. A borderless window
+ * that is maximized keeps the taskbar over it even in full screen, so Rust
+ * restores it on the way in and maximizes it again on the way out (never on
+ * macOS, where AppKit owns an animated transition that refuses a zoom).
+ */
+export const setWindowFullscreen = (fullscreen?: boolean): Promise<boolean> =>
+  invoke<boolean>('set_window_fullscreen', { fullscreen: fullscreen ?? null });
 
 /**
  * Promote (or demote) the Tauri window to true OS fullscreen in lockstep with
@@ -34,38 +37,17 @@ export const syncTauriWindowFullscreen = async (entering: boolean): Promise<void
     /* store not ready: nothing to overlay yet */
   }
   try {
-    const { getCurrentWindow, currentMonitor, PhysicalPosition } = await import('@tauri-apps/api/window');
-    const win = getCurrentWindow();
-    if (entering) {
-      // A player taking over from the previous one enters on a window that is
-      // already full screen; the maximize bookkeeping from the first entry
-      // has to survive it.
-      if (await win.isFullscreen()) return;
-      restoreMaximizedAfterFullscreen = !IS_MAC && (await win.isMaximized());
-      if (restoreMaximizedAfterFullscreen) {
-        await win.unmaximize();
-      }
-      await win.setFullscreen(true);
-    } else {
+    if (!entering) {
       // If the app is in its own borderless full-screen mode, the player only
       // borrowed an already-fullscreen window. Leave the window fullscreen on
       // exit so closing the video doesn't kick the whole app back to windowed.
       const { useAppStore } = await import('../stores/AppStore');
       if (useAppStore.getState().isWindowFullscreen) return;
-      await win.setFullscreen(false);
-      if (restoreMaximizedAfterFullscreen) {
-        // After repeated fullscreen→exit cycles, Win32's saved restore
-        // placement can drift, leaving the next maximize() bound to the
-        // wrong rect (window ends up partially off-screen). Anchor to the
-        // current monitor's origin first so maximize() snaps to its work area.
-        const monitor = await currentMonitor();
-        if (monitor) {
-          await win.setPosition(new PhysicalPosition(monitor.position.x, monitor.position.y));
-        }
-        await win.maximize();
-        restoreMaximizedAfterFullscreen = false;
-      }
     }
+    // A player taking over from the previous one enters on a window that is
+    // already full screen. Rust leaves such a window alone, so the maximize
+    // remembered on the first entry survives the hand-over.
+    await setWindowFullscreen(entering);
   } catch (err) {
     Logger.error('[Fullscreen] Failed to sync Tauri window:', err);
   }
@@ -107,4 +89,43 @@ export const claimPlayerFullscreen = (player: Plyr): void => {
   clearTimeout(fullscreenHandoff);
   fullscreenHandoff = null;
   player.fullscreen.enter();
+};
+
+/**
+ * Leave the player's own full screen through the player, so its exitfullscreen
+ * event runs the usual bridge (syncTauriWindowFullscreen) and the window and
+ * Plyr stay in step. Plyr keeps its instance on the media element.
+ */
+export const exitPlayerFullscreen = (): void => {
+  const media = document.querySelector<HTMLMediaElement & { plyr?: Plyr }>(
+    '.plyr--fullscreen-fallback video, .plyr--fullscreen-fallback audio',
+  );
+  const player = media?.plyr;
+  if (player?.fullscreen?.active) {
+    player.fullscreen.exit();
+    return;
+  }
+  // Mid hand-off (the old player gone, the next not built yet): nothing to
+  // exit through, so end the hand-off and the window's full screen directly.
+  if (fullscreenHandoff) {
+    clearTimeout(fullscreenHandoff);
+    fullscreenHandoff = null;
+  }
+  void syncTauriWindowFullscreen(false);
+};
+
+const ACTIONABLE = 'button, a[href], [role="button"], [role="menuitem"], [role="menuitemradio"], [role="option"], [role="tab"], [role="link"]';
+
+/** For a click inside the title bar or a menu it opened, while the player is
+ *  full screen: leaves full screen first when the click changes the page. */
+export const exitPlayerFullscreenForBarAction = (target: EventTarget | null): void => {
+  if (!(target instanceof Element)) return;
+  const control = target.closest(ACTIONABLE);
+  const exits = barClickExitsPlayerFullscreen({
+    playerFullscreen: true,
+    actionable: !!control,
+    opensMenu: !!control && (control.hasAttribute('aria-expanded') || control.hasAttribute('aria-haspopup')),
+    keepsFullscreen: !!target.closest('[data-keeps-player-fullscreen]'),
+  });
+  if (exits) exitPlayerFullscreen();
 };

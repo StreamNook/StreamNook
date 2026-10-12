@@ -73,6 +73,8 @@ export const MultiNookTileMenu: React.FC = () => {
     if (!isOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
+      // Handled: the same press must not also leave the tile's full screen.
+      e.preventDefault();
       setCopied(false);
       closeMenu();
     };

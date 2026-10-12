@@ -107,6 +107,8 @@ import {
 } from '../utils/playerMouseControls';
 import { PlayerVolumeOsd } from './PlayerVolumeOsd';
 import { useVolumeOsd } from '../hooks/useVolumeOsd';
+import { SevenTvAvatar } from './SevenTvAvatar';
+import { sevenTvIdForStream } from '../services/sevenTvPictures';
 
 // Per-channel learned cushion (LL path), relative to the viewer's chosen target. The
 // `base` is the user's target latency converted to the real (raw) cushion. The
@@ -491,7 +493,10 @@ const VideoPlayer = () => {
   useEffect(() => {
     if (!audioPanelOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setAudioPanelOpen(false);
+      if (e.key !== 'Escape') return;
+      // Handled: the same press must not also leave full screen.
+      e.preventDefault();
+      setAudioPanelOpen(false);
     };
     const onDown = (e: MouseEvent) => {
       const panel = audioPanelRef.current;
@@ -2855,7 +2860,10 @@ const VideoPlayer = () => {
   useEffect(() => {
     if (!chaptersOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setChaptersOpen(false);
+      if (e.key !== 'Escape') return;
+      // Handled: the same press must not also leave full screen.
+      e.preventDefault();
+      setChaptersOpen(false);
     };
     const onDown = (e: MouseEvent) => {
       const panel = chaptersMenuRef.current;
@@ -3303,7 +3311,10 @@ const VideoPlayer = () => {
                   VODs, clips, and offline chat, where it would be a lie. */}
               <div className="flex items-center gap-2 min-w-0">
                 {currentStream.profile_image_url ? (
-                  <img
+                  <SevenTvAvatar
+                    cosmeticsId={sevenTvIdForStream(currentStream)}
+                    px={28}
+                    motion="animate"
                     src={currentStream.profile_image_url}
                     alt=""
                     draggable={false}
@@ -3694,7 +3705,7 @@ const VideoPlayer = () => {
             onMouseDown={(e) => e.stopPropagation()}
             onContextMenu={(e) => e.preventDefault()}
             data-no-wheel-volume
-            className="liquid-glass-panel absolute bottom-16 right-3 z-[60] rounded-xl p-4"
+            className="player-fs-popover liquid-glass-panel absolute bottom-16 right-3 z-[60] rounded-xl p-4"
             style={{ width: 'min(460px, calc(100% - 24px))' }}
           >
             <AudioBoostControls

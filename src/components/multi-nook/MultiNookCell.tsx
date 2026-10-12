@@ -421,7 +421,10 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
   useEffect(() => {
     if (!boostPanelOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setBoostPanelOpen(false);
+      if (e.key !== 'Escape') return;
+      // Handled: the same press must not also leave the tile's full screen.
+      e.preventDefault();
+      setBoostPanelOpen(false);
     };
     const onDown = (e: MouseEvent) => {
       const target = e.target as Node;
