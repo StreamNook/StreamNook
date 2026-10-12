@@ -652,6 +652,38 @@ pub async fn fetch_channel_badges(channel_id: String) -> Result<HelixBadgesRespo
     Ok(badges)
 }
 
+/// A channel's FrankerFaceZ moderator and VIP art at 72 px (Twitch's 4x),
+/// finished the way chat draws it, whatever the viewer's own chat setting.
+/// The stream overlay has its own switch for this art, so its preview asks
+/// here instead of reading the chat's badge set.
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct FfzRoomRoleArtDto {
+    pub moderator: Option<String>,
+    pub vip: Option<String>,
+}
+
+impl FfzRoomRoleArtDto {
+    fn from_art(art: &crate::services::ffz_room_badges::RoomRoleArt) -> Self {
+        let x4 = |role: &Option<crate::services::ffz_room_badges::RoleArt>| {
+            role.as_ref().map(|r| r.x4.clone()).filter(|u| !u.is_empty())
+        };
+        Self { moderator: x4(&art.moderator), vip: x4(&art.vip) }
+    }
+}
+
+/// How long the overlay preview waits on a room it has not read yet.
+const ROLE_ART_READ_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+#[tauri::command]
+pub async fn get_ffz_room_role_art(channel_id: String) -> Result<Option<FfzRoomRoleArtDto>, String> {
+    if let Some(read) = crate::services::ffz_room_badges::refresh(&channel_id) {
+        let _ = tokio::time::timeout(ROLE_ART_READ_WAIT, read).await;
+    }
+    Ok(crate::services::ffz_room_badges::cached(&channel_id)
+        .map(|art| FfzRoomRoleArtDto::from_art(&art))
+        .filter(|dto| dto.moderator.is_some() || dto.vip.is_some()))
+}
+
 /// Get user's badges for a specific channel
 /// Returns a badge string in the format "badge1/version1,badge2/version2"
 /// Note: This uses the /users endpoint to get broadcaster_type and constructs badges from that

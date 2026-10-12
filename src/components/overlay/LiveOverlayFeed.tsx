@@ -6,7 +6,8 @@
 // resolve the same way the real chat row does; everything renders through the
 // SAME twin renderer the OBS overlay uses.
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { helixGet } from '../../services/helix';
 import {
   acquireChannel,
@@ -17,14 +18,23 @@ import { makeKey, parseKey } from '../../utils/providerKey';
 import { badgeSourceKey, HOMIES_CUSTOM_SOURCE } from '../../utils/chatterBadges';
 import { parseBadges } from '../../services/twitchBadges';
 import { useChatUserStore } from '../../stores/chatUserStore';
-import { isStreamNookUser, getStreamNookUserNumber, getActiveCosmeticSlug } from '../../services/supabaseService';
+import {
+  isStreamNookUser,
+  getStreamNookUserNumber,
+  getActiveCosmeticSlug,
+  getCosmeticBySlug,
+  getCosmeticsVersion,
+  subscribeCosmeticsVersion,
+} from '../../services/supabaseService';
 import { getBadgeImageUrl } from '../../services/seventvService';
-import { COSMETIC_ASSET_BY_SLUG } from '../cosmeticAssets';
+import { resolveCosmeticAsset } from '../cosmeticAssets';
 import { getAtmosphere } from '../../services/atmospheres';
 import type { Atmosphere } from '../../services/atmospheres';
 import type { BackendChatMessage } from '../../services/twitchChat';
 import type { ProviderId } from '../../types/providers';
 import { OverlayChat } from './OverlayChat';
+import { createSourceHolds } from './liveSourceHolds';
+import { isSystemRow, overlayTwitchBadgeUrl, systemRowForOverlay, type RoomRoleArt } from './liveOverlayRows';
 import type { OverlayMessage, OverlayAtmosphere } from './sampleMessages';
 import type { OverlayStyle } from './overlayConfig';
 
@@ -52,9 +62,6 @@ type UsersMap = ReturnType<typeof useChatUserStore.getState>['users'];
 // The chat store's slice key: bare login for Twitch, composite for the rest.
 const sliceKeyFor = (provider: ProviderId, channel: string): string =>
   provider === 'twitch' ? channel.trim().toLowerCase() : makeKey(provider, channel.trim());
-
-const twitchBadgeUrl = (info: { localUrl?: string; url?: string; image_url_4x?: string; image_url_2x?: string; image_url_1x?: string }): string | undefined =>
-  info.localUrl || info.image_url_4x || info.image_url_2x || info.image_url_1x || info.url;
 
 // Real send time (ms). Twitch stamps `tmi-sent-ts`; others carry an ISO timestamp.
 const sentAt = (m: BackendChatMessage): number => {
@@ -91,17 +98,23 @@ async function resolveTwitchId(login: string): Promise<string | null> {
 // already carry baked badge images + an avatar. Cosmetics (paint/7TV badge/
 // third-party) come from the shared user store; StreamNook membership from the
 // identity registry (Twitch-keyed, so non-Twitch chatters simply have none).
-function adapt(m: BackendChatMessage, users: UsersMap): OverlayMessage {
+function adapt(
+  m: BackendChatMessage,
+  users: UsersMap,
+  roleArtFor: (roomId: string | undefined) => RoomRoleArt | null | undefined,
+): OverlayMessage {
   const provider = m.provider ?? 'twitch';
   const rawBadges = Array.isArray(m.badges) ? m.badges : [];
   let badges = rawBadges;
   if (provider === 'twitch' && rawBadges.length > 0) {
     const roomId = m.tags?.['room-id'];
+    const roleArt = roleArtFor(roomId);
     const resolved = parseBadges(rawBadges.map((b) => `${b.name}/${b.version}`).join(','), roomId)
       .filter((r) => r.info)
       .map((r) => {
         const [name, version] = r.key.split('/');
-        return { name, version, image_url_4x: twitchBadgeUrl(r.info), title: r.info.title };
+        const url = overlayTwitchBadgeUrl(name, r.info, roleArt, () => parseBadges(r.key)[0]?.info);
+        return { name, version, image_url_4x: url, title: r.info.title };
       });
     if (resolved.length > 0) badges = resolved;
   }
@@ -129,10 +142,10 @@ function adapt(m: BackendChatMessage, users: UsersMap): OverlayMessage {
   const memberId = provider === 'twitch' ? m.user_id : undefined;
   const streamNookUserNumber =
     memberId && isStreamNookUser(memberId) ? (getStreamNookUserNumber(memberId) ?? null) : null;
-  // The member's equipped StreamNook cosmetic badge (bundled asset URL); the twin
-  // falls back to the default logo when there's none.
+  // The member's equipped StreamNook cosmetic badge: the bundled asset, else the
+  // catalog's CDN file. The twin falls back to the default logo when there's none.
   const snSlug = memberId && streamNookUserNumber != null ? getActiveCosmeticSlug(memberId) : null;
-  const streamNookBadgeUrl = snSlug ? (COSMETIC_ASSET_BY_SLUG[snSlug] ?? null) : null;
+  const streamNookBadgeUrl = snSlug ? resolveCosmeticAsset(getCosmeticBySlug(snSlug)) : null;
   const atmosphere =
     user?.atmosphereId && !user.themeHiddenInChat ? toOverlayAtmosphere(getAtmosphere(user.atmosphereId)) : null;
 
@@ -152,11 +165,30 @@ function adapt(m: BackendChatMessage, users: UsersMap): OverlayMessage {
 export const LiveOverlayFeed = ({ sources, style, superSample = 1 }: { sources: LiveSource[]; style: OverlayStyle; superSample?: number }) => {
   const usersMap = useChatUserStore((s) => s.users);
   const revision = useChatConnectionStore((s) => s.revision);
+  // Members' StreamNook badges resolve from the cosmetics registry, which can
+  // land after the rows it decorates; a quiet chat would keep the default mark.
+  const cosmeticsVersion = useSyncExternalStore(subscribeCosmeticsVersion, getCosmeticsVersion, getCosmeticsVersion);
+  // Each channel's FFZ moderator and VIP art, read from Rust while the overlay
+  // shows custom role art (by room id; null = the room has none).
+  const customRoleArt = style.ffzCustomRoleBadges === true;
+  const [roleArt, setRoleArt] = useState<ReadonlyMap<string, RoomRoleArt | null>>(() => new Map());
+  const roleArtAskedRef = useRef<Set<string>>(new Set());
   const registeredRef = useRef<Set<string>>(new Set());
   const badgeInitRef = useRef<Set<string>>(new Set());
-  // Composite keys currently held (acquired) so the diffing effect can add/remove
-  // without tearing down unchanged sources.
-  const acquiredRef = useRef<Set<string>>(new Set());
+  // The composite keys this feed wants and the ones it holds (see
+  // liveSourceHolds: a Twitch acquire waits on the broadcaster id).
+  const [holds] = useState(() =>
+    createSourceHolds({
+      acquire: (k, id) => {
+        const parsed = parseKey(k);
+        void acquireChannel(parsed.channel, id, parsed.provider);
+      },
+      release: (k) => {
+        const parsed = parseKey(k);
+        void releaseChannel(parsed.channel, parsed.provider);
+      },
+    }),
+  );
   // First-seen arrival order per message id. Provider timestamps aren't
   // comparable across platforms (Twitch send-time vs YouTube batch-time), which
   // made YouTube messages land mid-list. Ordering by when THIS feed first saw a
@@ -173,44 +205,23 @@ export const LiveOverlayFeed = ({ sources, style, superSample = 1 }: { sources: 
   // zero channels — which would tear down the WS/IRC and race the re-acquire (the
   // "messages stop after swapping a stream" bug). Unchanged sources are untouched.
   useEffect(() => {
-    const current = new Set(valid.map((s) => makeKey(s.provider, s.channel)));
-    for (const s of valid) {
-      const k = makeKey(s.provider, s.channel);
-      if (!acquiredRef.current.has(k)) {
-        acquiredRef.current.add(k);
-        if (s.provider === 'twitch') {
-          // Resolve the broadcaster id first so the store backfills recent history
-          // on connect (the overlay fills immediately instead of starting empty).
-          void resolveTwitchId(s.channel).then((id) => acquireChannel(s.channel, id, 'twitch'));
-        } else {
-          void acquireChannel(s.channel, null, s.provider);
-        }
+    holds.want(valid.map((s) => makeKey(s.provider, s.channel)), (k) => {
+      const parsed = parseKey(k);
+      if (parsed.provider === 'twitch') {
+        // Resolve the broadcaster id first so the store backfills recent history
+        // on connect (the overlay fills immediately instead of starting empty).
+        void resolveTwitchId(parsed.channel).then((id) => holds.take(k, id));
+      } else {
+        holds.take(k, null);
       }
-    }
-    for (const k of Array.from(acquiredRef.current)) {
-      if (!current.has(k)) {
-        acquiredRef.current.delete(k);
-        const parsed = parseKey(k);
-        void releaseChannel(parsed.channel, parsed.provider);
-      }
-    }
-  }, [valid]);
+    });
+  }, [valid, holds]);
 
   // Release everything still held on unmount (leaving the builder, or switching
   // to Sample). The diffing effect above has no per-run cleanup by design.
   useEffect(() => {
-    return () => {
-      // Intentionally reads the CURRENT held set at unmount time (not a mount-time
-      // snapshot) — we release whatever is still acquired.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      const held = acquiredRef.current;
-      for (const k of Array.from(held)) {
-        const parsed = parseKey(k);
-        void releaseChannel(parsed.channel, parsed.provider);
-      }
-      held.clear();
-    };
-  }, []);
+    return () => holds.dropAll();
+  }, [holds]);
 
   // Register Twitch chatters for 7TV cosmetics, and load channel badges once the
   // room-id is known. Non-Twitch chatters have no 7TV cosmetics (their badges +
@@ -231,19 +242,28 @@ export const LiveOverlayFeed = ({ sources, style, superSample = 1 }: { sources: 
           badgeInitRef.current.add(key);
           void acquireChannel(s.channel, roomId, 'twitch').then(() => releaseChannel(s.channel, 'twitch'));
         }
+        if (roomId && customRoleArt && !roleArtAskedRef.current.has(roomId)) {
+          roleArtAskedRef.current.add(roomId);
+          void invoke<RoomRoleArt | null>('get_ffz_room_role_art', { channelId: roomId })
+            .then((art) => setRoleArt((prev) => new Map(prev).set(roomId, art ?? null)))
+            .catch(() => roleArtAskedRef.current.delete(roomId));
+        }
         if (m.user_id && !registeredRef.current.has(m.user_id)) {
           registeredRef.current.add(m.user_id);
           addUser({ userId: m.user_id, username: m.username, displayName: m.display_name || m.username, color: m.color || '#9147ff' });
         }
       }
     }
-  }, [revision, valid]);
+  }, [revision, valid, customRoleArt]);
 
   const overlayMessages = useMemo<OverlayMessage[]>(() => {
     void revision;
+    void cosmeticsVersion;
+    const roleArtFor = (roomId: string | undefined): RoomRoleArt | null | undefined =>
+      customRoleArt ? (roomId ? roleArt.get(roomId) ?? null : null) : undefined;
     const order = orderRef.current;
     const now = Date.now();
-    const rows: { m: BackendChatMessage; seq: number }[] = [];
+    const rows: { m: BackendChatMessage; seq: number; provider: ProviderId }[] = [];
     for (const s of valid) {
       const slice = useChatConnectionStore.getState().channels.get(sliceKeyFor(s.provider, s.channel));
       if (!slice) continue;
@@ -269,12 +289,21 @@ export const LiveOverlayFeed = ({ sources, style, superSample = 1 }: { sources: 
           }
           order.map.set(m.id, seq);
         }
-        rows.push({ m, seq });
+        rows.push({ m, seq, provider: s.provider });
       }
     }
     rows.sort((a, b) => a.seq - b.seq);
-    return rows.map((r) => adapt(r.m, usersMap));
-  }, [revision, valid, usersMap]);
+    const out: OverlayMessage[] = [];
+    for (const r of rows) {
+      if (isSystemRow(r.m)) {
+        const row = systemRowForOverlay(r.m, r.provider);
+        if (row) out.push(row);
+        continue;
+      }
+      out.push(adapt(r.m, usersMap, roleArtFor));
+    }
+    return out;
+  }, [revision, valid, usersMap, cosmeticsVersion, customRoleArt, roleArt]);
 
   const anyConnected = valid.some((s) => useChatConnectionStore.getState().channels.get(sliceKeyFor(s.provider, s.channel))?.isConnected);
   const status = valid.length === 0

@@ -1677,6 +1677,9 @@ export interface CosmeticCatalogEntry {
     // Owner-only / staged cosmetics: kept out of the public "all badges"
     // collection. Still ownable and equippable by whoever has been granted it.
     hidden?: boolean;
+    // Set on Contributor badge tiers: the shipped contribution points that earn
+    // the tier. These are granted by the database, never bought.
+    contribution_min_points?: number | null;
 }
 
 let cosmeticsCatalog: Map<string, CosmeticCatalogEntry> = new Map();

@@ -9,7 +9,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { RotateCcw, RefreshCw, Link2, Plus, X, AlertTriangle, Play, Pause, Copy, Trash2, Pencil, Check, ChevronRight, LogIn, Download, Upload } from 'lucide-react';
+import { RotateCcw, RefreshCw, Link2, Plus, X, AlertTriangle, Play, Pause, Copy, Trash2, Pencil, Check, ChevronRight, LogIn, Download, Upload, Undo2, Redo2 } from 'lucide-react';
 import { Tooltip } from '../../ui/Tooltip';
 import { Dropdown } from '../../ui/Dropdown';
 import { SettingsSection, SettingsRow, SettingsSubGroup, SegmentedSelect } from '../../settings/_primitives';
@@ -66,13 +66,16 @@ import {
 } from '../../../utils/parseChannelInput';
 import { useOverlayHost } from './overlayHost';
 import {
+  EditHistory,
   MAX_OVERLAY_FILE_BYTES,
   OVERLAY_FILE_EXTENSION,
   buildOverlayFile,
+  historyShortcut,
   newProfileUid,
   overlayFileName,
-  overlaySaveSnapshot,
+  overlayNeedsSave,
   parseOverlayFile,
+  profileSaveSnapshot,
   profileFromImport,
   profileFromServer,
   reconcileProfiles,
@@ -695,6 +698,23 @@ const EMOJI_SAMPLES = [0x1f600, 0x1f602, 0x1f60d].map((cp) => ({
   char: String.fromCodePoint(cp),
 }));
 
+// What one undo step puts back: the look, the sources and the name.
+type OverlayEdit = { style: OverlayStyle; sources: OverlaySource[]; name: string };
+// Every overlay's undo history, by uid. Module-level so it outlives the editor:
+// closing the builder and opening it again keeps it for the session.
+const editHistory = new EditHistory<OverlayEdit>();
+// Cmd on Apple keyboards, Ctrl everywhere else. A user-agent test, so the site
+// runs it too.
+const MAC_KEYS = typeof navigator !== 'undefined' && /Macintosh|Mac OS X|iPhone|iPad|iPod/.test(navigator.userAgent);
+const MOD_KEY = MAC_KEYS ? 'Cmd' : 'Ctrl';
+// Fields that own Ctrl+Z: their own text undo keeps working there.
+const TEXT_INPUT_TYPES = new Set(['text', 'search', 'url', 'email', 'password', 'tel', 'number']);
+const isTextEntry = (target: EventTarget | null): boolean => {
+  if (typeof HTMLElement === 'undefined' || !(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable || target.tagName === 'TEXTAREA') return true;
+  return target instanceof HTMLInputElement && TEXT_INPUT_TYPES.has(target.type);
+};
+
 const OverlayEditor = () => {
   const host = useOverlayHost();
   const apiRequest = host.request;
@@ -745,6 +765,33 @@ const OverlayEditor = () => {
   // decide whether the editor is still on the profile the push was for.
   const activeUidRef = useRef<string>(initial.profiles[initial.active].uid);
 
+  // ── Undo and redo ─────────────────────────────────────────────────────────
+  // An undo sets style and sources exactly like an edit, so the effects below
+  // mirror it into the profile and auto-save it to a published overlay's link
+  // the same way (or not at all, when it lands back on the saved copy), and a
+  // draft stays a draft.
+  //
+  // What the editor showed after the last change, so the next change is
+  // recorded with the state it replaced. Loading an overlay and undoing set
+  // this first, so neither is recorded as an edit. `snap` is filled lazily.
+  const shownRef = useRef<{ uid: string; edit: OverlayEdit; snap: string | null }>({
+    uid: initial.profiles[initial.active].uid,
+    edit: {
+      style: initial.profiles[initial.active].style,
+      sources: initial.profiles[initial.active].sources,
+      name: initial.profiles[initial.active].name,
+    },
+    snap: null,
+  });
+  // A pointer is down: everything until it lifts is one gesture (a slider drag).
+  const pointerHeldRef = useRef(false);
+  const [canUndo, setCanUndo] = useState(() => editHistory.canUndo(initial.profiles[initial.active].uid));
+  const [canRedo, setCanRedo] = useState(() => editHistory.canRedo(initial.profiles[initial.active].uid));
+  const refreshHistory = () => {
+    setCanUndo(editHistory.canUndo(activeUidRef.current));
+    setCanRedo(editHistory.canRedo(activeUidRef.current));
+  };
+
   // The scaled stage measures its own width so the overlay canvas fits the pane
   // at true proportions (scaled down when the canvas is wider than the pane).
   const stageWrapRef = useRef<HTMLDivElement>(null);
@@ -778,6 +825,26 @@ const OverlayEditor = () => {
   // Leave an inset around the canvas so it sits framed inside the scene, not edge to edge.
   const STAGE_PAD = 44;
   const scale = Math.min(1, (stageW - STAGE_PAD) / style.width, (maxStageH - STAGE_PAD) / style.height);
+
+  // The name of the overlay being edited. It rides in the published style, so
+  // a rename is an edit like any other: an undo step and a save.
+  const activeName = profiles.find((p) => p.uid === activeUidRef.current)?.name ?? '';
+
+  // Record every change to the overlay being edited as an undo step.
+  useEffect(() => {
+    const uid = activeUidRef.current;
+    const shown = shownRef.current;
+    const { edit: was } = shown;
+    if (shown.uid === uid && was.style === style && was.sources === sources && was.name === activeName) return;
+    const edit = { style, sources, name: activeName };
+    const snap = profileSaveSnapshot(edit);
+    shownRef.current = { uid, edit, snap };
+    // Another overlay was loaded, or a change that changed nothing.
+    if (shown.uid !== uid) return;
+    if ((shown.snap ?? profileSaveSnapshot(was)) === snap) return;
+    editHistory.record(uid, was, Date.now(), pointerHeldRef.current);
+    refreshHistory();
+  }, [style, sources, activeName]);
 
   // The working state (style/sources/id) IS the active profile: mirror every
   // change into the profiles list, and keep writing the legacy single-overlay
@@ -901,6 +968,8 @@ const OverlayEditor = () => {
     }
     setAddError(null);
     const chan = channel;
+    // A step of its own, even when a lookup made it land late.
+    editHistory.seal();
     setSources((list) =>
       list.some((s) => s.provider === provider && s.channel.toLowerCase() === chan.toLowerCase())
         ? list
@@ -983,7 +1052,7 @@ const OverlayEditor = () => {
   // the editor without the user editing anything, and an effect can run twice
   // on mount; neither differs from this, so neither saves straight back.
   const savedSnapshotsRef = useRef(
-    new Map<string, string>(initial.profiles.map((p) => [p.uid, overlaySaveSnapshot(p.style, p.sources)])),
+    new Map<string, string>(initial.profiles.map((p) => [p.uid, profileSaveSnapshot(p)])),
   );
   const profilesRef = useRef(profiles);
   useEffect(() => {
@@ -1044,8 +1113,10 @@ const OverlayEditor = () => {
           const theirs = profileFromServer(body.overlay, forProfile.name, forUid);
           if (theirs) {
             againRef.current.delete(forUid);
+            // Its history was made on a copy that no longer exists.
+            editHistory.forget(forUid);
             versionsRef.current.set(forUid, theirs.version);
-            savedSnapshotsRef.current.set(forUid, overlaySaveSnapshot(theirs.style, theirs.sources));
+            savedSnapshotsRef.current.set(forUid, profileSaveSnapshot(theirs));
             setProfiles((list) => list.map((p) => (p.uid === forUid ? theirs : p)));
             if (activeUidRef.current === forUid) {
               applyProfile(theirs);
@@ -1067,7 +1138,7 @@ const OverlayEditor = () => {
       if (!data?.id || !data?.url) throw new Error('Publish failed (bad reply).');
       versionsRef.current.set(forUid, data.updated_at ?? null);
       idsRef.current.set(forUid, data.id);
-      savedSnapshotsRef.current.set(forUid, overlaySaveSnapshot(forProfile.style, forProfile.sources));
+      savedSnapshotsRef.current.set(forUid, profileSaveSnapshot(forProfile));
       // Stamp the id and version onto the overlay this save was for, and strip
       // the id from any other entry that claims the same overlay.
       setProfiles((list) =>
@@ -1155,10 +1226,12 @@ const OverlayEditor = () => {
     // The overlay being edited, by uid: auto-save never sends this look to
     // another overlay's link, even if the list moved under the editor.
     const p = profiles.find((x) => x.uid === activeUidRef.current);
-    if (!p?.id) return;
-    // Only a real edit saves: the editor differs from what this overlay last
-    // saved or loaded. An edit put back before the debounce sends nothing.
-    if (overlaySaveSnapshot(style, sources) === savedSnapshotsRef.current.get(p.uid)) {
+    if (!p) return;
+    const profile = { ...p, style, sources };
+    // Only a real edit to a published overlay saves: its look, sources or name
+    // differ from what it last saved or loaded. An edit put back before the
+    // debounce sends nothing, and a draft never sends.
+    if (!overlayNeedsSave(profile, savedSnapshotsRef.current.get(p.uid))) {
       if (pendingSaveRef.current?.profile.uid === p.uid) {
         clearTimeout(pendingSaveRef.current.timer);
         pendingSaveRef.current = null;
@@ -1166,35 +1239,113 @@ const OverlayEditor = () => {
       return;
     }
     if (pendingSaveRef.current) clearTimeout(pendingSaveRef.current.timer);
-    const profile = { ...p, style, sources };
     const timer = setTimeout(() => {
       pendingSaveRef.current = null;
       void pushProfileRef.current(profile, false);
     }, 1500);
     pendingSaveRef.current = { timer, profile };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [style, sources]);
+  }, [style, sources, activeName]);
   // Closing the builder sends an edit still waiting on its debounce.
   useEffect(() => () => flushPendingSave(), []);
 
   // Load an overlay's saved state into the working editor state.
   const applyProfile = (p: OverlayProfile) => {
-    savedSnapshotsRef.current.set(p.uid, overlaySaveSnapshot(p.style, p.sources));
+    savedSnapshotsRef.current.set(p.uid, profileSaveSnapshot(p));
     activeUidRef.current = p.uid;
     overlayIdRef.current = p.id;
-    setStyle(clampOverlayStyle({ ...DEFAULT_OVERLAY_STYLE, ...p.style } as OverlayStyle));
+    const loaded = clampOverlayStyle({ ...DEFAULT_OVERLAY_STYLE, ...p.style } as OverlayStyle);
+    // A load is not an edit: the recorder sees exactly what it already shows.
+    editHistory.seal();
+    shownRef.current = { uid: p.uid, edit: { style: loaded, sources: p.sources, name: p.name }, snap: null };
+    setStyle(loaded);
     setSources(p.sources);
     setPublishedUrl(p.id ? `https://streamnook.app/overlay/${p.id}` : null);
     setPublishState('idle');
     setPublishError(null);
     setRenaming(false);
     setConfirmDelete(false);
+    refreshHistory();
   };
+
+  // Put back a step of the overlay being edited, through the same state an
+  // edit sets.
+  const restoreEdit = (uid: string, edit: OverlayEdit) => {
+    // A name comes back only while no other overlay has taken it.
+    const list = profilesRef.current;
+    const name = uniqueProfileName(edit.name, list.filter((p) => p.uid !== uid));
+    const restored = name === edit.name ? edit : { ...edit, name };
+    shownRef.current = { uid, edit: restored, snap: null };
+    setStyle(restored.style);
+    setSources(restored.sources);
+    if (list.find((p) => p.uid === uid)?.name !== name) {
+      setProfiles((l) => l.map((p) => (p.uid === uid ? { ...p, name } : p)));
+    }
+    refreshHistory();
+  };
+  const undo = () => {
+    if (fileBusy) return;
+    const uid = activeUidRef.current;
+    const prev = editHistory.undo(uid, shownRef.current.edit);
+    if (prev) restoreEdit(uid, prev);
+  };
+  const redo = () => {
+    if (fileBusy) return;
+    const uid = activeUidRef.current;
+    const next = editHistory.redo(uid, shownRef.current.edit);
+    if (next) restoreEdit(uid, next);
+  };
+  const historyActionsRef = useRef({ undo, redo });
+  useEffect(() => {
+    historyActionsRef.current = { undo, redo };
+  });
+  // Gesture edges seal the open step, so a click, a toggle or a reset is a
+  // step of its own and a drag is one step however long it pauses. Capture
+  // phase: the seal lands before the handler that makes the change. The
+  // shortcuts listen last and leave a press the page already answered alone.
+  useEffect(() => {
+    const onPointerDown = () => {
+      pointerHeldRef.current = true;
+      editHistory.seal();
+    };
+    const onPointerUp = () => {
+      pointerHeldRef.current = false;
+      editHistory.seal();
+    };
+    const onFocusOut = () => editHistory.seal();
+    const onKeySeal = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || (e.key === ' ' && !isTextEntry(e.target))) editHistory.seal();
+    };
+    const onShortcut = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.isComposing || isTextEntry(e.target)) return;
+      const action = historyShortcut(e, MAC_KEYS);
+      if (!action) return;
+      e.preventDefault();
+      historyActionsRef.current[action]();
+    };
+    window.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('pointerup', onPointerUp, true);
+    window.addEventListener('pointercancel', onPointerUp, true);
+    window.addEventListener('focusout', onFocusOut, true);
+    window.addEventListener('keydown', onKeySeal, true);
+    window.addEventListener('keydown', onShortcut);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('pointerup', onPointerUp, true);
+      window.removeEventListener('pointercancel', onPointerUp, true);
+      window.removeEventListener('focusout', onFocusOut, true);
+      window.removeEventListener('keydown', onKeySeal, true);
+      window.removeEventListener('keydown', onShortcut);
+      pointerHeldRef.current = false;
+      editHistory.seal();
+    };
+  }, []);
 
   // Take an overlay out of the list (deleted on another device), keeping the
   // editor on a neighbour and the list never empty.
   const dropProfile = (uid: string, message: string) => {
     cancelPendingSave(uid);
+    editHistory.forget(uid);
     const list = profilesRef.current;
     const idx = list.findIndex((p) => p.uid === uid);
     if (idx < 0) return;
@@ -1302,9 +1453,9 @@ const OverlayEditor = () => {
     const name = renameValue.trim();
     setRenaming(false);
     if (!name || name === profiles[activeIdx].name) return;
+    // The name travels inside the published style, so the auto-save sends a
+    // rename of a published overlay like any other edit.
     setProfiles((list) => list.map((p, i) => (i === activeIdx ? { ...p, name: uniqueProfileName(name) } : p)));
-    // The name travels inside the published style; nudge a save.
-    if (overlayIdRef.current) setStyle((s) => ({ ...s }));
   };
 
   const deleteProfile = async () => {
@@ -1313,6 +1464,7 @@ const OverlayEditor = () => {
     // response landing meanwhile can't be clobbered by a stale list.
     const victim = profiles[activeIdx];
     cancelPendingSave(victim.uid);
+    editHistory.forget(victim.uid);
     const nextList = profiles.filter((_, i) => i !== activeIdx);
     const nextIdx = Math.max(0, activeIdx - 1);
     setProfiles(nextList);
@@ -1354,6 +1506,12 @@ const OverlayEditor = () => {
       next.every((p, i) => p === current[i] || (p.uid === current[i].uid && p.version === current[i].version && p.id === current[i].id));
     if (unchanged) return;
     for (const p of next) versionsRef.current.set(p.uid, p.version);
+    // An overlay the account replaced or removed loses its history: the steps
+    // were made on a copy that no longer exists.
+    for (const p of current) {
+      const now = next.find((n) => n.uid === p.uid);
+      if (!now || now.version !== p.version || now.id !== p.id) editHistory.forget(p.uid);
+    }
     const activeUid = activeUidRef.current;
     const idx = Math.max(0, next.findIndex((p) => p.uid === activeUid));
     setProfiles(next);
@@ -1569,6 +1727,26 @@ const OverlayEditor = () => {
               the bottom of whichever tab you happened to be on it read as
               buried. The OBS size reminder follows on its own line below. */}
           <div className="ml-auto flex items-center gap-1.5">
+            {/* History of this overlay's look and sources. Held, like the
+                rest of the row, while a file dialog is open. */}
+            <Tooltip content={`Undo (${MOD_KEY}+Z)`}>
+              <button
+                onClick={undo}
+                disabled={fileBusy || !canUndo}
+                className="glass-button rounded-md p-1.5 text-textSecondary hover:text-textPrimary transition-colors disabled:opacity-50 disabled:hover:text-textSecondary"
+              >
+                <Undo2 size={13} />
+              </button>
+            </Tooltip>
+            <Tooltip content={`Redo (${MOD_KEY}+Shift+Z)`}>
+              <button
+                onClick={redo}
+                disabled={fileBusy || !canRedo}
+                className="glass-button rounded-md p-1.5 text-textSecondary hover:text-textPrimary transition-colors disabled:opacity-50 disabled:hover:text-textSecondary"
+              >
+                <Redo2 size={13} />
+              </button>
+            </Tooltip>
             {/* Two-step, because this throws away every setting on the overlay
                 and the first click used to do it outright. Arming inline keeps
                 it one gesture away without a dialog to dismiss; it disarms
@@ -1878,6 +2056,7 @@ const OverlayEditor = () => {
               })}
             </div>
           </SettingsRow>
+          <SettingsRow onReset={resetFor('ffzCustomRoleBadges')} title="Custom mod & VIP badges" titleBadge={<SourceScope sources={['twitch']} />} description="Show your channel's own FrankerFaceZ moderator and VIP badges." help="Off shows Twitch's standard moderator and VIP badges. A channel's custom art can be anything, so it stays off until you turn it on." disabled={!style.showBadges} control={<Toggle enabled={style.ffzCustomRoleBadges === true} onChange={() => set('ffzCustomRoleBadges', style.ffzCustomRoleBadges !== true)} />} />
           </SettingsSubGroup>
           {/* Scales every badge in the row, not just the platform ones, so this
               only goes dead when BOTH badge switches are off. */}
@@ -2061,6 +2240,7 @@ const OverlayEditor = () => {
           <SettingsRow onReset={resetFor('cheerDisplay')} title="Cheers" titleBadge={<SourceScope sources={['twitch']} />} description="Show a bits cheer inline like a normal message, or as an event card like subs and raids.">
             <SegmentedSelect value={style.cheerDisplay ?? 'message'} onChange={(v) => set('cheerDisplay', v)} options={CHEER_DISPLAYS} />
           </SettingsRow>
+          <SettingsRow onReset={resetFor('seventvEmoteChanges')} title={<span className="inline-flex items-center gap-1.5"><SevenTVLogo className="h-[11px] w-auto text-[#29b6f6]" /> Emote changes</span>} description="Show when an emote is added to, removed from or renamed in your 7TV set." help="Each change shows who made it and the emote, styled like your other events." control={<Toggle enabled={style.seventvEmoteChanges !== false} onChange={() => set('seventvEmoteChanges', style.seventvEmoteChanges === false)} />} />
           <SettingsRow onReset={resetFor('eventStyle')} title="Style" description="A subtle tint, a thin platform-colored ring, or the StreamNook gradient wash." help="Every style shows the sender's badges and paint name.">
             <SegmentedSelect
               value={style.eventStyle}

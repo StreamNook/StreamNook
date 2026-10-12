@@ -2458,9 +2458,13 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
               Logger.error('Failed to open support URL:', err);
             }
           };
+          // Contributor tiers are earned in the Discord, so there is nothing to buy.
+          const contributionPoints = cosmetic.contribution_min_points ?? null;
           const acquireLabel = cosmetic.is_default
             ? 'Free for every StreamNook member'
-            : cosmetic.payment_type === 'Subscription'
+            : contributionPoints != null
+              ? `Earned with ${contributionPoints} points from bug reports and feature requests in the StreamNook Discord that shipped`
+              : cosmetic.payment_type === 'Subscription'
               ? 'Awarded for an active monthly subscription'
               : cosmetic.payment_type === 'Donation'
                 ? 'Awarded for a one-time donation'
@@ -2535,7 +2539,7 @@ const BadgesOverlay = ({ onClose, onBadgeClick, initialPaintId, initialBadgeId, 
                       >
                         {isActive ? 'Equipped' : 'Equip'}
                       </button>
-                    ) : supportUrl ? (
+                    ) : supportUrl && contributionPoints == null ? (
                       <button
                         onClick={handleGet}
                         className="flex-1 px-4 py-2 text-sm font-medium glass-button text-textPrimary hover:bg-white/5 transition-all flex items-center justify-center gap-2"

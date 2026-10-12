@@ -32,6 +32,7 @@
     "eventAnimation": "chase",
     "eventAnimateRepeat": true,
     "cheerDisplay": "event",
+    "seventvEmoteChanges": false,
     "hideBots": true,
     "hiddenEvents": [],
     "hiddenProviderEvents": [
@@ -80,6 +81,7 @@
       "roles",
       "other"
     ],
+    "ffzCustomRoleBadges": true,
     "emojiStyle": "google",
     "showAvatars": false,
     "showAtSign": false,

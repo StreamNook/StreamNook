@@ -120,18 +120,31 @@ export function reconcileProfiles(local: OverlayProfile[], server: ServerOverlay
 }
 
 /**
- * What a save sends for an overlay (its look and its sources) as text that is
- * the same whenever the content is: keys sorted, and the look filled out with
- * defaults and clamped the way loading fills it. The builder auto-saves only
- * when this differs from the copy it last saved or loaded, so opening an
- * overlay, an effect that runs twice, or a default the stored copy lacks never
- * writes over the published link.
+ * What a save sends for an overlay (its look, its sources and its name, which
+ * rides in the sent style as `profileName`) as text that is the same whenever
+ * the content is: keys sorted, and the look filled out with defaults and
+ * clamped the way loading fills it. The builder auto-saves only when this
+ * differs from the copy it last saved or loaded, so opening an overlay, an
+ * effect that runs twice, or a default the stored copy lacks never writes over
+ * the published link, and a rename alone does save.
  */
-export function overlaySaveSnapshot(style: Partial<OverlayStyle>, sources: readonly OverlaySource[]): string {
+export function overlaySaveSnapshot(style: Partial<OverlayStyle>, sources: readonly OverlaySource[], name?: string): string {
   return stableStringify({
     style: clampOverlayStyle({ ...DEFAULT_OVERLAY_STYLE, ...style } as OverlayStyle),
     sources: sources.map((s) => ({ provider: s.provider, channel: s.channel })),
+    name,
   });
+}
+
+/** The snapshot of a whole overlay, name included. */
+export const profileSaveSnapshot = (p: Pick<OverlayProfile, 'style' | 'sources' | 'name'>): string =>
+  overlaySaveSnapshot(p.style, p.sources, p.name);
+
+/** Whether the auto-save sends this overlay: only a published one, and only
+ *  when its look, sources or name differ from the copy last saved or loaded
+ *  (`saved`, a profileSaveSnapshot). A draft never auto-saves. */
+export function overlayNeedsSave(p: Pick<OverlayProfile, 'id' | 'style' | 'sources' | 'name'>, saved: string | undefined): boolean {
+  return !!p.id && profileSaveSnapshot(p) !== saved;
 }
 
 function stableStringify(value: unknown): string {
@@ -336,4 +349,124 @@ export function profileFromImport(
     style: clampOverlayStyle({ ...DEFAULT_OVERLAY_STYLE, ...file.style, blockedUsers: current.style.blockedUsers } as OverlayStyle),
     sources: [...current.sources],
   };
+}
+
+// ── Edit history ────────────────────────────────────────────────────────────
+// Undo and redo for the builder: one history per overlay (by uid), in memory
+// for the session. Each step holds the state an edit replaced. One gesture is
+// one step: a change joins the open step while the pointer that started it is
+// still down, or when it lands within EDIT_COALESCE_MS of the last change, so a
+// slider drag, a run of typing or a colour picker drag undo as one. The builder
+// seals the open step on pointer down and up, on blur and on Enter, so a click,
+// a toggle or a reset is always a step of its own.
+
+export const EDIT_HISTORY_LIMIT = 100;
+export const EDIT_COALESCE_MS = 500;
+
+interface EditStack<T> {
+  past: T[];
+  future: T[];
+  /** The newest step still takes changes. */
+  open: boolean;
+  lastAt: number;
+}
+
+export class EditHistory<T> {
+  private readonly stacks = new Map<string, EditStack<T>>();
+
+  constructor(
+    private readonly limit = EDIT_HISTORY_LIMIT,
+    private readonly coalesceMs = EDIT_COALESCE_MS,
+  ) {}
+
+  private stack(key: string): EditStack<T> {
+    let s = this.stacks.get(key);
+    if (!s) {
+      s = { past: [], future: [], open: false, lastAt: 0 };
+      this.stacks.set(key, s);
+    }
+    return s;
+  }
+
+  /** An edit on overlay `key` replaced `before`. `holding`: the pointer that
+   *  started the gesture is still down. A new step drops what redo held. */
+  record(key: string, before: T, now: number, holding = false): void {
+    const s = this.stack(key);
+    s.future = [];
+    if (s.open && (holding || now - s.lastAt < this.coalesceMs)) {
+      s.lastAt = now;
+      return;
+    }
+    s.past.push(before);
+    if (s.past.length > this.limit) s.past.splice(0, s.past.length - this.limit);
+    s.open = true;
+    s.lastAt = now;
+  }
+
+  /** Close the open step of one overlay, or of every overlay. */
+  seal(key?: string): void {
+    if (key === undefined) {
+      for (const s of this.stacks.values()) s.open = false;
+      return;
+    }
+    const s = this.stacks.get(key);
+    if (s) s.open = false;
+  }
+
+  /** The state before the latest step, or null when there is none. `current`
+   *  becomes the first thing redo gives back. */
+  undo(key: string, current: T): T | null {
+    const s = this.stacks.get(key);
+    if (!s || s.past.length === 0) return null;
+    const prev = s.past.pop() as T;
+    s.future.push(current);
+    s.open = false;
+    return prev;
+  }
+
+  /** The state the latest undo left, or null when there is none. */
+  redo(key: string, current: T): T | null {
+    const s = this.stacks.get(key);
+    if (!s || s.future.length === 0) return null;
+    const next = s.future.pop() as T;
+    s.past.push(current);
+    if (s.past.length > this.limit) s.past.splice(0, s.past.length - this.limit);
+    s.open = false;
+    return next;
+  }
+
+  canUndo(key: string): boolean {
+    return (this.stacks.get(key)?.past.length ?? 0) > 0;
+  }
+
+  canRedo(key: string): boolean {
+    return (this.stacks.get(key)?.future.length ?? 0) > 0;
+  }
+
+  /** Drop an overlay's history (deleted, or replaced by another copy). */
+  forget(key: string): void {
+    this.stacks.delete(key);
+  }
+}
+
+export type HistoryShortcutKey = {
+  key: string;
+  code?: string;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+};
+
+/** Which history action a key press asks for: Ctrl+Z undoes, Ctrl+Shift+Z and
+ *  Ctrl+Y redo (Cmd on macOS). Reads the typed letter first, so QWERTZ and
+ *  AZERTY get the key labelled Z, and the physical key on other scripts. */
+export function historyShortcut(e: HistoryShortcutKey, mac: boolean): 'undo' | 'redo' | null {
+  if (e.altKey || !(mac ? e.metaKey : e.ctrlKey) || (mac ? e.ctrlKey : e.metaKey)) return null;
+  const letter = /^[a-z]$/i.test(e.key)
+    ? e.key.toLowerCase()
+    : e.code === 'KeyZ' ? 'z' : e.code === 'KeyY' ? 'y' : '';
+  if (letter === 'z') return e.shiftKey ? 'redo' : 'undo';
+  if (letter === 'y' && !e.shiftKey) return 'redo';
+  return null;
 }

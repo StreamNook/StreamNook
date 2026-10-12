@@ -7,6 +7,7 @@
 
 import type { BackendChatMessage, MessageSegment } from '../../services/twitchChat';
 import type { ProviderId } from '../../types/providers';
+import type { SeventvEmoteChange } from './overlayConfig';
 
 // Structural subset of the 7TV PaintV4 shape (that type is module-private in
 // seventvService). Assignable to computePaintStyle's parameter, so the preview
@@ -62,7 +63,8 @@ export type OverlayMessage = BackendChatMessage & {
   seventvBadgeUrl?: string;
   seventvBadgeTitle?: string;
   /** Resolved third-party (FFZ / Chatterino / Homies / …) badge images. */
-  extraBadges?: { url: string; title?: string; source?: string; category?: string }[];
+  /** `backdrop` is the colour a glyph badge is drawn on (see OverlayChat). */
+  extraBadges?: { url: string; title?: string; source?: string; category?: string; backdrop?: string }[];
   /** StreamNook member number → renders the StreamNook identity badge. Null or
    *  absent means not a StreamNook member. */
   streamNookUserNumber?: number | null;
@@ -75,6 +77,9 @@ export type OverlayMessage = BackendChatMessage & {
   /** Set by the feed when moderation deletes this message: the renderer fades
    *  the row out, then the feed removes it for real a beat later. */
   retracted?: boolean;
+  /** A change to the channel's 7TV emote set: the row renders as a 7TV event
+   *  instead of a chat message. */
+  seventvEmoteChange?: SeventvEmoteChange;
 };
 
 type Badge = OverlayMessage['badges'][number];

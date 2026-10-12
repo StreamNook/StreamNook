@@ -192,6 +192,9 @@ export interface OverlayStyle {
   eventAnimateRepeat: boolean;
   /** How a bits cheer renders: inline as a normal message, or as an event card. */
   cheerDisplay: CheerDisplay;
+  /** Show a row when the channel's 7TV emote set changes (an emote added,
+   *  removed or renamed), styled like the other events. */
+  seventvEmoteChanges: boolean;
   /** Hide messages from known bot accounts / users carrying a bot badge. */
   hideBots: boolean;
   /** Legacy global event hides (e.g. 'raid', 'cheer'), applied to every platform.
@@ -231,6 +234,10 @@ export interface OverlayStyle {
   /** Twitch badge categories to hide, by id (e.g. 'predictions', 'roles'), on top
    *  of the showBadges master. See TWITCH_BADGE_CATEGORIES. */
   hiddenTwitchBadgeCategories: string[];
+  /** Draw a channel's own FrankerFaceZ moderator and VIP badge art instead of
+   *  Twitch's. Off shows Twitch's standard moderator and VIP badges, since a
+   *  channel's custom art can be anything. */
+  ffzCustomRoleBadges: boolean;
   /** How unicode emoji render. 'system' uses the OS/font emoji (varies by machine);
    *  the vendor styles re-render EVERY emoji from every platform as that one style's
    *  images, so a merged overlay looks consistent regardless of platform or OS. */
@@ -675,6 +682,7 @@ export const DEFAULT_OVERLAY_STYLE: OverlayStyle = {
   eventAnimation: 'none',
   eventAnimateRepeat: false,
   cheerDisplay: 'message',
+  seventvEmoteChanges: true,
   hideBots: false,
   hiddenEvents: [],
   hiddenProviderEvents: [],
@@ -687,6 +695,7 @@ export const DEFAULT_OVERLAY_STYLE: OverlayStyle = {
   showAtmospheres: true,
   hiddenBadgeProviders: [],
   hiddenTwitchBadgeCategories: [],
+  ffzCustomRoleBadges: false,
   emojiStyle: 'apple',
   bubble: false,
   bubbleShape: 'rounded',
@@ -853,6 +862,11 @@ export const clampOverlayStyle = (s: OverlayStyle): OverlayStyle => {
         : 'center',
     // Absent on configs saved before chat GIFs existed → on, like Twitch.
     showGifs: s.showGifs !== false,
+    // Absent on configs saved before the switch existed → Twitch's own art, the
+    // look those overlays always had.
+    ffzCustomRoleBadges: s.ffzCustomRoleBadges === true,
+    // Absent on configs saved before 7TV emote rows existed → shown.
+    seventvEmoteChanges: s.seventvEmoteChanges !== false,
     // Absent on configs saved before the GIF size existed → 1, today's size.
     gifScale: clamp(
       Number.isFinite(s.gifScale) ? s.gifScale : 1,
@@ -998,4 +1012,129 @@ export function overlayFontStack(fontFamily: string): string {
   const fam = primaryFontFamily(fontFamily);
   if (!isCustomFontFamily(fam)) return fontFamily;
   return [parts[0], `'${localFontAlias(fam)}'`, ...parts.slice(1)].join(', ');
+}
+
+// ---------------------------------------------------------------------------
+// 7TV emote set changes
+// ---------------------------------------------------------------------------
+
+/** One change to a channel's 7TV emote set, as an overlay row shows it. */
+export interface SeventvEmoteChange {
+  action: 'added' | 'removed' | 'renamed';
+  /** Who made the change on 7TV. */
+  actor: string;
+  /** The emote's name in the set (the new name for a rename). */
+  name: string;
+  /** The name before a rename. */
+  oldName?: string;
+  /** The emote's image, when known. */
+  emoteUrl?: string;
+}
+
+/** A 7TV emote's image by id, at the size the overlay draws emotes. */
+export const seventvEmoteImageUrl = (id: string): string => `https://cdn.7tv.app/emote/${id}/3x.webp`;
+
+/**
+ * The changes in one 7TV EventAPI `emote_set.update` body: `pushed` rows were
+ * added, `pulled` rows removed, and an `updated` row whose name changed was
+ * renamed (a flag-only update is not a change a viewer sees).
+ */
+export function seventvChangesFromDispatch(body: unknown): SeventvEmoteChange[] {
+  const b = body as {
+    actor?: { display_name?: unknown; username?: unknown } | null;
+    pushed?: unknown;
+    pulled?: unknown;
+    updated?: unknown;
+  } | null;
+  if (!b || typeof b !== 'object') return [];
+  const actorRaw = b.actor?.display_name || b.actor?.username;
+  const actor = typeof actorRaw === 'string' && actorRaw.trim() ? actorRaw.trim() : 'Someone';
+  type Row = { key?: unknown; value?: unknown; old_value?: unknown };
+  const rows = (list: unknown): Row[] =>
+    Array.isArray(list) ? (list as Row[]).filter((c) => c && c.key === 'emotes') : [];
+  const emote = (v: unknown): { id?: string; name?: string } => {
+    const e = v as { id?: unknown; name?: unknown; data?: { id?: unknown } } | null;
+    const id = typeof e?.id === 'string' ? e.id : typeof e?.data?.id === 'string' ? e.data.id : undefined;
+    return { id, name: typeof e?.name === 'string' ? e.name : undefined };
+  };
+  const out: SeventvEmoteChange[] = [];
+  for (const r of rows(b.pushed)) {
+    const e = emote(r.value);
+    if (e.name) out.push({ action: 'added', actor, name: e.name, ...(e.id ? { emoteUrl: seventvEmoteImageUrl(e.id) } : {}) });
+  }
+  for (const r of rows(b.pulled)) {
+    const e = emote(r.old_value);
+    if (e.name) out.push({ action: 'removed', actor, name: e.name, ...(e.id ? { emoteUrl: seventvEmoteImageUrl(e.id) } : {}) });
+  }
+  for (const r of rows(b.updated)) {
+    const before = emote(r.old_value);
+    const after = emote(r.value);
+    if (!after.name || !before.name || after.name === before.name) continue;
+    const id = after.id ?? before.id;
+    out.push({ action: 'renamed', actor, name: after.name, oldName: before.name, ...(id ? { emoteUrl: seventvEmoteImageUrl(id) } : {}) });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// FrankerFaceZ room moderator and VIP art
+// ---------------------------------------------------------------------------
+
+/** FFZ's moderator art is a white glyph its own client draws on the moderator
+ *  badge's green square. */
+export const FFZ_MOD_BACKDROP = '#34AE0A';
+
+const FFZ_ROOM_BADGE_CDN = 'https://cdn.frankerfacez.com/room-badge/';
+
+/**
+ * The largest image of a channel's FFZ moderator and VIP art, from its room
+ * payload (`/v1/room/id/{id}`: `room.mod_urls`, `room.vip_badge`, each
+ * `{"1","2","4"}`). Rooms that list only "1" still serve every scale on FFZ's
+ * room-badge CDN, so the 4x address is built from the listed one. Null for a
+ * role the room does not replace.
+ */
+export function ffzRoomRoleArt(payload: unknown): { moderator: string | null; vip: string | null } {
+  const room = (payload as { room?: Record<string, unknown> } | null)?.room;
+  const pick = (urls: unknown): string | null => {
+    if (!urls || typeof urls !== 'object') return null;
+    const listed = (scale: string): string | null => {
+      const u = (urls as Record<string, unknown>)[scale];
+      return typeof u === 'string' && u.startsWith('https://') ? u : null;
+    };
+    const direct = listed('4');
+    if (direct) return direct;
+    const any = listed('2') ?? listed('1');
+    if (!any) return null;
+    return any.startsWith(FFZ_ROOM_BADGE_CDN) ? `${any.slice(0, any.lastIndexOf('/'))}/4` : any;
+  };
+  return { moderator: pick(room?.mod_urls), vip: pick(room?.vip_badge) };
+}
+
+/** Width and height from a PNG's header, or null for bytes that are not a PNG. */
+export function pngDimensions(bytes: Uint8Array): { w: number; h: number } | null {
+  const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (bytes.length < 24 || sig.some((b, i) => bytes[i] !== b)) return null;
+  if (String.fromCharCode(bytes[12], bytes[13], bytes[14], bytes[15]) !== 'IHDR') return null;
+  const read = (o: number) => ((bytes[o] << 24) | (bytes[o + 1] << 16) | (bytes[o + 2] << 8) | bytes[o + 3]) >>> 0;
+  const w = read(16);
+  const h = read(20);
+  return w > 0 && h > 0 ? { w, h } : null;
+}
+
+/** A glyph PNG on a rounded square of `color` (radius side / 9, FFZ's own
+ *  shape), as an SVG data URI: the same finished badge the app paints. Null
+ *  for bytes that are not a PNG or a colour that is not `#RRGGBB`. */
+export function badgeWithBackdrop(png: Uint8Array, color: string): string | null {
+  if (!/^#[0-9a-f]{6}$/i.test(color)) return null;
+  const size = pngDimensions(png);
+  if (!size) return null;
+  let bin = '';
+  for (let i = 0; i < png.length; i++) bin += String.fromCharCode(png[i]);
+  const glyph = btoa(bin);
+  const radius = Math.min(size.w, size.h) / 9;
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size.w}" height="${size.h}" viewBox="0 0 ${size.w} ${size.h}">` +
+    `<rect width="${size.w}" height="${size.h}" rx="${radius}" fill="${color}"/>` +
+    `<image width="${size.w}" height="${size.h}" href="data:image/png;base64,${glyph}"/></svg>`;
+  return `data:image/svg+xml;base64,${btoa(svg)}`;
 }

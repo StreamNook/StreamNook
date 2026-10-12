@@ -7,7 +7,14 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 
-import { overlaySaveSnapshot, profileFromServer, reconcileProfiles, type OverlayProfile } from './profileSync';
+import {
+  overlayNeedsSave,
+  overlaySaveSnapshot,
+  profileFromServer,
+  profileSaveSnapshot,
+  reconcileProfiles,
+  type OverlayProfile,
+} from './profileSync';
 import { DEFAULT_OVERLAY_STYLE } from '../overlayConfig';
 
 const local = (uid: string, name: string, id: string | null, fontSize = 15, channel = 'winters27'): OverlayProfile => ({
@@ -109,4 +116,33 @@ test('a real edit to the look or the sources changes the save snapshot', () => {
   // Setting a value to its default IS an edit when the saved copy held another.
   const big = overlaySaveSnapshot({ ...p.style, gifScale: 2 }, p.sources);
   assert.notEqual(overlaySaveSnapshot({ ...p.style, gifScale: 1 }, p.sources), big);
+});
+
+// A rename used to nudge the style without changing it, and the snapshot held
+// only the look and sources, so a published overlay's new name never reached
+// the account. The name is part of what a save sends, so it is part of the
+// comparison.
+test('renaming a published overlay is a real difference; renaming it back is not', () => {
+  const p = local('u1', 'Main', 'A', 15);
+  const saved = profileSaveSnapshot(p);
+  assert.equal(overlayNeedsSave(p, saved), false);
+  assert.equal(overlayNeedsSave({ ...p, name: 'Main cam' }, saved), true);
+  // Undone (or typed back) before the debounce: the saved copy again.
+  assert.equal(overlayNeedsSave({ ...p, name: 'Main' }, saved), false);
+  // Look and sources still count.
+  assert.equal(overlayNeedsSave({ ...p, style: { ...p.style, fontSize: 16 } }, saved), true);
+  assert.equal(overlayNeedsSave({ ...p, sources: [] }, saved), true);
+});
+
+test('a draft never auto-saves, renamed or edited', () => {
+  const d = local('u2', 'Draft', null, 15);
+  const saved = profileSaveSnapshot(d);
+  assert.equal(overlayNeedsSave({ ...d, name: 'Draft renamed' }, saved), false);
+  assert.equal(overlayNeedsSave({ ...d, style: { ...d.style, fontSize: 30 } }, saved), false);
+});
+
+test('an overlay as loaded from the account needs no save', () => {
+  const server = profileFromServer(row('A', 'Main', 18), 'Main', 'u1') as OverlayProfile;
+  assert.equal(overlayNeedsSave(server, profileSaveSnapshot(server)), false);
+  assert.equal(overlayNeedsSave({ ...server, name: 'Renamed elsewhere' }, profileSaveSnapshot(server)), true);
 });

@@ -24,6 +24,7 @@ import {
   primaryFontFamily,
   touchLocalFontAliases,
   type OverlayStyle,
+  type SeventvEmoteChange,
   type EventCategory,
   type EventTemplateContext,
 } from './overlayConfig';
@@ -312,6 +313,69 @@ const PointsGlyph = ({ size = '0.9em' }: { size?: string }) => (
     <path fillRule="evenodd" d="M1 12C1 5.925 5.925 1 12 1s11 4.925 11 11-4.925 11-11 11S1 18.075 1 12Zm11 9a9 9 0 1 1 0-18 9 9 0 0 1 0 18Z" clipRule="evenodd" />
   </svg>
 );
+
+// 7TV's brand blue and its wordmark (SevenTV/Extension public/logo.svg), for the
+// emote set rows.
+const SEVENTV_BLUE = '#29b6f6';
+const SevenTvMark = () => (
+  <svg viewBox="0 0 109.6 80.9" fill={SEVENTV_BLUE} aria-hidden="true" style={{ height: '0.8em', width: 'auto' }}>
+    <path d="M84.1,22.2l5-8.7,2.7-4.6L86.8.2V0H60.1l5,8.7,5,8.7,2.8,4.8H84.1" />
+    <path d="M29,80.6l5-8.7,5-8.7,5-8.7,5-8.7,5-8.7,5-8.7L62.7,22l-5-8.7-5-8.7L49.9.1H7.7l-5,8.7L0,13.4l5,8.7v.2h32l-5,8.7-5,8.7-5,8.7-5,8.7-5,8.7L8.5,72l5,8.7v.2H29" />
+    <path d="M70.8,80.6H86.1l5-8.7,5-8.7,5-8.7,5-8.7,3.5-6-5-8.7v-.2H89.2l-5,8.7-5,8.7-.7,1.3-5-8.7-5-8.7-.7-1.3-5,8.7-5,8.7L55,53.1l5,8.7,5,8.7,5,8.7.8,1.4" />
+  </svg>
+);
+
+// The card every event row sits in, in the streamer's event style: 'plain' a
+// tinted bar in the accent colour, 'outline' a ring (optionally filled and
+// animated), 'streamnook' the app's wash for the event (`washClass`).
+const eventFrame = (
+  style: OverlayStyle,
+  accent: string,
+  washClass: string | undefined,
+): { className: string | undefined; css: CSSProperties } => {
+  const isStreamNook = style.eventStyle === 'streamnook';
+  const isOutline = style.eventStyle === 'outline';
+  const animType =
+    style.eventAnimation === 'sheen' || style.eventAnimation === 'pulse' || style.eventAnimation === 'chase'
+      ? style.eventAnimation
+      : null;
+  const outlineAnimClass =
+    isOutline && animType ? `sn-ft-anim-ring sn-ft-t-${animType}${style.eventAnimateRepeat === true ? ' sn-ft-loop' : ''}` : undefined;
+  const ring = (style.eventOutlineColor || '').trim() || accent;
+  return {
+    className: isStreamNook ? washClass : outlineAnimClass,
+    css: {
+      flex: 1, minWidth: 0, display: 'flex', alignItems: 'flex-start', gap: '0.5em',
+      // Em, not px: the whole renderer is drawn at ss× and scaled back down, so a
+      // raw px padding here came out half-size on the hosted overlay while the
+      // builder preview (ss=1) showed it full — the two never matched.
+      padding: '0.2em 0.55em', borderRadius: '0.4em',
+      ...(isStreamNook
+        ? { border: '1px solid rgba(255,255,255,0.08)' }
+        : isOutline
+          ? {
+              // The first-time chatter ring treatment, tinted with the accent (or
+              // the streamer's one fixed eventOutlineColor). Em-sized real border
+              // (see the first-time ring note: px strokes go sub-pixel under
+              // supersampling), opt-in fill clipped to the padding box, opt-in
+              // border animation (eventAnimation).
+              position: 'relative',
+              borderRadius: '0.5em',
+              border: `0.09em solid color-mix(in srgb, ${ring} 60%, transparent)`,
+              ...(style.eventFill === true
+                ? { backgroundColor: `color-mix(in srgb, ${ring} 8%, transparent)`, backgroundClip: 'padding-box' as const }
+                : null),
+            }
+          : { borderLeft: `2px solid ${accent}`, background: `linear-gradient(90deg, color-mix(in srgb, ${accent} 20%, transparent), transparent)` }),
+    },
+  };
+};
+
+const SEVENTV_CHANGE_LABEL: Record<SeventvEmoteChange['action'], string> = {
+  added: 'Added Emote',
+  removed: 'Removed Emote',
+  renamed: 'Renamed Emote',
+};
 
 // Twitch's own animated gem for the tier, matching the in-app cheer card.
 const cheerGemUrl = (bits: number): string => {
@@ -850,7 +914,15 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
         <FallbackImg key="seventv" src={message.seventvBadgeUrl} alt={message.seventvBadgeTitle || '7TV badge'} className="inline-block align-middle" style={{ height: badgeSize, width: badgeSize }} />
       )}
       {showExtraBadges && visibleExtraBadges.map((b, i) => (
-        <FallbackImg key={`tp-${i}`} src={b.url} alt={b.title || 'badge'} className="inline-block align-middle" style={{ height: badgeSize, width: badgeSize }} />
+        // A glyph badge (FFZ:AP) carries its backdrop colour: the rounded
+        // square its own client draws behind it (radius side / 9).
+        <FallbackImg
+          key={`tp-${i}`}
+          src={b.url}
+          alt={b.title || 'badge'}
+          className="inline-block align-middle"
+          style={{ height: badgeSize, width: badgeSize, ...(b.backdrop ? { backgroundColor: b.backdrop, borderRadius: `calc(${badgeSize} / 9)` } : null) }}
+        />
       ))}
       {/* StreamNook identity badge sits rightmost, next to the name, mirroring
           the real chat row (see utils/badgeOrder in the app repo). */}
@@ -888,6 +960,50 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
   // YouTube shows the name first, then its badges; Twitch and the rest keep badges
   // before the name.
   const nameAndBadges = provider === 'youtube' ? (<>{nameNode}{badgesNode}</>) : (<>{badgesNode}{nameNode}</>);
+
+  // A change to the channel's 7TV emote set: the 7TV mark, what happened and who
+  // did it, then the emote with what became of it, in the streamer's event style.
+  const emoteChange = message.seventvEmoteChange;
+  if (emoteChange) {
+    const frame = eventFrame(style, SEVENTV_BLUE, 'sn-ev-seventv');
+    const emoteSeg: MessageSegment | null = emoteChange.emoteUrl
+      ? { type: 'emote', content: emoteChange.name, emote_url: emoteChange.emoteUrl }
+      : null;
+    const strong = (text: string) => <span style={{ fontWeight: 700 }}>{text}</span>;
+    const outcome =
+      emoteChange.action === 'renamed' && emoteChange.oldName
+        ? <>{strong(emoteChange.oldName)} is now {strong(emoteChange.name)}</>
+        : <>{strong(emoteChange.name)} was {emoteChange.action === 'removed' ? 'removed from' : 'added to'} the set</>;
+    return (
+      <div className={`sn-ov-row ${entranceClass}${retractedClass}`} style={{ flexShrink: 0, lineHeight: style.lineHeight, textShadow: textShadowCss(style), display: 'flex', alignItems: 'flex-start', gap: '0.35em' }} data-provider={provider} data-ov-row="" data-ov-7tv={emoteChange.action}>
+        {style.sourceTag !== 'none' && (
+          <span style={{ flexShrink: 0, paddingTop: '0.25em' }}>
+            <SourceTag provider={provider} mode={style.sourceTag} />
+          </span>
+        )}
+        <div className={frame.className} style={frame.css}>
+          <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', height: `${style.lineHeight}em` }}>
+            <SevenTvMark />
+          </span>
+          <div style={{ minWidth: 0, color: style.bodyTextColor }}>
+            <div className="min-w-0">
+              <span style={{ fontWeight: 700, color: SEVENTV_BLUE }}>{SEVENTV_CHANGE_LABEL[emoteChange.action]}</span>
+              <span style={{ opacity: 0.75 }}> by </span>
+              {strong(emoteChange.actor)}
+            </div>
+            <div style={{ display: 'flex', gap: '0.5em', marginTop: '0.2em', opacity: emoteChange.action === 'removed' ? 0.85 : 0.95 }}>
+              <span aria-hidden="true" style={{ flexShrink: 0, width: '2px', borderRadius: '1px', background: 'color-mix(in srgb, currentColor 45%, transparent)' }} />
+              <span style={{ minWidth: 0 }}>
+                {emoteSeg && <OverlaySegment segment={emoteSeg} style={style} />}
+                {emoteSeg ? ' ' : null}
+                {outcome}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Event rows (subs, resubs, gifts, raids, announcements): render an icon + the
   // system message like the main app, with the user's message below if present —
@@ -942,19 +1058,10 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
     const meta = PROVIDERS[provider] ?? PROVIDERS.twitch;
     const isPrime = category === 'subscription' && message.tags?.['msg-param-sub-plan'] === 'Prime';
     const EventIcon = CATEGORY_ICON[category];
-    const isStreamNook = style.eventStyle === 'streamnook';
-    const isOutline = style.eventStyle === 'outline';
-    const evAnimType =
-      style.eventAnimation === 'sheen' || style.eventAnimation === 'pulse' || style.eventAnimation === 'chase'
-        ? style.eventAnimation
-        : null;
-    const outlineAnimClass =
-      isOutline && evAnimType
-        ? `sn-ft-anim-ring sn-ft-t-${evAnimType}${style.eventAnimateRepeat === true ? ' sn-ft-loop' : ''}`
-        : undefined;
     // Charity donations get collapsed into the 'cheer' category for the icon, but
     // in-app they wear the green donation wash — honor that here.
     const gradientClass = msgType === 'charitydonation' ? 'sn-ev-donation' : CATEGORY_GRADIENT[category];
+    const frame = eventFrame(style, meta.color, gradientClass);
     const action = stripLeadingName(text, [message.display_name, message.username]);
     // Subscriptions: collapse Twitch's two sentences ("subscribed at Tier 1." +
     // "They've subscribed for N months!") into ONE — "subscribed at Tier 1 for N
@@ -1002,35 +1109,8 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
           </span>
         )}
         <div
-          className={isStreamNook ? gradientClass : outlineAnimClass}
-          style={{
-            flex: 1, minWidth: 0, display: 'flex', alignItems: 'flex-start', gap: '0.5em',
-            // Em, not px: the whole renderer is drawn at ss× and scaled back down, so a
-            // raw px padding here came out half-size on the hosted overlay while the
-            // builder preview (ss=1) showed it full — the two never matched.
-            padding: '0.2em 0.55em', borderRadius: '0.4em',
-            ...(isStreamNook
-              ? { border: '1px solid rgba(255,255,255,0.08)' }
-              : isOutline
-                ? {
-                    // The first-time chatter ring treatment, tinted with the
-                    // source platform's color (or the streamer's one fixed
-                    // eventOutlineColor). Em-sized real border (see the
-                    // first-time ring note: px strokes go sub-pixel under
-                    // supersampling), opt-in fill clipped to the padding box,
-                    // opt-in border animation (eventAnimation).
-                    position: 'relative',
-                    borderRadius: '0.5em',
-                    border: `0.09em solid color-mix(in srgb, ${(style.eventOutlineColor || '').trim() || meta.color} 60%, transparent)`,
-                    ...(style.eventFill === true
-                      ? {
-                          backgroundColor: `color-mix(in srgb, ${(style.eventOutlineColor || '').trim() || meta.color} 8%, transparent)`,
-                          backgroundClip: 'padding-box' as const,
-                        }
-                      : null),
-                  }
-                : { borderLeft: `2px solid ${meta.color}`, background: `linear-gradient(90deg, color-mix(in srgb, ${meta.color} 20%, transparent), transparent)` }),
-          }}
+          className={frame.className}
+          style={frame.css}
         >
           {/* Exactly ONE line tall, so the icon box can never make the card taller than
               its text. A fixed 1.5em box did: at any lineHeight below 1.5 the card grew
@@ -1547,12 +1627,16 @@ export const OverlayChat = ({ messages, style: rawStyle, superSample = 1 }: { me
     const expiring = new Set<string>();
     const list = collapseGiftBombs(messages).filter((m) => {
       if (!seen.has(m.id)) seen.set(m.id, nowMs);
+
       if (ageSec > 0) {
         const elapsed = nowMs - (seen.get(m.id) ?? nowMs);
         if (elapsed > ageSec * 1000 + EXPIRE_FADE_MS) return false;
         if (elapsed > ageSec * 1000) expiring.add(m.id);
       }
       if (!allowed.has((m.provider ?? 'twitch') as ProviderId)) return false;
+      // A 7TV emote set row is the channel's, not a chatter's: only its own
+      // switch (and the age and platform rules above) apply to it.
+      if (m.seventvEmoteChange) return style.seventvEmoteChanges !== false;
       if (style.hideBots && isBotMessage(m)) return false;
       if (isBlockedUser(m)) return false;
       const mt = m.metadata?.msg_type || m.tags?.['msg-id'];
@@ -1599,7 +1683,7 @@ export const OverlayChat = ({ messages, style: rawStyle, superSample = 1 }: { me
     }
     return { ordered: list, expiringIds: expiring };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages, sourcesKey, style.hideBots, hiddenKey, hiddenProviderKey, blockedKey, style.hideCommands, cmdFilterKey, phraseKey, ageSec, expireTick]);
+  }, [messages, sourcesKey, style.hideBots, style.seventvEmoteChanges, hiddenKey, hiddenProviderKey, blockedKey, style.hideCommands, cmdFilterKey, phraseKey, ageSec, expireTick]);
 
   const windowMsgs = ordered.slice(-count);
   const rendered = style.direction === 'newTop' ? windowMsgs.slice().reverse() : windowMsgs;
@@ -1909,6 +1993,12 @@ export const OverlayChat = ({ messages, style: rawStyle, superSample = 1 }: { me
             color-mix(in srgb, #ff9d6b 13%, transparent) 33%,
             color-mix(in srgb, #ffc06b 11%, transparent) 66%,
             color-mix(in srgb, #ffc06b 16%, transparent) 100%); }
+        .sn-ev-seventv { background-color: #0c0c0d; background-size: 100% 100%;
+          background-image: linear-gradient(90deg,
+            color-mix(in srgb, #29b6f6 18%, transparent) 0%,
+            color-mix(in srgb, #4fc3f7 13%, transparent) 33%,
+            color-mix(in srgb, #29b6f6 10%, transparent) 66%,
+            color-mix(in srgb, #29b6f6 16%, transparent) 100%); }
         /* Exact match to globals.css so the shared AtmosphereChatWash animates
            identically on the hosted overlay (the component overrides the 16s/20s
            base to 9s/12s inline, same as in-app chat). */
