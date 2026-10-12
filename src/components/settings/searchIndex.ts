@@ -248,6 +248,12 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Player',
+    section: 'Picture',
+    title: 'Title bar auto-hide',
+    description: 'The title bar slides away while a stream plays, so the picture fills the window; move the mouse to the top edge to bring it back. Hide title bar while watching, auto-hide top bar, hover toolbar, borderless, distraction-free, edge to edge, without full screen.'
+  },
+  {
+    tab: 'Player',
     section: 'Playback',
     sectionId: 'settings-section-video-player',
     title: 'Start muted',
@@ -977,9 +983,15 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Chat',
+    section: 'Names & Badges',
+    title: '7TV profile pictures',
+    description: 'People who set a picture on 7TV show it instead of their platform picture: moving on profile cards, pins and the channel header, still in lists until you hover. Animated avatars, custom avatar, pfp.'
+  },
+  {
+    tab: 'Chat',
     section: 'Highlight Appearance',
     title: 'Highlight Appearance',
-    description: 'How highlights look across every highlight type: phrases, usernames, badges, and built-in events. Display style, tint opacity, flash window title.'
+    description: 'How highlights look across every highlight type: phrases, usernames, badges, and built-in events. Display style, tint opacity, flash window title, scrollbar marks.'
   },
   {
     tab: 'Chat',
@@ -999,6 +1011,19 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Highlight Appearance',
     title: 'Title flash',
     description: 'Flash the window title bar when a highlight fires while the app is in the background. Previously "Flash window title when unfocused".'
+  },
+  {
+    tab: 'Chat',
+    section: 'Highlight Appearance',
+    title: 'Scrollbar marks',
+    description: 'Colored ticks on the chat scrollbar where mentions, pings, subs, announcements, pinned messages and highlights are, so you can see what you missed while scrolled up. Scroll bar highlights, missed messages.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Highlight Appearance',
+    title: 'Kinds',
+    parent: 'Scrollbar marks',
+    description: 'Which messages get a scrollbar tick: mentions and replies, highlights, pinned, announcements, subs, redeems, raids, first messages.'
   },
   {
     tab: 'Chat',
@@ -1325,6 +1350,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   },
   {
     tab: 'Chat',
+    section: 'Emotes',
+    title: 'Size',
+    parent: 'GIFs',
+    description: 'How big GIFs draw in chat, from half to twice their usual size. GIF size, GIF scale.'
+  },
+  {
+    tab: 'Chat',
     section: 'Emote Effects',
     title: 'Emote Effects',
     description: 'Emote modifiers from FFZ and BetterTTV, and Twitch giant power-up emotes.'
@@ -1454,6 +1486,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     title: 'Services',
     parent: 'Add-on badges',
     description: 'Turn individual badge services off: 7TV, FFZ, Chatterino, Homies, Homies custom badges and the rest. Badge services, badge providers.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Names & Badges',
+    title: 'Custom mod & VIP badges',
+    parent: 'Badges',
+    description: "A channel's own moderator and VIP badges from FrankerFaceZ (FFZ) instead of the standard ones. Custom moderator and VIP badges, channel mod badge, custom VIP badge."
   },
   {
     tab: 'Chat',
@@ -1846,6 +1885,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Overlay',
     section: 'Emotes & Badges',
+    title: 'Size',
+    parent: 'GIFs',
+    description: 'How big GIFs draw on the overlay, from half to twice their usual size, on top of Emote size. GIF size, GIF scale.'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Emotes & Badges',
     title: 'Personal emotes',
     description: "Show or hide 7TV personal emotes on the overlay. A subscriber's own set works in every channel, so chatters show emotes your channel never added. Unknown emotes, random emotes, emotes not in my channel. Previously \"7TV personal emotes\"."
   },
@@ -1854,6 +1900,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Emotes & Badges',
     title: 'Badges',
     description: 'Badges the platform sends on the overlay: subscriber, moderator, VIP, and the rest. Previously "Show badges".'
+  },
+  {
+    tab: 'Overlay',
+    section: 'Emotes & Badges',
+    title: 'Twitch badges',
+    parent: 'Badges',
+    description: 'Hide kinds of Twitch badges on the overlay: subscriber and founder, prediction, gifted subs, bits and cheer, Blossom, Bloom, mod and VIP, and everything else. Hide prediction badges, badge categories.'
   },
   {
     tab: 'Overlay',
@@ -2586,5 +2639,19 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     section: 'Settings File',
     title: 'Location',
     description: 'The folder on this PC that holds your settings file. Previously "Where your settings file lives".'
+  },
+  {
+    tab: 'Chat',
+    section: 'Spam & Pyramid',
+    sectionId: 'settings-section-spam-pyramid',
+    title: 'Speed',
+    description: 'Time between lines for /spam and /pyramid, 10 ms to 5 s, default 1 s. Going faster than Twitch allows for your role gets lines dropped. Spam speed, pyramid speed, delay.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Spam & Pyramid',
+    sectionId: 'settings-section-spam-pyramid',
+    title: 'Vary repeats',
+    description: 'Adds invisible characters to a repeated /spam line so Twitch does not drop it as a duplicate. Vary repeated messages, duplicate filter.'
   },
 ];

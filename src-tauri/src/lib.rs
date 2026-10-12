@@ -35,7 +35,7 @@ use commands::{
     badges::*, cache::*, channel_links::*, channel_panels::*, channel_state::*, chat::*, chat_identity::*, components::*,
     cosmetics_cache::*, diagnostic_logging::*, drops::*, emoji::*, emote_prefetch::*,
     emotes::*, eventsub::*, ffz::*, gifs::*, helix::*, home_snapshot::*, hype_train::*, identity::*, justlog::*, layout::*,
-    link_preview::*, logs::*, media_glow::*, mod_log_storage::*, modroom::*, plugins::*,
+    link_preview::*, logs::*, media_glow::*, mod_log_storage::*, modroom::*, overlay_file::*, plugins::*,
     profile_cache::*, provider_browse::*,
     resub::*, session::*, settings::*, seventv::*, seventv_cosmetics::*,
     seventv_cosmetics_fetch::*, song_id::*, spellcheck::*, streamnook_api::*, streaming::*, subscriptions::*,
@@ -775,7 +775,7 @@ pub fn run() {
     services::mention_ping::refresh(&settings);
 
     // Apply persisted diagnostic logging setting immediately after loading settings
-    services::diagnostic_logger::set_diagnostics_enabled(settings.error_reporting_enabled);
+    services::diagnostic_logger::apply_setting(settings.error_reporting_enabled);
 
     // Initialize drops service with persisted settings (including priority_games for favorites)
     let drops_service = Arc::new(TokioMutex::new(DropsService::new_with_settings(
@@ -794,8 +794,11 @@ pub fn run() {
     // Initialize whisper service
     let whisper_service = Arc::new(TokioMutex::new(WhisperService::new()));
 
-    // Initialize layout service
+    // Initialize layout service, following the saved chat GIF size
     let layout_service = Arc::new(services::layout_service::LayoutService::new());
+    if let Ok(saved) = settings_arc.lock() {
+        layout_service.set_gif_scale(saved.chat_design.gif_scale);
+    }
 
     // Initialize emote service
     let emote_service = Arc::new(tokio::sync::RwLock::new(
@@ -951,9 +954,7 @@ pub fn run() {
             // the stores that were constructed from the defaults.
             #[cfg(mobile)]
             if let Ok(loaded) = load_settings_from_file() {
-                services::diagnostic_logger::set_diagnostics_enabled(
-                    loaded.error_reporting_enabled,
-                );
+                services::diagnostic_logger::apply_setting(loaded.error_reporting_enabled);
                 let drops_settings = loaded.drops.clone();
                 if let Ok(mut s) = settings_arc.lock() {
                     *s = loaded;
@@ -1670,6 +1671,8 @@ pub fn run() {
             get_multi_nook_tile_qualities,
             #[cfg(desktop)]
             set_multi_nook_raid_channels,
+            #[cfg(desktop)]
+            set_multi_nook_focus,
             register_active_channel,
             unregister_active_channel,
             // Chat commands
@@ -1688,6 +1691,9 @@ pub fn run() {
             debug_unjoin_channel,
             nudge_chat_channels,
             send_chat_message,
+            commands::chat_burst::run_chat_burst,
+            commands::chat_burst::stop_chat_burst,
+            commands::chat_burst::get_chat_burst,
             join_chat_channel,
             leave_chat_channel,
             search_chat,
@@ -1800,7 +1806,8 @@ pub fn run() {
             get_active_poll,
             end_poll,
             create_prediction,
-            end_prediction,
+            get_open_prediction,
+            finish_prediction,
             create_stream_marker,
             warn_chat_user,
             update_shield_mode,
@@ -1845,6 +1852,9 @@ pub fn run() {
             // the token (get_twitch_credentials retired 2026-09-07).
             helix_get,
             streamnook_api_request,
+            // Overlay builder: save and open shareable overlay files.
+            export_overlay_file,
+            import_overlay_file,
             get_user_badges,
             // Unified Badge Service commands
             get_selected_twitch_badge,
@@ -1961,6 +1971,7 @@ pub fn run() {
             get_channel_rewards,
             redeem_channel_reward,
             send_highlighted_message,
+            send_sub_mode_message,
             unlock_random_emote,
             get_modifiable_emotes,
             unlock_modified_emote,
@@ -2014,6 +2025,7 @@ pub fn run() {
             // 7TV cosmetics, resolved once for every window
             seventv_user_cosmetics,
             seventv_user_inventory,
+            seventv_profile_pictures,
             seventv_invalidate_cosmetics,
             seventv_clear_cosmetics,
             // Main-window watch session
@@ -2094,12 +2106,8 @@ pub fn run() {
             #[cfg(desktop)]
             open_logs_folder,
             // EventSub commands
-            connect_eventsub,
-            disconnect_eventsub,
             is_eventsub_connected,
             get_eventsub_session_id,
-            add_eventsub_moderation,
-            remove_eventsub_moderation,
             // Chat Identity commands (desktop-only — webview-scrape badge-loadout editor)
             #[cfg(desktop)]
             fetch_chat_identity_badges,
@@ -2140,6 +2148,7 @@ pub fn run() {
             submit_media_frame,
             sample_media_glow,
             get_window_flags,
+            set_window_fullscreen,
             refresh_channel_state,
             watch_user_history,
             unwatch_user_history,
@@ -2166,6 +2175,42 @@ pub fn run() {
             get_watch_streak,
             get_watch_streaks_batch,
             share_watch_streak,
+            // Chat slash commands
+            commands::slash_commands::slash_followage,
+            commands::slash_commands::slash_follower_count,
+            commands::slash_commands::slash_account_age,
+            commands::slash_commands::slash_viewer_count,
+            commands::slash_commands::slash_founders,
+            commands::slash_commands::slash_name_history,
+            commands::slash_commands::slash_chat_rules,
+            commands::slash_commands::slash_shared_chat,
+            commands::slash_commands::slash_raid_candidates,
+            commands::slash_commands::slash_raid_now,
+            commands::slash_commands::slash_lead_mod,
+            commands::slash_commands::slash_editor,
+            commands::slash_commands::slash_vote,
+            commands::slash_commands::watch_channel_poll,
+            commands::slash_commands::slash_last_message,
+            commands::slash_commands::slash_delete_message,
+            commands::slash_commands::slash_recent_messages,
+            commands::slash_commands::slash_mass_unban_start,
+            commands::slash_commands::slash_mass_unban_stop,
+            commands::slash_commands::slash_low_trust,
+            commands::slash_commands::slash_automod,
+            commands::slash_commands::slash_add_stream_highlight,
+            commands::slash_commands::slash_open_stream_highlights,
+            commands::slash_commands::slash_export_text,
+            commands::slash_commands::slash_open_export,
+            commands::slash_commands::slash_open_streamlink,
+            commands::slash_commands::slash_send_raw_irc,
+            commands::slash_commands::slash_inject_fake_message,
+            commands::slash_commands::slash_run_program,
+            commands::slash_commands::slash_copy_text,
+            services::chat_send_limiter::chat_send_acquire,
+            services::chat_send_limiter::chat_send_budget,
+            services::chat_send_limiter::chat_send_paced,
+            #[cfg(desktop)]
+            save_stream_screenshot,
             // Screen capture (Profile share) — desktop-only
             #[cfg(desktop)]
             capture_screen_region,

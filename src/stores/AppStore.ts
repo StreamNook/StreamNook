@@ -12,7 +12,7 @@ import { reportCodecPreference } from '../utils/codecPreference';
 import { setInlineEmoteScale } from '../services/emoteService';
 import { upsertUser, claimLoginAccolades, grantAtmosphereOwnership } from '../services/supabaseService';
 import { patchSettings, settingsDiff } from '../utils/settingsBroadcast';
-import { IS_MAC, IS_MOBILE } from '../utils/platform';
+import { IS_MOBILE } from '../utils/platform';
 import { makeKey, parseKey } from '../utils/providerKey';
 import { isStrayYouTubeFavoriteId } from '../utils/favorites';
 import { buildProviderUrl, streamProvider } from '../utils/streamProvider';
@@ -21,6 +21,9 @@ import { transientSwapVerdict } from '../utils/transientSwap';
 import { providerLabel, WATCHABLE_PROVIDERS, type ProviderId, type ProviderCategory } from '../types/providers';
 import { takePreloadedSettings } from '../bootPreload';
 import { settleFirstSettings } from '../utils/settingsOnceLoaded';
+import { setWindowFullscreen } from '../utils/windowFullscreen';
+import { useAccountRosterStore } from './accountRosterStore';
+import { twitchSignInReason } from '../utils/twitchSignIn';
 
 export type StreamStartResult = {
   url: string;
@@ -86,6 +89,7 @@ export interface Toast {
     onClick: () => void;
   };
   timeoutId?: ReturnType<typeof setTimeout>;
+  /** Milliseconds on screen; 0 keeps it until it is dismissed or taken down. */
   duration: number;
   createdAt: number;
 }
@@ -490,7 +494,9 @@ interface AppState {
   /** Merge fresh fields into the watched stream (viewers/title from a provider
    *  metadata poll). No-op when nothing is playing. */
   patchCurrentStream: (partial: Partial<TwitchStream>) => void;
-  addToast: (message: string | React.ReactNode, type: 'info' | 'success' | 'warning' | 'error' | 'live' | 'channel_points', action?: { label: string; onClick: () => void }, options?: { skipIsland?: boolean; alwaysShow?: boolean; avatarUrl?: string; source?: 'plugin' }) => void;
+  /** `sticky` keeps the toast on screen until it is dismissed or removed by
+   *  id; pass `id` to be able to remove it. */
+  addToast: (message: string | React.ReactNode, type: 'info' | 'success' | 'warning' | 'error' | 'live' | 'channel_points', action?: { label: string; onClick: () => void }, options?: { skipIsland?: boolean; alwaysShow?: boolean; avatarUrl?: string; source?: 'plugin'; sticky?: boolean; id?: number }) => void;
   removeToast: (id: number) => void;
   loadSettings: () => Promise<void>;
   updateSettings: (newSettings: Settings) => Promise<void>;
@@ -1615,14 +1621,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
 
-    const id = Date.now() + Math.random();
+    const id = options?.id ?? Date.now() + Math.random();
     const createdAt = Date.now();
-    // Live toasts get longer duration (8 seconds), others get 5 seconds
-    const duration = type === 'live' ? 8000 : 5000;
+    // Live toasts get longer duration (8 seconds), others get 5 seconds; a
+    // sticky one has none and stays until it is dismissed or removed by id.
+    const duration = options?.sticky ? 0 : type === 'live' ? 8000 : 5000;
 
     // For live toasts, let ToastItem handle the timer (so we can pause on hover)
     // For other toasts, use the simple auto-dismiss
-    if (type === 'live') {
+    if (type === 'live' || options?.sticky) {
       set(state => ({
         toasts: [...state.toasts, { id, message, type, action, duration, createdAt }]
       }));
@@ -1721,12 +1728,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
     }
 
-    // Sync diagnostic logging state to both frontend and backend
-    const diagnosticsEnabled = settings.error_reporting_enabled !== false;
-    setDiagnosticsEnabled(diagnosticsEnabled);
-    invoke('set_diagnostics_enabled', { enabled: diagnosticsEnabled }).catch((e) => {
-      Logger.warn('[Diagnostics] Failed to sync to backend:', e);
-    });
+    // This window's own logger. Rust applies the saved setting to its logging
+    // itself (at boot and when a save changes it), so a second window loading
+    // its settings never turns the app's logging up or down.
+    setDiagnosticsEnabled(settings.error_reporting_enabled !== false);
 
     // Tell the resolver which video codecs this machine can decode (capability-probed
     // here in the webview), gated by the enhanced-codecs setting. Must run before any
@@ -1777,13 +1782,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ settings: newSettings, chatPlacement: newSettings.chat_placement });
     }
 
-    // Sync diagnostic logging state if it changed
+    // This window's own logger; the save above already reached Rust's.
     if (newSettings.error_reporting_enabled !== oldSettings.error_reporting_enabled) {
-      const diagnosticsEnabled = newSettings.error_reporting_enabled !== false;
-      setDiagnosticsEnabled(diagnosticsEnabled);
-      invoke('set_diagnostics_enabled', { enabled: diagnosticsEnabled }).catch((e) => {
-        Logger.warn('[Diagnostics] Failed to sync to backend:', e);
-      });
+      setDiagnosticsEnabled(newSettings.error_reporting_enabled !== false);
     }
 
     // Handle Discord enable/disable toggle. Not awaited: the settings write is
@@ -3123,18 +3124,10 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   toggleWindowFullscreen: async () => {
     try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      const win = getCurrentWindow();
-      const next = !(await win.isFullscreen());
-      // A borderless (decorations: false) window that is WS_MAXIMIZE keeps its
-      // maximized chrome and leaves the taskbar showing even after
-      // setFullscreen(true). Drop the maximize first so we cover the whole screen.
-      // Windows only: on macOS the window is decorated, and zooming right
-      // before the animated full-screen transition makes AppKit refuse it.
-      if (next && !IS_MAC && (await win.isMaximized())) {
-        await win.unmaximize();
-      }
-      await win.setFullscreen(next);
+      // Rust toggles the window and keeps its maximize across the trip: a
+      // maximized window drops the maximize to cover the taskbar and gets it
+      // back on the way out (setWindowFullscreen).
+      const next = await setWindowFullscreen();
       set({ isWindowFullscreen: next });
       trackActivity(next ? 'Entered full screen' : 'Exited full screen');
     } catch (err) {
@@ -3391,18 +3384,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       // below stays the source of truth for auth state and auto-refresh.
       // Keep this the only call site: the missing-scopes path triggers a full
       // account-registry reset in Rust, so it must never fire twice per check.
+      // Rust also records why (services/twitch_signin.rs) on the roster's Twitch
+      // row, and useTwitchSignInPrompt asks the viewer to sign in again from
+      // that, so the prompt outlives this call and reaches every window.
       invoke<{ is_valid: boolean; needs_refresh: boolean; error?: string }>('verify_token_health')
         .then((health) => {
           if (!health.is_valid && health.error && health.error.includes('Missing scopes')) {
             set({ isAuthenticated: false, currentUser: null, followedStreams: [] });
-            get().addToast(
-              'We added new features! Please log in again to grant the new permissions.',
-              'warning',
-              {
-                label: 'Log In',
-                onClick: () => get().loginToTwitch()
-              }
-            );
           }
         })
         .catch(() => {});
@@ -3508,7 +3496,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       // If it fails, we're not authenticated
       set({ isAuthenticated: false, currentUser: null, followedStreams: [] });
 
-      const isMissingScopes = authErrorMsg.includes('Missing scopes');
+      // Rust signed the user out itself and says why on the roster; that prompt
+      // stays until they sign in, so no other toast should talk over it.
+      const isMissingScopes =
+        authErrorMsg.includes('Missing scopes') ||
+        authErrorMsg.includes('Sign-in required') ||
+        twitchSignInReason(useAccountRosterStore.getState().roster) !== null;
       const isNetworkError = authErrorMsg.toLowerCase().includes('error sending request') || 
                              authErrorMsg.toLowerCase().includes('timeout') || 
                              authErrorMsg.toLowerCase().includes('network') ||
@@ -3520,16 +3513,10 @@ export const useAppStore = create<AppState>((set, get) => ({
                              authErrorMsg.includes('503') ||
                              authErrorMsg.includes('504');
 
-      // Proactively notify the user if they lost their session or needed a scope upgrade
+      // Proactively notify the user if they lost their session. A scope upgrade
+      // is useTwitchSignInPrompt's to announce, from the reason Rust holds.
       if (isMissingScopes) {
-        get().addToast(
-          'We added new features! Please log in again to grant the new permissions.',
-          'warning',
-          {
-            label: 'Log In',
-            onClick: () => get().loginToTwitch()
-          }
-        );
+        Logger.info('[Auth] Twitch needs a new sign-in; the sign-in prompt covers it');
       } else if (isNetworkError) {
         // Don't mistakenly tell them their session expired if their internet is just out
         Logger.warn('[Auth] Network error during auth check, failing gracefully:', authErrorMsg);

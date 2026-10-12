@@ -142,16 +142,23 @@ pub async fn patch_settings(
         return Ok(());
     }
     let keys: Vec<String> = patch.keys().cloned().collect();
-    let (settings, favorites_changed) = {
+    let (settings, favorites_changed, role_art_changed) = {
         let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
         let next = apply_settings_patch(&state_settings, patch)?;
         let favorites_changed = state_settings.favorite_streamers != next.favorite_streamers;
+        let role_art_changed = state_settings.chat_design.ffz_custom_role_badges
+            != next.chat_design.ffz_custom_role_badges;
         *state_settings = next.clone();
-        (next, favorites_changed)
+        (next, favorites_changed, role_art_changed)
     };
     after_settings_change(&settings, favorites_changed);
+    state.layout_service.set_gif_scale(settings.chat_design.gif_scale);
     write_settings_to_disk(&settings)?;
     let _ = app.emit(SETTINGS_UPDATED_EVENT, SettingsUpdated { source, keys });
+    if role_art_changed {
+        // Every window's channel badge sets were built with the old choice.
+        crate::services::ffz_room_badges::announce(None);
+    }
     Ok(())
 }
 
@@ -402,6 +409,9 @@ fn apply_settings_patch(
 
 /// What every settings change has to refresh, whichever path wrote it.
 fn after_settings_change(settings: &Settings, favorites_changed: bool) {
+    // Detailed logging, from whichever window saved it. Applied only when the
+    // saved value changes, so a save of anything else never resets the level.
+    crate::services::diagnostic_logger::apply_setting(settings.error_reporting_enabled);
     // Recompile chat rules if their groups changed (hash-gated, cheap).
     crate::services::chat_rules::ChatRules::refresh(settings);
     crate::services::streamer_mode::StreamerMode::refresh(settings);
@@ -509,13 +519,15 @@ pub async fn import_settings(path: String, state: State<'_, AppState>) -> Result
     let imported: Settings = serde_json::from_value(merged)
         .map_err(|e| format!("That backup isn't compatible with this version: {}", e))?;
 
+    let favorites_changed = current.favorite_streamers != imported.favorite_streamers;
     {
         let mut state_settings = state.settings.lock().unwrap();
         *state_settings = imported.clone();
     }
-    crate::services::chat_rules::ChatRules::refresh(&imported);
-    crate::services::streamer_mode::StreamerMode::refresh(&imported);
-    crate::services::mention_ping::refresh(&imported);
+    // The same refresh set as every other write path, so imported reminders,
+    // chat rules and the notification polls apply without waiting for a save.
+    after_settings_change(&imported, favorites_changed);
+    state.layout_service.set_gif_scale(imported.chat_design.gif_scale);
     // Immediate direct write, deliberately not debounced: the frontend reloads
     // right after this returns and must find the imported file on disk.
     write_settings_to_disk_sync(&imported)?;
@@ -659,6 +671,7 @@ pub async fn send_test_notification(
         stream_url: format!("https://twitch.tv/{}", mock_streamer_login),
         is_test: true,
         source: None,
+        seventv_id: None,
     };
 
     // Emit the notification event to the frontend (for in-app notification)

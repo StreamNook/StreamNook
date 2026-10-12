@@ -129,6 +129,11 @@ pub struct VideoPlayerSettings {
     /// them match the theme background so the video appears to float.
     #[serde(default)]
     pub cinema_mode: bool,
+    /// While a stream or VOD plays in the main window, the title bar slides
+    /// away and the picture takes the top edge; the bar comes back when the
+    /// pointer reaches the top. Off by default.
+    #[serde(default)]
+    pub hide_title_bar_while_watching: bool,
     #[serde(default)]
     pub audio_boost: AudioBoostSettings,
     #[serde(default)]
@@ -223,6 +228,7 @@ impl Default for VideoPlayerSettings {
             start_quality: -1,
             lock_aspect_ratio: true,
             cinema_mode: false,
+            hide_title_bar_while_watching: false,
             audio_boost: AudioBoostSettings::default(),
             song_id: SongIdSettings::default(),
             experimental_low_latency: true,
@@ -309,6 +315,10 @@ pub struct ChatDesignSettings {
     /// that reveals it on click. Default true.
     #[serde(default = "default_true")]
     pub show_chat_gifs: bool,
+    /// Twitch chat GIF size multiplier on the 80px base height, held to
+    /// `GIF_SCALE_MIN..=GIF_SCALE_MAX` on every load and save. Default 1.
+    #[serde(default = "default_gif_scale", deserialize_with = "deserialize_gif_scale")]
+    pub gif_scale: f64,
     /// Opacity of backfilled history rows, 0-100 (100 = same as live).
     #[serde(default = "default_backfill_opacity")]
     pub backfill_opacity: u32,
@@ -373,6 +383,10 @@ pub struct ChatDesignSettings {
     pub show_badges: bool,
     #[serde(default = "default_badge_scale")]
     pub badge_scale: f64,
+    /// A channel's own moderator and VIP badge art from its FrankerFaceZ room
+    /// in place of Twitch's (`services::ffz_room_badges`).
+    #[serde(default = "default_true")]
+    pub ffz_custom_role_badges: bool,
     #[serde(default = "default_true")]
     pub show_third_party_badges: bool,
     #[serde(default)]
@@ -432,6 +446,21 @@ pub struct ChatDesignSettings {
     /// How docked chats are switched in a chat column: menu | tabs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat_dock_switcher: Option<String>,
+    /// Ticks on the chat scrollbar where marked rows sit (mentions, subs,
+    /// announcements and so on), so a viewer scrolled away can find them.
+    #[serde(default = "default_true")]
+    pub scrollbar_marks: bool,
+    /// Which mark kinds draw: mention (replies to you included) | highlight
+    /// | pinned | announcement | sub | redeem | raid | first_time.
+    #[serde(default = "default_scrollbar_mark_kinds")]
+    pub scrollbar_mark_kinds: Vec<String>,
+}
+
+pub fn default_scrollbar_mark_kinds() -> Vec<String> {
+    ["mention", "highlight", "pinned", "announcement", "sub", "redeem", "raid"]
+        .iter()
+        .map(|k| k.to_string())
+        .collect()
 }
 
 fn default_name_color_adjustment() -> String {
@@ -460,6 +489,34 @@ fn default_reply_style() -> String {
 
 fn default_emote_scale() -> f64 {
     1.0
+}
+
+/// Smallest chat GIF size: half the 80px default.
+pub const GIF_SCALE_MIN: f64 = 0.5;
+/// Largest chat GIF size: twice the 80px default.
+pub const GIF_SCALE_MAX: f64 = 2.0;
+
+fn default_gif_scale() -> f64 {
+    1.0
+}
+
+/// A GIF size held to its range; anything that is not a finite number (a
+/// hand-edited file, a stray null) takes the default instead of failing the
+/// whole settings load.
+pub fn clamp_gif_scale(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(GIF_SCALE_MIN, GIF_SCALE_MAX)
+    } else {
+        default_gif_scale()
+    }
+}
+
+fn deserialize_gif_scale<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = serde_json::Value::deserialize(deserializer)?;
+    Ok(clamp_gif_scale(raw.as_f64().unwrap_or_else(default_gif_scale)))
 }
 fn default_emote_margin() -> f64 {
     0.125
@@ -512,6 +569,7 @@ impl Default for ChatDesignSettings {
             emote_scale: 1.0,
             animate_emotes: default_animate_emotes(),
             show_chat_gifs: true,
+            gif_scale: default_gif_scale(),
             backfill_opacity: default_backfill_opacity(),
             emote_margin: 0.125,
             emote_hover_size: 96,
@@ -533,6 +591,7 @@ impl Default for ChatDesignSettings {
             name_color_adjustment: default_name_color_adjustment(),
             show_badges: true,
             badge_scale: 1.0,
+            ffz_custom_role_badges: true,
             show_third_party_badges: true,
             hidden_badge_providers: Vec::new(),
             message_entrance: default_message_entrance(),
@@ -556,6 +615,8 @@ impl Default for ChatDesignSettings {
             mention_style: None,
             mention_text_color: None,
             chat_dock_switcher: None,
+            scrollbar_marks: true,
+            scrollbar_mark_kinds: default_scrollbar_mark_kinds(),
             username_accent_source: "user".to_string(),
             drag_moderation_enabled: true,
             mod_action_style: "both".to_string(),
@@ -995,6 +1056,14 @@ pub struct Settings {
     /// every window sees one copy.
     #[serde(default)]
     pub snippets: SnippetSettings,
+    /// How 7TV cosmetics draw: paint shadows and 7TV profile pictures. Typed so
+    /// a new field persists; unknown keys inside the group ride its own `extra`.
+    #[serde(default)]
+    pub cosmetics: CosmeticsSettings,
+    /// `/spam` and `/pyramid`: the pause between lines and whether repeats
+    /// are varied. Typed because the Rust runner reads it.
+    #[serde(default)]
+    pub chat_burst: ChatBurstSettings,
     /// Catch-all for preference groups the frontend manages but this struct does
     /// not model field-by-field: highlight phrases, custom chat commands,
     /// moderation prefs, custom themes, the OLED accent, and any future ones.
@@ -1086,6 +1155,52 @@ pub struct CustomSnippet {
     pub content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keywords: Option<String>,
+}
+
+/// 7TV cosmetic display. Mirrors the frontend `CosmeticsSettings`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct CosmeticsSettings {
+    /// Paint drop shadows: "all", "one" or "none"; unset draws them all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paint_shadows: Option<String>,
+    /// Show the profile picture someone set on 7TV in place of their platform
+    /// picture.
+    pub seventv_profile_pictures: bool,
+    /// Keys the frontend adds to this group before this struct names them.
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
+impl Default for CosmeticsSettings {
+    fn default() -> Self {
+        Self { paint_shadows: None, seventv_profile_pictures: true, extra: HashMap::new() }
+    }
+}
+
+/// `/spam` and `/pyramid`. Mirrors the frontend `ChatBurstSettings`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct ChatBurstSettings {
+    /// Milliseconds between two lines (10 to 5000). 1000 is Twitch's
+    /// per-channel pace for a regular viewer.
+    pub delay_ms: u32,
+    /// Make a line that repeats the one before it differ by invisible
+    /// characters, so Twitch's duplicate filter does not drop it.
+    pub vary_repeats: bool,
+    /// Keys the frontend adds to this group before this struct names them.
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
+impl Default for ChatBurstSettings {
+    fn default() -> Self {
+        Self {
+            delay_ms: crate::services::chat_burst::DEFAULT_DELAY_MS,
+            vary_repeats: true,
+            extra: HashMap::new(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -1194,6 +1309,8 @@ impl Default for Settings {
             channel_links: vec![],
             chat_blend: ChatBlendSettings::first_run(),
             snippets: SnippetSettings::default(),
+            cosmetics: CosmeticsSettings::default(),
+            chat_burst: ChatBurstSettings::default(),
             chat_design: ChatDesignSettings::first_run(),
             live_notifications: LiveNotificationSettings::default(),
             last_seen_version: None,
@@ -1456,6 +1573,56 @@ mod backup_persistence_tests {
     }
 
     #[test]
+    fn hide_title_bar_while_watching_persists_and_defaults_off() {
+        assert!(!Settings::default().video_player.hide_title_bar_while_watching);
+
+        let mut on = Settings::default();
+        on.video_player.hide_title_bar_while_watching = true;
+        let json = serde_json::to_string(&on).expect("serialize");
+        let back: Settings = serde_json::from_str(&json).expect("parse");
+        assert!(back.video_player.hide_title_bar_while_watching);
+
+        // A file written before the field existed parses to off.
+        let mut old = serde_json::to_value(Settings::default()).expect("serialize");
+        old["video_player"]
+            .as_object_mut()
+            .expect("video_player object")
+            .remove("hide_title_bar_while_watching");
+        let parsed: Settings = serde_json::from_value(old).expect("settings without the field parse");
+        assert!(!parsed.video_player.hide_title_bar_while_watching);
+    }
+
+    #[test]
+    fn gif_scale_persists_defaults_to_one_and_stays_in_range() {
+        assert_eq!(Settings::default().chat_design.gif_scale, 1.0);
+
+        let mut big = Settings::default();
+        big.chat_design.gif_scale = 1.75;
+        let json = serde_json::to_string(&big).expect("serialize");
+        let back: Settings = serde_json::from_str(&json).expect("parse");
+        assert_eq!(back.chat_design.gif_scale, 1.75);
+
+        // `None` drops the key, as a file written before the field existed.
+        let parse_with = |value: Option<serde_json::Value>| -> f64 {
+            let mut file = serde_json::to_value(Settings::default()).expect("serialize");
+            let cd = file["chat_design"].as_object_mut().expect("chat_design object");
+            match value {
+                Some(v) => cd.insert("gif_scale".into(), v),
+                None => cd.remove("gif_scale"),
+            };
+            let parsed: Settings = serde_json::from_value(file).expect("settings parse");
+            parsed.chat_design.gif_scale
+        };
+        assert_eq!(parse_with(None), 1.0);
+        // Out of range is held to the slider's ends, never a broken row.
+        assert_eq!(parse_with(Some(serde_json::json!(9.0))), GIF_SCALE_MAX);
+        assert_eq!(parse_with(Some(serde_json::json!(0.1))), GIF_SCALE_MIN);
+        assert_eq!(parse_with(Some(serde_json::json!(0.75))), 0.75);
+        // A stray null takes the default instead of failing the whole load.
+        assert_eq!(parse_with(Some(serde_json::Value::Null)), 1.0);
+    }
+
+    #[test]
     fn legacy_default_gap_becomes_automatic_but_a_chosen_gap_survives() {
         let mut s = Settings::default();
         s.video_player.ll_target_latency = Some(6.0);
@@ -1707,6 +1874,47 @@ mod backup_persistence_tests {
     /// round-trip through the flattened `extra` map instead of being dropped,
     /// and must serialize back at the top level (not nested under "extra").
     #[test]
+    fn cosmetics_are_modelled_and_an_old_file_keeps_its_paint_shadows() {
+        let defaults = Settings::default();
+        assert!(defaults.cosmetics.seventv_profile_pictures, "7TV profile pictures default on");
+        assert_eq!(defaults.cosmetics.paint_shadows, None);
+
+        // A file written while `cosmetics` rode the top-level catch-all.
+        let mut value = serde_json::to_value(Settings::default()).unwrap();
+        value["cosmetics"] = serde_json::json!({ "paint_shadows": "none", "future_key": 3 });
+        let parsed: Settings = serde_json::from_value(value).unwrap();
+        assert!(!parsed.extra.contains_key("cosmetics"));
+        assert_eq!(parsed.cosmetics.paint_shadows.as_deref(), Some("none"));
+        assert!(parsed.cosmetics.seventv_profile_pictures, "a missing field takes the default");
+
+        let mut off = parsed.clone();
+        off.cosmetics.seventv_profile_pictures = false;
+        let back: Settings = serde_json::from_value(serde_json::to_value(&off).unwrap()).unwrap();
+        assert!(!back.cosmetics.seventv_profile_pictures);
+        assert_eq!(back.cosmetics.extra.get("future_key"), Some(&serde_json::json!(3)));
+    }
+
+    #[test]
+    fn chat_burst_settings_persist_and_an_old_file_gets_the_defaults() {
+        let defaults = Settings::default();
+        assert_eq!(defaults.chat_burst.delay_ms, 1000);
+        assert!(defaults.chat_burst.vary_repeats);
+
+        // A file from before the group existed.
+        let mut value = serde_json::to_value(Settings::default()).unwrap();
+        value.as_object_mut().unwrap().remove("chat_burst");
+        let parsed: Settings = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.chat_burst, ChatBurstSettings::default());
+
+        // What the page saves comes back, and never lands in the catch-all.
+        let mut value = serde_json::to_value(Settings::default()).unwrap();
+        value["chat_burst"] = serde_json::json!({ "delay_ms": 30, "vary_repeats": false });
+        let parsed: Settings = serde_json::from_value(value).unwrap();
+        assert!(!parsed.extra.contains_key("chat_burst"));
+        assert_eq!((parsed.chat_burst.delay_ms, parsed.chat_burst.vary_repeats), (30, false));
+    }
+
+    #[test]
     fn snippets_are_modelled_and_survive_a_round_trip() {
         let mut value = serde_json::to_value(Settings::default()).unwrap();
         value["snippets"] = serde_json::json!({
@@ -1775,6 +1983,31 @@ mod backup_persistence_tests {
         let again = serde_json::to_value(&parsed).expect("re-serialize");
         assert_eq!(again["chat_design"]["activity_font_size"], serde_json::json!(16));
         assert_eq!(again["chat_design"]["name_color_adjustment"], serde_json::json!("off"));
+    }
+
+    /// The scrollbar marks keys persist through a save, and an old settings
+    /// file without them gets marks on with the default kinds.
+    #[test]
+    fn scrollbar_marks_settings_persist_and_default_on() {
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize defaults");
+        let design = value["chat_design"].as_object_mut().expect("chat_design object");
+        assert_eq!(design.get("scrollbar_marks"), Some(&serde_json::json!(true)));
+        design.remove("scrollbar_marks");
+        design.remove("scrollbar_mark_kinds");
+        let old: Settings = serde_json::from_value(value.clone()).expect("deserialize old file");
+        assert!(old.chat_design.scrollbar_marks);
+        assert_eq!(old.chat_design.scrollbar_mark_kinds, default_scrollbar_mark_kinds());
+
+        let design = value["chat_design"].as_object_mut().unwrap();
+        design.insert("scrollbar_marks".into(), serde_json::json!(false));
+        design.insert("scrollbar_mark_kinds".into(), serde_json::json!(["mention", "first_time"]));
+        let parsed: Settings = serde_json::from_value(value).expect("deserialize");
+        let again = serde_json::to_value(&parsed).expect("re-serialize");
+        assert_eq!(again["chat_design"]["scrollbar_marks"], serde_json::json!(false));
+        assert_eq!(
+            again["chat_design"]["scrollbar_mark_kinds"],
+            serde_json::json!(["mention", "first_time"])
+        );
     }
 
     #[test]

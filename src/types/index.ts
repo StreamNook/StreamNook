@@ -47,6 +47,9 @@ export interface VideoPlayerSettings {
   start_quality: number;
   lock_aspect_ratio: boolean;
   cinema_mode?: boolean;
+  /** The title bar slides away while a stream or VOD plays in the main
+   *  window and comes back when the pointer reaches the top edge. */
+  hide_title_bar_while_watching?: boolean;
   audio_boost?: AudioBoostSettings;
   song_id?: SongIdSettings;
   experimental_low_latency?: boolean;
@@ -212,6 +215,9 @@ export interface ChatDesignSettings {
   // Twitch chat GIFs (Tier 2/3 subscribers). Off swaps each for a chip that
   // reveals on click. Typed in Rust too (ChatDesignSettings). Default true.
   show_chat_gifs?: boolean;
+  // Chat GIF size multiplier on the 80px default, 0.5 to 2. Typed and clamped
+  // in Rust (ChatDesignSettings.gif_scale). Default 1.
+  gif_scale?: number;
   // Opacity of history rows loaded on join, 0-100. Default 100.
   backfill_opacity?: number;
   emote_margin?: number; // Horizontal margin around emotes in rem. Negative values overlap. Default 0.125.
@@ -292,6 +298,11 @@ export interface ChatDesignSettings {
   mention_text_color?: string;
   /** How docked chats are switched in a chat column (default menu). */
   chat_dock_switcher?: 'menu' | 'tabs';
+  /** Ticks on the chat scrollbar where marked rows sit (default on). */
+  scrollbar_marks?: boolean;
+  /** Which mark kinds draw: mention (replies to you included), highlight,
+   *  pinned, announcement, sub, redeem, raid, first_time. Rust owns the default. */
+  scrollbar_mark_kinds?: string[];
   // --- Username prefix styling (normal messages only; action/"/me" stay plain) ---
   // Glyph rendered between the username and the message body.
   username_separator?: 'none' | 'colon' | 'dot' | 'arrow' | 'pipe' | 'dash';
@@ -313,6 +324,9 @@ export interface ChatDesignSettings {
   show_badges?: boolean;
   // Badge size multiplier, 0.5-2.5. Default 1.
   badge_scale?: number;
+  // A channel's own moderator and VIP badge art from FrankerFaceZ in place of
+  // Twitch's. Rust applies it to the channel badge set. Default true.
+  ffz_custom_role_badges?: boolean;
   // 7TV, FFZ, Chatterino and the other add-on badges. Default true.
   show_third_party_badges?: boolean;
   // Add-on badge providers to leave out (lowercase ids: 'streamnook', '7tv',
@@ -567,6 +581,18 @@ export interface RemindersSettings {
 // busy). 'none' = no shadows (cleanest, best on busy backgrounds).
 export interface CosmeticsSettings {
   paint_shadows?: 'all' | 'one' | 'none';
+  // Show the profile picture someone set on 7TV in place of their platform
+  // picture. Default true. Mirrored in models/settings.rs (CosmeticsSettings).
+  seventv_profile_pictures?: boolean;
+}
+
+// /spam and /pyramid. Mirrored in models/settings.rs (ChatBurstSettings).
+export interface ChatBurstSettings {
+  // Milliseconds between two lines, 10 to 5000. Default 1000.
+  delay_ms?: number;
+  // Vary a line that repeats the one before it with invisible characters so
+  // Twitch's duplicate filter keeps it. Default true.
+  vary_repeats?: boolean;
 }
 
 // Render / perf controls. All optional with defaults preserving prior behavior.
@@ -1127,6 +1153,7 @@ export interface Settings {
   /** The command palette's snippets (models/settings.rs SnippetSettings). */
   snippets?: SnippetSettings;
   cosmetics?: CosmeticsSettings;
+  chat_burst?: ChatBurstSettings;
   live_notifications?: LiveNotificationSettings;
   last_seen_version?: string;
   auto_switch?: AutoSwitchSettings;
@@ -2089,6 +2116,10 @@ export interface ChannelReward {
   global_cooldown_seconds?: number;
   reward_type?: string | null;
   redemptions_redeemed_current_stream?: number | null;
+  is_sub_only?: boolean;
+  is_hidden_for_subs?: boolean;
+  /** What a built-in reward does; custom rewards carry `prompt` instead. */
+  description?: string | null;
   /** Rust's verdict on whether the viewer can redeem it right now. */
   availability: RewardAvailability;
 }
@@ -2098,21 +2129,34 @@ export type RewardBlock =
   | 'disabled'
   | 'paused'
   | 'out_of_stock'
-  | 'input_not_supported'
   | 'max_per_stream_reached'
   | 'on_cooldown'
-  | 'not_enough_points';
+  | 'not_enough_points'
+  | 'needs_sub_only_mode'
+  | 'already_can_chat'
+  | 'chat_reconnecting'
+  | 'subscribers_only'
+  | 'only_while_live';
 
-/** Rust's verdict for one reward, computed when the list was fetched. */
+/** Rust's verdict for one reward (services/channel_rewards.rs). */
 export interface RewardAvailability {
   redeemable: boolean;
   reason: RewardBlock | null;
   cooldown_until_ms: number | null;
   affordable: boolean;
+  /** A few words for the list row; null when redeemable. */
+  label?: string | null;
+  /** The full sentence for the detail view; null when redeemable. */
+  detail?: string | null;
 }
 
-/** `get_channel_rewards`: the rewards, the balance they were judged against, and when. */
+/**
+ * `get_channel_rewards`, and the `channel-rewards` event Rust sends when it
+ * re-judges a list (sub-only mode toggled, the stream went live or offline).
+ */
 export interface ChannelRewardsSnapshot {
+  /** The channel's Twitch login, lowercase. */
+  login: string;
   rewards: ChannelReward[];
   balance: number | null;
   fetched_at_ms: number;
@@ -2224,6 +2268,9 @@ export interface LiveNotificationData {
   stream_title?: string;
   is_live: boolean; // Current status - may change
   is_test?: boolean; // Dummy preview entry from the "Test" button; clicking it must not open a real stream
+  /** The streamer's 7TV cosmetics id from Rust (a bare Twitch id, `kick:<id>`
+   *  or `youtube:UC...`), for their 7TV picture. Absent on older entries. */
+  seventv_id?: string;
 }
 
 export interface WhisperNotificationData {

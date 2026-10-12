@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type ReactNode } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Gift, RotateCcw } from 'lucide-react';
 import { useNameColorAdjust } from '../../hooks/useNameColor';
 import { StyledChatName, type NameSeparator, type NameStyle } from '../chat/StyledChatName';
@@ -10,6 +10,9 @@ import type { ChatEventSettings } from '../../types';
 import { Tooltip } from '../ui/Tooltip';
 import { calculateHalfPadding } from '../../utils/chatLayoutUtils';
 import { mentionBoxClass, mentionBoxStyle, mentionTextStyle, type MentionLook } from '../chat/mentionStyle';
+import { ScrollbarMarks } from '../chat/ScrollbarMarks';
+import { collectMarks } from '../chat/scrollbarMarkLayout';
+import type { BackendChatMessage, ScrollbarMarkKind } from '../../services/twitchChat';
 
 // A few lines of sample chat for the settings page, drawn with the viewer's own
 // chat design (text size, spacing, dividers, stripes, timestamps, name style)
@@ -349,6 +352,89 @@ export const MentionPreview = ({ design, look }: { design: PreviewDesign; look: 
           />
         </Row>
       </PreviewChat>
+    </SettingPreview>
+  );
+};
+
+interface MarkSample {
+  who: Chatter;
+  text: string;
+  mark?: ScrollbarMarkKind;
+  color?: string;
+}
+
+// A stretch of chat with one of each mark kind, scrolled to its newest lines
+// so the marked ones sit above, out of sight, as they do when you read back.
+const MARK_SAMPLES: MarkSample[] = [
+  { who: MOSSY, text: 'evening chat' },
+  { who: PIXELFOX, text: '@you did you catch that play?', mark: 'mention' },
+  { who: LOOTGOBLIN, text: 'subscribed for 6 months!', mark: 'sub' },
+  { who: QUIETSTORM, text: 'lol' },
+  { who: MOSSY, text: 'Drops are live, link in the panels', mark: 'announcement', color: '#22c55e' },
+  { who: PIXELFOX, text: 'that clutch though', mark: 'highlight' },
+  { who: LOOTGOBLIN, text: 'GG' },
+  { who: QUIETSTORM, text: 'schedule is in the about tab', mark: 'pinned' },
+  { who: MOSSY, text: 'is raiding with 120 viewers', mark: 'raid' },
+  { who: PIXELFOX, text: 'hydrate check' },
+  { who: LOOTGOBLIN, text: 'first time here, hi!', mark: 'first_time', color: '#a855f7' },
+  { who: QUIETSTORM, text: 'redeemed Hydrate', mark: 'redeem' },
+  { who: MOSSY, text: 'back to the queue' },
+  { who: PIXELFOX, text: 'one more game' },
+  { who: LOOTGOBLIN, text: 'he is so locked in' },
+  { who: QUIETSTORM, text: 'POG' },
+];
+
+const sampleId = (i: number) => `mark-sample-${i}`;
+
+/** Sample chat read back from the bottom, with the real scrollbar marks drawn
+ *  over its scrollbar for the kinds that are on. */
+export const ScrollbarMarksPreview = ({
+  design,
+  kinds,
+  mentionColor,
+}: {
+  design: PreviewDesign;
+  kinds: readonly string[];
+  mentionColor?: string;
+}) => {
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const marks = useMemo(() => {
+    const rows = MARK_SAMPLES.map(
+      (s, i) =>
+        ({
+          id: sampleId(i),
+          metadata:
+            s.mark && s.mark !== 'pinned'
+              ? { scrollbar_mark: { kind: s.mark, color: s.mark === 'mention' ? mentionColor : s.color } }
+              : {},
+        }) as unknown as BackendChatMessage,
+    );
+    const pinned = new Set(MARK_SAMPLES.flatMap((s, i) => (s.mark === 'pinned' ? [sampleId(i)] : [])));
+    return collectMarks(rows, (m) => (typeof m === 'string' ? null : m.id), new Set(kinds), pinned);
+  }, [kinds, mentionColor]);
+
+  useLayoutEffect(() => {
+    const el = scrollerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [design.font_size, design.message_spacing, design.show_timestamps]);
+
+  return (
+    <SettingPreview caption={kinds.length ? 'ticks mark what is above, while you read back' : 'no kinds are on'}>
+      <div className="glass-panel relative overflow-hidden rounded-lg">
+        <div className="relative h-36">
+          <div ref={scrollerRef} className="h-full overflow-y-auto overflow-x-hidden scrollbar-thin">
+            <div ref={contentRef} className={`flex flex-col py-1${design.alternating_backgrounds ? ' chat-striped' : ''}`}>
+              {MARK_SAMPLES.map((s, i) => (
+                <div key={sampleId(i)} data-message-id={sampleId(i)} className="chat-message-row">
+                  <PreviewLine design={design} who={s.who} text={s.text} minutesAgo={MARK_SAMPLES.length - i} first={i === 0} />
+                </div>
+              ))}
+            </div>
+          </div>
+          <ScrollbarMarks scrollerRef={scrollerRef} contentRef={contentRef} marks={marks} />
+        </div>
+      </div>
     </SettingPreview>
   );
 };

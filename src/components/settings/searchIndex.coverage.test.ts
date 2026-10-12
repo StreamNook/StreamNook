@@ -24,6 +24,7 @@ const TAB_FILES: Record<string, string[]> = {
     'BuiltInHighlightsSettings',
     'UserHighlightsSettings',
     'BadgeHighlightsSettings',
+    'ChatBurstSettings',
     'UserCommandsSettings',
     'RemindersSettings',
     'UserOverridesSettings',

@@ -28,7 +28,8 @@ import { useWatchedChestStat } from './hooks/useWatchedChestStat';
 import { useChatDockHold, useDockView } from './hooks/useChatDock';
 import { chatKey } from './stores/chatDockStore';
 import ChatDockPane from './components/chat/ChatDockPane';
-import { useStreamOnlyFullscreen } from './hooks/useStreamOnlyFullscreen';
+import { useTitleBarAutoHide } from './hooks/useTitleBarAutoHide';
+import { aspectTitleBarReserve } from './utils/titleBarTuck';
 import { useKeybindings } from './keybindings';
 import { useCurrentStreamStats } from './utils/useCurrentStreamStats';
 import { startSnippetSync } from './stores/snippetStore';
@@ -55,6 +56,7 @@ import InputContextMenuHost from './components/InputContextMenuHost';
 import ModerationDragLayer from './components/chat/ModerationDragLayer';
 import { listen } from '@tauri-apps/api/event';
 import { useMentionPing } from './hooks/useMentionPing';
+import { useTwitchSignInPrompt } from './hooks/useTwitchSignInPrompt';
 import { applyModerateEvent } from './utils/applyModerateEvent';
 import { handleSeventvEmoteSetUpdate, handleSeventvCosmeticUpdate, type EmoteSetUpdatePayload, type CosmeticUpdatePayload } from './services/seventvEventApi';
 import { invoke } from '@tauri-apps/api/core';
@@ -141,9 +143,6 @@ async function restoreFromCompact(
   await win.setSize(new LogicalSize(restored.width, restored.height));
 }
 
-/** Height of the React title bar, in CSS pixels. */
-const TITLE_BAR_HEIGHT = 40;
-
 /**
  * The aspect ratio the video box should hold, and the chrome that sits OUTSIDE
  * it, in CSS pixels. Chat is not included: each caller adds it on the axis it
@@ -209,6 +208,9 @@ function App() {
   useChatDockHold();
   // Plays the mention sound when Rust says a live message mentioned you.
   useMentionPing();
+  // Main window only: asks you to sign in to Twitch again, until you do, when
+  // Rust signed you out itself (one prompt per app, not per window).
+  useTwitchSignInPrompt();
   // A YouTube account can own several channels, and a brand channel has its OWN
   // subscriptions. When Rust notices the active one changed (at launch, or after
   // the user switched channel inside an in-app YouTube window), the imported follow
@@ -414,7 +416,12 @@ function App() {
     return () => { if (chatRevealTimer.current) window.clearTimeout(chatRevealTimer.current); };
   }, [autoHideActive]);
   const isMultiNookActive = usemultiNookStore((s) => s.isMultiNookActive);
-  const streamOnlyFullscreen = useStreamOnlyFullscreen();
+  // Stream-only full screen or "Title bar auto-hide": nothing reserves the
+  // title bar's row, so the stream area runs to the top edge.
+  const titleBarAutoHides = useTitleBarAutoHide();
+  // What the aspect-ratio lock counts for the title bar. Keyed to the setting,
+  // not the live layout (see aspectTitleBarReserve).
+  const aspectBarReserve = aspectTitleBarReserve(settings.video_player?.hide_title_bar_while_watching === true);
   // Which tile the grid's chat pane is showing. Only read to decide WHICH chat
   // surface renders; ChatWidget still synthesizes the Twitch case itself.
   const multiNookSlots = usemultiNookStore((s) => s.slots);
@@ -486,6 +493,7 @@ function App() {
 
   // Refs for aspect ratio lock to avoid stale closures
   const aspectRatioLockEnabledRef = useRef(false);
+  const aspectBarReserveRef = useRef(aspectBarReserve);
   const chatSizeRef = useRef(chatPlacement === 'bottom' ? DEFAULT_CHAT_HEIGHT : DEFAULT_CHAT_WIDTH);
   const chatPlacementRef = useRef(chatPlacement);
   const isTheaterModeRef = useRef(false);
@@ -595,7 +603,7 @@ function App() {
           // Logical pixels: the offsets below are all CSS pixels, so the window size
           // has to be converted out of physical device pixels before mixing them.
           const size = await getLogicalInnerSize(window);
-          const titleBarHeight = 40;
+          const titleBarHeight = aspectBarReserveRef.current;
 
           Logger.debug('[ChatSize] Calculating window size to preserve video dimensions');
           Logger.debug('[ChatSize] Old layout:', oldPlacement, 'with chat size', oldChatSize);
@@ -1426,8 +1434,10 @@ function App() {
             settings.compact_view?.customPresets
           );
 
-          // Title bar height is 40px, window borders are 1px each side
-          const titleBarHeight = 40;
+          // The title bar's row, when one is reserved; window borders are 1px each side.
+          // Read from render, not the ref: the ref catches up in a later effect of
+          // this same commit, so a setting change would size to the old value.
+          const titleBarHeight = aspectBarReserve;
           const windowBorderWidth = 2; // 1px border on each side
           // Subtract borders so total window width matches the preset exactly
           const targetWidth = preset.width - windowBorderWidth;
@@ -1454,7 +1464,7 @@ function App() {
 
     handleTheaterMode();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isTheaterMode, streamUrl, settings.compact_view?.selectedPresetId]); // Re-run if preset changes while in compact view
+  }, [isTheaterMode, streamUrl, settings.compact_view?.selectedPresetId, aspectBarReserve]); // Re-run if the preset or the title bar's row changes while in compact view
 
   // Keep-on-top, scoped to Compact View. The only place that calls
   // setAlwaysOnTop for the main window: the store action just writes the
@@ -1497,6 +1507,10 @@ function App() {
   useEffect(() => {
     aspectRatioLockEnabledRef.current = settings.video_player?.lock_aspect_ratio ?? true;
   }, [settings.video_player?.lock_aspect_ratio]);
+
+  useEffect(() => {
+    aspectBarReserveRef.current = aspectBarReserve;
+  }, [aspectBarReserve]);
 
   useEffect(() => {
     chatSizeRef.current = chatSize;
@@ -1613,7 +1627,7 @@ function App() {
     // video box never gets. Same decomposition calculate_aspect_ratio_size
     // makes, expressed once instead of per placement.
     const extraWidth = uiWidthOffset + (placement === 'right' || placement === 'left' ? size : 0);
-    const extraHeight = TITLE_BAR_HEIGHT + uiHeightOffset + (placement === 'bottom' ? size : 0);
+    const extraHeight = aspectBarReserve + uiHeightOffset + (placement === 'bottom' ? size : 0);
 
     invoke<boolean>('set_window_aspect_constraint', {
       enabled,
@@ -1637,6 +1651,7 @@ function App() {
     isMultiNookActive,
     visibleSlotsLength,
     activeChatChannelInPopout,
+    aspectBarReserve,
   ]);
 
   // Handle aspect ratio locking when setting changes or chat is resized
@@ -1695,8 +1710,7 @@ function App() {
         Logger.debug('[AspectRatio] Chat size:', currentChatSize);
         Logger.debug('[AspectRatio] Chat placement:', currentChatPlacement);
 
-        // Title bar height is 40px
-        const titleBarHeight = TITLE_BAR_HEIGHT;
+        const titleBarHeight = aspectBarReserve;
         const { targetAspectRatio, uiWidthOffset, uiHeightOffset } = measureAspectChrome(
           currentChatPlacement,
           currentIsMultiNookActive,
@@ -1739,7 +1753,7 @@ function App() {
     // resizes and lock/stream/layout changes, so chatPlacement is not a dep —
     // adding it here made this effect fire its shrinking formula on every
     // placement toggle and fight the placement handler.
-  }, [settings.video_player?.lock_aspect_ratio, chatSize, streamUrl, isTheaterMode, isMultiNookActive, visibleSlotsLength, activeChatChannelInPopout]);
+  }, [settings.video_player?.lock_aspect_ratio, chatSize, streamUrl, isTheaterMode, isMultiNookActive, visibleSlotsLength, activeChatChannelInPopout, aspectBarReserve]);
 
   // Separate effect for the resize listener - only set up once and use refs
   useEffect(() => {
@@ -1781,7 +1795,7 @@ function App() {
         // what stops the window from growing on every resize event.
         const { width, height, scale } = await getLogicalInnerSize(window);
 
-        const titleBarHeight = TITLE_BAR_HEIGHT;
+        const titleBarHeight = aspectBarReserveRef.current;
         const { targetAspectRatio, uiWidthOffset, uiHeightOffset } = measureAspectChrome(
           currentChatPlacement,
           currentIsMultiNookActive,
@@ -2124,13 +2138,15 @@ function App() {
                 // this is the surface that wants the space back. Home is a
                 // sibling of this element, not a child, so it is unaffected.
                 //
-                // It also keeps the aspect-ratio lock honest: measureAspectChrome
-                // counts TITLE_BAR_HEIGHT as chrome outside the video box, which
-                // is only true while something actually reserves it.
+                // It also keeps the aspect-ratio lock honest: the lock counts
+                // the bar's row as chrome outside the video box, which is only
+                // true while something actually reserves it.
                 //
-                // Stream-only full screen tucks the bar away, so nothing is
-                // reserved and the player and chat run to the top edge.
-                className={`flex flex-1 h-full overflow-hidden ${IS_MOBILE || streamOnlyFullscreen ? '' : 'pt-10'} ${
+                // Stream-only full screen and "Title bar auto-hide" tuck the
+                // bar away, so nothing is reserved and the player and
+                // chat run to the top edge. The bar overlays them when it comes
+                // back; revealing it never moves anything.
+                className={`flex flex-1 h-full overflow-hidden ${IS_MOBILE || titleBarAutoHides ? '' : 'pt-10'} ${
                   settings.show_mod_logs && chatPlacement !== 'hidden'
                     ? (isSideChat ? 'flex-col' : 'flex-row')
                     : (chatPlacement === 'bottom' ? 'flex-col' : 'flex-row')

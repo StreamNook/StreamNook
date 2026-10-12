@@ -21,6 +21,7 @@ const CHAT_TAB_FILES = [
   'BuiltInHighlightsSettings',
   'UserHighlightsSettings',
   'BadgeHighlightsSettings',
+  'ChatBurstSettings',
   'UserCommandsSettings',
   'RemindersSettings',
   'UserOverridesSettings',

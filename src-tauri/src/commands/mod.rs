@@ -12,6 +12,7 @@ pub mod channel_links;
 pub mod channel_panels;
 pub mod channel_state;
 pub mod chat;
+pub mod chat_burst;
 // The chats docked in the main window (desktop only).
 #[cfg(desktop)]
 pub mod chat_dock;
@@ -47,6 +48,7 @@ pub mod mod_log_storage;
 pub mod modroom;
 #[cfg(desktop)]
 pub mod multi_nook;
+pub mod overlay_file;
 pub mod plugins;
 pub mod profile_cache;
 pub mod provider_browse;
@@ -60,6 +62,7 @@ pub mod resub;
 #[cfg(desktop)]
 pub mod screen_capture;
 pub mod session;
+pub mod slash_commands;
 pub mod settings;
 pub mod seventv;
 pub mod song_id;

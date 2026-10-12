@@ -18,6 +18,7 @@ import BadgeHighlightsSettings from './BadgeHighlightsSettings';
 import HighlightAppearanceSettings from './HighlightAppearanceSettings';
 import UserOverridesSettings from './UserOverridesSettings';
 import UserCommandsSettings from './UserCommandsSettings';
+import ChatBurstSettings from './ChatBurstSettings';
 import RemindersSettings from './RemindersSettings';
 import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
 import { useSettingReset } from './settingReset';
@@ -424,6 +425,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     emote_scale: stored?.emote_scale ?? 1,
     animate_emotes: stored?.animate_emotes ?? 'always',
     show_chat_gifs: stored?.show_chat_gifs ?? true,
+    gif_scale: stored?.gif_scale ?? 1,
     backfill_opacity: stored?.backfill_opacity ?? 100,
     emote_margin: stored?.emote_margin ?? 0.125,
     emote_hover_size: stored?.emote_hover_size ?? 96,
@@ -446,6 +448,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     name_color_adjustment: (stored?.name_color_adjustment ?? 'hsl_loop') as 'off' | 'hsl_loop',
     show_badges: stored?.show_badges ?? true,
     badge_scale: stored?.badge_scale ?? 1,
+    ffz_custom_role_badges: stored?.ffz_custom_role_badges ?? true,
     show_third_party_badges: stored?.show_third_party_badges ?? true,
     hidden_badge_providers: stored?.hidden_badge_providers ?? [],
     message_entrance: (stored?.message_entrance ?? 'none') as 'none' | 'fade' | 'slide' | 'rise',
@@ -1518,9 +1521,25 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         <SettingsRow
           title="Badges"
           onReset={resetFor(['chat_design.show_badges', true])}
-          description="The platform's own badges next to names: moderator, subscriber, VIP and the rest."
+          description="The platform's own badges next to names: moderator, subscriber, VIP and the rest. Custom mod & VIP badges are a channel's own art from FrankerFaceZ."
+          help="A channel that uploads its own moderator and VIP badges to FrankerFaceZ shows them in its chat instead of the standard ones. Who is a moderator or VIP still comes from Twitch. Turn it off to see the standard badges everywhere."
           control={<Toggle enabled={cd.show_badges} onChange={() => setDesign({ show_badges: !cd.show_badges })} />}
-        />
+        >
+          {cd.show_badges && (
+            <SubControls>
+              <SubControl
+                title="Custom mod & VIP badges"
+                onReset={resetFor(['chat_design.ffz_custom_role_badges', true])}
+                control={
+                  <Toggle
+                    enabled={cd.ffz_custom_role_badges}
+                    onChange={() => setDesign({ ffz_custom_role_badges: !cd.ffz_custom_role_badges })}
+                  />
+                }
+              />
+            </SubControls>
+          )}
+        </SettingsRow>
 
         <SettingsRow
           title="Badge size"
@@ -1591,6 +1610,19 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           onReset={resetFor(['chat_design.show_avatars', true])}
           description="On platforms that send one (YouTube, TikTok), the chatter's picture leads their message."
           control={<Toggle enabled={cd.show_avatars} onChange={() => setDesign({ show_avatars: !cd.show_avatars })} />}
+        />
+
+        <SettingsRow
+          title="7TV profile pictures"
+          onReset={resetFor(['cosmetics.seventv_profile_pictures', true])}
+          description="People who set a picture on 7TV show it instead of their platform picture: moving on profile cards, pins and the channel header, still in lists until you hover."
+          help="Follows your Motion setting: with reduced or no motion, every picture stays still."
+          control={
+            <Toggle
+              enabled={settings.cosmetics?.seventv_profile_pictures ?? true}
+              onChange={() => setCosmetics({ seventv_profile_pictures: !(settings.cosmetics?.seventv_profile_pictures ?? true) })}
+            />
+          }
         />
 
         <SettingsRow
@@ -1977,7 +2009,27 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               onChange={() => setDesign({ show_chat_gifs: !(cd.show_chat_gifs ?? true) })}
             />
           }
-        />
+        >
+          {/* Not tied to the switch: a GIF revealed from its chip draws at
+              this size too. */}
+          <SubControls>
+            <SubControl
+              title="Size"
+              onReset={resetFor(['chat_design.gif_scale', 1])}
+              control={
+                <InlineSlider
+                  value={cd.gif_scale}
+                  min={0.5}
+                  max={2}
+                  step={0.05}
+                  label="GIF size"
+                  format={(v) => `${v.toFixed(2)}x`}
+                  onChange={(gif_scale) => setDesign({ gif_scale })}
+                />
+              }
+            />
+          </SubControls>
+        </SettingsRow>
 
         <SettingsRow
           title={`Size: ${(cd.emote_scale ?? 1).toFixed(2)}x`}
@@ -2909,6 +2961,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       <UserHighlightsSettings />
 
       <BadgeHighlightsSettings />
+
+      <ChatBurstSettings />
 
       <UserCommandsSettings />
 
