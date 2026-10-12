@@ -36,6 +36,7 @@ import LoadingWidget from '../components/LoadingWidget';
 import DeviceLoginOverlay from '../components/DeviceLoginOverlay';
 import ToastManager from '../components/ToastManager';
 import { usePlatformAccountSync } from '../hooks/usePlatformAccountSync';
+import { useTwitchSignInPrompt } from '../hooks/useTwitchSignInPrompt';
 
 const TAB_ORDER = ['following', 'browse', 'rewards', 'you'] as const;
 
@@ -45,6 +46,9 @@ const MobileApp: React.FC = () => {
   // Kick account state (connected, name, busy) for the composer and Accounts.
   // Mounted exactly once; the hook warns on a second mount.
   usePlatformAccountSync();
+  // Keeps this shell signed out while Rust says Twitch needs a new sign-in;
+  // the sign-in screen itself says why.
+  useTwitchSignInPrompt();
   useKeyboardInsets();
   // Shared with the desktop shell: the watched stream's viewer count is written
   // once at playback start and never refreshed without this.

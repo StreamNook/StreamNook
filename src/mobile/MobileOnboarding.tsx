@@ -3,10 +3,13 @@
 // DeviceLoginOverlay as the device-code fallback rendered by MobileApp).
 import React from 'react';
 import { useAppStore } from '../stores/AppStore';
+import { signInReasonText, useTwitchSignInReason } from '../utils/twitchSignIn';
 
 export const MobileOnboarding: React.FC = () => {
   const loginToTwitch = useAppStore((s) => s.loginToTwitch);
   const isLoading = useAppStore((s) => s.isLoading);
+  // Set when StreamNook signed you out itself: say why instead of the pitch.
+  const signInReason = useTwitchSignInReason();
 
   // Stays centred, full width, including on a foldable. An earlier version
   // confined this to one pane to keep the sign-in button off the crease; that
@@ -23,7 +26,9 @@ export const MobileOnboarding: React.FC = () => {
     >
       <div className="text-2xl font-bold text-textPrimary mb-2">StreamNook</div>
       <div className="text-sm text-textMuted text-center mb-10 max-w-[280px]">
-        Watch Twitch with your emotes, badges, and cosmetics everywhere.
+        {signInReason
+          ? signInReasonText(signInReason)
+          : 'Watch Twitch with your emotes, badges, and cosmetics everywhere.'}
       </div>
       <button
         onClick={() => void loginToTwitch()}
@@ -31,7 +36,7 @@ export const MobileOnboarding: React.FC = () => {
         className="sn-touch glass-button w-full max-w-[320px] px-6 text-[15px] font-semibold text-textPrimary disabled:opacity-60"
         style={{ height: 48 }}
       >
-        {isLoading ? 'Signing in…' : 'Sign in with Twitch'}
+        {isLoading ? 'Signing in…' : signInReason ? 'Sign in again' : 'Sign in with Twitch'}
       </button>
     </div>
   );

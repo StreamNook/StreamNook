@@ -10,6 +10,10 @@ import { create } from 'zustand';
 
 export type AccountStatus = 'connected' | 'expired' | 'not_connected';
 
+/** Why an account has to sign in again, when StreamNook signed it out itself
+ *  (`services/twitch_signin.rs`). */
+export type SignInReason = 'new_permissions';
+
 export type MainAccountId = 'twitch' | 'youtube' | 'kick' | 'tiktok';
 export type ExtraAccountId = 'twitch_drops' | 'seventv';
 
@@ -20,6 +24,9 @@ export interface RosterAccount<Id extends string = string> {
   handle: string | null;
   avatar_url: string | null;
   account_id: string | null;
+  /** Set only on an `expired` row StreamNook ended itself. Only Twitch carries
+   *  one today. */
+  reason?: SignInReason | null;
 }
 
 export interface AccountRoster {
