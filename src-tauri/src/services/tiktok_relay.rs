@@ -76,6 +76,9 @@ struct UriMap {
     next: u32,
     by_index: HashMap<u32, String>,
     by_url: HashMap<String, u32>,
+    /// Media sequence number -> index for segment lines, so a segment keeps
+    /// its `up/<n>` path when the upstream re-signs its URL between refreshes.
+    seq: crate::services::hls_seq_ids::SeqIds,
     cache: HashMap<u32, Bytes>,
 }
 
@@ -86,15 +89,33 @@ impl UriMap {
         if let Some(i) = self.by_url.get(url) {
             return *i;
         }
+        let idx = self.alloc(url);
+        self.by_url.insert(url.to_string(), idx);
+        idx
+    }
+
+    /// Stable index for the segment at relayed sequence number `sn`, pointed
+    /// at `url`, the freshest signature the upstream gave for it.
+    fn segment(&mut self, sn: u64, url: &str) -> u32 {
+        if let Some(idx) = self.seq.get(sn) {
+            self.by_index.insert(idx, url.to_string());
+            return idx;
+        }
+        let idx = self.alloc(url);
+        self.seq.insert(sn, idx);
+        idx
+    }
+
+    fn alloc(&mut self, url: &str) -> u32 {
         let idx = self.next;
         self.next = self.next.wrapping_add(1);
         self.by_index.insert(idx, url.to_string());
-        self.by_url.insert(url.to_string(), idx);
         if self.by_index.len() > MAX_URIS {
             // Drop the oldest indices, which are behind the live window.
             let cutoff = idx.saturating_sub(MAX_URIS as u32);
             self.by_index.retain(|k, _| *k > cutoff);
             self.by_url.retain(|_, v| *v > cutoff);
+            self.seq.retain_ids_above(cutoff);
         }
         idx
     }
@@ -712,6 +733,12 @@ async fn media_playlist(s: &Session) -> Result<String> {
 fn rewrite_playlist(s: &Session, body: &str) -> String {
     let base = reqwest::Url::parse(&s.upstream).ok();
     let mut out = String::with_capacity(body.len());
+    // Segment lines are keyed by media sequence number when the playlist
+    // states one, and its MEDIA-SEQUENCE is rewritten to the relayed number
+    // (see hls_seq_ids for why a URL key breaks on a re-signed refresh).
+    let relayed_first = crate::services::hls_seq_ids::scan(body)
+        .and_then(|scan| s.uris.lock().ok().map(|mut m| m.seq.begin(&scan)));
+    let mut position: u64 = 0;
 
     for line in body.lines() {
         let trimmed = line.trim();
@@ -719,15 +746,26 @@ fn rewrite_playlist(s: &Session, body: &str) -> String {
             out.push('\n');
             continue;
         }
+        if let (Some(first), true) =
+            (relayed_first, trimmed.starts_with("#EXT-X-MEDIA-SEQUENCE:"))
+        {
+            out.push_str(&format!("#EXT-X-MEDIA-SEQUENCE:{}\n", first));
+            continue;
+        }
         if let Some(stripped) = trimmed.strip_prefix('#') {
             out.push_str(&rewrite_attr_uri(s, base.as_ref(), line, stripped));
             out.push('\n');
             continue;
         }
+        let sn = relayed_first.map(|first| first + position);
+        position += 1;
         match absolutize(base.as_ref(), trimmed) {
             Some(abs) => {
                 let idx = match s.uris.lock() {
-                    Ok(mut m) => m.intern(&abs),
+                    Ok(mut m) => match sn {
+                        Some(sn) => m.segment(sn, &abs),
+                        None => m.intern(&abs),
+                    },
                     Err(_) => {
                         out.push_str(line);
                         out.push('\n');
@@ -1862,6 +1900,25 @@ mod tests {
         assert!(first.contains("up/0"));
         // seg1 keeps index 0, so a request already in flight stays valid.
         assert!(again.contains("up/0") && again.contains("up/1"), "got: {}", again);
+    }
+
+    /// A refresh that re-signs every segment URL must not hand the player a new
+    /// path for a sequence number it already holds: hls.js rejects that refresh
+    /// as a fatal "media sequence mismatch".
+    #[test]
+    fn a_re_signed_refresh_keeps_each_sequence_numbers_path() {
+        let s = session("https://pull-hls.tiktokcdn.com/live/room/index.m3u8");
+        let first = rewrite_playlist(
+            &s,
+            "#EXT-X-MEDIA-SEQUENCE:40\n#EXTINF:2.0,\nseg40.ts?sign=a\n#EXTINF:2.0,\nseg41.ts?sign=a\n",
+        );
+        let again = rewrite_playlist(
+            &s,
+            "#EXT-X-MEDIA-SEQUENCE:41\n#EXTINF:2.0,\nseg41.ts?sign=b\n#EXTINF:2.0,\nseg42.ts?sign=b\n",
+        );
+        assert!(first.contains("#EXT-X-MEDIA-SEQUENCE:40\n#EXTINF:2.0,\nup/0\n#EXTINF:2.0,\nup/1\n"), "{first}");
+        assert!(again.contains("#EXT-X-MEDIA-SEQUENCE:41\n#EXTINF:2.0,\nup/1\n#EXTINF:2.0,\nup/2\n"), "{again}");
+        assert!(s.uris.lock().unwrap().target(1).unwrap().ends_with("seg41.ts?sign=b"));
     }
 
     /// TikTok signs the directory, not the file, and the signature lives in the

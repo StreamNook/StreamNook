@@ -34,6 +34,7 @@ import { setActiveVideo } from '../../utils/activeVideo';
 import { startLatencyGovernor } from '../../utils/liveLatencyGovernor';
 import { behindLiveFromEdge, edgeTargetForGap, resolveLiveEdgeGap } from '../../utils/latency';
 import { Logger } from '../../utils/logger';
+import { recoverFromSequenceMismatch } from '../../utils/hlsSequenceMismatch';
 
 // The earning gate.
 //
@@ -308,6 +309,10 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (seq !== seqRef.current) return;
         if (!data.fatal) return;
+        if (recoverFromSequenceMismatch(hls, data)) {
+          Logger.warn('[MobilePlayer] playlist refresh rejected for a sequence mismatch; accepting the next refresh');
+          return;
+        }
         Logger.warn('[MobilePlayer] fatal hls error:', data.type, data.details);
         switch (data.type) {
           case Hls.ErrorTypes.NETWORK_ERROR:

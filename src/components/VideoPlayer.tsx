@@ -109,6 +109,7 @@ import { PlayerVolumeOsd } from './PlayerVolumeOsd';
 import { useVolumeOsd } from '../hooks/useVolumeOsd';
 import { SevenTvAvatar } from './SevenTvAvatar';
 import { sevenTvIdForStream } from '../services/sevenTvPictures';
+import { recoverFromSequenceMismatch } from '../utils/hlsSequenceMismatch';
 
 // Per-channel learned cushion (LL path), relative to the viewer's chosen target. The
 // `base` is the user's target latency converted to the real (raw) cushion. The
@@ -1908,6 +1909,14 @@ const VideoPlayer = () => {
 
         // Handle fatal errors
         if (data.fatal) {
+          // A rejected refresh on a live channel: accept the next one rather
+          // than stall against the stale playlist. Not a sign of an offline
+          // channel, so it does not count toward the offline threshold.
+          if (recoverFromSequenceMismatch(hls, data)) {
+            Logger.warn('[HLS] playlist refresh rejected for a sequence mismatch; accepting the next refresh');
+            return;
+          }
+
           const now = Date.now();
 
           // Reset error count if enough time has passed since last error

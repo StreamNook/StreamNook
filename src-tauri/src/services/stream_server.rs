@@ -145,11 +145,11 @@ static AD_STATE: Lazy<std::sync::Mutex<AdDetectionState>> =
 
 /// Snapshot the current ad-detection state (for the Tauri command / the pivot).
 pub fn ad_state() -> AdDetectionState {
-    AD_STATE.lock().unwrap().clone()
+    AD_STATE.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 fn reset_ad_state() {
-    *AD_STATE.lock().unwrap() = AdDetectionState::default();
+    *AD_STATE.lock().unwrap_or_else(|e| e.into_inner()) = AdDetectionState::default();
     // Tear down the LL-HLS origin (background reader + live edge) for the old stream.
     crate::services::ll_origin::stop();
     // Drop the stable-projection segment map for the old stream so a synthetic
@@ -192,7 +192,7 @@ fn finish_playlist_response(
 /// fast-forwards into an ad. The core never acts on ads beyond that and never
 /// reports them to a plugin; a resolution-owning plugin detects ads itself.
 fn detect_ads_in_playlist(playlist: &str) {
-    let mut st = AD_STATE.lock().unwrap();
+    let mut st = AD_STATE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(n) = crate::services::ad_detect::update(&mut st, playlist) {
         info!(
             "[StreamServer] ad markers detected in live playlist (break #{}): {:?}",
@@ -262,10 +262,15 @@ struct PsegMap {
     inflight: std::collections::HashSet<u32>,
     /// index -> absolute URL.
     by_index: std::collections::HashMap<u32, String>,
-    /// absolute URL -> index, so a segment that survives a playlist refresh keeps
-    /// the SAME local URI. Handing the player a new URI for a segment it already
-    /// has would make it re-download the sliding window on every refresh.
+    /// absolute URL -> index, for URIs that carry no sequence number (an
+    /// `#EXT-X-MAP` init, or the segments of a playlist that does not state its
+    /// MEDIA-SEQUENCE).
     by_url: std::collections::HashMap<String, u32>,
+    /// Media sequence number -> index, so a segment that survives a playlist
+    /// refresh keeps the SAME local URI even when the upstream re-signs its URL
+    /// (Kick's IVS does on every `playlist-creation`). A new URI for a sequence
+    /// number the player already holds is a fatal "media sequence mismatch".
+    seq: crate::services::hls_seq_ids::SeqIds,
     next: u32,
 }
 
@@ -273,19 +278,17 @@ impl PsegMap {
     fn clear(&mut self) {
         self.by_index.clear();
         self.by_url.clear();
+        self.seq.clear();
         self.cache.clear();
         self.inflight.clear();
         // `next` deliberately keeps counting: reusing indices across streams
         // could hand the player a cached URI pointing at different bytes.
     }
 
-    fn intern(&mut self, url: &str) -> u32 {
-        if let Some(i) = self.by_url.get(url) {
-            return *i;
-        }
+    /// A fresh index for `url`.
+    fn alloc(&mut self, url: &str) -> u32 {
         let idx = self.next;
         self.next = self.next.wrapping_add(1);
-        self.by_url.insert(url.to_string(), idx);
         self.by_index.insert(idx, url.to_string());
         // Bound it. A live window is a handful of segments; this keeps enough
         // history for a slow client without growing across a long session.
@@ -293,7 +296,29 @@ impl PsegMap {
             let cutoff = idx.saturating_sub(256);
             self.by_index.retain(|k, _| *k > cutoff);
             self.by_url.retain(|_, v| *v > cutoff);
+            self.seq.retain_ids_above(cutoff);
         }
+        idx
+    }
+
+    fn intern(&mut self, url: &str) -> u32 {
+        if let Some(i) = self.by_url.get(url) {
+            return *i;
+        }
+        let idx = self.alloc(url);
+        self.by_url.insert(url.to_string(), idx);
+        idx
+    }
+
+    /// The index for the segment at relayed sequence number `sn`, pointing it
+    /// at `url`, the freshest signature the upstream gave for it.
+    fn segment(&mut self, sn: u64, url: &str) -> u32 {
+        if let Some(idx) = self.seq.get(sn) {
+            self.by_index.insert(idx, url.to_string());
+            return idx;
+        }
+        let idx = self.alloc(url);
+        self.seq.insert(sn, idx);
         idx
     }
 
@@ -389,22 +414,46 @@ fn relay_may_fetch(url: &str) -> bool {
 /// so the caller decides what to fetch ahead. Pure apart from interning, which
 /// is what makes it testable without a runtime.
 fn rewrite_uris(playlist: &str) -> (String, Vec<u32>, Option<u32>) {
+    match pseg_map().lock() {
+        Ok(mut m) => rewrite_uris_in(&mut m, playlist),
+        Err(_) => (playlist.to_string(), Vec::new(), None),
+    }
+}
+
+/// `rewrite_uris` against a given map.
+///
+/// Segments are keyed by media sequence number whenever the playlist states
+/// one, and the playlist's `#EXT-X-MEDIA-SEQUENCE` is rewritten to the relayed
+/// number of its first segment, so the number the player computes for every
+/// `pseg/<n>` line is the number that index was first handed out for.
+/// `#EXT-X-PREFETCH` lines are tags, not segments, and are left alone.
+fn rewrite_uris_in(m: &mut PsegMap, playlist: &str) -> (String, Vec<u32>, Option<u32>) {
+    let relayed_first = crate::services::hls_seq_ids::scan(playlist).map(|s| m.seq.begin(&s));
     let mut out = String::with_capacity(playlist.len());
     let mut segments: Vec<u32> = Vec::new();
     let mut init: Option<u32> = None;
+    let mut position: u64 = 0;
     for line in playlist.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-            match pseg_map().lock() {
-                Ok(mut m) => {
-                    let idx = m.intern(trimmed);
-                    segments.push(idx);
-                    out.push_str(&format!("pseg/{}", idx));
-                }
-                Err(_) => out.push_str(line),
+        if crate::services::hls_seq_ids::is_uri_line(trimmed) {
+            let sn = relayed_first.map(|first| first + position);
+            position += 1;
+            if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+                let idx = match sn {
+                    Some(sn) => m.segment(sn, trimmed),
+                    None => m.intern(trimmed),
+                };
+                segments.push(idx);
+                out.push_str(&format!("pseg/{}", idx));
+            } else {
+                out.push_str(line);
             }
+        } else if let (Some(first), true) =
+            (relayed_first, trimmed.starts_with("#EXT-X-MEDIA-SEQUENCE:"))
+        {
+            out.push_str(&format!("#EXT-X-MEDIA-SEQUENCE:{}", first));
         } else if trimmed.starts_with("#EXT-X-MAP") {
-            out.push_str(&rewrite_map_line(line, &mut init));
+            out.push_str(&rewrite_map_line(m, line, &mut init));
         } else {
             out.push_str(line);
         }
@@ -414,7 +463,7 @@ fn rewrite_uris(playlist: &str) -> (String, Vec<u32>, Option<u32>) {
 }
 
 /// Rewrite an absolute `URI="..."` on an `#EXT-X-MAP` line to `pseg/<n>`.
-fn rewrite_map_line(line: &str, init: &mut Option<u32>) -> String {
+fn rewrite_map_line(m: &mut PsegMap, line: &str, init: &mut Option<u32>) -> String {
     let Some(open) = line.find("URI=\"") else {
         return line.to_string();
     };
@@ -427,9 +476,6 @@ fn rewrite_map_line(line: &str, init: &mut Option<u32>) -> String {
     if !(uri.starts_with("http://") || uri.starts_with("https://")) {
         return line.to_string();
     }
-    let Ok(mut m) = pseg_map().lock() else {
-        return line.to_string();
-    };
     let idx = m.intern(uri);
     *init = Some(idx);
     format!("{}pseg/{}{}", &line[..value_start], idx, &line[close..])
@@ -492,13 +538,13 @@ pub fn set_app_handle(handle: crate::rt::AppHandle) {
 /// Record (or clear) the live channel the solo relay serves. Live starts set
 /// it; VOD/clip starts and stops clear it.
 pub fn set_solo_session(channel: Option<String>) {
-    *SOLO_CHANNEL.lock().unwrap() = channel;
+    *SOLO_CHANNEL.lock().unwrap_or_else(|e| e.into_inner()) = channel;
 }
 
 /// True while the solo relay is serving a live channel (the precondition for
 /// a plugin to swap its upstream).
 pub fn solo_session_active() -> bool {
-    SOLO_CHANNEL.lock().unwrap().is_some()
+    SOLO_CHANNEL.lock().unwrap_or_else(|e| e.into_inner()).is_some()
 }
 
 /// Replace the solo relay's upstream playlist with one a resolution-owning
@@ -508,7 +554,7 @@ pub fn solo_session_active() -> bool {
 pub async fn swap_upstream(playlist_url: String) -> Result<()> {
     let channel = SOLO_CHANNEL
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .clone()
         .ok_or_else(|| anyhow::anyhow!("no live solo relay session"))?;
     let port = StreamServer::start_proxy_server(playlist_url).await?;
@@ -1113,6 +1159,126 @@ mod relay_rewrite_tests {
         assert_eq!(init, None);
         assert!(segments.is_empty());
         assert!(out.contains("#EXT-X-MAP:URI=\"init.mp4\""), "{out}");
+    }
+
+    /// The two playlists hls.js reported in a "media sequence mismatch 322"
+    /// (Kick, IVS), exactly as the relay served them. The second came right
+    /// after a new `playlist-creation` DATERANGE.
+    const RELAYED_321: &str = include_str!("fixtures/kick_ivs_relayed_seq321.m3u8");
+    const RELAYED_322: &str = include_str!("fixtures/kick_ivs_relayed_seq322.m3u8");
+
+    /// Turn a relayed fixture back into what IVS sent: each `pseg/<n>` line
+    /// becomes an absolute segment URL whose path is fixed per sequence number
+    /// and whose `dna=` signature changes with every `playlist-creation`, which
+    /// is how IVS re-signs a recreated playlist.
+    fn upstream_of(relayed: &str) -> String {
+        let scan = crate::services::hls_seq_ids::scan(relayed).expect("a media playlist");
+        let creation = relayed
+            .split("playlist-creation-")
+            .nth(1)
+            .and_then(|s| s.split('"').next())
+            .expect("a playlist-creation id");
+        let mut sn = scan.first;
+        let mut out = String::new();
+        for line in relayed.lines() {
+            if line.starts_with("pseg/") {
+                out.push_str(&format!(
+                    "https://fa723fc1b171.1da94767c301.j.cloudfront.hls.live-video.net/v1/segment/seg{sn}.ts?dna=sig{creation}"
+                ));
+                sn += 1;
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// (sequence number, relay uri) for every segment, the pairs hls.js
+    /// compares between refreshes.
+    fn segment_uris(served: &str) -> Vec<(u64, String)> {
+        let first = crate::services::hls_seq_ids::scan(served).expect("a media playlist").first;
+        served
+            .lines()
+            .filter(|l| crate::services::hls_seq_ids::is_uri_line(l.trim()))
+            .enumerate()
+            .map(|(i, l)| (first + i as u64, l.trim().to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn the_logged_mismatch_is_the_same_sequence_number_under_two_paths() {
+        let before = segment_uris(RELAYED_321);
+        let after = segment_uris(RELAYED_322);
+        assert_eq!(before[1], (322, "pseg/72".to_string()));
+        assert_eq!(after[0], (322, "pseg/78".to_string()));
+    }
+
+    #[test]
+    fn a_recreated_ivs_playlist_keeps_every_segments_relay_path() {
+        let mut m = PsegMap::default();
+        let (first, _, _) = rewrite_uris_in(&mut m, &upstream_of(RELAYED_321));
+        let (second, _, _) = rewrite_uris_in(&mut m, &upstream_of(RELAYED_322));
+        assert!(first.contains("#EXT-X-MEDIA-SEQUENCE:321\n"), "{first}");
+        assert!(second.contains("#EXT-X-MEDIA-SEQUENCE:322\n"), "{second}");
+
+        let before = segment_uris(&first);
+        let after = segment_uris(&second);
+        let mut overlap = 0;
+        for (sn, uri) in &after {
+            if let Some((_, old)) = before.iter().find(|(s, _)| s == sn) {
+                assert_eq!(uri, old, "sequence {sn} changed its relay path");
+                overlap += 1;
+            }
+        }
+        assert_eq!(overlap, 6, "322..=327 are in both windows");
+
+        // The newest segment is new and the index behind a kept path now
+        // points at the freshest signature.
+        assert_eq!(after.last().unwrap().0, 328);
+        let idx: u32 = after[0].1.strip_prefix("pseg/").unwrap().parse().unwrap();
+        assert!(m.by_index[&idx].ends_with("seg322.ts?dna=sig1791827445"));
+    }
+
+    #[test]
+    fn prefetch_lines_are_neither_rewritten_nor_counted_as_segments() {
+        let mut m = PsegMap::default();
+        let upstream = upstream_of(RELAYED_322);
+        let (out, segments, _) = rewrite_uris_in(&mut m, &upstream);
+        assert_eq!(segments.len(), 7);
+        let prefetch_in = upstream.lines().filter(|l| l.starts_with("#EXT-X-PREFETCH:")).count();
+        let prefetch_out: Vec<&str> =
+            out.lines().filter(|l| l.starts_with("#EXT-X-PREFETCH:")).collect();
+        assert_eq!(prefetch_in, 2);
+        assert_eq!(prefetch_out.len(), 2);
+        assert!(prefetch_out.iter().all(|l| l.contains("cloudfront.hls.live-video.net")));
+        assert_eq!(segment_uris(&out).last().unwrap().0, 328);
+    }
+
+    #[test]
+    fn an_upstream_restart_never_moves_the_relayed_sequence_backwards() {
+        let mut m = PsegMap::default();
+        let (a, _, _) = rewrite_uris_in(&mut m, &upstream_of(RELAYED_322));
+        let restarted = upstream_of(RELAYED_321)
+            .replace("#EXT-X-MEDIA-SEQUENCE:321", "#EXT-X-MEDIA-SEQUENCE:0")
+            .replace("seg", "restart-seg");
+        let (b, _, _) = rewrite_uris_in(&mut m, &restarted);
+        let last_before = segment_uris(&a).last().unwrap().0;
+        let first_after = segment_uris(&b)[0].0;
+        assert_eq!(first_after, last_before + 1, "{b}");
+        // And none of the restarted segments reuses an earlier path.
+        let old: Vec<String> = segment_uris(&a).into_iter().map(|(_, u)| u).collect();
+        assert!(segment_uris(&b).iter().all(|(_, u)| !old.contains(u)));
+    }
+
+    #[test]
+    fn a_playlist_without_a_media_sequence_keeps_url_keyed_paths() {
+        let mut m = PsegMap::default();
+        let pl = "#EXTM3U\n#EXTINF:2.0,\nhttps://cdn.example.com/a.ts\n";
+        let (first, _, _) = rewrite_uris_in(&mut m, pl);
+        let (again, _, _) = rewrite_uris_in(&mut m, pl);
+        assert_eq!(first, again);
+        assert!(!first.contains("MEDIA-SEQUENCE"));
     }
 
     #[test]
