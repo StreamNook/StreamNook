@@ -1,3 +1,50 @@
+## [8.8.8] - 2026-10-12
+
+### ✨ Features
+- Many more chat commands, from viewer tools like `/followage` and `/logs` to moderator tools like `/purge` and `/massunban`, plus timers and scripts like `/timer` and `/chain`. Find them all in the commands menu or with `/help`.
+- `/spam` and `/pyramid` run at the speed you pick in Settings > Chat and stop on their own if Twitch starts dropping lines. Everything StreamNook sends for you, timers and scripts included, is paced to Twitch's chat limits.
+- Commands that can't be undone, like `/massunban` and `/editor`, ask you to run them twice.
+- Polls show in every chat you have open, including your own channel and docked chats. `/vote` works from the chat box, and the banner marks the option you picked.
+- Title bar auto-hide (Settings > Player > Picture): while you watch, the title bar slides away and comes back when you move to the top edge.
+- 7TV profile pictures show across the app: the sidebar, Home, profile cards, live notifications and pinned messages.
+- Highlights, mentions and announcements are marked on the chat scrollbar.
+- Channels with custom FrankerFaceZ moderator and VIP badges show them in chat, with a switch in Settings > Chat.
+- MultiChat tabs show which channels are live.
+- GIF size sliders for chat (Settings > Chat > Emotes > GIFs) and for the stream overlay.
+- Stream overlay:
+  - save an overlay's look to a file and open it on any computer as a new overlay with its own link;
+  - hide Twitch badges by kind: subscriber, predictions, gifted subs, bits, Blossom, Bloom, mod and VIP, or everything else;
+  - chat GIFs sit right after the name like a normal message;
+  - the preview looks like a real busy chat.
+- Channel point rewards are easier to read in narrow chats, and "Send a Message in Sub-Only Mode" can be redeemed right in StreamNook.
+
+### 🐛 Bug Fixes
+- The floating chat window no longer shows old messages again at the bottom, and keeps receiving chat after the main window leaves that channel. MultiChat windows and docked chats got the same fix.
+- In full screen, moving to the top edge brings the title bar out over the video, and Home or any page you open leaves full screen. Esc leaves the player's full screen, and leaving F11 puts a maximized window back the way it was.
+- Audio Boost, chapters and stream stats stay on top of the video in full screen.
+- The notifications list stays readable in small windows and Compact View.
+- Sending in YouTube chat no longer says you're in a timeout when the message went through.
+- Twitch's own emotes win over 7TV emotes with the same name in chat, pins and Tab completion, and both spellings of a name like LULE and lule stay in the list.
+- Chat history keeps the text of announcements, subs and raids, shows chat mode changes properly, and shows a new channel's emotes as images the first time you open it.
+- Pressing Enter to pick a word in a Japanese, Chinese or Korean keyboard no longer sends the message.
+- The chat box stays usable in narrow chat columns.
+- A cancelled poll closes quietly instead of showing a winner.
+- `/lockprediction`, `/cancelprediction` and `/completeprediction` work again, and the moderator menu shows a running prediction with Lock and Refund.
+- `/shield` and `/shieldoff` turn shield mode on and off.
+- Errors for bans, timeouts and deleted messages say what Twitch actually refused.
+- The stream overlay finds your installed fonts by the name Windows shows (like "Montserrat Bold"), and Max lines no longer hides a GIF.
+- Opening a channel no longer waits on FrankerFaceZ, and paints show without waiting for profile pictures.
+- Twitch events (follows, mod actions, whispers) no longer stop when one of the app's event connections reconnects. In MultiNook they follow the tile you're watching.
+- Opening an offline channel from the command palette goes straight to its room, and an exact channel name is the first result.
+- Going back to a category keeps its description.
+
+### 🔧 Maintenance
+- After updating, StreamNook asks you to sign in to Twitch once more so shield mode can work from chat. The sign-in prompt stays up until you do.
+
+### ⚡ Performance
+- Badge services that are down are retried with a growing delay instead of many times a second.
+- MultiChat redraws only what changed when a channel's viewer count updates.
+
 ## [8.8.7] - 2026-10-10
 
 ### ✨ Features
