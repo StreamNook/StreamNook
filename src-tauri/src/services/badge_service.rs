@@ -339,7 +339,7 @@ const BACKDROP_SOURCE_MAX_BYTES: usize = 256 * 1024;
 /// composites the glyph over the square, so nothing is decoded here and this
 /// builds on every platform. `None` for a colour that isn't `#RRGGBB` or
 /// bytes that aren't a PNG.
-fn badge_with_backdrop(png: &[u8], color: &str) -> Option<String> {
+pub(crate) fn badge_with_backdrop(png: &[u8], color: &str) -> Option<String> {
     let hex = color.strip_prefix('#')?;
     if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
@@ -1234,6 +1234,18 @@ pub struct BadgeService {
     /// Selected Twitch badge per user id, with when it was read (see
     /// `selected_badge`). Bounded: profile cards open for many chatters.
     selected_badges: tokio::sync::Mutex<LruCache<String, (Option<SelectedTwitchBadge>, Instant)>>,
+    /// One third-party badge refresh at a time (`fetch_third_party_badges`).
+    third_party_refresh: tokio::sync::Mutex<()>,
+    /// Refreshes in a row that had a provider fail, and which ones failed
+    /// last: the retry backs off on the first and logs when the second changes.
+    third_party_failures: std::sync::Mutex<(u32, String)>,
+}
+
+/// When a third-party refresh with failed providers is retried: a minute, then
+/// doubling per refresh that fails again, up to the normal refresh window.
+fn third_party_retry_after(failures_in_a_row: u32, window: Duration) -> Duration {
+    let doublings = failures_in_a_row.saturating_sub(1).min(8);
+    Duration::from_secs(60).saturating_mul(1 << doublings).min(window)
 }
 
 impl BadgeService {
@@ -1253,6 +1265,8 @@ impl BadgeService {
             client_id,
             drops_identity: RwLock::new(None),
             selected_badges: tokio::sync::Mutex::new(LruCache::new(NonZeroUsize::new(256).unwrap())),
+            third_party_refresh: tokio::sync::Mutex::new(()),
+            third_party_failures: std::sync::Mutex::new((0, String::new())),
             http_client: reqwest::Client::builder()
                 .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
                 .timeout(Duration::from_secs(30))
@@ -1353,6 +1367,22 @@ impl BadgeService {
 
     pub async fn fetch_third_party_badges(&self) -> Result<(), String> {
         let cache_duration = Duration::from_secs(10 * 60); // 10 minutes
+
+        // One refresh at a time. The freshness check below drops the cache lock
+        // for the network calls, so without this every caller arriving during a
+        // refresh started its own (a profile burst refetched every provider
+        // dozens of times in a few seconds while one was down). A caller that
+        // finds a refresh running uses the set already loaded; only the first
+        // load waits for it.
+        let _refresh = match self.third_party_refresh.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                if self.cache.read().await.third_party.last_updated != UNIX_EPOCH {
+                    return Ok(());
+                }
+                self.third_party_refresh.lock().await
+            }
+        };
 
         let mut cache = self.cache.write().await;
 
@@ -1637,15 +1667,39 @@ impl BadgeService {
         cache.third_party.backdrops = backdrops;
         if failed.is_empty() {
             cache.third_party.last_updated = SystemTime::now();
+            if let Ok(mut failures) = self.third_party_failures.lock() {
+                *failures = (0, String::new());
+            }
         } else {
-            log::warn!(
-                "[BadgeService] Third-party badge providers failed to refresh: {}; retrying in 60s",
-                failed.join(", ")
-            );
-            // Back-date the stamp so the next lookup retries after a minute
+            let failed_list = failed.join(", ");
+            let (in_a_row, changed) = match self.third_party_failures.lock() {
+                Ok(mut failures) => {
+                    failures.0 = failures.0.saturating_add(1);
+                    let changed = failures.1 != failed_list;
+                    failures.1 = failed_list.clone();
+                    (failures.0, changed)
+                }
+                Err(_) => (1, true),
+            };
+            let retry = third_party_retry_after(in_a_row, cache_duration);
+            if changed {
+                log::warn!(
+                    "[BadgeService] Third-party badge providers failed to refresh: {}; retrying in {}s",
+                    failed_list,
+                    retry.as_secs()
+                );
+            } else {
+                log::debug!(
+                    "[BadgeService] Third-party badge providers still failing ({} in a row): {}; retrying in {}s",
+                    in_a_row,
+                    failed_list,
+                    retry.as_secs()
+                );
+            }
+            // Back-date the stamp so the next lookup retries after the backoff
             // instead of serving the stale set for the full window.
             cache.third_party.last_updated = SystemTime::now()
-                .checked_sub(cache_duration.saturating_sub(Duration::from_secs(60)))
+                .checked_sub(cache_duration.saturating_sub(retry))
                 .unwrap_or(UNIX_EPOCH);
         }
 
@@ -2192,6 +2246,18 @@ impl BadgeService {
                         provider: BadgeProvider::Twitch,
                     });
                 }
+            }
+        }
+
+        // The channel's own moderator / VIP art from its FFZ room, when the
+        // viewer has it on. Identity and title stay Twitch's.
+        for badge in &mut resolved {
+            if let Some(art) =
+                crate::services::ffz_room_badges::art_for(channel_id, &badge.badge_info.set_id)
+            {
+                badge.badge_info.image_1x = art.x1;
+                badge.badge_info.image_2x = art.x2;
+                badge.badge_info.image_4x = art.x4;
             }
         }
 
@@ -3285,5 +3351,51 @@ mod tests {
         );
         // Every one carries provider `homies`, so only the set_id tells them apart.
         assert!(owned(&index, "95700563").iter().all(|b| b.provider == BadgeProvider::Homies));
+    }
+}
+
+#[cfg(test)]
+mod third_party_refresh_tests {
+    use super::*;
+
+    #[test]
+    fn a_failing_provider_backs_off_doubling_up_to_the_window() {
+        let window = Duration::from_secs(10 * 60);
+        let secs = |n| third_party_retry_after(n, window).as_secs();
+        assert_eq!(secs(1), 60);
+        assert_eq!(secs(2), 120);
+        assert_eq!(secs(3), 240);
+        assert_eq!(secs(4), 480);
+        assert_eq!(secs(5), 600, "capped at the normal refresh window");
+        assert_eq!(secs(40), 600);
+    }
+
+    #[tokio::test]
+    async fn a_caller_during_a_refresh_uses_the_loaded_set_instead_of_refetching() {
+        let service = BadgeService::new("test".into());
+        // A set loaded earlier and now stale: a lone caller would refresh.
+        service.cache.write().await.third_party.last_updated = SystemTime::now()
+            .checked_sub(Duration::from_secs(60 * 60))
+            .unwrap();
+        // Another caller's refresh is running.
+        let running = service.third_party_refresh.lock().await;
+        let answered = tokio::time::timeout(Duration::from_millis(200), service.fetch_third_party_badges()).await;
+        assert!(matches!(answered, Ok(Ok(()))), "returns at once, no second refresh");
+        drop(running);
+    }
+
+    #[tokio::test]
+    async fn the_first_load_waits_for_the_refresh_already_running() {
+        let service = BadgeService::new("test".into());
+        let running = service.third_party_refresh.lock().await;
+        // Nothing loaded yet: it waits for the running refresh rather than
+        // starting its own.
+        let waited = tokio::time::timeout(Duration::from_millis(100), service.fetch_third_party_badges()).await;
+        assert!(waited.is_err(), "still waiting while the refresh holds the lock");
+        // That refresh finishes and leaves a fresh set: the waiter returns at once.
+        service.cache.write().await.third_party.last_updated = SystemTime::now();
+        drop(running);
+        let answered = tokio::time::timeout(Duration::from_millis(200), service.fetch_third_party_badges()).await;
+        assert!(matches!(answered, Ok(Ok(()))));
     }
 }

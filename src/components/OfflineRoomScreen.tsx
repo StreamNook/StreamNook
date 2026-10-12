@@ -8,6 +8,7 @@ import { formatShortCount } from '../utils/streamStats';
 import { earnOfflineAccolade, PERFECT_CORNER_ACCOLADE_ID, SHINY_ACCOLADE_ID } from '../utils/offlineAccolades';
 import type { OfflineRoom, TwitchStream } from '../types';
 import { agoLabel, durationLabel, lastLiveLabel, nextStreamLabel } from '../utils/lastLive';
+import { SevenTvAvatar } from './SevenTvAvatar';
 
 /** Until a room answers (or for a channel with no room, like a Kick tile):
  *  the same FFZ emotes Rust falls back to. */
@@ -209,7 +210,10 @@ export function OfflineCard({
       >
         <div className="flex items-center gap-3">
           {avatar ? (
-            <img
+            <SevenTvAvatar
+              cosmeticsId={room?.user_id}
+              px={compact ? 36 : 44}
+              motion="animate"
               src={avatar}
               alt=""
               draggable={false}

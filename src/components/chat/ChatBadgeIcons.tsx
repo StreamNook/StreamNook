@@ -26,6 +26,9 @@ export interface ResolvedTwitchBadge {
 /** The selected 7TV badge, as chatUserStore holds it. */
 export type SevenTvBadgeLike = Parameters<typeof getBadgeImageUrl>[0];
 
+const isTwitchBadgeCdn = (url: string | undefined): boolean =>
+  !url || url.startsWith('https://static-cdn.jtvnw.net/');
+
 /**
  * Get the best URL for a Twitch badge, with reactive caching.
  * - Channel-specific badges (subscriber, bits, etc.) are never cached to avoid cross-channel pollution
@@ -40,8 +43,10 @@ function getTwitchBadgeUrl(badgeKey: string, badgeInfo: TwitchBadgeInfo): string
   const setId = badgeKey.split('/')[0];
 
   // Channel-specific badges always use the remote URL, so one streamer's sub
-  // badge never appears in another's chat.
-  if (CHANNEL_SPECIFIC_TWITCH_BADGES.has(setId)) {
+  // badge never appears in another's chat. Art from anywhere but Twitch's CDN
+  // is a channel's own (its FFZ moderator / VIP badge) and is never cached
+  // under the shared global key either.
+  if (CHANNEL_SPECIFIC_TWITCH_BADGES.has(setId) || !isTwitchBadgeCdn(badgeInfo.image_url_4x)) {
     return badgeInfo.image_url_4x || badgeInfo.image_url_1x || '';
   }
 

@@ -601,6 +601,18 @@ pub async fn debug_compare_badge_sources() -> Result<(Vec<String>, Vec<String>, 
 /// Fetch channel-specific Twitch badges using the Helix API
 #[tauri::command]
 pub async fn fetch_channel_badges(channel_id: String) -> Result<HelixBadgesResponse, String> {
+    // The channel's FFZ room (its own moderator / VIP art) is read alongside
+    // Helix while the viewer has the art on. Only a room never read before is
+    // waited on, and only briefly: the chat's history waits on this set. Art
+    // that lands later is announced (`ffz_room_badges::CHANGED_EVENT`) and every
+    // window reads the set again; a stale room refreshes in the background.
+    let role_art = crate::services::ffz_room_badges::enabled();
+    let first_read = if role_art {
+        let unread = !crate::services::ffz_room_badges::has_entry(&channel_id);
+        crate::services::ffz_room_badges::refresh(&channel_id).filter(|_| unread)
+    } else {
+        None
+    };
     let client_id = env!("TWITCH_APP_CLIENT_ID").to_string();
     let token = TwitchService::get_token()
         .await
@@ -627,10 +639,15 @@ pub async fn fetch_channel_badges(channel_id: String) -> Result<HelixBadgesRespo
         ));
     }
 
-    let badges = response
+    let mut badges = response
         .json::<HelixBadgesResponse>()
         .await
         .map_err(|e| format!("Failed to parse channel badges: {}", e))?;
+
+    if let Some(read) = first_read {
+        let _ = tokio::time::timeout(crate::services::ffz_room_badges::FIRST_READ_WAIT, read).await;
+    }
+    crate::services::ffz_room_badges::apply_if_enabled(&channel_id, &mut badges, role_art);
 
     Ok(badges)
 }

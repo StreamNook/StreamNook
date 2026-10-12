@@ -310,6 +310,7 @@ async fn apply(app: &AppHandle, provider: &str, from: List, rows: Vec<ProviderSt
                 stream_url: row.watch_url.clone(),
                 is_test: false,
                 source: None,
+                seventv_id: crate::services::seventv_cosmetics_resolver::cosmetics_id(&row.provider, &row.user_id),
             },
         );
     }

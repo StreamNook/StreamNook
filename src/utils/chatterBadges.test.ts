@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { onePerCategory, toggleLoadoutBadge, visibleChatterBadges, wearCategory } from './chatterBadges';
+import {
+  onePerCategory,
+  pickRoleBadge,
+  toggleLoadoutBadge,
+  visibleChatterBadges,
+  wearCategory,
+} from './chatterBadges';
 import type { ThirdPartyBadge } from '../services/badgeService';
 
 const tp = (provider: string): ThirdPartyBadge => ({
@@ -156,5 +162,32 @@ describe('Homies custom badges toggle on their own', () => {
   it('hiding both hides every Homies badge', () => {
     const out = visibleChatterBadges({ hidden_badge_providers: ['homies', 'homies-custom'] }, twitch, seventv, list);
     expect(out.thirdParty.map((b) => b.title)).toEqual(['ffz']);
+  });
+});
+
+describe('pickRoleBadge', () => {
+  const b = (...keys: string[]) => keys.map((key) => ({ key }));
+
+  it('picks broadcaster over a subscription', () => {
+    expect(pickRoleBadge(b('broadcaster/1', 'subscriber/12'))?.key).toBe('broadcaster/1');
+  });
+
+  it('picks moderator over VIP and a subscription, whatever the order', () => {
+    expect(pickRoleBadge(b('subscriber/12', 'vip/1', 'moderator/1'))?.key).toBe('moderator/1');
+  });
+
+  it('picks staff over moderator', () => {
+    expect(pickRoleBadge(b('moderator/1', 'staff/1'))?.key).toBe('staff/1');
+  });
+
+  it('picks none for a subscriber with earned and global badges', () => {
+    expect(pickRoleBadge(b('subscriber/12', 'bits/1000', 'premium/1'))).toBeNull();
+  });
+
+  it('picks none when the chatter wears only third-party badges', () => {
+    // Third-party badges never enter the Twitch list, so it arrives empty.
+    const look = visibleChatterBadges(undefined, [], seventv, third);
+    expect(look.thirdParty.length).toBeGreaterThan(0);
+    expect(pickRoleBadge(look.twitch)).toBeNull();
   });
 });

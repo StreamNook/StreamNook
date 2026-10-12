@@ -103,12 +103,11 @@ pub struct ThirdPartyBadge {
 pub struct SevenTVCosmetics {
     pub paints: Vec<SevenTVPaint>,
     pub badges: Vec<SevenTVBadge>,
-    /// 7TV animated profile picture URL (`style.activeProfilePicture`), if the
-    /// user has set a custom one. `None` when they have no 7TV avatar — callers
-    /// then fall back to the Twitch profile image. 7TV has no profile *banner*,
-    /// only this avatar, so this is the only 7TV image surface for the card.
+    /// The profile picture the user set on 7TV, still and animated renditions
+    /// per scale. `None` when they have none; the card then shows the
+    /// platform's picture. 7TV has no profile banner, only this picture.
     #[serde(default)]
-    pub avatar_url: Option<String>,
+    pub profile_picture: Option<crate::services::seventv_cosmetics_resolver::ProfilePicture>,
 }
 
 // v4 API Paint structure with layers
@@ -602,9 +601,7 @@ fn cosmetics_from_inventory(owned: &crate::services::seventv_cosmetics_resolver:
     SevenTVCosmetics {
         paints: owned.cosmetics.paints.iter().filter_map(paint_from_definition).collect(),
         badges: owned.cosmetics.badges.iter().filter_map(badge_from_definition).collect(),
-        // 7TV animated avatar (only present if the user set one). None lets the
-        // card fall back to the Twitch pfp.
-        avatar_url: pick_best_seventv_image(&owned.avatar_images),
+        profile_picture: owned.cosmetics.profile_picture.clone(),
     }
 }
 
@@ -656,31 +653,6 @@ fn badge_from_definition(badge: &serde_json::Value) -> Option<SevenTVBadge> {
         description: text_of(badge, "description"),
         selected: is_selected(badge),
     })
-}
-
-/// Pick the highest-quality usable image URL from a 7TV `images[]` array.
-/// Prefers webp (broadly supported in WebView2) at the largest scale, falling
-/// back to the largest image of any format. Normalizes protocol-relative URLs.
-fn pick_best_seventv_image(images: &[serde_json::Value]) -> Option<String> {
-    let score = |img: &serde_json::Value| -> i64 {
-        let scale = img.get("scale").and_then(|s| s.as_i64()).unwrap_or(0);
-        let is_webp = img
-            .get("mime")
-            .and_then(|m| m.as_str())
-            .map(|m| m.contains("webp"))
-            .unwrap_or(false);
-        scale * 10 + if is_webp { 5 } else { 0 }
-    };
-    images
-        .iter()
-        .max_by_key(|img| score(img))
-        .and_then(|img| img.get("url"))
-        .and_then(|u| u.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| match s.strip_prefix("//") {
-            Some(rest) => format!("https://{}", rest),
-            None => s.to_string(),
-        })
 }
 
 // Helper function to parse a color object
@@ -928,7 +900,7 @@ pub async fn get_ivr_subage_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::seventv_cosmetics_resolver::{Inventory, UserCosmetics};
+    use crate::services::seventv_cosmetics_resolver::{Inventory, PictureImage, ProfilePicture, UserCosmetics};
     use serde_json::json;
 
     #[test]
@@ -954,8 +926,13 @@ mod tests {
                 })],
                 badges: vec![json!({ "id": "b1", "name": "Sub", "description": "desc" })],
                 seventv_user_id: Some("7tv".into()),
+                profile_picture: Some(ProfilePicture {
+                    id: "pp".into(),
+                    still: vec![PictureImage { url: "https://cdn.7tv.app/a/1x.webp".into(), scale: 1 }],
+                    animated: vec![],
+                }),
+                ..Default::default()
             },
-            avatar_images: vec![json!({ "url": "//cdn.7tv.app/a/4x.webp", "mime": "image/webp", "scale": 4 })],
         };
         let c = cosmetics_from_inventory(&owned);
         assert_eq!(c.paints.len(), 1);
@@ -965,6 +942,6 @@ mod tests {
         assert_eq!(c.badges.len(), 1);
         assert!(!c.badges[0].selected);
         assert_eq!(c.badges[0].description.as_deref(), Some("desc"));
-        assert!(c.avatar_url.is_some());
+        assert_eq!(c.profile_picture.as_ref().map(|p| p.id.as_str()), Some("pp"));
     }
 }

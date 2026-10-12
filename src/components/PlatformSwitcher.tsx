@@ -36,6 +36,7 @@ import { ProviderMark } from './ProviderLogo';
 import { streamProvider } from '../utils/streamProvider';
 import { WATCHABLE_PROVIDERS, providerLabel, type ProviderId } from '../types/providers';
 import { deckGeometry } from '../utils/markDeck';
+import { useTwitchSignInReason } from '../utils/twitchSignIn';
 
 type Platform = ProviderId | 'all';
 
@@ -117,6 +118,8 @@ export default function PlatformSwitcher() {
   const liveByKey = useFollowsStore((s) => s.liveByKey);
   const kickConnected = usePlatformAccountStore((s) => s.kick.connected);
   const youtubeConnected = usePlatformAccountStore((s) => s.youtube.connected);
+  // StreamNook signed you out of Twitch itself: "not connected" would hide why.
+  const twitchSignInOwed = useTwitchSignInReason() !== null;
 
   const [open, setOpen] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -277,7 +280,11 @@ export default function PlatformSwitcher() {
         ref={anchorRef}
         type="button"
         aria-label={`Platform: ${labelOf(focused)}, ${
-          isConnected(focused) ? `${countOf(focused)} followed live` : 'not connected'
+          isConnected(focused)
+            ? `${countOf(focused)} followed live`
+            : focused === 'twitch' && twitchSignInOwed
+              ? 'sign in again'
+              : 'not connected'
         }`}
         aria-expanded={open}
         aria-haspopup="menu"
@@ -305,6 +312,15 @@ export default function PlatformSwitcher() {
           {/* Same rule as the rows: with no account behind the platform, "0
               live" would be a claim about your follows when the real answer is
               that there is nothing signed in to ask. */}
+          {/* Signed out by StreamNook rather than by you: a status, so an
+              amber dot and words. Same width rule as the count; the account
+              button carries it on a narrow window. */}
+          {!isConnected(focused) && focused === 'twitch' && twitchSignInOwed ? (
+            <span className="hidden items-center gap-[5px] self-center whitespace-nowrap text-[10.5px] leading-none text-textMuted min-[700px]:flex">
+              <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-amber-400" aria-hidden />
+              sign in again
+            </span>
+          ) : (
           <span
             className={`hidden text-[10.5px] leading-none text-textMuted min-[700px]:inline ${
               isConnected(focused) ? 'tabular-nums' : ''
@@ -312,6 +328,7 @@ export default function PlatformSwitcher() {
           >
             {isConnected(focused) ? `${countOf(focused)} live` : 'not connected'}
           </span>
+          )}
         </span>
         {/* Double chevron: select language rather than disclosure language. A
             single one points DOWN and so promises the list opens downward; this
@@ -342,7 +359,7 @@ export default function PlatformSwitcher() {
             // Glassiness. The flyout recipe keeps a real frost at every slider
             // position (see globals.css for the why).
             className="glass-flyout w-[196px] overflow-hidden"
-            style={{ position: 'fixed', top: menuPos.top, left: menuPos.left, zIndex: 9999, transformOrigin: 'top left' }}
+            style={{ position: 'fixed', top: menuPos.top, left: menuPos.left, zIndex: 'var(--sn-z-titlebar-menu)', transformOrigin: 'top left' }}
             initial={{ opacity: 0, scale: 0.96, y: -5 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.97, y: -4, transition: { duration: 0.12, ease: 'easeIn' } }}

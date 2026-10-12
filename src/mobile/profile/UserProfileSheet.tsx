@@ -26,6 +26,7 @@ import { StreamNookBadge } from '../../components/StreamNookBadge';
 import { MobileSheet } from '../ui/MobileSheet';
 import { useNameColorAdjust } from '../../hooks/useNameColor';
 import { Logger } from '../../utils/logger';
+import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 
 export interface SheetUser {
   userId: string;
@@ -228,7 +229,10 @@ const ProfileBody: React.FC<{
       <div className="flex flex-col pb-2">
         <div className="flex items-center gap-3">
           {avatar ? (
-            <img
+            <SevenTvAvatar
+              cosmeticsId={userId}
+              px={56}
+              motion="animate"
               src={avatar}
               alt=""
               className="w-14 h-14 rounded-full object-cover shrink-0 ring-1 ring-white/10"

@@ -16,6 +16,24 @@ pub struct LayoutConfig {
     pub font_size: f32,
     pub message_spacing: f32,
     pub show_timestamps: bool,
+    /// The chat GIF size setting (`chat_design.gif_scale`), already clamped.
+    pub gif_scale: f32,
+}
+
+/// A Twitch chat GIF's height at 1x: ChatMessage.tsx draws it 5rem (80px) tall,
+/// times the GIF size setting.
+pub const GIF_BASE_HEIGHT: f32 = 80.0;
+
+/// Line-box descent slack under an inline GIF, independent of its size.
+const GIF_LINE_SLACK: f32 = 6.0;
+
+/// Width placeholder for a GIF at 1x: GIPHY assets run about 1.5:1, so ~120px,
+/// about 30 spaces at the 13px measuring size.
+const GIF_BASE_SPACES: f32 = 30.0;
+
+/// The height of the line that holds a chat GIF at the given size setting.
+pub fn gif_row_height(gif_scale: f32) -> f32 {
+    GIF_BASE_HEIGHT * gif_scale + GIF_LINE_SLACK
 }
 
 impl LayoutService {
@@ -42,8 +60,16 @@ impl LayoutService {
                 font_size: 13.0,
                 message_spacing: 8.0,
                 show_timestamps: false,
+                gif_scale: 1.0,
             }),
         }
+    }
+
+    /// Follow the chat GIF size setting. Called at boot and on every settings
+    /// write, so a GIF row's estimate always matches the drawn size.
+    pub fn set_gif_scale(&self, gif_scale: f64) {
+        let clamped = crate::models::settings::clamp_gif_scale(gif_scale) as f32;
+        self.config.lock().unwrap().gif_scale = clamped;
     }
 
     /// Reconstruct text from segments, replacing emotes/emoji with placeholder spaces
@@ -52,6 +78,7 @@ impl LayoutService {
         &self,
         segments: &[MessageSegment],
         font_size: f32,
+        gif_scale: f32,
     ) -> (String, bool) {
         // Emote is rendered as h-7 (28px) image in frontend
         // Emoji is rendered as h-5 (20px) image in frontend - sized to align with text
@@ -100,9 +127,10 @@ impl LayoutService {
                     text.push_str("          "); // 10 spaces ≈ 40px
                 }
                 MessageSegment::Gif { .. } => {
-                    // A Twitch chat GIF renders 80px tall with its own aspect;
-                    // GIPHY assets run about 1.5:1, so ~120px wide (30 spaces).
-                    text.push_str("                              ");
+                    // A Twitch chat GIF keeps its own aspect, so its width
+                    // follows the size setting along with its height.
+                    let spaces = (GIF_BASE_SPACES * gif_scale).round().max(1.0) as usize;
+                    text.push_str(&" ".repeat(spaces));
                 }
             }
         }
@@ -161,6 +189,7 @@ impl LayoutService {
         display_name: &str,
         is_action: bool,
     ) -> LayoutResult {
+        let gif_scale = self.config.lock().unwrap().gif_scale;
         let mut font_system = self.font_system.lock().unwrap();
 
         // === CONSTANTS matching frontend CSS ===
@@ -235,7 +264,7 @@ impl LayoutService {
         // This is critical: the backend must measure what the frontend actually renders
         // Emotes/emoji are fixed-width images, not their text codes
         let (reconstructed_text, has_links) = if !segments.is_empty() {
-            self.reconstruct_text_from_segments(segments, font_size)
+            self.reconstruct_text_from_segments(segments, font_size, gif_scale)
         } else {
             (text.to_string(), false)
         };
@@ -307,13 +336,13 @@ impl LayoutService {
         // Content height = lines * effective line height
         let mut content_height = (line_count as f32) * effective_line_height;
 
-        // A Twitch chat GIF is a fixed 80px inline-block (ChatMessage.tsx `h-20`
-        // plus the line box's descent slack), far taller than any emote row.
-        // Only the line holding it grows, and messages carry one in practice,
-        // so grow the message by the difference once rather than per line.
-        const GIF_ROW_HEIGHT: f32 = 86.0;
+        // A Twitch chat GIF is an inline-block 80px tall times the GIF size
+        // setting (ChatMessage.tsx), plus the line box's descent slack, far
+        // taller than any emote row. Only the line holding it grows, and
+        // messages carry one in practice, so grow the message by the
+        // difference once rather than per line.
         if segment_gif_count > 0 {
-            content_height += (GIF_ROW_HEIGHT - effective_line_height).max(0.0);
+            content_height += (gif_row_height(gif_scale) - effective_line_height).max(0.0);
         }
 
         // === Add vertical padding ===
@@ -392,5 +421,58 @@ impl LayoutService {
 
     pub fn get_current_config_extended(&self) -> LayoutConfig {
         self.config.lock().unwrap().clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn gif_message() -> Vec<MessageSegment> {
+        vec![MessageSegment::Gif {
+            content: "[Y A Y Yes GIF by Djemilah Birnie]".into(),
+            gif_id: "joSNxeswxuc74Juo8X".into(),
+            gif_url: "https://media4.giphy.com/media/joSNxeswxuc74Juo8X/giphy.gif".into(),
+        }]
+    }
+
+    fn height(service: &LayoutService, segments: &[MessageSegment]) -> f32 {
+        // Wide enough that the name and every GIF size stay on one line, so
+        // the difference between sizes is the GIF's own height and nothing else.
+        service
+            .layout_message_extended("", 1200.0, 14.0, false, false, 0, 0, false, false, segments, "gifdropper", false)
+            .height
+    }
+
+    #[test]
+    fn gif_row_height_is_today_at_one_and_scales_with_the_setting() {
+        assert_eq!(gif_row_height(1.0), 86.0);
+        assert_eq!(gif_row_height(0.5), 46.0);
+        assert_eq!(gif_row_height(2.0), 166.0);
+    }
+
+    #[test]
+    fn gif_message_height_follows_the_gif_size_setting() {
+        let service = LayoutService::new();
+        let gif = gif_message();
+        let text = vec![MessageSegment::Text { content: "nice".into() }];
+
+        let at_one = height(&service, &gif);
+        let text_at_one = height(&service, &text);
+
+        service.set_gif_scale(2.0);
+        assert_eq!(height(&service, &gif) - at_one, GIF_BASE_HEIGHT);
+        // Only GIF rows move; a text row is the same at any GIF size.
+        assert_eq!(height(&service, &text), text_at_one);
+
+        service.set_gif_scale(0.5);
+        assert_eq!(at_one - height(&service, &gif), GIF_BASE_HEIGHT * 0.5);
+
+        // Out of range is held to the setting's ends, like the saved value.
+        service.set_gif_scale(10.0);
+        assert_eq!(service.get_current_config_extended().gif_scale, 2.0);
+        service.set_gif_scale(f64::NAN);
+        assert_eq!(service.get_current_config_extended().gif_scale, 1.0);
+        assert_eq!(height(&service, &gif), at_one);
     }
 }

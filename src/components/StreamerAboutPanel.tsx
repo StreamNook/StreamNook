@@ -8,6 +8,8 @@ import { useAppStore } from '../stores/AppStore';
 import { LinkPreviewCard } from './chat/LinkPreviewCard';
 import { isTrustedHost } from '../services/linkPreviewService';
 import { formatViewerCount } from '../utils/streamStats';
+import { SevenTvAvatar } from './SevenTvAvatar';
+import { sevenTvIdForStream } from '../services/sevenTvPictures';
 
 /** One live channel from Twitch's "Viewers of X also watch" set. Mirrors the
  *  Rust SimilarChannel struct. */
@@ -443,7 +445,10 @@ const StreamerAboutPanel = memo(({ channelLogin, hideHero, scrollRef, onChannelS
                     >
                       <div className="flex items-center gap-2">
                         {stream.profile_image_url && (
-                          <img
+                          <SevenTvAvatar
+                            cosmeticsId={sevenTvIdForStream(stream)}
+                            px={32}
+                            motion="hover"
                             src={stream.profile_image_url}
                             alt=""
                             className="w-8 h-8 rounded-full object-cover flex-shrink-0"

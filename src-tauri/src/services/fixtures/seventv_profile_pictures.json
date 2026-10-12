@@ -1,0 +1,319 @@
+{
+ "_source": "7tv.io/v4/gql, read-only queries for Twitch ids 64282485 (animated picture), 129272570 (still picture), 71092938 (no picture)",
+ "worn": {
+  "u_64282485": {
+   "userByConnection": {
+    "id": "01FF3DRSGG000FF5VVCKV49EA1",
+    "style": {
+     "activePaint": {
+      "id": "01FQB6K5T0000BDD0YMN21KEXX"
+     },
+     "activeBadge": null,
+     "activeProfilePictureId": "01JJCJQ9HDR7HH3PH3APTW9SS7"
+    },
+    "roleIds": [
+     "01G68MMQFR0007J6GNM9E2M0TM",
+     "01F37R3RFR0000K96678WEQT01",
+     "01F6ZEHYGG0008GVK38JE54RXH",
+     "01F2Z8C8M8000EJFC2HFW8B1W9"
+    ],
+    "personalEmoteSet": {
+     "id": "01GN7SRGRR000EK2J7DFXT0QDR"
+    }
+   }
+  },
+  "u_129272570": {
+   "userByConnection": {
+    "id": "01H0FJAE3800050W5JSPH4Y7ZR",
+    "style": {
+     "activePaint": {
+      "id": "01HNFTV3CG0008Y0WDTPT0GPGT"
+     },
+     "activeBadge": {
+      "id": "01GAFGTXQ0000E8VNG1S1RMTC4",
+      "description": "7TV Translator"
+     },
+     "activeProfilePictureId": "01KPNFT8JDMS68AD6GYCHGA3Z9"
+    },
+    "roleIds": [
+     "01G68MMQFR0007J6GNM9E2M0TM",
+     "01F37R3RFR0000K96678WEQT01",
+     "01GAFGTXQ0000E8VNG1S1RMTC4"
+    ],
+    "personalEmoteSet": {
+     "id": "01H1W68YPR000895KZ7WZM04HG"
+    }
+   }
+  },
+  "u_71092938": {
+   "userByConnection": {
+    "id": "01FE9DRF000009TR6M9N941CYW",
+    "style": {
+     "activePaint": {
+      "id": "01JHXJFACX42RV996VE9933TB8"
+     },
+     "activeBadge": {
+      "id": "01JJJ74CRHZBRMCM8F4Y2WBN6R",
+      "description": "Minecraft Event Winner"
+     },
+     "activeProfilePictureId": null
+    },
+    "roleIds": [
+     "01G68MMQFR0007J6GNM9E2M0TM",
+     "01F37R3RFR0000K96678WEQT01",
+     "01F37RCTH00000K96678WEQT02"
+    ],
+    "personalEmoteSet": {
+     "id": "01GN7SRYE8000EK2J7DFXT0WE5"
+    }
+   }
+  }
+ },
+ "pictures": {
+  "u_64282485": {
+   "userByConnection": {
+    "style": {
+     "activeProfilePicture": {
+      "id": "01JJCJQ9HDR7HH3PH3APTW9SS7",
+      "images": [
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/1x_static.webp",
+        "mime": "image/webp",
+        "scale": 1,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/2x_static.webp",
+        "mime": "image/webp",
+        "scale": 2,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/3x_static.webp",
+        "mime": "image/webp",
+        "scale": 3,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/4x_static.webp",
+        "mime": "image/webp",
+        "scale": 4,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/1x_static.avif",
+        "mime": "image/avif",
+        "scale": 1,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/2x_static.avif",
+        "mime": "image/avif",
+        "scale": 2,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/3x_static.avif",
+        "mime": "image/avif",
+        "scale": 3,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/4x_static.avif",
+        "mime": "image/avif",
+        "scale": 4,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/1x_static.png",
+        "mime": "image/png",
+        "scale": 1,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/2x_static.png",
+        "mime": "image/png",
+        "scale": 2,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/3x_static.png",
+        "mime": "image/png",
+        "scale": 3,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/4x_static.png",
+        "mime": "image/png",
+        "scale": 4,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/1x.webp",
+        "mime": "image/webp",
+        "scale": 1,
+        "frameCount": 180
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/2x.webp",
+        "mime": "image/webp",
+        "scale": 2,
+        "frameCount": 180
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/3x.webp",
+        "mime": "image/webp",
+        "scale": 3,
+        "frameCount": 180
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/4x.webp",
+        "mime": "image/webp",
+        "scale": 4,
+        "frameCount": 180
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/1x.avif",
+        "mime": "image/avif",
+        "scale": 1,
+        "frameCount": 180
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/2x.avif",
+        "mime": "image/avif",
+        "scale": 2,
+        "frameCount": 180
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/3x.avif",
+        "mime": "image/avif",
+        "scale": 3,
+        "frameCount": 180
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/4x.avif",
+        "mime": "image/avif",
+        "scale": 4,
+        "frameCount": 180
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/1x.gif",
+        "mime": "image/gif",
+        "scale": 1,
+        "frameCount": 180
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/2x.gif",
+        "mime": "image/gif",
+        "scale": 2,
+        "frameCount": 180
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/3x.gif",
+        "mime": "image/gif",
+        "scale": 3,
+        "frameCount": 180
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01FF3DRSGG000FF5VVCKV49EA1/profile-picture/01JJCJQ9HDR7HH3PH3APTW9SS7/4x.gif",
+        "mime": "image/gif",
+        "scale": 4,
+        "frameCount": 180
+       }
+      ]
+     }
+    }
+   }
+  },
+  "u_129272570": {
+   "userByConnection": {
+    "style": {
+     "activeProfilePicture": {
+      "id": "01KPNFT8JDMS68AD6GYCHGA3Z9",
+      "images": [
+       {
+        "url": "https://cdn.7tv.app/user/01H0FJAE3800050W5JSPH4Y7ZR/profile-picture/01KPNFT8JDMS68AD6GYCHGA3Z9/1x.webp",
+        "mime": "image/webp",
+        "scale": 1,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01H0FJAE3800050W5JSPH4Y7ZR/profile-picture/01KPNFT8JDMS68AD6GYCHGA3Z9/2x.webp",
+        "mime": "image/webp",
+        "scale": 2,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01H0FJAE3800050W5JSPH4Y7ZR/profile-picture/01KPNFT8JDMS68AD6GYCHGA3Z9/3x.webp",
+        "mime": "image/webp",
+        "scale": 3,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01H0FJAE3800050W5JSPH4Y7ZR/profile-picture/01KPNFT8JDMS68AD6GYCHGA3Z9/4x.webp",
+        "mime": "image/webp",
+        "scale": 4,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01H0FJAE3800050W5JSPH4Y7ZR/profile-picture/01KPNFT8JDMS68AD6GYCHGA3Z9/1x.avif",
+        "mime": "image/avif",
+        "scale": 1,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01H0FJAE3800050W5JSPH4Y7ZR/profile-picture/01KPNFT8JDMS68AD6GYCHGA3Z9/2x.avif",
+        "mime": "image/avif",
+        "scale": 2,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01H0FJAE3800050W5JSPH4Y7ZR/profile-picture/01KPNFT8JDMS68AD6GYCHGA3Z9/3x.avif",
+        "mime": "image/avif",
+        "scale": 3,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01H0FJAE3800050W5JSPH4Y7ZR/profile-picture/01KPNFT8JDMS68AD6GYCHGA3Z9/4x.avif",
+        "mime": "image/avif",
+        "scale": 4,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01H0FJAE3800050W5JSPH4Y7ZR/profile-picture/01KPNFT8JDMS68AD6GYCHGA3Z9/1x.png",
+        "mime": "image/png",
+        "scale": 1,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01H0FJAE3800050W5JSPH4Y7ZR/profile-picture/01KPNFT8JDMS68AD6GYCHGA3Z9/2x.png",
+        "mime": "image/png",
+        "scale": 2,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01H0FJAE3800050W5JSPH4Y7ZR/profile-picture/01KPNFT8JDMS68AD6GYCHGA3Z9/3x.png",
+        "mime": "image/png",
+        "scale": 3,
+        "frameCount": 1
+       },
+       {
+        "url": "https://cdn.7tv.app/user/01H0FJAE3800050W5JSPH4Y7ZR/profile-picture/01KPNFT8JDMS68AD6GYCHGA3Z9/4x.png",
+        "mime": "image/png",
+        "scale": 4,
+        "frameCount": 1
+       }
+      ]
+     }
+    }
+   }
+  },
+  "u_71092938": {
+   "userByConnection": {
+    "style": {
+     "activeProfilePicture": null
+    }
+   }
+  }
+ }
+}

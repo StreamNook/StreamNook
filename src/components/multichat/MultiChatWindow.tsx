@@ -60,6 +60,9 @@ import ErrorBoundary from '../ErrorBoundary';
 import ChatOnlySettingsModal from './ChatOnlySettingsModal';
 import MultiChatToasts from './MultiChatToasts';
 import ViewerCounter from './ViewerCounter';
+import { useMultiChatLive } from './useMultiChatLive';
+import { liveWord, type SourceLive } from './multiChatLive';
+import { isImeComposing } from '../../utils/imeComposing';
 import CommandPalette from '../CommandPalette';
 import InputContextMenuHost from '../InputContextMenuHost';
 import ClipModal from '../ClipModal';
@@ -535,6 +538,9 @@ export default function MultiChatWindow() {
   }, []);
 
   const [channels, setChannels] = useState<ChannelEntry[]>(initial.channels);
+  // Live state per open source, read from Rust: the title bar's viewer total
+  // and the tab strip's live dots share this one reader.
+  const sourceLive = useMultiChatLive(channels);
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(initial.layoutMode);
   const [isBlendedMode, setIsBlendedMode] = useState(initial.isBlendedMode);
   const [isMentionsMode, setIsMentionsMode] = useState(initial.isMentionsMode);
@@ -1967,7 +1973,7 @@ export default function MultiChatWindow() {
         showActivityFeed={showActivityFeed}
         onToggleActivityFeed={() => setShowActivityFeed((v) => !v)}
         onOpenMainApp={showMainApp}
-        channels={channels}
+        liveStats={sourceLive.stats}
       />
       {/* Always mounted so the modal can play its own open/close (fill) animation
           via AnimatePresence; it renders nothing while closed. */}
@@ -1980,6 +1986,7 @@ export default function MultiChatWindow() {
       />
       <TabStrip
         channels={channels}
+        liveByKey={sourceLive.byKey}
         active={activeKey}
         visibleSet={visibleSet}
         layoutMode={layoutMode}
@@ -2687,7 +2694,7 @@ interface TitleBarProps {
   onToggleModLogs: () => void;
   onToggleActivityFeed: () => void;
   onOpenMainApp: () => void;
-  channels: ChannelEntry[];
+  liveStats: SourceLive[];
 }
 
 function TitleBar({
@@ -2712,7 +2719,7 @@ function TitleBar({
   onToggleModLogs,
   onToggleActivityFeed,
   onOpenMainApp,
-  channels,
+  liveStats,
 }: TitleBarProps) {
   // Track maximized state so the corner-control icon swaps between
   // CornersOut (maximize) and CornersIn (restore) — same behavior as
@@ -2767,7 +2774,7 @@ function TitleBar({
       </div>
 
       <div data-tauri-drag-region className="flex flex-1 items-center justify-center">
-        <ViewerCounter channels={channels} />
+        <ViewerCounter stats={liveStats} />
       </div>
 
       {canSplit && (
@@ -3013,6 +3020,8 @@ function LayoutIcon({ mode }: { mode: LayoutMode }) {
 
 interface TabStripProps {
   channels: ChannelEntry[];
+  /** Each tab's live state by its key, from useMultiChatLive. */
+  liveByKey: Map<string, SourceLive>;
   active: string | null;
   visibleSet: Set<string>;
   layoutMode: LayoutMode;
@@ -3053,6 +3062,7 @@ interface TabContextMenuState {
 
 function TabStrip({
   channels,
+  liveByKey,
   active,
   visibleSet,
   layoutMode,
@@ -3137,6 +3147,7 @@ function TabStrip({
             <TabButton
               key={key}
               entry={c}
+              live={liveByKey.get(key)}
               isActive={isActive}
               isVisible={isVisible}
               isDragOver={dragOver === key}
@@ -3246,6 +3257,8 @@ function TabStrip({
 
 interface TabButtonProps {
   entry: ChannelEntry;
+  /** Undefined or not yet known: no dot and no live word. */
+  live?: SourceLive;
   isActive: boolean;
   isVisible: boolean;
   isDragOver: boolean;
@@ -3265,6 +3278,7 @@ interface TabButtonProps {
 // surfaced — too noisy for chats with high volume.
 function TabButton({
   entry,
+  live,
   isActive,
   isVisible,
   isDragOver,
@@ -3287,6 +3301,9 @@ function TabButton({
   if (isVisible && lastSeen !== mentionCount) setLastSeen(mentionCount);
   const unread = Math.max(0, mentionCount - lastSeen);
   const unreadLabel = unread > 99 ? '99+' : String(unread);
+  const label = entry.channelName || entry.channel;
+  const state = liveWord(live);
+  const isLive = state === 'Live';
 
   return (
     <div
@@ -3301,9 +3318,12 @@ function TabButton({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
-      <Tooltip content={entry.channelName || entry.channel}>
+      <Tooltip content={state ? `${label} · ${state}` : label}>
       <button
         type="button"
+        aria-label={[label, state, unread > 0 && !isVisible ? `${unreadLabel} unread` : null]
+          .filter(Boolean)
+          .join(', ')}
         draggable
         onDragStart={onDragStart}
         onClick={onSelect}
@@ -3331,7 +3351,14 @@ function TabButton({
           size={14}
           className="absolute left-2 top-1/2 -translate-y-1/2"
         />
-        <span className="truncate text-center">{entry.channelName || entry.channel}</span>
+        {/* The dot hangs off the label's top-right corner inside the tab's
+            padding, so a channel going live or offline never moves its name. */}
+        <span className="relative min-w-0">
+          <span className="block truncate text-center">{label}</span>
+          {isLive && (
+            <span className="blend-live-dot pointer-events-none absolute -right-1.5 -top-0.5" aria-hidden />
+          )}
+        </span>
         {unread > 0 && !isVisible && (
           <span
             className="absolute right-7 top-1/2 grid h-4 min-w-[1rem] -translate-y-1/2 place-items-center rounded-full bg-accent px-1.5 text-[10px] font-bold leading-none text-background"
@@ -3682,6 +3709,7 @@ function AddChannelPanel({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
+            if (isImeComposing(e)) return;
             if (e.key === 'Enter') onSubmit();
             else if (e.key === 'Escape') onCancel();
           }}

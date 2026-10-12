@@ -10,6 +10,7 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 
 import { Logger } from '../utils/logger';
 import { forgetAssetRequests, onAssetsCached, requestAssetCaching } from './assetCacheQueue';
+import { primeSevenTvPicture, type SevenTvPicture } from './sevenTvPictures';
 // The paint → CSS engine + its v4 paint types now live in the standalone,
 // Tauri-free `paintStyle` module so the hosted overlay page can share the exact
 // same rendering. Re-exported here so existing importers stay unchanged.
@@ -39,6 +40,8 @@ interface UserCosmeticsResponse {
   paints: PaintV4[];
   badges: BadgeV4[];
   seventvUserId?: string; // The user's 7TV profile ID
+  /** The profile picture they set on 7TV (Rust leaves it out when none). */
+  profilePicture?: SevenTvPicture;
 }
 
 // Public result shape for getUserCosmetics. hardFail distinguishes "we never
@@ -144,6 +147,9 @@ export async function getUserCosmetics(twitchId: string): Promise<UserCosmeticsR
   });
   if (listing) await listing;
   applyLocalFiles(result.data, cachedCosmeticFiles || {});
+  // The same answer names their 7TV picture: every avatar surface reads it
+  // from here instead of asking again.
+  if (!result.hardFail) primeSevenTvPicture(twitchId, result.data.profilePicture);
   return result;
 }
 

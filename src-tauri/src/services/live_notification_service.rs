@@ -27,6 +27,10 @@ pub struct LiveNotification {
     /// must not be silenced by the follows toggle, and vice versa.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// The streamer's 7TV cosmetics id (a bare Twitch id, `kick:<id>` or
+    /// `youtube:UC...`), so the notification can draw their 7TV picture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seventv_id: Option<String>,
 }
 
 pub struct LiveNotificationService {
@@ -132,6 +136,7 @@ impl LiveNotificationService {
             stream_url: format!("https://twitch.tv/{}", stream.user_login),
             is_test: false,
             source: None,
+            seventv_id: crate::services::seventv_cosmetics_resolver::cosmetics_id("twitch", &stream.user_id),
         };
 
         // Through the one gate (dedupe, cross-platform merge, the toggles).

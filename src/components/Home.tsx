@@ -45,6 +45,8 @@ import {
 
 import { formatViewerCount } from '../utils/streamStats';
 import { useStreamAvatars } from '../hooks/useStreamAvatars';
+import { SevenTvAvatar } from './SevenTvAvatar';
+import { sevenTvIdForStream } from '../services/sevenTvPictures';
 import { useVisibleAvatarKeys } from '../hooks/useVisibleAvatarKeys';
 import { useTitleBarNavDensity } from '../hooks/useTitleBarNavDensity';
 import { Logger } from '../utils/logger';
@@ -54,6 +56,7 @@ import { CardChip } from './ui/CardChip';
 import { AutomationPulse } from './ui/AutomationPulse';
 import { TogetherChip } from './SharedViewers';
 import { groupFor } from '../utils/sharedViewers';
+import { signInReasonText, useTwitchSignInReason } from '../utils/twitchSignIn';
 // Types for drops data
 interface DropCampaign {
     id: string;
@@ -195,6 +198,8 @@ const Home = () => {
         setVideosPeriod,
         setMediaSearchQuery,
     } = useAppStore.getState();
+    // Set when StreamNook signed you out of Twitch itself; the login wall says why.
+    const twitchSignInReason = useTwitchSignInReason();
     const {
         followedStreams,
         recommendedStreams,
@@ -991,6 +996,16 @@ const Home = () => {
                             setHasMoreCategoryStreams(false);
                         })
                         .finally(() => { if (isMountedRef.current) setIsLoadingCategoryStreams(false); });
+                }
+                // The header (description, followers, tags) comes back with it:
+                // a remount starts with no details, and only a fresh click used
+                // to fetch them.
+                if (categoryDetails?.id !== selectedCategory.id && !isLoadingCategoryDetails) {
+                    setIsLoadingCategoryDetails(true);
+                    invoke('get_category_info', { gameName: selectedCategory.name })
+                        .then(details => { if (isMountedRef.current) setCategoryDetails(details as CategoryInfo | null); })
+                        .catch(e => { if (isMountedRef.current) Logger.error('Failed to load category details:', e); })
+                        .finally(() => { if (isMountedRef.current) setIsLoadingCategoryDetails(false); });
                 }
             } else if (selectedCategory.name) {
                 // Badge overlay navigation — category has no ID, load by name
@@ -2039,7 +2054,9 @@ const Home = () => {
                                                                         {/* No placeholder when a platform ships no avatar: a row of
                                                                             identical grey monograms is noise, not information. */}
                                                                         {(stream.profile_image_url || cardAvatars[streamKey(stream)]) && (
-                                                                            <img
+                                                                            <SevenTvAvatar
+                                                                                cosmeticsId={sevenTvIdForStream(stream)}
+                                                                                px={16}
                                                                                 loading="lazy"
                                                                                 src={stream.profile_image_url || cardAvatars[streamKey(stream)]}
                                                                                 alt=""
@@ -2216,7 +2233,18 @@ const Home = () => {
                                                                         cardAvatars[streamKey(user)] ||
                                                                         user.thumbnail_url;
                                                                     return offlineAvatar ? (
-                                                                        <img src={offlineAvatar} alt={user.user_name} className="w-full h-full object-cover" />
+                                                                        <SevenTvAvatar
+                                                                            cosmeticsId={sevenTvIdForStream(user)}
+                                                                            px={40}
+                                                                            motion="hover"
+                                                                            // The card's hover overlay covers the picture and
+                                                                            // takes the pointer, so the card's hover moves it.
+                                                                            hoverScope="[data-avatar-key]"
+                                                                            loading="lazy"
+                                                                            src={offlineAvatar}
+                                                                            alt={user.user_name}
+                                                                            className="w-full h-full object-cover"
+                                                                        />
                                                                     ) : (
                                                                         <User size={14} className="text-textSecondary" />
                                                                     );
@@ -2656,7 +2684,9 @@ const Home = () => {
                                 drill-down and is gone entirely while watching — so from
                                 here they were unreachable most of the time. They live in
                                 the title bar now, which is mounted in every view. */}
-                            {isAuthenticated && (
+                            {/* Kept while Twitch is owed a new sign-in, so looking for
+                                your follows finds the wall that says why they went. */}
+                            {(isAuthenticated || twitchSignInReason) && (
                                 <Tooltip content="Following" delay={200} disabled={!navIcons}>
                                 <button
                                     aria-label={navIcons ? 'Following' : undefined}
@@ -3502,7 +3532,9 @@ const Home = () => {
                                                                     <div className="flex items-center justify-between">
                                                                         <div className="flex items-center gap-1 min-w-0">
                                                                             {(stream.profile_image_url || cardAvatars[streamKey(stream)]) && (
-                                                                                <img
+                                                                                <SevenTvAvatar
+                                                                                    cosmeticsId={sevenTvIdForStream(stream)}
+                                                                                    px={16}
                                                                                     loading="lazy"
                                                                                     src={stream.profile_image_url || cardAvatars[streamKey(stream)]}
                                                                                     alt=""
@@ -3717,9 +3749,13 @@ const Home = () => {
                         !isAuthenticated && activeTab === 'following' && !isProviderView ? (
                             <div className="flex items-center justify-center h-full">
                                 <div className="text-center glass-panel p-6 max-w-sm">
-                                    <h3 className="text-base font-bold text-textPrimary mb-1">Not Logged In</h3>
+                                    <h3 className="text-base font-bold text-textPrimary mb-1">
+                                        {twitchSignInReason ? 'Sign In Again' : 'Not Logged In'}
+                                    </h3>
                                     <p className="text-textSecondary text-sm mb-4">
-                                        Log in to see your followed streams.
+                                        {twitchSignInReason
+                                            ? signInReasonText(twitchSignInReason)
+                                            : 'Log in to see your followed streams.'}
                                     </p>
                                     <div className="flex justify-center">
                                         <PlatformLoginButton
@@ -3727,6 +3763,7 @@ const Home = () => {
                                             onClick={loginToTwitch}
                                             busy={isLoading}
                                             busyLabel="Logging in…"
+                                            label={twitchSignInReason ? 'Sign in with Twitch' : undefined}
                                         />
                                     </div>
                                 </div>
@@ -4028,7 +4065,14 @@ const Home = () => {
                                                 >
                                                     <div className="w-10 h-10 rounded-full bg-glass flex items-center justify-center overflow-hidden ring-1 ring-borderSubtle group-hover:ring-accent/40 flex-shrink-0">
                                                         {user.thumbnail_url ? (
-                                                            <img src={user.thumbnail_url} alt={user.user_name} className="w-full h-full object-cover" />
+                                                            <SevenTvAvatar
+                                                                cosmeticsId={sevenTvIdForStream(user)}
+                                                                px={40}
+                                                                motion="hover"
+                                                                src={user.thumbnail_url}
+                                                                alt={user.user_name}
+                                                                className="w-full h-full object-cover"
+                                                            />
                                                         ) : (
                                                             <User size={14} className="text-textSecondary" />
                                                         )}

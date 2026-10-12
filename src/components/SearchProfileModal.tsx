@@ -10,6 +10,8 @@ import StreamerMedia from './StreamerMedia';
 import { Tooltip } from './ui/Tooltip';
 import { Logger } from '../utils/logger';
 import { CardChip } from './ui/CardChip';
+import { SevenTvAvatar } from './SevenTvAvatar';
+import { sevenTvIdForStream } from '../services/sevenTvPictures';
 
 type ProfileTab = 'about' | 'clips' | 'videos';
 
@@ -95,7 +97,7 @@ export const SearchProfileModal = ({ user, onClose }: { user: TwitchStream, onCl
                         <div className="flex items-center gap-3 w-1/2">
                             <div className={`relative w-12 h-12 rounded-full flex items-center justify-center overflow-hidden ring-2 ${isLive ? 'ring-red-500/80' : 'bg-accent/20 ring-accent/20'}`}>
                                 {profileImg ? (
-                                    <img src={profileImg} alt={user.user_name} className="w-full h-full object-cover" />
+                                    <SevenTvAvatar cosmeticsId={sevenTvIdForStream(user)} px={48} motion="animate" src={profileImg} alt={user.user_name} className="w-full h-full object-cover" />
                                 ) : (
                                     <User size={24} className={isLive ? 'text-red-500' : 'text-accent'} />
                                 )}

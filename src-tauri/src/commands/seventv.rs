@@ -94,6 +94,16 @@ pub async fn seventv_user_inventory(
     crate::services::seventv_cosmetics_resolver::inventory(&id).await
 }
 
+/// The 7TV profile picture of each cosmetics id (bare Twitch id, `kick:<id>`,
+/// `youtube:UC...`), for list surfaces that show many people at once. Rides the
+/// chatter resolver, so one call costs one shared batch and no extra cache.
+#[command]
+pub async fn seventv_profile_pictures(
+    ids: Vec<String>,
+) -> std::collections::HashMap<String, Option<crate::services::seventv_cosmetics_resolver::ProfilePicture>> {
+    crate::services::seventv_cosmetics_resolver::profile_pictures(ids).await
+}
+
 /// Forget one chatter's cosmetics so the next lookup asks 7TV again.
 #[command]
 pub async fn seventv_invalidate_cosmetics(id: String) {

@@ -20,6 +20,8 @@ import PenroseMarch from '../../components/PenroseMarch';
 import { CollabAvatarStack } from '../../components/SharedViewers';
 import { collabLabel } from '../../utils/sharedViewers';
 import { TogetherSheet } from './TogetherSheet';
+import { SevenTvAvatar } from '../../components/SevenTvAvatar';
+import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 
 const CONTROLS_HIDE_MS = 3000;
 
@@ -376,7 +378,10 @@ export const MobilePlayer: React.FC<{
             {/* Identity row: avatar + name, with the live metrics opposite. */}
             <div className="flex items-center gap-2 min-w-0">
               {currentStream.profile_image_url ? (
-                <img
+                <SevenTvAvatar
+                  cosmeticsId={sevenTvIdForStream(currentStream)}
+                  px={28}
+                  motion="animate"
                   src={currentStream.profile_image_url}
                   alt=""
                   draggable={false}

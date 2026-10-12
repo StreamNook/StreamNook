@@ -15,6 +15,8 @@ import { computePaintStyle, getBadgeImageUrls, getBadgeFallbackUrls, pickPaintLa
 import { withBttvPro } from '../services/bttvProBadge';
 import { useNameColorAdjust } from '../hooks/useNameColor';
 import { FallbackImage } from './FallbackImage';
+import { SevenTvAvatar } from './SevenTvAvatar';
+import { primeSevenTvPicture, type SevenTvPicture } from '../services/sevenTvPictures';
 import { formatIVRDate, formatSubTenure } from '../utils/ivrFormat';
 import { Logger } from '../utils/logger';
 import {
@@ -57,6 +59,7 @@ import { useChannelEmotes } from '../stores/chatConnectionStore';
 import { historyKey } from '../utils/chatterIdentity';
 import { isChannelScopedTwitchBadge } from '../utils/badgeOrder';
 import { usePlatformAccountStore } from '../stores/platformAccountStore';
+import { isImeComposing } from '../utils/imeComposing';
 
 // messageHistory arrives from two sources:
 //   1. The frontend's in-session userMessageHistory Map (full ParsedMessage shape
@@ -217,8 +220,9 @@ interface ThirdPartyBadge {
 interface SevenTVCosmetics {
   paints: SevenTVPaint[];
   badges: SevenTVBadge[];
-  /** 7TV animated avatar URL, if the user has set one. 7TV has no banner. */
-  avatar_url: string | null;
+  /** The profile picture the user set on 7TV (still and animated renditions).
+   *  7TV has no banner. */
+  profile_picture?: SevenTvPicture | null;
 }
 
 // v4 API Paint structure with layers
@@ -561,6 +565,7 @@ const NicknameEditor: React.FC<NicknameEditorProps> = ({ userId, username, displ
             onChange={(e) => setDraft(e.target.value)}
             onBlur={commitNickname}
             onKeyDown={(e) => {
+              if (isImeComposing(e)) return;
               if (e.key === 'Enter') {
                 e.preventDefault();
                 commitNickname();
@@ -1543,18 +1548,24 @@ const UserProfileCard = ({
   // commands, whisper). Falls back to the passed value while the profile loads.
   const login = twitchProfile?.login || username;
 
-  // Prefer the user's 7TV animated avatar when they have one; otherwise the
-  // platform's own profile image. 7TV exposes no banner, only this avatar.
+  // The platform's own profile image. A 7TV profile picture is drawn over it
+  // by SevenTvAvatar below, and this stays its fallback.
   //
   // `twitchProfile` is null on a provider card by design (the Helix fetch is
   // skipped), so reading only from it left every Kick and YouTube card with a
   // blank avatar and banner even though both are fetched and parsed.
   const avatarUrl =
-    profileData?.seventv_cosmetics?.avatar_url ||
     twitchProfile?.profile_image_url ||
     kickProfile?.avatar_url ||
     youtubeProfile?.avatar_url ||
     undefined;
+
+  // The card's own 7TV lookup already names the picture; hand it to the avatar
+  // so it draws without a lookup of its own.
+  const cardSeventv = profileData?.seventv_cosmetics ?? earlySeventv;
+  useEffect(() => {
+    if (cardSeventv) primeSevenTvPicture(cardChatKey, cardSeventv.profile_picture ?? null);
+  }, [cardChatKey, cardSeventv]);
 
   const bannerStyle = useMemo(() => {
     const bannerUrl =
@@ -1986,8 +1997,11 @@ const UserProfileCard = ({
             style={prefersReducedMotion ? undefined : { scale: avatarScale, y: avatarLift, transformOrigin: 'left bottom' }}
           >
             {avatarUrl ? (
-              <img
+              <SevenTvAvatar
+                cosmeticsId={cardChatKey}
                 src={avatarUrl}
+                px={80}
+                motion="animate"
                 alt={displayName}
                 className={`w-full h-full object-cover ${isBanned ? 'grayscale' : ''}`}
               />

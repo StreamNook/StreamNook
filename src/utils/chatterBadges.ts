@@ -133,3 +133,37 @@ export function toggleLoadoutBadge(
   const category = categoryOf(key);
   return [...badges.filter((k) => categoryOf(k) !== category), key];
 }
+
+/**
+ * Twitch role badge sets, ranked as Rust's `chat_layout::twitch_badge_rank`
+ * ranks them (lowest first): broadcaster, then staff, then moderator, then
+ * VIP. Subscription, earned and global badges are not roles.
+ */
+const TWITCH_ROLE_RANK: Readonly<Record<string, number>> = {
+  broadcaster: 0,
+  staff: 1,
+  admin: 1,
+  global_mod: 1,
+  lead_moderator: 2,
+  moderator: 2,
+  vip: 3,
+};
+
+/**
+ * The one badge a compact one-line byline (the collapsed pin bar) shows: the
+ * sender's highest Twitch role badge, or none. Takes resolved Twitch badges
+ * keyed `set/version`; third-party badges never reach it. Picked by rank, not
+ * position, so it holds whatever order the badges arrive in.
+ */
+export function pickRoleBadge<T extends { key: string }>(twitch: readonly T[]): T | null {
+  let best: T | null = null;
+  let bestRank = Infinity;
+  for (const b of twitch) {
+    const rank = TWITCH_ROLE_RANK[b.key.split('/')[0]];
+    if (rank !== undefined && rank < bestRank) {
+      best = b;
+      bestRank = rank;
+    }
+  }
+  return best;
+}

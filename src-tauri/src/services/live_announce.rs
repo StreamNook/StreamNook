@@ -141,6 +141,7 @@ mod tests {
             stream_url: String::new(),
             is_test: false,
             source: None,
+            seventv_id: None,
         }
     }
 

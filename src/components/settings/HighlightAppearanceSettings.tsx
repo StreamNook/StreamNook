@@ -4,8 +4,10 @@ import { useAppStore } from '../../stores/AppStore';
 import { IS_MOBILE } from '../../utils/platform';
 import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
 import { InlineSlider, SubControl, SubControls } from '../plugins/settingsPageKit';
-import type { HighlightDisplayStyle } from '../../types';
+import type { ChatDesignSettings, HighlightDisplayStyle } from '../../types';
 import { useSettingReset } from './settingReset';
+import { ScrollbarMarksPreview, type PreviewDesign } from './ChatPreview';
+import { FALLBACK_MARK_KINDS, MARK_KIND_OPTIONS } from '../chat/scrollbarMarkLayout';
 
 const STYLE_HINTS: Record<HighlightDisplayStyle, string> = {
   standard: 'Tinted row background plus colored left border.',
@@ -34,6 +36,34 @@ const HighlightAppearanceSettings = () => {
   const displayStyle: HighlightDisplayStyle = appearance.display_style ?? 'standard';
   const opacity = appearance.opacity ?? 20;
   const resetFor = useSettingReset();
+
+  const design = settings.chat_design;
+  // Rust always sends a full chat_design block; the cast keeps the spread typed.
+  const writeDesign = (patch: Partial<ChatDesignSettings>) =>
+    updateSettings({ ...settings, chat_design: { ...(design as ChatDesignSettings), ...patch } });
+  const marksOn = design?.scrollbar_marks ?? true;
+  const markKinds = design?.scrollbar_mark_kinds ?? [...FALLBACK_MARK_KINDS];
+  // Saved in the settings order, so a list toggled back to the default
+  // compares equal to it and the reset arrow goes away.
+  const toggleMarkKind = (kind: string) => {
+    const next = markKinds.includes(kind) ? markKinds.filter((k) => k !== kind) : [...markKinds, kind];
+    const order = MARK_KIND_OPTIONS.map((o) => o.kind as string);
+    next.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    writeDesign({ scrollbar_mark_kinds: next });
+  };
+  const previewDesign: PreviewDesign = {
+    show_dividers: design?.show_dividers ?? true,
+    alternating_backgrounds: design?.alternating_backgrounds ?? false,
+    message_spacing: design?.message_spacing ?? 8,
+    font_size: design?.font_size ?? 14,
+    font_weight: design?.font_weight ?? 400,
+    show_timestamps: design?.show_timestamps ?? false,
+    show_timestamp_seconds: design?.show_timestamp_seconds ?? false,
+    timestamp_format: design?.timestamp_format ?? '12h',
+    username_separator: design?.username_separator ?? (design?.username_colon ? 'colon' : 'none'),
+    username_style: design?.username_style ?? 'plain',
+    username_accent_source: design?.username_accent_source ?? 'user',
+  };
 
   const writeAppearance = (patch: Partial<typeof appearance>) =>
     updateSettings({
@@ -105,6 +135,54 @@ const HighlightAppearanceSettings = () => {
           }
         />
       )}
+
+      <SettingsRow
+        title="Scrollbar marks"
+        onReset={resetFor('chat_design.scrollbar_marks')}
+        description="Small ticks on the chat scrollbar show where mentions, subs, announcements and pinned messages are, so you can find what you missed while reading back."
+        help="A tick takes its message's highlight colour where it has one. A run of one kind, like a gift bomb, joins into one bar, and mentions draw on top of everything else."
+        control={
+          <Toggle
+            enabled={marksOn}
+            onChange={() => writeDesign({ scrollbar_marks: !marksOn })}
+          />
+        }
+      >
+        {marksOn && (
+          <div className="space-y-4">
+            <SubControls>
+              <SubControl
+                title="Kinds"
+                stacked
+                onReset={resetFor('chat_design.scrollbar_mark_kinds')}
+                control={
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {MARK_KIND_OPTIONS.map(({ kind, label }) => {
+                      const on = markKinds.includes(kind);
+                      return (
+                        <button
+                          key={kind}
+                          type="button"
+                          aria-pressed={on}
+                          onClick={() => toggleMarkKind(kind)}
+                          className={`px-2.5 py-1 rounded-full text-[12px] font-medium transition-colors ${
+                            on
+                              ? 'chrome-glaze chrome-glaze--flat chrome-glaze--control text-textPrimary'
+                              : 'glass-button-static text-textMuted'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                }
+              />
+            </SubControls>
+            <ScrollbarMarksPreview design={previewDesign} kinds={markKinds} mentionColor={design?.mention_color} />
+          </div>
+        )}
+      </SettingsRow>
     </SettingsSection>
   );
 };

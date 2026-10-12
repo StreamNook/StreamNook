@@ -14,16 +14,20 @@ import { TogetherTag } from './SharedViewers';
 import { groupFor, type ChannelGroup } from '../utils/sharedViewers';
 import StreamHoverCard, { STREAM_HOVER_CARD_CLASS } from './StreamHoverCard';
 import { ProviderLogo } from './ProviderLogo';
+import { SevenTvAvatar } from './SevenTvAvatar';
+import { sevenTvIdForStream } from '../services/sevenTvPictures';
 import { useFollowsStore } from '../stores/followsStore';
 import { favoriteIdOf, favoriteMetaOf } from '../utils/favorites';
 import { streamProvider, streamKey } from '../utils/streamProvider';
 import { streamMiddleClickHandlers } from '../utils/openInMultiNook';
 import { useStreamAvatars } from '../hooks/useStreamAvatars';
 import { useStreamOnlyFullscreen } from '../hooks/useStreamOnlyFullscreen';
+import { useTitleBarAutoHide } from '../hooks/useTitleBarAutoHide';
 
 import { Logger } from '../utils/logger';
 import { IS_LINUX, IS_WEBKITGTK } from '../utils/platform';
 import { formatViewerCount } from '../utils/streamStats';
+import { useTwitchSignInReason } from '../utils/twitchSignIn';
 // Width constants
 const COMPACT_WIDTH = 56;
 const DEFAULT_EXPANDED_WIDTH = 280;
@@ -150,6 +154,8 @@ const StreamItem = memo(({
     onStreamClick,
     onFavoriteClick,
 }: StreamItemProps) => {
+    // A moving 7TV picture plays only while this row is pointed at.
+    const [hovered, setHovered] = useState(false);
     return (
         <Tooltip
             content={<StreamHoverCard stream={stream} hasDrops={hasDrops} collab={collab} />}
@@ -173,10 +179,17 @@ const StreamItem = memo(({
                 onClick={(e) => onStreamClick(e, stream)}
                 {...streamMiddleClickHandlers(stream)}
                 onContextMenu={(e) => useContextMenuStore.getState().openMenu(e, stream)}
+                onMouseEnter={() => setHovered(true)}
+                onMouseLeave={() => setHovered(false)}
             >
             {/* Avatar with live indicator */}
             <div className={`relative flex-shrink-0 ${AVATAR_TRANSITION}`}>
-                <img
+                <SevenTvAvatar
+                    cosmeticsId={sevenTvIdForStream(stream)}
+                    px={36}
+                    motion="hover"
+                    hovered={hovered}
+                    loading="lazy"
                     src={profileImage}
                     alt={stream.user_name}
                     className={`rounded-full object-cover ${AVATAR_TRANSITION} ${showExpanded ? 'w-8 h-8' : 'w-9 h-9'}`}
@@ -327,6 +340,8 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
         loadMoreRecommendedStreams,
         isFavoriteStreamer,
     } = useAppStore.getState();
+    // StreamNook signed you out of Twitch itself; the empty state says so.
+    const twitchSignInOwed = useTwitchSignInReason() !== null;
     const {
         followedStreams,
         recommendedStreams,
@@ -372,6 +387,9 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
     // the stream and chat get the screen and the list still slides in from the
     // edge. Disabled stays disabled: that viewer never wants the list.
     const streamOnlyFullscreen = useStreamOnlyFullscreen();
+    // Whenever the title bar tucks away (that full screen, or "Hide title bar
+    // while watching"), nothing reserves its row and the panel runs to the top.
+    const titleBarAutoHides = useTitleBarAutoHide();
     const sidebarMode: SidebarMode =
         streamOnlyFullscreen && chosenSidebarMode !== 'disabled' ? 'hidden' : chosenSidebarMode;
     const [expandOnHover, setExpandOnHover] = useState(() => {
@@ -950,15 +968,15 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
                         // MUST track the title bar height (h-[40px] in TitleBar.tsx);
                         // when it lagged at top-8 the panel rode up under the bar and
                         // its frosted backing clipped the title-bar action icons.
-                        // Stream-only full screen tucks the bar away, so the
-                        // panel runs the full height there.
-                        ? `fixed ${onRight ? 'right-0' : 'left-0'} ${streamOnlyFullscreen ? 'top-0' : 'top-10'} bottom-0 z-50`
+                        // While the bar tucks away the panel runs the full
+                        // height, and the bar overlays it when it comes back.
+                        ? `fixed ${onRight ? 'right-0' : 'left-0'} ${titleBarAutoHides ? 'top-0' : 'top-10'} bottom-0 z-50`
                         // pt-10 clears the floating title bar, which no longer
                         // reserves those 40px for anyone. Padding rather than a
                         // margin so the panel's own backing still reaches the top
                         // of the window and the left icon cluster has something to
                         // sit on; only the content starts below the bar.
-                        : 'relative h-full pt-10'
+                        : `relative h-full ${titleBarAutoHides ? '' : 'pt-10'}`
                     }
                 `}
                 // On Linux, hidden mode slides a full-width panel in and out
@@ -1175,7 +1193,9 @@ const Sidebar = ({ side = 'left' }: { side?: 'left' | 'right' }) => {
                             {showExpanded ? (
                                 <p className="text-xs text-textMuted">
                                     {activePlatform === 'all' || activePlatform === 'twitch'
-                                        ? 'Log in to see followed streams'
+                                        ? twitchSignInOwed
+                                            ? 'Sign in again to see followed streams'
+                                            : 'Log in to see followed streams'
                                         : `Connect ${providerLabel(activePlatform as ProviderId)} to see followed streams`}
                                 </p>
                             ) : (

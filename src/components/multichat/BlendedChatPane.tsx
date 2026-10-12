@@ -26,6 +26,7 @@ import HypeTrainBanner from '../HypeTrainBanner';
 import { useBlendedHypeTrains } from './useBlendedHypeTrains';
 import { Logger } from '../../utils/logger';
 import { Tooltip } from '../ui/Tooltip';
+import { isImeComposing } from '../../utils/imeComposing';
 
 interface BlendedChannel {
   channel: string;
@@ -702,6 +703,7 @@ export function BlendedChatPane({
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
+              if (isImeComposing(e)) return;
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 handleSend();

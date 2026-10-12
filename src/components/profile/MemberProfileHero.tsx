@@ -7,6 +7,7 @@ import { motion } from 'framer-motion';
 import { StreamNookBadge, getTier } from '../StreamNookBadge';
 import { getBadgeImageUrls, getBadgeFallbackUrls } from '../../services/seventvService';
 import { FallbackImage } from '../FallbackImage';
+import { SevenTvAvatar } from '../SevenTvAvatar';
 import { Tooltip } from '../ui/Tooltip';
 import { AtmosphereChip, PaintChip, SevenTvProfileButton } from './IdentityChips';
 import type { MemberProfileView } from './memberProfile';
@@ -80,7 +81,15 @@ export function MemberProfileHero({
         <div className="flex min-w-0 flex-1 items-center gap-3.5">
           <span className="flex h-16 w-16 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/[0.04] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.18),0_4px_12px_rgba(0,0,0,0.5)] ring-1 ring-inset ring-white/15">
             {info?.avatar ? (
-              <img src={info.avatar} alt="" className="h-full w-full object-cover" draggable={false} />
+              <SevenTvAvatar
+                cosmeticsId={userId}
+                src={info.avatar}
+                px={64}
+                motion="animate"
+                alt=""
+                className="h-full w-full object-cover"
+                draggable={false}
+              />
             ) : (
               <User size={28} className="text-textSecondary" />
             )}

@@ -540,6 +540,7 @@ async fn apply(
                 stream_url: row.watch_url.clone(),
                 is_test: false,
                 source: Some("favorite".to_string()),
+                seventv_id: crate::services::seventv_cosmetics_resolver::cosmetics_id(&row.provider, &row.user_id),
             },
         );
     }

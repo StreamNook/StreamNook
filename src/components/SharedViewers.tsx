@@ -8,6 +8,7 @@ import { makeKey } from '../utils/providerKey';
 import { collabLabel, groupWord, isTogether, type ChannelGroup } from '../utils/sharedViewers';
 import { collabMissingFromGrid, watchCollabInMultiNook } from '../utils/collabMultiNook';
 import { ACCENT_BUTTON, ACCENT_FILL } from './ui/glazeButtons';
+import { SevenTvAvatar } from './SevenTvAvatar';
 
 // Twitch's Shared Viewership, presented as its own thing rather than folded
 // into the viewer count: the others' faces and "Together" beside the channel's
@@ -25,8 +26,11 @@ const POPOVER_WIDTH = 272;
 const EDGE = 8;
 
 function Avatar({ member, size }: { member: Collaborator; size: number }) {
+  // Shared Viewership is Twitch-only, so `user_id` is a Twitch id.
   return member.avatar_url ? (
-    <img
+    <SevenTvAvatar
+      cosmeticsId={member.user_id}
+      px={size}
       src={member.avatar_url}
       alt=""
       draggable={false}

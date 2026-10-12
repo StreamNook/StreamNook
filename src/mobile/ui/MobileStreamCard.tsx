@@ -18,6 +18,8 @@ import { CardChip } from '../../components/ui/CardChip';
 import { TogetherTag } from '../../components/SharedViewers';
 import { useAppStore } from '../../stores/AppStore';
 import { groupFor } from '../../utils/sharedViewers';
+import { SevenTvAvatar } from '../../components/SevenTvAvatar';
+import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 
 // The stamp is what makes a refreshed list show refreshed previews: Twitch's
 // preview URL is fixed per channel and the WebView caches it, so without a
@@ -229,7 +231,9 @@ export const MobileStreamCard: React.FC<{
         </h3>
         <div className="flex items-center gap-1 text-textSecondary text-[13px]">
           {stream.profile_image_url && (
-            <img
+            <SevenTvAvatar
+              cosmeticsId={sevenTvIdForStream(stream)}
+              px={16}
               src={stream.profile_image_url}
               alt=""
               draggable={false}
