@@ -22,16 +22,21 @@ const REDIRECT_URI: &str = "http://localhost:3000/callback";
 /// How recently someone must have chatted to count as present in a viewers list.
 const CHATTED_RECENTLY_MS: i64 = 30 * 60 * 1000;
 // Adding ANY scope here invalidates every stored token at once (see the
-// missing-scopes branch in check_token_health, which calls AccountStore::
+// missing-scopes branch in verify_token_health, which calls AccountStore::
 // reset_all). That makes a scope change a one-time, whole-user-base re-auth, so
-// new scopes are batched deliberately rather than added one at a time.
+// new scopes are batched deliberately rather than added one at a time. The same
+// branch records why in `twitch_signin`, so every window asks the user to sign
+// in again until they do.
 //
 // The 2026-07 batch added, in one event:
 //   channel:manage:polls / channel:manage:predictions — create and resolve them
 //   moderator:manage:blocked_terms — /blockterm and /unblockterm (read-only
 //     moderator:read:blocked_terms was already held)
 //   user:bot — the chat-bot badge on /bot sends
-const SCOPES: &str = "user:read:follows user:read:email chat:read chat:edit channel:read:redemptions channel:manage:redemptions moderator:read:followers openid user:manage:whispers user:read:whispers user:read:emotes channel:read:hype_train moderator:read:blocked_terms moderator:manage:blocked_terms moderator:manage:chat_settings moderator:manage:unban_requests moderator:manage:banned_users moderator:manage:chat_messages moderator:read:warnings moderator:read:moderators moderator:read:vips moderator:read:chatters channel:manage:moderators channel:manage:vips channel:manage:polls channel:manage:predictions moderator:manage:suspicious_users user:manage:chat_color user:manage:blocked_users user:read:blocked_users moderator:manage:announcements moderator:manage:shoutouts channel:edit:commercial channel:manage:raids channel:manage:broadcast moderation:read user:write:chat user:bot clips:edit moderator:manage:automod moderator:read:suspicious_users";
+// A later re-auth added:
+//   moderator:manage:shield_mode: /shield and /shieldoff (Helix
+//     PUT moderation/shield_mode refuses the token without it)
+const SCOPES: &str = "user:read:follows user:read:email chat:read chat:edit channel:read:redemptions channel:manage:redemptions moderator:read:followers openid user:manage:whispers user:read:whispers user:read:emotes channel:read:hype_train moderator:read:blocked_terms moderator:manage:blocked_terms moderator:manage:chat_settings moderator:manage:unban_requests moderator:manage:banned_users moderator:manage:chat_messages moderator:read:warnings moderator:read:moderators moderator:read:vips moderator:read:chatters channel:manage:moderators channel:manage:vips channel:manage:polls channel:manage:predictions moderator:manage:suspicious_users user:manage:chat_color user:manage:blocked_users user:read:blocked_users moderator:manage:announcements moderator:manage:shoutouts channel:edit:commercial channel:manage:raids channel:manage:broadcast moderation:read user:write:chat user:bot clips:edit moderator:manage:automod moderator:read:suspicious_users moderator:manage:shield_mode";
 const TOKEN_FILE_NAME: &str = ".twitch_token";
 
 /// Normalize a GQL Language enum spelling ("FR", "ZH_HK") to the Helix form
@@ -315,6 +320,58 @@ pub struct TokenHealthStatus {
     pub error: Option<String>,
 }
 
+/// The scopes in `required` (space separated, as `SCOPES` is) that the token
+/// was not granted. Twitch reports a token's scopes exactly, so a plain string
+/// match is the whole test.
+fn missing_scopes<'a>(required: &'a str, granted: &[String]) -> Vec<&'a str> {
+    required
+        .split_whitespace()
+        .filter(|&scope| !granted.iter().any(|g| g == scope))
+        .collect()
+}
+
+/// Helix Send Chat Message answered with an error status. Carried inside the
+/// `anyhow::Error` so a caller that needs the status (429 means "too fast")
+/// can downcast; the text reads as it always has.
+#[derive(Debug)]
+pub struct HelixSendRefused {
+    pub status: u16,
+    pub body: serde_json::Value,
+}
+
+impl std::fmt::Display for HelixSendRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Helix send returned HTTP {}: {}", self.status, self.body)
+    }
+}
+
+impl std::error::Error for HelixSendRefused {}
+
+/// Twitch's own reason from a refused Helix moderation call, in plain words
+/// where Twitch's are cryptic, so a command can say why it failed.
+pub fn helix_refusal_text(status: u16, body: &str) -> String {
+    let message = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v["message"].as_str().map(str::to_string))
+        .unwrap_or_default();
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("may not be banned") {
+        "that user can't be banned or timed out here".into()
+    } else if lower.contains("already banned") {
+        "they are already banned".into()
+    } else if lower.contains("is not banned") {
+        "they are not banned or timed out".into()
+    } else if lower.contains("not one of the broadcaster's moderators") {
+        "you are not a moderator in this channel".into()
+    } else if lower.contains("missing scope") {
+        "StreamNook needs moderation access again: sign out and back in to Twitch".into()
+    } else if !message.is_empty() {
+        message
+    } else {
+        format!("Twitch answered HTTP {status}")
+    }
+}
+
 pub struct TwitchService;
 
 impl TwitchService {
@@ -463,6 +520,9 @@ impl TwitchService {
                     match store_result {
                         Ok(()) => {
                             debug!("[LOGIN] Token stored");
+                            // This token was granted every scope in SCOPES, so a
+                            // sign-in StreamNook asked for is no longer owed.
+                            crate::services::twitch_signin::clear();
 
                             // Emit success event
                             debug!("[LOGIN] Emitting twitch-login-complete event...");
@@ -522,6 +582,7 @@ impl TwitchService {
         };
 
         Self::persist_primary_token(&storable_token).await?;
+        crate::services::twitch_signin::clear();
 
         debug!(
             "Access token: {}...",
@@ -825,11 +886,7 @@ impl TwitchService {
             })
             .unwrap_or_default();
 
-        let required_scopes: Vec<&str> = SCOPES.split_whitespace().collect();
-        let missing_scopes: Vec<&str> = required_scopes
-            .into_iter()
-            .filter(|&required| !scopes.iter().any(|s| s == required))
-            .collect();
+        let missing_scopes = missing_scopes(SCOPES, &scopes);
 
         if !missing_scopes.is_empty() {
             // INFO on purpose: this line is the only evidence of a forced
@@ -853,6 +910,12 @@ impl TwitchService {
             // user just logged in.
             crate::services::account_store::AccountStore::reset_all().await;
 
+            // Say why, to every window and across a relaunch, until the user
+            // signs in again. A sign-out with no reason reads as a bug.
+            crate::services::twitch_signin::require(
+                crate::services::twitch_signin::SignInReason::NewPermissions,
+            );
+
             return Ok(TokenHealthStatus {
                 is_valid: false,
                 seconds_remaining: 0,
@@ -871,6 +934,10 @@ impl TwitchService {
 
         let user_id = data["user_id"].as_str().map(|s| s.to_string());
         let login = data["login"].as_str().map(|s| s.to_string());
+
+        // A token with every scope settles any sign-in StreamNook asked for,
+        // whichever path stored it.
+        crate::services::twitch_signin::clear();
 
         debug!("[Auth Debug] Token is VALID and has all required scopes.");
         debug!("[Auth Debug] Scopes: {}", scopes.join(", "));
@@ -1186,6 +1253,14 @@ impl TwitchService {
     pub async fn get_user_info() -> Result<UserInfo> {
         let token = Self::get_token().await?;
         let info = Self::get_user_info_with_token(&token).await?;
+        // The token check runs alongside this read and can clear every account
+        // while it is in flight. A profile read from the token it just removed
+        // must not report the user as signed in.
+        if crate::services::twitch_signin::current().is_some() {
+            return Err(anyhow::anyhow!(
+                "Sign-in required: Twitch needs you to sign in again"
+            ));
+        }
         crate::services::account_roster::set_twitch_identity(Some(info.clone()));
         Ok(info)
     }
@@ -1274,11 +1349,7 @@ impl TwitchService {
             .await
             .unwrap_or(serde_json::Value::Null);
         if !status.is_success() {
-            return Err(anyhow::anyhow!(
-                "Helix send returned HTTP {}: {}",
-                status.as_u16(),
-                json
-            ));
+            return Err(HelixSendRefused { status: status.as_u16(), body: json }.into());
         }
 
         let data = json
@@ -4546,6 +4617,13 @@ impl TwitchService {
         let client = crate::services::http::client().clone();
         let user_info = Self::get_user_info().await?;
         let moderator_id = &user_info.id;
+        let action = if duration.is_some() { "time out" } else { "ban" };
+        if target_user_id == broadcaster_id {
+            return Err(anyhow::anyhow!("You can't {} the broadcaster", action));
+        }
+        if target_user_id == moderator_id {
+            return Err(anyhow::anyhow!("You can't {} yourself", action));
+        }
 
         let url = format!(
             "https://api.twitch.tv/helix/moderation/bans?broadcaster_id={}&moderator_id={}",
@@ -4578,9 +4656,14 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to ban/timeout user: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to ban or timeout user"));
+            return Err(anyhow::anyhow!(
+                "Twitch refused the {}: {}",
+                if duration.is_some() { "timeout" } else { "ban" },
+                helix_refusal_text(status, &error_text)
+            ));
         }
 
         Ok(())
@@ -4606,9 +4689,13 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() && response.status() != 204 {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!("[TwitchService] Failed to unban user: {}", error_text);
-            return Err(anyhow::anyhow!("Failed to unban user"));
+            return Err(anyhow::anyhow!(
+                "Twitch refused the unban: {}",
+                helix_refusal_text(status, &error_text)
+            ));
         }
 
         Ok(())
@@ -5833,6 +5920,31 @@ impl TwitchService {
         Ok(poll)
     }
 
+    /// One of the broadcaster's own polls by id, whatever its state: its
+    /// status (ACTIVE, COMPLETED, TERMINATED, ARCHIVED, MODERATED, INVALID).
+    /// Helix only answers for the token's own channel.
+    pub async fn get_poll_status(broadcaster_id: &str, poll_id: &str) -> Result<Option<String>> {
+        let token = Self::get_token().await?;
+        let client = crate::services::http::client().clone();
+        let url = format!(
+            "https://api.twitch.tv/helix/polls?broadcaster_id={}&id={}",
+            urlencoding::encode(broadcaster_id),
+            urlencoding::encode(poll_id)
+        );
+        let response = client
+            .get(&url)
+            .header("Client-Id", CLIENT_ID)
+            .header(AUTHORIZATION, format!("Bearer {}", token))
+            .send()
+            .await?;
+        let value = Self::helix_json_result(response, "get poll").await?;
+        Ok(value["data"]
+            .get(0)
+            .filter(|p| p["id"].as_str() == Some(poll_id))
+            .and_then(|p| p["status"].as_str())
+            .map(str::to_string))
+    }
+
     /// End a poll. `status` is TERMINATED (show the result) or ARCHIVED (hide it).
     pub async fn end_poll(broadcaster_id: &str, poll_id: &str, status: &str) -> Result<serde_json::Value> {
         let token = Self::get_token().await?;
@@ -5896,6 +6008,55 @@ impl TwitchService {
             "end prediction",
         )
         .await
+    }
+
+    /// The channel's prediction while it can still be ended: the latest one,
+    /// when it is ACTIVE or LOCKED. Asked fresh each time, so a prediction
+    /// started on the dashboard or before StreamNook opened is found too.
+    /// Broadcaster-only, like the rest of Helix predictions.
+    pub async fn get_open_prediction(broadcaster_id: &str) -> Result<Option<serde_json::Value>> {
+        let token = Self::get_token().await?;
+        let client = crate::services::http::client().clone();
+        let url = format!(
+            "https://api.twitch.tv/helix/predictions?broadcaster_id={}&first=1",
+            broadcaster_id
+        );
+        let response = client
+            .get(&url)
+            .header("Client-Id", CLIENT_ID)
+            .header(AUTHORIZATION, format!("Bearer {}", token))
+            .send()
+            .await?;
+        let value = Self::helix_json_result(response, "get predictions").await?;
+        Ok(value["data"]
+            .get(0)
+            .cloned()
+            .filter(|p| matches!(p["status"].as_str(), Some("ACTIVE" | "LOCKED"))))
+    }
+
+    /// Lock, cancel (refunding every bet) or pay out the channel's open
+    /// prediction. `outcome` names the winner for a payout, by its position
+    /// (1-based) or its title. Answers the line to show the user.
+    pub async fn finish_open_prediction(
+        broadcaster_id: &str,
+        action: PredictionEnd,
+        outcome: Option<&str>,
+    ) -> std::result::Result<String, String> {
+        let open = Self::get_open_prediction(broadcaster_id)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "No prediction is running right now".to_string())?;
+        let (status, winner) = prediction_end_plan(&open, action, outcome)?;
+        let id = open["id"].as_str().unwrap_or_default();
+        Self::end_prediction(broadcaster_id, id, status, winner.as_deref())
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(match action {
+            PredictionEnd::Lock => "Prediction locked",
+            PredictionEnd::Cancel => "Prediction cancelled, points refunded",
+            PredictionEnd::Complete => "Prediction paid out",
+        }
+        .to_string())
     }
 
     /// POST a JSON body to Helix and return the parsed response. Surfaces
@@ -6110,15 +6271,97 @@ impl TwitchService {
             .await?;
 
         if !response.status().is_success() {
+            let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_default();
             error!(
-                "[TwitchService] Failed to update shield mode: {}",
-                error_text
+                "[TwitchService] Failed to update shield mode: {} {}",
+                status, error_text
             );
-            return Err(anyhow::anyhow!("Failed to update shield mode"));
+            return Err(anyhow::anyhow!("{}", helix_refusal_text(status, &error_text)));
         }
 
         Ok(())
+    }
+}
+
+/// What `/lockprediction`, `/cancelprediction` and `/completeprediction` do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PredictionEnd {
+    Lock,
+    Cancel,
+    Complete,
+}
+
+/// The Helix status (and winning outcome id) that ends `open` as asked, or
+/// why it can't be done.
+fn prediction_end_plan(
+    open: &serde_json::Value,
+    action: PredictionEnd,
+    outcome: Option<&str>,
+) -> std::result::Result<(&'static str, Option<String>), String> {
+    match action {
+        PredictionEnd::Lock if open["status"].as_str() == Some("LOCKED") => {
+            Err("The prediction is already locked".into())
+        }
+        PredictionEnd::Lock => Ok(("LOCKED", None)),
+        PredictionEnd::Cancel => Ok(("CANCELED", None)),
+        PredictionEnd::Complete => {
+            let wanted = outcome
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or("Say which outcome won, by number or title")?;
+            let outcomes = open["outcomes"].as_array().map(Vec::as_slice).unwrap_or_default();
+            let picked = wanted
+                .parse::<usize>()
+                .ok()
+                .and_then(|n| n.checked_sub(1))
+                .and_then(|i| outcomes.get(i))
+                .or_else(|| {
+                    outcomes
+                        .iter()
+                        .find(|o| o["title"].as_str().is_some_and(|t| t.eq_ignore_ascii_case(wanted)))
+                });
+            let id = picked
+                .and_then(|o| o["id"].as_str())
+                .ok_or_else(|| format!("No outcome matches \"{wanted}\""))?;
+            Ok(("RESOLVED", Some(id.to_string())))
+        }
+    }
+}
+
+#[cfg(test)]
+mod prediction_end_tests {
+    use super::{prediction_end_plan, PredictionEnd};
+
+    fn open(status: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": "p1",
+            "status": status,
+            "outcomes": [
+                { "id": "o-yes", "title": "Yes" },
+                { "id": "o-no", "title": "No" },
+            ],
+        })
+    }
+
+    #[test]
+    fn lock_and_cancel_need_no_outcome() {
+        assert_eq!(prediction_end_plan(&open("ACTIVE"), PredictionEnd::Lock, None), Ok(("LOCKED", None)));
+        assert_eq!(prediction_end_plan(&open("LOCKED"), PredictionEnd::Cancel, None), Ok(("CANCELED", None)));
+        assert!(prediction_end_plan(&open("LOCKED"), PredictionEnd::Lock, None).is_err());
+    }
+
+    #[test]
+    fn a_payout_names_its_winner_by_number_or_title() {
+        let by_number = prediction_end_plan(&open("LOCKED"), PredictionEnd::Complete, Some("2"));
+        assert_eq!(by_number, Ok(("RESOLVED", Some("o-no".into()))));
+        let by_title = prediction_end_plan(&open("ACTIVE"), PredictionEnd::Complete, Some(" yes "));
+        assert_eq!(by_title, Ok(("RESOLVED", Some("o-yes".into()))));
+        assert!(prediction_end_plan(&open("LOCKED"), PredictionEnd::Complete, None).is_err());
+        assert!(prediction_end_plan(&open("LOCKED"), PredictionEnd::Complete, Some("3")).is_err());
+        assert!(prediction_end_plan(&open("LOCKED"), PredictionEnd::Complete, Some("0")).is_err());
+        assert!(prediction_end_plan(&open("LOCKED"), PredictionEnd::Complete, Some("Maybe")).is_err());
     }
 }
 
@@ -6171,6 +6414,69 @@ mod pin_tests {
         assert!(check_pin_duration(Some(1800)).is_ok());
         assert!(check_pin_duration(Some(29)).is_err());
         assert!(check_pin_duration(Some(3600)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod scope_check_tests {
+    use super::{missing_scopes, SCOPES};
+
+    fn granted(scopes: &str) -> Vec<String> {
+        scopes.split_whitespace().map(str::to_string).collect()
+    }
+
+    #[test]
+    fn a_token_with_every_scope_owes_nothing() {
+        assert!(missing_scopes(SCOPES, &granted(SCOPES)).is_empty());
+        // Extra scopes Twitch granted beyond ours are not a problem.
+        let mut more = granted(SCOPES);
+        more.push("analytics:read:games".into());
+        assert!(missing_scopes(SCOPES, &more).is_empty());
+    }
+
+    #[test]
+    fn a_token_from_before_a_new_scope_names_exactly_that_scope() {
+        let before: Vec<String> = granted(SCOPES)
+            .into_iter()
+            .filter(|s| s != "moderator:manage:shield_mode")
+            .collect();
+        assert_eq!(missing_scopes(SCOPES, &before), ["moderator:manage:shield_mode"]);
+    }
+
+    #[test]
+    fn scope_names_match_exactly() {
+        // A read scope does not stand in for the manage scope of the same name.
+        let required = "moderator:read:blocked_terms moderator:manage:blocked_terms";
+        assert_eq!(
+            missing_scopes(required, &granted("moderator:read:blocked_terms")),
+            ["moderator:manage:blocked_terms"]
+        );
+        assert_eq!(missing_scopes(required, &[]).len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod moderation_refusal_tests {
+    use super::helix_refusal_text;
+
+    #[test]
+    fn twitch_reasons_come_through_in_plain_words() {
+        let body = |m: &str| serde_json::json!({ "error": "Bad Request", "status": 400, "message": m }).to_string();
+        assert_eq!(
+            helix_refusal_text(400, &body("The user specified in the user_id field may not be banned.")),
+            "that user can't be banned or timed out here"
+        );
+        assert_eq!(
+            helix_refusal_text(400, &body("The user specified in the user_id field is already banned.")),
+            "they are already banned"
+        );
+        assert_eq!(
+            helix_refusal_text(403, &body("The user in moderator_id is not one of the broadcaster's moderators.")),
+            "you are not a moderator in this channel"
+        );
+        // Anything else is Twitch's own sentence, or the status when there is none.
+        assert_eq!(helix_refusal_text(400, &body("Something new.")), "Something new.");
+        assert_eq!(helix_refusal_text(502, "<html>"), "Twitch answered HTTP 502");
     }
 }
 

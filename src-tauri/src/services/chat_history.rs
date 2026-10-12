@@ -150,6 +150,11 @@ impl ChatHistory {
                 v.insert(VecDeque::with_capacity(64))
             }
         };
+        // One entry per message id: a backfill that overlaps what already
+        // arrived live (a rejoin, a reconnect) must not list it twice.
+        if ring.iter().rev().any(|e| e.id == entry.id) {
+            return;
+        }
         if ring.len() >= cap {
             ring.pop_front();
         }
@@ -519,7 +524,9 @@ mod tests {
 
     #[test]
     fn ring_caps_and_searches_newest_first() {
-        ChatHistory::clear_all();
+        // Only this test's own ring: the rings are shared with the other
+        // tests, which run at the same time.
+        ChatHistory::clear_channel("ringtest");
         ChatHistory::set_cap(200);
         let mut m = crate::models::chat_layout::ChatMessage {
             id: String::new(),
@@ -545,8 +552,15 @@ mod tests {
             let facts = MessageFacts::from_message(&m);
             ChatHistory::push(&m, &facts, false, false);
         }
-        let stats = ChatHistory::stats();
-        assert_eq!(stats.entries, 200);
+        // The same message again (a backfill overlapping live rows) is not a
+        // second entry.
+        m.id = "id249".into();
+        m.content = "message number 249 again".into();
+        let facts = MessageFacts::from_message(&m);
+        ChatHistory::push(&m, &facts, false, false);
+        assert!(ChatHistory::search(Some("ringtest"), "again", 5).unwrap().is_empty());
+        assert_eq!(rings().lock().unwrap()["ringtest"].len(), 200);
+        assert!(ChatHistory::stats().entries >= 200);
         let hits = ChatHistory::search(Some("ringtest"), "number 24", 10).unwrap();
         assert_eq!(hits.len(), 10);
         assert_eq!(hits[0].id, "id249");
@@ -557,6 +571,6 @@ mod tests {
         let del = ChatHistory::search(Some("ringtest"), "is:deleted", 5).unwrap();
         assert_eq!(del.len(), 1);
         ChatHistory::clear_channel("ringtest");
-        assert_eq!(ChatHistory::stats().entries, 0);
+        assert!(!rings().lock().unwrap().contains_key("ringtest"));
     }
 }

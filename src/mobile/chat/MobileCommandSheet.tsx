@@ -24,7 +24,8 @@ interface Props {
 export const MobileCommandSheet: React.FC<Props> = ({ open, onClose, isModerator, isBroadcaster, onPick }) => {
   const userCommands = useAppStore((s) => s.settings.chat_commands?.user_commands);
   const commands = useMemo(
-    () => [...COMMAND_DEFINITIONS, ...buildUserCommandDefinitions(userCommands)],
+    // Commands that need a desktop window or file are left out on the phone.
+    () => [...COMMAND_DEFINITIONS.filter((c) => !c.desktopOnly), ...buildUserCommandDefinitions(userCommands)],
     [userCommands],
   );
   const [q, setQ] = useState('');

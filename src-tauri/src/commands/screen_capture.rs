@@ -83,6 +83,40 @@ pub async fn capture_screen_region(
     Ok(Response::new(bytes))
 }
 
+/// `/screenshot`: capture the player's on-screen rectangle (desktop-physical
+/// pixels) and save it as a PNG in Pictures\StreamNook. Returns the file path.
+#[tauri::command]
+pub async fn save_stream_screenshot(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    channel: Option<String>,
+) -> Result<String, String> {
+    if width == 0 || height == 0 {
+        return Err("The player is not on screen".into());
+    }
+    let bytes = tokio::task::spawn_blocking(move || capture_png_blocking(x, y, width, height))
+        .await
+        .map_err(|e| format!("capture task panicked: {e}"))??;
+    let dir = dirs::picture_dir()
+        .or_else(dirs::home_dir)
+        .ok_or("Could not find your Pictures folder")?
+        .join("StreamNook");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    let who: String = channel
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .take(25)
+        .collect();
+    let stamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+    let name = if who.is_empty() { format!("stream_{stamp}.png") } else { format!("{who}_{stamp}.png") };
+    let path = dir.join(name);
+    std::fs::write(&path, bytes).map_err(|e| format!("Could not save the screenshot: {e}"))?;
+    Ok(path.display().to_string())
+}
+
 #[cfg(not(windows))]
 fn capture_png_blocking(x: i32, y: i32, width: u32, height: u32) -> Result<Vec<u8>, String> {
     // Off Windows this goes through `platform::capture`, which shells out to

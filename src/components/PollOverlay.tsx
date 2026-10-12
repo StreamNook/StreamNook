@@ -26,6 +26,19 @@ interface PollData {
   channel_points_voting: boolean;
   channel_points_cost: number;
   choices: PollChoice[];
+  /** This viewer's vote, remembered by Rust when cast from StreamNook (the
+   *  banner or /vote). Null when they have not voted here. */
+  my_choice_id?: string | null;
+  /** On poll-completed only. "completed" and "terminated" show the result a
+   *  moment; "archived" (deleted or cancelled) closes the banner quietly. */
+  end_reason?: 'completed' | 'terminated' | 'archived';
+}
+
+/** `poll-voted`: this viewer's vote landed, from the banner or /vote. */
+interface PollVote {
+  channel_id: string;
+  poll_id: string;
+  choice_id: string;
 }
 
 interface PollOverlayProps {
@@ -49,6 +62,9 @@ const PollOverlay = ({ channelId }: PollOverlayProps) => {
   // without re-subscribing (same pattern as PredictionOverlay).
   const votedChoiceIdRef = useRef(votedChoiceId);
   useEffect(() => { votedChoiceIdRef.current = votedChoiceId; }, [votedChoiceId]);
+  // The poll on screen, for listeners that must only touch that one.
+  const activePollIdRef = useRef<string | null>(null);
+  useEffect(() => { activePollIdRef.current = activePoll?.poll_id ?? null; }, [activePoll?.poll_id]);
 
   const { addToast, currentStream } = useAppStore();
 
@@ -57,12 +73,33 @@ const PollOverlay = ({ channelId }: PollOverlayProps) => {
   const isClosed = activePoll?.status === 'COMPLETED';
   const isLocked = isClosed || timeRemaining <= 0 || votedChoiceId !== null;
 
-  // Reset when the watched channel changes.
+  // Reset when the watched channel changes, then ask Rust for the poll the
+  // channel shows now. PubSub only covers the watched stream's channel (and
+  // only with the rewards sign-in), so this read is what shows a poll already
+  // running, or one in any other chat; Rust then follows it until it ends,
+  // sending the same poll-updated / poll-completed events.
   useEffect(() => {
     setActivePoll(null);
     setVotedChoiceId(null);
     setTimeRemaining(0);
+    if (!currentChannelId) return;
+    let live = true;
+    invoke<PollData | null>('watch_channel_poll', { channelId: currentChannelId })
+      .then((poll) => {
+        if (!live || !poll || poll.status !== 'ACTIVE') return;
+        setActivePoll((prev) => prev ?? poll);
+        setTimeRemaining((prev) => prev || Math.max(0, Math.round((poll.remaining_ms || 0) / 1000)));
+        if (poll.my_choice_id) setVotedChoiceId(poll.my_choice_id);
+      })
+      .catch((err) => Logger.debug('[Poll] First read failed:', err));
+    return () => {
+      live = false;
+    };
   }, [currentChannelId]);
+
+  // The end of a poll can arrive from PubSub and from Rust's own follow; it
+  // is announced once.
+  const completedPollRef = useRef<string | null>(null);
 
   // Listen for poll lifecycle events from the PubSub backend.
   useEffect(() => {
@@ -77,7 +114,7 @@ const PollOverlay = ({ channelId }: PollOverlayProps) => {
       const poll = event.payload;
       if (currentChannelId && poll.channel_id === currentChannelId) {
         Logger.debug('[Poll] Created:', poll.title);
-        setVotedChoiceId(null);
+        setVotedChoiceId(poll.my_choice_id ?? null);
         applyPoll(poll);
       }
     });
@@ -96,23 +133,51 @@ const PollOverlay = ({ channelId }: PollOverlayProps) => {
         return { ...prev, ...poll };
       });
       setTimeRemaining(Math.max(0, Math.round((poll.remaining_ms || 0) / 1000)));
+      if (poll.my_choice_id) setVotedChoiceId(poll.my_choice_id);
       // Deliberately NOT re-expanding here. This listener fires on every vote,
       // so forcing it open meant a poll you collapsed sprang back open the
       // moment anyone else voted. Only a NEW poll opens itself (see applyPoll).
     });
 
+    // This viewer's vote landed (here or through /vote): mark it.
+    const unlistenVoted = listen<PollVote>('poll-voted', (event) => {
+      const vote = event.payload;
+      if (!currentChannelId || vote.channel_id !== currentChannelId) return;
+      if (activePollIdRef.current && activePollIdRef.current !== vote.poll_id) return;
+      setVotedChoiceId(vote.choice_id);
+    });
+
+    const closeIfShowing = (pollId: string) => {
+      if (activePollIdRef.current !== pollId) return;
+      setActivePoll(null);
+      setVotedChoiceId(null);
+      setTimeRemaining(0);
+    };
+
     const unlistenCompleted = listen<PollData>('poll-completed', (event) => {
       const poll = event.payload;
       if (!currentChannelId || poll.channel_id !== currentChannelId) return;
 
-      Logger.debug('[Poll] Completed:', poll.title);
+      // Deleted or cancelled: Twitch hides it, so the banner just goes,
+      // including a finished poll still showing its result.
+      if (poll.end_reason === 'archived') {
+        Logger.debug('[Poll] Removed:', poll.title);
+        completedPollRef.current = poll.poll_id;
+        closeIfShowing(poll.poll_id);
+        return;
+      }
+
+      if (completedPollRef.current === poll.poll_id) return;
+      completedPollRef.current = poll.poll_id;
+
+      Logger.debug('[Poll] Completed:', poll.title, poll.end_reason ?? '');
       setActivePoll(prev => (prev ? { ...prev, ...poll, status: 'COMPLETED' } : poll));
       setTimeRemaining(0);
 
       // Announce the winner, then clear the overlay after a beat.
       const winner = [...poll.choices].sort((a, b) => b.total_votes - a.total_votes)[0];
       if (winner && poll.total_votes > 0) {
-        const userWon = votedChoiceIdRef.current === winner.id;
+        const userWon = (poll.my_choice_id ?? votedChoiceIdRef.current) === winner.id;
         addToast(
           userWon
             ? `Poll ended. Your pick "${winner.title}" won!`
@@ -121,10 +186,8 @@ const PollOverlay = ({ channelId }: PollOverlayProps) => {
         );
       }
 
-      setTimeout(() => {
-        setActivePoll(null);
-        setVotedChoiceId(null);
-      }, 5000);
+      // Only this poll: a new one may have opened in the meantime.
+      setTimeout(() => closeIfShowing(poll.poll_id), 5000);
     });
 
     return () => {
@@ -132,6 +195,7 @@ const PollOverlay = ({ channelId }: PollOverlayProps) => {
       // swallow it so it doesn't surface as an uncaught rejection.
       unlistenCreated.then(fn => fn()).catch(() => {});
       unlistenUpdated.then(fn => fn()).catch(() => {});
+      unlistenVoted.then(fn => fn()).catch(() => {});
       unlistenCompleted.then(fn => fn()).catch(() => {});
     };
   }, [currentChannelId, addToast, pollsStartCollapsed]);

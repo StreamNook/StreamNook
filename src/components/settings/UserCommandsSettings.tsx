@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { ChevronDown, ChevronUp, Plus, Trash2, AlertTriangle, BookOpen } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
-import { RESERVED_TRIGGERS } from '../../utils/chatCommands';
+import { RESERVED_TRIGGERS, customCommandWins } from '../../utils/chatCommands';
 import { SettingsSection } from './_primitives';
 import type { UserSlashCommand } from '../../types';
 
@@ -225,7 +225,9 @@ const UserCommandsSettings = () => {
           const reservedConflict = triggerLower.length > 0 && RESERVED_TRIGGERS.has(triggerLower);
           const duplicateConflict = duplicateTriggers.has(triggerLower);
           const warning = reservedConflict
-            ? `Trigger "/${triggerLower}" is a built-in command and won't fire.`
+            ? customCommandWins(triggerLower)
+              ? `"/${triggerLower}" is also a built-in command. Yours runs instead of it.`
+              : `Trigger "/${triggerLower}" is a built-in command and won't fire.`
             : duplicateConflict
               ? `Another command already uses "/${triggerLower}". Only the first will fire.`
               : null;

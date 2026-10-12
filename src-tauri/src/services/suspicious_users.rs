@@ -70,6 +70,18 @@ impl SuspiciousUsers {
         }
     }
 
+    /// Every flagged user in `channel`: (user_id, "monitored" | "restricted").
+    pub fn list(channel: &str) -> Vec<(String, String)> {
+        let key = channel.trim_start_matches('#').to_lowercase();
+        let mut out: Vec<(String, String)> = map()
+            .read()
+            .ok()
+            .and_then(|m| m.get(&key).map(|u| u.iter().map(|(k, v)| (k.clone(), v.clone())).collect()))
+            .unwrap_or_default();
+        out.sort();
+        out
+    }
+
     pub fn clear_channel(channel: &str) {
         let key = channel.trim_start_matches('#').to_lowercase();
         if let Ok(mut m) = map().write() {

@@ -5,12 +5,17 @@ import { useAppStore } from '../stores/AppStore';
 import { usePinStore } from '../stores/pinStore';
 import { Logger } from './logger';
 import {
+  customCommandWins,
   expandUserCommand,
+  findCommandDefinition,
   findUserCommand,
   formatStreamUptime,
-  RESERVED_TRIGGERS,
+  resolveCommandAlias,
   type TemplateContext,
 } from './chatCommands';
+import { cleanLogin, noticeIn, parseDelay, runExtendedCommand, sendPaced } from './extendedCommands';
+import { watchBurstNotices } from './burstStatus';
+import { IS_MOBILE } from './platform';
 import { parseNukeArgs, executeNuke, executeUndo, isUserModeratorOf } from './nukeEngine';
 import { parseRemindCommand, fireReminderNow, formatReminderList, remindHelpLines } from './reminderEngine';
 import { recognizeNowPlaying, announceSong } from './songId';
@@ -72,29 +77,34 @@ export const handleSlashCommand = async (
   message: string,
   broadcasterId: string,
   broadcasterLogin: string,
-  sendMessageToChat: (msg: string) => void
+  sendMessageToChat: (msg: string) => void,
+  // How deep inside /chain, /foreach, /timer or /runin this run is.
+  depth = 0,
 ): Promise<boolean> => {
   if (!message.startsWith('/')) return false;
 
   const args = message.slice(1).trim().split(/\s+/);
-  const command = args[0].toLowerCase();
+  // What was typed, and the command it runs (`/b` runs `/ban`).
+  const typed = args[0].toLowerCase();
+  const command = resolveCommandAlias(typed);
   const argsWithoutCommand = args.slice(1);
 
   const addToast = useAppStore.getState().addToast;
 
-  // User-defined slash commands. Built-in triggers (RESERVED_TRIGGERS) always
-  // win — the switch below catches them regardless of what the user typed in
-  // settings. Plain-text (non-slash) user commands are handled by ChatWidget
-  // before this function is called.
-  if (!RESERVED_TRIGGERS.has(command)) {
+  // User-defined slash commands. The built-ins custom commands have always
+  // yielded to win; for every newer built-in name or alias a saved custom
+  // command of the same name runs instead (customCommandWins). Plain-text
+  // (non-slash) user commands are handled by ChatWidget before this function
+  // is called.
+  if (customCommandWins(typed)) {
     const state = useAppStore.getState();
-    const userCommand = findUserCommand(command, state.settings.chat_commands?.user_commands, true);
+    const userCommand = findUserCommand(typed, state.settings.chat_commands?.user_commands, true);
     if (userCommand) {
       const ctx = buildTemplateContext(argsWithoutCommand, broadcasterId, broadcasterLogin);
       const expansion = expandUserCommand(userCommand.expansion, ctx);
       if (expansion.missing_args.length > 0) {
         addToast(
-          `/${command} expects argument${expansion.missing_args.length > 1 ? 's' : ''} ${expansion.missing_args
+          `/${typed} expects argument${expansion.missing_args.length > 1 ? 's' : ''} ${expansion.missing_args
             .map((i) => `{${i}}`)
             .join(', ')}`,
           'error',
@@ -102,7 +112,7 @@ export const handleSlashCommand = async (
         return true;
       }
       if (!expansion.text) {
-        addToast(`/${command} expanded to an empty message`, 'error');
+        addToast(`/${typed} expanded to an empty message`, 'error');
         return true;
       }
       sendMessageToChat(expansion.text);
@@ -110,11 +120,41 @@ export const handleSlashCommand = async (
     }
   }
 
+  const definition = findCommandDefinition(command);
+  if (IS_MOBILE && definition?.desktopOnly) {
+    addToast(`/${typed} works in the desktop app`, 'info');
+    return true;
+  }
+
   try {
     switch (command) {
       // ────────────────────────────────────────────────────────
       // StreamNook-native: identify the music playing in the stream
       // ────────────────────────────────────────────────────────
+      // ── /spam and /pyramid: parsed, paced and sent by Rust (run_chat_burst).
+      case 'spam':
+      case 'pyramid': {
+        // Everything after the command word, spacing kept.
+        const rawArgs = message.slice(1).trim().slice(command.length);
+        try {
+          const reply = await invoke<{ message: string; status: unknown }>('run_chat_burst', {
+            kind: command,
+            args: rawArgs,
+            channelLogin: broadcasterLogin,
+            channelId: broadcasterId,
+          });
+          // In the chat it was typed in, whichever chats are open.
+          noticeIn(broadcasterLogin, reply.message);
+          // The phone has no progress bar above its chat box: how the run
+          // ends (done, stopped, failed) arrives as a notice instead.
+          if (IS_MOBILE && reply.status) {
+            void watchBurstNotices(broadcasterLogin, (line) => noticeIn(broadcasterLogin, line));
+          }
+        } catch (e) {
+          addToast(String(e), 'error');
+        }
+        return true;
+      }
       case 'song': {
         emitSystemMessage('Listening to identify the song...');
         announceSong(await recognizeNowPlaying());
@@ -125,7 +165,7 @@ export const handleSlashCommand = async (
       // ────────────────────────────────────────────────────────
       case 'ban': {
         if (argsWithoutCommand.length >= 1) {
-          const username = argsWithoutCommand[0];
+          const username = cleanLogin(argsWithoutCommand[0]);
           const reason = argsWithoutCommand.slice(1).join(' ');
           const user = await lookupUser(username);
           if (user) {
@@ -140,12 +180,14 @@ export const handleSlashCommand = async (
       }
       case 'timeout': {
         if (argsWithoutCommand.length >= 1) {
-          const username = argsWithoutCommand[0];
-          const duration = argsWithoutCommand.length > 1 ? parseInt(argsWithoutCommand[1], 10) : 600;
-          const reason = argsWithoutCommand.slice(2).join(' ');
+          const username = cleanLogin(argsWithoutCommand[0]);
+          // "600", "10m", "1h30m", "2d": seconds, or a length with units. When
+          // the second word is not a length it starts the reason.
+          const lengthMs = parseDelay(argsWithoutCommand[1]);
+          const reason = argsWithoutCommand.slice(lengthMs === null ? 1 : 2).join(' ');
           const user = await lookupUser(username);
           if (user) {
-            const safeDuration = isNaN(duration) ? 600 : duration;
+            const safeDuration = lengthMs === null ? 600 : Math.max(1, Math.floor(lengthMs / 1000));
             await invoke('ban_user', { broadcasterId, targetUserId: user.id, duration: safeDuration, reason: reason || null });
             addToast(`Timed out ${username} for ${safeDuration}s`, 'success');
           } else {
@@ -158,7 +200,7 @@ export const handleSlashCommand = async (
       case 'unban':
       case 'untimeout': {
         if (argsWithoutCommand.length >= 1) {
-          const username = argsWithoutCommand[0];
+          const username = cleanLogin(argsWithoutCommand[0]);
           const user = await lookupUser(username);
           if (user) {
             await invoke('unban_user', { broadcasterId, targetUserId: user.id });
@@ -432,8 +474,14 @@ export const handleSlashCommand = async (
       case 'disconnect': {
         // Disconnect from chat
         try {
-          await invoke('stop_chat');
-          addToast('Disconnected from chat', 'info');
+          // Rust keeps the connection while another chat window still uses it.
+          const disconnected = await invoke<boolean>('stop_chat');
+          addToast(
+            disconnected
+              ? 'Disconnected from chat'
+              : 'Chat stayed connected because another chat window is still using it',
+            'info',
+          );
         } catch (err: unknown) {
           Logger.error('[Command Handler] Disconnect failed:', err);
         }
@@ -961,16 +1009,6 @@ export const handleSlashCommand = async (
       // ────────────────────────────────────────────────────────
       // Commands that show usage info or are client-side only
       // ────────────────────────────────────────────────────────
-      case 'help': {
-        const helpCmd = argsWithoutCommand[0] || '';
-        window.dispatchEvent(new CustomEvent('twitch-system-message', {
-          detail: { message: helpCmd
-            ? `For help with /${helpCmd}, visit: https://help.twitch.tv/s/article/chat-commands`
-            : 'Available commands: /mods, /vips, /color, /block, /unblock, /me, /w, /announce, and more. Use /help <command> for details.'
-          }
-        }));
-        return true;
-      }
       // Poll / prediction builder. Opening the composer rather than parsing a
       // long argument list: the form validates against Twitch's limits and
       // previews the banner, which a one-liner can't.
@@ -1017,54 +1055,15 @@ export const handleSlashCommand = async (
           addToast(`/${command}: no active channel`, 'error');
           return true;
         }
-        const active = await invoke<{
-          prediction_id?: string;
-          outcomes?: Array<{ id: string; title: string }>;
-        } | null>('get_active_prediction', { channelLogin: broadcasterLogin }).catch(() => null);
-        if (!active?.prediction_id) {
-          addToast('No prediction is running right now', 'error');
-          return true;
-        }
-        let status = 'LOCKED';
-        let winningOutcomeId: string | null = null;
-        if (command === 'cancelprediction') {
-          status = 'CANCELED';
-        } else if (command === 'completeprediction') {
-          status = 'RESOLVED';
-          // Accept either the outcome's position (1-based, how people say it
-          // out loud) or its title.
-          const arg = argsWithoutCommand.join(' ').trim();
-          const outcomes = active.outcomes ?? [];
-          if (!arg) {
-            addToast('Say which outcome won, by number or title', 'error');
-            return true;
-          }
-          const byIndex = Number(arg);
-          const picked =
-            Number.isInteger(byIndex) && byIndex >= 1 && byIndex <= outcomes.length
-              ? outcomes[byIndex - 1]
-              : outcomes.find((o) => o.title.toLowerCase() === arg.toLowerCase());
-          if (!picked) {
-            addToast(`No outcome matches "${arg}"`, 'error');
-            return true;
-          }
-          winningOutcomeId = picked.id;
-        }
+        // Rust finds the open prediction, checks it, picks the winner (by
+        // number or title) and ends it; this only shows the answer.
         try {
-          await invoke('end_prediction', {
+          const done = await invoke<string>('finish_prediction', {
             broadcasterId,
-            predictionId: active.prediction_id,
-            status,
-            winningOutcomeId,
+            action: command.replace('prediction', ''),
+            outcome: argsWithoutCommand.join(' ').trim() || null,
           });
-          addToast(
-            status === 'LOCKED'
-              ? 'Prediction locked'
-              : status === 'CANCELED'
-                ? 'Prediction cancelled, points refunded'
-                : 'Prediction paid out',
-            'success',
-          );
+          addToast(done, 'success');
         } catch (err: unknown) {
           addToast(typeof err === 'string' ? err : `/${command} failed`, 'error');
         }
@@ -1195,18 +1194,20 @@ export const handleSlashCommand = async (
         }
         return true;
       }
-      case 'vote':
-      case 'gift':
-      case 'deletepoll':
-      case 'goal':
-      case 'raidbrowser':
-      case 'requests':
-      case 'sharedchat':
-        // These are handled natively by the Twitch web client and cannot be replicated.
-        // Let them fall through to IRC as a best-effort attempt.
-        return false;
       default:
-        return false;
+        // The newer commands live in extendedCommands.ts. Anything neither
+        // knows goes on to chat as text (Twitch still runs /me).
+        return await runExtendedCommand({
+          command,
+          typed,
+          args: argsWithoutCommand,
+          rest: message.slice(1).trim().slice(typed.length).trim(),
+          broadcasterId,
+          broadcasterLogin,
+          send: sendMessageToChat,
+          depth,
+          dispatch: (line: string) => dispatchScriptLine(line, broadcasterId, broadcasterLogin, depth + 1),
+        });
     }
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
@@ -1214,10 +1215,41 @@ export const handleSlashCommand = async (
     addToast(`Command failed: ${errMsg}`, 'error');
     return true; // We handled it (it failed, but we shouldn't send it to chat directly)
   }
-  
+
+  // A listed command that reached here was missing its arguments. Say how to
+  // use it; never pass it to IRC, where Twitch runs no commands but /me.
+  if (definition) {
+    if (broadcasterLogin) noticeIn(broadcasterLogin, `Usage: ${definition.usage}`);
+    addToast(`Usage: ${definition.usage}`, 'info');
+    return true;
+  }
   return false;
 };
 
+
+/**
+ * One line of a script (/chain, /foreach, /timer, /runin) in its channel.
+ * Everything it sends goes to that channel, paced by the send limiter and sent
+ * from Rust, even when the chat box has moved on to another channel (or the
+ * chat is closed) by the time a /timer fires. A command that goes to chat as
+ * text (/me, or one nothing here knows) is sent the same way.
+ */
+export async function dispatchScriptLine(
+  line: string,
+  broadcasterId: string,
+  broadcasterLogin: string,
+  depth: number,
+): Promise<boolean> {
+  if (!line.startsWith('/')) return sendPaced(broadcasterLogin, line, broadcasterId);
+  const handled = await handleSlashCommand(
+    line,
+    broadcasterId,
+    broadcasterLogin,
+    (msg) => void sendPaced(broadcasterLogin, msg, broadcasterId),
+    depth,
+  );
+  return handled || sendPaced(broadcasterLogin, line, broadcasterId);
+}
 
 ensureLastWhisperListener();
 

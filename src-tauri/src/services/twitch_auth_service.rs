@@ -122,6 +122,18 @@ struct Inner {
     logged_out: AtomicBool,
 }
 
+/// Chat sending belongs to the account that was signed in: the send limiter's
+/// role and history are that account's, and a running `/spam` or `/pyramid`
+/// would keep going as whoever signs in next. Every login, switch and
+/// sign-out passes through `on_account_changed` / `on_logged_out`.
+fn forget_chat_sender() {
+    crate::services::chat_send_limiter::reset_account();
+    let stopped = crate::services::chat_burst::stop_all();
+    if stopped > 0 {
+        log::info!("[Auth] account changed: stopped {stopped} chat burst run(s)");
+    }
+}
+
 #[derive(Clone)]
 pub struct TwitchAuthService {
     inner: Arc<Inner>,
@@ -180,6 +192,7 @@ impl TwitchAuthService {
     pub async fn on_account_changed(&self) {
         self.inner.logged_out.store(false, Ordering::SeqCst);
         self.invalidate().await;
+        forget_chat_sender();
     }
 
     /// A full logout happened: reads return not-logged-in (no fallback to the
@@ -187,6 +200,7 @@ impl TwitchAuthService {
     pub async fn on_logged_out(&self) {
         self.inner.logged_out.store(true, Ordering::SeqCst);
         self.invalidate().await;
+        forget_chat_sender();
     }
 
     /// Cached session if fresh, otherwise a single harvest behind the gate.

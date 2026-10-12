@@ -9,10 +9,12 @@
 // sent row belongs to this window's chat store. Reminders themselves are
 // persisted in settings.reminders. The /remind parser lives here too.
 
+import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../stores/AppStore';
 import {
   useChatConnectionStore,
   sendChannelMessage,
+  injectSystemMessage,
   type SendUserInfo,
 } from '../stores/chatConnectionStore';
 import { expandUserCommand, formatStreamUptime, type TemplateContext, type CommandDefinition } from './chatCommands';
@@ -25,11 +27,11 @@ import type { Reminder } from '../types';
 // chat box's bypass-duplicate option.
 const DUPLICATE_BYPASS_CHAR = '\u{E0000}';
 // How many back-to-back copies a single reminder may post. The invisible-char
-// bypass keeps Twitch from rejecting the repeats; the ceiling keeps a reminder
-// from tripping Twitch's per-30s message rate limit.
+// bypass keeps Twitch from rejecting the repeats. Spacing is not decided here:
+// every copy waits for a slot from Rust's chat send limiter, which paces by the
+// sender's role in the channel (one per second for viewers, faster for mods,
+// VIPs and the broadcaster) and slow mode.
 const MAX_REPEAT = 10;
-// Spacing between repeat copies so they land in order and read cleanly.
-const REPEAT_SPACING_MS = 550;
 
 /** Make copy `copyIndex` of a repeated send unique. Copy 0 is the plain text
  *  (so a single send looks exactly like a normal message); later copies carry
@@ -44,8 +46,6 @@ export function clampRepeat(n: number | undefined): number {
   if (!Number.isFinite(v) || v < 1) return 1;
   return Math.min(v, MAX_REPEAT);
 }
-
-const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 function makeId(): string {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -117,12 +117,20 @@ async function fireReminder(reminder: Reminder, target: ReminderTarget): Promise
 
   const copies = clampRepeat(reminder.repeat_count);
   for (let j = 0; j < copies; j++) {
+    const copy = withDuplicateBypass(text, j);
     try {
-      await sendChannelMessage(target.key, withDuplicateBypass(text, j), userInfo);
+      // Waits until Twitch's limits allow this copy; a refusal (sub-only,
+      // emote-only, a full budget) stops the rest of the run.
+      await invoke('chat_send_acquire', { channel: target.key, text: copy });
+    } catch (refusal) {
+      injectSystemMessage(target.key, `Reminder stopped: ${String(refusal)}`);
+      return;
+    }
+    try {
+      await sendChannelMessage(target.key, copy, userInfo);
     } catch (err) {
       Logger.error('[Reminders] failed to send reminder:', err);
     }
-    if (j < copies - 1) await delay(REPEAT_SPACING_MS);
   }
 }
 

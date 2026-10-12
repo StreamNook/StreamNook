@@ -1737,19 +1737,15 @@ pub async fn start_whisper_listener(
     app: AppHandle,
     whisper_service: State<'_, Arc<TokioMutex<WhisperService>>>,
 ) -> Result<(), String> {
-    // Get the current user's ID and token
+    // Get the current user's ID; the listener fetches a fresh token per connect.
     let user_info = TwitchService::get_user_info()
         .await
         .map_err(|e| format!("Failed to get user info: {}", e))?;
 
-    let token = TwitchService::get_token()
-        .await
-        .map_err(|e| format!("Failed to get token: {}", e))?;
-
     // Start the whisper listener
     let service = whisper_service.lock().await;
     service
-        .start_listening(user_info.id, token, app)
+        .start_listening(user_info.id, app)
         .await
         .map_err(|e| format!("Failed to start whisper listener: {}", e))?;
 
@@ -2625,9 +2621,22 @@ pub async fn create_poll(
     duration: u32,
     points_per_vote: Option<u32>,
 ) -> Result<serde_json::Value, String> {
-    TwitchService::create_poll(&broadcaster_id, &title, &choices, duration, points_per_vote)
+    let created = TwitchService::create_poll(&broadcaster_id, &title, &choices, duration, points_per_vote)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Show it in this chat right away and follow it, whether or not PubSub
+    // covers this channel. Twitch can take a moment to show a new poll.
+    tauri::async_runtime::spawn(async move {
+        for _ in 0..4 {
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            if let Ok(Some(_)) =
+                crate::services::slash_commands::watch_poll_now(&broadcaster_id, Some("poll-created")).await
+            {
+                break;
+            }
+        }
+    });
+    Ok(created)
 }
 
 #[tauri::command]
@@ -2660,9 +2669,13 @@ pub async fn end_poll(
     poll_id: String,
     status: String,
 ) -> Result<serde_json::Value, String> {
-    TwitchService::end_poll(&broadcaster_id, &poll_id, &status)
+    let ended = TwitchService::end_poll(&broadcaster_id, &poll_id, &status)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Twitch accepted it: every banner on this poll closes (or shows its
+    // result) now, not at the next poll read with a guessed reason.
+    crate::services::slash_commands::announce_poll_ended(&broadcaster_id, &poll_id, &status, &ended);
+    Ok(ended)
 }
 
 #[tauri::command]
@@ -2677,21 +2690,25 @@ pub async fn create_prediction(
         .map_err(|e| e.to_string())
 }
 
+/// The channel's prediction while it can still be locked, cancelled or paid
+/// out (ACTIVE or LOCKED), or null.
 #[tauri::command]
-pub async fn end_prediction(
+pub async fn get_open_prediction(broadcaster_id: String) -> Result<Option<serde_json::Value>, String> {
+    TwitchService::get_open_prediction(&broadcaster_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Lock, cancel or pay out the channel's open prediction, found fresh. A
+/// payout names its winner by position (1-based) or title. Answers the line
+/// to show the user.
+#[tauri::command]
+pub async fn finish_prediction(
     broadcaster_id: String,
-    prediction_id: String,
-    status: String,
-    winning_outcome_id: Option<String>,
-) -> Result<serde_json::Value, String> {
-    TwitchService::end_prediction(
-        &broadcaster_id,
-        &prediction_id,
-        &status,
-        winning_outcome_id.as_deref(),
-    )
-    .await
-    .map_err(|e| e.to_string())
+    action: crate::services::twitch_service::PredictionEnd,
+    outcome: Option<String>,
+) -> Result<String, String> {
+    TwitchService::finish_open_prediction(&broadcaster_id, action, outcome.as_deref()).await
 }
 
 #[tauri::command]
