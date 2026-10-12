@@ -1147,7 +1147,7 @@ impl ChannelPointsWebSocketService {
             }
         }
 
-        let payload = json!({
+        let mut payload = json!({
             "channel_id": channel_id,
             "poll_id": poll_id,
             "title": title,
@@ -1162,20 +1162,40 @@ impl ChannelPointsWebSocketService {
             "choices": choices
         });
 
-        // Map Twitch's event type to a frontend event. TERMINATE/ARCHIVE aren't
-        // in the captured set but are handled defensively as an end-of-poll.
+        // Map Twitch's event type to a frontend event. All three ends close
+        // the poll; `end_reason` tells the banner which: a finished or ended
+        // poll shows its result, a cancelled (archived) one just goes away.
         let emit_event = match event_type {
             "POLL_CREATE" => "poll-created",
             "POLL_UPDATE" => "poll-updated",
             "POLL_COMPLETE" | "POLL_ARCHIVE" | "POLL_TERMINATE" => "poll-completed",
             _ => return,
         };
+        if emit_event == "poll-completed" {
+            payload["end_reason"] =
+                json!(crate::services::slash_commands::poll_end_reason(Some(event_type), status));
+        }
+        // A poll StreamNook ended was announced the moment Twitch accepted the
+        // end. A frame that was still on its way must not bring the banner back
+        // or say the same end twice; a different end (an ended poll deleted
+        // afterwards) still goes through.
+        if let Some(done) = crate::services::slash_commands::ended_poll_reason(poll_id) {
+            let same_end = emit_event == "poll-completed" && payload["end_reason"].as_str() == Some(done);
+            if emit_event != "poll-completed" || same_end {
+                return;
+            }
+        }
+        // This viewer's own vote, so a banner that mounts mid-poll marks it.
+        crate::services::slash_commands::stamp_my_vote(&mut payload);
 
         debug!(
             "Poll {} on channel {:?}: {} ({} voters, {} votes, status {})",
             emit_event, channel_id, title, total_voters, total_votes, status
         );
 
+        if let Some(ref cid) = channel_id {
+            crate::services::slash_commands::note_poll(cid, &payload, emit_event);
+        }
         let _ = app_handle.emit(emit_event, payload);
     }
 

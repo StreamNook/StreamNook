@@ -1,27 +1,36 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../stores/AppStore';
-import { ChannelReward, ChannelRewardsSnapshot, RedemptionResult, RewardAvailability, UnlockedEmote } from '../types';
+import { ChannelReward, ChannelRewardsSnapshot, RedemptionResult, UnlockedEmote } from '../types';
 
 import { Logger } from '../utils/logger';
+import { formatCostShort, newTransactionId, rewardKind, rewardStatusText, rewardTakesText } from '../utils/rewardStatus';
 import { ChannelPointsIcon } from './ChannelPointsIcon';
 import { Tooltip } from './ui/Tooltip';
-
-/** The built-in reward whose text goes out through send_highlighted_message. */
-const HIGHLIGHTED_MESSAGE_REWARD = 'SEND_HIGHLIGHTED_MESSAGE';
 
 /** Opening a reward re-reads the list when it is older than this. */
 const REWARDS_STALE_MS = 30_000;
 /** setTimeout's ceiling; longer cooldowns re-arm after a refresh. */
 const MAX_TIMER_MS = 2_147_483_647;
+/** Room the detail view and the emote pickers need, however short the list. */
+const OVERLAY_MIN_HEIGHT = 340;
+/** Shared with Twitch's own limit for a reward's typed text. */
+const INPUT_MAX = 500;
 
-const formatCountdown = (ms: number): string => {
-  const total = Math.max(0, Math.ceil(ms / 1000));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = String(total % 60).padStart(2, '0');
-  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+const panelGlass: React.CSSProperties = {
+  backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, var(--glass-under, transparent))',
+  backdropFilter: 'blur(24px)',
+  WebkitBackdropFilter: 'blur(24px)',
 };
+
+/** A status as a dot and words, never a chip. */
+const StatusLine: React.FC<{ text: string; className?: string; title?: string }> = ({ text, className = '', title }) => (
+  <span className={`flex items-start gap-1.5 min-w-0 text-xs leading-snug text-textSecondary ${className}`} role="status" title={title}>
+    <span className="w-1.5 h-1.5 mt-[5px] rounded-full bg-yellow-400 flex-shrink-0" aria-hidden="true" />
+    <span className="line-clamp-2 break-words">{text}</span>
+  </span>
+);
 
 interface ChannelPointsMenuProps {
   channelLogin: string;  // Username for fetching rewards
@@ -71,18 +80,24 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     }
   };
 
-  // Typed-input modal state (Highlight My Message and custom input rewards)
-  const [showInputModal, setShowInputModal] = useState(false);
+  // The reward opened in the detail view, and the text typed for it.
+  const [detailReward, setDetailReward] = useState<ChannelReward | null>(null);
   const [inputText, setInputText] = useState('');
-  const [inputReward, setInputReward] = useState<ChannelReward | null>(null);
+  // One transaction id per redeem attempt: kept while the same reward and text
+  // are retried, so Twitch recognises a retry after a lost answer instead of
+  // posting and charging twice. A success, closing the view or new text drops it.
+  const transactionRef = useRef<{ key: string; id: string } | null>(null);
+  const transactionFor = (rewardId: string, text: string): string => {
+    const key = `${rewardId}\n${text}`;
+    if (transactionRef.current?.key !== key) {
+      transactionRef.current = { key, id: newTransactionId() };
+    }
+    return transactionRef.current.id;
+  };
 
   // Emote reveal popup state
   const [showEmoteReveal, setShowEmoteReveal] = useState(false);
   const [revealedEmote, setRevealedEmote] = useState<UnlockedEmote | null>(null);
-
-  // Confirmation modal state (for costly redemptions like emote unlocks)
-  const [showConfirmModal, setShowConfirmModal] = useState(false);
-  const [pendingReward, setPendingReward] = useState<ChannelReward | null>(null);
 
   // Modify emote picker modal state
   const [showModifyEmoteModal, setShowModifyEmoteModal] = useState(false);
@@ -149,6 +164,26 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     return () => { seqRef.current++; };
   }, [refreshRewards]);
 
+  // Rust re-judges the list when chat enters or leaves sub-only mode, the
+  // viewer's sub badge changes, or the stream goes live or offline.
+  useEffect(() => {
+    const login = channelLogin.toLowerCase();
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<ChannelRewardsSnapshot>('channel-rewards', (event) => {
+      if (event.payload.login !== login) return;
+      setRewards(event.payload.rewards);
+      setSnapshotBalance(event.payload.balance);
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [channelLogin]);
+
   const retryRewards = () => {
     setIsLoading(true);
     setError(null);
@@ -198,271 +233,191 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     };
   }, [showsCooldown]);
 
-  // A modal holds the reward it opened with; read its current verdict from the
+  // A view holds the reward it opened with; read its current verdict from the
   // latest list. A reward that dropped out of the list cannot be redeemed.
   const liveOf = (reward: ChannelReward): ChannelReward => {
     const live = rewards.find((r) => r.id === reward.id);
     if (live) return live;
     return {
       ...reward,
-      availability: { ...reward.availability, redeemable: false, reason: 'disabled', cooldown_until_ms: null },
+      availability: {
+        ...reward.availability,
+        redeemable: false,
+        reason: 'disabled',
+        cooldown_until_ms: null,
+        label: 'Gone',
+        detail: 'This reward is no longer offered',
+      },
     };
   };
 
-  /** Plain sentence shown beside a blocked confirm button. */
-  const blockedText = (availability: RewardAvailability): string | null => {
-    switch (availability.reason) {
-      case null:
-        return null;
-      case 'disabled':
-        return 'Turned off by the streamer';
-      case 'paused':
-        return 'Paused by the streamer';
-      case 'out_of_stock':
-        return 'Out of stock';
-      case 'input_not_supported':
-        return 'Needs typed input, not supported yet';
-      case 'max_per_stream_reached':
-        return 'Limit reached for this stream';
-      case 'on_cooldown':
-        return availability.cooldown_until_ms !== null
-          ? `On cooldown, ${formatCountdown(availability.cooldown_until_ms - nowMs)} left`
-          : 'On cooldown';
-      case 'not_enough_points':
-        return `Not enough ${customPointsName || 'points'}`;
-    }
-  };
+  const closeDetail = useCallback(() => {
+    setDetailReward(null);
+    setInputText('');
+    transactionRef.current = null;
+  }, []);
 
-  /** Short badge for a blocked row in the list. */
-  const badgeText = (availability: RewardAvailability): string | null => {
-    switch (availability.reason) {
-      case 'disabled':
-        return 'Off';
-      case 'paused':
-        return 'Paused';
-      case 'out_of_stock':
-        return 'Out of stock';
-      case 'input_not_supported':
-        return 'Needs input';
-      case 'max_per_stream_reached':
-        return 'Limit reached';
-      case 'on_cooldown':
-        return availability.cooldown_until_ms !== null
-          ? `Cooldown ${formatCountdown(availability.cooldown_until_ms - nowMs)}`
-          : 'Cooldown';
-      // Too few points shows on the red cost pill instead.
-      default:
-        return null;
-    }
-  };
-
-  // Close on Escape key
+  // Escape backs out of the open view first, then closes the menu.
+  const detailOpen = detailReward !== null;
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onClose();
+      if (event.key !== 'Escape') return;
+      if (detailOpen) {
+        closeDetail();
+        return;
       }
+      onClose();
     };
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  }, [onClose, closeDetail, detailOpen]);
 
-  const handleRedeem = async (reward: ChannelReward) => {
-    if (redeemingId) return; // Already redeeming something
-    if (!reward.availability.redeemable) {
-      useAppStore
-        .getState()
-        .addToast(blockedText(reward.availability) ?? 'This reward is not available', 'error');
-      return;
-    }
-
+  // A click on any row opens its detail, available or not, so the full name,
+  // the description and the reason it is blocked are always one click away.
+  const openDetail = (reward: ChannelReward) => {
+    setDetailReward(reward);
+    setInputText('');
     // The verdict may have gone stale while the menu sat open (a reward
-    // paused, a cooldown started elsewhere). The view below follows the
-    // fresh list as soon as it lands.
+    // paused, a cooldown started elsewhere). The view follows the fresh list
+    // as soon as it lands.
     void refreshIfStale();
-
-    // Input rewards the backend lets through: Highlight My Message and the
-    // streamer's custom rewards that ask for text.
-    if (reward.is_user_input_required) {
-      setInputReward(reward);
-      setInputText('');
-      setShowInputModal(true);
-      return;
-    }
-
-    // Handle random emote unlock - show confirmation first
-    const titleLower = reward.title.toLowerCase();
-    if (titleLower.includes('random') && titleLower.includes('emote')) {
-      setPendingReward(reward);
-      setShowConfirmModal(true);
-      return;
-    }
-
-    // Handle modify single emote - show emote picker
-    if (titleLower.includes('modify') && titleLower.includes('emote')) {
-      setModifyEmoteReward(reward);
-      setSelectedModifyEmote(null);
-      setShowModifyEmoteModal(true);
-      // Fetch the list of modifiable emotes
-      setIsLoadingEmotes(true);
-      try {
-        const emotes = await invoke<Array<{
-          id: string;
-          token: string;
-          emote_type?: string;
-          modifications: Array<{ id: string; modifier_id: string; token: string }>;
-        }>>('get_modifiable_emotes', {
-          channelId: channelLogin, // Use login for ChannelPointsContext query
-        });
-        setModifiableEmotes(emotes);
-      } catch (err) {
-        Logger.error('[ChannelPointsMenu] Failed to fetch modifiable emotes:', err);
-        useAppStore.getState().addToast('Failed to load emotes', 'error');
-      } finally {
-        setIsLoadingEmotes(false);
-      }
-      return;
-    }
-
-    // Handle choose specific emote to unlock - show emote picker
-    if ((titleLower.includes('choose') || titleLower.includes('unlock a sub emote')) && titleLower.includes('emote') && !titleLower.includes('modify') && !titleLower.includes('random')) {
-      setChooseEmoteReward(reward);
-      setSelectedUnlockEmote(null);
-      setShowChooseEmoteModal(true);
-      // Fetch the list of unlockable emotes (same as modifiable but we just need base emotes)
-      setIsLoadingUnlockable(true);
-      try {
-        const emotes = await invoke<Array<{
-          id: string;
-          token: string;
-          emote_type?: string;
-          modifications: Array<{ id: string; modifier_id: string; token: string }>;
-        }>>('get_modifiable_emotes', {
-          channelId: channelLogin,
-        });
-        // Map to simple emote list (just base emotes without modifications)
-        setUnlockableEmotes(emotes.map(e => ({ id: e.id, token: e.token })));
-      } catch (err) {
-        Logger.error('[ChannelPointsMenu] Failed to fetch unlockable emotes:', err);
-        useAppStore.getState().addToast('Failed to load emotes', 'error');
-      } finally {
-        setIsLoadingUnlockable(false);
-      }
-      return;
-    }
-
-    // Standard redemption — route through the confirm modal so the user has a chance
-    // to back out before spending points. The actual invoke happens in
-    // handleConfirmRedemption, which branches by reward type.
-    setPendingReward(reward);
-    setShowConfirmModal(true);
   };
 
-  const handleSendInput = async () => {
-    if (!inputReward || !inputText.trim()) {
-      useAppStore.getState().addToast('Please enter a message', 'error');
-      return;
-    }
-    if (!liveOf(inputReward).availability.redeemable) return;
-
-    const isHighlight = inputReward.reward_type === HIGHLIGHTED_MESSAGE_REWARD;
-    setRedeemingId(inputReward.id);
+  const openModifyPicker = async (reward: ChannelReward) => {
+    setModifyEmoteReward(reward);
+    setSelectedModifyEmote(null);
+    setShowModifyEmoteModal(true);
+    setIsLoadingEmotes(true);
     try {
-      const result = isHighlight
-        ? await invoke<RedemptionResult>('send_highlighted_message', {
-          channelId: channelId,
-          message: inputText.trim(),
-          cost: inputReward.cost,
-        })
-        : await invoke<RedemptionResult>('redeem_channel_reward', {
-          channelId: channelId,
-          rewardId: inputReward.id,
-          cost: inputReward.cost,
-          title: inputReward.title,
-          prompt: inputReward.prompt ?? '',
-          textInput: inputText.trim(),
-        });
-
-      if (result.success) {
-        useAppStore
-          .getState()
-          .addToast(isHighlight ? 'Highlighted message sent!' : `Redeemed: ${inputReward.title}`, 'success');
-        setShowInputModal(false);
-        setInputText('');
-        setInputReward(null);
-        onBalanceUpdate(); // Refresh balance
-        void refreshRewards(); // A redeem can start a cooldown or use up stock
-      } else {
-        useAppStore.getState().addToast(result.error_message || 'Failed to send', 'error');
-      }
+      const emotes = await invoke<Array<{
+        id: string;
+        token: string;
+        emote_type?: string;
+        modifications: Array<{ id: string; modifier_id: string; token: string }>;
+      }>>('get_modifiable_emotes', {
+        channelId: channelLogin, // Use login for ChannelPointsContext query
+      });
+      setModifiableEmotes(emotes);
     } catch (err) {
-      Logger.error('[ChannelPointsMenu] Input reward error:', err);
-      useAppStore.getState().addToast(typeof err === 'string' ? err : 'Failed to send', 'error');
+      Logger.error('[ChannelPointsMenu] Failed to fetch modifiable emotes:', err);
+      useAppStore.getState().addToast('Failed to load emotes', 'error');
     } finally {
-      setRedeemingId(null);
+      setIsLoadingEmotes(false);
     }
   };
 
-  const handleConfirmRedemption = async () => {
-    if (!pendingReward) return;
-    if (!liveOf(pendingReward).availability.redeemable) return;
-
-    const reward = pendingReward;
-    const titleLower = reward.title.toLowerCase();
-    const isRandomEmote =
-      titleLower.includes('random') && titleLower.includes('emote');
-
-    setShowConfirmModal(false);
-    setRedeemingId(reward.id);
-
+  const openChoosePicker = async (reward: ChannelReward) => {
+    setChooseEmoteReward(reward);
+    setSelectedUnlockEmote(null);
+    setShowChooseEmoteModal(true);
+    setIsLoadingUnlockable(true);
     try {
-      if (isRandomEmote) {
-        const result = await invoke<RedemptionResult>('unlock_random_emote', {
+      const emotes = await invoke<Array<{
+        id: string;
+        token: string;
+        emote_type?: string;
+        modifications: Array<{ id: string; modifier_id: string; token: string }>;
+      }>>('get_modifiable_emotes', {
+        channelId: channelLogin,
+      });
+      // Just the base emotes, without their modified versions.
+      setUnlockableEmotes(emotes.map(e => ({ id: e.id, token: e.token })));
+    } catch (err) {
+      Logger.error('[ChannelPointsMenu] Failed to fetch unlockable emotes:', err);
+      useAppStore.getState().addToast('Failed to load emotes', 'error');
+    } finally {
+      setIsLoadingUnlockable(false);
+    }
+  };
+
+  // The detail view's main button: redeem, send the typed text, or move on
+  // to the emote picker the reward needs.
+  const handleDetailAction = async () => {
+    if (!detailReward || redeemingId) return;
+    const reward = liveOf(detailReward);
+    if (!reward.availability.redeemable) return;
+    const kind = rewardKind(reward);
+
+    if (kind === 'modify_emote') {
+      closeDetail();
+      void openModifyPicker(reward);
+      return;
+    }
+    if (kind === 'choose_emote') {
+      closeDetail();
+      void openChoosePicker(reward);
+      return;
+    }
+
+    const text = inputText.trim();
+    if (rewardTakesText(kind) && !text) return;
+
+    setRedeemingId(reward.id);
+    // Rust treats Twitch's "already committed" answer to a reused id as sent.
+    const transactionId = transactionFor(reward.id, text);
+    try {
+      let result: RedemptionResult;
+      if (kind === 'highlight') {
+        result = await invoke<RedemptionResult>('send_highlighted_message', {
+          channelId: channelId,
+          message: text,
+          cost: reward.cost,
+          transactionId: transactionId,
+        });
+      } else if (kind === 'sub_message') {
+        result = await invoke<RedemptionResult>('send_sub_mode_message', {
+          channelId: channelId,
+          channelLogin: channelLogin,
+          message: text,
+          cost: reward.cost,
+          transactionId: transactionId,
+        });
+      } else if (kind === 'random_emote') {
+        result = await invoke<RedemptionResult>('unlock_random_emote', {
           channelId: channelId,
           cost: reward.cost,
         });
-        if (result.success) {
+      } else {
+        result = await invoke<RedemptionResult>('redeem_channel_reward', {
+          channelId: channelId,
+          rewardId: reward.id,
+          cost: reward.cost,
+          title: reward.title,
+          prompt: reward.prompt ?? '',
+          transactionId: transactionId,
+          ...(kind === 'input' ? { textInput: text } : {}),
+        });
+      }
+
+      if (result.success) {
+        closeDetail();
+        if (kind === 'random_emote') {
           if (result.unlocked_emote) {
             setRevealedEmote(result.unlocked_emote);
             setShowEmoteReveal(true);
           } else {
             useAppStore.getState().addToast('Random emote unlocked!', 'success');
           }
-          onBalanceUpdate();
-          void refreshRewards();
           if (onEmotesChange) onEmotesChange();
         } else {
           useAppStore
             .getState()
-            .addToast(result.error_message || 'Failed to unlock emote', 'error');
+            .addToast(
+              kind === 'highlight' ? 'Highlighted message sent!' : kind === 'sub_message' ? 'Message sent' : `Redeemed: ${reward.title}`,
+              'success',
+            );
         }
+        onBalanceUpdate();
+        void refreshRewards(); // A redeem can start a cooldown or use up stock
       } else {
-        const result = await invoke<RedemptionResult>('redeem_channel_reward', {
-          channelId: channelId,
-          rewardId: reward.id,
-          cost: reward.cost,
-          title: reward.title,
-          prompt: reward.prompt ?? '',
-        });
-        if (result.success) {
-          useAppStore.getState().addToast(`Redeemed: ${reward.title}`, 'success');
-          onBalanceUpdate();
-          void refreshRewards();
-        } else {
-          useAppStore
-            .getState()
-            .addToast(result.error_message || 'Redemption failed', 'error');
-        }
+        useAppStore.getState().addToast(result.error_message || 'Redemption failed', 'error');
       }
     } catch (err) {
       Logger.error('[ChannelPointsMenu] Redemption error:', err);
-      useAppStore
-        .getState()
-        .addToast(typeof err === 'string' ? err : 'Redemption failed', 'error');
+      useAppStore.getState().addToast(typeof err === 'string' ? err : 'Redemption failed', 'error');
     } finally {
       setRedeemingId(null);
-      setPendingReward(null);
     }
   };
 
@@ -564,27 +519,48 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     }
   };
 
-  // Current verdicts for whichever confirm view is open.
-  const inputAvail = inputReward ? liveOf(inputReward).availability : null;
-  const inputIsHighlight = inputReward?.reward_type === HIGHLIGHTED_MESSAGE_REWARD;
-  const pendingAvail = pendingReward ? liveOf(pendingReward).availability : null;
+  // Current verdicts for whichever view is open.
+  const detail = detailReward ? liveOf(detailReward) : null;
+  const detailKind = detail ? rewardKind(detail) : null;
+  const detailTakesText = detailKind !== null && rewardTakesText(detailKind);
+  const detailStatus = detail ? rewardStatusText(detail.availability, nowMs, 'detail') : null;
+  const detailAbout = detail ? (detail.prompt?.trim() || detail.description?.trim() || null) : null;
+  const detailBusy = detail !== null && redeemingId === detail.id;
+  const detailCanAct = detail !== null
+    && detail.availability.redeemable
+    && redeemingId === null
+    && (!detailTakesText || inputText.trim().length > 0);
+  const detailActionLabel = detailBusy
+    ? (detailKind === 'highlight' || detailKind === 'sub_message' ? 'Sending...' : 'Redeeming...')
+    : detailKind === 'highlight'
+      ? 'Send highlighted'
+      : detailKind === 'sub_message'
+        ? 'Send'
+      : detailKind === 'choose_emote' || detailKind === 'modify_emote'
+        ? 'Choose emote'
+        : 'Redeem';
   const modifyAvail = modifyEmoteReward ? liveOf(modifyEmoteReward).availability : null;
   const chooseAvail = chooseEmoteReward ? liveOf(chooseEmoteReward).availability : null;
-  const inputBlocked = inputAvail ? blockedText(inputAvail) : null;
-  const pendingBlocked = pendingAvail ? blockedText(pendingAvail) : null;
-  const modifyBlocked = modifyAvail ? blockedText(modifyAvail) : null;
-  const chooseBlocked = chooseAvail ? blockedText(chooseAvail) : null;
+  const modifyBlocked = modifyAvail ? rewardStatusText(modifyAvail, nowMs, 'detail') : null;
+  const chooseBlocked = chooseAvail ? rewardStatusText(chooseAvail, nowMs, 'detail') : null;
+  const overlayOpen = detail !== null || showModifyEmoteModal || showChooseEmoteModal || showEmoteReveal;
+
+  const pointsGlyph = (size: number, className = '') => (customPointsIconUrl ? (
+    <img src={customPointsIconUrl} alt="" style={{ width: size, height: size }} className={className} />
+  ) : (
+    <ChannelPointsIcon size={size} className={className} />
+  ));
 
   return (
     <div
       ref={menuRef}
       className="glass-panel absolute bottom-full left-0 right-0 mb-2 flex flex-col max-h-[400px] overflow-hidden z-50"
-      style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, var(--glass-under, transparent))', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)' }}
+      style={{ ...panelGlass, minHeight: overlayOpen ? OVERLAY_MIN_HEIGHT : undefined }}
     >
       {/* Header with balance */}
       <div className="px-4 py-3 border-b border-borderSubtle bg-black/20">
-        <div className="flex items-center justify-between">
-          <span className="text-sm font-medium text-textSecondary">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-medium text-textSecondary truncate">
             {customPointsName || 'Channel Points'}
           </span>
           <Tooltip content="Click to refresh" side="top">
@@ -593,7 +569,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
               onClick={handleRefreshBalance}
               disabled={isRefreshingBalance}
               aria-label={`Refresh ${customPointsName || 'channel points'} balance`}
-              className="flex items-center gap-1.5 rounded-md px-1.5 py-0.5 -mr-1.5 transition-colors hover:bg-surface-hover disabled:opacity-60"
+              className="flex items-center gap-1.5 rounded-md px-1.5 py-0.5 -mr-1.5 transition-colors hover:bg-surface-hover disabled:opacity-60 flex-shrink-0"
             >
               {customPointsIconUrl ? (
                 <img
@@ -624,7 +600,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
         ) : error ? (
           <div className="px-4 py-6 text-center">
             <p className="text-textSecondary text-sm">{error}</p>
-            <button 
+            <button
               onClick={retryRewards}
               className="mt-2 text-xs text-accent hover:underline"
             >
@@ -639,35 +615,35 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
             </p>
           </div>
         ) : (
-          <div className="p-2 space-y-1">
+          <div className="p-2 space-y-0.5">
             {rewards.map((reward) => {
               const available = reward.availability.redeemable;
-              const statusText = badgeText(reward.availability);
+              const status = rewardStatusText(reward.availability, nowMs, 'label');
+              const about = reward.prompt?.trim() || reward.description?.trim() || null;
               const isRedeeming = redeemingId === reward.id;
               const canAfford = reward.availability.affordable;
 
               return (
                 <button
                   key={reward.id}
-                  onClick={() => handleRedeem(reward)}
-                  disabled={!available || isRedeeming}
+                  type="button"
+                  onClick={() => openDetail(reward)}
+                  aria-label={status ? `${reward.title}, ${status}` : reward.title}
                   className={`
-                    w-full flex items-center gap-3 p-2.5 rounded-lg transition-all text-left
-                    ${available 
-                      ? 'hover:bg-surface-hover cursor-pointer active:scale-[0.99]' 
-                      : 'opacity-50 cursor-not-allowed'}
+                    w-full flex items-center gap-2 px-2 py-2 rounded-lg transition-colors text-left
+                    hover:bg-surface-hover cursor-pointer
                     ${isRedeeming ? 'animate-pulse bg-accent/10' : ''}
                   `}
                 >
                   {/* Reward image/color */}
-                  <div 
-                    className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden"
+                  <div
+                    className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden ${available ? '' : 'opacity-50 grayscale'}`}
                     style={{ backgroundColor: reward.background_color || '#9147FF' }}
                   >
                     {reward.image_url ? (
-                      <img 
-                        src={reward.image_url} 
-                        alt="" 
+                      <img
+                        src={reward.image_url}
+                        alt=""
                         className="w-full h-full object-cover"
                         onError={(e) => {
                           e.currentTarget.style.display = 'none';
@@ -678,42 +654,30 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                     )}
                   </div>
 
-                  {/* Reward info - grows but truncates */}
-                  <div className="flex-1 min-w-0 overflow-hidden">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-textPrimary truncate">
-                        {reward.title}
-                      </span>
-                    </div>
-                    {reward.prompt && (
-                      <p className="text-xs text-textMuted truncate mt-0.5">
-                        {reward.prompt}
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Status badge if not available */}
-                  {statusText && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-400 flex-shrink-0 whitespace-nowrap">
-                      {statusText}
+                  {/* Full name on up to two lines, then why it is blocked or what it is */}
+                  <div className="flex-1 min-w-0">
+                    <span
+                      className={`text-[13px] font-medium leading-snug line-clamp-2 break-words ${available ? 'text-textPrimary' : 'text-textSecondary'}`}
+                      title={reward.title}
+                    >
+                      {reward.title}
                     </span>
-                  )}
+                    {status ? (
+                      <StatusLine text={status} className="mt-0.5" title={reward.availability.detail ?? undefined} />
+                    ) : about ? (
+                      <p className="text-xs text-textMuted truncate mt-0.5">{about}</p>
+                    ) : null}
+                  </div>
 
                   {/* Cost - always visible */}
                   <div className={`
-                    flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold flex-shrink-0
-                    ${canAfford 
-                      ? 'bg-accent/20 text-accent' 
-                      : 'bg-red-500/20 text-red-400'}
+                    flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold flex-shrink-0 tabular-nums
+                    ${canAfford
+                      ? (available ? 'bg-accent/20 text-accent' : 'bg-white/5 text-textSecondary')
+                      : 'bg-red-500/15 text-red-400'}
                   `}>
-                    {customPointsIconUrl ? (
-                      <img src={customPointsIconUrl} alt="" className="w-3 h-3" />
-                    ) : (
-                      <ChannelPointsIcon size={12} />
-                    )}
-                    {reward.cost >= 1000 
-                      ? `${(reward.cost / 1000).toFixed(reward.cost % 1000 === 0 ? 0 : 1)}k`
-                      : reward.cost.toLocaleString()}
+                    {pointsGlyph(12)}
+                    {formatCostShort(reward.cost)}
                   </div>
                 </button>
               );
@@ -722,88 +686,105 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
         )}
       </div>
 
-      {/* Typed-input modal: Highlight My Message or a custom input reward */}
-      {showInputModal && inputReward && (
-        <div 
+      {/* Reward detail: the full name, what it does, why it is blocked, and
+          the text box for rewards that ask for one */}
+      {detail && (
+        <div
           className="glass-panel animate-scale-in absolute inset-0 flex flex-col overflow-hidden z-50"
-          style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, var(--glass-under, transparent))', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)' }}
+          style={panelGlass}
+          role="dialog"
+          aria-label={detail.title}
         >
-          {/* Modal Header */}
-          <div className="px-4 py-3 border-b border-borderSubtle bg-black/20">
-            <div className="flex items-center justify-between">
-              <span className={`text-sm font-medium truncate ${inputIsHighlight ? 'text-yellow-400' : 'text-textPrimary'}`}>
-                {inputIsHighlight ? `✨ ${inputReward.title}` : inputReward.title}
-              </span>
-              <div className="flex items-center gap-1.5">
-                {customPointsIconUrl ? (
-                  <img src={customPointsIconUrl} alt="" className="w-4 h-4" />
-                ) : (
-                  <ChannelPointsIcon size={16} className="text-accent-neon" />
-                )}
-                <span className="text-base font-bold text-accent-neon">
-                  {inputReward.cost.toLocaleString()}
-                </span>
-              </div>
+          <div className="flex items-center justify-between gap-2 px-2 py-2 border-b border-borderSubtle bg-black/20">
+            <button
+              type="button"
+              onClick={closeDetail}
+              className="flex items-center gap-1 px-1.5 py-1 text-xs font-medium text-textSecondary hover:text-textPrimary hover:bg-glass rounded-md transition-colors"
+              aria-label="Back to rewards"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+              Rewards
+            </button>
+            <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-sm font-bold tabular-nums ${detail.availability.affordable ? 'bg-accent/20 text-accent' : 'bg-red-500/15 text-red-400'}`}>
+              {pointsGlyph(14)}
+              {detail.cost.toLocaleString()}
             </div>
           </div>
 
-          {/* Message Input */}
-          <div className="flex-1 min-h-0 p-4 flex flex-col gap-3">
-            {!inputIsHighlight && inputReward.prompt && (
-              <p className="text-xs text-textSecondary whitespace-pre-wrap break-words max-h-20 overflow-y-auto custom-scrollbar">
-                {inputReward.prompt}
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-4 pt-3 pb-2 flex flex-col gap-2.5">
+            <div className="flex items-center gap-3">
+              <div
+                className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden"
+                style={{ backgroundColor: detail.background_color || '#9147FF' }}
+              >
+                {detail.image_url ? (
+                  <img src={detail.image_url} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  <ChannelPointsIcon size={20} className="text-white/80" />
+                )}
+              </div>
+              <h3 className={`text-sm font-semibold leading-snug break-words min-w-0 ${detailKind === 'highlight' ? 'text-yellow-400' : 'text-textPrimary'}`}>
+                {detail.title}
+              </h3>
+            </div>
+            {detailAbout && (
+              <p className="text-xs text-textSecondary leading-relaxed whitespace-pre-wrap break-words">
+                {detailAbout}
               </p>
             )}
-            <textarea
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              placeholder={inputIsHighlight ? 'Type your highlighted message...' : 'Type your answer...'}
-              maxLength={500}
-              autoFocus
-              className="flex-1 w-full glass-input px-3 py-2 text-sm text-textPrimary placeholder-textMuted resize-none focus:outline-none"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSendInput();
-                }
-                if (e.key === 'Escape') {
-                  setShowInputModal(false);
-                }
-              }}
-            />
-            <div className="flex items-center justify-between">
-              {inputBlocked ? (
-                <span className="text-xs text-yellow-400" role="status">
-                  {inputBlocked}
-                </span>
-              ) : (
-                <span className="text-xs text-textMuted">
-                  {inputText.length}/500
-                </span>
-              )}
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setShowInputModal(false)}
-                  className="px-3 py-1.5 text-xs font-medium text-textSecondary hover:text-textPrimary transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSendInput}
-                  disabled={!inputText.trim() || redeemingId === inputReward.id || !inputAvail?.redeemable}
-                  className={`
-                    px-4 py-1.5 text-xs font-semibold glass-button transition-all
-                    ${inputText.trim() && redeemingId !== inputReward.id && inputAvail?.redeemable
-                      ? (inputIsHighlight ? 'text-yellow-400 hover:text-yellow-300' : 'text-accent hover:text-accent-neon')
-                      : 'opacity-50 cursor-not-allowed'}
-                  `}
-                >
-                  {redeemingId === inputReward.id
-                    ? (inputIsHighlight ? 'Sending...' : 'Redeeming...')
-                    : (inputIsHighlight ? 'Send Highlighted' : 'Redeem')}
-                </button>
-              </div>
-            </div>
+            {detailStatus && (
+              <span
+                className="flex items-start gap-1.5 text-xs text-textPrimary leading-snug"
+                role="status"
+              >
+                <span className="w-1.5 h-1.5 mt-[5px] rounded-full bg-yellow-400 flex-shrink-0" aria-hidden="true" />
+                <span className="break-words">{detailStatus}</span>
+              </span>
+            )}
+            {detailTakesText && detail.availability.redeemable && (
+              <textarea
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                placeholder={detailKind === 'input' ? 'Type your answer...' : 'Type your message...'}
+                maxLength={INPUT_MAX}
+                rows={3}
+                autoFocus
+                className="w-full min-h-[72px] glass-input px-3 py-2 text-sm text-textPrimary placeholder-textMuted resize-none focus:outline-none"
+                onKeyDown={(e) => {
+                  // Enter that confirms an IME candidate is not a send: it would
+                  // post half-typed text and spend the points.
+                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    void handleDetailAction();
+                  }
+                }}
+              />
+            )}
+          </div>
+
+          <div className="flex items-center justify-between gap-2 px-4 py-2.5 border-t border-borderSubtle">
+            {detailStatus ? (
+              <span aria-hidden="true" />
+            ) : detailTakesText ? (
+              <span className="text-xs text-textMuted tabular-nums">{inputText.length}/{INPUT_MAX}</span>
+            ) : (
+              <span className="text-xs text-textMuted">Can't be undone</span>
+            )}
+            <button
+              type="button"
+              onClick={() => { void handleDetailAction(); }}
+              disabled={!detailCanAct}
+              className={`
+                flex-shrink-0 px-4 py-1.5 text-xs font-semibold glass-button transition-all whitespace-nowrap
+                ${detailCanAct
+                  ? (detailKind === 'highlight' ? 'text-yellow-400 hover:text-yellow-300' : 'text-accent hover:text-accent-neon active:scale-[0.98]')
+                  : 'opacity-50 cursor-not-allowed'}
+              `}
+            >
+              {detailActionLabel}
+            </button>
           </div>
         </div>
       )}
@@ -812,7 +793,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
       {showEmoteReveal && revealedEmote && (
         <div 
           className="glass-panel animate-scale-in absolute inset-0 flex flex-col items-center justify-center overflow-hidden z-50"
-          style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, var(--glass-under, transparent))', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)' }}
+          style={panelGlass}
           onClick={() => {
             setShowEmoteReveal(false);
             setRevealedEmote(null);
@@ -857,93 +838,11 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
         </div>
       )}
 
-      {/* Confirmation Modal */}
-      {showConfirmModal && pendingReward && (
-        <div 
-          className="glass-panel animate-scale-in absolute inset-0 flex flex-col items-center justify-center overflow-hidden z-50"
-          style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, var(--glass-under, transparent))', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)' }}
-        >
-          {/* Header */}
-          <div className="text-lg font-bold text-textPrimary mb-2">
-            Confirm Redemption
-          </div>
-
-          {/* Reward Image */}
-          {pendingReward.image_url && (
-            <img
-              src={pendingReward.image_url}
-              alt={pendingReward.title}
-              className="w-16 h-16 object-cover rounded-lg mb-3"
-            />
-          )}
-
-          {/* Reward Title */}
-          <div className="text-base font-semibold text-textPrimary mb-1">
-            {pendingReward.title}
-          </div>
-
-          {/* Warning Text — generic; show the streamer's prompt when available */}
-          <div className="text-sm text-textMuted text-center px-6 mb-4">
-            {pendingReward.prompt
-              ? pendingReward.prompt
-              : pendingReward.title.toLowerCase().includes('random') &&
-                pendingReward.title.toLowerCase().includes('emote')
-                ? 'You will receive a random subscriber emote.'
-                : 'Spend channel points to redeem this reward.'}
-            <br />
-            {pendingBlocked ? (
-              <span className="text-yellow-400" role="status">{pendingBlocked}</span>
-            ) : (
-              <span className="text-yellow-400/80">This cannot be undone.</span>
-            )}
-          </div>
-
-          {/* Cost */}
-          <div className="flex items-center gap-2 mb-6">
-            <div className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-accent/20">
-              {customPointsIconUrl ? (
-                <img src={customPointsIconUrl} alt="" className="w-5 h-5" />
-              ) : (
-                <ChannelPointsIcon size={18} className="text-accent" />
-              )}
-              <span className="text-lg font-bold text-accent">
-                {pendingReward.cost.toLocaleString()}
-              </span>
-            </div>
-          </div>
-
-          {/* Buttons */}
-          <div className="flex gap-3">
-            <button
-              onClick={() => {
-                setShowConfirmModal(false);
-                setPendingReward(null);
-              }}
-              className="px-6 py-2 text-sm font-medium text-textSecondary hover:text-textPrimary transition-colors rounded-lg border border-border hover:border-borderLight"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleConfirmRedemption}
-              disabled={redeemingId !== null || !pendingAvail?.redeemable}
-              className={`
-                px-6 py-2 text-sm font-semibold glass-button transition-all
-                ${redeemingId === null && pendingAvail?.redeemable
-                  ? 'text-accent hover:text-accent-hover active:scale-[0.98]'
-                  : 'opacity-50 cursor-not-allowed'}
-              `}
-            >
-              {redeemingId !== null ? 'Unlocking...' : 'Confirm'}
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Modify Emote Picker Modal */}
       {showModifyEmoteModal && modifyEmoteReward && (
         <div 
           className="glass-panel animate-scale-in absolute inset-0 z-50 flex flex-col overflow-hidden"
-          style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, var(--glass-under, transparent))', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)' }}
+          style={panelGlass}
         >
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b border-borderSubtle">
@@ -1171,7 +1070,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
       {showChooseEmoteModal && chooseEmoteReward && (
         <div 
           className="glass-panel animate-scale-in absolute inset-0 z-50 flex flex-col overflow-hidden"
-          style={{ backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, var(--glass-under, transparent))', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)' }}
+          style={panelGlass}
         >
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b border-borderSubtle">

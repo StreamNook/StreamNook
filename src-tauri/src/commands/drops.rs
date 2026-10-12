@@ -8,7 +8,7 @@ use crate::models::settings::AppState;
 use crate::services::drops_auth_service::{DropsAuthService, DropsDeviceCodeInfo};
 use log::{debug, error, warn};
 use crate::rt::AppHandle;
-use tauri::{Emitter, State};
+use tauri::{Emitter, Manager, State};
 
 /// The Drops page model (services/drops_overview.rs): campaigns joined with
 /// live progress and the inventory, per game, with ownership worked out.
@@ -613,7 +613,7 @@ pub async fn refresh_followed_channel_points(
 /// Shared active-channel chokepoint: points the parity heartbeat at the
 /// channel now on screen and forwards the matching stream event to plugins.
 /// Every caller of start/update monitoring funnels through here, including
-/// the chat hot-swap that tracks the focused tile in the multi-stream grid.
+/// MultiNook's focused tile (`watch_session::set_grid_focus`).
 async fn report_active_channel(state: &State<'_, AppState>, channel_id: &str, login: &str) {
     let previous = state
         .watch_heartbeat
@@ -647,17 +647,23 @@ async fn report_active_channel(state: &State<'_, AppState>, channel_id: &str, lo
 pub async fn start_drops_monitoring(
     channel_id: String,
     channel_name: String,
-    state: State<'_, AppState>,
     app_handle: AppHandle,
 ) -> Result<(), String> {
+    monitor_watched_channel(&app_handle, channel_id, channel_name).await;
+    Ok(())
+}
+
+/// Point drops monitoring and the active-channel chokepoint at a channel
+/// now on screen. `start_drops_monitoring`, for callers inside Rust.
+pub async fn monitor_watched_channel(app: &AppHandle, channel_id: String, login: String) {
+    let state = app.state::<AppState>();
     {
         let drops_service = state.drops_service.lock().await;
         drops_service
-            .start_monitoring(channel_id.clone(), channel_name.clone(), app_handle)
+            .start_monitoring(channel_id.clone(), login.clone(), app.clone())
             .await;
     }
-    report_active_channel(&state, &channel_id, &channel_name).await;
-    Ok(())
+    report_active_channel(&state, &channel_id, &login).await;
 }
 
 #[tauri::command]
@@ -913,6 +919,13 @@ pub async fn vote_on_poll(
     const VOTE_IN_POLL_HASH: &str =
         "1280e27b0f3c7ae60b5714bd569771ea50635778473182e6e959e2dcfcc16e3c";
 
+    // This sends the free vote, which Twitch allows once per poll (more votes
+    // cost channel points, not offered here). A second one is refused here
+    // rather than sent.
+    if crate::services::slash_commands::my_poll_vote(&poll_id).is_some() {
+        return Err("You already voted in this poll".into());
+    }
+
     let token = DropsAuthService::get_token()
         .await
         .map_err(|e| format!("Failed to get token: {}", e))?;
@@ -997,6 +1010,9 @@ pub async fn vote_on_poll(
         "Poll vote cast on channel {}: poll {} choice {}",
         channel_id, poll_id, choice_id
     );
+    // The banner and `/vote` both read this, so either way of voting marks
+    // the choice in every banner showing the poll.
+    crate::services::slash_commands::announce_my_vote(&channel_id, &poll_id, &choice_id);
 
     Ok(result)
 }
@@ -1282,6 +1298,9 @@ fn parse_reward(
         global_cooldown_seconds,
         reward_type: None,
         redemptions_redeemed_current_stream: redemptions_this_stream(reward),
+        is_sub_only: reward["isSubOnly"].as_bool().unwrap_or(false),
+        is_hidden_for_subs: false,
+        description: None,
         availability: Default::default(),
     })
 }
@@ -1302,68 +1321,7 @@ fn redemptions_this_stream(reward: &serde_json::Value) -> Option<i32> {
         .map(|v| v as i32)
 }
 
-/// The built-in reward whose text input the menu collects itself.
-const HIGHLIGHTED_MESSAGE_REWARD: &str = "SEND_HIGHLIGHTED_MESSAGE";
-
-/// Decide whether the viewer can redeem `reward` right now. `balance` is the
-/// viewer's points on the channel (None when unknown, which never blocks:
-/// Twitch still refuses an unaffordable redeem). `now_ms` is Unix ms.
-pub(crate) fn reward_availability(
-    reward: &crate::models::drops::ChannelReward,
-    balance: Option<i64>,
-    now_ms: i64,
-) -> crate::models::drops::RewardAvailability {
-    use crate::models::drops::{RewardAvailability, RewardBlock};
-
-    let cooldown_until_ms = reward
-        .cooldown_expires_at
-        .as_deref()
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|t| t.timestamp_millis())
-        .filter(|&until| until > now_ms);
-    let affordable = balance.map_or(true, |b| b >= i64::from(reward.cost));
-    // Custom rewards carry the viewer's text as the redeem's `textInput`; of
-    // the built-in input rewards only Highlight My Message has a sender.
-    let input_supported = !reward.is_user_input_required
-        || reward.reward_type.is_none()
-        || reward.reward_type.as_deref() == Some(HIGHLIGHTED_MESSAGE_REWARD);
-    let stream_cap_reached = matches!(
-        (reward.max_per_stream, reward.redemptions_redeemed_current_stream),
-        (Some(max), Some(done)) if max > 0 && done >= max
-    );
-    // Twitch turns `isInStock` off while a reward's global cooldown runs and
-    // leaves it off after the cooldown ends, so for a reward with a cooldown
-    // timestamp the stock flag only restates the cooldown (judged above from
-    // the timestamp itself). Twitch's own client reads it the same way.
-    let stock_held_by_cooldown =
-        reward.global_cooldown_seconds.is_some() && reward.cooldown_expires_at.is_some();
-    let out_of_stock = !reward.is_in_stock && !stock_held_by_cooldown;
-
-    let reason = if !reward.is_enabled {
-        Some(RewardBlock::Disabled)
-    } else if reward.is_paused {
-        Some(RewardBlock::Paused)
-    } else if stream_cap_reached {
-        Some(RewardBlock::MaxPerStreamReached)
-    } else if cooldown_until_ms.is_some() {
-        Some(RewardBlock::OnCooldown)
-    } else if out_of_stock {
-        Some(RewardBlock::OutOfStock)
-    } else if !input_supported {
-        Some(RewardBlock::InputNotSupported)
-    } else if !affordable {
-        Some(RewardBlock::NotEnoughPoints)
-    } else {
-        None
-    };
-
-    RewardAvailability {
-        redeemable: reason.is_none(),
-        reason,
-        cooldown_until_ms,
-        affordable,
-    }
-}
+use crate::services::channel_rewards::{built_in_description, HIGHLIGHTED_MESSAGE_REWARD, SUB_MODE_BYPASS_REWARD};
 
 /// Parse an automatic (built-in) reward from the GQL response
 fn parse_automatic_reward(
@@ -1438,7 +1396,7 @@ fn parse_automatic_reward(
         is_paused: false,
         is_in_stock: reward["isInStock"].as_bool().unwrap_or(true),
         is_user_input_required: reward_type == HIGHLIGHTED_MESSAGE_REWARD
-            || reward_type == "SINGLE_MESSAGE_BYPASS_SUB_MODE",
+            || reward_type == SUB_MODE_BYPASS_REWARD,
         cooldown_expires_at: reward["cooldownExpiresAt"].as_str().map(|s| s.to_string()),
         max_per_stream: enabled_setting(reward, "maxPerStreamSetting", "maxPerStream"),
         max_per_user_per_stream: enabled_setting(
@@ -1453,6 +1411,9 @@ fn parse_automatic_reward(
         ),
         reward_type: Some(reward_type.to_string()),
         redemptions_redeemed_current_stream: redemptions_this_stream(reward),
+        is_sub_only: false,
+        is_hidden_for_subs: reward["isHiddenForSubs"].as_bool().unwrap_or(false),
+        description: built_in_description(reward_type).map(str::to_string),
         availability: Default::default(),
     })
 }
@@ -1542,16 +1503,22 @@ pub async fn get_channel_rewards(
         .iter()
         .find_map(|base| result.pointer(&format!("{base}/self/communityPoints/balance")))
         .and_then(|b| b.as_i64());
+    let points_name = settings
+        .and_then(|s| s.get("name"))
+        .and_then(|n| n.as_str())
+        .map(str::to_string);
     let fetched_at_ms = chrono::Utc::now().timestamp_millis();
-    for reward in &mut rewards {
-        reward.availability = reward_availability(reward, balance, fetched_at_ms);
-    }
 
-    Ok(crate::models::drops::ChannelRewardsSnapshot {
+    // Judged against the room (sub-only mode, the viewer's sub badge) and the
+    // stream, and re-judged and pushed when those change.
+    Ok(crate::services::channel_rewards::judge_fetched(
+        &channel_id,
         rewards,
         balance,
+        points_name,
         fetched_at_ms,
-    })
+    )
+    .await)
 }
 
 #[tauri::command]
@@ -1562,6 +1529,7 @@ pub async fn redeem_channel_reward(
     title: String,
     prompt: Option<String>,
     text_input: Option<String>,
+    transaction_id: Option<String>,
 ) -> Result<crate::models::drops::RedemptionResult, String> {
     use crate::services::drops_auth_service::DropsAuthService;
     use serde_json::json;
@@ -1580,7 +1548,8 @@ pub async fn redeem_channel_reward(
 
     let client = HTTP_CLIENT.clone();
 
-    let transaction_id = uuid::Uuid::new_v4().to_string().replace("-", "");
+    // The menu's id for this redeem, so a retry is recognised by Twitch.
+    let transaction_id = crate::services::channel_rewards::transaction_id_or_new(transaction_id);
     let device_id = uuid::Uuid::new_v4().to_string().replace("-", "");
     let session_id = uuid::Uuid::new_v4().to_string().replace("-", "")[..16].to_string();
 
@@ -1679,6 +1648,16 @@ pub async fn redeem_channel_reward(
                 .get("code")
                 .and_then(|v| v.as_str())
                 .unwrap_or("UNKNOWN");
+            // A retry of a redeem that already went through.
+            if error_code == crate::services::channel_rewards::ALREADY_COMMITTED {
+                return Ok(crate::models::drops::RedemptionResult {
+                    success: true,
+                    error_code: None,
+                    error_message: None,
+                    new_balance: None,
+                    unlocked_emote: None,
+                });
+            }
             return Ok(crate::models::drops::RedemptionResult {
                 success: false,
                 error_code: Some(error_code.to_string()),
@@ -1692,7 +1671,7 @@ pub async fn redeem_channel_reward(
                         "You've already redeemed this reward".to_string()
                     }
                     "COOLDOWN" => "Reward is on cooldown".to_string(),
-                    "PROPERTIES_MISMATCH" => "Reward changed — refresh and try again".to_string(),
+                    "PROPERTIES_MISMATCH" => "The reward changed. Reopen rewards and try again".to_string(),
                     _ => format!("Redemption failed: {}", error_code),
                 }),
                 new_balance: None,
@@ -1736,6 +1715,7 @@ pub async fn send_highlighted_message(
     channel_id: String,
     message: String,
     cost: i32,
+    transaction_id: Option<String>,
 ) -> Result<crate::models::drops::RedemptionResult, String> {
     use crate::services::drops_auth_service::DropsAuthService;
     use serde_json::json;
@@ -1749,8 +1729,9 @@ pub async fn send_highlighted_message(
 
     let client = HTTP_CLIENT.clone();
 
-    // Generate transaction ID and device/session IDs (UUID without dashes, lowercase)
-    let transaction_id = uuid::Uuid::new_v4().to_string().replace("-", "");
+    // The menu's id for this message, so a retry is recognised by Twitch; the
+    // device and session ids are fresh (UUID without dashes, lowercase).
+    let transaction_id = crate::services::channel_rewards::transaction_id_or_new(transaction_id);
     let device_id = uuid::Uuid::new_v4().to_string().replace("-", "");
     let session_id = uuid::Uuid::new_v4().to_string().replace("-", "")[..16].to_string();
 
@@ -1815,6 +1796,16 @@ pub async fn send_highlighted_message(
             .get("code")
             .and_then(|v| v.as_str())
             .unwrap_or("UNKNOWN");
+        // A retry of a message that already went through.
+        if error_code == crate::services::channel_rewards::ALREADY_COMMITTED {
+            return Ok(crate::models::drops::RedemptionResult {
+                success: true,
+                error_code: None,
+                error_message: None,
+                new_balance: None,
+                unlocked_emote: None,
+            });
+        }
         return Ok(crate::models::drops::RedemptionResult {
             success: false,
             error_code: Some(error_code.to_string()),
@@ -1855,6 +1846,97 @@ pub async fn send_highlighted_message(
         new_balance: None,
         unlocked_emote: None,
     })
+}
+
+/// Send one message through sub-only mode with the channel's built-in
+/// "Send a Message in Sub-Only Mode" reward. `channel_id` is numeric,
+/// `channel_login` the Twitch login whose room state gates it.
+#[tauri::command]
+pub async fn send_sub_mode_message(
+    channel_id: String,
+    channel_login: String,
+    message: String,
+    cost: i32,
+    transaction_id: Option<String>,
+) -> Result<crate::models::drops::RedemptionResult, String> {
+    use crate::services::channel_rewards as rewards;
+    use crate::services::drops_auth_service::DropsAuthService;
+
+    let refuse = |code: &str, text: &str| crate::models::drops::RedemptionResult {
+        success: false,
+        error_code: Some(code.to_string()),
+        error_message: Some(text.to_string()),
+        new_balance: None,
+        unlocked_emote: None,
+    };
+    let message = message.trim();
+    if message.is_empty() {
+        return Ok(refuse("EMPTY", "Type a message first"));
+    }
+    if message.chars().count() > rewards::CHAT_MESSAGE_MAX {
+        return Ok(refuse("TOO_LONG", "That message is longer than 500 characters"));
+    }
+    // Twitch only takes it while chat is sub-only and the viewer cannot
+    // already chat there; a stale view never spends.
+    if let Some((code, text)) = rewards::sub_mode_send_refusal(&channel_login) {
+        return Ok(refuse(code, text));
+    }
+
+    // Same client and credential as the other built-in reward redeems.
+    const CLIENT_ID: &str = env!("TWITCH_ANDROID_CLIENT_ID");
+    let token = DropsAuthService::get_token()
+        .await
+        .map_err(|e| format!("Failed to get token: {}", e))?;
+    // The menu keeps one id per message, so a retry after a lost answer is
+    // recognised by Twitch instead of posting and charging twice.
+    let transaction_id = rewards::transaction_id_or_new(transaction_id);
+    let device_id = uuid::Uuid::new_v4().to_string().replace("-", "");
+    let session_id = uuid::Uuid::new_v4().to_string().replace("-", "")[..16].to_string();
+
+    let response = match HTTP_CLIENT
+        .clone()
+        .post("https://gql.twitch.tv/gql")
+        .header("Client-Id", CLIENT_ID)
+        .header("Authorization", format!("OAuth {}", token))
+        .header("X-Device-Id", &device_id)
+        .header("Client-Session-Id", &session_id)
+        .json(&rewards::sub_mode_message_request(&channel_id, message, cost, &transaction_id))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("send_sub_mode_message channel={} transport error: {}", channel_id, e);
+            return Ok(refuse("NETWORK", "Couldn't reach Twitch. Check your connection and try again"));
+        }
+    };
+    let status = response.status().as_u16();
+    let body = match response.text().await {
+        Ok(b) => b,
+        Err(e) => {
+            log::warn!("send_sub_mode_message channel={} status={} unreadable body: {}", channel_id, status, e);
+            return Ok(refuse("NETWORK", "Couldn't reach Twitch. Check your connection and try again"));
+        }
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+
+    let points_name = rewards::points_name_of(&channel_login);
+    let outcome = rewards::sub_mode_message_outcome(status, &parsed, points_name.as_deref());
+    if outcome.success {
+        log::info!("send_sub_mode_message channel={} success=true status={}", channel_id, status);
+    } else {
+        // Twitch's own answer, for the report the toast cannot carry. It holds
+        // the balance and an error code, never the token.
+        let head: String = body.chars().take(2000).collect();
+        log::warn!(
+            "send_sub_mode_message channel={} success=false code={:?} status={}: {}",
+            channel_id,
+            outcome.error_code,
+            status,
+            head
+        );
+    }
+    Ok(outcome)
 }
 
 #[tauri::command]
@@ -2493,161 +2575,6 @@ mod tests {
         assert!(apply_drops_patch(&DropsSettings::default(), patch).is_err());
     }
 
-    const NOW_MS: i64 = 1_700_000_000_000;
-
-    fn reward() -> ChannelReward {
-        ChannelReward {
-            id: "r1".to_string(),
-            title: "Hydrate".to_string(),
-            cost: 500,
-            prompt: None,
-            image_url: None,
-            background_color: "#9147FF".to_string(),
-            is_enabled: true,
-            is_paused: false,
-            is_in_stock: true,
-            is_user_input_required: false,
-            cooldown_expires_at: None,
-            max_per_stream: None,
-            max_per_user_per_stream: None,
-            global_cooldown_seconds: None,
-            reward_type: None,
-            redemptions_redeemed_current_stream: None,
-            availability: RewardAvailability::default(),
-        }
-    }
-
-    fn iso(ms: i64) -> String {
-        chrono::DateTime::from_timestamp_millis(ms).unwrap().to_rfc3339()
-    }
-
-    #[test]
-    fn an_open_affordable_reward_is_redeemable() {
-        let a = reward_availability(&reward(), Some(1_000), NOW_MS);
-        assert!(a.redeemable);
-        assert_eq!(a.reason, None);
-        assert!(a.affordable);
-        assert_eq!(a.cooldown_until_ms, None);
-    }
-
-    #[test]
-    fn an_unknown_balance_never_blocks() {
-        let a = reward_availability(&reward(), None, NOW_MS);
-        assert!(a.redeemable);
-        assert!(a.affordable);
-    }
-
-    #[test]
-    fn too_few_points_blocks() {
-        let a = reward_availability(&reward(), Some(499), NOW_MS);
-        assert!(!a.redeemable);
-        assert_eq!(a.reason, Some(RewardBlock::NotEnoughPoints));
-        assert!(!a.affordable);
-        assert!(reward_availability(&reward(), Some(500), NOW_MS).redeemable);
-    }
-
-    #[test]
-    fn disabled_paused_and_out_of_stock_block_in_that_order() {
-        let mut r = reward();
-        r.is_in_stock = false;
-        assert_eq!(reward_availability(&r, Some(1_000), NOW_MS).reason, Some(RewardBlock::OutOfStock));
-        r.is_paused = true;
-        assert_eq!(reward_availability(&r, Some(1_000), NOW_MS).reason, Some(RewardBlock::Paused));
-        r.is_enabled = false;
-        assert_eq!(reward_availability(&r, Some(1_000), NOW_MS).reason, Some(RewardBlock::Disabled));
-    }
-
-    #[test]
-    fn a_running_cooldown_blocks_until_it_ends() {
-        let mut r = reward();
-        r.cooldown_expires_at = Some(iso(NOW_MS + 84_000));
-        let a = reward_availability(&r, Some(1_000), NOW_MS);
-        assert_eq!(a.reason, Some(RewardBlock::OnCooldown));
-        assert_eq!(a.cooldown_until_ms, Some(NOW_MS + 84_000));
-
-        let later = reward_availability(&r, Some(1_000), NOW_MS + 84_000);
-        assert!(later.redeemable);
-        assert_eq!(later.cooldown_until_ms, None);
-    }
-
-    #[test]
-    fn twitch_nanosecond_timestamps_parse() {
-        let mut r = reward();
-        r.cooldown_expires_at = Some("2023-11-14T22:14:20.462676805Z".to_string());
-        let a = reward_availability(&r, Some(1_000), NOW_MS);
-        assert_eq!(a.reason, Some(RewardBlock::OnCooldown));
-        assert_eq!(a.cooldown_until_ms, Some(1_700_000_060_462));
-    }
-
-    #[test]
-    fn a_cooldown_outranks_too_few_points() {
-        let mut r = reward();
-        r.cooldown_expires_at = Some(iso(NOW_MS + 1_000));
-        let a = reward_availability(&r, Some(0), NOW_MS);
-        assert_eq!(a.reason, Some(RewardBlock::OnCooldown));
-        assert!(!a.affordable);
-    }
-
-    #[test]
-    fn a_cooldown_is_not_out_of_stock() {
-        let mut r = reward();
-        r.is_in_stock = false;
-        r.global_cooldown_seconds = Some(60);
-        r.cooldown_expires_at = Some(iso(NOW_MS + 30_000));
-        assert_eq!(
-            reward_availability(&r, Some(1_000), NOW_MS).reason,
-            Some(RewardBlock::OnCooldown)
-        );
-        // Twitch still says out of stock once the cooldown has passed.
-        assert!(reward_availability(&r, Some(1_000), NOW_MS + 30_000).redeemable);
-    }
-
-    #[test]
-    fn out_of_stock_without_a_cooldown_still_blocks() {
-        let mut r = reward();
-        r.is_in_stock = false;
-        r.cooldown_expires_at = Some(iso(NOW_MS - 1_000));
-        assert_eq!(
-            reward_availability(&r, Some(1_000), NOW_MS).reason,
-            Some(RewardBlock::OutOfStock)
-        );
-    }
-
-    #[test]
-    fn custom_input_rewards_are_supported() {
-        let mut r = reward();
-        r.is_user_input_required = true;
-        assert!(reward_availability(&r, Some(1_000), NOW_MS).redeemable);
-    }
-
-    #[test]
-    fn only_highlight_my_message_built_in_input_is_supported() {
-        let mut r = reward();
-        r.is_user_input_required = true;
-        r.reward_type = Some("SINGLE_MESSAGE_BYPASS_SUB_MODE".to_string());
-        assert_eq!(
-            reward_availability(&r, Some(1_000), NOW_MS).reason,
-            Some(RewardBlock::InputNotSupported)
-        );
-        r.reward_type = Some(HIGHLIGHTED_MESSAGE_REWARD.to_string());
-        assert!(reward_availability(&r, Some(1_000), NOW_MS).redeemable);
-    }
-
-    #[test]
-    fn the_per_stream_cap_blocks_once_reached() {
-        let mut r = reward();
-        r.max_per_stream = Some(3);
-        r.redemptions_redeemed_current_stream = Some(2);
-        assert!(reward_availability(&r, Some(1_000), NOW_MS).redeemable);
-        r.redemptions_redeemed_current_stream = Some(3);
-        assert_eq!(
-            reward_availability(&r, Some(1_000), NOW_MS).reason,
-            Some(RewardBlock::MaxPerStreamReached)
-        );
-        r.max_per_stream = None;
-        assert!(reward_availability(&r, Some(1_000), NOW_MS).redeemable);
-    }
-
     #[test]
     fn parsed_rewards_carry_limits_cooldowns_and_type() {
         let custom = serde_json::json!({
@@ -2677,21 +2604,31 @@ mod tests {
         assert!(a.is_user_input_required);
         assert_eq!(a.cooldown_expires_at.as_deref(), Some("2023-11-14T22:14:20Z"));
         assert_eq!(a.global_cooldown_seconds, Some(30));
+        assert!(!a.is_hidden_for_subs);
+        assert_eq!(a.description.as_deref(), Some("Everyone in chat sees it in a colored box"));
     }
 
     #[test]
-    fn availability_serializes_for_the_menu() {
-        let mut r = reward();
-        r.is_paused = true;
-        let v = serde_json::to_value(reward_availability(&r, Some(1_000), NOW_MS)).unwrap();
-        assert_eq!(
-            v,
-            serde_json::json!({
-                "redeemable": false,
-                "reason": "paused",
-                "cooldown_until_ms": null,
-                "affordable": true
-            })
-        );
+    fn parsed_rewards_carry_sub_flags_and_descriptions() {
+        let custom = serde_json::json!({
+            "id": "c2", "title": "VIP for a day", "cost": 50000,
+            "isSubOnly": true, "prompt": "Pick a colour"
+        });
+        let c = parse_reward(&custom, false).unwrap();
+        assert!(c.is_sub_only);
+        assert_eq!(c.prompt.as_deref(), Some("Pick a colour"));
+        assert_eq!(c.description, None);
+
+        let bypass = serde_json::json!({
+            "id": "1:SINGLE_MESSAGE_BYPASS_SUB_MODE", "type": "SINGLE_MESSAGE_BYPASS_SUB_MODE",
+            "cost": 3000, "defaultCost": 350, "isEnabled": true, "isHiddenForSubs": true,
+            "pricingType": "POINTS"
+        });
+        let b = parse_automatic_reward(&bypass).unwrap();
+        assert_eq!(b.title, "Send a Message in Sub-Only Mode");
+        assert!(b.is_hidden_for_subs);
+        assert!(b.is_user_input_required);
+        assert_eq!(b.prompt, None);
+        assert_eq!(b.description.as_deref(), Some("Posts even though you're not subscribed"));
     }
 }

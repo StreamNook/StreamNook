@@ -24,6 +24,7 @@ pub mod youtube;
 pub mod youtube_account;
 pub mod youtube_emotes;
 pub mod youtube_media;
+pub mod youtube_send;
 pub mod youtube_subscribe;
 
 use crate::models::chat_layout::ChatMessage;

@@ -181,6 +181,31 @@ pub async fn account_name_lazy() -> Option<String> {
     Some(name)
 }
 
+/// Which account and channel the session acts as, as one comparable string.
+/// Values tied to one identity (a chat page's send token) are cached under it.
+pub fn identity_key() -> String {
+    let ident = stored_identity();
+    let (authuser, page) = ident.effective();
+    format!("{}|{}", authuser, page)
+}
+
+/// The identity a signed-in youtube.com page was rendered for, in the
+/// `identity_key()` form, so the two compare directly. None for a signed-out
+/// page or one whose ytcfg does not name the account.
+pub(crate) fn page_identity_key(html: &str) -> Option<String> {
+    use crate::services::providers::youtube::json_str_after;
+
+    if !html.contains("\"LOGGED_IN\":true") {
+        return None;
+    }
+    let ident = Identity {
+        session_index: Some(json_str_after(html, "\"SESSION_INDEX\":\"")?).filter(|s| !s.is_empty()),
+        delegated_session_id: json_str_after(html, "\"DELEGATED_SESSION_ID\":\"").filter(|s| !s.is_empty()),
+    };
+    let (authuser, page) = ident.effective();
+    Some(format!("{}|{}", authuser, page))
+}
+
 /// The headers that authenticate a private `youtubei/v1` request as this user:
 /// the Cookie header + the per-request `SAPISIDHASH` Authorization. None when not
 /// connected. Recomputed each call (the hash is timestamped).

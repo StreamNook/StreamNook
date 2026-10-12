@@ -219,8 +219,19 @@ pub struct ChannelReward {
     /// count, so only the per-stream cap can be judged ahead of a redeem.
     #[serde(default)]
     pub redemptions_redeemed_current_stream: Option<i32>,
-    /// Whether the viewer can redeem this reward right now, decided when the
-    /// list was fetched. The menu shows this verdict as-is.
+    /// Only subscribers may redeem it (a custom reward's `isSubOnly`).
+    #[serde(default)]
+    pub is_sub_only: bool,
+    /// Twitch hides it from subscribers (a built-in reward's
+    /// `isHiddenForSubs`, e.g. the sub-only bypass and the emote unlocks).
+    #[serde(default)]
+    pub is_hidden_for_subs: bool,
+    /// What a built-in reward does. Twitch sends no prompt for those, so this
+    /// is ours; custom rewards carry the streamer's `prompt` instead.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Whether the viewer can redeem this reward right now. Re-judged in Rust
+    /// when the room or the stream changes; the menu shows it as-is.
     #[serde(default)]
     pub availability: RewardAvailability,
 }
@@ -233,12 +244,21 @@ pub enum RewardBlock {
     Disabled,
     Paused,
     OutOfStock,
-    /// The reward needs typed input this client cannot collect (every
-    /// input reward except Highlight My Message).
-    InputNotSupported,
     MaxPerStreamReached,
     OnCooldown,
     NotEnoughPoints,
+    /// The sub-only bypass message while chat is not in sub-only mode.
+    NeedsSubOnlyMode,
+    /// The sub-only bypass message for the broadcaster, a moderator or a VIP,
+    /// who chat in sub-only mode without it.
+    AlreadyCanChat,
+    /// The sub-only bypass message while chat's room state is unknown (chat
+    /// reconnecting), so whether it would work cannot be judged.
+    ChatReconnecting,
+    /// A subscriber-only reward and a viewer who is not subscribed.
+    SubscribersOnly,
+    /// A reward with a per-stream limit while the channel is offline.
+    OnlyWhileLive,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -249,6 +269,13 @@ pub struct RewardAvailability {
     pub cooldown_until_ms: Option<i64>,
     /// False only when the viewer's balance is known and below the cost.
     pub affordable: bool,
+    /// A few words for the list row ("Sub-only mode only"); None when
+    /// redeemable. A running cooldown's countdown is appended by the view.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// The full sentence for the reward's detail view.
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 impl Default for RewardAvailability {
@@ -258,14 +285,20 @@ impl Default for RewardAvailability {
             reason: None,
             cooldown_until_ms: None,
             affordable: true,
+            label: None,
+            detail: None,
         }
     }
 }
 
 /// The reward list for one channel plus the viewer's balance it was judged
-/// against.
+/// against. Also the payload of the `channel-rewards` event, sent when Rust
+/// re-judges the list (sub-only mode toggled, the stream went live or off).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelRewardsSnapshot {
+    /// The channel's Twitch login, lowercase.
+    #[serde(default)]
+    pub login: String,
     pub rewards: Vec<ChannelReward>,
     /// The viewer's points on this channel; None when Twitch did not report
     /// one (points off, or the account cannot earn here).

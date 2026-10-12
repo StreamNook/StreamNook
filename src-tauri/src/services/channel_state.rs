@@ -265,6 +265,15 @@ pub async fn get(login: &str) -> Option<ChannelState> {
     inner.state.read().await.get(&login.to_lowercase()).cloned()
 }
 
+/// Whether a watched channel is live: `None` until the viewer poll has
+/// answered for it, or when nobody watches it.
+pub async fn is_live(login: &str) -> Option<bool> {
+    let inner = SERVICE.get()?;
+    let state = inner.state.read().await;
+    let s = state.get(&login.to_lowercase())?;
+    s.answered.then_some(s.viewer_count.is_some())
+}
+
 /// Manual refresh of one section (`viewers`, `points`, `pinned`) for a
 /// watched channel: after a pin, a claim, a spend.
 pub async fn refresh(login: &str, section: &str) -> Result<(), String> {
@@ -346,6 +355,8 @@ async fn refresh_viewers(inner: &Inner) {
     let at = now_secs();
     let mut changed: Vec<(String, Live)> = Vec::new();
     let mut went_live: Vec<TwitchStream> = Vec::new();
+    // Channels whose live/offline answer changed, or arrived for the first time.
+    let mut live_flipped: Vec<String> = Vec::new();
     {
         let mut state = inner.state.write().await;
         for (login, id) in &by_login {
@@ -366,6 +377,9 @@ async fn refresh_viewers(inner: &Inner) {
                 if before != now || !s.answered {
                     changed.push((login.clone(), now.clone()));
                 }
+                if !s.answered || before.viewer_count.is_some() != now.viewer_count.is_some() {
+                    live_flipped.push(login.clone());
+                }
                 if before.started_at.is_none() && now.started_at.is_some() {
                     if let Some(row) = rows.get(id) {
                         went_live.push(row.clone());
@@ -379,6 +393,11 @@ async fn refresh_viewers(inner: &Inner) {
                 s.viewers_at = Some(at);
             }
         }
+    }
+    // Rewards with a per-stream limit open and close with the stream; a viewer
+    // count moving is no reason to judge them again.
+    for login in live_flipped {
+        crate::services::channel_rewards::note_live_changed(&login);
     }
     for (login, l) in changed {
         emit(
