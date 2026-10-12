@@ -240,8 +240,8 @@ const SupportSettings = () => {
 /**
  * The diagnostic logging toggle.
  *
- * `error_reporting_enabled` already drove `set_diagnostics_enabled` from
- * AppStore, but it had no control anywhere in the app, so the only way to raise
+ * `error_reporting_enabled` already drove the log level (Rust applies it when
+ * it is saved), but it had no control anywhere in the app, so the only way to raise
  * the log level was to edit settings.json by hand. That is precisely the moment
  * someone needs it: they are trying to produce a log for a bug report and the
  * file is empty apart from the watchdog line.

@@ -38,6 +38,7 @@ import {
   type PaletteItem,
   type PaletteSection,
 } from '../utils/commandPaletteSources';
+import { orderSections } from '../utils/paletteRank';
 
 // Render order — empty-state-only sections (Now Playing / Jump To / Tips) come
 // right after Recent so the resting-state composition is: what you did last,
@@ -59,6 +60,10 @@ const SECTION_ORDER: PaletteSection[] = [
   'Tips',
   'Snippets',
 ];
+
+// A search whose exact match sits in more than one section (a streamer who
+// also chatted here) opens the channel first.
+const EXACT_FIRST: PaletteSection[] = ['Followed Channels', 'Streamers'];
 
 // Static IDs of the high-level surfaces featured in the empty-state "Jump To"
 // section. Pulled out as a constant so the order stays stable and so the
@@ -699,6 +704,9 @@ function RowAvatar({ item }: { item: PaletteItem }) {
   if (item.avatarUrl) {
     return (
       <img
+        // Keyed by the address: a picture hidden after a failed load must not
+        // stay hidden once the row carries a different one.
+        key={item.avatarUrl}
         src={item.avatarUrl}
         alt=""
         className="h-8 w-8 flex-shrink-0 rounded-full bg-surface object-cover mt-0.5"
@@ -747,7 +755,7 @@ function groupAndOrder(items: PaletteItem[]): RenderSection[] {
   }
   const out: RenderSection[] = [];
   let globalIndex = 0;
-  for (const section of SECTION_ORDER) {
+  for (const section of orderSections(SECTION_ORDER, items, EXACT_FIRST)) {
     const list = bySection.get(section);
     if (!list || list.length === 0) continue;
     // Snippets: favorites win the tie-breaker so starred entries always sit

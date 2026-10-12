@@ -628,11 +628,24 @@ pub async fn resolve_live_resilient(
 ) -> Result<ResolvedLive> {
     let start = Instant::now();
     let mut attempt = 0u32;
+    let mut budget_secs = budget_secs;
+    let mut asked_live = false;
     loop {
         attempt += 1;
         match resolve_live(channel, oauth_token, quality).await {
             Ok(r) => return Ok(r),
             Err(e) => {
+                // No playlist, and Twitch says no stream either: the channel
+                // is offline, so a short wait covers a stream that is starting
+                // instead of the whole budget. Asked once per start.
+                if retry_delay_secs > 0 && !asked_live && is_playlist_not_found(&e) {
+                    asked_live = true;
+                    let login = channel.to_lowercase();
+                    match crate::services::twitch_service::TwitchService::get_live_public(&[], &[login]).await {
+                        Ok(rows) => budget_secs = retry_budget_when_offline(budget_secs, !rows.is_empty()),
+                        Err(err) => debug!("[Resolver] {} live check failed ({}); keeping the full retry budget", channel, err),
+                    }
+                }
                 let elapsed = start.elapsed().as_secs() as u32;
                 // Stop if retries are disabled, or sleeping again would exceed
                 // the budget.
@@ -647,6 +660,25 @@ pub async fn resolve_live_resilient(
                 tokio::time::sleep(Duration::from_secs(retry_delay_secs as u64)).await;
             }
         }
+    }
+}
+
+/// Seconds a start keeps retrying a channel Twitch says is offline: enough for
+/// a stream that is just starting to publish its playlist, far short of the
+/// full budget an offline channel used to wait out.
+pub const OFFLINE_RETRY_BUDGET_SECS: u32 = 8;
+
+/// The usher answer for a channel with no playlist (offline, or not started).
+fn is_playlist_not_found(e: &anyhow::Error) -> bool {
+    format!("{e:#}").contains("usher returned 404")
+}
+
+/// The retry budget once Twitch has said whether the channel is live.
+pub fn retry_budget_when_offline(budget_secs: u32, live: bool) -> u32 {
+    if live {
+        budget_secs
+    } else {
+        budget_secs.min(OFFLINE_RETRY_BUDGET_SECS)
     }
 }
 
@@ -1103,6 +1135,21 @@ https://euc11.playlist.ttvnw.net/160.m3u8\n";
         assert!(names.iter().any(|n| n == "best"));
         assert!(names.iter().any(|n| n == "worst"));
         assert!(names.iter().any(|n| n == "audio_only"));
+    }
+
+    #[test]
+    fn an_offline_channel_gets_a_short_retry_budget() {
+        // No playlist and no stream: a few seconds, not the whole minute.
+        assert_eq!(retry_budget_when_offline(60, false), OFFLINE_RETRY_BUDGET_SECS);
+        // Live per Twitch (the playlist is late): the full budget stays.
+        assert_eq!(retry_budget_when_offline(60, true), 60);
+        // A budget already shorter is never raised.
+        assert_eq!(retry_budget_when_offline(5, false), 5);
+        // Only usher's "no playlist" answer asks Twitch whether it is live.
+        assert!(is_playlist_not_found(&anyhow!("usher returned 404 Not Found")));
+        assert!(is_playlist_not_found(&anyhow!("usher returned 404 Not Found").context("resolve")));
+        assert!(!is_playlist_not_found(&anyhow!("usher returned 403 Forbidden")));
+        assert!(!is_playlist_not_found(&anyhow!("GQL request failed")));
     }
 
     // --- Screen-size cap (mobile) -----------------------------------------

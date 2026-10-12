@@ -79,6 +79,10 @@ export interface PaletteItem {
   initial?: string;
   /** Searchable text beyond title/subtitle. */
   keywords?: string;
+  /** Names that are this row exactly (a channel's login and display name).
+   *  A query equal to one ranks the row with an exact title match, and its
+   *  section first. */
+  exactNames?: string[];
   /** Action to fire when this item is chosen. */
   run: () => void | Promise<void>;
   /** Computed at query time; renderer uses it for ordering within sections. */
@@ -814,7 +818,7 @@ const SETTINGS_CATALOG: SettingsEntry[] = [
   { tab: 'Player', section: 'Streaming', sectionId: 'settings-section-streaming', keywords: 'streaming start timeout retry delay keep trying pause between attempts codecs h265 hevc av1 h264 connection timeout auto retry delay resolve' },
   { tab: 'Player', section: 'Playback', sectionId: 'settings-section-video-player', keywords: 'playback video player autoplay play as soon as a stream opens start quality start muted start volume starting volume resume vods continue watching' },
   { tab: 'Player', section: 'Latency & Buffering', sectionId: 'settings-section-latency', keywords: 'latency buffering target latency how close to live live edge gap delay low latency buffer ahead stutter' },
-  { tab: 'Player', section: 'Picture', keywords: 'picture 16:9 window aspect ratio lock keep the window cinema mode letterbox bars black color match theme floating pillarbox ambient glow glow with the stream backdrop' },
+  { tab: 'Player', section: 'Picture', keywords: 'picture 16:9 window aspect ratio lock keep the window cinema mode letterbox bars black color match theme floating pillarbox ambient glow glow with the stream backdrop hide title bar while watching auto-hide top bar hover toolbar edge to edge distraction free' },
   { tab: 'Player', section: 'Audio Boost', sectionId: 'settings-section-audio-boost', keywords: 'audio boost leveling turn on audio boost compressor makeup gain louder volume normalize even out loud quiet clipping threshold ratio knee attack release' },
   { tab: 'Player', section: 'Song Identification', sectionId: 'settings-section-song-id', keywords: 'song identification identify music what song is this shazam recognize now playing track name spotify apple music song.link listen time retries retries when nothing matches capture detection' },
 
@@ -1146,6 +1150,7 @@ function streamToItem(stream: TwitchStream): PaletteItem {
     avatarUrl: stream.profile_image_url || undefined,
     initial: (stream.user_login || stream.user_name || '?').slice(0, 1).toUpperCase(),
     keywords: `${stream.user_login} ${stream.user_name} ${stream.game_name ?? ''}`.toLowerCase(),
+    exactNames: [stream.user_login, stream.user_name],
     twitchUserId: stream.user_id || undefined,
     run: () => useAppStore.getState().startStream(stream.user_login, stream),
   };
@@ -1225,21 +1230,35 @@ export async function searchTwitchChannels(query: string): Promise<PaletteItem[]
     return results.slice(0, 10).map((stream) => {
       const parts: string[] = [];
       if (stream.game_name) parts.push(stream.game_name);
-      if (typeof stream.viewer_count === 'number' && stream.viewer_count > 0) {
+      const hasViewers = typeof stream.viewer_count === 'number' && stream.viewer_count > 0;
+      const live = hasViewers || stream.is_live === true;
+      if (hasViewers) {
         parts.push(`${stream.viewer_count.toLocaleString()} viewers · LIVE`);
       } else {
-        parts.push('Offline');
+        parts.push(live ? 'LIVE' : 'Offline');
       }
       return {
         id: `streamer.${stream.user_id || stream.user_login}`,
         section: 'Streamers' as const,
         title: stream.user_name || stream.user_login,
         subtitle: parts.join(' · '),
-        avatarUrl: stream.thumbnail_url || stream.profile_image_url || undefined,
+        // The profile picture: a live row's thumbnail_url is the stream preview
+        // template ({width}x{height}), which never loads as an avatar.
+        avatarUrl: stream.profile_image_url || stream.thumbnail_url || undefined,
         initial: (stream.user_login || stream.user_name || '?').slice(0, 1).toUpperCase(),
         keywords: `${stream.user_login} ${stream.user_name} ${stream.game_name ?? ''}`.toLowerCase(),
+        exactNames: [stream.user_login, stream.user_name],
         twitchUserId: stream.user_id || undefined,
-        run: () => useAppStore.getState().startStream(stream.user_login, stream),
+        // An offline channel opens its offline room, as it does from Home and
+        // the sidebar; starting a stream there waits out playback retries for
+        // a channel with nothing to play. The room still switches to the
+        // stream if the channel turns out to be live.
+        run: () => {
+          if (live) return useAppStore.getState().startStream(stream.user_login, stream);
+          const store = useAppStore.getState();
+          if (store.isHomeActive) store.toggleHome();
+          return store.startOfflineChat(stream.user_login, stream);
+        },
       };
     });
   } catch (err) {
@@ -1370,38 +1389,8 @@ export function warmupAbout(userId: string, login: string): void {
 
 // ---------- Matcher ---------------------------------------------------------
 
-export function scoreItem(item: PaletteItem, queryLower: string): number {
-  if (!queryLower) return 0;
-
-  // Alias matches win, hard. A user explicitly bound this snippet to this
-  // keystroke; we trust that intent over any title-text fuzz.
-  if (item.alias) {
-    if (item.alias === queryLower) return 1500;
-    if (item.alias.startsWith(queryLower)) return 1200 - (item.alias.length - queryLower.length);
-  }
-
-  const title = item.title.toLowerCase();
-  const subtitle = (item.subtitle ?? '').toLowerCase();
-  const keywords = item.keywords ?? '';
-
-  if (title === queryLower) return 1000;
-  if (title.startsWith(queryLower)) return 700 - (title.length - queryLower.length);
-  const titleIdx = title.indexOf(queryLower);
-  if (titleIdx !== -1) return 500 - titleIdx;
-  if (subtitle.includes(queryLower)) return 300;
-  if (keywords.includes(queryLower)) return 200;
-
-  const haystack = `${title} ${subtitle} ${keywords}`;
-  let lastIdx = -1;
-  let gaps = 0;
-  for (const ch of queryLower) {
-    const nextIdx = haystack.indexOf(ch, lastIdx + 1);
-    if (nextIdx === -1) return -1;
-    if (lastIdx !== -1) gaps += nextIdx - lastIdx - 1;
-    lastIdx = nextIdx;
-  }
-  return 100 - Math.min(gaps, 80);
-}
+// The ranking itself lives in paletteRank.ts (pure, tested there).
+export { scoreItem } from './paletteRank';
 
 // ---------- Recent-commands persistence ------------------------------------
 

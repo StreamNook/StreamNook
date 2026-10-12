@@ -3,8 +3,9 @@
 use crate::services::diagnostic_logger;
 use tauri::command;
 
-/// Set whether diagnostic logging is enabled.
-/// Called from frontend when user changes the error_reporting_enabled setting.
+/// Raise or lower diagnostic logging for this session without saving it.
+/// The saved `error_reporting_enabled` setting is applied by Rust itself, at
+/// boot and when a settings write changes it; no window re-applies it.
 #[command]
 pub fn set_diagnostics_enabled(enabled: bool) {
     diagnostic_logger::set_diagnostics_enabled(enabled);

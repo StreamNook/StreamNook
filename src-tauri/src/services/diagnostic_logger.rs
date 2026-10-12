@@ -78,7 +78,45 @@ pub fn set_diagnostics_enabled(enabled: bool) {
     }
 }
 
+/// The saved "Detailed logging" setting last applied: 0 none yet, 1 off, 2 on.
+static APPLIED_SETTING: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Whether applying the saved setting `enabled` changes anything: true the
+/// first time and whenever the saved value flips, false for every other save.
+fn note_applied_setting(enabled: bool) -> bool {
+    let next = if enabled { 2 } else { 1 };
+    APPLIED_SETTING.swap(next, Ordering::SeqCst) != next
+}
+
+/// Apply the saved "Detailed logging" setting. Rust owns it: applied once at
+/// boot and again only when a settings write changes it, so saving any other
+/// setting, or a second window loading its settings, never resets a level
+/// raised for the session.
+pub fn apply_setting(enabled: bool) {
+    if note_applied_setting(enabled) {
+        set_diagnostics_enabled(enabled);
+    }
+}
+
 /// Check if diagnostics are currently enabled.
 pub fn is_diagnostics_enabled() -> bool {
     DIAGNOSTICS_ENABLED.load(Ordering::SeqCst)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_saved_setting_applies_only_when_it_changes() {
+        // First apply (boot) always lands.
+        assert!(note_applied_setting(false));
+        // Saving any other setting, or another window loading, changes nothing.
+        assert!(!note_applied_setting(false));
+        assert!(!note_applied_setting(false));
+        // Turning it on in Settings applies, once.
+        assert!(note_applied_setting(true));
+        assert!(!note_applied_setting(true));
+        assert!(note_applied_setting(false));
+    }
 }

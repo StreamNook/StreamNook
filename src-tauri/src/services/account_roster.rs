@@ -22,13 +22,15 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 
 use crate::models::user::UserInfo;
+use crate::services::twitch_signin::{self, SignInReason};
 
 /// What a row says about its account.
 #[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum AccountStatus {
     Connected,
-    /// Was signed in until the platform revoked or expired the session.
+    /// Was signed in until the platform revoked or expired the session, or
+    /// until StreamNook needed it granted again (`RosterAccount::reason`).
     Expired,
     NotConnected,
 }
@@ -46,6 +48,9 @@ pub struct RosterAccount {
     /// user id, Kick account id, YouTube `UC…` channel id, TikTok user id).
     /// None is normal: a YouTube account can have no channel.
     pub account_id: Option<String>,
+    /// Why this account has to sign in again, when StreamNook signed it out
+    /// itself. Only Twitch carries one today (`twitch_signin`).
+    pub reason: Option<SignInReason>,
 }
 
 #[derive(Serialize, Clone, PartialEq, Eq, Debug)]
@@ -86,6 +91,11 @@ fn static_id(provider: &str) -> Option<&'static str> {
         "tiktok" => Some("tiktok"),
         _ => None,
     }
+}
+
+/// The primary Twitch account's user id, when it is known.
+pub fn twitch_user_id() -> Option<String> {
+    TWITCH_IDENTITY.lock().ok().and_then(|c| c.as_ref().map(|u| u.id.clone()))
 }
 
 /// Record (or clear) who the primary Twitch account is.
@@ -142,6 +152,7 @@ fn empty(id: &'static str, status: AccountStatus) -> RosterAccount {
         handle: None,
         avatar_url: None,
         account_id: None,
+        reason: None,
     }
 }
 
@@ -187,11 +198,25 @@ async fn platform_row(id: &'static str) -> RosterAccount {
         handle,
         avatar_url,
         account_id,
+        reason: None,
     }
 }
 
 fn twitch_row() -> RosterAccount {
     let identity = TWITCH_IDENTITY.lock().ok().and_then(|c| c.clone());
+    twitch_row_from(identity, twitch_signin::current())
+}
+
+/// A pending sign-in reason wins over a cached identity: the reason is only
+/// set once the token is gone, and a profile read that was already in flight
+/// can still land after that.
+fn twitch_row_from(identity: Option<UserInfo>, reason: Option<SignInReason>) -> RosterAccount {
+    if let Some(reason) = reason {
+        return RosterAccount {
+            reason: Some(reason),
+            ..empty("twitch", AccountStatus::Expired)
+        };
+    }
     match identity {
         Some(user) => RosterAccount {
             id: "twitch",
@@ -200,6 +225,7 @@ fn twitch_row() -> RosterAccount {
             handle: Some(user.login),
             avatar_url: user.profile_image_url,
             account_id: Some(user.id),
+            reason: None,
         },
         None => empty("twitch", AccountStatus::NotConnected),
     }
@@ -279,5 +305,49 @@ mod tests {
     fn status_serializes_snake_case() {
         let json = serde_json::to_string(&AccountStatus::NotConnected).unwrap();
         assert_eq!(json, "\"not_connected\"");
+    }
+
+    fn user() -> UserInfo {
+        UserInfo {
+            id: "1".into(),
+            login: "viewer".into(),
+            display_name: "Viewer".into(),
+            email: None,
+            profile_image_url: Some("https://example.invalid/a.png".into()),
+            broadcaster_type: None,
+        }
+    }
+
+    #[test]
+    fn twitch_row_says_why_a_sign_in_is_owed() {
+        let owed = twitch_row_from(None, Some(SignInReason::NewPermissions));
+        assert_eq!(owed.status, AccountStatus::Expired);
+        assert_eq!(owed.reason, Some(SignInReason::NewPermissions));
+        assert_eq!(owed.name, None);
+
+        let json = serde_json::to_value(&owed).unwrap();
+        assert_eq!(json["status"], "expired");
+        assert_eq!(json["reason"], "new_permissions");
+    }
+
+    #[test]
+    fn a_stale_identity_never_hides_the_reason() {
+        let row = twitch_row_from(Some(user()), Some(SignInReason::NewPermissions));
+        assert_eq!(row.status, AccountStatus::Expired);
+        assert_eq!(row.reason, Some(SignInReason::NewPermissions));
+        assert_eq!(row.avatar_url, None);
+    }
+
+    #[test]
+    fn twitch_row_without_a_reason_is_as_before() {
+        let signed_in = twitch_row_from(Some(user()), None);
+        assert_eq!(signed_in.status, AccountStatus::Connected);
+        assert_eq!(signed_in.reason, None);
+        assert_eq!(signed_in.handle.as_deref(), Some("viewer"));
+
+        let signed_out = twitch_row_from(None, None);
+        assert_eq!(signed_out.status, AccountStatus::NotConnected);
+        assert_eq!(signed_out.reason, None);
+        assert_eq!(serde_json::to_value(&signed_out).unwrap()["reason"], serde_json::Value::Null);
     }
 }
