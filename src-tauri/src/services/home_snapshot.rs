@@ -201,6 +201,8 @@ pub struct ContinueWatchingItem {
     pub partner: bool,
     /// Category of the broadcast; empty until the hydrate has seen it.
     pub game_name: String,
+    /// The channel's Twitch user id; empty until the hydrate has seen it.
+    pub channel_id: String,
 }
 
 /// One changed section, as emitted on `EVENT`.
@@ -976,6 +978,7 @@ async fn refresh_continue_watching(inner: &Inner) {
                 profile_image_url: p.profile_image_url,
                 partner: p.partner,
                 game_name: p.game_name,
+                channel_id: p.channel_id,
             })
             .collect()
     } else {
@@ -1002,12 +1005,12 @@ async fn hydrate_continue_watching(inner: &Inner) {
     let (ids, missing_avatar) = {
         let s = inner.snap.read().await;
         let ids: Vec<String> = s.continue_watching.iter().map(|i| i.video_id.clone()).collect();
-        // Avatar or category still blank: the store predates the hydrate that
-        // fills them, or the VOD was recorded since the last one.
+        // Avatar, category or channel id still blank: the store predates the
+        // hydrate that fills them, or the VOD was recorded since the last one.
         let missing = s
             .continue_watching
             .iter()
-            .any(|i| i.profile_image_url.is_empty() || i.game_name.is_empty());
+            .any(|i| i.profile_image_url.is_empty() || i.game_name.is_empty() || i.channel_id.is_empty());
         (ids, missing)
     };
     if ids.is_empty() {

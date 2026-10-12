@@ -4,9 +4,12 @@ import { ArrowUpRight } from 'lucide-react';
 import type { TwitchStream } from '../../types';
 import { resolveAvatar, DEFAULT_AVATAR } from '../multi-nook/channelSearch';
 import { Logger } from '../../utils/logger';
+import { SevenTvAvatar } from '../SevenTvAvatar';
 
 interface Resolved {
   login: string;
+  /** Twitch user id, the channel owner's 7TV cosmetics id. */
+  userId?: string;
   displayName: string;
   avatarUrl?: string;
   isLive: boolean;
@@ -41,6 +44,7 @@ async function resolveChannel(login: string): Promise<Resolved | null> {
     }
     const resolved: Resolved = {
       login: hit.user_login || login,
+      userId: hit.user_id || undefined,
       displayName: hit.user_name || login,
       avatarUrl: resolveAvatar(hit.profile_image_url, hit.thumbnail_url),
       isLive: !!live,
@@ -89,7 +93,10 @@ export const BadgeChannelCard = ({
       className="group flex items-center gap-3 w-full text-left p-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.06] transition-colors"
     >
       <div className="relative shrink-0">
-        <img
+        <SevenTvAvatar
+          cosmeticsId={data.userId}
+          px={46}
+          motion="hover"
           src={data.avatarUrl || DEFAULT_AVATAR}
           alt=""
           onError={(e) => {

@@ -10,6 +10,7 @@ import { Logger } from '../utils/logger';
 import { playNotificationSound as playGatedNotificationSound } from '../utils/notificationSound';
 import { liveActivityText } from '../utils/liveActivity';
 import { IS_MOBILE } from '../utils/platform';
+import { SevenTvAvatar } from './SevenTvAvatar';
 interface LiveNotification {
   streamer_name: string;
   streamer_login: string;
@@ -19,6 +20,8 @@ interface LiveNotification {
   stream_title?: string;
   stream_url: string;
   is_test?: boolean;
+  /** The streamer's cosmetics id, for their 7TV picture. */
+  seventv_id?: string | null;
 }
 
 // Component to render stream title with Apple-style emojis (inline)
@@ -220,7 +223,10 @@ const ToastManager = () => {
           <div className="flex items-start gap-3 w-full max-w-full">
             {/* Streamer Avatar */}
             {notification.streamer_avatar && (
-              <img
+              <SevenTvAvatar
+                cosmeticsId={notification.seventv_id}
+                px={40}
+                motion="animate"
                 src={notification.streamer_avatar}
                 alt={notification.streamer_name}
                 className="w-10 h-10 rounded-full object-cover flex-shrink-0"

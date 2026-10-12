@@ -3451,7 +3451,8 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               message (those adapters stamp it onto the `avatar` tag). */}
           {chatDesign?.show_avatars !== false && (parsed.provider === 'youtube' || parsed.provider === 'tiktok') && parsed.tags.get('avatar') && (
             // A 7TV picture (YouTube chatters can link one) draws as a still
-            // here: a chat row is the densest list there is.
+            // here under On hover, since a chat row is the densest list there
+            // is; Always moves it while the row is on screen.
             <SevenTvAvatar
               cosmeticsId={cosmeticsKey}
               ask={false}
@@ -3480,7 +3481,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               {/* Shared chat channel profile image badge */}
               {isFromSharedChat && channelProfileImage && (
                 <Tooltip content={`Chatting from ${fetchedChannelName || 'shared channel'}`} side="top">
-                  <img
+                  <SevenTvAvatar
+                    cosmeticsId={sourceRoomId}
+                    px={Math.round((chatDesign?.font_size ?? 14) * 1.3)}
                     src={channelProfileImage}
                     alt={`${fetchedChannelName || 'Channel'} profile`}
                     className="sn-chat-badge block cursor-pointer hover:scale-110 transition-transform object-cover"

@@ -7,6 +7,7 @@ import { motion } from 'framer-motion';
 import { Compass, Heart, Package, UserCircle } from 'phosphor-react';
 import { useAppStore } from '../stores/AppStore';
 import { useMobileNavStore, type MobileTab } from './navStore';
+import { SevenTvAvatar } from '../components/SevenTvAvatar';
 
 const TABS: { id: MobileTab; label: string; Icon: typeof Heart }[] = [
   { id: 'following', label: 'Following', Icon: Heart },
@@ -23,6 +24,7 @@ export const MobileTabBar: React.FC<{
   const activeTab = useMobileNavStore((s) => s.activeTab);
   const setTab = useMobileNavStore((s) => s.setTab);
   const avatarUrl = useAppStore((s) => s.currentUser?.profile_image_url);
+  const userId = useAppStore((s) => s.currentUser?.user_id);
 
   return (
     <nav
@@ -71,7 +73,9 @@ export const MobileTabBar: React.FC<{
                 )}
                 <span className="relative z-10 flex items-center">
                   {isYouWithAvatar ? (
-                    <img
+                    <SevenTvAvatar
+                      cosmeticsId={userId}
+                      px={26}
                       src={avatarUrl}
                       alt=""
                       draggable={false}

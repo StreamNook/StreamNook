@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { isAnimatedPicture, pickSevenTvPictureUrl, sevenTvIdForStream, type SevenTvPicture } from './sevenTvPictures';
+import {
+  DEFAULT_PROFILE_PICTURE_ANIMATION,
+  DEFAULT_PROFILE_PICTURE_SOURCE,
+  isAnimatedPicture,
+  isSevenTvCosmeticsId,
+  profilePictureSource,
+  sevenTvLookupId,
+  pickSevenTvPictureUrl,
+  pictureMovesNow,
+  picturePlan,
+  sevenTvIdForStream,
+  type SevenTvMotion,
+  type SevenTvPicture,
+} from './sevenTvPictures';
 
 // The shapes Rust emits for two real 7TV pictures (seventv_cosmetics_resolver.rs
 // fixtures): an animated upload with `_static` first frames, and a still one.
@@ -35,6 +48,56 @@ describe('sevenTvIdForStream', () => {
   });
 });
 
+describe('profilePictureSource', () => {
+  it('defaults to 7TV, as Rust does, and reads only "twitch" as the platform source', () => {
+    expect(DEFAULT_PROFILE_PICTURE_SOURCE).toBe('seventv');
+    expect(profilePictureSource(undefined)).toBe('seventv');
+    expect(profilePictureSource(null)).toBe('seventv');
+    expect(profilePictureSource('seventv')).toBe('seventv');
+    expect(profilePictureSource('anything else')).toBe('seventv');
+    expect(profilePictureSource('twitch')).toBe('twitch');
+  });
+});
+
+describe('isSevenTvCosmeticsId', () => {
+  // Same table as Rust's only_ids_7tv_can_know_are_looked_up.
+  it('accepts what has_seventv_platform accepts', () => {
+    expect(isSevenTvCosmeticsId('71092938')).toBe(true);
+    expect(isSevenTvCosmeticsId('kick:26298')).toBe(true);
+    expect(isSevenTvCosmeticsId('youtube:UCX6OQ3DkcsbYNE6H8uQQuVA')).toBe(true);
+  });
+
+  it('refuses logins, TikTok, a Kick slug and a YouTube video id', () => {
+    expect(isSevenTvCosmeticsId('xqc')).toBe(false);
+    expect(isSevenTvCosmeticsId('tiktok:123')).toBe(false);
+    expect(isSevenTvCosmeticsId('kick:xqc')).toBe(false);
+    expect(isSevenTvCosmeticsId('youtube:dQw4w9WgXcQ')).toBe(false);
+    expect(isSevenTvCosmeticsId('')).toBe(false);
+    expect(isSevenTvCosmeticsId('123456789012345678901')).toBe(false);
+  });
+});
+
+describe('sevenTvLookupId', () => {
+  it('looks nobody up on the Twitch source', () => {
+    for (const id of ['71092938', 'kick:26298', 'youtube:UCX6OQ3DkcsbYNE6H8uQQuVA']) {
+      expect(sevenTvLookupId('twitch', id)).toBeNull();
+      expect(sevenTvLookupId('twitch', id, false)).toBeNull();
+    }
+  });
+
+  it('looks up ids 7TV can know on the 7TV source, and nothing else', () => {
+    expect(sevenTvLookupId('seventv', '71092938')).toBe('71092938');
+    expect(sevenTvLookupId('seventv', 'kick:26298')).toBe('kick:26298');
+    expect(sevenTvLookupId('seventv', 'tiktok:123')).toBeNull();
+    expect(sevenTvLookupId('seventv', null)).toBeNull();
+    expect(sevenTvLookupId('seventv', undefined)).toBeNull();
+  });
+
+  it('reads a primed id as it is when nothing is asked', () => {
+    expect(sevenTvLookupId('seventv', 'streamnook:sample', false)).toBe('streamnook:sample');
+  });
+});
+
 describe('pickSevenTvPictureUrl', () => {
   it('animates only where the surface may move', () => {
     // Profile card: 80 px at 1x needs 3x (96 px), moving.
@@ -67,5 +130,49 @@ describe('pickSevenTvPictureUrl', () => {
   it('handles a missing scale by taking the next one up', () => {
     const gappy: SevenTvPicture = { id: 'g', still: [{ scale: 1, url: 'a' }, { scale: 3, url: 'c' }], animated: [] };
     expect(pickSevenTvPictureUrl(gappy, { px: 48, animate: false })).toBe('c');
+  });
+});
+
+describe('picturePlan', () => {
+  const surfaces: SevenTvMotion[] = ['animate', 'hover', 'still'];
+
+  it('defaults to Always, so an unset or unknown choice moves every surface', () => {
+    expect(DEFAULT_PROFILE_PICTURE_ANIMATION).toBe('always');
+    for (const surface of surfaces) {
+      expect(picturePlan(undefined, surface)).toBe('moving');
+      expect(picturePlan(null, surface)).toBe('moving');
+      expect(picturePlan('sideways', surface)).toBe('moving');
+      expect(picturePlan('always', surface)).toBe('moving');
+    }
+  });
+
+  it('On hover lets the surface decide', () => {
+    expect(picturePlan('hover', 'animate')).toBe('moving');
+    expect(picturePlan('hover', 'hover')).toBe('hover');
+    expect(picturePlan('hover', 'still')).toBe('still');
+  });
+
+  it('Never draws every surface still', () => {
+    for (const surface of surfaces) expect(picturePlan('never', surface)).toBe('still');
+  });
+});
+
+describe('pictureMovesNow', () => {
+  const shown = { hovered: false, onScreen: true, windowHidden: false };
+
+  it('plays a moving picture only while it is on screen in a shown window', () => {
+    expect(pictureMovesNow('moving', shown)).toBe(true);
+    expect(pictureMovesNow('moving', { ...shown, onScreen: false })).toBe(false);
+    expect(pictureMovesNow('moving', { ...shown, windowHidden: true })).toBe(false);
+  });
+
+  it('plays a hover picture only under the pointer', () => {
+    expect(pictureMovesNow('hover', shown)).toBe(false);
+    expect(pictureMovesNow('hover', { ...shown, hovered: true })).toBe(true);
+    expect(pictureMovesNow('hover', { ...shown, hovered: true, windowHidden: true })).toBe(false);
+  });
+
+  it('never plays a still picture', () => {
+    expect(pictureMovesNow('still', { hovered: true, onScreen: true, windowHidden: false })).toBe(false);
   });
 });

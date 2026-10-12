@@ -355,7 +355,10 @@ const StreamerAboutPanel = memo(({ channelLogin, hideHero, scrollRef, onChannelS
             {!hideHero && (
               <div className="flex items-center gap-3">
                 {aboutData.profile_image_url && (
-                  <img
+                  <SevenTvAvatar
+                    cosmeticsId={sevenTvIdForStream({ provider: 'twitch', user_id: aboutData.user_id })}
+                    px={56}
+                    motion="animate"
                     src={aboutData.profile_image_url}
                     alt={aboutData.display_name || channelLogin}
                     className="w-14 h-14 rounded-full object-cover ring-2 ring-borderSubtle/40 flex-shrink-0"

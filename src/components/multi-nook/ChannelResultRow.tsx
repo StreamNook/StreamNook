@@ -1,6 +1,7 @@
 import React from 'react';
 import { Plus, Users } from 'lucide-react';
-import { ChannelItem, DEFAULT_AVATAR } from './channelSearch';
+import { ChannelItem, DEFAULT_AVATAR, itemSevenTvId } from './channelSearch';
+import { SevenTvAvatar } from '../SevenTvAvatar';
 import { ProviderLogo } from '../ProviderLogo';
 import { Tooltip } from '../ui/Tooltip';
 import { lastLiveLabel } from '../../utils/lastLive';
@@ -38,7 +39,11 @@ export const ChannelResultRow: React.FC<{
       {/* Avatar with accent ring when active */}
       <div className="relative shrink-0">
         {item.avatarUrl ? (
-          <img
+          <SevenTvAvatar
+            cosmeticsId={itemSevenTvId(item)}
+            px={32}
+            motion="hover"
+            hovered={highlighted}
             src={item.avatarUrl}
             alt={item.displayName}
             onError={(e) => {

@@ -14,6 +14,8 @@ import { ChannelResultRow } from './ChannelResultRow';
 import MultiNookPresets from './MultiNookPresets';
 import MultiNookLayoutPicker from './MultiNookLayoutPicker';
 import { alignTiles } from './tileSync';
+import { SevenTvAvatar } from '../SevenTvAvatar';
+import { slotSevenTvId } from './slotSevenTvId';
 
 interface MultiNookToolbarProps {
   isDragging?: boolean;
@@ -581,7 +583,13 @@ const DraggableDockPill: React.FC<{
       >
         <div className="flex items-center gap-1.5 opacity-80 group-hover:opacity-100 transition-opacity">
         {slot.profileImageUrl ? (
-          <img src={slot.profileImageUrl} alt="" className="w-5 h-5 rounded-full object-cover shadow-sm bg-black/20" />
+          <SevenTvAvatar
+            cosmeticsId={slotSevenTvId(slot)}
+            px={20}
+            src={slot.profileImageUrl}
+            alt=""
+            className="w-5 h-5 rounded-full object-cover shadow-sm bg-black/20"
+          />
         ) : (
           <div className="w-2 h-2 ml-2 rounded-full bg-accent animate-pulse"></div>
         )}

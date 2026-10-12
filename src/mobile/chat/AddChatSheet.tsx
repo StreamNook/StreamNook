@@ -19,6 +19,8 @@ import { useFollowsStore } from '../../stores/followsStore';
 import { isTwitchStream, streamKey, streamProvider } from '../../utils/streamProvider';
 import { mergeFollowedLive } from '../followingMerge';
 import { orderSearchResults } from './searchOrder';
+import { SevenTvAvatar } from '../../components/SevenTvAvatar';
+import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 
 /** A Kick slug from a pasted kick.com link or a `kick:slug` / `kick/slug` prefix. */
 function parseKickLink(input: string): string | null {
@@ -172,7 +174,9 @@ export const AddChatSheet: React.FC<{ open: boolean; onClose: () => void }> = ({
               >
                 <div className="relative shrink-0">
                   {avatar ? (
-                    <img
+                    <SevenTvAvatar
+                      cosmeticsId={sevenTvIdForStream(stream)}
+                      px={36}
                       src={avatar}
                       alt=""
                       className="w-9 h-9 rounded-full object-cover"

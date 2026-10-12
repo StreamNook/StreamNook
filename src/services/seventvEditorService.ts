@@ -118,6 +118,8 @@ export interface DirectoryPage {
 
 export interface ChannelEditor {
   editorSeventvId: string;
+  /** The editor's Twitch id when their main connection is Twitch. */
+  twitchId?: string;
   username: string;
   displayName: string;
   avatarUrl?: string;
@@ -445,6 +447,8 @@ export interface EmoteDetail {
   ownerId?: string;
   ownerName?: string;
   ownerAvatarUrl?: string;
+  /** The owner's Twitch id when their main connection is Twitch. */
+  ownerTwitchId?: string;
   /** How many channels currently use this emote (popularity). */
   channelCount?: number;
 }
@@ -456,7 +460,7 @@ export async function getEmoteDetail(emoteId: string, accountId?: string): Promi
       emotes { emote(id: $id) {
         id defaultName tags
         flags { animated defaultZeroWidth nsfw }
-        owner { id mainConnection { platformUsername platformDisplayName platformAvatarUrl } }
+        owner { id mainConnection { platform platformId platformUsername platformDisplayName platformAvatarUrl } }
         channels { totalCount }
       } }
     }
@@ -474,6 +478,7 @@ export async function getEmoteDetail(emoteId: string, accountId?: string): Promi
     ownerId: e.owner?.id,
     ownerName: e.owner?.mainConnection?.platformDisplayName || e.owner?.mainConnection?.platformUsername || undefined,
     ownerAvatarUrl: e.owner?.mainConnection?.platformAvatarUrl || undefined,
+    ownerTwitchId: twitchIdOf(e.owner),
     channelCount: e.channels?.totalCount,
   };
 }
@@ -495,6 +500,7 @@ export async function listEditors(seventvUserId: string, accountId?: string): Pr
   const editors = data?.users?.user?.editors ?? [];
   return editors.map((e: any): ChannelEditor => ({
     editorSeventvId: e.editorId,
+    twitchId: twitchIdOf(e.editor),
     username: e.editor?.mainConnection?.platformUsername || e.editorId,
     displayName: e.editor?.mainConnection?.platformDisplayName || e.editor?.mainConnection?.platformUsername || e.editorId,
     avatarUrl: e.editor?.mainConnection?.platformAvatarUrl || undefined,

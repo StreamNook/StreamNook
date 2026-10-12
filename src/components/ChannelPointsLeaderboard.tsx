@@ -7,6 +7,7 @@ import { useAppStore } from '../stores/AppStore';
 
 import { Logger } from '../utils/logger';
 import { Tooltip } from './ui/Tooltip';
+import { SevenTvAvatar } from './SevenTvAvatar';
 interface ChannelPointsLeaderboardProps {
   onStreamClick?: (channelName: string) => void;
   // Reports the all-followed-channel totals whenever balances update, so a
@@ -232,7 +233,9 @@ const ChannelPointsLeaderboard = ({ onStreamClick, onTotalsChange }: ChannelPoin
               {/* Profile Picture */}
               <div className="relative flex-shrink-0 z-10">
                 {profilePics[balance.channel_name.toLowerCase()] ? (
-                  <img
+                  <SevenTvAvatar
+                    cosmeticsId={balance.channel_id}
+                    px={36}
                     src={profilePics[balance.channel_name.toLowerCase()]}
                     alt={balance.channel_name}
                     className={`w-9 h-9 rounded-full object-cover border ${streamerInfo.isLive ? 'border-green-500' : 'border-borderLight'}`}

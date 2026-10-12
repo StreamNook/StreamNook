@@ -14,6 +14,8 @@ import { useFollowsStore } from '../../stores/followsStore';
 import { ProviderMark } from '../../components/ProviderLogo';
 import { PROVIDERS, type ProviderId } from '../../types/providers';
 import { Logger } from '../../utils/logger';
+import { SevenTvAvatar } from '../../components/SevenTvAvatar';
+import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 
 /** Two-tap confirm that disarms itself, shared by both sign-out buttons. */
 function useArmed(ms = 3000): [boolean, () => boolean] {
@@ -35,10 +37,16 @@ function useArmed(ms = 3000): [boolean, () => boolean] {
 }
 
 /** Avatar with the platform's mark pinned to its corner. */
-const AccountAvatar: React.FC<{ provider: ProviderId; src: string | null | undefined }> = ({ provider, src }) => (
+const AccountAvatar: React.FC<{ provider: ProviderId; src: string | null | undefined; sevenTvId?: string | null }> = ({
+  provider,
+  src,
+  sevenTvId,
+}) => (
   <div className="relative shrink-0">
     {src ? (
-      <img
+      <SevenTvAvatar
+        cosmeticsId={sevenTvId}
+        px={44}
         src={src}
         alt=""
         className="w-11 h-11 rounded-full object-cover"
@@ -121,7 +129,7 @@ export const AccountsCard: React.FC = () => {
     <div className="glass-panel divide-y divide-borderSubtle">
       {/* Twitch */}
       <div className="flex items-center gap-3 p-3.5">
-        <AccountAvatar provider="twitch" src={currentUser?.profile_image_url} />
+        <AccountAvatar provider="twitch" src={currentUser?.profile_image_url} sevenTvId={currentUser?.user_id} />
         <div className="flex-1 min-w-0">
           <div className="text-[15px] font-semibold text-textPrimary truncate">
             {currentUser?.display_name || currentUser?.login || PROVIDERS.twitch.label}
@@ -140,7 +148,11 @@ export const AccountsCard: React.FC = () => {
 
       {/* Kick */}
       <div className="flex items-center gap-3 p-3.5">
-        <AccountAvatar provider="kick" src={kick.connected ? kick.avatarUrl : null} />
+        <AccountAvatar
+          provider="kick"
+          src={kick.connected ? kick.avatarUrl : null}
+          sevenTvId={kick.connected ? sevenTvIdForStream({ provider: 'kick', user_id: kick.id }) : null}
+        />
         <div className="flex-1 min-w-0">
           <div className="text-[15px] font-semibold text-textPrimary truncate">
             {kick.connected ? (kick.name ?? PROVIDERS.kick.label) : PROVIDERS.kick.label}

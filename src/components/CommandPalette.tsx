@@ -39,6 +39,7 @@ import {
   type PaletteSection,
 } from '../utils/commandPaletteSources';
 import { orderSections } from '../utils/paletteRank';
+import { SevenTvAvatar } from './SevenTvAvatar';
 
 // Render order — empty-state-only sections (Now Playing / Jump To / Tips) come
 // right after Recent so the resting-state composition is: what you did last,
@@ -703,10 +704,12 @@ function SectionBlock({ section, activeIndex, onActivate, onPick }: SectionBlock
 function RowAvatar({ item }: { item: PaletteItem }) {
   if (item.avatarUrl) {
     return (
-      <img
+      <SevenTvAvatar
         // Keyed by the address: a picture hidden after a failed load must not
         // stay hidden once the row carries a different one.
         key={item.avatarUrl}
+        cosmeticsId={item.sevenTvId}
+        px={32}
         src={item.avatarUrl}
         alt=""
         className="h-8 w-8 flex-shrink-0 rounded-full bg-surface object-cover mt-0.5"

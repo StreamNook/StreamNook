@@ -7,6 +7,8 @@ import { usePlatformAccountStore } from '../../stores/platformAccountStore';
 import { useFollowsStore } from '../../stores/followsStore';
 import type { PlatformId } from '../../services/platformAccountService';
 import { Tooltip } from '../ui/Tooltip';
+import { SevenTvAvatar } from '../SevenTvAvatar';
+import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 
 /**
  * Kick and YouTube account rows, in the same visual language as the Twitch
@@ -101,7 +103,9 @@ function PlatformRow({ provider }: { provider: PlatformId }) {
           background disc reads as a chip stuck to the photo. */}
       <div className="relative flex-shrink-0">
         {avatarUrl ? (
-          <img
+          <SevenTvAvatar
+            cosmeticsId={connected ? sevenTvIdForStream({ provider, user_id: state.id }) : null}
+            px={36}
             src={avatarUrl}
             alt=""
             className="w-9 h-9 rounded-full object-cover"

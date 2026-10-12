@@ -79,6 +79,7 @@ import {
   toggleStat,
   type ProfileStatKey,
 } from '../../services/profileVisibility';
+import { SevenTvAvatar } from '../SevenTvAvatar';
 
 export interface ChatIdentityCache {
   badges: ChatIdentityBadge[];
@@ -1186,7 +1187,14 @@ const ProfileSettings = () => {
         {tier?.auraClassName && <div className={tier.auraClassName} />}
         <div className="relative w-32 h-32 rounded-full bg-white/[0.04] flex-shrink-0 flex items-center justify-center overflow-hidden ring-1 ring-inset ring-white/10 shadow-[0_6px_20px_rgba(0,0,0,0.45)]">
           {currentUser.profile_image_url ? (
-            <img src={currentUser.profile_image_url} alt="Profile" className="w-full h-full object-cover" />
+            <SevenTvAvatar
+              cosmeticsId={currentUser.user_id}
+              px={128}
+              motion="animate"
+              src={currentUser.profile_image_url}
+              alt="Profile"
+              className="w-full h-full object-cover"
+            />
           ) : (
             <User size={56} className="text-textSecondary" />
           )}

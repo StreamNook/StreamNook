@@ -20,6 +20,7 @@ import {
   type EditableChannel,
 } from '../services/seventvEditorService';
 import ChannelWorkspace from './emotesets/ChannelWorkspace';
+import { SevenTvAvatar } from './SevenTvAvatar';
 
 type WorkspaceTab = 'emotes' | 'sets' | 'editors';
 
@@ -326,7 +327,9 @@ export default function EmoteSetsOverlay() {
 
 function ChannelAvatar({ channel }: { channel: EditableChannel }) {
   return channel.avatarUrl ? (
-    <img
+    <SevenTvAvatar
+      cosmeticsId={channel.twitchId}
+      px={28}
       src={channel.avatarUrl}
       alt=""
       className="w-7 h-7 rounded-full shrink-0 object-cover"

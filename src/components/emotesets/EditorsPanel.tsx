@@ -9,6 +9,7 @@ import {
   listEditors, addEditor, removeEditor, updateEditorPermissions, resolveTwitchUserTo7TV,
   SevenTVSessionExpired, type ChannelEditor, type EditableChannel,
 } from '../../services/seventvEditorService';
+import { SevenTvAvatar } from '../SevenTvAvatar';
 
 interface Props {
   channel: EditableChannel;
@@ -133,7 +134,14 @@ export default function EditorsPanel({ channel }: Props) {
           {editors.map((ed) => (
             <div key={ed.editorSeventvId} className="glass-panel rounded-lg p-3 flex items-center gap-3">
               {ed.avatarUrl ? (
-                <img src={ed.avatarUrl} alt="" className="w-8 h-8 rounded-full object-cover shrink-0" loading="lazy" />
+                <SevenTvAvatar
+                  cosmeticsId={ed.twitchId}
+                  px={32}
+                  src={ed.avatarUrl}
+                  alt=""
+                  className="w-8 h-8 rounded-full object-cover shrink-0"
+                  loading="lazy"
+                />
               ) : (
                 <div className="w-8 h-8 rounded-full bg-glass flex items-center justify-center text-xs text-textSecondary shrink-0">
                   {ed.displayName.slice(0, 1).toUpperCase()}

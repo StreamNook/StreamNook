@@ -6,7 +6,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 import type { ModLogEvent } from '../../types';
 import { openProfilePopup } from '../../utils/openProfilePopup';
 import { colorForAction, highlightContainerStyle, type HighlightStyleKey } from '../../utils/modLogCategories';
-import { useAvatar } from '../../utils/avatarCache';
+import { useTwitchIdentity } from '../../utils/avatarCache';
+import { SevenTvAvatar } from '../SevenTvAvatar';
+import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 import { Tooltip } from '../ui/Tooltip';
 import { usePluginUiRegistry, selectSlot } from '../../plugins-ui/registry';
 import { invoke } from '@tauri-apps/api/core';
@@ -29,12 +31,20 @@ function humanDuration(secs?: number): string | undefined {
 }
 
 // A small round avatar resolved by login, with an initial fallback while it loads
-// (or if the user has none).
-const Avatar: React.FC<{ login?: string; name?: string; size?: number; url?: string }> = ({ login, name, size = 18, url }) => {
+// (or if the user has none). The login lookup also yields the Twitch id, which
+// draws the person's 7TV picture.
+const Avatar: React.FC<{ login?: string; name?: string; size?: number; url?: string; sevenTvId?: string | null }> = ({
+  login,
+  name,
+  size = 18,
+  url,
+  sevenTvId,
+}) => {
   // `url` is an explicit override (e.g. a Kick channel's profile_pic, which can't
   // resolve through the Twitch-login-keyed avatar cache). Falls back to it.
-  const fetched = useAvatar(login);
-  const src = url || fetched;
+  const fetched = useTwitchIdentity(login);
+  const src = url || fetched?.url;
+  const cosmeticsId = sevenTvId ?? fetched?.id ?? null;
   const initial = (name || login || '?').charAt(0).toUpperCase();
   return (
     <span
@@ -42,7 +52,14 @@ const Avatar: React.FC<{ login?: string; name?: string; size?: number; url?: str
       style={{ width: size, height: size, fontSize: Math.round(size * 0.5) }}
     >
       {src ? (
-        <img src={src} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+        <SevenTvAvatar
+          cosmeticsId={cosmeticsId}
+          px={size}
+          src={src}
+          alt=""
+          className="w-full h-full object-cover"
+          referrerPolicy="no-referrer"
+        />
       ) : (
         initial
       )}
@@ -191,7 +208,9 @@ const ModLogRow: React.FC<{
         <div className="mt-1.5 ml-4 flex flex-wrap items-center gap-1.5 text-[12px] text-textSecondary min-w-0">
           {modName && (
             <span className="flex items-center gap-1.5 min-w-0">
-              {log.moderator_login && <Avatar login={log.moderator_login} name={modName} size={16} />}
+              {log.moderator_login && (
+                <Avatar login={log.moderator_login} name={modName} size={16} sevenTvId={log.moderator_id} />
+              )}
               {modClickable ? (
                 <Tooltip content={`View ${modName}'s profile`}>
                   <span
@@ -244,6 +263,11 @@ const ModLogRow: React.FC<{
                 name={channelMeta?.name ?? channelLabel}
                 size={14}
                 url={channelMeta && channelMeta.provider !== 'twitch' ? channelMeta.avatarUrl : undefined}
+                sevenTvId={
+                  channelMeta?.provider === 'youtube'
+                    ? sevenTvIdForStream({ provider: 'youtube', user_id: log.channel })
+                    : undefined
+                }
               />
               <span className="text-[11px] text-textSecondary truncate max-w-[140px]">
                 {channelMeta?.name ?? channelLabel}
@@ -287,6 +311,7 @@ const ModLogColumn: React.FC<{
           name={channel.name}
           size={14}
           url={channel.provider !== 'twitch' ? avatarUrl : undefined}
+          sevenTvId={channel.provider === 'youtube' ? sevenTvIdForStream({ provider: 'youtube', user_id: channel.channel }) : undefined}
         />
         <ProviderLogo provider={channel.provider} size={10} className="flex-shrink-0" />
         <span className="truncate text-[12px] font-medium text-textSecondary">{channel.name}</span>
@@ -560,6 +585,7 @@ export const ModLogsWidget: React.FC<{
                       name={ch.name}
                       size={16}
                       url={ch.provider !== 'twitch' ? providerAvatars[`${ch.provider}:${ch.channel}`] : undefined}
+                      sevenTvId={ch.provider === 'youtube' ? sevenTvIdForStream({ provider: 'youtube', user_id: ch.channel }) : undefined}
                     />
                     <ProviderLogo provider={ch.provider} size={11} className="flex-shrink-0" />
                     <span className="text-[13px] text-textSecondary truncate max-w-[110px]">{ch.name}</span>

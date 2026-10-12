@@ -78,6 +78,93 @@ export function sevenTvIdForStream(stream: { provider?: string | null; user_id?:
 export const isAnimatedPicture = (picture: SevenTvPicture | null | undefined): boolean =>
   !!picture && picture.animated.length > 0;
 
+/**
+ * How much a surface may move by its own nature:
+ * - `animate`: the moving picture (one person, a focal surface: profile card,
+ *   pinned card, channel header);
+ * - `still`: the first frame only (dense lists: chat rows, viewers);
+ * - `hover`: the first frame until the pointer is over it (sidebar, tiles).
+ */
+export type SevenTvMotion = 'animate' | 'still' | 'hover';
+
+/** The viewer's "Profile pictures" choice: the 7TV picture when someone set
+ *  one, or always the platform's own picture. */
+export type ProfilePictureSource = 'seventv' | 'twitch';
+
+/** Rust's CosmeticsSettings default, for every install. */
+export const DEFAULT_PROFILE_PICTURE_SOURCE: ProfilePictureSource = 'seventv';
+
+/** The saved source, read the way Rust reads it: only 'twitch' turns 7TV
+ *  pictures off; unset or anything unknown is the 7TV default. */
+export const profilePictureSource = (setting: string | null | undefined): ProfilePictureSource =>
+  setting === 'twitch' ? 'twitch' : 'seventv';
+
+/** Whether 7TV can know this cosmetics id: a bare Twitch id, `kick:<id>` or
+ *  `youtube:UC...`. Twin of Rust's `has_seventv_platform`, so an id Rust would
+ *  drop (TikTok, a login) is never sent, and never re-asked as a failure. */
+export function isSevenTvCosmeticsId(id: string): boolean {
+  const digits = (s: string) => /^\d{1,20}$/.test(s);
+  if (id.startsWith('kick:')) return digits(id.slice(5));
+  if (id.startsWith('youtube:')) return /^UC[\w-]{22}$/.test(id.slice(8));
+  return digits(id);
+}
+
+/** The id to look a 7TV picture up by under this source: none at all on the
+ *  platform source, so a surface asks 7TV nothing, and none for an id 7TV
+ *  cannot know. With `ask` false nothing is asked, so any id that another
+ *  lookup primed (the settings sample) is read as it is. */
+export function sevenTvLookupId(
+  source: ProfilePictureSource,
+  id: string | null | undefined,
+  ask = true,
+): string | null {
+  if (source !== 'seventv' || !id) return null;
+  return !ask || isSevenTvCosmeticsId(id) ? id : null;
+}
+
+/** The viewer's "Animation" choice for 7TV profile pictures. */
+export type ProfilePictureAnimation = 'always' | 'hover' | 'never';
+
+/** Rust's CosmeticsSettings default, for every install. */
+export const DEFAULT_PROFILE_PICTURE_ANIMATION: ProfilePictureAnimation = 'always';
+
+/** What a picture does on one surface, before hover and visibility:
+ *  `moving`, `hover` (moves while the pointer is over it) or `still`. */
+export type PicturePlan = 'moving' | 'hover' | 'still';
+
+/**
+ * The viewer's setting applied to one surface, and nothing else: neither the
+ * app's Motion setting nor the system's reduce-motion request moves it, so
+ * the choice made here is the one that shows. Always (the default, and the
+ * reading of an unset or unknown value) moves every picture whatever the
+ * surface. On hover lets the surface decide: focal surfaces move, lists move
+ * under the pointer, chat rows stay still. Never draws every picture still.
+ */
+export function picturePlan(
+  setting: ProfilePictureAnimation | string | null | undefined,
+  surface: SevenTvMotion,
+): PicturePlan {
+  if (setting === 'never') return 'still';
+  if (setting !== 'hover') return 'moving';
+  if (surface === 'animate') return 'moving';
+  return surface === 'hover' ? 'hover' : 'still';
+}
+
+/**
+ * Whether the animated rendition is drawn right now. A `moving` picture
+ * pauses (draws its still) while it is off screen or the window is hidden,
+ * so a list of moving pictures only costs what is in view; one in view
+ * always plays at its own frame rate.
+ */
+export function pictureMovesNow(
+  plan: PicturePlan,
+  { hovered, onScreen, windowHidden }: { hovered: boolean; onScreen: boolean; windowHidden: boolean },
+): boolean {
+  if (plan === 'moving') return onScreen && !windowHidden;
+  if (plan === 'hover') return hovered && !windowHidden;
+  return false;
+}
+
 // ---- Per-window memo -------------------------------------------------------------
 
 /** The resolver's USER_TTL: a picture changed on 7TV shows within this. */

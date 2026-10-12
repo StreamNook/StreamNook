@@ -18,6 +18,7 @@ import {
   type SevenTVAccountStatus,
   type StoredAccount,
 } from '../../services/accountService';
+import { SevenTvAvatar } from '../SevenTvAvatar';
 
 const tpKey = (b: { provider: string; id: string }) => `${b.provider}:${b.id}`;
 
@@ -206,7 +207,14 @@ export default function AccountIdentityEditor({
         {/* Header */}
         <div className="flex items-center gap-3">
           {account.avatar_url ? (
-            <img src={account.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover" />
+            <SevenTvAvatar
+              cosmeticsId={account.user_id}
+              px={40}
+              motion="animate"
+              src={account.avatar_url}
+              alt=""
+              className="w-10 h-10 rounded-full object-cover"
+            />
           ) : (
             <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center">
               <User size={18} className="text-textMuted" />

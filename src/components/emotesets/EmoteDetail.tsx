@@ -18,6 +18,7 @@ import {
   SevenTVSessionExpired, SevenTVGraphQLError,
   type EmoteDetail as EmoteDetailData, type ChannelSet, type EditableChannel,
 } from '../../services/seventvEditorService';
+import { SevenTvAvatar } from '../SevenTvAvatar';
 
 export interface DetailContext {
   emoteId: string;
@@ -128,7 +129,14 @@ export default function EmoteDetail({ ctx, canManage, sets, workingSetId, channe
             {data?.ownerName && (
               <div className="flex items-center gap-1.5 mt-1 text-xs text-textSecondary">
                 {data.ownerAvatarUrl && (
-                  <img src={data.ownerAvatarUrl} alt="" className="w-4 h-4 rounded-full object-cover" loading="lazy" />
+                  <SevenTvAvatar
+                    cosmeticsId={data.ownerTwitchId}
+                    px={16}
+                    src={data.ownerAvatarUrl}
+                    alt=""
+                    className="w-4 h-4 rounded-full object-cover"
+                    loading="lazy"
+                  />
                 )}
                 <span>by {data.ownerName}</span>
               </div>

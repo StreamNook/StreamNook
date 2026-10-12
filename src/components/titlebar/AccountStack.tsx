@@ -30,6 +30,13 @@ import { providerLabel } from '../../types/providers';
 import { deckGeometry } from '../../utils/markDeck';
 import { signInReasonText, twitchSignInReason } from '../../utils/twitchSignIn';
 import { Logger } from '../../utils/logger';
+import { SevenTvAvatar } from '../SevenTvAvatar';
+import { sevenTvIdForStream } from '../../services/sevenTvPictures';
+
+/** A roster account's cosmetics id: its `account_id` is the id that
+ *  platform's chat stamps on its messages, the space 7TV keys chatters in. */
+const accountSevenTvId = (a: RosterAccount | undefined): string | null =>
+  a ? sevenTvIdForStream({ provider: a.id, user_id: a.account_id }) : null;
 
 const FLYOUT_WIDTH = 252;
 
@@ -83,6 +90,7 @@ export default function AccountStack() {
   // The picture already on screen before the roster's first read lands, so the
   // face never blinks to a placeholder at boot.
   const fallbackAvatar = useAppStore((s) => (s.isAuthenticated ? s.currentUser?.profile_image_url : null));
+  const fallbackId = useAppStore((s) => (s.isAuthenticated ? s.currentUser?.user_id : null));
 
   const [open, setOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
@@ -183,6 +191,13 @@ export default function AccountStack() {
   // while it says "Sign in again": that is about Twitch, and another
   // platform's face beside it would point at the wrong account.
   const face = signInReason ? null : (avatar ?? connectedMain[0]?.avatar_url ?? null);
+  const faceSevenTvId = signInReason
+    ? null
+    : avatar
+      ? twitch?.status === 'connected'
+        ? accountSevenTvId(twitch)
+        : fallbackId
+      : accountSevenTvId(connectedMain[0]);
 
   const drops = extras.find((a) => a.id === 'twitch_drops');
   const anyExpired = main.some((a) => a.status === 'expired');
@@ -231,7 +246,14 @@ export default function AccountStack() {
         {/* The attention dot rides the picture's corner, clear of the marks. */}
         <span className="relative flex">
           {face ? (
-            <img src={face} alt="" className="h-[20px] w-[20px] rounded-full object-cover" draggable={false} />
+            <SevenTvAvatar
+              cosmeticsId={faceSevenTvId}
+              px={20}
+              src={face}
+              alt=""
+              className="h-[20px] w-[20px] rounded-full object-cover"
+              draggable={false}
+            />
           ) : (
             <User size={20} />
           )}
@@ -292,7 +314,9 @@ export default function AccountStack() {
                     <div key={a.id} role="menuitem" className="flex items-center gap-2.5 px-2.5 py-[6px]">
                       <ProviderMark provider={a.id} size={12} />
                       {connected && a.avatar_url ? (
-                        <img
+                        <SevenTvAvatar
+                          cosmeticsId={accountSevenTvId(a)}
+                          px={18}
                           src={a.avatar_url}
                           alt=""
                           className="h-[18px] w-[18px] flex-shrink-0 rounded-full object-cover"

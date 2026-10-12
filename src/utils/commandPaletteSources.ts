@@ -25,6 +25,7 @@ import { sectionIdFromLabel } from '../components/settings/sectionId';
 import { useChatUserStore } from '../stores/chatUserStore';
 import { useFollowsStore } from '../stores/followsStore';
 import { favoriteIdOf, favoriteMetaOf } from './favorites';
+import { sevenTvIdForStream } from '../services/sevenTvPictures';
 import { useSnippetStore } from '../stores/snippetStore';
 import { WATCHABLE_PROVIDERS, providerLabel, type ProviderId } from '../types/providers';
 import { usePluginUiRegistry } from '../plugins-ui/registry';
@@ -75,6 +76,9 @@ export interface PaletteItem {
   details?: string;
   /** Optional avatar URL (streamer thumbnails). */
   avatarUrl?: string;
+  /** The person's cosmetics id when `avatarUrl` is their picture, so the row
+   *  draws their 7TV picture; never set on a category's box art. */
+  sevenTvId?: string | null;
   /** Optional fallback letter for items without avatars. */
   initial?: string;
   /** Searchable text beyond title/subtitle. */
@@ -1148,6 +1152,7 @@ function streamToItem(stream: TwitchStream): PaletteItem {
     title: stream.user_name || stream.user_login,
     subtitle: subtitleParts.join(' · ') || 'Live',
     avatarUrl: stream.profile_image_url || undefined,
+    sevenTvId: sevenTvIdForStream(stream),
     initial: (stream.user_login || stream.user_name || '?').slice(0, 1).toUpperCase(),
     keywords: `${stream.user_login} ${stream.user_name} ${stream.game_name ?? ''}`.toLowerCase(),
     exactNames: [stream.user_login, stream.user_name],
@@ -1245,6 +1250,7 @@ export async function searchTwitchChannels(query: string): Promise<PaletteItem[]
         // The profile picture: a live row's thumbnail_url is the stream preview
         // template ({width}x{height}), which never loads as an avatar.
         avatarUrl: stream.profile_image_url || stream.thumbnail_url || undefined,
+        sevenTvId: sevenTvIdForStream({ provider: 'twitch', user_id: stream.user_id }),
         initial: (stream.user_login || stream.user_name || '?').slice(0, 1).toUpperCase(),
         keywords: `${stream.user_login} ${stream.user_name} ${stream.game_name ?? ''}`.toLowerCase(),
         exactNames: [stream.user_login, stream.user_name],

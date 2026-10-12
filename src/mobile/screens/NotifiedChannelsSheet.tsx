@@ -17,6 +17,8 @@ import { isChannelMuted, toggleChannelMuted } from '../notifyChannels';
 import { useAppStore } from '../../stores/AppStore';
 import { Logger } from '../../utils/logger';
 import type { TwitchStream } from '../../types';
+import { SevenTvAvatar } from '../../components/SevenTvAvatar';
+import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 
 const PAGE = 100;
 // Enough for anyone's follow list without letting a pathological account spin
@@ -128,7 +130,9 @@ export const NotifiedChannelsSheet: React.FC<{ open: boolean; onClose: () => voi
               return (
                 <div key={c.user_id} className="flex items-center gap-3 p-2.5">
                   {c.profile_image_url ? (
-                    <img
+                    <SevenTvAvatar
+                      cosmeticsId={sevenTvIdForStream(c)}
+                      px={32}
                       src={c.profile_image_url}
                       alt=""
                       className="w-8 h-8 rounded-full shrink-0"

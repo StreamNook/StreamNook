@@ -16,6 +16,8 @@ export interface SocialMediaLink {
 }
 
 export interface ChannelAboutData {
+  /** The channel owner's Twitch user id (their 7TV cosmetics id). */
+  user_id?: string | null;
   display_name: string | null;
   description: string | null;
   profile_image_url: string | null;

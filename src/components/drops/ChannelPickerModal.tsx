@@ -13,6 +13,7 @@ import { X, Radio, Loader2, Users } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
 import { Logger } from '../../utils/logger';
 import type { AllowedChannel, TwitchStream, UserInfo } from '../../types';
+import { SevenTvAvatar } from '../SevenTvAvatar';
 
 export interface PickableChannel {
   login: string;
@@ -269,7 +270,14 @@ function ChannelAvatar({ channel }: { channel: PickableChannel }) {
   if (channel.avatarUrl) {
     return (
       <Tooltip content={channel.displayName} side="top" delay={300}>
-        <img src={channel.avatarUrl} alt={channel.displayName} className="w-8 h-8 rounded-full object-cover border border-borderLight shrink-0" loading="lazy" />
+        <SevenTvAvatar
+          cosmeticsId={channel.userId}
+          px={32}
+          src={channel.avatarUrl}
+          alt={channel.displayName}
+          className="w-8 h-8 rounded-full object-cover border border-borderLight shrink-0"
+          loading="lazy"
+        />
       </Tooltip>
     );
   }

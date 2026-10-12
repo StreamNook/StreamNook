@@ -7,6 +7,7 @@ import AccountIdentityEditor from './AccountIdentityEditor';
 import PlatformAccountRows from './PlatformAccountRows';
 import CredentialStorageNotice from './CredentialStorageNotice';
 import { Tooltip } from '../ui/Tooltip';
+import { SevenTvAvatar } from '../SevenTvAvatar';
 
 /**
  * Manage linked Twitch accounts. Two distinct roles, deliberately kept separate
@@ -94,7 +95,9 @@ export default function LinkedAccountsSection() {
 
   const avatar = (account: StoredAccount) =>
     account.avatar_url ? (
-      <img
+      <SevenTvAvatar
+        cosmeticsId={account.user_id}
+        px={36}
         src={account.avatar_url}
         alt=""
         className="w-9 h-9 rounded-full object-cover flex-shrink-0"

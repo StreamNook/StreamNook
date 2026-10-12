@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Clock, X } from 'lucide-react';
 import { useAppStore } from '../stores/AppStore';
 import { MediaCard } from './MediaCard';
+import { sevenTvIdForStream } from '../services/sevenTvPictures';
 import { formatRemaining, formatVodTime, vodProgressLabel, vodThumbUrl } from '../utils/vodProgress';
 import type { ContinueWatchingItem } from '../types';
 
@@ -136,6 +137,7 @@ function ContinueWatchingCard({ item }: { item: ContinueWatchingItem }) {
       channel={{
         name: item.channel_name,
         avatarUrl: item.profile_image_url || undefined,
+        sevenTvId: sevenTvIdForStream({ user_id: item.channel_id }),
         partner: item.partner,
       }}
       category={item.game_name || undefined}

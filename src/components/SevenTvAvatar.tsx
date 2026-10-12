@@ -8,26 +8,31 @@ import {
   type ImgHTMLAttributes,
 } from 'react';
 import { useAppStore } from '../stores/AppStore';
-import { isAnimatedPicture, pickSevenTvPictureUrl, useSevenTvPicture } from '../services/sevenTvPictures';
+import {
+  isAnimatedPicture,
+  pickSevenTvPictureUrl,
+  pictureMovesNow,
+  picturePlan,
+  type ProfilePictureAnimation,
+  type ProfilePictureSource,
+  type SevenTvMotion,
+} from '../services/sevenTvPictures';
+import { useProfilePicture } from '../hooks/useProfilePicture';
+import { isWindowHidden, onWindowVisibility } from '../utils/windowVisibility';
 
-/**
- * How much a surface may move:
- * - `animate`: the moving picture (one person, a focal surface: profile card,
- *   pinned card, channel header);
- * - `still`: the first frame only (dense lists: chat rows, viewers);
- * - `hover`: the first frame until the pointer is over it (sidebar, tiles).
- */
-export type SevenTvMotion = 'animate' | 'still' | 'hover';
+export type { SevenTvMotion } from '../services/sevenTvPictures';
 
 export interface SevenTvAvatarProps extends Omit<ImgHTMLAttributes<HTMLImageElement>, 'src'> {
   /** The person's cosmetics id: a bare Twitch id, `kick:<id>` or `youtube:UC...`.
    *  Leave it out where the id would be from another key space. */
   cosmeticsId?: string | null;
   /** The platform's picture, drawn until a 7TV one is known, when there is
-   *  none, when the setting is off, and when the 7TV image fails to load. */
+   *  none, on the platform source, and when the 7TV image fails to load. */
   src?: string | null;
   /** The box this fills, in CSS px; picks the smallest sharp rendition. */
   px: number;
+  /** How much this surface moves under the viewer's "On hover" choice.
+   *  Always (the default) and Never override it. */
   motion?: SevenTvMotion;
   /** Hover state owned by a parent row, for `hover` motion. */
   hovered?: boolean;
@@ -39,29 +44,71 @@ export interface SevenTvAvatarProps extends Omit<ImgHTMLAttributes<HTMLImageElem
   /** False where the person's cosmetics are already being resolved (chat
    *  rows): draw what that lookup primed and never ask on its own. */
   ask?: boolean;
+  /** Draw as if the viewer had picked this choice (the settings preview). */
+  animation?: ProfilePictureAnimation;
+  /** Draw as if the viewer had picked this source (the settings preview). */
+  source?: ProfilePictureSource;
 }
 
-const REDUCED_QUERY = '(prefers-reduced-motion: reduce)';
-const reducedMotionQuery = typeof window !== 'undefined' ? window.matchMedia?.(REDUCED_QUERY) : undefined;
-const subscribeReduced = (notify: () => void) => {
-  reducedMotionQuery?.addEventListener?.('change', notify);
-  return () => reducedMotionQuery?.removeEventListener?.('change', notify);
-};
-const osReducesMotion = () => reducedMotionQuery?.matches ?? false;
+const subscribeNothing = () => () => {};
+const neverHidden = () => false;
+
+// One IntersectionObserver for every moving picture in the window, so a list
+// of a hundred costs one observer, not a hundred. A small margin starts the
+// animation just before a picture scrolls in.
+const onScreenListeners = new Map<Element, (onScreen: boolean) => void>();
+let onScreenObserver: IntersectionObserver | null = null;
+
+function watchOnScreen(el: Element, notify: (onScreen: boolean) => void): () => void {
+  if (typeof IntersectionObserver === 'undefined') {
+    notify(true);
+    return () => {};
+  }
+  onScreenObserver ??= new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) onScreenListeners.get(entry.target)?.(entry.isIntersecting);
+    },
+    { rootMargin: '64px' },
+  );
+  onScreenListeners.set(el, notify);
+  onScreenObserver.observe(el);
+  return () => {
+    onScreenObserver?.unobserve(el);
+    onScreenListeners.delete(el);
+  };
+}
 
 /**
  * A person's picture: their 7TV profile picture when they set one and the
- * setting is on, otherwise the platform picture. Always one `<img>`, so the
+ * viewer's source is 7TV, otherwise the platform picture. Always one `<img>`, so the
  * box the caller sized never changes; only its source does.
  */
 export const SevenTvAvatar = forwardRef<HTMLImageElement, SevenTvAvatarProps>(function SevenTvAvatar(
-  { cosmeticsId, src, px, motion = 'still', hovered, hoverScope, ask = true, onError, onMouseEnter, onMouseLeave, ...img },
+  {
+    cosmeticsId,
+    src,
+    px,
+    motion = 'still',
+    hovered,
+    hoverScope,
+    ask = true,
+    animation,
+    source,
+    onError,
+    onMouseEnter,
+    onMouseLeave,
+    ...img
+  },
   ref,
 ) {
-  const enabled = useAppStore((s) => s.settings.cosmetics?.seventv_profile_pictures) ?? true;
-  const motionMode = useAppStore((s) => s.settings.motion_mode) ?? 'full';
-  const osReduced = useSyncExternalStore(subscribeReduced, osReducesMotion);
-  const picture = useSevenTvPicture(enabled ? cosmeticsId : null, ask);
+  const chosen = useAppStore((s) => s.settings.cosmetics?.profile_picture_animation);
+  const picture = useProfilePicture(cosmeticsId, ask, source);
+  const animated = isAnimatedPicture(picture);
+  const plan = picturePlan(animation ?? chosen, motion);
+  // A focal surface (`animate`) is in view when it mounts; a list upgraded to
+  // moving by Always draws its still until the observer says it is in view,
+  // so pictures scrolled out of sight never fetch their animation.
+  const [onScreen, setOnScreen] = useState(motion === 'animate');
   const [ownHover, setOwnHover] = useState(false);
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
@@ -74,19 +121,30 @@ export const SevenTvAvatar = forwardRef<HTMLImageElement, SevenTvAvatarProps>(fu
     [ref],
   );
 
-  const mayMove = motionMode === 'full' && !osReduced;
-  const moving =
-    mayMove && (motion === 'animate' || (motion === 'hover' && (hovered ?? ownHover)));
+  // Only a picture that can move listens to the window, its scroll position
+  // or the pointer; a still one listens to nothing.
+  const tracksVisibility = animated && plan !== 'still';
+  const windowHidden = useSyncExternalStore(
+    tracksVisibility ? onWindowVisibility : subscribeNothing,
+    tracksVisibility ? isWindowHidden : neverHidden,
+  );
+  const tracksOnScreen = animated && plan === 'moving';
+  const tracksHover = animated && plan === 'hover' && hovered === undefined;
+  const tracksScope = tracksHover && !!hoverScope;
+
+  const moving = pictureMovesNow(plan, { hovered: hovered ?? ownHover, onScreen, windowHidden });
   const sevenTvUrl = pickSevenTvPictureUrl(picture, {
     px,
     animate: moving,
     dpr: typeof window !== 'undefined' ? window.devicePixelRatio : 1,
   });
   const useSevenTv = !!sevenTvUrl && sevenTvUrl !== failedUrl;
-  // Nothing to listen for when the picture may not move (motion off or
-  // reduced) or has no motion to show.
-  const tracksHover = mayMove && motion === 'hover' && hovered === undefined && isAnimatedPicture(picture);
-  const tracksScope = tracksHover && !!hoverScope;
+
+  useEffect(() => {
+    const el = imgRef.current;
+    if (!tracksOnScreen || !el) return;
+    return watchOnScreen(el, setOnScreen);
+  }, [tracksOnScreen]);
 
   useEffect(() => {
     if (!tracksScope || !hoverScope) return;

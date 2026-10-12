@@ -4,6 +4,7 @@ import React from 'react';
 import { X, Broadcast } from 'phosphor-react';
 import { useChatTabsStore } from './chatTabsStore';
 import { ProviderMark } from '../../components/ProviderLogo';
+import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 
 /** Fixed so the chat header, which is absolutely positioned over the top of the
  *  chat column, can offset itself by exactly this much and stop covering the
@@ -82,7 +83,10 @@ const ChatTabStripImpl: React.FC = () => {
                   className="flex items-center gap-1.5 pr-1 max-w-[136px]"
                 >
                   {tab.avatar ? (
-                    <img
+                    <SevenTvAvatar
+                      // The tab's id is Twitch's alone; other platforms carry none.
+                      cosmeticsId={tab.provider === 'twitch' ? tab.channelId : null}
+                      px={20}
                       src={tab.avatar}
                       alt=""
                       className="w-5 h-5 rounded-full object-cover shrink-0"

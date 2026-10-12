@@ -174,6 +174,8 @@ struct GqlPanelsData {
 #[derive(Debug, Deserialize)]
 struct GqlPanelsUser {
     #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
     description: Option<String>,
     panels: Option<Vec<GqlPanel>>,
     #[serde(default)]
@@ -256,6 +258,9 @@ pub struct SocialMediaLink {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelAboutData {
+    /// The channel owner's Twitch user id (their 7TV cosmetics id).
+    #[serde(default)]
+    pub user_id: Option<String>,
     pub display_name: Option<String>,
     pub description: Option<String>,
     pub profile_image_url: Option<String>,
@@ -287,6 +292,7 @@ pub async fn get_channel_about_data(channel_login: String) -> Result<ChannelAbou
     let query = r#"
         query ChannelPanels($login: String!) {
             user(login: $login) {
+                id
                 displayName
                 description
                 profileImageURL(width: 300)
@@ -412,6 +418,7 @@ pub async fn get_channel_about_data(channel_login: String) -> Result<ChannelAbou
     );
 
     Ok(ChannelAboutData {
+        user_id: user.id,
         display_name: user.display_name,
         description: user.description,
         profile_image_url: user.profile_image_url,

@@ -44,7 +44,7 @@ import { formatViewerCount } from '../../utils/streamStats';
 import { lastLiveLabel } from '../../utils/lastLive';
 import { isTwitchLogin, parseChannelInput } from '../../utils/parseChannelInput';
 import { streamProvider } from '../../utils/streamProvider';
-import { useChannelSearch, type ChannelItem } from '../multi-nook/channelSearch';
+import { itemSevenTvId, useChannelSearch, type ChannelItem } from '../multi-nook/channelSearch';
 import { PROVIDERS, type ProviderId } from '../../types/providers';
 import { Logger } from '../../utils/logger';
 import { SevenTvAvatar } from '../SevenTvAvatar';
@@ -163,6 +163,7 @@ export function ChatDockSwitcher() {
 
   if (!held) return null;
   const avatar = shown ? shown.avatar_url : stream?.profile_image_url;
+  const avatarSevenTvId = shown ? dockSevenTvId(shown) : stream ? sevenTvIdForStream(stream) : null;
   const total = others.length + (live ? 1 : 0);
 
   return (
@@ -179,7 +180,7 @@ export function ChatDockSwitcher() {
         className="chrome-glaze chrome-glaze--flat chat-header-capsule pointer-events-auto min-w-0 max-w-full"
       >
         <span className="chat-header-pill min-w-0 !pl-0.5 !pr-1.5 text-textPrimary">
-          <Avatar src={avatar} name={name} size={18} live={!shown} />
+          <Avatar src={avatar} name={name} size={18} live={!shown} sevenTvId={avatarSevenTvId} />
           <span data-fit-label className="chat-dock-name max-w-[6.5rem] truncate" style={{ minWidth: nameFloor(name) }}>
             {name}
           </span>
@@ -417,6 +418,7 @@ function ResultRow({
         size={26}
         live={item.isLive}
         provider={showPlatform ? provider : undefined}
+        sevenTvId={itemSevenTvId(item)}
       />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[13px] font-semibold text-textSecondary">{item.displayName || item.login}</span>

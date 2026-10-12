@@ -11,6 +11,7 @@ import { checkForAndroidUpdate, openAndroidUpdate, type AndroidUpdate } from '..
 import { OwnIdentityHeader } from '../profile/OwnIdentityHeader';
 import { SETTINGS_ROWS } from './SettingsScreen';
 import { AccountsCard } from '../profile/AccountsCard';
+import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 
 export const YouScreen: React.FC = () => {
   const currentUser = useAppStore((s) => s.currentUser);
@@ -42,7 +43,10 @@ export const YouScreen: React.FC = () => {
           the avatar off the name it belongs to. */}
       <div className="flex items-start gap-3 px-4 pt-4 pb-3">
         {currentUser?.profile_image_url ? (
-          <img
+          <SevenTvAvatar
+            cosmeticsId={currentUser.user_id}
+            px={56}
+            motion="animate"
             src={currentUser.profile_image_url}
             alt=""
             className="w-14 h-14 rounded-full shrink-0"

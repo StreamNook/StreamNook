@@ -6,6 +6,7 @@ import { useAppStore, clipSourceOf } from '../stores/AppStore';
 import type { TwitchClip, TwitchVideo } from '../types';
 import { GlassSelect } from './ui/GlassSelect';
 import { MediaCard } from './MediaCard';
+import { sevenTvIdForStream } from '../services/sevenTvPictures';
 import { formatCardDate, mediaKindOfVideo, videoDurationLabel, vodThumbUrl, VOD_FALLBACK_THUMB } from '../utils/vodProgress';
 import { Logger } from '../utils/logger';
 
@@ -249,7 +250,7 @@ export default function StreamerMedia({
             </div>
           )
         }
-        channel={{ name: clip.broadcaster_name, avatarUrl: channelAvatarUrl, partner: channelPartner }}
+        channel={{ name: clip.broadcaster_name, avatarUrl: channelAvatarUrl, sevenTvId: sevenTvIdForStream({ user_id: broadcasterId }), partner: channelPartner }}
         trailing={formatCardDate(clip.created_at)}
         category={category}
         note={`Clipped by ${clip.creator_name}`}
@@ -269,7 +270,7 @@ export default function StreamerMedia({
       progress={video.progress}
       lengthSeconds={video.length_seconds}
       status={video.status}
-      channel={{ name: video.user_name, avatarUrl: channelAvatarUrl, partner: channelPartner }}
+      channel={{ name: video.user_name, avatarUrl: channelAvatarUrl, sevenTvId: sevenTvIdForStream({ user_id: broadcasterId }), partner: channelPartner }}
       trailing={formatCardDate(video.created_at)}
       category={video.game_name}
       onClick={() => {

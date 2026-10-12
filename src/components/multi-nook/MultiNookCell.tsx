@@ -42,6 +42,8 @@ import {
 import { injectPlyrControl } from '../../utils/plyrControls';
 import { AudioBoostControls } from '../AudioBoostFaders';
 import { canGridProvider, PROVIDER_WATCH, type ProviderId } from '../../types/providers';
+import { SevenTvAvatar } from '../SevenTvAvatar';
+import { slotSevenTvId } from './slotSevenTvId';
 
 interface MultiNookCellProps {
   slot: MultiNookSlot;
@@ -681,7 +683,10 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
       {raid && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/85 backdrop-blur-sm z-30 px-4 text-center">
           {raid.target_image ? (
-            <img
+            <SevenTvAvatar
+              cosmeticsId={raid.target_id}
+              px={56}
+              motion="animate"
               src={raid.target_image}
               alt=""
               className="w-14 h-14 rounded-full object-cover ring-2 ring-accent/60"
@@ -762,7 +767,10 @@ const MultiNookCellInner: React.FC<MultiNookCellProps> = ({ slot, cssOrder, grid
                 avatar though — a tile can be offline. */}
             <div className={`flex items-center min-w-0 ${full ? 'gap-2 mt-1' : 'gap-1.5 mt-0.5'}`}>
               {mini ? null : profileImageUrl ? (
-                <img
+                <SevenTvAvatar
+                  cosmeticsId={slotSevenTvId(slot)}
+                  px={full ? 28 : 20}
+                  motion="hover"
                   src={profileImageUrl}
                   alt=""
                   draggable={false}

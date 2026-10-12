@@ -4267,7 +4267,7 @@ impl TwitchService {
                         "v{i}: video(id: $i{i}) {{ id title lengthSeconds status \
                          previewThumbnailURL(width: 440, height: 248) \
                          game {{ displayName }} \
-                         owner {{ displayName profileImageURL(width: 70) roles {{ isPartner }} }} }}"
+                         owner {{ id displayName profileImageURL(width: 70) roles {{ isPartner }} }} }}"
                     )
                 })
                 .collect::<Vec<_>>()
@@ -4328,6 +4328,11 @@ impl TwitchService {
                             partner: v.pointer("/owner/roles/isPartner").and_then(|b| b.as_bool()),
                             game_name: v
                                 .pointer("/game/displayName")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or_default()
+                                .to_string(),
+                            channel_id: v
+                                .pointer("/owner/id")
                                 .and_then(|n| n.as_str())
                                 .unwrap_or_default()
                                 .to_string(),

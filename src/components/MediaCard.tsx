@@ -5,6 +5,7 @@ import { VodProgressBar, VodRecordingBadge } from './VodCardMarks';
 import { VOD_FALLBACK_THUMB, type MediaKind } from '../utils/vodProgress';
 import { glowThumbProps } from '../utils/mediaGlow';
 import type { VodProgressSummary } from '../types';
+import { SevenTvAvatar } from './SevenTvAvatar';
 
 /**
  * The one card every clip and VOD in the app is drawn with: Home's Continue
@@ -32,6 +33,9 @@ export interface MediaCardChannel {
   /** Absent means "not known yet": the row shows no placeholder, a grey
    *  monogram would only be noise next to cards that have the real one. */
   avatarUrl?: string;
+  /** The channel's 7TV cosmetics id, so its 7TV picture can stand in for
+   *  `avatarUrl`. */
+  sevenTvId?: string | null;
   /** Twitch partner: draws the verified mark after the name. */
   partner?: boolean;
 }
@@ -105,6 +109,8 @@ export function MediaCard({
       style={style}
       onClick={onClick}
       onKeyDown={onKeyDown}
+      // Hovering anywhere on the card moves the channel's 7TV picture.
+      data-avatar-hover=""
     >
       <div className="relative aspect-video overflow-hidden bg-black/30">
         <img
@@ -168,7 +174,11 @@ export function MediaCard({
         </h3>
         <div className="mt-1 flex items-center gap-1.5 text-[12px] text-textSecondary">
           {channel.avatarUrl && (
-            <img
+            <SevenTvAvatar
+              cosmeticsId={channel.sevenTvId}
+              px={16}
+              motion="hover"
+              hoverScope="[data-avatar-hover]"
               loading="lazy"
               src={channel.avatarUrl}
               alt=""

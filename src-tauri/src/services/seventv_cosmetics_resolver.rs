@@ -460,6 +460,13 @@ fn remember_picture(picture_id: &str, picture: Option<ProfilePicture>) {
     }
 }
 
+/// Whether the viewer shows 7TV profile pictures (Settings > Chat > Profile
+/// pictures). On the platform source no picture image is ever looked up; the
+/// worn picture id still rides the cosmetics query, which costs nothing extra.
+fn pictures_shown() -> bool {
+    crate::services::providers::setting(|s| s.cosmetics.shows_seventv_pictures()).unwrap_or(true)
+}
+
 /// Emitted with `{ "<cosmetics id>": ProfilePicture }` when worn pictures'
 /// images arrive after the cosmetics answer that named them, so every window
 /// can draw them without asking again.
@@ -601,6 +608,8 @@ static USERS: Mutex<Option<LruCache<String, Cached>>> = Mutex::new(None);
 /// here; one whose images never arrived keeps the entry only `HARD_FAIL_TTL`,
 /// so the next resolve asks again.
 fn cached(id: &str, chatter: bool) -> Option<(CosmeticsLookup, bool)> {
+    // Read before the cache lock: a picture nobody shows is never missing.
+    let pictures_wanted = pictures_shown();
     let mut guard = USERS.lock().ok()?;
     let entry = guard.as_mut()?.get_mut(id)?;
     let mut picture_missing = false;
@@ -608,7 +617,7 @@ fn cached(id: &str, chatter: bool) -> Option<(CosmeticsLookup, bool)> {
         if let Some(picture_id) = entry.data.picture_id.as_deref() {
             match known_picture(picture_id) {
                 Some(known) => entry.data.profile_picture = known,
-                None => picture_missing = true,
+                None => picture_missing = pictures_wanted,
             }
         }
     }
@@ -740,7 +749,7 @@ async fn drain() {
             }
         }
     }
-    if !unfilled_pictures.is_empty() {
+    if !unfilled_pictures.is_empty() && pictures_shown() {
         tauri::async_runtime::spawn(fill_pictures(unfilled_pictures));
     }
 }
@@ -901,8 +910,12 @@ pub fn cosmetics_id(provider: &str, user_id: &str) -> Option<String> {
 /// These are streamers on a list, not chatters, so no personal emote set is
 /// fetched for them. A worn picture whose images are not known yet is waited
 /// on here (joining the lookup a chat batch may have started), because a list
-/// surface keeps whatever this answers.
+/// surface keeps whatever this answers. Answers nothing, and asks 7TV
+/// nothing, while the viewer shows platform pictures.
 pub async fn profile_pictures(ids: Vec<String>) -> HashMap<String, Option<ProfilePicture>> {
+    if !pictures_shown() {
+        return HashMap::new();
+    }
     let mut ids: Vec<String> = ids.into_iter().filter(|id| has_seventv_platform(id)).collect();
     ids.sort_unstable();
     ids.dedup();

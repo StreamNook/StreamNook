@@ -29,6 +29,8 @@ import { ChannelResultRow } from './ChannelResultRow';
 import { Logger } from '../../utils/logger';
 import { makeKey } from '../../utils/providerKey';
 import { GRID_PICKER_PROVIDERS, gridRefusal } from '../../types/providers';
+import { SevenTvAvatar } from '../SevenTvAvatar';
+import { slotSevenTvId } from './slotSevenTvId';
 
 const MAX_NAME_LEN = 40;
 
@@ -375,8 +377,10 @@ const PresetRow: React.FC<{
               </div>
             ) : (
               stack.map((ch, i) => (
-                <img
+                <SevenTvAvatar
                   key={ch.channelLogin + i}
+                  cosmeticsId={slotSevenTvId(ch)}
+                  px={28}
                   src={ch.profileImageUrl || DEFAULT_AVATAR}
                   alt=""
                   onError={(e) => {
@@ -807,7 +811,10 @@ const PresetEditorView: React.FC<{
                 key={makeKey(ch.provider ?? 'twitch', ch.channelLogin)}
                 className="group flex items-center gap-2.5 rounded-lg px-1.5 py-1.5 hover:bg-white/[0.05] transition-colors"
               >
-                <img
+                <SevenTvAvatar
+                  cosmeticsId={slotSevenTvId(ch)}
+                  px={28}
+                  motion="hover"
                   src={ch.profileImageUrl || DEFAULT_AVATAR}
                   alt=""
                   onError={(e) => {

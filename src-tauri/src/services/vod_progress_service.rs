@@ -78,6 +78,10 @@ pub struct VodProgress {
     /// Category of the broadcast, from the hydrate. Empty until then.
     #[serde(default)]
     pub game_name: String,
+    /// The channel's Twitch user id, from the hydrate, so a card can draw the
+    /// channel's 7TV picture. Empty until then.
+    #[serde(default)]
+    pub channel_id: String,
 }
 
 /// The slice of a `VodProgress` a video card needs, joined onto `TwitchVideo`.
@@ -115,6 +119,8 @@ pub struct VodRefresh {
     /// a mark the store already holds.
     pub partner: Option<bool>,
     pub game_name: String,
+    /// Empty when the owner node was missing.
+    pub channel_id: String,
 }
 
 /// A thumbnail URL Twitch serves while a VOD is still being processed. Storing
@@ -354,6 +360,7 @@ pub fn record(
                 profile_image_url: String::new(),
                 partner: false,
                 game_name: String::new(),
+                channel_id: String::new(),
             });
         entry.position_secs = position_secs;
         // A recording VOD grows; never let a shorter stale hint replace a
@@ -491,6 +498,10 @@ pub fn reconcile(updates: &[VodRefresh], gone: &[String]) -> bool {
             }
             if !up.profile_image_url.is_empty() && entry.profile_image_url != up.profile_image_url {
                 entry.profile_image_url = up.profile_image_url.clone();
+                changed = true;
+            }
+            if !up.channel_id.is_empty() && entry.channel_id != up.channel_id {
+                entry.channel_id = up.channel_id.clone();
                 changed = true;
             }
             if let Some(partner) = up.partner {
@@ -671,6 +682,7 @@ mod tests {
             profile_image_url: String::new(),
             partner: false,
             game_name: String::new(),
+            channel_id: String::new(),
         }
     }
 

@@ -237,7 +237,7 @@ const renderPreviewIcon = (n: DynamicIslandNotification): React.ReactNode => {
             // faces on the trigger and the pop-up preview, so the two can never
             // disagree with the list they came from.
             if (d.avatar_url) {
-                return <img src={d.avatar_url} alt="" className="w-4 h-4 rounded-full object-cover flex-shrink-0" />;
+                return <SevenTvAvatar cosmeticsId={d.avatar_seventv_id} px={16} src={d.avatar_url} alt="" className="w-4 h-4 rounded-full object-cover flex-shrink-0" />;
             }
             if (d.source === 'plugin') return <PuzzlePiece size={11} className="text-accent flex-shrink-0" />;
             if (d.level === 'success') return <CheckCircle2 size={11} className="text-green-400 flex-shrink-0" />;
@@ -540,17 +540,18 @@ const DynamicIsland = () => {
             text: string;
             level?: SystemNotificationData['level'];
             avatarUrl?: string;
+            avatarSevenTvId?: string;
             source?: SystemNotificationData['source'];
         }>('action-notification', (event) => {
             if (!notificationsEnabled || !useDynamicIsland) return;
-            const { text, level, avatarUrl, source } = event.payload;
+            const { text, level, avatarUrl, avatarSevenTvId, source } = event.payload;
             if (!text) return;
             addNotification({
                 id: `system-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                 type: 'system',
                 timestamp: Date.now(),
                 read: false,
-                data: { title: '', message: text, level, avatar_url: avatarUrl, source } as SystemNotificationData,
+                data: { title: '', message: text, level, avatar_url: avatarUrl, avatar_seventv_id: avatarSevenTvId, source } as SystemNotificationData,
             });
         });
         return () => { unlisten.then((fn) => fn()); };
@@ -2237,7 +2238,10 @@ const DynamicIsland = () => {
                                                                         <div className="relative flex-shrink-0">
                                                                             {d.avatar_url ? (
                                                                                 <>
-                                                                                    <img
+                                                                                    <SevenTvAvatar
+                                                                                        cosmeticsId={d.avatar_seventv_id}
+                                                                                        px={34}
+                                                                                        motion="hover"
                                                                                         src={d.avatar_url}
                                                                                         alt=""
                                                                                         className="w-[34px] h-[34px] rounded-full object-cover"

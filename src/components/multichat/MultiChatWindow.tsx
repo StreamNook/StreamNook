@@ -28,7 +28,9 @@ import { ActivityFeedWidget } from '../activity/ActivityFeedWidget';
 import { startActivityNormalizer, stopActivityNormalizer } from '../../services/activityNormalizer';
 import { useActivityStore } from '../../stores/activityStore';
 import { makeKey, parseKey } from '../../utils/providerKey';
-import { offlineSuggestions } from '../multi-nook/channelSearch';
+import { itemSevenTvId, offlineSuggestions } from '../multi-nook/channelSearch';
+import { SevenTvAvatar } from '../SevenTvAvatar';
+import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 import { lastLiveLabel } from '../../utils/lastLive';
 import {
   isYouTubeChannelId,
@@ -2127,7 +2129,13 @@ export default function MultiChatWindow() {
                   style={{ background: 'rgba(255,255,255,0.05)', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.07)' }}
                 >
                   {modChannelEntry && avatarMap[modChannelEntry.channel] && (
-                    <img src={avatarMap[modChannelEntry.channel]} alt="" className="h-4 w-4 shrink-0 rounded-full object-cover" />
+                    <SevenTvAvatar
+                      cosmeticsId={modChannelEntry.channelId}
+                      px={16}
+                      src={avatarMap[modChannelEntry.channel]}
+                      alt=""
+                      className="h-4 w-4 shrink-0 rounded-full object-cover"
+                    />
                   )}
                   <span className="max-w-[140px] truncate">{modChannelEntry?.channelName ?? 'Select channel'}</span>
                   <svg
@@ -2162,7 +2170,14 @@ export default function MultiChatWindow() {
                             className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-surface-hover ${active ? 'text-accent' : 'text-textPrimary'}`}
                           >
                             {avatarMap[c.channel] ? (
-                              <img src={avatarMap[c.channel]} alt="" className="h-5 w-5 shrink-0 rounded-full object-cover" />
+                              <SevenTvAvatar
+                                cosmeticsId={c.channelId}
+                                px={20}
+                                motion="hover"
+                                src={avatarMap[c.channel]}
+                                alt=""
+                                className="h-5 w-5 shrink-0 rounded-full object-cover"
+                              />
                             ) : (
                               <span className="h-5 w-5 shrink-0 rounded-full bg-white/10" />
                             )}
@@ -3829,7 +3844,15 @@ function AddChannelPanel({
                 className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left transition-colors hover:bg-surface-hover"
               >
                 {item.avatarUrl ? (
-                  <img src={item.avatarUrl} alt="" draggable={false} className="h-9 w-9 shrink-0 rounded-full object-cover opacity-80" />
+                  <SevenTvAvatar
+                    cosmeticsId={itemSevenTvId(item)}
+                    px={36}
+                    motion="hover"
+                    src={item.avatarUrl}
+                    alt=""
+                    draggable={false}
+                    className="h-9 w-9 shrink-0 rounded-full object-cover opacity-80"
+                  />
                 ) : (
                   <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-surface text-xs font-bold text-textMuted">
                     {item.displayName.charAt(0).toUpperCase()}
@@ -3891,7 +3914,10 @@ function StreamerAvatar({
 }) {
   if (profileImageUrl) {
     return (
-      <img
+      <SevenTvAvatar
+        cosmeticsId={sevenTvIdForStream(stream)}
+        px={36}
+        motion="hover"
         src={profileImageUrl}
         alt=""
         className="h-9 w-9 rounded-full bg-surface object-cover"

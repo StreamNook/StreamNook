@@ -8,6 +8,7 @@ import { Logger } from '../../utils/logger';
 import { makeKey, parseKey } from '../../utils/providerKey';
 import { streamProvider } from '../../utils/streamProvider';
 import { PROVIDER_WATCH, type ProviderId } from '../../types/providers';
+import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 
 /** Normalized shape so live follows and search results from any platform render
  *  through one row. `provider` absent means Twitch, matching the convention on
@@ -30,6 +31,13 @@ export interface ChannelItem {
  *  read the other silently stops excluding anything. */
 export function itemKey(it: Pick<ChannelItem, 'provider' | 'login'>): string {
   return makeKey(it.provider ?? 'twitch', it.login);
+}
+
+/** The cosmetics id a picker row's 7TV picture is looked up by, or null where
+ *  the row's id is not the account id 7TV keys on (a Kick favourite carries
+ *  its slug; a row without a user id carries its login). */
+export function itemSevenTvId(it: Pick<ChannelItem, 'provider' | 'id'>): string | null {
+  return sevenTvIdForStream({ provider: it.provider ?? 'twitch', user_id: it.id });
 }
 
 export const DEFAULT_AVATAR =

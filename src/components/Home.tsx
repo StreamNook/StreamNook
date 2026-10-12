@@ -2057,6 +2057,9 @@ const Home = () => {
                                                                             <SevenTvAvatar
                                                                                 cosmeticsId={sevenTvIdForStream(stream)}
                                                                                 px={16}
+                                                                                motion="hover"
+                                                                                // Hovering anywhere on the card moves it.
+                                                                                hoverScope="[data-avatar-key]"
                                                                                 loading="lazy"
                                                                                 src={stream.profile_image_url || cardAvatars[streamKey(stream)]}
                                                                                 alt=""
@@ -3535,6 +3538,9 @@ const Home = () => {
                                                                                 <SevenTvAvatar
                                                                                     cosmeticsId={sevenTvIdForStream(stream)}
                                                                                     px={16}
+                                                                                    motion="hover"
+                                                                                    // Hovering anywhere on the card moves it.
+                                                                                    hoverScope="[data-avatar-key]"
                                                                                     loading="lazy"
                                                                                     src={stream.profile_image_url || cardAvatars[streamKey(stream)]}
                                                                                     alt=""
@@ -4061,6 +4067,7 @@ const Home = () => {
                                                 <button
                                                     key={user.id}
                                                     onClick={() => setProfileModalUser(user)}
+                                                    data-avatar-hover=""
                                                     className="flex items-center gap-3 px-3 py-2 rounded-xl glass-panel hover:bg-white/[0.05] border border-borderSubtle hover:border-accent/40 transition-all text-left shadow-sm group w-[180px] sm:w-[200px]"
                                                 >
                                                     <div className="w-10 h-10 rounded-full bg-glass flex items-center justify-center overflow-hidden ring-1 ring-borderSubtle group-hover:ring-accent/40 flex-shrink-0">
@@ -4069,6 +4076,7 @@ const Home = () => {
                                                                 cosmeticsId={sevenTvIdForStream(user)}
                                                                 px={40}
                                                                 motion="hover"
+                                                                hoverScope="[data-avatar-hover]"
                                                                 src={user.thumbnail_url}
                                                                 alt={user.user_name}
                                                                 className="w-full h-full object-cover"

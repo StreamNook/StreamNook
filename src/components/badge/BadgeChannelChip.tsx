@@ -4,9 +4,12 @@ import type { TwitchStream } from '../../types';
 import { Tooltip } from '../ui/Tooltip';
 import { resolveAvatar, DEFAULT_AVATAR } from '../multi-nook/channelSearch';
 import { Logger } from '../../utils/logger';
+import { SevenTvAvatar } from '../SevenTvAvatar';
 
 interface Resolved {
   login: string;
+  /** Twitch user id, the channel owner's 7TV cosmetics id. */
+  userId?: string;
   displayName: string;
   avatarUrl?: string;
   isLive: boolean;
@@ -25,6 +28,7 @@ async function resolveChannel(login: string): Promise<Resolved | null> {
     const resolved: Resolved | null = hit
       ? {
           login: hit.user_login || login,
+          userId: hit.user_id || undefined,
           displayName: hit.user_name || login,
           avatarUrl: resolveAvatar(hit.profile_image_url, hit.thumbnail_url),
           isLive: !!hit.is_live,
@@ -75,7 +79,9 @@ export const BadgeChannelChip = ({
         style={{ verticalAlign: '-5px' }}
         className="inline-flex items-center gap-1.5 pl-0.5 pr-2 py-0.5 rounded-full bg-white/[0.06] hover:bg-white/[0.10] transition-colors"
       >
-        <img
+        <SevenTvAvatar
+          cosmeticsId={data.userId}
+          px={18}
           src={data.avatarUrl || DEFAULT_AVATAR}
           alt=""
           onError={(e) => {

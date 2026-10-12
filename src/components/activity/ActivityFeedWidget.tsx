@@ -14,6 +14,10 @@ import { Coins, SlidersHorizontal, Check } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { Tooltip } from '../ui/Tooltip';
 import type { ActivityEvent, ActivityKind } from '../../types/activity';
+import { SevenTvAvatar } from '../SevenTvAvatar';
+import { sevenTvIdForStream } from '../../services/sevenTvPictures';
+import { useProfilePictureSource } from '../../hooks/useProfilePicture';
+import { useTwitchIdentity } from '../../utils/avatarCache';
 
 // "combined" = all open sources (each row labeled with its stream); "current" =
 // only the active tab. Blended mode forces combined.
@@ -95,6 +99,12 @@ function persistSourceAvatars(): void {
 function SourceAvatar({ provider, login, color }: { provider: ProviderId; login: string; color: string }) {
   const cacheKey = `${provider}:${login.toLowerCase()}`;
   const [url, setUrl] = useState<string | undefined>(() => sourceAvatarCache.get(cacheKey));
+  // The broadcaster's cosmetics id: a Twitch login resolves to its id (once
+  // per session, and only while 7TV pictures show); a YouTube source is keyed
+  // by its UC id already; a Kick slug is not an id 7TV keys on.
+  const showsSevenTv = useProfilePictureSource() === 'seventv';
+  const twitchId = useTwitchIdentity(provider === 'twitch' && showsSevenTv ? login : null)?.id;
+  const sevenTvId = provider === 'twitch' ? twitchId : sevenTvIdForStream({ provider, user_id: login });
   useEffect(() => {
     if (url || !login) return;
     let active = true;
@@ -132,7 +142,9 @@ function SourceAvatar({ provider, login, color }: { provider: ProviderId; login:
 
   if (url) {
     return (
-      <img
+      <SevenTvAvatar
+        cosmeticsId={sevenTvId}
+        px={16}
         src={url}
         alt=""
         loading="lazy"
@@ -249,7 +261,9 @@ function ActorIdentity({ e }: { e: ActivityEvent }) {
   return (
     <span className="flex min-w-0 items-center gap-1">
       {e.actor.avatar_url && (
-        <img
+        <SevenTvAvatar
+          cosmeticsId={cosmeticsKey}
+          px={20}
           src={e.actor.avatar_url}
           alt=""
           className="inline-block flex-shrink-0 rounded-full object-cover"
