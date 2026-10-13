@@ -13,6 +13,8 @@ public final class FakeCore: CoreBridge {
     private struct State {
         var started: CoreDirs?
         var calls: [String] = []
+        var chatFixture: ChatFixture?
+        var sent: [String] = []
     }
 
     private let state = Mutex(State())
@@ -22,6 +24,13 @@ public final class FakeCore: CoreBridge {
     /// The commands invoked so far, oldest first.
     public var calls: [String] { state.withLock { $0.calls } }
     public var isStarted: Bool { state.withLock { $0.started != nil } }
+    /// Recorded chat the fake answers chat commands from (settings, emotes, history).
+    public var chatFixture: ChatFixture? {
+        get { state.withLock { $0.chatFixture } }
+        set { state.withLock { $0.chatFixture = newValue } }
+    }
+    /// Messages handed to `send_chat_message`, oldest first.
+    public var sentMessages: [String] { state.withLock { $0.sent } }
 
     public func start(dirs: CoreDirs, version: String, vaultKey: Data, codecs: [String]) throws {
         guard vaultKey.count == 32 else { throw CoreFailure.start(message: "vault key must be 32 bytes") }
@@ -60,6 +69,19 @@ public final class FakeCore: CoreBridge {
             return "0"
         case "stop_stream", "stop_chat":
             return "null"
+        case "get_settings":
+            let design = chatFixture.flatMap { try? JSONSerialization.jsonObject(with: $0.chatDesignJSON) } ?? [String: Any]()
+            return try Self.json(["chat_design": design])
+        case "load_channel_history":
+            return "[]"
+        case "fetch_channel_emotes":
+            guard let emotes = chatFixture?.emotesJSON else { return #"{"twitch":[],"bttv":[],"7tv":[],"ffz":[],"kick":[]}"# }
+            return String(decoding: emotes, as: UTF8.self)
+        case "send_chat_message":
+            let text = args["message"] as? String ?? ""
+            state.withLock { $0.sent.append(text) }
+            // A send needs a Twitch sign-in, which the fake never has.
+            throw CoreFailure.command(json: #""Not signed in to Twitch""#)
         default:
             throw CoreFailure.command(json: #""unknown command \#(cmd)""#)
         }

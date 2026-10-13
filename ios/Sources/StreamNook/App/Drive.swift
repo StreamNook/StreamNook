@@ -16,6 +16,7 @@ import Foundation
 /// - `catchup:MS` holds that distance behind the relay's edge with a gentle catch-up rate
 /// - `hold:PARTS` sets the low-latency playlist's hold-back in part targets (2 or 3)
 /// - `signin` opens the Twitch sign-in sheet
+/// - the chat steps in `ChatDrive` (`chatlab`, `chatperf`, ...)
 /// - `shot` marks the moment a screenshot is due (the host takes it) and holds still for five
 ///   seconds so it lands on a settled screen
 @MainActor
@@ -50,7 +51,10 @@ enum Drive {
             case "shot":
                 log.notice("drive shot")
                 try? await Task.sleep(for: .seconds(5))
-            default: log.error("drive: unknown step \(name, privacy: .public)")
+            default:
+                if !(await ChatDrive.run(name, value, model: model)) {
+                    log.error("drive: unknown step \(name, privacy: .public)")
+                }
             }
             try? await Task.sleep(for: .milliseconds(400))
         }
