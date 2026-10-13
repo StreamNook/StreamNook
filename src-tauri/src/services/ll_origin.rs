@@ -2083,12 +2083,29 @@ impl LlOrigin {
                         duration,
                         bytes: Arc::new(bytes),
                     });
+                    if crate::services::relay_probe::is_active() {
+                        if let Some(start) = seg.pdt.as_deref().and_then(pdt_millis) {
+                            let held: f64 = seg.parts.iter().map(|p| p.duration).sum();
+                            crate::services::relay_probe::note_edge(
+                                sn,
+                                seg.parts.len() - 1,
+                                start + (held * 1000.0).round() as i64,
+                            );
+                        }
+                    }
                 }
                 true
             }
             None => false,
         }
     }
+}
+
+/// An RFC3339 PROGRAM-DATE-TIME as Unix milliseconds.
+fn pdt_millis(pdt: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(pdt)
+        .ok()
+        .map(|t| t.timestamp_millis())
 }
 
 // ──────────────────────────── serving ────────────────────────────
@@ -2251,6 +2268,174 @@ fn render_locked(edge: &LiveEdge) -> String {
     s
 }
 
+// ──────────────────────────── Apple LL-HLS ────────────────────────────
+//
+// AVPlayer's low-latency mode wants more than hls.js: a `#EXT-X-PRELOAD-HINT`
+// for the next part (whose request the server holds until the part exists), a
+// blocking reload that holds until the requested part or segment is really
+// there, and, because its playlists arrive through a resource loader on a
+// custom scheme, absolute http URIs for everything it fetches itself. All of
+// it is opt-in per request (`apple=1` on the query): the hls.js playlist is
+// `render_locked` byte for byte, and the Apple one is derived from it.
+
+/// Hold-back AVPlayer is told to keep from the last listed part. The spec floor
+/// is twice the part target (1.334 s at `PART_TARGET`).
+const APPLE_PART_HOLD_BACK: f64 = 1.5;
+/// How long an Apple blocking reload waits for its part before answering with
+/// the current playlist. AVPlayer allows a blocking reload about three target
+/// durations, far above hls.js's 2 s budget that bounds `BLOCK_TIMEOUT`.
+const APPLE_BLOCK_TIMEOUT: Duration = Duration::from_millis(3000);
+/// How long a request for a part that does not exist yet (the preload hint) is
+/// held before it answers 404.
+const APPLE_PART_WAIT: Duration = Duration::from_millis(3000);
+
+/// Whether a reload that names only `_HLS_msn` can be released: the segment is
+/// complete, or a later one has begun.
+fn segment_satisfied(edge: &LiveEdge, sn: u64) -> bool {
+    edge.segments
+        .iter()
+        .any(|s| s.sn > sn || (s.sn == sn && s.complete))
+}
+
+/// Whether part `idx` of `sn` can no longer appear: its segment completed
+/// without it, or left the window.
+fn part_never_comes(edge: &LiveEdge, sn: u64, idx: usize) -> bool {
+    if edge.segments.front().is_some_and(|s| s.sn > sn) {
+        return true;
+    }
+    edge.segments
+        .iter()
+        .any(|s| s.sn == sn && s.complete && s.parts.len() <= idx)
+}
+
+/// The part a preload hint names: the next part of the in-progress segment, or
+/// part 0 of the next segment when the newest one is complete.
+fn next_part(edge: &LiveEdge) -> Option<(u64, usize)> {
+    let newest = edge.segments.back()?;
+    Some(if newest.complete {
+        (newest.sn + 1, 0)
+    } else {
+        (newest.sn, newest.parts.len())
+    })
+}
+
+/// Rewrites the `URI="..."` attribute of a tag line against `base`, adding
+/// `query`. Absolute URIs (the upstream CMAF init) stay as they are.
+fn absolute_uri_attr(line: &str, base: &str, query: &str) -> String {
+    let Some(start) = line.find("URI=\"").map(|i| i + 5) else {
+        return line.to_string();
+    };
+    let Some(len) = line[start..].find('"') else {
+        return line.to_string();
+    };
+    let uri = &line[start..start + len];
+    if uri.contains("://") {
+        return line.to_string();
+    }
+    format!(
+        "{}{base}{uri}{query}{}",
+        &line[..start],
+        &line[start + len..]
+    )
+}
+
+/// The playlist for AVPlayer: `render_locked` with absolute URIs against `base`
+/// (`http://127.0.0.1:<port>/`), the Apple hold-back, and a preload hint.
+fn render_apple(edge: &LiveEdge, base: &str) -> String {
+    let plain = render_locked(edge);
+    let mut s = String::with_capacity(plain.len() * 2);
+    for line in plain.lines() {
+        if line.starts_with("#EXT-X-SERVER-CONTROL:") {
+            s.push_str(&format!(
+                "#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK={APPLE_PART_HOLD_BACK:.3}"
+            ));
+        } else if line.starts_with("#EXT-X-PART:") {
+            s.push_str(&absolute_uri_attr(line, base, "?apple=1"));
+        } else if line.starts_with("#EXT-X-MAP:") {
+            s.push_str(&absolute_uri_attr(line, base, ""));
+        } else if !line.starts_with('#') && !line.is_empty() {
+            s.push_str(base);
+            s.push_str(line);
+        } else {
+            s.push_str(line);
+        }
+        s.push('\n');
+    }
+    if let Some((sn, k)) = next_part(edge) {
+        let ext = if edge.cmaf_presented() { "mp4" } else { "ts" };
+        s.push_str(&format!(
+            "#EXT-X-PRELOAD-HINT:TYPE=PART,URI=\"{base}part/{sn}/{k}.{ext}?apple=1\"\n"
+        ));
+    }
+    s
+}
+
+impl LlOrigin {
+    /// Waits until `ready` holds, the edge goes away (false) or `deadline`
+    /// passes (true, the caller answers with what it has).
+    async fn wait_for(
+        &self,
+        deadline: tokio::time::Instant,
+        ready: impl Fn(&LiveEdge) -> bool,
+    ) -> bool {
+        loop {
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            {
+                let g = self.live_edge.lock().unwrap();
+                match g.as_ref() {
+                    Some(edge) if ready(edge) => return true,
+                    Some(_) => {}
+                    None => return false,
+                }
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline
+                || tokio::time::timeout(deadline - now, notified)
+                    .await
+                    .is_err()
+            {
+                return true;
+            }
+        }
+    }
+
+    /// The playlist for AVPlayer, honoring its blocking reload. A request
+    /// without directives (the first load) answers at once.
+    pub async fn serve_playlist_apple(
+        &self,
+        msn: Option<u64>,
+        part: Option<u64>,
+        base: &str,
+    ) -> Option<String> {
+        if let Some(m) = msn {
+            let deadline = tokio::time::Instant::now() + APPLE_BLOCK_TIMEOUT;
+            let held = self
+                .wait_for(deadline, |edge| match part {
+                    Some(p) => blocking_satisfied(edge, m, p),
+                    None => segment_satisfied(edge, m),
+                })
+                .await;
+            if !held {
+                return None;
+            }
+        }
+        let g = self.live_edge.lock().unwrap();
+        g.as_ref().map(|edge| render_apple(edge, base))
+    }
+
+    /// A part for AVPlayer: held while it is still to come (a preload hint).
+    pub async fn get_part_apple(&self, sn: u64, idx: usize) -> Option<Arc<Vec<u8>>> {
+        let deadline = tokio::time::Instant::now() + APPLE_PART_WAIT;
+        self.wait_for(deadline, |edge| {
+            has_part_locked(edge, sn, idx as u64) || part_never_comes(edge, sn, idx)
+        })
+        .await;
+        self.get_part(sn, idx)
+    }
+}
+
 impl LlOrigin {
     /// Bytes for a single part (`part/<sn>/<k>.mp4`).
     pub fn get_part(&self, sn: u64, idx: usize) -> Option<Arc<Vec<u8>>> {
@@ -2358,6 +2543,18 @@ pub fn get_init() -> Option<Arc<Vec<u8>>> {
 
 pub async fn serve_playlist(msn: Option<u64>, part: Option<u64>) -> Option<String> {
     SOLO.serve_playlist(msn, part).await
+}
+
+pub async fn serve_playlist_apple(
+    msn: Option<u64>,
+    part: Option<u64>,
+    base: &str,
+) -> Option<String> {
+    SOLO.serve_playlist_apple(msn, part, base).await
+}
+
+pub async fn get_part_apple(sn: u64, idx: usize) -> Option<Arc<Vec<u8>>> {
+    SOLO.get_part_apple(sn, idx).await
 }
 
 pub fn get_part(sn: u64, idx: usize) -> Option<Arc<Vec<u8>>> {
@@ -3209,5 +3406,104 @@ mod tests {
         assert_eq!(window_for_delay(10.0), 7, "6 complete segments plus the in-progress one");
         assert_eq!(window_for_delay(40.0), TILE_SYNC_MAX_SEGMENTS, "bounded");
         assert_eq!(window_for_delay(f64::NAN), TILE_MAX_SEGMENTS);
+    }
+
+    /// A transmuxed TS edge: one complete segment and one in progress.
+    fn apple_fixture() -> LiveEdge {
+        let mut segs = VecDeque::new();
+        segs.push_back(make_segment(
+            50,
+            Some("P0".into()),
+            true,
+            even_parts(vec![vec![1], vec![2]]),
+        ));
+        segs.push_back(Segment {
+            sn: 51,
+            pdt: Some("P1".into()),
+            complete: false,
+            duration: 2.0,
+            parts: vec![Part {
+                duration: 0.3,
+                bytes: Arc::new(vec![3]),
+            }],
+            assembled: None,
+        });
+        LiveEdge {
+            init_url: String::new(),
+            init_bytes: Some(Arc::new(vec![0, 0, 0, 8, b'f', b't', b'y', b'p'])),
+            container: Container::Ts,
+            target_duration: 2,
+            part_target: PART_TARGET,
+            segments: segs,
+        }
+    }
+
+    #[test]
+    fn the_hls_js_playlist_is_unchanged_by_the_apple_variant() {
+        let expected = "#EXTM3U\n\
+#EXT-X-VERSION:9\n\
+#EXT-X-TARGETDURATION:2\n\
+#EXT-X-PART-INF:PART-TARGET=0.667\n\
+#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=1.500\n\
+#EXT-X-MEDIA-SEQUENCE:50\n\
+#EXT-X-MAP:URI=\"init.mp4\"\n\
+#EXT-X-PROGRAM-DATE-TIME:P0\n\
+#EXT-X-PART:DURATION=1.000,URI=\"part/50/0.mp4\",INDEPENDENT=YES\n\
+#EXT-X-PART:DURATION=1.000,URI=\"part/50/1.mp4\"\n\
+#EXTINF:2.000,live\n\
+seg/50.ts\n\
+#EXT-X-PROGRAM-DATE-TIME:P1\n\
+#EXT-X-PART:DURATION=0.300,URI=\"part/51/0.mp4\",INDEPENDENT=YES\n";
+        let edge = apple_fixture();
+        assert_eq!(render_locked(&edge), expected);
+        // Rendering the Apple variant first leaves the hls.js one untouched.
+        let _ = render_apple(&edge, "http://127.0.0.1:9/");
+        assert_eq!(render_locked(&edge), expected);
+        assert!(!expected.contains("PRELOAD-HINT"));
+        assert!(!expected.contains("apple=1"));
+    }
+
+    #[test]
+    fn the_apple_playlist_is_absolute_and_hints_the_next_part() {
+        let pl = render_apple(&apple_fixture(), "http://127.0.0.1:9/");
+        let expected = "#EXTM3U\n\
+#EXT-X-VERSION:9\n\
+#EXT-X-TARGETDURATION:2\n\
+#EXT-X-PART-INF:PART-TARGET=0.667\n\
+#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=1.500\n\
+#EXT-X-MEDIA-SEQUENCE:50\n\
+#EXT-X-MAP:URI=\"http://127.0.0.1:9/init.mp4\"\n\
+#EXT-X-PROGRAM-DATE-TIME:P0\n\
+#EXT-X-PART:DURATION=1.000,URI=\"http://127.0.0.1:9/part/50/0.mp4?apple=1\",INDEPENDENT=YES\n\
+#EXT-X-PART:DURATION=1.000,URI=\"http://127.0.0.1:9/part/50/1.mp4?apple=1\"\n\
+#EXTINF:2.000,live\n\
+http://127.0.0.1:9/seg/50.ts\n\
+#EXT-X-PROGRAM-DATE-TIME:P1\n\
+#EXT-X-PART:DURATION=0.300,URI=\"http://127.0.0.1:9/part/51/0.mp4?apple=1\",INDEPENDENT=YES\n\
+#EXT-X-PRELOAD-HINT:TYPE=PART,URI=\"http://127.0.0.1:9/part/51/1.mp4?apple=1\"\n";
+        assert_eq!(pl, expected);
+    }
+
+    #[test]
+    fn an_absolute_cmaf_init_stays_upstream() {
+        assert_eq!(
+            absolute_uri_attr("#EXT-X-MAP:URI=\"https://cdn/init.mp4\"", "http://127.0.0.1:9/", ""),
+            "#EXT-X-MAP:URI=\"https://cdn/init.mp4\""
+        );
+    }
+
+    #[test]
+    fn apple_holds_release_on_the_right_edge_changes() {
+        let mut edge = apple_fixture();
+        assert!(segment_satisfied(&edge, 50));
+        assert!(!segment_satisfied(&edge, 51));
+        assert!(!part_never_comes(&edge, 51, 1));
+        assert!(part_never_comes(&edge, 50, 2));
+        assert!(part_never_comes(&edge, 49, 0));
+        assert_eq!(next_part(&edge), Some((51, 1)));
+        edge.segments.back_mut().unwrap().complete = true;
+        assert!(segment_satisfied(&edge, 51));
+        assert!(part_never_comes(&edge, 51, 1));
+        assert_eq!(next_part(&edge), Some((52, 0)));
     }
 }

@@ -1705,6 +1705,7 @@ pub fn run() {
             get_ad_detection,
             get_stream_low_latency,
             get_stream_prefetch_present,
+            get_relay_live_distance,
             set_experimental_low_latency,
             set_codec_preference,
             // Allowed only by mobile-commands.toml (a phone caps its rendition

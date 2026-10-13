@@ -477,11 +477,20 @@ fn channel_from_url(url: &str) -> Option<String> {
 /// The localhost URL the player polls, with a cache-busting timestamp.
 pub(crate) fn local_player_url(port: u16) -> String {
     format!(
-        "http://localhost:{}/stream.m3u8?t={}",
+        "http://{}:{}/stream.m3u8?t={}",
+        LOOPBACK_HOST,
         port,
         chrono::Utc::now().timestamp_millis()
     )
 }
+
+/// The relay's host in player URLs. The webview players and their CSP name
+/// `localhost`; AVPlayer gets the address itself, so the iPhone never resolves
+/// a name or tries IPv6 first for a relay bound to IPv4.
+#[cfg(not(target_os = "ios"))]
+const LOOPBACK_HOST: &str = "localhost";
+#[cfg(target_os = "ios")]
+const LOOPBACK_HOST: &str = "127.0.0.1";
 
 /// Resolve a Twitch clip to its signed MP4 URL WITHOUT touching any global live-
 /// stream state (no solo-session reset, no proxy server, no `currentStream`
@@ -867,6 +876,19 @@ pub fn get_stream_low_latency() -> bool {
 #[tauri::command]
 pub fn get_stream_prefetch_present() -> bool {
     crate::services::ll_origin::upstream_has_prefetch()
+}
+
+/// How far the player sits behind the relay's live edge, for a player that
+/// cannot measure it itself (AVPlayer): it passes the programme date of the
+/// frame it shows, in Unix milliseconds. With `target_ms` the answer carries a
+/// catch-up rate toward that distance. Also drains the relay's record of the
+/// player's requests since the previous call.
+#[tauri::command]
+pub fn get_relay_live_distance(
+    player_pdt_ms: Option<f64>,
+    target_ms: Option<i64>,
+) -> crate::services::relay_probe::LiveDistance {
+    crate::services::relay_probe::report(player_pdt_ms, target_ms)
 }
 
 /// Enable or disable the experimental parts-based low-latency origin at runtime.

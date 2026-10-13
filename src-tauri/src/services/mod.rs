@@ -118,6 +118,7 @@ pub mod multi_nook_raids;
 pub mod profile_cache_service;
 pub mod providers;
 pub mod quality;
+pub mod relay_probe;
 pub mod reminder_service;
 pub mod seventv_auth_service;
 pub mod seventv_cosmetics_resolver;
