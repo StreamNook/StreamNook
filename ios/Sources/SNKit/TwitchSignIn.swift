@@ -1,22 +1,14 @@
 import Foundation
 
-/// What `twitch_login` answers: the activate page that approves the core's device code, and the
-/// code itself. The core polls for that code and emits `twitch-login-complete` once it is
-/// approved, as on Android.
-public struct DeviceLogin: Decodable, Sendable, Equatable {
-    public var verificationURI: String
-    public var userCode: String
+/// What `begin_twitch_web_login` answers: Twitch's authorize page, and the redirect it ends on
+/// with `code` and `state` (or `error`), which the sheet hands to `finish_twitch_web_login`.
+public struct WebLogin: Decodable, Sendable, Equatable {
+    public var url: String
+    public var redirect: String
 
-    public init(verificationURI: String, userCode: String) {
-        self.verificationURI = verificationURI
-        self.userCode = userCode
-    }
-
-    /// The command answers a `[verification_uri, user_code]` pair.
-    public init(from decoder: Decoder) throws {
-        var pair = try decoder.unkeyedContainer()
-        verificationURI = try pair.decode(String.self)
-        userCode = try pair.decode(String.self)
+    public init(url: String, redirect: String) {
+        self.url = url
+        self.redirect = redirect
     }
 }
 
@@ -42,49 +34,55 @@ public struct TwitchUser: Decodable, Sendable, Equatable {
     }
 }
 
-/// Follows the sign-in sheet's page loads, the way the Android login overlay does:
+/// Follows the sign-in sheet's page loads:
 ///
+/// - The authorize page's redirect never loads. Reaching it carries the result: `code` and
+///   `state` on approval, `error` when the person declined.
 /// - Twitch's mobile site can finish a fresh sign-in on its home page instead of returning to
-///   the activate page, with the device code nowhere in sight. The first arrival home goes back
-///   to the activate page, where the code now waits to be approved.
-/// - Approving leaves through `auth.twitch.tv/authorize`, whose `redirect_uri` says where it
-///   lands. Reaching that page means the code is approved; the sheet can close while the core's
-///   poll collects the token.
-public struct ActivateNavigator: Sendable {
+///   the authorize page. The first arrival home goes back to the authorize page, where Authorize
+///   now waits.
+public struct SignInNavigator: Sendable {
     public enum Step: Equatable, Sendable {
         case stay
-        /// Load the activate page again.
-        case returnToActivate(URL)
-        /// Approval landed; close the sheet and wait for the core.
-        case approved
+        /// Load the authorize page again.
+        case returnToAuthorize(URL)
+        /// The redirect: stop there and hand its result to the core.
+        case redirect(code: String?, state: String?, error: String?)
     }
 
-    /// Where approving lands when the authorize step was not seen.
-    static let fallbackLanding = "www.twitch.tv/settings/connections"
-
-    public let activate: URL
+    public let authorize: URL
+    public let redirect: URL
     private var returnedHome = false
-    private var landing: String?
 
-    public init(activate: URL) {
-        self.activate = activate
+    public init(authorize: URL, redirect: URL) {
+        self.authorize = authorize
+        self.redirect = redirect
     }
 
     /// What to do on arriving at `url`.
     public mutating func arrived(at url: URL) -> Step {
+        if Self.sameEndpoint(url, redirect) {
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            func value(_ name: String) -> String? {
+                items.first(where: { $0.name == name })?.value.flatMap { $0.isEmpty ? nil : $0 }
+            }
+            // Twitch writes spaces in the description as "+", which URLComponents keeps.
+            let error = value("error").map { code in
+                (value("error_description") ?? code).replacingOccurrences(of: "+", with: " ")
+            }
+            return .redirect(code: value("code"), state: value("state"), error: error)
+        }
         guard let here = Self.hostPath(url) else { return .stay }
-        if !returnedHome, activate.path.contains("/activate"), here == "www.twitch.tv" || here == "m.twitch.tv" {
+        if !returnedHome, here == "www.twitch.tv" || here == "m.twitch.tv" {
             returnedHome = true
-            return .returnToActivate(activate)
+            return .returnToAuthorize(authorize)
         }
-        if url.host?.lowercased() == "auth.twitch.tv",
-           let redirect = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-               .queryItems?.first(where: { $0.name == "redirect_uri" })?.value,
-           let target = URL(string: redirect).flatMap(Self.hostPath) {
-            landing = target
-            return .stay
-        }
-        return here == (landing ?? Self.fallbackLanding) ? .approved : .stay
+        return .stay
+    }
+
+    /// Same scheme, host, port and path, whatever the query.
+    static func sameEndpoint(_ a: URL, _ b: URL) -> Bool {
+        a.scheme?.lowercased() == b.scheme?.lowercased() && a.port == b.port && hostPath(a) == hostPath(b)
     }
 
     /// Lowercased host and path without a trailing slash, so queries and slashes do not matter.
