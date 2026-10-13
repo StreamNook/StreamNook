@@ -1,3 +1,25 @@
+## [8.8.10] - 2026-10-13
+
+### ✨ Features
+- Hide channels. Right-click any stream and pick Hide channel to keep it out of Discover, categories and Recommended, and, if you like, out of chat, search and your follows too. Twitch channels can be blocked on Twitch in the same step. Settings > Interface > Hidden channels sets what a hide covers and lists everything you hid.
+- Chat modes take up less room: one small chip at the end of the message box names the mode that limits you, like "Slow 30s", and hovering it lists the rest. To see the mode in the message box itself, pick Placeholder under Settings > Chat > Chat Input > Chat modes > Style.
+- Favorite categories. Click the heart on any category to keep it in a Favorites row at the top of the Categories tab, with live viewer counts.
+- Profiles show a chatter's sub in the channel: months, tier, founder, Prime or gift, the channel's badge for their tenure and how close the next one is. Anyone not subscribed gets a Gift a sub button.
+- Badge pages say in one sentence how to earn the badge, like "Watch 30 minutes on dnd's channel while it streams Dungeons & Dragons." Badges limited to certain channels list them, and on the phone each one is a tap from watching.
+- `/lurk` picks one of 40 lurk lines each time. `/lurk making dinner` still adds your note.
+- On the phone, channel point rewards open in their own sheet: a grid with each reward's art and cost, and a full-size box for rewards that ask for text.
+
+### 🐛 Bug Fixes
+- Rewards that ask for text show their name in chat instead of "Redeemed a channel points reward".
+- Pinned messages show in every chat, offline chats included, without the Drops sign-in.
+- `/me` messages, `/lurk` included, show as actions in your own chat instead of starting with "/me".
+- Profiles and `/followage` no longer say "Not following" for people who follow. Twitch stopped sharing follows, so StreamNook asks Twitch directly where it can and says when it can't tell.
+- Channel point redemptions and shared chat show the channel's own sub badges, in chat and on the stream overlay.
+- Animated profile pictures pause while something covers them, like Settings or the full-screen player, and no longer blink when they pause or resume.
+
+### ⚡ Performance
+- The rewards menu opens straight away with the last list it read and refreshes in the background.
+
 ## [8.8.9] - 2026-10-12
 
 ### ✨ Features
