@@ -221,7 +221,9 @@ final class Watch {
         let recommended = Self.ms(item.recommendedTimeOffsetFromLive)
         let configured = Self.ms(item.configuredTimeOffsetFromLive)
         let dated = pdt == nil ? "none" : "ok"
-        log.notice("behind \(behind) newest \(newest) edge \(edge, privacy: .public) age \(age) buf \(ahead) rate \(rate) rec \(recommended) cfg \(configured) pdt \(dated, privacy: .public)")
+        let state = player.timeControlStatus.rawValue
+        let fast = item.canPlayFastForward
+        log.notice("behind \(behind) newest \(newest) edge \(edge, privacy: .public) age \(age) buf \(ahead) rate \(rate) rec \(recommended) cfg \(configured) pdt \(dated, privacy: .public) state \(state) ff \(fast)")
         for chunk in stride(from: 0, to: distance.fetches.count, by: 14) {
             let slice = distance.fetches[chunk..<min(chunk + 14, distance.fetches.count)]
             log.notice("fetch \(slice.joined(separator: " | "), privacy: .public)")
@@ -231,6 +233,9 @@ final class Watch {
     private func logSummary() {
         guard let item = player.currentItem else { return }
         let errors = item.errorLog()?.events.count ?? 0
+        for event in item.errorLog()?.events ?? [] {
+            log.notice("error log: \(event.errorDomain, privacy: .public) \(event.errorStatusCode) \(event.errorComment ?? "", privacy: .public)")
+        }
         if let access = item.accessLog()?.events.last {
             log.notice("summary route \(self.route.rawValue, privacy: .public) first \(self.firstPlayMS ?? -1) stalls \(self.stalls) access-stalls \(access.numberOfStalls) errors \(errors) startup \(access.startupTime) indicated \(Int(access.indicatedBitrate)) observed \(Int(access.observedBitrate)) dropped \(access.numberOfDroppedVideoFrames)")
         } else {
