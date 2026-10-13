@@ -47,14 +47,6 @@ struct RGBA: Equatable, Sendable {
         self.init(r, g, b, parts.count > 3 ? (alpha(parts[3]) ?? 1) : 1)
     }
 
-    /// This colour laid over `under` (straight alpha compositing).
-    func over(_ under: RGBA) -> RGBA {
-        let out = a + under.a * (1 - a)
-        guard out > 0 else { return RGBA(0, 0, 0, 0) }
-        func mix(_ top: Double, _ bottom: Double) -> Double { (top * a + bottom * under.a * (1 - a)) / out }
-        return RGBA(mix(r, under.r), mix(g, under.g), mix(b, under.b), out)
-    }
-
     /// `amount` of this colour and the rest black, as CSS `color-mix(in srgb, C amount, #000)`.
     func darkened(keeping amount: Double) -> RGBA { RGBA(r * amount, g * amount, b * amount, a) }
 
