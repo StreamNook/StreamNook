@@ -45,7 +45,8 @@ final class Watch {
     /// The distance behind the edge a gentle catch-up rate holds, in milliseconds.
     var catchUpTargetMS: Int?
     /// Part targets of hold-back the low-latency playlist asks AVPlayer for (the relay takes 2 or 3).
-    var holdParts: Int?
+    /// Two lands the desktop player's distance behind the edge; three is Apple's recommendation.
+    var holdParts: Int? = 2
 
     private var tasks: [Task<Void, Never>] = []
     private var opened: ContinuousClock.Instant?
