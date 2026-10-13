@@ -14,6 +14,7 @@ import Foundation
 /// - `offset:SECONDS` sets the next player item's configured offset from live
 /// - `preserve` makes the next player item keep its offset from live after a stall
 /// - `catchup:MS` holds that distance behind the relay's edge with a gentle catch-up rate
+/// - `hold:PARTS` sets the low-latency playlist's hold-back in part targets (2 or 3)
 /// - `signin` opens the Twitch sign-in sheet
 /// - `shot` marks the moment a screenshot is due (the host takes it) and holds still for five
 ///   seconds so it lands on a settled screen
@@ -44,6 +45,7 @@ enum Drive {
             case "offset": model.watch.offsetFromLive = Double(value)
             case "preserve": model.watch.preservesOffset = true
             case "catchup": model.watch.catchUpTargetMS = Int(value)
+            case "hold": model.watch.holdParts = Int(value)
             case "signin": await model.signIn.begin(core: model.core)
             case "shot":
                 log.notice("drive shot")

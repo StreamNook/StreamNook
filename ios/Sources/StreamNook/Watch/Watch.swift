@@ -42,6 +42,8 @@ final class Watch {
     var preservesOffset = false
     /// The distance behind the edge a gentle catch-up rate holds, in milliseconds.
     var catchUpTargetMS: Int?
+    /// Part targets of hold-back the low-latency playlist asks AVPlayer for (the relay takes 2 or 3).
+    var holdParts: Int?
 
     private var tasks: [Task<Void, Never>] = []
     private var opened: ContinuousClock.Instant?
@@ -133,9 +135,9 @@ final class Watch {
             let plain = url.replacingOccurrences(of: "/stream.m3u8", with: "/plain.m3u8")
             return URL(string: route == .promote ? plain + "&promote=1" : plain).map(AVPlayerItem.init(url:))
         case .llhttp:
-            return URL(string: url + "&apple=1").map(AVPlayerItem.init(url:))
+            return URL(string: url + appleQuery).map(AVPlayerItem.init(url:))
         case .ll:
-            guard var parts = URLComponents(string: url + "&apple=1") else { return nil }
+            guard var parts = URLComponents(string: url + appleQuery) else { return nil }
             parts.scheme = LLPlaylistLoader.scheme
             guard let custom = parts.url else { return nil }
             let loader = LLPlaylistLoader()
@@ -144,6 +146,11 @@ final class Watch {
             self.loader = loader
             return AVPlayerItem(asset: asset)
         }
+    }
+
+    /// What marks a playlist request as AVPlayer's low-latency one for the relay.
+    private var appleQuery: String {
+        "&apple=1" + (holdParts.map { "&apple_hold=\($0)" } ?? "")
     }
 
     private func observe(_ item: AVPlayerItem) {
