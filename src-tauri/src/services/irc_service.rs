@@ -327,6 +327,8 @@ async fn confirm_join(key: &str) {
     let mut t = get_join_tracker().lock().await;
     if t.confirm(key) {
         record_lifecycle(&format!("JOIN #{} confirmed", key));
+        // A reward that asks for text reaches chat with only its id.
+        crate::services::channel_rewards::note_chat_joined(key);
     }
     refresh_join_hint(&t);
 }
@@ -1385,6 +1387,21 @@ pub async fn wait_for_channel_emotes(channel: &str, budget: std::time::Duration)
 /// table before giving up on re-stamping. The channel document fetch has a
 /// 25 s budget.
 const HISTORY_RESTAMP_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A reward that asks for text reaches chat as an ordinary message tagged only
+/// with its id. Name it: `sn-redeemed-title` and `sn-redeemed-cost` give the
+/// row "Redeemed <title>" and the cost. These are not the `sn-reward-*` tags of
+/// a no-text redemption row, which the stream overlay draws as an event card
+/// with no message.
+fn stamp_reward_name(tags: &mut HashMap<String, String>, raw: &str) {
+    let Some(reward_id) = tags.get("custom-reward-id").filter(|id| !id.is_empty()).cloned() else { return };
+    let Some(channel) = extract_channel_from_irc_line(raw) else { return };
+    let Some(name) = crate::services::channel_rewards::reward_name(&channel, &reward_id) else { return };
+    tags.insert("sn-redeemed-title".into(), name.title);
+    if name.cost > 0 {
+        tags.insert("sn-redeemed-cost".into(), name.cost.to_string());
+    }
+}
 
 // Extract the channel name (lowercase, no leading #) from a raw IRC line.
 // Used by ROOMSTATE/USERSTATE/CLEARMSG/CLEARCHAT parsing to key per-channel
@@ -4366,10 +4383,11 @@ impl IrcService {
             .map(|s| s.to_string())
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-        let tags_owned: HashMap<String, String> = tag_map
+        let mut tags_owned: HashMap<String, String> = tag_map
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
+        stamp_reward_name(&mut tags_owned, raw);
 
         let display_name = tag_map
             .get("display-name")
@@ -5365,6 +5383,11 @@ fn native_emote_positions(text: &str, twitch: &[Emote]) -> Vec<EmotePos> {
 /// The `emotes` tag Twitch would attach to `text`: the native emote positions
 /// grouped by emote id in first-seen order. A sent row built without it would
 /// show its Twitch emotes as text until the echo arrives.
+/// `text` wrapped as the IRC ACTION a `/me` becomes.
+fn irc_action(text: &str) -> String {
+    format!("\u{1}ACTION {text}\u{1}")
+}
+
 fn own_emotes_tag(text: &str, twitch: &[Emote]) -> String {
     let mut order: Vec<&str> = Vec::new();
     let mut ranges: HashMap<&str, Vec<String>> = HashMap::new();
@@ -5388,6 +5411,11 @@ fn own_emotes_tag(text: &str, twitch: &[Emote]) -> String {
 pub struct RedemptionRow {
     /// The channel's bare login.
     pub channel: String,
+    /// The channel's Twitch id. It rides the row as `room-id`, which every
+    /// renderer reads to draw badges from the channel's own set: without it a
+    /// subscriber badge falls back to Twitch's global art (the default star)
+    /// instead of the channel's custom one.
+    pub room_id: String,
     /// Twitch's redemption id; the row id derives from it so the same
     /// redemption reported twice is one row.
     pub redemption_id: String,
@@ -5423,6 +5451,9 @@ fn redemption_message(r: &RedemptionRow, segments: Vec<MessageSegment>, timestam
 
     let mut tags: HashMap<String, String> = HashMap::new();
     tags.insert("user-id".into(), r.user_id.clone());
+    if !r.room_id.is_empty() {
+        tags.insert("room-id".into(), r.room_id.clone());
+    }
     tags.insert("id".into(), id.clone());
     tags.insert("display-name".into(), name.clone());
     tags.insert("custom-reward-id".into(), reward_id.to_string());
@@ -5558,10 +5589,17 @@ impl IrcService {
             .unwrap_or(false);
         let cached = get_user_badges_cache().lock().await.get(&key).cloned();
         m.badges = own_row_badges(&m.badges, cached.as_deref(), is_primary);
+        // A `/me` goes out as an IRC ACTION, so the row is one too. Emote
+        // positions count from the action's own words, as Twitch's do.
+        let action_body = m.text.strip_prefix("/me ").map(str::to_string);
         let emotes_tag = {
             let map = get_channel_emotes().lock().await;
-            map.get(&key).map(|set| own_emotes_tag(&m.text, &set.twitch)).unwrap_or_default()
+            let body = action_body.as_deref().unwrap_or(&m.text);
+            map.get(&key).map(|set| own_emotes_tag(body, &set.twitch)).unwrap_or_default()
         };
+        if let Some(body) = action_body {
+            m.text = irc_action(&body);
+        }
         let line = own_message_line(&m, &emotes_tag, chrono::Utc::now().timestamp_millis());
         let mut msg = Self::parse_privmsg(&line)?;
         msg.layout = LayoutResult {
@@ -5587,7 +5625,7 @@ impl IrcService {
         let key = channel.trim_start_matches('#').to_lowercase();
         let badges = get_user_badges_cache().lock().await.get(&key).cloned().unwrap_or_default();
         let text = match message.strip_prefix("/me ") {
-            Some(rest) => format!("\u{1}ACTION {rest}\u{1}"),
+            Some(rest) => irc_action(rest),
             None => message.to_string(),
         };
         let own = OwnMessage {
@@ -5731,6 +5769,22 @@ mod own_message_tests {
     const LOGIN_ONLY_WATCH_STREAK: &str = "@badge-info=;badges=subscriber/3;color=#FF69B4;display-name=mochi_panda;emotes=;id=a2;login=mochi_panda;msg-id=viewermilestone;msg-param-category=watch-streak;msg-param-copoReward=350;msg-param-value=3;room-id=1;system-msg=mochi_panda\\swatched\\s3\\sconsecutive\\sstreams\\sand\\ssparked\\sa\\swatch\\sstreak!;tmi-sent-ts=2000;user-id=700700 :tmi.twitch.tv USERNOTICE #chan :yay";
 
     #[test]
+    fn a_text_reward_message_is_named_from_the_channels_rewards() {
+        crate::services::channel_rewards::note_reward_name("rewardnamechan", "rw-1", "Билет на Розыгрыш Ножа", 4999);
+        let line = |reward: &str| {
+            format!("@badges=;color=;display-name=Bob;emotes=;id=r{reward};custom-reward-id={reward};room-id=1;tmi-sent-ts=1;user-id=2 :bob!bob@bob.tmi.twitch.tv PRIVMSG #rewardnamechan :https://example.com/trade")
+        };
+        let named = IrcService::parse_privmsg(&line("rw-1")).expect("parses");
+        assert_eq!(named.tags["sn-redeemed-title"], "Билет на Розыгрыш Ножа");
+        assert_eq!(named.tags["sn-redeemed-cost"], "4999");
+        assert!(!named.tags.contains_key("sn-reward-title"), "not drawn as a no-text redemption");
+        let unknown = IrcService::parse_privmsg(&line("rw-unknown")).expect("parses");
+        assert!(!unknown.tags.contains_key("sn-redeemed-title"));
+        let plain = IrcService::parse_privmsg(LOCALIZED_PRIVMSG).expect("parses");
+        assert!(!plain.tags.contains_key("sn-redeemed-title"));
+    }
+
+    #[test]
     fn a_privmsg_username_is_the_login_not_the_display_name() {
         let msg = IrcService::parse_privmsg(LOCALIZED_PRIVMSG).expect("parses");
         assert_eq!(msg.username, "mochi_panda");
@@ -5753,6 +5807,7 @@ mod own_message_tests {
     fn redemption(title: &str) -> RedemptionRow {
         RedemptionRow {
             channel: "chan".into(),
+            room_id: "7".into(),
             redemption_id: "r-1".into(),
             user_id: "42".into(),
             user_login: "viewer".into(),
@@ -5816,6 +5871,9 @@ mod own_message_tests {
         assert!(badges.contains(&"vip") && badges.contains(&"subscriber"));
 
         let mut bare = redemption("Hydrate");
+        bare.room_id.clear();
+        assert!(!redemption_message(&bare, Vec::new(), 1000).tags.contains_key("room-id"));
+        let mut bare = redemption("Hydrate");
         bare.reward_id.clear();
         bare.reward_cost = 0;
         bare.points_icon_url = None;
@@ -5825,6 +5883,20 @@ mod own_message_tests {
         for absent in ["sn-reward-cost", "sn-points-icon", "sn-reward-image"] {
             assert!(!msg.tags.contains_key(absent), "{absent}");
         }
+    }
+
+    #[test]
+    fn a_redemption_row_names_its_channel_so_badges_resolve_against_the_channel_set() {
+        // The renderers look a Twitch badge up in the set of the row's
+        // `room-id`; a row without one draws a subscriber badge from the global
+        // set, the default star, instead of the channel's custom art.
+        let msg = redemption_message(&redemption("Hydrate"), Vec::new(), 1000);
+        assert_eq!(msg.tags.get("room-id").map(String::as_str), Some("7"));
+        let sub = msg.badges.iter().find(|b| b.name == "subscriber").expect("subscriber badge");
+        assert_eq!(sub.version, "12");
+        // The page reads the row's tags as a plain object, so the id must survive JSON.
+        let json: Value = serde_json::to_value(&msg).expect("serializes");
+        assert_eq!(json["tags"]["room-id"], "7");
     }
 }
 

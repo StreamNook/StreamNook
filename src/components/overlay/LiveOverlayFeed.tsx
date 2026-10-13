@@ -16,7 +16,7 @@ import {
 } from '../../stores/chatConnectionStore';
 import { makeKey, parseKey } from '../../utils/providerKey';
 import { badgeSourceKey, HOMIES_CUSTOM_SOURCE } from '../../utils/chatterBadges';
-import { parseBadges } from '../../services/twitchBadges';
+import { initializeBadgeCache, parseBadges } from '../../services/twitchBadges';
 import { useChatUserStore } from '../../stores/chatUserStore';
 import {
   isStreamNookUser,
@@ -34,7 +34,7 @@ import type { BackendChatMessage } from '../../services/twitchChat';
 import type { ProviderId } from '../../types/providers';
 import { OverlayChat } from './OverlayChat';
 import { createSourceHolds } from './liveSourceHolds';
-import { isSystemRow, overlayTwitchBadgeUrl, systemRowForOverlay, type RoomRoleArt } from './liveOverlayRows';
+import { badgeRoomOf, isSystemRow, overlayTwitchBadges, systemRowForOverlay, type RoomRoleArt } from './liveOverlayRows';
 import type { OverlayMessage, OverlayAtmosphere } from './sampleMessages';
 import type { OverlayStyle } from './overlayConfig';
 
@@ -102,21 +102,14 @@ function adapt(
   m: BackendChatMessage,
   users: UsersMap,
   roleArtFor: (roomId: string | undefined) => RoomRoleArt | null | undefined,
+  sourceRoomId: string | null,
 ): OverlayMessage {
   const provider = m.provider ?? 'twitch';
   const rawBadges = Array.isArray(m.badges) ? m.badges : [];
   let badges = rawBadges;
   if (provider === 'twitch' && rawBadges.length > 0) {
-    const roomId = m.tags?.['room-id'];
-    const roleArt = roleArtFor(roomId);
-    const resolved = parseBadges(rawBadges.map((b) => `${b.name}/${b.version}`).join(','), roomId)
-      .filter((r) => r.info)
-      .map((r) => {
-        const [name, version] = r.key.split('/');
-        const url = overlayTwitchBadgeUrl(name, r.info, roleArt, () => parseBadges(r.key)[0]?.info);
-        return { name, version, image_url_4x: url, title: r.info.title };
-      });
-    if (resolved.length > 0) badges = resolved;
+    const roleArt = roleArtFor(m.tags?.['room-id'] || sourceRoomId || undefined);
+    badges = overlayTwitchBadges(rawBadges, m.tags, parseBadges, roleArt, sourceRoomId) ?? rawBadges;
   }
 
   // Two different id spaces, and reading one as the other shows a stranger's
@@ -175,6 +168,8 @@ export const LiveOverlayFeed = ({ sources, style, superSample = 1 }: { sources: 
   const roleArtAskedRef = useRef<Set<string>>(new Set());
   const registeredRef = useRef<Set<string>>(new Set());
   const badgeInitRef = useRef<Set<string>>(new Set());
+  const sharedBadgeRoomsRef = useRef<Set<string>>(new Set());
+  const [badgeRoomsLoaded, setBadgeRoomsLoaded] = useState(0);
   // The composite keys this feed wants and the ones it holds (see
   // liveSourceHolds: a Twitch acquire waits on the broadcaster id).
   const [holds] = useState(() =>
@@ -242,6 +237,13 @@ export const LiveOverlayFeed = ({ sources, style, superSample = 1 }: { sources: 
           badgeInitRef.current.add(key);
           void acquireChannel(s.channel, roomId, 'twitch').then(() => releaseChannel(s.channel, 'twitch'));
         }
+        // A shared-chat row wears the badges of the channel it was sent in,
+        // so that channel's set loads too, as the chat loads it.
+        const badgeRoom = badgeRoomOf(m.tags);
+        if (badgeRoom && badgeRoom !== roomId && !sharedBadgeRoomsRef.current.has(badgeRoom)) {
+          sharedBadgeRoomsRef.current.add(badgeRoom);
+          void initializeBadgeCache(badgeRoom).then(() => setBadgeRoomsLoaded((n) => n + 1));
+        }
         if (roomId && customRoleArt && !roleArtAskedRef.current.has(roomId)) {
           roleArtAskedRef.current.add(roomId);
           void invoke<RoomRoleArt | null>('get_ffz_room_role_art', { channelId: roomId })
@@ -259,14 +261,17 @@ export const LiveOverlayFeed = ({ sources, style, superSample = 1 }: { sources: 
   const overlayMessages = useMemo<OverlayMessage[]>(() => {
     void revision;
     void cosmeticsVersion;
+    void badgeRoomsLoaded;
     const roleArtFor = (roomId: string | undefined): RoomRoleArt | null | undefined =>
       customRoleArt ? (roomId ? roleArt.get(roomId) ?? null : null) : undefined;
     const order = orderRef.current;
     const now = Date.now();
-    const rows: { m: BackendChatMessage; seq: number; provider: ProviderId }[] = [];
+    const rows: { m: BackendChatMessage; seq: number; provider: ProviderId; roomId: string | null }[] = [];
     for (const s of valid) {
       const slice = useChatConnectionStore.getState().channels.get(sliceKeyFor(s.provider, s.channel));
       if (!slice) continue;
+      // The source's broadcaster id, for a row that arrives without its own.
+      const roomId = s.provider === 'twitch' ? (twitchIdCache.get(s.channel.toLowerCase()) ?? null) : null;
       for (const raw of slice.messages) {
         if (!raw || typeof raw !== 'object') continue;
         const m = raw as BackendChatMessage;
@@ -289,7 +294,7 @@ export const LiveOverlayFeed = ({ sources, style, superSample = 1 }: { sources: 
           }
           order.map.set(m.id, seq);
         }
-        rows.push({ m, seq, provider: s.provider });
+        rows.push({ m, seq, provider: s.provider, roomId });
       }
     }
     rows.sort((a, b) => a.seq - b.seq);
@@ -300,10 +305,10 @@ export const LiveOverlayFeed = ({ sources, style, superSample = 1 }: { sources: 
         if (row) out.push(row);
         continue;
       }
-      out.push(adapt(r.m, usersMap, roleArtFor));
+      out.push(adapt(r.m, usersMap, roleArtFor, r.roomId));
     }
     return out;
-  }, [revision, valid, usersMap, cosmeticsVersion, customRoleArt, roleArt]);
+  }, [revision, valid, usersMap, cosmeticsVersion, customRoleArt, roleArt, badgeRoomsLoaded]);
 
   const anyConnected = valid.some((s) => useChatConnectionStore.getState().channels.get(sliceKeyFor(s.provider, s.channel))?.isConnected);
   const status = valid.length === 0

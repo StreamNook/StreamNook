@@ -378,6 +378,7 @@ import { SevenTvAvatar } from './SevenTvAvatar';
 
 import { Logger } from '../utils/logger';
 import { kickTimeoutMinutes } from '../utils/kickTimeout';
+import { WatchStreakFlame } from './icons/WatchStreakFlame';
 
 interface ChatMessageProps {
   message: string | BackendChatMessage; // Raw IRC message or Backend Message Object
@@ -2179,6 +2180,10 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // "<reward name> <points glyph> <amount>" instead of a plain "(N)" in the text.
   const redemptionCost = parsed.tags.get('sn-reward-cost');
   const redemptionPointsIcon = parsed.tags.get('sn-points-icon');
+  // A reward that asks for text arrives as a chat message tagged only with its
+  // id; Rust names it from the channel's rewards (irc_service stamp_reward_name).
+  const redeemedTitle = parsed.tags.get('sn-redeemed-title');
+  const redeemedCost = parsed.tags.get('sn-redeemed-cost');
   const isGigantifiedEmote =
     msgId === 'gigantified-emote-message' || sourceMsgId === 'gigantified-emote-message';
   const isAnimatedMessage =
@@ -2194,7 +2199,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         : isSubModeBypass
           ? 'Sent a Message in Sub-Only Mode'
           : hasCustomReward
-            ? 'Redeemed a channel points reward'
+            ? (redeemedTitle ? `Redeemed ${redeemedTitle}` : 'Redeemed a channel points reward')
             : null;
   const isRedemption = redemptionLabel !== null;
 
@@ -2752,10 +2757,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('watchstreak-gradient')}`} style={{ ...eventCardStyle, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
         <div className="flex items-center gap-2.5">
           <div className="flex-shrink-0">
-            {/* Fire/Watch Streak icon from Twitch */}
-            <svg className="w-5 h-5 text-highlight-orange" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M11 4.5 9 2 4.8 6.9A7.48 7.48 0 0 0 3 11.77C3 15.2 5.8 18 9.23 18h1.65A6.12 6.12 0 0 0 17 11.88c0-1.86-.65-3.66-1.84-5.1L12 3l-1 1.5ZM6.32 8.2 9 5l2 2.5L12 6l1.62 2.07A5.96 5.96 0 0 1 15 11.88c0 2.08-1.55 3.8-3.56 4.08.36-.47.56-1.05.56-1.66 0-.52-.18-1.02-.5-1.43L10 11l-1.5 1.87c-.32.4-.5.91-.5 1.43 0 .6.2 1.18.54 1.64A4.23 4.23 0 0 1 5 11.77c0-1.31.47-2.58 1.32-3.57Z" clipRule="evenodd" />
-            </svg>
+            <WatchStreakFlame size={20} className="text-highlight-orange" />
           </div>
           <div
             className="flex-1 min-w-0 flex flex-col"
@@ -3353,12 +3355,27 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       )}
       {/* Channel points redemption indicator (highlight, gigantify, animate, skip-subs-mode, custom reward) */}
       {redemptionLabel && (
-        <div className="flex items-center justify-end gap-1">
-          <svg className="w-3 h-3 text-highlight-cyan opacity-60" viewBox="0 0 20 20" fill="currentColor">
+        <div className="flex min-w-0 items-center justify-end gap-1">
+          <svg className="w-3 h-3 flex-shrink-0 text-highlight-cyan opacity-60" viewBox="0 0 20 20" fill="currentColor">
             <path d="M10 6a4 4 0 014 4h-2a2 2 0 00-2-2V6z" />
             <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-2 0a6 6 0 11-12 0 6 6 0 0112 0z" clipRule="evenodd" />
           </svg>
-          <span className="text-xs text-highlight-cyan font-normal opacity-60">{redemptionLabel}</span>
+          <span className="min-w-0 truncate text-xs text-highlight-cyan font-normal opacity-60">{redemptionLabel}</span>
+          {redeemedTitle && redeemedCost && (
+            <span className="inline-flex flex-shrink-0 items-center gap-0.5 text-xs text-highlight-cyan/80 font-medium tabular-nums">
+              {redemptionPointsIcon ? (
+                <img
+                  src={redemptionPointsIcon}
+                  alt=""
+                  className="w-3 h-3 inline-block rounded-full object-cover"
+                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                />
+              ) : (
+                <ChannelPointsIcon size={12} className="text-highlight-cyan/80" />
+              )}
+              {Number(redeemedCost).toLocaleString()}
+            </span>
+          )}
         </div>
       )}
       {/* Reply indicator */}
