@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import SNKit
+import WebKit
 
 /// The Twitch sign-in on Twitch's own login and Authorize pages. The core starts it
 /// (`begin_twitch_web_login`: the authorize page, with its CSRF state kept in Rust), the sheet
@@ -127,6 +128,15 @@ final class SignIn {
         finishing = false
         error = message
         log.error("sign-in failed: \(message, privacy: .public)")
+    }
+
+    /// The core signed the account out: forget it, and empty the sign-in browser so the next
+    /// sign-in starts at Twitch's login page instead of continuing as the person who left.
+    func signedOut(core: CoreBridge) async {
+        user = nil
+        await WKWebsiteDataStore.default().removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
+        await cookies?.push()
+        log.notice("signed out")
     }
 
     private func refreshUser(core: CoreBridge) async {

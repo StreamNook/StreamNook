@@ -10,15 +10,20 @@ enum CoreHost {
     static let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
 
     /// The Rust core when it is linked into this build, FakeCore otherwise. A DEBUG build launched
-    /// with SN_FAKE=1 uses FakeCore either way.
+    /// with SN_FAKE=1, or with a `fake` or `fake:signedin` drive step, uses FakeCore either way,
+    /// answering the screens from fixtures.
     static func makeCore() -> CoreBridge {
-        #if canImport(SNCore)
         #if DEBUG
-        if ProcessInfo.processInfo.environment["SN_FAKE"] == "1" { return FakeCore() }
+        let environment = ProcessInfo.processInfo.environment
+        let steps = (environment["SN_DRIVE"] ?? "").split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }
+        if environment["SN_FAKE"] == "1" || steps.contains("fake") || steps.contains("fake:signedin") {
+            return FakeCore(fixtures: FakeFixtures(signedIn: steps.contains("fake:signedin")))
+        }
         #endif
+        #if canImport(SNCore)
         return RustCore()
         #else
-        return FakeCore()
+        return FakeCore(fixtures: FakeFixtures(signedIn: false))
         #endif
     }
 

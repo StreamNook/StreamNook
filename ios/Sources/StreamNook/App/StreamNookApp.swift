@@ -2,12 +2,17 @@ import SwiftUI
 
 @main
 struct StreamNookApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var model = AppModel()
     @Environment(\.scenePhase) private var phase
 
+    init() {
+        Typeface.register()
+    }
+
     var body: some Scene {
         WindowGroup {
-            RootView(model: model)
+            AppRoot(model: model)
                 .task {
                     await model.boot()
                     #if DEBUG
