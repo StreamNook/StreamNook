@@ -72,6 +72,7 @@ pub mod emote_service;
 pub mod emote_set_cache;
 pub mod eventsub_moderation;
 pub mod eventsub_service;
+pub mod follow_lookup;
 pub mod ffz_room_badges;
 pub mod file_log;
 pub mod app_exit;
@@ -86,6 +87,8 @@ pub mod member_alias;
 pub mod modroom_auth_service;
 pub mod tiktok_auth_service;
 pub mod youtube_auth_service;
+pub mod favorite_categories;
+pub mod hidden_channels;
 pub mod favorite_live_service;
 // Reads the chat dock, which is desktop only.
 #[cfg(desktop)]
@@ -123,6 +126,7 @@ pub mod seventv_auth_service;
 pub mod seventv_cosmetics_resolver;
 pub mod seventv_eventapi;
 pub mod song_id;
+pub mod sub_standing;
 pub mod stream_server;
 pub mod flv_fmp4;
 pub mod tiktok_relay;

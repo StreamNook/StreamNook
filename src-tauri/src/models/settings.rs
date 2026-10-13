@@ -965,6 +965,19 @@ pub struct Settings {
     /// settings file in the field needs migrating.
     #[serde(default)]
     pub favorite_channels: Vec<FavoriteChannel>,
+    /// Twitch categories the viewer starred, in the order they were added.
+    /// Edited only through `set_favorite_category` (an in-place change).
+    #[serde(default)]
+    pub favorite_categories: Vec<FavoriteCategory>,
+    /// Channels hidden from browsing (Discover, suggestions, categories,
+    /// directories), keyed like `favorite_streamers`. Edited only through
+    /// `set_channel_hidden` and `set_hidden_channel_blocked`.
+    #[serde(default)]
+    pub hidden_channels: Vec<HiddenChannel>,
+    /// What a newly hidden channel is hidden from besides browsing; each
+    /// hidden channel keeps its own copy, adjustable in Settings.
+    #[serde(default)]
+    pub hidden_channel_defaults: HiddenRealms,
     #[serde(default)]
     pub chat_design: ChatDesignSettings,
     #[serde(default)]
@@ -1169,6 +1182,9 @@ pub struct ChatInputSettings {
     /// Show the channel's chat modes (emote-only, followers-only, slow mode
     /// and the rest) in the message box while they are on.
     pub show_room_modes: bool,
+    /// How the modes show: `chip` (one chip at the box's edge, the default) or
+    /// `prompt` (named in place of "Send a message").
+    pub room_modes_style: String,
     /// The composer keys this struct does not name (placeholder, buttons,
     /// spellcheck, tab completion, ...), kept verbatim.
     #[serde(flatten)]
@@ -1177,7 +1193,7 @@ pub struct ChatInputSettings {
 
 impl Default for ChatInputSettings {
     fn default() -> Self {
-        Self { show_room_modes: true, extra: HashMap::new() }
+        Self { show_room_modes: true, room_modes_style: "chip".into(), extra: HashMap::new() }
     }
 }
 
@@ -1342,6 +1358,49 @@ impl ChatBlendSettings {
 ///
 /// Rows whose id has left `favorite_streamers` are ignored where they're read
 /// rather than pruned, so nothing has to write settings during startup.
+/// A hidden channel: the favourites' row shape, so the list in Settings can
+/// draw it, whether StreamNook also blocked it on Twitch, and where besides
+/// browsing (always) it is hidden.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HiddenChannel {
+    #[serde(flatten)]
+    pub channel: FavoriteChannel,
+    #[serde(default)]
+    pub blocked: bool,
+    #[serde(flatten)]
+    pub realms: HiddenRealms,
+}
+
+/// Where a hidden channel is hidden besides browsing lists.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct HiddenRealms {
+    /// Their messages, in every chat room.
+    pub chat: bool,
+    /// Search results.
+    pub search: bool,
+    /// Following, favourites, the Sidebar and live notifications.
+    pub follows: bool,
+}
+
+impl Default for HiddenRealms {
+    fn default() -> Self {
+        Self { chat: true, search: true, follows: true }
+    }
+}
+
+/// A starred Twitch category. The name and box art are kept so the row paints
+/// before Twitch answers, and when it does not.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct FavoriteCategory {
+    /// Twitch game id.
+    pub id: String,
+    pub name: String,
+    /// Helix's template form (`{width}x{height}`) or a sized URL.
+    #[serde(default)]
+    pub box_art_url: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FavoriteChannel {
     /// The key used in `favorite_streamers`: a Twitch numeric user id, or a
@@ -1379,6 +1438,9 @@ impl Default for Settings {
             drops: DropsSettings::default(),
             favorite_streamers: vec![],
             favorite_channels: vec![],
+            favorite_categories: vec![],
+            hidden_channels: vec![],
+            hidden_channel_defaults: HiddenRealms::default(),
             provider_follows: vec![],
             youtube_chat_view: YouTubeChatView::default(),
             channel_links: vec![],
@@ -1988,15 +2050,19 @@ mod backup_persistence_tests {
         let parsed: Settings = serde_json::from_value(value).unwrap();
         assert!(!parsed.extra.contains_key("chat_input"));
         assert!(parsed.chat_input.show_room_modes, "a missing switch takes the default");
+        assert_eq!(parsed.chat_input.room_modes_style, "chip", "a missing style takes the chip");
         assert_eq!(parsed.chat_input.extra.get("hide_placeholder"), Some(&serde_json::json!(true)));
 
         let mut off = parsed.clone();
         off.chat_input.show_room_modes = false;
+        off.chat_input.room_modes_style = "prompt".into();
         let out = serde_json::to_value(&off).unwrap();
         assert_eq!(out["chat_input"]["show_room_modes"], false);
+        assert_eq!(out["chat_input"]["room_modes_style"], "prompt");
         assert_eq!(out["chat_input"]["emote_tab_complete_match_mode"], "includes", "flattened back in place");
         let back: Settings = serde_json::from_value(out).unwrap();
         assert!(!back.chat_input.show_room_modes);
+        assert_eq!(back.chat_input.room_modes_style, "prompt");
     }
 
     /// The on/off switch the source choice replaced: a file that turned 7TV

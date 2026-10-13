@@ -671,6 +671,9 @@ export interface ChatInputSettings {
   // in the message box while they are on. Typed in Rust
   // (models/settings.rs ChatInputSettings), which owns the default: on.
   show_room_modes?: boolean;
+  // How the modes show: one chip at the box's edge (the default), or named in
+  // place of "Send a message". Typed in Rust beside show_room_modes.
+  room_modes_style?: 'chip' | 'prompt';
 }
 
 // Screen anchor a toast popup appears at. Mirrors the Rust `toast_position`
@@ -1148,6 +1151,17 @@ export interface Settings {
   // Display identity for the entries in favorite_streamers. A sidecar, not a
   // replacement: favorite_streamers stays the answer to "is this favorited".
   favorite_channels?: FavoriteChannel[];
+  // Starred Twitch categories, in the order they were starred. Typed in Rust
+  // (models/settings.rs FavoriteCategory); edited only through the
+  // set_favorite_category command, never a page-built write.
+  favorite_categories?: FavoriteCategory[];
+  // Channels hidden from browsing (Discover, the sidebar's suggestions,
+  // categories, directories), keyed like favorite_streamers. Typed in Rust;
+  // edited only through set_channel_hidden and set_hidden_channel_blocked.
+  hidden_channels?: HiddenChannel[];
+  // What a newly hidden channel is hidden from besides browsing. Typed in Rust
+  // (HiddenRealms), which owns the default: everything.
+  hidden_channel_defaults?: HiddenRealms;
   chat_design?: ChatDesignSettings;
   chat_highlights?: ChatHighlightSettings;
   chat_customization?: ChatCustomizationSettings;
@@ -1595,6 +1609,34 @@ export interface HomeSnapshot {
    *  each platform's cached categories. */
   other_categories: ProviderCategory[];
   other_categories_at: number | null;
+  /** The Categories tab's favorites row, built in Rust with live viewer
+   *  counts, in the order the categories were starred. */
+  favorite_categories?: TwitchCategory[];
+  favorite_categories_at?: number | null;
+}
+
+/** A channel hidden from browsing, and whether StreamNook also blocked it on
+ *  Twitch. Mirrors Rust `models::settings::HiddenChannel`. */
+export interface HiddenChannel extends FavoriteChannel, Partial<HiddenRealms> {
+  blocked?: boolean;
+}
+
+/** Where a hidden channel is hidden besides browsing lists. Mirrors Rust
+ *  `models::settings::HiddenRealms`; absent means true. */
+export interface HiddenRealms {
+  /** Their messages, in every chat room. */
+  chat: boolean;
+  /** Search results. */
+  search: boolean;
+  /** Following, favorites, the sidebar and live notifications. */
+  follows: boolean;
+}
+
+/** A starred Twitch category. Mirrors Rust `models::settings::FavoriteCategory`. */
+export interface FavoriteCategory {
+  id: string;
+  name: string;
+  box_art_url: string;
 }
 
 /** Live favourites, the other live follows (ranked by viewers across every
@@ -1644,7 +1686,8 @@ export type HomeSnapshotUpdate =
    *  provider id): ranked, minus what its Favourites and Followed show. */
   | { section: 'sidebar_discover'; scope: string; streams: TwitchStream[]; at: number }
   | { section: 'following'; favorites: TwitchStream[]; live: TwitchStream[]; offline: TwitchStream[]; at: number }
-  | { section: 'other_categories'; categories: ProviderCategory[]; at: number };
+  | { section: 'other_categories'; categories: ProviderCategory[]; at: number }
+  | { section: 'favorite_categories'; categories: TwitchCategory[]; at: number };
 
 /**
  * A live stream row. The name is historical: rows may now come from any
@@ -2433,7 +2476,35 @@ export interface HypeTrainData {
   is_golden_kappa?: boolean;
 }
 
-
-
-
-
+/** A chatter's sub in a channel, with its words. Mirrors `SubStanding` in
+ *  src-tauri/src/services/sub_standing.rs. */
+export interface SubStanding {
+  state: 'current' | 'past' | 'never' | 'unknown';
+  founder: boolean;
+  kind: 'paid' | 'gift' | 'prime' | null;
+  tier: number | null;
+  months: number | null;
+  streak_months: number | null;
+  gifter_login: string | null;
+  gifter_display_name: string | null;
+  title: string | null;
+  detail: string | null;
+  gift_label: string | null;
+  gift_url: string | null;
+  /** "month" or "months", beside `months` shown large. */
+  months_unit: string | null;
+  /** "Tier 1" beside the months; null for Prime, which is a fact instead. */
+  tier_label: string | null;
+  /** Each fact with Twitch's own badge art where one exists (founder, Prime
+   *  Gaming, Sub Gifter); a streak has none. */
+  facts: Array<{ kind: 'founder' | 'prime' | 'streak' | 'gift'; text: string; art: string | null }>;
+  /** The channel's sub badge for this tenure and tier. */
+  badge_art: string | null;
+  next_badge: {
+    months: number;
+    months_left: number;
+    progress: number;
+    art: string | null;
+    text: string;
+  } | null;
+}

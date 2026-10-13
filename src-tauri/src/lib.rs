@@ -801,6 +801,7 @@ pub fn run() {
     services::chat_rules::ChatRules::refresh(&settings);
     services::streamer_mode::StreamerMode::refresh(&settings);
     services::mention_ping::refresh(&settings);
+    services::hidden_channels::refresh(&settings);
 
     // Apply persisted diagnostic logging setting immediately after loading settings
     services::diagnostic_logger::apply_setting(settings.error_reporting_enabled);
@@ -1866,6 +1867,10 @@ pub fn run() {
             patch_settings,
             get_default_settings,
             set_chat_user_hidden,
+            set_favorite_category,
+            set_channel_hidden,
+            set_hidden_channel_blocked,
+            set_hidden_channel_realms,
             set_chat_user_override,
             get_settings_dir,
             open_settings_folder,
@@ -1915,6 +1920,7 @@ pub fn run() {
             get_badge_standing,
             get_badge_window,
             get_badge_drop_campaign,
+            get_badge_earn_guide,
             // Badge Metadata commands
             fetch_badge_metadata,
             // Link preview commands
@@ -2009,6 +2015,7 @@ pub fn run() {
             // Watch token allocation commands
             // Channel Points Rewards commands
             get_channel_rewards,
+            get_cached_channel_rewards,
             redeem_channel_reward,
             send_highlighted_message,
             send_sub_mode_message,
@@ -2058,6 +2065,7 @@ pub fn run() {
             // IVR account facts
             get_ivr_user_summary,
             get_ivr_subage_summary,
+            get_sub_standing,
             // Server-controlled client switches
             get_client_config,
             // Drops page model
@@ -2232,6 +2240,7 @@ pub fn run() {
             commands::slash_commands::watch_channel_poll,
             commands::slash_commands::slash_last_message,
             commands::slash_commands::slash_delete_message,
+            commands::slash_commands::slash_lurk_line,
             commands::slash_commands::slash_recent_messages,
             commands::slash_commands::slash_mass_unban_start,
             commands::slash_commands::slash_mass_unban_stop,
