@@ -413,8 +413,6 @@ const StreamerAboutPanel = memo(({ channelLogin, hideHero, scrollRef, onChannelS
                     <Tooltip key={i} content={link.url} side="top">
                       <a
                         href={link.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
                         onClick={(e) => {
                           e.preventDefault();
                           invoke('open_browser_url', { url: link.url });

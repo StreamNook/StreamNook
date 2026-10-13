@@ -1,4 +1,5 @@
 import { X, Gift, ChevronLeft, AlertTriangle, Calendar, ChevronRight, Users, Clock, ArrowUpRight, Radio } from 'lucide-react';
+import { ExternalAnchor } from './ui/ExternalAnchor';
 import { useEffect, useState, useMemo, useCallback, type JSX } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -923,10 +924,8 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
             {/* Badge Variations */}
             <div className="flex items-end gap-4">
               <Tooltip content="View 72px image" side="top">
-                <a
+                <ExternalAnchor
                   href={badge.image_url_4x}
-                  target="_blank"
-                  rel="noopener noreferrer"
                   className="flex items-center justify-center bg-glass rounded-lg p-4 hover:bg-glass/80 transition-colors cursor-pointer"
                 >
                   <img
@@ -934,13 +933,11 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
                     alt={badge.title}
                     className="w-18 h-18 object-contain"
                   />
-                </a>
+                </ExternalAnchor>
               </Tooltip>
               <Tooltip content="View 36px image" side="top">
-                <a
+                <ExternalAnchor
                   href={badge.image_url_2x}
-                  target="_blank"
-                  rel="noopener noreferrer"
                   className="flex items-center justify-center bg-glass rounded-lg p-3 hover:bg-glass/80 transition-colors cursor-pointer"
                 >
                   <img
@@ -948,13 +945,11 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
                     alt={badge.title}
                     className="w-9 h-9 object-contain"
                   />
-                </a>
+                </ExternalAnchor>
               </Tooltip>
               <Tooltip content="View 18px image" side="top">
-                <a
+                <ExternalAnchor
                   href={badge.image_url_1x}
-                  target="_blank"
-                  rel="noopener noreferrer"
                   className="flex items-center justify-center bg-glass rounded-lg p-2 hover:bg-glass/80 transition-colors cursor-pointer"
                 >
                   <img
@@ -962,7 +957,7 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
                     alt={badge.title}
                     className="w-[18px] h-[18px] object-contain"
                   />
-                </a>
+                </ExternalAnchor>
               </Tooltip>
             </div>
 
@@ -1169,14 +1164,12 @@ const BadgeDetailOverlay = ({ badge, setId, onClose, onBack }: BadgeDetailOverla
                   {badge.click_url && (
                     <div className="flex gap-3">
                       <span className="text-textSecondary w-24 shrink-0">Click URL</span>
-                      <a
+                      <ExternalAnchor
                         href={badge.click_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
                         className="text-accent hover:underline break-all"
                       >
                         {badge.click_url}
-                      </a>
+                      </ExternalAnchor>
                     </div>
                   )}
                       </div>

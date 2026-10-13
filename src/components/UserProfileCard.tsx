@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback, useSyncExternalStore } from 'react';
+import { ExternalAnchor } from './ui/ExternalAnchor';
 import { MessageCircle, UserPlus, UserMinus, Loader2, ChevronLeft, ChevronUp, Pencil, X, Share2, Link2, Check, EyeOff, History } from 'lucide-react';
 import { filterChannelKey, isHiddenInScope } from '../utils/chatFilters';
 import { buildShareUrl, buildProfileUrl } from '../utils/shareLink';
@@ -1707,9 +1708,9 @@ const UserProfileCard = ({
       >
         Join chat
       </button>
-      <a href={`https://www.twitch.tv/${login}`} target="_blank" rel="noopener noreferrer" className={memberActionBtn}>
+      <ExternalAnchor href={`https://www.twitch.tv/${login}`} className={memberActionBtn}>
         Twitch
-      </a>
+      </ExternalAnchor>
       <button
         onClick={async () => {
           try {
@@ -1924,14 +1925,12 @@ const UserProfileCard = ({
               >
                 Join Chat
               </button>
-              <a
+              <ExternalAnchor
                 href={`https://www.twitch.tv/${login}`}
-                target="_blank"
-                rel="noopener noreferrer"
                 className="glass-button text-white text-xs py-2.5 px-3 rounded-md text-center hover:bg-accent/20 transition-colors flex items-center justify-center w-full"
               >
                 Open on Twitch
-              </a>
+              </ExternalAnchor>
               {/* Share. Copies the streamnook.app/w/<channel> link; icon and label
                   pop to a check on copy. Full width under the action grid. */}
               <button
