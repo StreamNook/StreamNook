@@ -1,3 +1,22 @@
+## [8.8.11] - 2026-10-13
+
+### ✨ Features
+- A new channel points menu. Rewards show their art without boxes, your balance sits up top with a search for channels with lots of rewards, and a colored dot says why a reward is unavailable: red when you can't afford it (with how close you are), amber while it's on cooldown, grey when it's paused or sold out. The menu eases open and closed, and closes when you click outside it.
+- Replies to you can have their own sound. Pick one under Settings > Chat > Mentions & Replies > Reply sound, or keep Same as mentions.
+- Seven retro sounds join the built-in tones for mentions, replies and highlights: Morse SMS, Gran Vals, Pager, Flip Phone, Arcade, Spy Gadget and Old Ringtone.
+- Mentions and replies to you can stay tinted the whole time they're on screen instead of only flashing as they land. Turn on Keep tinted under Settings > Chat > Mentions & Replies > Highlight.
+- Moderators who drag messages can choose where the grab hand shows: anywhere on the message, or only on the strip at its left edge. You can pick a message up from anywhere either way. Settings > Moderation > Method > Grab cursor.
+- Offline channels on Home show which platform they're on when you follow channels on more than one.
+
+### 🐛 Bug Fixes
+- Drop progress counts again while you watch a stream in the app or on your phone.
+- The channel points menu lists a channel's rewards and your balance without the Drops sign-in.
+- Chats show recent messages when you join. A chat first opened from the chat dock or MultiChat could stay empty until someone talked, and history now comes straight from Twitch, 7TV, BTTV and FFZ emotes included.
+- Static 7TV emotes in Favorites no longer blink or fade when you scroll the emote menu.
+- The Channel button on a search profile opens the channel inside StreamNook: Watch when they're live, Open chat when they're not.
+- Links to outside pages from About panels, badge pages and profile cards open in your browser every time.
+- Redemptions that don't ask for text read on one line, like "Supibot redeemed Hydrate".
+
 ## [8.8.10] - 2026-10-13
 
 ### ✨ Features
