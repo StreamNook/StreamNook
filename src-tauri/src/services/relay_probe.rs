@@ -154,6 +154,7 @@ pub fn report(player_pdt_ms: Option<f64>, target_ms: Option<i64>) -> LiveDistanc
         _ => false,
     };
     s.catching_up = catching_up;
+    let fetches = std::mem::take(&mut s.fetches);
     let newest = s.edges.back();
     LiveDistance {
         behind_ms,
@@ -162,7 +163,7 @@ pub fn report(player_pdt_ms: Option<f64>, target_ms: Option<i64>) -> LiveDistanc
         edge_part: newest.map(|e| e.part),
         edge_age_ms: newest.map(|e| now - e.arrived_ms),
         rate: if catching_up { CATCH_UP_RATE } else { 1.0 },
-        fetches: std::mem::take(&mut s.fetches),
+        fetches,
     }
 }
 
