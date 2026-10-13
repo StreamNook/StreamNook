@@ -26,6 +26,16 @@
 # does not exist on Linux.
 set -euo pipefail
 
+# One core build at a time across every checkout: two at once overrun the VM's
+# memory. The guard keeps a nested call from waiting on its own lock.
+if [[ -z "${SN_BUILD_LOCKED:-}" ]]; then
+    mkdir -p /root/sn-ios-core
+    exec 9>/root/sn-ios-core/build.lock
+    echo "Waiting for the core build lock..." >&2
+    flock 9
+    export SN_BUILD_LOCKED=1
+fi
+
 mode="build"
 if [[ "${1:-}" == "--check" ]]; then
     mode="check"
