@@ -62,6 +62,8 @@ allow = [
   "get_emoji_image",
   "read_clipboard_text_native",
   "twitch_login",
+  "begin_twitch_web_login",
+  "finish_twitch_web_login",
   "create_clip",
   "get_live_broadcast",
   "create_vod_clip",

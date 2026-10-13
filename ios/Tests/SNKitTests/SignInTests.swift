@@ -35,10 +35,10 @@ import Testing
 }
 
 @Suite struct TwitchSignInTests {
-    @Test func theDeviceLoginPairDecodes() throws {
-        let json = #"["https://www.twitch.tv/activate?device-code=ABCD","ABCD"]"#
-        let login = try JSONDecoder().decode(DeviceLogin.self, from: Data(json.utf8))
-        #expect(login == DeviceLogin(verificationURI: "https://www.twitch.tv/activate?device-code=ABCD", userCode: "ABCD"))
+    @Test func theWebLoginDecodes() throws {
+        let json = #"{"url":"https://id.twitch.tv/oauth2/authorize?state=s","redirect":"http://localhost:3000/callback"}"#
+        let login = try JSONDecoder().decode(WebLogin.self, from: Data(json.utf8))
+        #expect(login == WebLogin(url: "https://id.twitch.tv/oauth2/authorize?state=s", redirect: "http://localhost:3000/callback"))
     }
 
     @Test func theUserDecodesWithItsOptionalFields() throws {
@@ -47,33 +47,41 @@ import Testing
         #expect(user == TwitchUser(id: "1", login: "nook", displayName: "Nook", profileImageURL: "p"))
     }
 
-    private let activate = URL(string: "https://www.twitch.tv/activate?device-code=ABCD")!
+    private let authorize = URL(string: "https://id.twitch.tv/oauth2/authorize?client_id=x&state=s")!
+    private let redirect = URL(string: "http://localhost:3000/callback")!
 
-    @Test func landingHomeMidSignInReturnsToTheActivatePageOnce() {
-        var nav = ActivateNavigator(activate: activate)
+    @Test func theRedirectCarriesTheCodeAndState() {
+        var nav = SignInNavigator(authorize: authorize, redirect: redirect)
         #expect(nav.arrived(at: URL(string: "https://www.twitch.tv/login?client_id=x")!) == .stay)
-        #expect(nav.arrived(at: URL(string: "https://www.twitch.tv/")!) == .returnToActivate(activate))
+        #expect(nav.arrived(at: URL(string: "http://localhost:3000/callback?code=abc&scope=chat%3Aread&state=s")!)
+            == .redirect(code: "abc", state: "s", error: nil))
+    }
+
+    @Test func aDeclinedAuthorizeCarriesTheError() {
+        var nav = SignInNavigator(authorize: authorize, redirect: redirect)
+        let declined = URL(string: "http://localhost:3000/callback?error=access_denied&error_description=The+user+denied+you+access&state=s")!
+        #expect(nav.arrived(at: declined) == .redirect(code: nil, state: "s", error: "The user denied you access"))
+        let bare = URL(string: "http://localhost:3000/callback/?error=access_denied")!
+        #expect(nav.arrived(at: bare) == .redirect(code: nil, state: nil, error: "access_denied"))
+    }
+
+    @Test func anotherPortOrPathIsNotTheRedirect() {
+        var nav = SignInNavigator(authorize: authorize, redirect: redirect)
+        #expect(nav.arrived(at: URL(string: "http://localhost:3001/callback?code=abc")!) == .stay)
+        #expect(nav.arrived(at: URL(string: "http://localhost:3000/other?code=abc")!) == .stay)
+    }
+
+    @Test func landingHomeMidSignInReturnsToTheAuthorizePageOnce() {
+        var nav = SignInNavigator(authorize: authorize, redirect: redirect)
+        #expect(nav.arrived(at: URL(string: "https://www.twitch.tv/")!) == .returnToAuthorize(authorize))
         #expect(nav.arrived(at: URL(string: "https://www.twitch.tv/")!) == .stay)
-    }
-
-    @Test func approvalIsWhereTheAuthorizeRedirectSaid() {
-        var nav = ActivateNavigator(activate: activate)
-        let authorize = URL(string: "https://auth.twitch.tv/authorize?client_id=x&redirect_uri=https%3A%2F%2Fwww.twitch.tv%2Factivate%2Fdone%3Fa%3D1")!
-        #expect(nav.arrived(at: authorize) == .stay)
-        #expect(nav.arrived(at: URL(string: "https://www.twitch.tv/settings/connections")!) == .stay)
-        #expect(nav.arrived(at: URL(string: "https://www.twitch.tv/activate/done/?a=1")!) == .approved)
-    }
-
-    @Test func approvalFallsBackToTheConnectionsPage() {
-        var nav = ActivateNavigator(activate: activate)
-        #expect(nav.arrived(at: activate) == .stay)
-        #expect(nav.arrived(at: URL(string: "https://www.twitch.tv/settings/connections")!) == .approved)
+        #expect(nav.arrived(at: URL(string: "https://www.twitch.tv/somechannel")!) == .stay)
     }
 
     @Test func onlyWebLinksLoadInTheSheet() {
-        #expect(ActivateNavigator.allows(URL(string: "https://www.twitch.tv/login")!))
-        #expect(ActivateNavigator.allows(URL(string: "about:blank")!))
-        #expect(!ActivateNavigator.allows(URL(string: "itms-apps://apps.apple.com/app/id460177396")!))
-        #expect(!ActivateNavigator.allows(URL(string: "twitch://open")!))
+        #expect(SignInNavigator.allows(URL(string: "https://www.twitch.tv/login")!))
+        #expect(SignInNavigator.allows(URL(string: "about:blank")!))
+        #expect(!SignInNavigator.allows(URL(string: "itms-apps://apps.apple.com/app/id460177396")!))
+        #expect(!SignInNavigator.allows(URL(string: "twitch://open")!))
     }
 }

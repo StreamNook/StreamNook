@@ -2,7 +2,7 @@ import SNKit
 import SwiftUI
 import WebKit
 
-/// Twitch's own sign-in and activate pages in a web view on the persistent default store.
+/// Twitch's own login and Authorize pages in a web view on the persistent default store.
 struct SignInSheet: View {
     let signIn: SignIn
     let page: SignIn.Page
@@ -10,10 +10,18 @@ struct SignInSheet: View {
 
     var body: some View {
         NavigationStack {
-            TwitchWebView(url: page.url, cookies: signIn.cookies) {
-                signIn.approvalLanded()
+            TwitchWebView(page: page, cookies: signIn.cookies) { code, state, error in
+                signIn.redirected(code: code, state: state, error: error)
             }
             .ignoresSafeArea(edges: .bottom)
+            .overlay {
+                if signIn.finishing {
+                    ProgressView()
+                        .controlSize(.large)
+                        .padding(24)
+                        .glassEffect()
+                }
+            }
             .navigationTitle("Sign in to Twitch")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -26,12 +34,12 @@ struct SignInSheet: View {
 }
 
 private struct TwitchWebView: UIViewRepresentable {
-    let url: URL
+    let page: SignIn.Page
     let cookies: CookieSync?
-    let approved: @MainActor () -> Void
+    let redirected: @MainActor (String?, String?, String?) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(activate: url, cookies: cookies, approved: approved)
+        Coordinator(page: page, cookies: cookies, redirected: redirected)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -39,7 +47,7 @@ private struct TwitchWebView: UIViewRepresentable {
         view.navigationDelegate = context.coordinator
         view.allowsBackForwardNavigationGestures = true
         context.coordinator.watch(view)
-        view.load(URLRequest(url: url))
+        view.load(URLRequest(url: page.authorize))
         return view
     }
 
@@ -47,16 +55,16 @@ private struct TwitchWebView: UIViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate {
-        private var navigator: ActivateNavigator
+        private var navigator: SignInNavigator
         private let cookies: CookieSync?
-        private let approved: @MainActor () -> Void
+        private let redirected: @MainActor (String?, String?, String?) -> Void
         private var done = false
         private var urlWatch: NSKeyValueObservation?
 
-        init(activate: URL, cookies: CookieSync?, approved: @escaping @MainActor () -> Void) {
-            navigator = ActivateNavigator(activate: activate)
+        init(page: SignIn.Page, cookies: CookieSync?, redirected: @escaping @MainActor (String?, String?, String?) -> Void) {
+            navigator = SignInNavigator(authorize: page.authorize, redirect: page.redirect)
             self.cookies = cookies
-            self.approved = approved
+            self.redirected = redirected
         }
 
         /// Twitch's site moves between pages in place, which no navigation callback reports; the
@@ -65,46 +73,59 @@ private struct TwitchWebView: UIViewRepresentable {
             urlWatch = view.observe(\.url, options: [.new]) { [weak self] view, _ in
                 MainActor.assumeIsolated {
                     guard let self, let url = view.url else { return }
-                    if case .returnToActivate(let activate) = self.step(url) {
-                        view.load(URLRequest(url: activate))
+                    if case .returnToAuthorize(let authorize) = self.step(url) {
+                        view.load(URLRequest(url: authorize))
                     }
                 }
             }
         }
 
-        /// Every main-frame load, redirects included, so the authorize hop is seen even when it
-        /// never draws a page.
+        /// Every main-frame load, redirects included, so the redirect to the callback is caught
+        /// before anything tries to load it.
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction) async -> WKNavigationActionPolicy {
             guard action.targetFrame?.isMainFrame ?? true, let url = action.request.url else { return .allow }
-            guard ActivateNavigator.allows(url) else {
+            guard SignInNavigator.allows(url) else {
                 log.notice("sign-in sheet ignored a \(url.scheme ?? "?", privacy: .public): link")
                 return .cancel
             }
-            // Host and path only: a fragment or query can carry a credential.
+            // Host and path only: the query carries the code.
             log.notice("sign-in nav \(url.host ?? "", privacy: .public)\(url.path, privacy: .public)")
-            if case .returnToActivate(let activate) = step(url) {
-                webView.load(URLRequest(url: activate))
+            switch step(url) {
+            case .stay:
+                return .allow
+            case .returnToAuthorize(let authorize):
+                webView.load(URLRequest(url: authorize))
+                return .cancel
+            case .redirect:
                 return .cancel
             }
-            return .allow
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             Task { await cookies?.push() }
         }
 
-        private func step(_ url: URL) -> ActivateNavigator.Step {
+        /// Nothing listens at the redirect, so a load of it that slipped past the policy check
+        /// fails; its URL still carries the result.
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
+            guard let url = (error as NSError).userInfo[NSURLErrorFailingURLErrorKey] as? URL else { return }
+            _ = step(url)
+        }
+
+        private func step(_ url: URL) -> SignInNavigator.Step {
             guard !done else { return .stay }
             let step = navigator.arrived(at: url)
             switch step {
             case .stay: break
-            case .returnToActivate:
-                log.notice("sign-in landed home; back to the activate page")
-            case .approved:
+            case .returnToAuthorize:
+                log.notice("sign-in landed home; back to the authorize page")
+            case .redirect(let code, let state, let error):
                 done = true
-                log.notice("sign-in approval landed on \(url.host ?? "", privacy: .public)\(url.path, privacy: .public)")
-                Task { await cookies?.push() }
-                approved()
+                Task {
+                    // The login just set the session cookies; the core gets them before the code.
+                    await cookies?.push()
+                    redirected(code, state, error)
+                }
             }
             return step
         }

@@ -19,6 +19,16 @@ const CLIENT_ID: &str = env!("TWITCH_APP_CLIENT_ID");
 const CLIENT_SECRET: &str = env!("TWITCH_APP_CLIENT_SECRET");
 const TWITCH_GQL_CLIENT_ID: &str = "kimne78kx3ncx6brgo4mv6wki5h1ko";
 const REDIRECT_URI: &str = "http://localhost:3000/callback";
+/// How long a web sign-in's `state` stays good for its redirect.
+const WEB_LOGIN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+/// The `state` of the web sign-in in progress and when it began.
+fn pending_web_login() -> &'static std::sync::Mutex<Option<(String, std::time::Instant)>> {
+    static PENDING: std::sync::Mutex<Option<(String, std::time::Instant)>> =
+        std::sync::Mutex::new(None);
+    &PENDING
+}
+
 /// How recently someone must have chatted to count as present in a viewers list.
 const CHATTED_RECENTLY_MS: i64 = 30 * 60 * 1000;
 // Adding ANY scope here invalidates every stored token at once (see the
@@ -499,47 +509,7 @@ impl TwitchService {
                         expires_at: expires_at.timestamp(),
                     };
 
-                    let store_result = Self::persist_primary_token(&storable_token).await;
-
-                    // The web-session reads (stream resolver, follow/unfollow,
-                    // entitlement checks) gate on a logged_out flag that
-                    // twitch_logout sets. A fresh login has to clear it and drop
-                    // the stale cache, otherwise the next get_token() short-
-                    // circuits to "not logged in" and every web-session feature
-                    // stays dead until restart. This poller is the only place the
-                    // primary login actually completes, so it owns the reset.
-                    {
-                        use tauri::Manager;
-                        app_handle
-                            .state::<crate::models::settings::AppState>()
-                            .twitch_auth
-                            .on_account_changed()
-                            .await;
-                    }
-
-                    match store_result {
-                        Ok(()) => {
-                            debug!("[LOGIN] Token stored");
-                            // This token was granted every scope in SCOPES, so a
-                            // sign-in StreamNook asked for is no longer owed.
-                            crate::services::twitch_signin::clear();
-
-                            // Emit success event
-                            debug!("[LOGIN] Emitting twitch-login-complete event...");
-                            if let Err(e) = app_handle.emit("twitch-login-complete", ()) {
-                                error!("[LOGIN] Failed to emit login-complete event: {}", e);
-                            } else {
-                                debug!("[LOGIN] Event emitted successfully");
-                            }
-                        }
-                        Err(e) => {
-                            error!("[LOGIN] Failed to store token: {:?}", e);
-                            let _ = app_handle.emit(
-                                "twitch-login-error",
-                                format!("Failed to store token: {}", e),
-                            );
-                        }
-                    }
+                    Self::complete_primary_login(&app_handle, storable_token).await;
                 }
                 Err(e) => {
                     error!("[LOGIN] Token polling failed: {}", e);
@@ -551,6 +521,129 @@ impl TwitchService {
         // Return the verification URI and the matching user code for the frontend
         // to open/display. Both come from the single device flow polled above.
         Ok((verification_uri, user_code))
+    }
+
+    /// Finish a primary sign-in once Twitch has handed over its token, however
+    /// it was obtained (the device-code poll, or the web sign-in's code
+    /// exchange): seal it into the primary slot, reset the web-session reads,
+    /// and announce the result with `twitch-login-complete` /
+    /// `twitch-login-error`.
+    pub(crate) async fn complete_primary_login(
+        app_handle: &crate::rt::AppHandle,
+        storable_token: StorableToken,
+    ) {
+        let store_result = Self::persist_primary_token(&storable_token).await;
+
+        // The web-session reads (stream resolver, follow/unfollow, entitlement
+        // checks) gate on a logged_out flag that twitch_logout sets. A fresh
+        // login has to clear it and drop the stale cache, otherwise the next
+        // get_token() short-circuits to "not logged in" and every web-session
+        // feature stays dead until restart. Every primary login completes here,
+        // so this owns the reset.
+        {
+            use tauri::Manager;
+            app_handle
+                .state::<crate::models::settings::AppState>()
+                .twitch_auth
+                .on_account_changed()
+                .await;
+        }
+
+        match store_result {
+            Ok(()) => {
+                debug!("[LOGIN] Token stored");
+                // This token was granted every scope in SCOPES, so a sign-in
+                // StreamNook asked for is no longer owed.
+                crate::services::twitch_signin::clear();
+
+                // Emit success event
+                debug!("[LOGIN] Emitting twitch-login-complete event...");
+                if let Err(e) = app_handle.emit("twitch-login-complete", ()) {
+                    error!("[LOGIN] Failed to emit login-complete event: {}", e);
+                } else {
+                    debug!("[LOGIN] Event emitted successfully");
+                }
+            }
+            Err(e) => {
+                error!("[LOGIN] Failed to store token: {:?}", e);
+                let _ = app_handle.emit(
+                    "twitch-login-error",
+                    format!("Failed to store token: {}", e),
+                );
+            }
+        }
+    }
+
+    /// Where a web sign-in's authorize page redirects with its result.
+    pub(crate) fn web_login_redirect() -> &'static str {
+        REDIRECT_URI
+    }
+
+    /// Start a primary sign-in on Twitch's own web pages: the authorize URL for
+    /// an in-app sheet to load, with a fresh CSRF `state` kept here for
+    /// `finish_web_login` to check. `force_verify` is off, so a twitch.tv
+    /// session the sheet already holds goes straight to the Authorize page. A
+    /// second start replaces the first, whose redirect then fails the check.
+    pub(crate) fn begin_web_login() -> Result<String> {
+        let state = format!("{:032x}", rand::random::<u128>());
+        let url = Self::authorize_url(&state, false)?;
+        *pending_web_login().lock().unwrap_or_else(|p| p.into_inner()) =
+            Some((state, std::time::Instant::now()));
+        Ok(url)
+    }
+
+    /// Finish a web sign-in from its redirect (`code` and `state`, or `error`):
+    /// check the state, exchange the code and complete the primary login
+    /// exactly as the device-code poll does. A failure is announced with
+    /// `twitch-login-error` as well as returned.
+    pub(crate) async fn finish_web_login(
+        app_handle: &crate::rt::AppHandle,
+        code: Option<String>,
+        state: Option<String>,
+        error: Option<String>,
+    ) -> Result<()> {
+        let result = Self::web_login_token(code, state, error).await;
+        match result {
+            Ok(token) => {
+                Self::complete_primary_login(app_handle, token).await;
+                Ok(())
+            }
+            Err(e) => {
+                error!("[LOGIN] Web sign-in failed: {}", e);
+                let _ = app_handle.emit("twitch-login-error", e.to_string());
+                Err(e)
+            }
+        }
+    }
+
+    async fn web_login_token(
+        code: Option<String>,
+        state: Option<String>,
+        error: Option<String>,
+    ) -> Result<StorableToken> {
+        // Taken either way: a state answers one redirect only.
+        let pending = pending_web_login()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
+        if let Some(error) = error {
+            return Err(anyhow::anyhow!("Sign-in was cancelled or failed: {}", error));
+        }
+        let Some((expected, started)) = pending else {
+            return Err(anyhow::anyhow!("No sign-in is waiting. Please try again."));
+        };
+        if started.elapsed() > WEB_LOGIN_TIMEOUT {
+            return Err(anyhow::anyhow!("The sign-in took too long. Please try again."));
+        }
+        if state.as_deref() != Some(expected.as_str()) {
+            return Err(anyhow::anyhow!(
+                "Sign-in could not be verified (state mismatch). Please try again."
+            ));
+        }
+        let code = code.filter(|c| !c.is_empty()).ok_or_else(|| {
+            anyhow::anyhow!("Twitch did not return an authorization code.")
+        })?;
+        Self::exchange_code_for_token(&code).await
     }
 
     // Device code flow methods (kept for backward compatibility if needed)
@@ -599,6 +692,10 @@ impl TwitchService {
     /// opaque CSRF token the caller verifies against the redirect. This reads
     /// nothing from the primary's cached token.
     pub(crate) fn build_authorize_url(state: &str) -> Result<String> {
+        Self::authorize_url(state, true)
+    }
+
+    fn authorize_url(state: &str, force_verify: bool) -> Result<String> {
         let url = reqwest::Url::parse_with_params(
             "https://id.twitch.tv/oauth2/authorize",
             &[
@@ -606,7 +703,7 @@ impl TwitchService {
                 ("redirect_uri", REDIRECT_URI),
                 ("response_type", "code"),
                 ("scope", SCOPES),
-                ("force_verify", "true"),
+                ("force_verify", if force_verify { "true" } else { "false" }),
                 ("state", state),
             ],
         )?;
@@ -6710,5 +6807,43 @@ mod search_rank_tests {
         ];
         rank_search_results("moon", &mut rows);
         assert_eq!(logins(&rows), ["moonbig", "moonlive", "moonoffline", "themoonfan"]);
+    }
+}
+
+#[cfg(test)]
+mod web_login_tests {
+    use super::TwitchService;
+
+    fn state_of(url: &str) -> String {
+        reqwest::Url::parse(url)
+            .unwrap()
+            .query_pairs()
+            .find(|(k, _)| k == "state")
+            .map(|(_, v)| v.into_owned())
+            .unwrap()
+    }
+
+    // One test, in order: the pending state is process-wide.
+    #[tokio::test]
+    async fn a_redirect_is_only_taken_with_the_state_it_was_sent_with() {
+        let url = TwitchService::begin_web_login().unwrap();
+        assert!(url.contains("force_verify=false"), "an existing session goes straight to Authorize");
+        assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fcallback"));
+        let state = state_of(&url);
+
+        let wrong = TwitchService::web_login_token(Some("c".into()), Some("other".into()), None).await;
+        assert!(wrong.unwrap_err().to_string().contains("state mismatch"));
+        // A state answers one redirect: the right one now finds nothing waiting.
+        let replay = TwitchService::web_login_token(Some("c".into()), Some(state), None).await;
+        assert!(replay.unwrap_err().to_string().contains("No sign-in is waiting"));
+
+        let url = TwitchService::begin_web_login().unwrap();
+        let declined =
+            TwitchService::web_login_token(None, Some(state_of(&url)), Some("access_denied".into())).await;
+        assert!(declined.unwrap_err().to_string().contains("access_denied"));
+
+        let url = TwitchService::begin_web_login().unwrap();
+        let no_code = TwitchService::web_login_token(None, Some(state_of(&url)), None).await;
+        assert!(no_code.unwrap_err().to_string().contains("authorization code"));
     }
 }
