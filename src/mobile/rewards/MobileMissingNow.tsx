@@ -4,7 +4,7 @@
 import { useState } from 'react';
 import { closesInLabel, timeLeftLabel, type BadgeStanding, type MissingBadge } from '../../services/badgeStanding';
 import { CatchUpPanel } from '../../components/badge/CatchUpPanel';
-import { EarnChips, RandomDrawNote } from '../../components/badge/EarnChips';
+import { ChannelsOnlyNote, EarnChips, RandomDrawNote } from '../../components/badge/EarnChips';
 import { CardChip } from '../../components/ui/CardChip';
 
 const COLLAPSED_ROWS = 4;
@@ -85,9 +85,10 @@ export function MobileMissingNow({
                     <span className="min-w-[3.5rem] flex-1 text-[13px] font-medium text-textPrimary truncate">{badge.title}</span>
                     <EarnChips earn={badge.earn} icons={standing?.earn_icons} />
                   </div>
-                  {badge.earn.random_of && (
-                    <div className="mt-0.5">
-                      <RandomDrawNote of={badge.earn.random_of} />
+                  {(badge.earn.random_of || badge.earn.channels) && (
+                    <div className="mt-0.5 flex items-center gap-2 min-w-0">
+                      {badge.earn.random_of && <RandomDrawNote of={badge.earn.random_of} />}
+                      {badge.earn.channels && <ChannelsOnlyNote channels={badge.earn.channels} />}
                     </div>
                   )}
                 </div>

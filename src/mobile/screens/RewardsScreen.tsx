@@ -9,7 +9,7 @@
 // main Twitch login pattern on mobile.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowSquareOut, CalendarBlank, CaretRight, CheckCircle, Gift, MagnifyingGlass, Warning, X } from 'phosphor-react';
+import { ArrowSquareOut, Broadcast, CalendarBlank, CaretRight, CheckCircle, Gift, MagnifyingGlass, Warning, X } from 'phosphor-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../../stores/AppStore';
@@ -25,7 +25,7 @@ import {
   type GlobalBadge,
 } from '../rewards/badgeGalleryStore';
 import { MobileMissingNow } from '../rewards/MobileMissingNow';
-import { refetchDelay } from '../../services/badgeStanding';
+import { getBadgeEarnGuide, refetchDelay, type EarnGuide } from '../../services/badgeStanding';
 import { orderBadges, type BadgeSort } from '../rewards/badgeSort';
 import { gameBoxArt } from '../../utils/boxArt';
 import { openExternal } from '../../utils/openExternal';
@@ -35,6 +35,7 @@ import type {
   DropCampaign,
   InventoryItem,
   InventoryResponse,
+  TwitchStream,
 } from '../../types';
 
 type RewardsTab = 'drops' | 'badges';
@@ -240,6 +241,8 @@ export const RewardsScreen: React.FC = () => {
   const [warmOnMount] = useState(() => badgeGalleryIsWarm());
   const [badgeSort, setBadgeSort] = useState<BadgeSort>('newest');
   const [badgeDetail, setBadgeDetail] = useState<GlobalBadge | null>(null);
+  // How the open badge is earned and where, from Rust (badge_earn.rs).
+  const [badgeGuide, setBadgeGuide] = useState<{ key: string; guide: EarnGuide } | null>(null);
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [inventory, setInventory] = useState<InventoryResponse | null>(null);
   const [connecting, setConnecting] = useState(false);
@@ -373,6 +376,27 @@ export const RewardsScreen: React.FC = () => {
       await invoke('close_mobile_login').catch(() => {});
       setConnecting(false);
     }
+  };
+
+  useEffect(() => {
+    if (!badgeDetail) return;
+    let live = true;
+    const key = badgeDetail.key;
+    getBadgeEarnGuide(badgeDetail.setId, badgeDetail.versionId)
+      .then((guide) => { if (live) setBadgeGuide({ key, guide }); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [badgeDetail]);
+  const openGuide = badgeDetail && badgeGuide?.key === badgeDetail.key ? badgeGuide.guide : null;
+
+  // A badge's channel, opened the way the desktop badge page opens it: with the
+  // live stream when there is one, so the player starts with its metadata.
+  const watchBadgeChannel = async (login: string) => {
+    const live = await invoke<TwitchStream | null>('check_stream_online', { userLogin: login }).catch(
+      () => null,
+    );
+    setBadgeDetail(null);
+    void startStream(login, live ?? undefined);
   };
 
   const ownedCount = globalBadges.filter(isOwned).length;
@@ -845,12 +869,42 @@ export const RewardsScreen: React.FC = () => {
               const { prose, window, caveat } = splitBadgeBlurb(
                 badgeDetail.dateInfo || badgeDetail.description,
               );
+              const summary = openGuide?.summary ?? null;
+              const channels = (openGuide?.earn.channels ?? []).slice(0, 10);
               return (
                 <>
-                  {prose && (
-                    <p className="text-[13px] text-textSecondary leading-relaxed whitespace-pre-line text-left w-full">
+                  {/* The campaign's own numbers in one sentence: what, how
+                      long, and where. The writeup below it is colour. */}
+                  {summary && (
+                    <p className="text-[14px] font-medium text-textPrimary leading-relaxed text-left w-full">
+                      {summary}
+                    </p>
+                  )}
+                  {prose && prose.trim() !== summary && (
+                    <p
+                      className={`text-[13px] text-textSecondary leading-relaxed whitespace-pre-line text-left w-full${summary ? ' mt-2' : ''}`}
+                    >
                       {prose}
                     </p>
+                  )}
+                  {/* The only channels it counts on, each a tap away. */}
+                  {channels.length > 0 && (
+                    <div className="mt-3 w-full flex flex-col gap-1.5">
+                      {channels.map((login) => (
+                        <button
+                          key={login}
+                          onClick={() => void watchBadgeChannel(login)}
+                          className="glass-panel sn-touch px-3 py-2.5 flex items-center gap-2.5 text-left active:opacity-80"
+                        >
+                          <Broadcast size={16} className="text-accent shrink-0" />
+                          <span className="flex-1 min-w-0 truncate text-[13.5px] font-medium text-textPrimary">
+                            {login}
+                          </span>
+                          <span className="text-[12px] text-textMuted shrink-0">Watch</span>
+                          <CaretRight size={13} weight="bold" className="text-textMuted shrink-0" />
+                        </button>
+                      ))}
+                    </div>
                   )}
                   {caveat && (
                     <div className="mt-3 w-full flex items-start gap-2 rounded-lg px-3 py-2 bg-amber-500/10 border border-amber-500/25">

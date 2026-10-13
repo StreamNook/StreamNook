@@ -1,5 +1,5 @@
 import { Fragment } from 'react';
-import { Clapperboard, Coins, Dices, Eye, MapPin, Sparkles, Ticket, type LucideIcon } from 'lucide-react';
+import { Clapperboard, Coins, Dices, Eye, MapPin, Radio, Sparkles, Ticket, type LucideIcon } from 'lucide-react';
 import { earnChipHint, earnChipText, type EarnPath, type EarnStep } from '../../services/badgeStanding';
 
 // Drawn icons, one hue per way of earning, for the kinds Twitch has no art for.
@@ -46,6 +46,23 @@ export const EarnChips = ({ earn, icons }: { earn: EarnPath; icons?: Record<stri
           </span>
         </Fragment>
       ))}
+    </span>
+  );
+};
+
+/** "Only on dnd" for a badge one allow-list of channels gives, as quiet
+ *  inline text: the one fact a viewer cannot guess from the category. */
+export const ChannelsOnlyNote = ({ channels }: { channels: string[] }) => {
+  if (channels.length === 0) return null;
+  const named = channels.length <= 3;
+  const label = named ? `Only on ${channels.join(', ')}` : `Only on ${channels.length} channels`;
+  return (
+    <span
+      className="inline-flex items-center gap-1 min-w-0 whitespace-nowrap text-[11px] text-textMuted"
+      title={named ? `Counts only on ${channels.join(', ')}` : channels.join(', ')}
+    >
+      <Radio size={11} className="shrink-0" />
+      <span className="truncate">{label}</span>
     </span>
   );
 };

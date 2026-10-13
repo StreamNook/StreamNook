@@ -43,6 +43,21 @@ pub struct EarnPath {
     pub inferred: bool,
     /// The sentence the path came from, for a tooltip.
     pub detail: Option<String>,
+    /// The only channels it counts on, from the campaign's allow-list. `None`
+    /// means any channel in the category, or that nobody said.
+    pub channels: Option<Vec<String>>,
+}
+
+/// Everything a single badge's page says about earning it.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct EarnGuide {
+    pub earn: EarnPath,
+    /// The campaign's Twitch category, when it has one.
+    pub category: Option<String>,
+    /// The whole requirement as one sentence to the viewer: what to do, how
+    /// long, and where. Only when it comes from the campaign's own numbers;
+    /// a guess is never stated this plainly.
+    pub summary: Option<String>,
 }
 
 fn re(pattern: &str) -> Regex {
@@ -174,6 +189,18 @@ pub fn earn_path(enrichment: Option<&serde_json::Value>, more_info: Option<&str>
         .and_then(|p| p.as_array())
         .map(|p| p.len() as u32)
         .filter(|n| *n > 1);
+    // A null list means the whole category counts; an empty one says nothing.
+    let channels = requirement
+        .and_then(|r| r.get("channels"))
+        .and_then(|c| c.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|c| c.as_str())
+                .map(|c| c.trim().trim_start_matches('/').to_lowercase())
+                .filter(|c| !c.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .filter(|list| !list.is_empty());
 
     if let Some(r) = requirement {
         let steps = steps_from_requirement(r);
@@ -183,6 +210,7 @@ pub fn earn_path(enrichment: Option<&serde_json::Value>, more_info: Option<&str>
                 random_of,
                 inferred: false,
                 detail: action.or(how).map(summary),
+                channels,
             };
         }
     }
@@ -192,7 +220,13 @@ pub fn earn_path(enrichment: Option<&serde_json::Value>, more_info: Option<&str>
     for source in [action, how, copy].into_iter().flatten() {
         let steps = steps_from_text(source);
         if !steps.is_empty() {
-            return EarnPath { steps, random_of, inferred: true, detail: Some(summary(source)) };
+            return EarnPath {
+                steps,
+                random_of,
+                inferred: true,
+                detail: Some(summary(source)),
+                channels,
+            };
         }
     }
 
@@ -201,7 +235,149 @@ pub fn earn_path(enrichment: Option<&serde_json::Value>, more_info: Option<&str>
         random_of,
         inferred: true,
         detail: action.or(how).or(copy).map(summary),
+        channels,
     }
+}
+
+/// A live Drops campaign's requirement in the relay's `requirement` shape, so
+/// a badge page reads one shape whichever source answered.
+pub fn campaign_requirement(
+    campaign: &crate::models::drops::DropCampaign,
+    title: Option<&str>,
+) -> Option<serde_json::Value> {
+    let tier = crate::services::drops_overview::badge_tier_for(campaign, title)?;
+    let channels: Vec<String> = if campaign.is_acl_based {
+        campaign
+            .allowed_channels
+            .iter()
+            .map(|c| c.name.to_lowercase())
+            .filter(|c| !c.is_empty())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Some(serde_json::json!({
+        "watch_minutes": tier.required_minutes_watched.max(0),
+        "required_subs": tier.required_subs,
+        "category": (campaign.has_category && !campaign.game_name.is_empty())
+            .then(|| campaign.game_name.clone()),
+        "channels": (!channels.is_empty()).then_some(channels),
+        "repeat_times": tier.required_days.max(1),
+        "source": "campaign",
+    }))
+}
+
+/// How a badge is earned and where, for its own page. `live_requirement`, from
+/// the viewer's Drops list, beats the relay's because it is read right now.
+pub fn earn_guide(
+    enrichment: Option<&serde_json::Value>,
+    more_info: Option<&str>,
+    live_requirement: Option<serde_json::Value>,
+) -> EarnGuide {
+    let merged = live_requirement.map(|r| {
+        let mut e = enrichment.cloned().unwrap_or_else(|| serde_json::json!({}));
+        if let Some(obj) = e.as_object_mut() {
+            obj.insert("requirement".into(), r);
+        }
+        e
+    });
+    let enrichment = merged.as_ref().or(enrichment);
+    let earn = earn_path(enrichment, more_info);
+    let requirement = enrichment.and_then(|e| e.get("requirement")).filter(|r| r.is_object());
+    let category = requirement
+        .and_then(|r| r.get("category"))
+        .or_else(|| enrichment.and_then(|e| e.get("category")))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let summary = (!earn.inferred)
+        .then(|| summary_sentence(&earn, category.as_deref()))
+        .flatten();
+    EarnGuide { earn, category, summary }
+}
+
+fn duration_phrase(minutes: u32) -> String {
+    if minutes >= 60 && minutes % 60 == 0 {
+        let h = minutes / 60;
+        format!("{h} {}", if h == 1 { "hour" } else { "hours" })
+    } else {
+        format!("{minutes} {}", if minutes == 1 { "minute" } else { "minutes" })
+    }
+}
+
+/// "dnd", "dnd or critrole", "dnd, critrole or geekandsundry".
+fn channel_list(channels: &[String]) -> String {
+    match channels {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} or {last}", rest.join(", ")),
+    }
+}
+
+/// The requirement as one sentence, spoken to the viewer. `None` when the path
+/// has no subscribe or watch step to state.
+fn summary_sentence(earn: &EarnPath, category: Option<&str>) -> Option<String> {
+    let sub = earn.steps.iter().find_map(|s| match s {
+        EarnStep::Subscribe { count } => Some(count.unwrap_or(1)),
+        _ => None,
+    });
+    let watch = earn.steps.iter().find_map(|s| match s {
+        EarnStep::Watch { minutes: Some(m), days } => Some((*m, *days)),
+        _ => None,
+    });
+    if sub.is_none() && watch.is_none() {
+        return None;
+    }
+    let channels = earn.channels.as_deref().unwrap_or(&[]);
+
+    // Where, with the preposition each verb takes: you watch OF a stream but ON
+    // a channel, and subscribe TO a streamer but ON a channel.
+    let (watch_where, sub_where) = match channels.len() {
+        0 => match category {
+            Some(cat) => (
+                format!("of any {cat} stream with Drops enabled"),
+                format!("to a streamer live in {cat}"),
+            ),
+            None => (
+                "of a participating stream".to_string(),
+                "to a participating streamer".to_string(),
+            ),
+        },
+        n => {
+            let on = match n {
+                1 => format!("on {}'s channel", channels[0]),
+                2 | 3 => format!("on {}", channel_list(channels)),
+                n => format!("on one of the {n} participating channels"),
+            };
+            let live = match (n, category) {
+                (_, None) => String::new(),
+                (1, Some(cat)) => format!(" while it streams {cat}"),
+                (_, Some(cat)) => format!(" while they stream {cat}"),
+            };
+            (format!("{on}{live}"), format!("{on}{live}"))
+        }
+    };
+
+    let mut sentence = String::new();
+    if let Some(n) = sub {
+        let what = if n > 1 { format!("{n} subs") } else { "a sub".to_string() };
+        sentence.push_str(&format!("Subscribe or gift {what} {sub_where}"));
+    }
+    if let Some((minutes, days)) = watch {
+        let how_long = duration_phrase(minutes);
+        let repeat = days.map(|d| format!(", on {d} different days")).unwrap_or_default();
+        if sentence.is_empty() {
+            sentence.push_str(&format!("Watch {how_long} {watch_where}{repeat}"));
+        } else {
+            sentence.push_str(&format!(", then watch {how_long}{repeat}"));
+        }
+    }
+    sentence.push('.');
+    if sub.is_some() {
+        sentence.push_str(" Prime subs do not count.");
+    }
+    Some(sentence)
 }
 
 #[cfg(test)]
@@ -211,6 +387,67 @@ mod tests {
 
     fn from_action(action: &str) -> Vec<EarnStep> {
         earn_path(Some(&json!({ "action": action })), None).steps
+    }
+
+    #[test]
+    fn a_channel_limited_badge_says_which_channel_and_category() {
+        // The d20 badge: thirty minutes on dnd, in Dungeons & Dragons only.
+        let e = json!({
+            "how_to_earn": "The d20 lands the same for the table and the person behind the screen.",
+            "requirement": {
+                "watch_minutes": 30, "required_subs": 0, "repeat_times": 1,
+                "category": "Dungeons & Dragons", "channels": ["dnd"]
+            }
+        });
+        let g = earn_guide(Some(&e), None, None);
+        assert_eq!(g.earn.channels, Some(vec!["dnd".to_string()]));
+        assert_eq!(
+            g.summary.as_deref(),
+            Some("Watch 30 minutes on dnd's channel while it streams Dungeons & Dragons.")
+        );
+    }
+
+    #[test]
+    fn a_live_campaign_fills_in_what_the_relay_never_matched() {
+        // What the relay had for d20 before its campaign matched: a flavour
+        // paragraph, no requirement.
+        let relay = json!({ "action": "Watch for 30 minutes during the campaign.", "requirement": null });
+        let live = json!({
+            "watch_minutes": 30, "required_subs": 0, "repeat_times": 1,
+            "category": "Dungeons & Dragons", "channels": ["dnd"]
+        });
+        let before = earn_guide(Some(&relay), None, None);
+        assert!(before.earn.inferred);
+        assert_eq!(before.summary, None);
+        let after = earn_guide(Some(&relay), None, Some(live));
+        assert!(!after.earn.inferred);
+        assert_eq!(after.category.as_deref(), Some("Dungeons & Dragons"));
+        assert!(after.summary.unwrap().contains("dnd's channel"));
+    }
+
+    #[test]
+    fn the_summary_reads_for_categories_subs_days_and_long_channel_lists() {
+        let guide = |r: serde_json::Value| earn_guide(Some(&json!({ "requirement": r })), None, None).summary;
+        assert_eq!(
+            guide(json!({ "watch_minutes": 120, "required_subs": 0, "category": "WARDOGS", "channels": null })),
+            Some("Watch 2 hours of any WARDOGS stream with Drops enabled.".into())
+        );
+        assert_eq!(
+            guide(json!({ "watch_minutes": 0, "required_subs": 1, "category": "Dungeons & Dragons", "channels": null })),
+            Some("Subscribe or gift a sub to a streamer live in Dungeons & Dragons. Prime subs do not count.".into())
+        );
+        assert_eq!(
+            guide(json!({ "watch_minutes": 20, "required_subs": 1, "repeat_times": 3, "category": null })),
+            Some("Subscribe or gift a sub to a participating streamer, then watch 20 minutes, on 3 different days. Prime subs do not count.".into())
+        );
+        assert_eq!(
+            guide(json!({ "watch_minutes": 15, "required_subs": 0, "category": "Special Events", "channels": ["ironmouse", "mouseathon"] })),
+            Some("Watch 15 minutes on ironmouse or mouseathon while they stream Special Events.".into())
+        );
+        assert_eq!(
+            guide(json!({ "watch_minutes": 60, "required_subs": 0, "channels": ["a1aa", "b2bb", "c3cc", "d4dd"] })),
+            Some("Watch 1 hour on one of the 4 participating channels.".into())
+        );
     }
 
     #[test]
