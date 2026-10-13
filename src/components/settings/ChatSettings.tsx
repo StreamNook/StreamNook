@@ -74,7 +74,7 @@ import { useChatUserStore } from '../../stores/chatUserStore';
 import { getUserCosmetics, computePaintStyle } from '../../services/seventvService';
 import { StyledChatName, type NameSeparator, type NameStyle } from '../chat/StyledChatName';
 import type { DeletedMessageStyle } from '../chat/deletedMessage';
-import { DeletedMessagePreview, EventRowPreview, MentionPreview, MessageLayoutPreview, RoomModesPreview, SettingPreview } from './ChatPreview';
+import { DeletedMessagePreview, EventRowPreview, MentionPreview, MentionRowPreview, MessageLayoutPreview, RoomModesPreview, SettingPreview } from './ChatPreview';
 import { ProfilePicturePreview } from './ProfilePicturePreview';
 import {
   DEFAULT_PROFILE_PICTURE_ANIMATION,
@@ -366,6 +366,14 @@ const BADGE_PROVIDERS: { id: string; label: string }[] = [
   { id: 'dankchat', label: 'DankChat' },
 ];
 
+/** The Reply sound picker's value: a sound of its own, 'none', or 'same'
+ *  (follows the mention sound; the older replies switch off reads as 'none'). */
+function replySoundChoice(cd: { reply_sound?: string; mention_sound_replies?: boolean }): string {
+  const own = cd.reply_sound?.trim();
+  if (own) return own;
+  return cd.mention_sound_replies === false ? 'none' : 'same';
+}
+
 const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {}) => {
   const { settings, updateSettings } = useAppStore();
   const resetFor = useSettingReset();
@@ -395,6 +403,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
       return next;
     });
   const mentionSoundOptions = useSoundOptions({ noneLabel: 'No sound' });
+  const soundOptions = useSoundOptions();
   const [eventStyleHover, setEventStyleHover] = useState<'cards' | 'outline' | 'plain' | null>(null);
   const [roomModesStyleHover, setRoomModesStyleHover] = useState<'chip' | 'prompt' | null>(null);
   const [glintHover, setGlintHover] = useState<'none' | 'sheen' | 'pulse' | 'chase' | null>(null);
@@ -425,6 +434,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     mention_color: stored?.mention_color ?? '#ff4444',
     reply_color: stored?.reply_color ?? '#ff6b6b',
     mention_animation: stored?.mention_animation ?? true,
+    mention_hold: stored?.mention_hold ?? false,
     show_timestamps: stored?.show_timestamps ?? false,
     show_timestamp_seconds: stored?.show_timestamp_seconds ?? false,
     timestamp_format: stored?.timestamp_format ?? '12h',
@@ -478,6 +488,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     mention_sound: stored?.mention_sound,
     mention_sound_volume: stored?.mention_sound_volume,
     mention_sound_replies: stored?.mention_sound_replies,
+    reply_sound: stored?.reply_sound,
+    reply_sound_volume: stored?.reply_sound_volume,
     mention_weight: stored?.mention_weight,
     mention_italic: stored?.mention_italic,
     mention_style: stored?.mention_style,
@@ -1729,13 +1741,44 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                   />
                 }
               />
+            </SubControls>
+          )}
+        </SettingsRow>
+
+        <SettingsRow
+          title="Reply sound"
+          onReset={resetFor(['chat_design.reply_sound', ''], ['chat_design.mention_sound_replies', true], 'chat_design.reply_sound_volume')}
+          description="Plays when someone replies to one of your messages."
+          help="Same as mentions plays your mention sound at its volume. Pick a sound to give replies their own."
+        >
+          <Dropdown
+            value={replySoundChoice(cd)}
+            onChange={(v) =>
+              setDesign(
+                v === 'same'
+                  ? { reply_sound: undefined, mention_sound_replies: undefined }
+                  : { reply_sound: v },
+              )
+            }
+            className="w-full"
+            ariaLabel="Reply sound"
+            options={[
+              { value: 'same', label: 'Same as mentions' },
+              { value: 'none', label: 'No sound' },
+              ...soundOptions,
+            ]}
+          />
+          {!['same', 'none'].includes(replySoundChoice(cd)) && (
+            <SubControls>
               <SubControl
-                title="Replies to you"
-                onReset={resetFor(['chat_design.mention_sound_replies', true])}
+                title="Volume"
+                onReset={resetFor(['chat_design.reply_sound_volume', 100])}
                 control={
-                  <Toggle
-                    enabled={cd.mention_sound_replies ?? true}
-                    onChange={() => setDesign({ mention_sound_replies: !(cd.mention_sound_replies ?? true) })}
+                  <SoundVolume
+                    value={cd.reply_sound_volume ?? 100}
+                    onChange={(reply_sound_volume) => setDesign({ reply_sound_volume })}
+                    sound={cd.reply_sound}
+                    label="Reply sound volume"
                   />
                 }
               />
@@ -1826,7 +1869,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           title="Highlight"
           onReset={resetFor(['chat_design.mention_color', '#ff4444'])}
           description="The color that marks a message mentioning or replying to you."
-          help="Flash briefly lights the message up as it lands, so you spot it in a fast chat. The color edge stays either way."
+          help="Flash briefly lights the message up as it lands, so you spot it in a fast chat. Keep tinted holds the color behind the whole message for as long as it is on screen. The color edge stays either way."
         >
           <ColorSwatch
             value={cd.mention_color ?? '#ff4444'}
@@ -1844,7 +1887,26 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                 />
               }
             />
+            <SubControl
+              title="Keep tinted"
+              onReset={resetFor(['chat_design.mention_hold', false])}
+              control={
+                <Toggle
+                  enabled={cd.mention_hold ?? false}
+                  onChange={() => setDesign({ mention_hold: !(cd.mention_hold ?? false) })}
+                />
+              }
+            />
           </SubControls>
+          <div className="pt-3">
+            <MentionRowPreview
+              design={cd}
+              hold={cd.mention_hold ?? false}
+              opacity={settings.chat_highlights?.appearance?.opacity ?? 20}
+              mentionColor={cd.mention_color ?? '#ff4444'}
+              replyColor={cd.reply_color ?? '#ff6b6b'}
+            />
+          </div>
         </SettingsRow>
 
         {IS_MOBILE && (

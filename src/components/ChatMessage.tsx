@@ -6,6 +6,7 @@ import { parseMessage, type MessageSegment } from '../services/twitchChat';
 import { queueEmoteForDisplayCaching, getCachedEmoteUrl, getEmoteLookup, inlineEmoteTier, sevenTvTierUrl, EmoteSet } from '../services/emoteService';
 import { getCachedEmojiUrl, parseEmojisSync } from '../services/emojiService';
 import { calculateHalfPadding } from '../utils/chatLayoutUtils';
+import { mentionHoldBackground } from './chat/mentionHold';
 import { deletedBodyStyle, deletedRowDimmed, DEFAULT_DELETED_STYLE } from './chat/deletedMessage';
 import { ModerationTag } from './chat/ModerationTag';
 import { eventCardClass as eventCardClassFor, eventCardStyle as eventCardStyleFor } from './chat/eventCard';
@@ -1358,6 +1359,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     </span>
   ) : null;
   const bodyDragEnabled = canModerateThisRow && (modActionStyle === 'drag' || modActionStyle === 'both');
+  // The grab hand covers the whole row unless the viewer keeps it to the edge
+  // strip; the pickup itself works anywhere on the row either way.
+  const rowGrabCursor = bodyDragEnabled && chatDesign?.mod_drag_cursor !== 'edge';
   const showModButtons = modActionStyle === 'buttons' || modActionStyle === 'both';
   // The inline Pin button is ALWAYS available to moderators so a pin can never go
   // missing. The Pin Action setting only controls whether a Pin tile ALSO shows
@@ -2184,6 +2188,9 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
   // id; Rust names it from the channel's rewards (irc_service stamp_reward_name).
   const redeemedTitle = parsed.tags.get('sn-redeemed-title');
   const redeemedCost = parsed.tags.get('sn-redeemed-cost');
+  // A reward with no text, which Rust builds as its own row (body = the
+  // reward's title): one line, "<name> redeemed <title> <cost>", like Twitch.
+  const isRewardEventRow = !!parsed.tags.get('sn-reward-title');
   const isGigantifiedEmote =
     msgId === 'gigantified-emote-message' || sourceMsgId === 'gigantified-emote-message';
   const isAnimatedMessage =
@@ -3235,6 +3242,11 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     .padStart(2, '0');
   const showHighlightBg = displayStyle === 'standard';
   const showHighlightBorder = displayStyle !== 'none';
+  // Keep tinted: a mention or reply to you holds its color while on screen.
+  const mentionHoldBg =
+    (isMentioned || isReplyToMe) && chatDesign?.mention_hold === true && borderLeftColor
+      ? mentionHoldBackground(borderLeftColor, tintOpacityPct)
+      : undefined;
 
   // Compose built-in event tint styles inline. The configurable color drives
   // a gradient (alpha controlled by tintOpacityPct). Phrase/mention/reply
@@ -3261,10 +3273,10 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       className={`group relative isolate px-3 hover:bg-glass transition-colors ${borderClass} ${animationClass
         }${ftClass} ${isRedemption ? 'highlight-message-gradient' : ''
         } ${isFromSharedChat ? 'border-l-2 border-l-accent/50 bg-accent/5' : ''
-        } ${moderationContext && deletedRowDimmed(deletedStyle) ? 'opacity-50' : ''} ${bodyDragEnabled ? 'select-none cursor-grab' : ''} ${isBeingDragged ? 'overflow-hidden' : ''}`}
+        } ${moderationContext && deletedRowDimmed(deletedStyle) ? 'opacity-50' : ''} ${bodyDragEnabled ? 'select-none' : ''} ${rowGrabCursor ? 'cursor-grab' : ''} ${isBeingDragged ? 'overflow-hidden' : ''}`}
       style={{
         ...messageStyle,
-        ...(builtInEventBg ? { backgroundImage: builtInEventBg } : {}),
+        ...(mentionHoldBg ?? builtInEventBg ? { backgroundImage: mentionHoldBg ?? builtInEventBg } : {}),
         ...(ftRing ? ({ '--sn-ft-color': builtInEventColor } as React.CSSProperties) : {}),
         borderLeftColor: (isMentioned || isReplyToMe)
           ? borderLeftColor
@@ -3331,15 +3343,17 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         </>
       )}
 
-      {/* "Grab to drag" hint: an accent bar down the left edge that fades in on
-          hover whenever whole-message drag is enabled (pairs with the grab
-          cursor). Full-height accent + soft shadow so it pops over the Atmosphere
-          and on any theme. */}
+      {/* The grab handle: an accent bar down the left edge that fades in on
+          hover whenever whole-message drag is enabled, over a slightly wider
+          strip that wears the grab cursor. With the Edge only grab cursor the
+          rest of the row keeps the normal cursor; a press anywhere on it still
+          lifts the chatter, as the pointerdown reaches the row either way.
+          Full-height accent + soft shadow so it pops over the Atmosphere and
+          on any theme. */}
       {bodyDragEnabled && (
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-y-1 left-0 z-20 w-1.5 rounded-r-md bg-accent shadow-[1px_0_4px_rgba(0,0,0,0.45)] opacity-0 group-hover:opacity-100 transition-opacity duration-150"
-        />
+        <div aria-hidden="true" className="absolute inset-y-0 left-0 z-20 w-3 cursor-grab">
+          <div className="pointer-events-none absolute inset-y-1 left-0 w-1.5 rounded-r-md bg-accent shadow-[1px_0_4px_rgba(0,0,0,0.45)] opacity-0 group-hover:opacity-100 transition-opacity duration-150" />
+        </div>
       )}
 
       {/* Built-in event label (first-time chatter, returning, self, raid) */}
@@ -3354,7 +3368,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
         </div>
       )}
       {/* Channel points redemption indicator (highlight, gigantify, animate, skip-subs-mode, custom reward) */}
-      {redemptionLabel && (
+      {redemptionLabel && !isRewardEventRow && (
         <div className="flex min-w-0 items-center justify-end gap-1">
           <svg className="w-3 h-3 flex-shrink-0 text-highlight-cyan opacity-60" viewBox="0 0 20 20" fill="currentColor">
             <path d="M10 6a4 4 0 014 4h-2a2 2 0 00-2-2V6z" />
@@ -3591,7 +3605,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                   name={renderedName}
                   nameTextStyle={usernameStyle}
                   nameStyle={nameStyle}
-                  separator={nameSeparator}
+                  separator={isRewardEventRow ? 'none' : nameSeparator}
                   accentColor={prefixAccentColor}
                   interactive
                   onClick={(e) => {
@@ -3635,7 +3649,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
                 />
                 <span style={{ fontWeight: 'var(--chat-body-weight, 300)' }} className="text-textPrimary break-words">
                   <span style={moderationContext ? deletedBodyStyle(deletedStyle) : undefined}>
-                    {' '}{replyMentionNode}{giantPluck ? giantPluck.inline : renderContent(contentWithEmotes)}
+                    {' '}{isRewardEventRow && <span className="text-textSecondary">redeemed </span>}{replyMentionNode}{giantPluck ? giantPluck.inline : renderContent(contentWithEmotes)}
                   </span>
                   {redemptionCost && (
                     <span className="inline-flex items-center gap-0.5 ml-1 align-middle text-highlight-cyan/90 font-medium">

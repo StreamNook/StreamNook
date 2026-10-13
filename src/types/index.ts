@@ -205,6 +205,9 @@ export interface ChatDesignSettings {
   mention_color: string; // Hex color for @ mentions
   reply_color: string; // Hex color for reply threads
   mention_animation: boolean; // Enable red-shift animation for mentions
+  // Keep a mention or reply to you tinted the whole time it is on screen.
+  // Typed in Rust (ChatDesignSettings), which owns the default: off.
+  mention_hold?: boolean;
   show_timestamps?: boolean; // Show timestamp next to each message
   show_timestamp_seconds?: boolean; // Include seconds in timestamps
   timestamp_format?: '12h' | '24h'; // Formatted in Rust; default 12h
@@ -286,8 +289,12 @@ export interface ChatDesignSettings {
   mention_sound?: string;
   /** Mention sound volume, percent of the sound's own level (0-200, default 100). */
   mention_sound_volume?: number;
-  /** A reply to one of your messages also plays the mention sound (default true). */
+  /** A reply to one of your messages also plays the mention sound (default true), while `reply_sound` follows it. */
   mention_sound_replies?: boolean;
+  /** Sound for a reply to you: absent or empty follows the mention sound, 'none' is silent, else a tone id or `file:<id>`. */
+  reply_sound?: string;
+  /** Volume of a reply sound of its own, percent (0-200, default 100). */
+  reply_sound_volume?: number;
   /** @mention text weight in message bodies (default medium). */
   mention_weight?: 'regular' | 'medium' | 'bold';
   /** @mention slant: inherit (italic inside /me messages, the default), never, or always. */
@@ -362,6 +369,10 @@ export interface ChatDesignSettings {
   // Default 'both'. Profile/whisper buckets are available to everyone whenever
   // the grip is shown; delete/timeout/ban are mod-only either way.
   mod_action_style?: 'buttons' | 'drag' | 'both';
+  // Where the grab cursor shows while drag is on: 'row' = anywhere on the
+  // message, 'edge' = only the accent strip at its left edge. A press anywhere
+  // lifts the chatter either way. Default 'row'.
+  mod_drag_cursor?: 'row' | 'edge';
   // Style of the drag-to-moderate controls: 'column' = vertical bucket column
   // docked beside chat; 'bar' = horizontal bucket row above the chat. Default
   // 'column'. (A legacy 'slider' value may persist from older builds; it is
@@ -708,7 +719,7 @@ export interface FavoriteChannel {
 export interface LiveNotificationSettings {
   enabled: boolean;
   play_sound: boolean;
-  sound_type?: string; // 'boop' | 'tick' | 'gentle' | 'soft' | 'whisper'
+  sound_type?: string; // a built-in tone id (BUILT_IN_SOUNDS) or `file:<id>`
   /** Notification sound volume, percent of the sound's own level (0-200, default 100). */
   sound_volume?: number;
   // Notification type toggles

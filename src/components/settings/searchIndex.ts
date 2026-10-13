@@ -533,6 +533,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Chat',
     section: 'Mentions & Replies',
+    title: 'Keep tinted',
+    parent: 'Highlight',
+    description: 'Hold the mention or reply color behind the whole message for as long as it is on screen, instead of only a flash. Highlight replies to me, mention background, persistent highlight, tint whole message.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Mentions & Replies',
     title: 'Mentions & Replies',
     description: 'How a message that mentions you stands out, the mention and reply colors, the mention sound, how @mentions look (weight, italic, pill, color), inline paint on @mentions, and how a reply shows its parent.'
   },
@@ -1300,9 +1307,15 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
   {
     tab: 'Chat',
     section: 'Mentions & Replies',
-    title: 'Replies to you',
-    parent: 'Mention sound',
-    description: 'A reply to one of your messages plays the mention sound too, even without an @. Reply sound.'
+    title: 'Reply sound',
+    description: 'Plays when someone replies to one of your messages: the mention sound, no sound, or a sound of its own. Replies to you, reply ping.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Mentions & Replies',
+    title: 'Volume',
+    parent: 'Reply sound',
+    description: 'How loud a reply sound of its own plays. Reply sound volume, quieter, louder.'
   },
   {
     tab: 'Chat',
@@ -1629,6 +1642,13 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     title: 'Pin bucket',
     parent: 'Method',
     description: 'Moderators always get a Pin button beside Copy on a message; this adds a Pin tile to the drag buckets as well. Previously "Pin from the drag gesture too".'
+  },
+  {
+    tab: 'Moderation',
+    section: 'Moderation Actions',
+    title: 'Grab cursor',
+    parent: 'Method',
+    description: 'Whole message shows the grab hand anywhere on a message you can drag; Edge only keeps the normal cursor and shows the hand on the strip at its left edge. You can pick a message up from anywhere either way.'
   },
   {
     tab: 'Moderation',

@@ -7,6 +7,7 @@ import { ModerationTag } from '../chat/ModerationTag';
 import { eventCardClass, eventCardStyle } from '../chat/eventCard';
 import type { ModerationContext, RoomModeView } from '../../stores/chatConnectionStore';
 import { RoomModeIndicator } from '../chat/RoomModeIndicator';
+import { mentionHoldBackground } from '../chat/mentionHold';
 import type { ChatEventSettings } from '../../types';
 import { Tooltip } from '../ui/Tooltip';
 import { calculateHalfPadding } from '../../utils/chatLayoutUtils';
@@ -489,3 +490,42 @@ export const RoomModesPreview = ({ style }: { style: 'chip' | 'prompt' }) => (
     </div>
   </SettingPreview>
 );
+
+/** A mention and a reply to you as they sit in chat after landing: the color
+ *  edge, and with Keep tinted the held wash chat rows draw (chat/mentionHold). */
+export const MentionRowPreview = ({
+  design,
+  hold,
+  opacity,
+  mentionColor,
+  replyColor,
+}: {
+  design: PreviewDesign;
+  hold: boolean;
+  opacity: number;
+  mentionColor: string;
+  replyColor: string;
+}) => {
+  const rows: { who: Chatter; text: string; color: string }[] = [
+    { who: PIXELFOX, text: '@you that clutch was unreal', color: mentionColor },
+    { who: MOSSY, text: 'right? best play of the night', color: replyColor },
+  ];
+  return (
+    <SettingPreview caption={hold ? 'a mention and a reply to you, tinted the whole time' : 'a mention and a reply to you after the flash'}>
+      <PreviewChat design={design}>
+        {rows.map((r, i) => (
+          <Row key={i}>
+            <div
+              style={{
+                borderLeft: `4px solid ${r.color}`,
+                backgroundImage: hold ? mentionHoldBackground(r.color, opacity) : undefined,
+              }}
+            >
+              <PreviewLine design={design} who={r.who} text={r.text} minutesAgo={2 - i} first={i === 0} />
+            </div>
+          </Row>
+        ))}
+      </PreviewChat>
+    </SettingPreview>
+  );
+};

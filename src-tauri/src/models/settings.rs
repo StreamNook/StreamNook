@@ -294,6 +294,10 @@ pub struct ChatDesignSettings {
     pub mention_color: String,   // Hex color for @ mentions
     pub reply_color: String,     // Hex color for reply threads
     pub mention_animation: bool, // Enable red-shift animation for mentions
+    /// Keep a mention or reply to you tinted in its color for as long as it is
+    /// on screen, instead of only flashing as it lands.
+    #[serde(default)]
+    pub mention_hold: bool,
     #[serde(default)]
     pub show_timestamps: bool, // Show timestamp next to each message
     #[serde(default)]
@@ -367,6 +371,12 @@ pub struct ChatDesignSettings {
     pub drag_moderation_enabled: bool, // deprecated: superseded by mod_action_style
     #[serde(default = "default_mod_action_style")]
     pub mod_action_style: String, // buttons | drag | both
+    /// Where the grab cursor shows while drag-to-moderate is on: "row" (the
+    /// whole message, so the gesture announces itself) or "edge" (only the
+    /// accent strip at the left edge). A press anywhere lifts the chatter
+    /// either way.
+    #[serde(default = "default_mod_drag_cursor")]
+    pub mod_drag_cursor: String, // row | edge
     #[serde(default = "default_mod_drag_layout")]
     pub mod_drag_layout: String, // column | bar
     #[serde(default = "default_pinned_collapsed_style")]
@@ -428,9 +438,18 @@ pub struct ChatDesignSettings {
     /// Mention sound volume, percent of the sound's own level (0-200).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mention_sound_volume: Option<u32>,
-    /// Whether a reply to one of your messages also plays the mention sound.
+    /// Whether a reply to one of your messages also plays the mention sound,
+    /// while `reply_sound` follows the mention sound.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mention_sound_replies: Option<bool>,
+    /// Sound for a reply to one of your messages: absent or empty follows the
+    /// mention sound (and `mention_sound_replies`), "none" is silent, anything
+    /// else is a built-in tone id or `file:<id>` of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_sound: Option<String>,
+    /// Volume of a reply sound of its own, percent of its level (0-200).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_sound_volume: Option<u32>,
     /// @mention text weight in message bodies: regular | medium | bold.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mention_weight: Option<String>,
@@ -542,6 +561,9 @@ fn default_mod_action_style() -> String {
 fn default_mod_drag_layout() -> String {
     "column".to_string()
 }
+fn default_mod_drag_cursor() -> String {
+    "row".to_string()
+}
 fn default_pinned_collapsed_style() -> String {
     "bar".to_string()
 }
@@ -563,6 +585,7 @@ impl Default for ChatDesignSettings {
             mention_color: "#ff4444".to_string(),
             reply_color: "#ff6b6b".to_string(),
             mention_animation: true,
+            mention_hold: false,
             show_timestamps: false,
             show_timestamp_seconds: false,
             timestamp_format: default_timestamp_format(),
@@ -610,6 +633,8 @@ impl Default for ChatDesignSettings {
             mention_sound: None,
             mention_sound_volume: None,
             mention_sound_replies: None,
+            reply_sound: None,
+            reply_sound_volume: None,
             mention_weight: None,
             mention_italic: None,
             mention_style: None,
@@ -620,6 +645,7 @@ impl Default for ChatDesignSettings {
             username_accent_source: "user".to_string(),
             drag_moderation_enabled: true,
             mod_action_style: "both".to_string(),
+            mod_drag_cursor: default_mod_drag_cursor(),
             mod_drag_layout: "column".to_string(),
             pinned_collapsed_style: "bar".to_string(),
             mod_pin_style: "both".to_string(),
