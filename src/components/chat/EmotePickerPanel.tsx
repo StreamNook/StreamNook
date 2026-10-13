@@ -71,6 +71,11 @@ export function useSwappingSmiley() {
 }
 
 // ── grid item ────────────────────────────────────────────────────────────────
+/** Emotes found to have no first-frame file (`provider:id`). The CDNs publish
+ *  one only for emotes that animate, so an emote whose animation is unknown
+ *  answers 404 for it; once seen, it is drawn live and never asked again. */
+const noStillFrame = new Set<string>();
+
 const EmoteGridItem = memo(
   ({
     emote,
@@ -104,12 +109,14 @@ const EmoteGridItem = memo(
     const emoteTier = inlineEmoteTier();
     const liveLocal = getCachedEmoteUrl(emote.id, emote.provider, emoteTier);
     // An emote known to be still has no frames to save: it keeps its disk copy.
-    const showStill = still && !hovered && emote.animated !== false;
+    const stillKey = `${emote.provider}:${emote.id}`;
+    const showStill = still && !hovered && emote.animated !== false && !noStillFrame.has(stillKey);
+    const liveSrc = is7tv
+      ? liveLocal || emote.localUrl || sevenTvTierUrl(emote.id, emoteTier)
+      : liveLocal || emote.localUrl || emote.url;
     const gridSrc = showStill
       ? staticEmoteUrl(is7tv ? sevenTvTierUrl(emote.id, emoteTier) : emote.url)
-      : is7tv
-        ? liveLocal || emote.localUrl || sevenTvTierUrl(emote.id, emoteTier)
-        : liveLocal || emote.localUrl || emote.url;
+      : liveSrc;
     const hoverPreviewSize = useAppStore((s) => s.settings.chat_design?.emote_hover_size) ?? 96;
 
     return (
@@ -210,8 +217,21 @@ const EmoteGridItem = memo(
                     ? 'drop-shadow-[0_0_3px_color-mix(in_srgb,var(--color-warning)_60%,transparent)]'
                     : ''
               }`}
+              onLoad={(e) => {
+                // A good load ends any fallback run, so failures from earlier
+                // scrolls never add up to a faded emote.
+                const t = e.currentTarget;
+                delete t.dataset.fb;
+                t.style.opacity = '';
+              }}
               onError={(e) => {
                 const t = e.currentTarget;
+                if (showStill && t.src !== liveSrc) {
+                  // No first frame published: the emote does not animate.
+                  noStillFrame.add(stillKey);
+                  t.src = liveSrc;
+                  return;
+                }
                 if (is7tv) {
                   t.srcset = '';
                   const ladder = ['2x', '1x', '3x', '4x'].flatMap((s) => [
@@ -1027,7 +1047,9 @@ export function EmotePickerPanel({
                       {(still) =>
                         block.map((emote, idx) => {
                           const isFavorited = isFavoriteEmote(emote.id);
-                          const liveSrc = still && emote.animated !== false
+                          const stillKey = `${emote.provider}:${emote.id}`;
+                          const drawStill = still && emote.animated !== false && !noStillFrame.has(stillKey);
+                          const liveSrc = drawStill
                             ? staticEmoteUrl(emote.url)
                             : getCachedEmoteUrl(emote.id, emote.provider) || emote.localUrl || emote.url;
                           return (
@@ -1044,6 +1066,7 @@ export function EmotePickerPanel({
                                     className="w-8 h-8 object-contain"
                                     onError={(e) => {
                                       const target = e.currentTarget;
+                                      if (drawStill) noStillFrame.add(stillKey);
                                       if (target.src !== emote.url) target.src = emote.url;
                                       else target.style.display = 'none';
                                     }}

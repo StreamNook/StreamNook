@@ -98,17 +98,25 @@ export function getFavoriteEmotes(): FavoriteEmote[] {
 }
 
 /**
- * Filter favorite emotes by availability in current emote set
- * Returns favorites that are available in the provided emote set
+ * The favorites this chat offers, in favorite order, each drawn from the
+ * chat's own entry for that emote. A saved favorite is a copy from when it was
+ * starred and can lack what the picker learned since (whether it animates,
+ * its cached file), so only `addedAt` comes from the copy.
  */
 export function getAvailableFavorites(allEmotes: Emote[]): FavoriteEmote[] {
   if (!favoriteEmotesCache) {
     return [];
   }
-  
-  // Create a Set of available emote IDs for fast lookup
-  const availableEmoteIds = new Set(allEmotes.map(e => e.id));
-  
-  // Filter favorites to only those available in current chat
-  return favoriteEmotesCache.filter(fav => availableEmoteIds.has(fav.id));
+
+  const byKey = new Map<string, Emote>();
+  const byId = new Map<string, Emote>();
+  for (const e of allEmotes) {
+    byKey.set(`${e.provider}:${e.id}`, e);
+    if (!byId.has(e.id)) byId.set(e.id, e);
+  }
+
+  return favoriteEmotesCache.flatMap((fav) => {
+    const live = byKey.get(`${fav.provider}:${fav.id}`) ?? byId.get(fav.id);
+    return live ? [{ ...fav, ...live, addedAt: fav.addedAt }] : [];
+  });
 }
