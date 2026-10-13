@@ -1,6 +1,7 @@
 import Foundation
 
-/// A live stream as `get_streams_by_game` returns it (the TypeScript `TwitchStream`).
+/// A live stream as `get_streams_by_game`, `search_channels` and the home snapshot return it
+/// (the TypeScript `TwitchStream`).
 public struct TwitchStream: Codable, Sendable, Hashable, Identifiable {
     public var id: String
     public var userLogin: String
@@ -9,6 +10,14 @@ public struct TwitchStream: Codable, Sendable, Hashable, Identifiable {
     public var viewerCount: Int
     public var gameName: String
     public var thumbnailURL: String
+    /// The broadcaster's Twitch numeric id, the key hype trains and watch streaks are filed under.
+    public var userID: String?
+    public var gameID: String?
+    public var broadcasterType: String?
+    public var profileImageURL: String?
+    public var startedAt: String?
+    /// Search answers offline channels too; a missing value counts as live.
+    public var isLive: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -18,10 +27,18 @@ public struct TwitchStream: Codable, Sendable, Hashable, Identifiable {
         case viewerCount = "viewer_count"
         case gameName = "game_name"
         case thumbnailURL = "thumbnail_url"
+        case userID = "user_id"
+        case gameID = "game_id"
+        case broadcasterType = "broadcaster_type"
+        case profileImageURL = "profile_image_url"
+        case startedAt = "started_at"
+        case isLive = "is_live"
     }
 
     public init(id: String, userLogin: String, userName: String, title: String, viewerCount: Int,
-                gameName: String, thumbnailURL: String = "") {
+                gameName: String, thumbnailURL: String = "", userID: String? = nil, gameID: String? = nil,
+                broadcasterType: String? = nil, profileImageURL: String? = nil, startedAt: String? = nil,
+                isLive: Bool? = nil) {
         self.id = id
         self.userLogin = userLogin
         self.userName = userName
@@ -29,11 +46,19 @@ public struct TwitchStream: Codable, Sendable, Hashable, Identifiable {
         self.viewerCount = viewerCount
         self.gameName = gameName
         self.thumbnailURL = thumbnailURL
+        self.userID = userID
+        self.gameID = gameID
+        self.broadcasterType = broadcasterType
+        self.profileImageURL = profileImageURL
+        self.startedAt = startedAt
+        self.isLive = isLive
     }
+
+    public var isPartner: Bool { broadcasterType == "partner" }
 }
 
 /// A category as `get_top_games_paginated` returns it (the TypeScript `TwitchCategory`).
-public struct TwitchCategory: Codable, Sendable, Equatable, Identifiable {
+public struct TwitchCategory: Codable, Sendable, Hashable, Identifiable {
     public var id: String
     public var name: String
     public var boxArtURL: String?

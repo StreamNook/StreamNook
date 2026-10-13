@@ -16,8 +16,13 @@ public final class FakeCore: CoreBridge {
     }
 
     private let state = Mutex(State())
+    /// Canned answers for the screens beyond the spike (settings, the home snapshot, the account),
+    /// so their signed-in states can be drawn without a real account. Nil answers none of them.
+    let fixtures: FakeFixtures?
 
-    public init() {}
+    public init(fixtures: FakeFixtures? = nil) {
+        self.fixtures = fixtures
+    }
 
     /// The commands invoked so far, oldest first.
     public var calls: [String] { state.withLock { $0.calls } }
@@ -61,6 +66,7 @@ public final class FakeCore: CoreBridge {
         case "stop_stream", "stop_chat":
             return "null"
         default:
+            if let fixtures, let answer = try fixtures.answer(cmd, args) { return answer }
             throw CoreFailure.command(json: #""unknown command \#(cmd)""#)
         }
     }
@@ -128,7 +134,8 @@ public final class FakeCore: CoreBridge {
         return (game.id, TwitchStream(
             id: "\(900_000 + i)", userLogin: login, userName: "FakeStreamer\(i)",
             title: "Spike stream \(i): testing the iPhone app", viewerCount: 40_000 - i * 1_350,
-            gameName: game.name
+            gameName: game.name, userID: "\(5_000 + i)", gameID: game.id,
+            broadcasterType: i % 3 == 0 ? "partner" : nil
         ))
     }
 
