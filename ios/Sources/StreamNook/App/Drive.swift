@@ -10,7 +10,7 @@ import Foundation
 /// - `wait:SECONDS`
 /// - `pause` pauses the player
 /// - `route:NAME` picks how the next stream reaches the relay (`plain`, `promote`, `ll`,
-///   `llhttp`; see `PlayRoute`)
+///   `llhttp`, `auto`; see `PlayRoute`)
 /// - `offset:SECONDS` sets the next player item's configured offset from live
 /// - `preserve` makes the next player item keep its offset from live after a stall
 /// - `catchup:MS` holds that distance behind the relay's edge with a gentle catch-up rate

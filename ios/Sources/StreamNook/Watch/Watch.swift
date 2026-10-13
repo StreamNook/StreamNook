@@ -16,6 +16,8 @@ enum PlayRoute: String, Sendable {
     case ll
     /// The low-latency playlist over plain http, to see whether AVPlayer takes it there.
     case llhttp
+    /// `ll` when the core's origin took the stream, `plain` when it did not.
+    case auto
 }
 
 /// One stream being watched: the player on the URL the core serves, how far behind the live
@@ -37,7 +39,7 @@ final class Watch {
     private var chatLines = 0
 
     /// Set by drive steps before a stream opens.
-    var route = PlayRoute.plain
+    var route = PlayRoute.auto
     var offsetFromLive: Double?
     var preservesOffset = false
     /// The distance behind the edge a gentle catch-up rate holds, in milliseconds.
@@ -106,8 +108,9 @@ final class Watch {
             guard !Task.isCancelled else { return }
             let lowLatency = (try? await core.invoke("get_stream_low_latency", args: [:], as: Bool.self)) ?? false
             quality = start.quality
-            log.notice("start_stream \(stream.userLogin, privacy: .public) -> \(start.url, privacy: .public) (\(start.quality, privacy: .public)) origin \(lowLatency ? "on" : "off", privacy: .public) route \(self.route.rawValue, privacy: .public)")
-            guard let item = makeItem(start.url) else { return }
+            let chosen = route == .auto ? (lowLatency ? PlayRoute.ll : .plain) : route
+            log.notice("start_stream \(stream.userLogin, privacy: .public) -> \(start.url, privacy: .public) (\(start.quality, privacy: .public)) origin \(lowLatency ? "on" : "off", privacy: .public) route \(chosen.rawValue, privacy: .public)")
+            guard let item = makeItem(start.url, route: chosen) else { return }
             if let offsetFromLive {
                 item.configuredTimeOffsetFromLive = CMTime(seconds: offsetFromLive, preferredTimescale: 1000)
             }
@@ -129,14 +132,14 @@ final class Watch {
     }
 
     /// The player item for the URL the core answered, on the chosen route.
-    private func makeItem(_ url: String) -> AVPlayerItem? {
+    private func makeItem(_ url: String, route: PlayRoute) -> AVPlayerItem? {
         switch route {
         case .plain, .promote:
             let plain = url.replacingOccurrences(of: "/stream.m3u8", with: "/plain.m3u8")
             return URL(string: route == .promote ? plain + "&promote=1" : plain).map(AVPlayerItem.init(url:))
         case .llhttp:
             return URL(string: url + appleQuery).map(AVPlayerItem.init(url:))
-        case .ll:
+        case .ll, .auto:
             guard var parts = URLComponents(string: url + appleQuery) else { return nil }
             parts.scheme = LLPlaylistLoader.scheme
             guard let custom = parts.url else { return nil }
