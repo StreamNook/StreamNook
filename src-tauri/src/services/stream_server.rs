@@ -1056,14 +1056,17 @@ impl StreamServer {
                     }
                 }
                 if plain && crate::services::relay_probe::is_active() {
-                    let newest = work
+                    // The newest listed sequence number, comparable with `vseg`.
+                    let first: i64 = work
                         .lines()
-                        .rev()
-                        .find(|l| !l.starts_with('#') && !l.trim().is_empty())
-                        .map(|l| l.rsplit('/').next().unwrap_or(l).split('?').next().unwrap_or(""))
-                        .unwrap_or("")
-                        .to_string();
-                    crate::services::relay_probe::note_fetch(format!("plain {newest}"));
+                        .find_map(|l| l.strip_prefix("#EXT-X-MEDIA-SEQUENCE:"))
+                        .and_then(|v| v.trim().parse().ok())
+                        .unwrap_or(-1);
+                    let listed = work.matches("#EXTINF:").count() as i64;
+                    crate::services::relay_probe::note_fetch(format!(
+                        "plain newest {}",
+                        first + listed - 1
+                    ));
                 }
                 bytes = if stabilize_ok {
                     let base = crate::services::hls_projection::base_url_of(&manifest_url);

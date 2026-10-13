@@ -709,7 +709,7 @@ impl TsChunker {
                 }
             }
             let pkt = &self.buf[i..i + TS_PACKET];
-            if let Some(pts) = video_pes_pts(pkt) {
+            if let Some(pts) = cut_stamp(pkt) {
                 self.last_pts = Some(pts);
                 // A video PES (access unit) starts here. Cut the previous part BEFORE
                 // this packet once enough has accumulated SINCE THE PART'S FIRST PES,
@@ -778,6 +778,27 @@ impl TsChunker {
 /// (`0x000001` start code, stream_id `0xE0..=0xEF`) with a PTS, return the 33-bit
 /// PTS. Returns None for continuation packets, non-video PIDs, and PES without PTS.
 fn video_pes_pts(pkt: &[u8]) -> Option<u64> {
+    video_pes_stamps(pkt).map(|(pts, _)| pts)
+}
+
+/// The timestamp the TS chunker cuts parts on. Desktop and Android cut on the
+/// PTS: hls.js takes parts that wander a frame or two around `TS_PART_PTS`
+/// (presentation order is not decode order). AVPlayer refuses a playlist whose
+/// non-final parts fall under 85% of its PART-TARGET, so the iPhone cuts on the
+/// decode timestamp, which gives every non-final part the same frame count.
+#[cfg(not(target_os = "ios"))]
+fn cut_stamp(pkt: &[u8]) -> Option<u64> {
+    video_pes_pts(pkt)
+}
+
+#[cfg(target_os = "ios")]
+fn cut_stamp(pkt: &[u8]) -> Option<u64> {
+    video_pes_stamps(pkt).map(|(_, dts)| dts)
+}
+
+/// `(PTS, DTS)` of a video PES start; the DTS is the PTS when the PES carries
+/// none (no reordering).
+fn video_pes_stamps(pkt: &[u8]) -> Option<(u64, u64)> {
     if pkt.len() < TS_PACKET || pkt[0] != TS_SYNC {
         return None;
     }
@@ -810,13 +831,21 @@ fn video_pes_pts(pkt: &[u8]) -> Option<u64> {
     if b.len() < 5 {
         return None;
     }
-    // 33-bit PTS packed across 5 bytes with marker bits (ISO 13818-1).
-    let pts = (((b[0] as u64 >> 1) & 0x07) << 30)
-        | ((b[1] as u64) << 22)
-        | (((b[2] as u64 >> 1) & 0x7F) << 15)
-        | ((b[3] as u64) << 7)
-        | ((b[4] as u64 >> 1) & 0x7F);
-    Some(pts)
+    // 33-bit timestamps packed across 5 bytes with marker bits (ISO 13818-1).
+    let stamp = |b: &[u8]| {
+        (((b[0] as u64 >> 1) & 0x07) << 30)
+            | ((b[1] as u64) << 22)
+            | (((b[2] as u64 >> 1) & 0x7F) << 15)
+            | ((b[3] as u64) << 7)
+            | ((b[4] as u64 >> 1) & 0x7F)
+    };
+    let pts = stamp(b);
+    let dts = if pts_dts_flags == 3 && b.len() >= 10 {
+        stamp(&b[5..])
+    } else {
+        pts
+    };
+    Some((pts, dts))
 }
 
 // ──────────────────────────── upstream playlist parse ────────────────────────────
@@ -2278,9 +2307,26 @@ fn render_locked(edge: &LiveEdge) -> String {
 // it is opt-in per request (`apple=1` on the query): the hls.js playlist is
 // `render_locked` byte for byte, and the Apple one is derived from it.
 
-/// Hold-back AVPlayer is told to keep from the last listed part. The spec floor
-/// is twice the part target (1.334 s at `PART_TARGET`).
-const APPLE_PART_HOLD_BACK: f64 = 1.5;
+/// AVPlayer enforces the spec's part-size window: no part above PART-TARGET and
+/// no non-final part under 85% of it (a playlist that breaks either is a parse
+/// error, not a warning). hls.js's generous `PART_TARGET` fails the second rule,
+/// so the Apple playlist declares a target that fits the parts. TS parts are cut
+/// on the decode timestamp on the iPhone (`cut_stamp`), so every non-final part
+/// spans `TS_PART_PTS` rounded up to a whole frame: 0.300 s at 30, 50 and 60
+/// fps, 0.320 at 25, 0.333 at 24.
+const APPLE_TS_PART_TARGET: f64 = 0.334;
+/// Twitch's own CMAF fragments run about 0.105 s.
+const APPLE_CMAF_PART_TARGET: f64 = 0.12;
+/// Hold-back as a multiple of the part target: the spec's floor is two, Apple
+/// asks for three.
+const APPLE_PART_HOLD_BACK_PARTS: f64 = 3.0;
+
+fn apple_part_target(edge: &LiveEdge) -> f64 {
+    match edge.container {
+        Container::Ts => APPLE_TS_PART_TARGET,
+        Container::Cmaf => APPLE_CMAF_PART_TARGET,
+    }
+}
 /// How long an Apple blocking reload waits for its part before answering with
 /// the current playlist. AVPlayer allows a blocking reload about three target
 /// durations, far above hls.js's 2 s budget that bounds `BLOCK_TIMEOUT`.
@@ -2340,14 +2386,19 @@ fn absolute_uri_attr(line: &str, base: &str, query: &str) -> String {
 }
 
 /// The playlist for AVPlayer: `render_locked` with absolute URIs against `base`
-/// (`http://127.0.0.1:<port>/`), the Apple hold-back, and a preload hint.
+/// (`http://127.0.0.1:<port>/`), Apple's part target and hold-back, and a
+/// preload hint.
 fn render_apple(edge: &LiveEdge, base: &str) -> String {
     let plain = render_locked(edge);
+    let target = apple_part_target(edge);
     let mut s = String::with_capacity(plain.len() * 2);
     for line in plain.lines() {
-        if line.starts_with("#EXT-X-SERVER-CONTROL:") {
+        if line.starts_with("#EXT-X-PART-INF:") {
+            s.push_str(&format!("#EXT-X-PART-INF:PART-TARGET={target:.3}"));
+        } else if line.starts_with("#EXT-X-SERVER-CONTROL:") {
             s.push_str(&format!(
-                "#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK={APPLE_PART_HOLD_BACK:.3}"
+                "#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK={:.3}",
+                target * APPLE_PART_HOLD_BACK_PARTS
             ));
         } else if line.starts_with("#EXT-X-PART:") {
             s.push_str(&absolute_uri_attr(line, base, "?apple=1"));
@@ -2892,6 +2943,30 @@ mod tests {
             p[4..4 + h.len()].copy_from_slice(&h);
         }
         p
+    }
+
+    #[test]
+    fn a_pes_with_a_dts_reports_both_stamps() {
+        let mut pkt = ts_packet(true, 0xE0, Some(4_500), 0);
+        // Rewrite the header as PTS 4500 + DTS 1500 ('11' flags, 10 header bytes).
+        let pack = |prefix: u8, t: u64| {
+            [
+                prefix | (((t >> 30) & 0x07) << 1) as u8 | 0x01,
+                ((t >> 22) & 0xFF) as u8,
+                ((((t >> 15) & 0x7F) << 1) | 0x01) as u8,
+                ((t >> 7) & 0xFF) as u8,
+                (((t & 0x7F) << 1) | 0x01) as u8,
+            ]
+        };
+        pkt[11] = 0xC0;
+        pkt[12] = 0x0A;
+        pkt[13..18].copy_from_slice(&pack(0x30, 4_500));
+        pkt[18..23].copy_from_slice(&pack(0x10, 1_500));
+        assert_eq!(video_pes_stamps(&pkt), Some((4_500, 1_500)));
+        assert_eq!(video_pes_pts(&pkt), Some(4_500));
+        // Without a DTS the decode stamp is the presentation stamp.
+        let plain = ts_packet(true, 0xE0, Some(9_000), 0);
+        assert_eq!(video_pes_stamps(&plain), Some((9_000, 9_000)));
     }
 
     #[test]
@@ -3469,8 +3544,8 @@ seg/50.ts\n\
         let expected = "#EXTM3U\n\
 #EXT-X-VERSION:9\n\
 #EXT-X-TARGETDURATION:2\n\
-#EXT-X-PART-INF:PART-TARGET=0.667\n\
-#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=1.500\n\
+#EXT-X-PART-INF:PART-TARGET=0.334\n\
+#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=1.002\n\
 #EXT-X-MEDIA-SEQUENCE:50\n\
 #EXT-X-MAP:URI=\"http://127.0.0.1:9/init.mp4\"\n\
 #EXT-X-PROGRAM-DATE-TIME:P0\n\
