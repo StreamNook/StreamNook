@@ -6,7 +6,57 @@
   "user_id": "999"
  },
  "emotes": {
-  "twitch": [],
+  "twitch": [
+   {
+    "id": "25",
+    "name": "Kappa",
+    "url": "https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/1.0",
+    "provider": "twitch",
+    "emote_type": "globals"
+   },
+   {
+    "id": "425618",
+    "name": "LUL",
+    "url": "https://static-cdn.jtvnw.net/emoticons/v2/425618/default/dark/1.0",
+    "provider": "twitch",
+    "emote_type": "globals"
+   },
+   {
+    "id": "305954156",
+    "name": "PogChamp",
+    "url": "https://static-cdn.jtvnw.net/emoticons/v2/305954156/default/dark/1.0",
+    "provider": "twitch",
+    "emote_type": "globals"
+   },
+   {
+    "id": "41",
+    "name": "Kreygasm",
+    "url": "https://static-cdn.jtvnw.net/emoticons/v2/41/default/dark/1.0",
+    "provider": "twitch",
+    "emote_type": "globals"
+   },
+   {
+    "id": "30259",
+    "name": "HeyGuys",
+    "url": "https://static-cdn.jtvnw.net/emoticons/v2/30259/default/dark/1.0",
+    "provider": "twitch",
+    "emote_type": "globals"
+   },
+   {
+    "id": "64138",
+    "name": "SeemsGood",
+    "url": "https://static-cdn.jtvnw.net/emoticons/v2/64138/default/dark/1.0",
+    "provider": "twitch",
+    "emote_type": "globals"
+   },
+   {
+    "id": "86",
+    "name": "BibleThump",
+    "url": "https://static-cdn.jtvnw.net/emoticons/v2/86/default/dark/1.0",
+    "provider": "twitch",
+    "emote_type": "globals"
+   }
+  ],
   "bttv": [
    {
     "id": "566ca38765dbbdab32ec0560",

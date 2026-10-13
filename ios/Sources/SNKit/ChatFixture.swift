@@ -11,6 +11,8 @@ public struct ChatFixture: Sendable {
     public var chatDesignJSON: Data
     /// The room's emote set (`twitch`, `bttv`, `7tv`, `ffz`), as JSON.
     public var emotesJSON: Data
+    /// What the core's `command_catalog` answers a viewer on a phone, as JSON.
+    public var commandsJSON: Data
     /// Socket frames in the order the core sent them.
     public var frames: [String]
 
@@ -23,6 +25,7 @@ public struct ChatFixture: Sendable {
         ownLogin = (root["own"] as? [String: Any])?["login"] as? String ?? ""
         chatDesignJSON = try JSONSerialization.data(withJSONObject: root["chat_design"] ?? [String: Any]())
         emotesJSON = try JSONSerialization.data(withJSONObject: root["emotes"] ?? [String: Any]())
+        commandsJSON = try JSONSerialization.data(withJSONObject: root["commands"] ?? [Any]())
         frames = root["frames"] as? [String] ?? []
     }
 

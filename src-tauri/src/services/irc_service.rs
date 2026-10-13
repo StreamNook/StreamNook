@@ -5643,6 +5643,7 @@ impl IrcService {
         // and never recorded: the echo is the record.
         let rules = ChatRules::snapshot();
         let _ = ChatRules::evaluate_unrecorded(&mut msg, &rules);
+        crate::services::chat_row_view::stamp(&mut msg);
         Some(msg)
     }
 
@@ -6972,6 +6973,8 @@ mod chat_fixture_tests {
                 "own": inputs["own"],
                 "chat_design": design,
                 "emotes": inputs["emotes"],
+                // What `command_catalog` answers a viewer on a phone.
+                "commands": crate::services::command_catalog::catalog(true, false, false, &[], ""),
                 "frames": frames,
             });
             std::fs::write(&path, serde_json::to_string_pretty(&fixture).unwrap() + "\n").expect("write fixtures");

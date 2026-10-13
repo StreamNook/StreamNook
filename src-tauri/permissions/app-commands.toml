@@ -197,6 +197,7 @@ allow = [
   "debug_unjoin_channel",
   "nudge_chat_channels",
   "send_chat_message",
+  "command_catalog",
   "run_chat_burst",
   "stop_chat_burst",
   "get_chat_burst",

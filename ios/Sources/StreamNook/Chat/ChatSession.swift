@@ -93,6 +93,11 @@ final class ChatSession {
         }
     }
 
+    /// Takes the room's connection again after `stop()`.
+    func restart() {
+        start()
+    }
+
     func setPaused(_ paused: Bool) {
         self.paused = paused
     }

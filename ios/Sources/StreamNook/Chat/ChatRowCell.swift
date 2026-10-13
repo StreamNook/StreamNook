@@ -51,6 +51,8 @@ final class ChatRowCell: UIView {
                 let image = AnimatedImageLayer()
                 image.contentsScale = scale
                 image.frame = group.bounds
+                // FFZ GrowX and BetterTTV wide stretch the target to their box.
+                if i == 0, attachment.effects & (Modifier.growX | Modifier.wide) != 0 { image.contentsGravity = .resize }
                 group.addSublayer(image)
                 imageLayers.append(image)
                 load(url, into: image, attachment: attachment, isBase: i == 0)

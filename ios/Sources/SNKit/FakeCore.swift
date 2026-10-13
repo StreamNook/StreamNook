@@ -77,6 +77,16 @@ public final class FakeCore: CoreBridge {
         case "fetch_channel_emotes":
             guard let emotes = chatFixture?.emotesJSON else { return #"{"twitch":[],"bttv":[],"7tv":[],"ffz":[],"kick":[]}"# }
             return String(decoding: emotes, as: UTF8.self)
+        case "command_catalog":
+            let rows = chatFixture.flatMap { try? JSONSerialization.jsonObject(with: $0.commandsJSON) as? [[String: Any]] } ?? []
+            let tokens = (args["query"] as? String ?? "").lowercased().split(separator: " ")
+            let hits = rows.filter { row in
+                let hay = ["name", "usage", "description"].compactMap { row[$0] as? String }.joined(separator: " ").lowercased()
+                return tokens.allSatisfy { hay.contains($0) }
+            }
+            return try Self.json(hits)
+        case "match_emote_tokens":
+            return try Self.json(Self.emoteMatches(chatFixture?.emotesJSON, args: args))
         case "send_chat_message":
             let text = args["message"] as? String ?? ""
             state.withLock { $0.sent.append(text) }
@@ -135,6 +145,32 @@ public final class FakeCore: CoreBridge {
             "tags": [String: String](),
         ]
         return (try? json(message)) ?? "{}"
+    }
+
+    /// A stand-in for the core's emote matcher over the fixture's emote set: prefix matches for
+    /// the suggestion strip, substring matches (everything, grouped, when nothing is typed) for
+    /// the picker.
+    static func emoteMatches(_ emotesJSON: Data?, args: [String: Any]) -> [String: Any] {
+        let set = emotesJSON.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: [[String: Any]]] } ?? [:]
+        let query = (args["query"] as? String ?? "").lowercased()
+        let search = args["profile"] as? String == "search"
+        var rows: [[String: Any]] = []
+        for provider in ["7tv", "bttv", "ffz", "twitch"] {
+            for emote in set[provider] ?? [] {
+                guard let name = emote["name"] as? String, let url = emote["url"] as? String else { continue }
+                let lower = name.lowercased()
+                let hit = query.isEmpty ? search : (search ? lower.contains(query) : lower.hasPrefix(query))
+                guard hit else { continue }
+                var row: [String: Any] = [
+                    "id": emote["id"] as? String ?? name, "name": name, "url": url, "provider": provider,
+                    "source_label": provider.uppercased(), "source_detail": "Channel",
+                ]
+                if query.isEmpty { row["group"] = provider == "twitch" ? "Global Emotes" : "Channel Emotes" }
+                rows.append(row)
+            }
+        }
+        let limit = args["limit"] as? Int ?? (search ? 60 : 50)
+        return ["rows": Array(rows.prefix(limit)), "total": rows.count, "ready": true]
     }
 
     // MARK: Canned data
