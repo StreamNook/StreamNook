@@ -97,6 +97,20 @@ pub async fn snapshot() -> Vec<ProviderStream> {
     STATE.read().await.snapshot.values().cloned().collect()
 }
 
+/// Send every platform's live follows again, as `provider-live-update` does on
+/// a change, after the hidden-channels list changed what the windows may see.
+pub async fn resend(app: &AppHandle) {
+    let all = snapshot().await;
+    for provider in ["kick", "youtube", "tiktok"] {
+        let mut shown: Vec<ProviderStream> = all.iter().filter(|r| r.provider == provider).cloned().collect();
+        crate::services::hidden_channels::retain_provider(&mut shown, crate::services::hidden_channels::Realm::Follows);
+        let _ = app.emit(
+            "provider-live-update",
+            serde_json::json!({ "provider": provider, "streams": shown }),
+        );
+    }
+}
+
 /// Sweep ONE provider immediately, outside the poll cadence.
 ///
 /// Connecting an account imports the follow list but says nothing about who is
@@ -282,9 +296,12 @@ async fn apply(app: &AppHandle, provider: &str, from: List, rows: Vec<ProviderSt
     };
 
     if rows_changed {
+        // The windows never see a channel hidden from follows; this list keeps it.
+        let mut shown = live.clone();
+        crate::services::hidden_channels::retain_provider(&mut shown, crate::services::hidden_channels::Realm::Follows);
         let _ = app.emit(
             "provider-live-update",
-            serde_json::json!({ "provider": provider, "streams": live }),
+            serde_json::json!({ "provider": provider, "streams": shown }),
         );
         // Home's unified Discover list leaves out whoever this list shows.
         crate::services::home_snapshot::note_discover_inputs_changed();

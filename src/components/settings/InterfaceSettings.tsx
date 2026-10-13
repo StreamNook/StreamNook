@@ -1,13 +1,16 @@
 import { useState, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Eye, EyeOff, Columns, X, Sparkles, Gauge, Zap } from 'lucide-react';
 import CompactViewSettings from './CompactViewSettings';
+import { ProviderLogo } from '../ProviderLogo';
+import type { ProviderId } from '../../types/providers';
 import { SettingsSection, SettingsRow, SegmentedSelect } from './_primitives';
 import { SubControl, SubControls } from '../plugins/settingsPageKit';
 import { GlassMultiSelect } from '../ui/GlassMultiSelect';
 import { DISCOVERY_LANGUAGES } from '../../utils/discoveryLanguages';
 import { useAppStore } from '../../stores/AppStore';
 import { IS_MAC } from '../../utils/platform';
-import type { MotionMode, CloseToTrayMode } from '../../types';
+import type { MotionMode, CloseToTrayMode, HiddenRealms } from '../../types';
 import { useSettingReset } from './settingReset';
 
 export type SidebarMode = 'expanded' | 'compact' | 'hidden' | 'disabled';
@@ -33,6 +36,20 @@ export const saveSidebarSettings = (mode: SidebarMode, expandOnHover: boolean, s
         detail: { mode, expandOnHover, showRecommended }
     }));
 };
+
+/** The places a hidden channel can be hidden besides browsing, in Rust's words. */
+const HIDDEN_REALMS: { key: keyof HiddenRealms; label: string; short: string }[] = [
+    { key: 'chat', label: 'Their chat messages', short: 'Chat' },
+    { key: 'search', label: 'Search results', short: 'Search' },
+    { key: 'follows', label: 'Follows, favorites and live alerts', short: 'Follows' },
+];
+
+/** A saved entry's realms; a field Rust has not written yet reads as hidden. */
+const realmsOf = (c: Partial<HiddenRealms>): HiddenRealms => ({
+    chat: c.chat ?? true,
+    search: c.search ?? true,
+    follows: c.follows ?? true,
+});
 
 const Toggle = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
     <button
@@ -63,6 +80,7 @@ const MOTION_MODE_OPTIONS: { value: MotionMode; label: string; hint: string; Ico
 const InterfaceSettings = () => {
     const { settings, updateSettings } = useAppStore();
     const resetFor = useSettingReset();
+    const hiddenDefaults = realmsOf(settings.hidden_channel_defaults ?? {});
     const [sidebarMode, setSidebarMode] = useState<SidebarMode>('compact');
     const [expandOnHover, setExpandOnHover] = useState(true);
     const [showRecommended, setShowRecommended] = useState(true);
@@ -162,6 +180,131 @@ const InterfaceSettings = () => {
     return (
         <div className="space-y-8">
             <SettingsSection
+                id="settings-section-hidden-channels"
+                label="Hidden channels"
+                description="A channel you hide never shows in Discover, categories or Recommended. Right-click any stream and pick Hide channel."
+            >
+                <SettingsRow
+                    title="Also hide from"
+                    onReset={resetFor(['hidden_channel_defaults', { chat: true, search: true, follows: true }])}
+                    description="Where a channel you hide next is hidden too. Each channel below can be changed on its own."
+                >
+                    <SubControls>
+                        {HIDDEN_REALMS.map(({ key, label }) => (
+                            <SubControl
+                                key={key}
+                                title={label}
+                                control={
+                                    <Toggle
+                                        enabled={hiddenDefaults[key]}
+                                        onChange={() =>
+                                            void updateSettings({
+                                                ...settings,
+                                                hidden_channel_defaults: { ...hiddenDefaults, [key]: !hiddenDefaults[key] },
+                                            })
+                                        }
+                                    />
+                                }
+                            />
+                        ))}
+                    </SubControls>
+                </SettingsRow>
+                <SettingsRow
+                    title="Channels"
+                    description={
+                        (settings.hidden_channels?.length ?? 0) > 0
+                            ? 'Show brings a channel back everywhere. Block also blocks a Twitch channel on Twitch, so it cannot chat with or whisper to you.'
+                            : 'No hidden channels.'
+                    }
+                >
+                    {(settings.hidden_channels?.length ?? 0) > 0 && (
+                        <div className="flex flex-col gap-1.5">
+                            {settings.hidden_channels!.map((c) => {
+                                const realms = realmsOf(c);
+                                return (
+                                    <div key={c.id} className="flex flex-col gap-1 rounded-lg px-1 py-1">
+                                        <div className="flex items-center gap-2.5">
+                                            {c.avatar ? (
+                                                <img src={c.avatar} alt="" className="h-6 w-6 flex-shrink-0 rounded-full object-cover" />
+                                            ) : (
+                                                <span className="h-6 w-6 flex-shrink-0 rounded-full bg-glass" aria-hidden />
+                                            )}
+                                            <span className="min-w-0 flex-1 truncate text-sm text-textPrimary">{c.display_name || c.channel}</span>
+                                            {c.blocked && (
+                                                <span className="flex flex-shrink-0 items-center gap-1.5 text-xs text-textSecondary">
+                                                    <span className="h-1.5 w-1.5 rounded-full bg-error" aria-hidden />
+                                                    Blocked on Twitch
+                                                </span>
+                                            )}
+                                            {/* Platform marks only where platforms mix. */}
+                                            {new Set(settings.hidden_channels!.map((h) => h.provider)).size > 1 && (
+                                                <ProviderLogo provider={c.provider as ProviderId} size={12} />
+                                            )}
+                                            {c.provider === 'twitch' && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                        void invoke('set_hidden_channel_blocked', { id: c.id, blocked: !c.blocked }).catch((err) =>
+                                                            useAppStore.getState().addToast(typeof err === 'string' ? err : 'Twitch did not take that change', 'error'),
+                                                        )
+                                                    }
+                                                    className="glass-button flex-shrink-0 px-2.5 py-1 text-xs text-textSecondary hover:text-textPrimary"
+                                                    aria-label={`${c.blocked ? 'Unblock' : 'Block'} ${c.display_name || c.channel} on Twitch`}
+                                                >
+                                                    {c.blocked ? 'Unblock' : 'Block'}
+                                                </button>
+                                            )}
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    // Showing undoes the hide, and the block StreamNook added.
+                                                    const unblock = c.blocked
+                                                        ? invoke('set_hidden_channel_blocked', { id: c.id, blocked: false })
+                                                        : Promise.resolve();
+                                                    void unblock
+                                                        .then(() => invoke('set_channel_hidden', { channel: c, hidden: false }))
+                                                        .catch((err) =>
+                                                            useAppStore.getState().addToast(typeof err === 'string' ? err : 'Could not show that channel again', 'error'),
+                                                        );
+                                                }}
+                                                className="glass-button flex-shrink-0 px-2.5 py-1 text-xs text-textSecondary hover:text-textPrimary"
+                                                aria-label={`Show ${c.display_name || c.channel} again`}
+                                            >
+                                                Show
+                                            </button>
+                                        </div>
+                                        {/* Where else it is hidden: tap to change this one channel. */}
+                                        <div className="flex flex-wrap items-center gap-1 pl-[34px]">
+                                            {HIDDEN_REALMS.map(({ key, short }) => (
+                                                <button
+                                                    key={key}
+                                                    type="button"
+                                                    aria-pressed={realms[key]}
+                                                    onClick={() =>
+                                                        void invoke('set_hidden_channel_realms', {
+                                                            id: c.id,
+                                                            realms: { ...realms, [key]: !realms[key] },
+                                                        })
+                                                    }
+                                                    className={`rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                                                        realms[key]
+                                                            ? 'bg-accent/15 text-accent'
+                                                            : 'text-textMuted hover:text-textSecondary'
+                                                    }`}
+                                                >
+                                                    {short}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </SettingsRow>
+            </SettingsSection>
+
+            <SettingsSection
                 id="settings-section-sidebar"
                 label="Sidebar"
                 description="How much of the streams list stays on screen while you watch."
@@ -248,6 +391,7 @@ const InterfaceSettings = () => {
                         />
                     }
                 />
+
             </SettingsSection>
 
             <SettingsSection

@@ -739,7 +739,14 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     tab: 'Chat',
     section: 'Chat Input',
     title: 'Chat modes',
-    description: 'Show when a channel limits who can chat in the message box: emote-only, followers-only, subscriber-only, slow mode and unique chat, with a countdown on the send button during slow mode. Room mode bar, chat restrictions, emote only chat, follower only, sub only.'
+    description: 'Show when a channel limits who can chat: emote-only, followers-only, subscriber-only, slow mode and unique chat, as a chip at the end of the message box or named in its placeholder (Style), with a countdown on the send button during slow mode. Room mode bar, chat restrictions, emote only chat, follower only, sub only.'
+  },
+  {
+    tab: 'Chat',
+    section: 'Chat Input',
+    title: 'Style',
+    parent: 'Chat modes',
+    description: 'Chip puts one small chip at the end of the message box that stays while you type. Placeholder names the mode in place of Send a message. Chat mode chip, room mode icon, slow mode placeholder.'
   },
   {
     tab: 'Chat',
@@ -2269,6 +2276,20 @@ export const SETTINGS_INDEX: SettingsIndexEntry[] = [
     sectionId: 'settings-section-discover',
     title: 'Languages',
     description: 'Filter the Discover tab and sidebar recommended streams by broadcast language: only show streams in english, french, german, spanish, or any other language you pick.'
+  },
+  {
+    tab: 'Interface',
+    section: 'Hidden channels',
+    sectionId: 'settings-section-hidden-channels',
+    title: 'Also hide from',
+    description: 'Where a channel you hide is hidden besides Discover and categories: their chat messages, search results, and follows, favorites and live alerts. Hide user everywhere, mute streamer, block chatter.'
+  },
+  {
+    tab: 'Interface',
+    section: 'Hidden channels',
+    sectionId: 'settings-section-hidden-channels',
+    title: 'Channels',
+    description: 'Every channel you hid, with where each one is hidden. Show one again, or block a Twitch channel on Twitch too. Block a stream, hide streamer, never see, not interested, blocklist, hidden channels.'
   },
   {
     tab: 'Interface',

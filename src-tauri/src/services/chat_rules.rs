@@ -303,6 +303,11 @@ pub struct CompiledRules {
     hide_bots: bool,
     hidden_global: HashSet<String>,
     hidden_per_channel: HashMap<String, HashSet<String>>,
+    /// Hidden channels' accounts (`hidden_channels::chat_accounts`):
+    /// `twitch:<user id>`, or `provider:<login>` elsewhere.
+    hidden_accounts: HashSet<String>,
+    /// Their logins, for clearing rows already on screen.
+    hidden_account_logins: HashSet<String>,
     ignore_set: Option<RegexSet>,
     pub filters: Vec<CompiledFilter>,
     /// Patterns that failed to compile, for the settings UI.
@@ -588,6 +593,8 @@ impl CompiledRules {
             hide_bots: cf.hide_bots,
             hidden_global,
             hidden_per_channel,
+            hidden_accounts: HashSet::new(),
+            hidden_account_logins: HashSet::new(),
             ignore_set,
             filters,
             errors,
@@ -920,6 +927,7 @@ impl Evaluation {
 fn newly_hidden_frames(prev: &CompiledRules, next: &CompiledRules) -> Vec<String> {
     let mut frames = Vec::new();
     let mut everywhere: Vec<String> = next.hidden_global.difference(&prev.hidden_global).cloned().collect();
+    everywhere.extend(next.hidden_account_logins.difference(&prev.hidden_account_logins).cloned());
     if next.hide_bots && !prev.hide_bots {
         everywhere.extend(KNOWN_BOTS.iter().map(|b| b.to_string()));
     }
@@ -989,6 +997,9 @@ impl ChatRules {
                 None => 0u8.hash(&mut hasher),
             }
         }
+        // Hidden channels whose chat is hidden ride the same rules.
+        let hidden_accounts = crate::services::hidden_channels::chat_accounts(settings);
+        hidden_accounts.hash(&mut hasher);
         // The mention and reply colours ride the scrollbar ticks.
         settings.chat_design.mention_color.hash(&mut hasher);
         settings.chat_design.reply_color.hash(&mut hasher);
@@ -1009,6 +1020,10 @@ impl ChatRules {
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
         let mut compiled = CompiledRules::compile(&hl, &cf, &cq);
+        for (account, login) in hidden_accounts {
+            compiled.hidden_accounts.insert(account);
+            compiled.hidden_account_logins.insert(login);
+        }
         compiled.mention_color = settings.chat_design.mention_color.clone();
         compiled.reply_color = settings.chat_design.reply_color.clone();
         for e in &compiled.errors {
@@ -1134,6 +1149,17 @@ impl ChatRules {
             }
             if let Some(set) = rules.hidden_per_channel.get(&facts.filter_channel_key) {
                 if set.contains(&facts.login) || set.contains(&facts.display_lower) {
+                    return Evaluation::dropped();
+                }
+            }
+            if !rules.hidden_accounts.is_empty() {
+                let account = if facts.twitch {
+                    format!("twitch:{}", facts.user_id)
+                } else {
+                    let provider = facts.filter_channel_key.split(':').next().unwrap_or("");
+                    format!("{}:{}", provider, facts.login)
+                };
+                if rules.hidden_accounts.contains(&account) {
                     return Evaluation::dropped();
                 }
             }
@@ -2223,6 +2249,28 @@ mod tests {
         assert!(ids.contains(&"re".to_string()));
         assert!(!ids.contains(&"bits".to_string()));
         assert!(ids.contains(&"chan".to_string()));
+    }
+
+    #[test]
+    fn a_hidden_channel_is_dropped_by_account_not_by_name() {
+        let mut rules = rules_from("{}", "{}", "{}");
+        rules.hidden_accounts.insert("twitch:42".into());
+        rules.hidden_accounts.insert("kick:carl".into());
+        // Twitch: the user id, so a rename does not escape it.
+        let mut renamed = msg("newname", "hi");
+        assert!(eval_with(&rules, &mut renamed).drop);
+        let mut other = msg("bob", "hi");
+        other.user_id = "43".into();
+        assert!(!eval_with(&rules, &mut other).drop);
+        // Kick: provider and login, so a Twitch "carl" still talks.
+        let mut kick = msg("carl", "hi");
+        kick.provider = "kick".into();
+        kick.channel = "kick:xqc".into();
+        kick.user_id = "9".into();
+        assert!(eval_with(&rules, &mut kick).drop);
+        let mut twitch_carl = msg("carl", "hi");
+        twitch_carl.user_id = "44".into();
+        assert!(!eval_with(&rules, &mut twitch_carl).drop);
     }
 
     #[test]
