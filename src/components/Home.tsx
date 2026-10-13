@@ -2275,9 +2275,20 @@ const Home = () => {
                                                                 <h4 className="text-sm font-semibold text-textPrimary truncate transition-colors">
                                                                     {user.user_name}
                                                                 </h4>
-                                                                <p className="text-[10px] text-textSecondary truncate">
-                                                                    {lastLiveLabel(lastOnline)}
-                                                                </p>
+                                                                {/* The platform, as the live cards show it: a bare mark at
+                                                                    the end of the line, only while the list mixes platforms. */}
+                                                                <div className="flex items-center justify-between gap-1">
+                                                                    <p className="text-[10px] text-textSecondary truncate">
+                                                                        {lastLiveLabel(lastOnline)}
+                                                                    </p>
+                                                                    {isUnifiedView && (
+                                                                        <Tooltip content={providerLabel(streamProvider(user))} side="top">
+                                                                            <span className="flex flex-shrink-0 items-center opacity-80">
+                                                                                <ProviderLogo provider={streamProvider(user)} size={11} />
+                                                                            </span>
+                                                                        </Tooltip>
+                                                                    )}
+                                                                </div>
                                                             </div>
                                                         </div>
 
