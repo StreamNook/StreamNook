@@ -494,12 +494,11 @@ fn group(n: i64) -> String {
     out
 }
 
-/// A line for a built-in reward's detail view, only where it adds something
-/// its title does not say. Titles like "Gigantify an Emote" need none.
+/// A line for a built-in reward, only where it says something its title
+/// cannot: which effects "Modify a Single Emote" offers. Every other built-in
+/// title says what it does.
 pub fn built_in_description(reward_type: &str) -> Option<&'static str> {
     Some(match reward_type {
-        HIGHLIGHTED_MESSAGE_REWARD => "Everyone in chat sees it in a colored box",
-        SUB_MODE_BYPASS_REWARD => "Posts even though you're not subscribed",
         "CHOSEN_MODIFIED_SUB_EMOTE_UNLOCK" => "Effects include black and white, flipped and sunglasses",
         _ => return None,
     })
