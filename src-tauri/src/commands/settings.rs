@@ -210,6 +210,120 @@ pub async fn set_chat_user_hidden(
     Ok(())
 }
 
+/// Star (`favorite`) or unstar one Twitch category, edited in place so a
+/// window holding an older copy of the list cannot drop another's star. The
+/// Categories tab's favorites row updates at once.
+#[tauri::command]
+pub async fn set_favorite_category(
+    app: AppHandle,
+    category: crate::models::settings::FavoriteCategory,
+    favorite: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let settings = {
+        let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
+        if !crate::services::favorite_categories::apply(&mut state_settings.favorite_categories, category, favorite) {
+            return Ok(());
+        }
+        state_settings.clone()
+    };
+    after_settings_change(&settings, false);
+    write_settings_to_disk(&settings)?;
+    let _ = app.emit(
+        SETTINGS_UPDATED_EVENT,
+        SettingsUpdated { source: None, keys: vec!["favorite_categories".to_string()] },
+    );
+    crate::services::home_snapshot::note_favorite_categories_changed();
+    Ok(())
+}
+
+/// Hide (`hidden`) or show again one channel in every browse list, edited in
+/// place so a window with an older copy of the list cannot drop another's.
+#[tauri::command]
+pub async fn set_channel_hidden(
+    app: AppHandle,
+    channel: crate::models::settings::FavoriteChannel,
+    hidden: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let settings = {
+        let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
+        let realms = state_settings.hidden_channel_defaults;
+        if !crate::services::hidden_channels::apply(&mut state_settings.hidden_channels, channel, hidden, realms) {
+            return Ok(());
+        }
+        state_settings.clone()
+    };
+    after_settings_change(&settings, false);
+    write_settings_to_disk(&settings)?;
+    let _ = app.emit(
+        SETTINGS_UPDATED_EVENT,
+        SettingsUpdated { source: None, keys: vec!["hidden_channels".to_string()] },
+    );
+    crate::services::home_snapshot::note_hidden_channels_changed();
+    Ok(())
+}
+
+/// Change where one hidden channel is hidden besides browsing.
+#[tauri::command]
+pub async fn set_hidden_channel_realms(
+    app: AppHandle,
+    id: String,
+    realms: crate::models::settings::HiddenRealms,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let settings = {
+        let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
+        if !crate::services::hidden_channels::set_realms(&mut state_settings.hidden_channels, &id, realms) {
+            return Ok(());
+        }
+        state_settings.clone()
+    };
+    after_settings_change(&settings, false);
+    write_settings_to_disk(&settings)?;
+    let _ = app.emit(
+        SETTINGS_UPDATED_EVENT,
+        SettingsUpdated { source: None, keys: vec!["hidden_channels".to_string()] },
+    );
+    crate::services::home_snapshot::note_hidden_channels_changed();
+    Ok(())
+}
+
+/// Block (`blocked`) or unblock a hidden Twitch channel on Twitch itself, and
+/// remember it beside the hide so the list in Settings can say so and undo it.
+#[tauri::command]
+pub async fn set_hidden_channel_blocked(
+    app: AppHandle,
+    id: String,
+    blocked: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let target = {
+        let s = state.settings.lock().map_err(|e| e.to_string())?;
+        crate::services::hidden_channels::twitch_target(&s.hidden_channels, &id)
+    }
+    .ok_or_else(|| "Only a hidden Twitch channel can be blocked here".to_string())?;
+    if blocked {
+        crate::services::twitch_service::TwitchService::block_user(&target).await
+    } else {
+        crate::services::twitch_service::TwitchService::unblock_user(&target).await
+    }
+    .map_err(|e| e.to_string())?;
+    let settings = {
+        let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
+        if !crate::services::hidden_channels::mark_blocked(&mut state_settings.hidden_channels, &id, blocked) {
+            return Ok(());
+        }
+        state_settings.clone()
+    };
+    write_settings_to_disk(&settings)?;
+    let _ = app.emit(
+        SETTINGS_UPDATED_EVENT,
+        SettingsUpdated { source: None, keys: vec!["hidden_channels".to_string()] },
+    );
+    Ok(())
+}
+
 /// Apply one hide or unhide to a `chat_filters` JSON group in place. Names
 /// compare the way the rule engine matches them (case-insensitive, leading @
 /// dropped) and per-channel keys through `channel_filter_key`, so an entry saved
@@ -422,6 +536,7 @@ fn after_settings_change(settings: &Settings, favorites_changed: bool) {
     // Spawns or aborts the gifted-membership poll with the master switch.
     crate::services::membership_gifts::refresh(settings);
     crate::services::reminder_service::refresh(settings);
+    crate::services::hidden_channels::refresh(settings);
     // Home's unified Discover list leaves out live favourites, so a heart
     // toggled anywhere changes it. Unhearting in particular is announced by
     // nothing else: the favourites sweep only notices on its next pass.

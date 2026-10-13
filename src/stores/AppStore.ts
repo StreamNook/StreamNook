@@ -237,6 +237,8 @@ interface AppState {
   following: FollowingLists;
   /** The unified Categories tab's "On other platforms" row, built in Rust. */
   otherCategories: ProviderCategory[];
+  /** The Categories tab's favorites row, built in Rust with live counts. */
+  favoriteCategories: TwitchCategory[];
   streamUrl: string | null;
   // The quality the resolver is actually serving right now (canonical name from
   // the playlist). May differ from `settings.quality` if the saved preference
@@ -1250,6 +1252,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   sidebarDiscover: null,
   following: { favorites: [], live: [], offline: [] },
   otherCategories: [],
+  favoriteCategories: [],
   streamUrl: null,
   isRestartingStream: false,
   activeQuality: null,
@@ -1457,6 +1460,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (snapshot.other_categories_at != null && snapshot.other_categories) {
       set({ otherCategories: snapshot.other_categories });
     }
+    if (snapshot.favorite_categories_at != null && snapshot.favorite_categories) {
+      set({ favoriteCategories: snapshot.favorite_categories });
+    }
   },
   applyHomeUpdate: (update) => {
     switch (update.section) {
@@ -1506,6 +1512,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         break;
       case 'other_categories':
         set({ otherCategories: update.categories });
+        break;
+      case 'favorite_categories':
+        set({ favoriteCategories: update.categories });
         break;
     }
   },
