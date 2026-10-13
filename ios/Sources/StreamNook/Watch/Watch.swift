@@ -184,9 +184,12 @@ final class Watch {
                     log.notice("player \(nowWaiting ? "waiting" : "resumed", privacy: .public) \(self.player.reasonForWaitingToPlay?.rawValue ?? "", privacy: .public)")
                 }
             }
-            if let failure = player.currentItem?.error {
+            if let failure = player.currentItem?.error, error == nil {
                 error = failure.localizedDescription
                 status = "Failed"
+                let ns = failure as NSError
+                let underlying = (ns.userInfo[NSUnderlyingErrorKey] as? NSError).map { "\($0.domain) \($0.code)" } ?? ""
+                log.error("player item failed: \(ns.domain, privacy: .public) \(ns.code) \(ns.localizedDescription, privacy: .public) \(ns.localizedFailureReason ?? "", privacy: .public) underlying \(underlying, privacy: .public)")
             }
             if tick % 4 == 0, let item = player.currentItem {
                 await sample(item, core: core)

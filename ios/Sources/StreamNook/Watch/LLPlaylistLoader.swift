@@ -57,8 +57,12 @@ final class LLPlaylistLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecke
                 request.dataRequest?.respond(with: data)
                 request.finishLoading()
                 self.answered += 1
-                if self.answered == 1 {
-                    log.notice("ll first playlist \(data.count) bytes")
+                if self.answered <= 2 {
+                    log.notice("ll playlist \(self.answered): \(data.count) bytes for \(relay.query ?? "", privacy: .public)")
+                    let text = String(decoding: data, as: UTF8.self)
+                    for line in text.split(separator: "\n") {
+                        log.notice("ll | \(String(line.prefix(300)), privacy: .public)")
+                    }
                 }
             }
         }
