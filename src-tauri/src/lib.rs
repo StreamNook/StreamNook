@@ -1605,6 +1605,8 @@ pub fn run() {
             read_clipboard_text_native,
             // Twitch commands
             twitch_login,
+            begin_twitch_web_login,
+            finish_twitch_web_login,
             create_clip,
             get_live_broadcast,
             create_vod_clip,

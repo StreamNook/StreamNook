@@ -31,6 +31,42 @@ pub async fn twitch_login(
     Ok((verification_uri, user_code))
 }
 
+/// Where a web sign-in starts, and the redirect it ends on.
+#[derive(serde::Serialize)]
+pub struct WebLogin {
+    /// Twitch's authorize page, which asks for the password first when the
+    /// page holds no twitch.tv session.
+    pub url: String,
+    /// The page Twitch redirects to with `code` and `state` (or `error`). The
+    /// sheet stops there and hands them to `finish_twitch_web_login`.
+    pub redirect: String,
+}
+
+/// Primary sign-in on Twitch's own login and Authorize pages, for a shell that
+/// shows them in its own web view (the iPhone app). Completes through
+/// `finish_twitch_web_login`, which emits the same `twitch-login-complete` /
+/// `twitch-login-error` the device-code login does.
+#[tauri::command]
+pub async fn begin_twitch_web_login() -> Result<WebLogin, String> {
+    Ok(WebLogin {
+        url: TwitchService::begin_web_login().map_err(|e| e.to_string())?,
+        redirect: TwitchService::web_login_redirect().to_string(),
+    })
+}
+
+/// The redirect of a web sign-in began with `begin_twitch_web_login`.
+#[tauri::command]
+pub async fn finish_twitch_web_login(
+    app: AppHandle,
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+) -> Result<(), String> {
+    TwitchService::finish_web_login(&app, code, state, error)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[derive(serde::Serialize)]
 pub struct CreateClipResult {
     pub id: String,
