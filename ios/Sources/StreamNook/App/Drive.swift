@@ -9,6 +9,7 @@ import Foundation
 /// - `back` closes the watch page
 /// - `wait:SECONDS`
 /// - `pause` pauses the player
+/// - `signin` opens the Twitch sign-in sheet
 /// - `shot` marks the moment a screenshot is due (the host takes it) and holds still for five
 ///   seconds so it lands on a settled screen
 @MainActor
@@ -34,6 +35,7 @@ enum Drive {
             case "back": model.path = []
             case "wait": try? await Task.sleep(for: .seconds(Double(value) ?? 1))
             case "pause": model.watch.pause()
+            case "signin": await model.signIn.begin(core: model.core)
             case "shot":
                 log.notice("drive shot")
                 try? await Task.sleep(for: .seconds(5))
