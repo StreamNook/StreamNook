@@ -374,6 +374,9 @@ pub struct LlOrigin {
     /// fragGap retry storm). Retired segments stay servable until they age out
     /// of this small ring.
     retired: Mutex<VecDeque<Segment>>,
+    /// PART-TARGET of the Apple playlist, fixed by the first one served for
+    /// this stream (see `APPLE_PART_TARGET_HEADROOM`).
+    apple_part_target: Mutex<Option<f64>>,
 }
 
 /// Hard kill switch: when true, no origin activates and the relays fall back to the
@@ -935,6 +938,7 @@ impl LlOrigin {
             transmux: Mutex::new(None),
             cmaf_video: Mutex::new(None),
             retired: Mutex::new(VecDeque::new()),
+            apple_part_target: Mutex::new(None),
         })
     }
 
@@ -1011,6 +1015,7 @@ impl LlOrigin {
         *self.transmux.lock().unwrap() = None;
         *self.cmaf_video.lock().unwrap() = None;
         self.retired.lock().unwrap().clear();
+        *self.apple_part_target.lock().unwrap() = None;
         self.wake_serves();
     }
 
@@ -2310,18 +2315,40 @@ fn render_locked(edge: &LiveEdge) -> String {
 /// AVPlayer enforces the spec's part-size window: no part above PART-TARGET and
 /// no non-final part under 85% of it (a playlist that breaks either is a parse
 /// error, not a warning). hls.js's generous `PART_TARGET` fails the second rule,
-/// so the Apple playlist declares a target that fits the parts. TS parts are cut
-/// on the decode timestamp on the iPhone (`cut_stamp`), so every non-final part
-/// spans `TS_PART_PTS` rounded up to a whole frame: 0.300 s at 30, 50 and 60
-/// fps, 0.320 at 25, 0.333 at 24.
+/// so the Apple playlist declares a target fitted to the stream's own parts:
+/// the longest non-final part held when the first Apple playlist is served,
+/// plus this headroom, kept for the rest of the stream (the spec forbids the
+/// target changing). The window then runs from 0.88 to 1.04 of that part. TS
+/// parts are cut on the decode timestamp on the iPhone (`cut_stamp`), so every
+/// non-final part spans `TS_PART_PTS` rounded up to a whole frame (0.300 s at
+/// 30, 50 and 60 fps, 0.333 at 24) and a segment's first part can run a frame
+/// or two short.
+const APPLE_PART_TARGET_HEADROOM: f64 = 1.04;
+/// The target before any complete segment exists (never kept).
 const APPLE_TS_PART_TARGET: f64 = 0.334;
 /// Twitch's own CMAF fragments run about 0.105 s.
 const APPLE_CMAF_PART_TARGET: f64 = 0.12;
 /// Hold-back as a multiple of the part target: the spec's floor is two, Apple
-/// asks for three.
-const APPLE_PART_HOLD_BACK_PARTS: f64 = 3.0;
+/// asks for three. A request may ask for two (`apple_hold=2`).
+pub(crate) const APPLE_HOLD_BACK_PARTS: u64 = 3;
 
-fn apple_part_target(edge: &LiveEdge) -> f64 {
+/// The part target fitted to the edge's parts, rounded up to the millisecond.
+/// `None` before a complete segment exists.
+fn fitted_apple_part_target(edge: &LiveEdge) -> Option<f64> {
+    let longest = edge
+        .segments
+        .iter()
+        .filter(|s| s.complete)
+        .flat_map(|s| s.parts.split_last().map(|(_, rest)| rest).unwrap_or(&[]))
+        .map(|p| p.duration)
+        .fold(0.0, f64::max);
+    // The epsilon keeps float noise (0.3 * 1.04 = 0.31200000000000006) from
+    // rounding up a whole millisecond.
+    (longest > 0.0)
+        .then(|| (longest * APPLE_PART_TARGET_HEADROOM * 1000.0 - 1e-6).ceil() / 1000.0)
+}
+
+fn fallback_apple_part_target(edge: &LiveEdge) -> f64 {
     match edge.container {
         Container::Ts => APPLE_TS_PART_TARGET,
         Container::Cmaf => APPLE_CMAF_PART_TARGET,
@@ -2386,11 +2413,10 @@ fn absolute_uri_attr(line: &str, base: &str, query: &str) -> String {
 }
 
 /// The playlist for AVPlayer: `render_locked` with absolute URIs against `base`
-/// (`http://127.0.0.1:<port>/`), Apple's part target and hold-back, and a
-/// preload hint.
-fn render_apple(edge: &LiveEdge, base: &str) -> String {
+/// (`http://127.0.0.1:<port>/`), Apple's part target, a hold-back of
+/// `hold_parts` targets, and a preload hint.
+fn render_apple(edge: &LiveEdge, base: &str, target: f64, hold_parts: u64) -> String {
     let plain = render_locked(edge);
-    let target = apple_part_target(edge);
     let mut s = String::with_capacity(plain.len() * 2);
     for line in plain.lines() {
         if line.starts_with("#EXT-X-PART-INF:") {
@@ -2398,7 +2424,7 @@ fn render_apple(edge: &LiveEdge, base: &str) -> String {
         } else if line.starts_with("#EXT-X-SERVER-CONTROL:") {
             s.push_str(&format!(
                 "#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK={:.3}",
-                target * APPLE_PART_HOLD_BACK_PARTS
+                target * hold_parts as f64
             ));
         } else if line.starts_with("#EXT-X-PART:") {
             s.push_str(&absolute_uri_attr(line, base, "?apple=1"));
@@ -2459,6 +2485,7 @@ impl LlOrigin {
         msn: Option<u64>,
         part: Option<u64>,
         base: &str,
+        hold_parts: u64,
     ) -> Option<String> {
         if let Some(m) = msn {
             let deadline = tokio::time::Instant::now() + APPLE_BLOCK_TIMEOUT;
@@ -2473,7 +2500,18 @@ impl LlOrigin {
             }
         }
         let g = self.live_edge.lock().unwrap();
-        g.as_ref().map(|edge| render_apple(edge, base))
+        let edge = g.as_ref()?;
+        let target = {
+            let mut kept = self.apple_part_target.lock().unwrap();
+            match *kept {
+                Some(t) => t,
+                None => match fitted_apple_part_target(edge) {
+                    Some(t) => *kept.insert(t),
+                    None => fallback_apple_part_target(edge),
+                },
+            }
+        };
+        Some(render_apple(edge, base, target, hold_parts))
     }
 
     /// A part for AVPlayer: held while it is still to come (a preload hint).
@@ -2600,8 +2638,9 @@ pub async fn serve_playlist_apple(
     msn: Option<u64>,
     part: Option<u64>,
     base: &str,
+    hold_parts: u64,
 ) -> Option<String> {
-    SOLO.serve_playlist_apple(msn, part, base).await
+    SOLO.serve_playlist_apple(msn, part, base, hold_parts).await
 }
 
 pub async fn get_part_apple(sn: u64, idx: usize) -> Option<Arc<Vec<u8>>> {
@@ -3532,7 +3571,7 @@ seg/50.ts\n\
         let edge = apple_fixture();
         assert_eq!(render_locked(&edge), expected);
         // Rendering the Apple variant first leaves the hls.js one untouched.
-        let _ = render_apple(&edge, "http://127.0.0.1:9/");
+        let _ = render_apple(&edge, "http://127.0.0.1:9/", 0.334, APPLE_HOLD_BACK_PARTS);
         assert_eq!(render_locked(&edge), expected);
         assert!(!expected.contains("PRELOAD-HINT"));
         assert!(!expected.contains("apple=1"));
@@ -3540,7 +3579,7 @@ seg/50.ts\n\
 
     #[test]
     fn the_apple_playlist_is_absolute_and_hints_the_next_part() {
-        let pl = render_apple(&apple_fixture(), "http://127.0.0.1:9/");
+        let pl = render_apple(&apple_fixture(), "http://127.0.0.1:9/", 0.334, APPLE_HOLD_BACK_PARTS);
         let expected = "#EXTM3U\n\
 #EXT-X-VERSION:9\n\
 #EXT-X-TARGETDURATION:2\n\
@@ -3557,6 +3596,25 @@ http://127.0.0.1:9/seg/50.ts\n\
 #EXT-X-PART:DURATION=0.300,URI=\"http://127.0.0.1:9/part/51/0.mp4?apple=1\",INDEPENDENT=YES\n\
 #EXT-X-PRELOAD-HINT:TYPE=PART,URI=\"http://127.0.0.1:9/part/51/1.mp4?apple=1\"\n";
         assert_eq!(pl, expected);
+    }
+
+    #[test]
+    fn the_apple_part_target_fits_the_longest_non_final_part() {
+        let mut edge = apple_fixture();
+        // Segment 50's parts are 1.0 + 1.0: only the first is non-final.
+        assert_eq!(fitted_apple_part_target(&edge), Some(1.04));
+        // In-progress segments do not count; with no complete one, nothing fits yet.
+        edge.segments.pop_front();
+        assert_eq!(fitted_apple_part_target(&edge), None);
+        assert_eq!(fallback_apple_part_target(&edge), APPLE_TS_PART_TARGET);
+        // 0.300 s parts land on a 0.312 target: 0.265 to 0.312 are accepted.
+        edge.segments.push_front(make_segment(
+            50,
+            None,
+            true,
+            vec![(vec![1], 0.284), (vec![2], 0.3), (vec![3], 0.2)],
+        ));
+        assert_eq!(fitted_apple_part_target(&edge), Some(0.312));
     }
 
     #[test]

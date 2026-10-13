@@ -800,7 +800,10 @@ impl StreamServer {
                 let served = if apple {
                     let port = CURRENT_PORT.lock().await.unwrap_or_default();
                     let base = format!("http://127.0.0.1:{port}/");
-                    crate::services::ll_origin::serve_playlist_apple(msn, part, &base).await
+                    let hold = parse_directive(&raw_query, "apple_hold")
+                        .unwrap_or(crate::services::ll_origin::APPLE_HOLD_BACK_PARTS)
+                        .clamp(2, crate::services::ll_origin::APPLE_HOLD_BACK_PARTS);
+                    crate::services::ll_origin::serve_playlist_apple(msn, part, &base, hold).await
                 } else {
                     crate::services::ll_origin::serve_playlist(msn, part).await
                 };
