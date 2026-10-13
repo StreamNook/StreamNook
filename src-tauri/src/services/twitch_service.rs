@@ -2386,15 +2386,11 @@ impl TwitchService {
         Ok(())
     }
 
-    /// Fetch pinned chat messages for a channel via Twitch GQL (GetPinnedChat)
-    /// Hash captured live from Twitch web client on 2026-03-25
+    /// Fetch pinned chat messages for a channel via Twitch GQL (GetPinnedChat).
+    /// Pins are public: the read goes out anonymously, so they show for a
+    /// viewer without the Drops sign-in, live or offline.
     pub async fn get_pinned_chat_messages(channel_id: &str) -> Result<Vec<serde_json::Value>> {
-        use crate::services::drops_auth_service::DropsAuthService;
-
-        let token = DropsAuthService::get_token().await?;
         let client = crate::services::http::client().clone();
-
-        const GQL_CLIENT_ID: &str = env!("TWITCH_ANDROID_CLIENT_ID");
 
         let payload = serde_json::json!({
             "operationName": "GetPinnedChat",
@@ -2415,30 +2411,7 @@ impl TwitchService {
             channel_id
         );
 
-        let response = client
-            .post("https://gql.twitch.tv/gql")
-            .header("Client-Id", GQL_CLIENT_ID)
-            .header(AUTHORIZATION, format!("OAuth {}", token))
-            .header(ACCEPT, "*/*")
-            .json(&payload)
-            .send()
-            .await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response.text().await?;
-            return Err(anyhow::anyhow!(
-                "GQL GetPinnedChat failed (HTTP {}): {}",
-                status,
-                error_text
-            ));
-        }
-
-        let body: serde_json::Value = response.json().await?;
-
-        if let Some(errors) = body.get("errors") {
-            return Err(anyhow::anyhow!("GQL GetPinnedChat errors: {:?}", errors));
-        }
+        let body = Self::gql_public_read(payload).await?;
 
         // Parse pinned messages and collect unique user IDs for avatar lookup
         let mut raw_pins = Vec::new();
@@ -3559,7 +3532,7 @@ impl TwitchService {
     /// through it), so pagination works without minting a Client-Integrity token.
     /// The device/session ids keep us out of the harsh anonymous rate-limit
     /// bucket.
-    async fn gql_public_read(body: serde_json::Value) -> Result<serde_json::Value> {
+    pub(crate) async fn gql_public_read(body: serde_json::Value) -> Result<serde_json::Value> {
         let client = crate::services::http::client().clone();
         let device_id = uuid::Uuid::new_v4().to_string().replace('-', "");
         let session_id = uuid::Uuid::new_v4().to_string().replace('-', "");
