@@ -98,3 +98,23 @@ struct SignInButton: View {
         .opacity(busy ? 0.6 : 1)
     }
 }
+
+/// A place that needs a Twitch sign-in: the line saying what it gets you, and the button.
+struct SignInNote: View {
+    let model: AppModel
+    let text: String
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text(text)
+                .font(.snBody)
+                .foregroundStyle(SN.textMuted)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 300)
+            SignInButton(model: model)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 56)
+        .padding(.horizontal, 24)
+    }
+}

@@ -17,7 +17,8 @@ import SwiftUI
 /// - `open:category:INDEX` pushes the category of the Browse list's stream at INDEX
 /// - `open:settings:NAME` pushes a settings section (`theme`, `support`, ...); `open:cosmetics`
 /// - `mini`, `full` shrink or expand the watch layer; `back` or `close` closes it
-/// - `rotate:landscape`, `rotate:portrait` turn the screen; `chat:on`, `chat:off` the landscape chat
+/// - `rotate:landscape`, `rotate:portrait` turn the screen; `chat:on`, `chat:off` the landscape chat;
+///   `controls` shows the player's controls
 /// - `menu:card:INDEX` lists the Browse card's long-press menu in a sheet (a system menu cannot
 ///   be opened from code)
 /// - `glass:PERCENT`, `motion:full|reduced|off` preview a look without saving it
@@ -57,7 +58,7 @@ enum Drive {
             case "fake": break
             case "setup":
                 model.showSetup()
-                if let page = SetupWizard.Page.named(value) { SetupWizard.drivePage = page }
+                if let page = SetupWizard.Page.named(value) { model.nav.setupPage = page }
             case "tab": if let tab = MobileTab(rawValue: value) { model.nav.tab = tab }
             case "browse":
                 switch value {
@@ -72,6 +73,7 @@ enum Drive {
             case "full": withAnimation(SNMotion.settleBack) { model.nav.playerMode = .full }
             case "back", "close": model.stopWatching()
             case "rotate": Orientation.turn(landscape: value == "landscape")
+            case "controls": model.nav.controlsPing += 1
             case "chat": model.nav.landscapeChat = value != "off"
             case "menu":
                 let parts = value.split(separator: ":")

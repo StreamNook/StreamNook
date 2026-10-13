@@ -74,6 +74,16 @@ enum Typeface {
     }
 }
 
+/// Navigation titles in the interface font.
+@MainActor
+enum Appearance {
+    static func apply() {
+        let bar = UINavigationBar.appearance()
+        bar.largeTitleTextAttributes = [.font: Typeface.uiFont(32, 700), .foregroundColor: UIColor.white]
+        bar.titleTextAttributes = [.font: Typeface.uiFont(17, 700), .foregroundColor: UIColor.white]
+    }
+}
+
 /// The phone's type scale, in points (CSS px map one to one).
 @MainActor
 extension Font {

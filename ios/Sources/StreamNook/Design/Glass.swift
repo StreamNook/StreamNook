@@ -16,8 +16,13 @@ extension View {
                 shape.fill(SN.floor)
                 shape.fill(SN.backgroundSecondary)
             }
-            .overlay(alignment: .top) { Color.white.opacity(0.08).frame(height: 1).clipShape(shape) }
             .overlay { shape.stroke(Color.black.opacity(0.4), lineWidth: 0.5) }
+            .overlay {
+                // Top-lit: light along the top edge, fading out down the sides.
+                shape.strokeBorder(LinearGradient(stops: [.init(color: .white.opacity(0.09), location: 0),
+                                                          .init(color: .clear, location: min(1, 14 / 120))],
+                                                  startPoint: .top, endPoint: .bottom), lineWidth: 1)
+            }
             .elevation1()
         }
     }

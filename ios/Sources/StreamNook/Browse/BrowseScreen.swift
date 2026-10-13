@@ -41,8 +41,10 @@ struct BrowseScreen: View {
         }
         .refreshable { await refresh() }
         .task { if !home.recommendedLoaded { await home.loadRecommended() } }
-        .task(id: "\(browse.mode)|\(browse.query)") { await browse.search(model.core) }
-        .task(id: browse.mode) { if browse.mode == .categories { await browse.loadCategories(model.core) } }
+        .task(id: "\(browse.mode)|\(browse.query)|\(model.signedIn)") { if model.signedIn { await browse.search(model.core) } }
+        .task(id: "\(browse.mode)|\(model.signedIn)") {
+            if model.signedIn && browse.mode == .categories { await browse.loadCategories(model.core) }
+        }
     }
 
     private var modeBinding: Binding<BrowseModel.Mode?> {
@@ -51,6 +53,16 @@ struct BrowseScreen: View {
 
     @ViewBuilder
     private var content: some View {
+        if !model.signedIn && (browse.mode == .categories || !browse.trimmed.isEmpty) {
+            SignInNote(model: model, text: browse.mode == .categories
+                       ? "Sign in with Twitch to browse every category." : "Sign in with Twitch to search channels.")
+        } else {
+            results
+        }
+    }
+
+    @ViewBuilder
+    private var results: some View {
         switch browse.mode {
         case .live:
             let shown = browse.streamResults ?? home.recommended

@@ -17,10 +17,6 @@ struct SetupWizard: View {
 
     enum Page: Int, CaseIterable { case welcome, accounts, drops, notifications, done }
 
-    #if DEBUG
-    /// The page a drive step opens the wizard on.
-    static var drivePage: Page?
-    #endif
 
     private var signedIn: Bool { model.signedIn }
 
@@ -57,9 +53,9 @@ struct SetupWizard: View {
         }
         .background { Wash() }
         .task { notifications = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus }
-        #if DEBUG
-        .onAppear { if let start = Self.drivePage { page = start } }
-        #endif
+        .onChange(of: model.nav.setupPage, initial: true) { _, asked in
+            if let asked { go(to: asked) }
+        }
         .onChange(of: signedIn) { _, now in
             guard now, page == .accounts else { return }
             Task {

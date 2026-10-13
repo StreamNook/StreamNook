@@ -75,10 +75,14 @@ final class Navigator {
     /// The mini box's top-left corner as the person left it; clamped to the screen when drawn.
     var miniOrigin: CGPoint?
 
-    #if DEBUG
-    /// A drive step's stand-in for a system menu, which only a finger can open.
+    // Drive steps' hooks. Kept outside `#if DEBUG` so Observation tracks them; release builds
+    // never set them.
+    /// A stand-in for a system menu, which only a finger can open.
     var menuSample: MenuSample?
-    #endif
+    /// Bumped to show the player's controls, as a tap does.
+    var controlsPing = 0
+    /// The first-run wizard page to show.
+    var setupPage: SetupWizard.Page?
 
     init() {
         tab = MobileTab.stored(UserDefaults.standard.string(forKey: "sn-start-tab"))
@@ -107,11 +111,9 @@ final class Navigator {
     }
 }
 
-#if DEBUG
 /// The items of a system menu, listed in a sheet so a drive step can screenshot them.
 struct MenuSample: Identifiable {
     let id = UUID()
     let title: String
     let items: [(label: String, symbol: String)]
 }
-#endif

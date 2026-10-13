@@ -8,6 +8,8 @@ import SwiftUI
 /// mode, so rotating, shrinking and expanding never rebuild it.
 struct WatchLayer: View {
     let model: AppModel
+    /// The screen's safe area, read where it is respected (the layer itself draws past it).
+    let insets: EdgeInsets
     @State private var shrink: CGFloat = 0
     @State private var dragging = false
     @State private var miniDrag: CGSize = .zero
@@ -23,7 +25,6 @@ struct WatchLayer: View {
     var body: some View {
         GeometryReader { box in
             let screen = box.size
-            let insets = box.safeAreaInsets
             let landscape = screen.width > screen.height
             let mini = nav.playerMode == .mini
             let miniRect = Self.miniRect(screen: screen, insets: insets, origin: nav.miniOrigin, drag: miniDrag)
@@ -41,17 +42,19 @@ struct WatchLayer: View {
 
                 PlayerView(player: watch.player)
                     .frame(width: band.width, height: band.height)
-                    .offset(x: band.minX, y: band.minY)
                     .contentShape(Rectangle())
                     .onTapGesture { mini ? expand() : toggleControls() }
                     .gesture(mini ? nil : shrinkGesture(screen: screen, landscape: landscape))
+                    .overlay {
+                        if !mini {
+                            PlayerChrome(model: model, landscape: landscape, insets: landscape ? insets : EdgeInsets(),
+                                         chatWidth: nav.landscapeChat ? overlayWidth + insets.trailing : 0,
+                                         shown: controlsShown && !dragging, onMinimize: minimize, onTouch: touchedControls)
+                        }
+                    }
+                    .offset(x: band.minX, y: band.minY)
 
                 if !mini {
-                    PlayerChrome(model: model, landscape: landscape, insets: landscape ? insets : EdgeInsets(),
-                                 chatWidth: nav.landscapeChat ? overlayWidth + insets.trailing : 0,
-                                 shown: controlsShown && !dragging, onMinimize: minimize, onTouch: touchedControls)
-                        .frame(width: band.width, height: band.height)
-                        .offset(x: band.minX, y: band.minY)
                     if !landscape {
                         BandRim()
                             .frame(width: band.width)
@@ -59,8 +62,8 @@ struct WatchLayer: View {
                     }
                 }
 
-                ChatSlot(model: model, readOnly: false)
-                    .frame(width: layer.width, height: max(0, layer.maxY - band.maxY))
+                ChatArea(model: model, readOnly: false)
+                    .frame(width: layer.width, height: max(0, layer.maxY - band.maxY - insets.bottom * (1 - progress)))
                     .offset(x: layer.minX, y: band.maxY)
                     .opacity(showChatBelow ? 1 : 0)
                     .allowsHitTesting(showChatBelow && !dragging)
@@ -96,6 +99,7 @@ struct WatchLayer: View {
             }
             .gesture(mini ? miniGesture(screen: screen, insets: insets, rect: miniRect) : nil)
             .onChange(of: nav.playing?.id) { _, _ in touchedControls() }
+            .onChange(of: nav.controlsPing) { _, _ in touchedControls() }
         }
         .ignoresSafeArea()
         .task(id: controlsTouch) {
@@ -239,7 +243,7 @@ private struct LandscapeChat: View {
     let outerInset: CGFloat
 
     var body: some View {
-        ChatSlot(model: model, readOnly: true)
+        ChatArea(model: model, readOnly: true)
             .padding(.trailing, outerInset)
             .background {
                 ZStack {
@@ -250,5 +254,28 @@ private struct LandscapeChat: View {
                 .overlay(alignment: .leading) { Color.white.opacity(0.1).frame(width: 1) }
                 .shadow(color: .black.opacity(0.6), radius: 20)
             }
+    }
+}
+
+/// Chat in the watch layer: the chat slot when signed in; signed out, what signing in gets you.
+private struct ChatArea: View {
+    let model: AppModel
+    let readOnly: Bool
+
+    var body: some View {
+        if model.signedIn {
+            ChatSlot(model: model, readOnly: readOnly)
+        } else {
+            VStack(spacing: 14) {
+                Text("Sign in with Twitch to read and send chat.")
+                    .font(.snBody)
+                    .foregroundStyle(SN.textMuted)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 280)
+                if !readOnly { SignInButton(model: model).frame(maxWidth: 280) }
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 }

@@ -77,7 +77,7 @@ private struct ThemePanel: View {
     private var look: Look { model.look }
 
     var body: some View {
-        SettingsGroup(title: "Glassiness") {
+        SettingsGroup(title: "Glass") {
             GlassPreview(glassiness: glassiness / 100)
                 .padding(12)
             SettingsRow(title: "Glassiness", detail: "How much of the page shows through StreamNook's panels. At 0% every panel is solid.") {
@@ -94,7 +94,7 @@ private struct ThemePanel: View {
         .onChange(of: look.glassiness) { _, value in if !editing { glassiness = value * 100 } }
 
         SettingsGroup(title: "Motion") {
-            SettingsRow(title: "Motion", detail: "Reduced keeps fades and drops movement; Off stills everything but loaders.") {
+            SettingsRow(title: "Amount", detail: "Reduced keeps fades and drops movement; Off stills everything but loaders.") {
                 Picker("Motion", selection: Binding(get: { look.motion }, set: { mode in
                     Task { await model.patchSettings(["motion_mode": mode.rawValue]) }
                 })) {

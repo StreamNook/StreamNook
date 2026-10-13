@@ -7,6 +7,7 @@ import SwiftUI
 struct MainShell: View {
     @Bindable var model: AppModel
     @State private var landscape = false
+    @State private var insets = EdgeInsets()
 
     private var nav: Navigator { model.nav }
 
@@ -33,13 +34,14 @@ struct MainShell: View {
             .accessibilityHidden(nav.shellCovered)
 
             if nav.playing != nil {
-                WatchLayer(model: model)
+                WatchLayer(model: model, insets: insets)
                     .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 40)).animation(SNMotion.run(SNMotion.watchIn)),
                                             removal: .opacity.combined(with: .offset(y: 40)).animation(SNMotion.run(SNMotion.watchOut))))
                     .zIndex(1)
             }
         }
         .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height } action: { landscape = $0 }
+        .onGeometryChange(for: EdgeInsets.self) { $0.safeAreaInsets } action: { insets = $0 }
         .statusBarHidden(immersive)
         .persistentSystemOverlays(immersive ? .hidden : .automatic)
         .onChange(of: nav.shellCovered, initial: true) { _, covered in Orientation.allowLandscape(covered) }

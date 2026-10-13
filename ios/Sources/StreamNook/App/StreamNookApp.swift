@@ -8,6 +8,7 @@ struct StreamNookApp: App {
 
     init() {
         Typeface.register()
+        Appearance.apply()
     }
 
     var body: some Scene {
