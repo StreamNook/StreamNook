@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_sync": 1791813195,
+  "last_sync": 1791897049,
   "entries": {
     "global_badges": {
       "id": "global_badges",
@@ -7435,10 +7435,10 @@
             }
           ]
         },
-        "cached_at": 1791813189
+        "cached_at": 1791897029
       },
       "metadata": {
-        "timestamp": 1791813189,
+        "timestamp": 1791897029,
         "expiry_days": 7,
         "source": "twitch",
         "version": 1
@@ -15773,7 +15773,7 @@
         "more_info": null
       },
       "metadata": {
-        "timestamp": 1791289504,
+        "timestamp": 1791897031,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -15789,7 +15789,7 @@
         "more_info": null
       },
       "metadata": {
-        "timestamp": 1791289505,
+        "timestamp": 1791897033,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -15805,7 +15805,7 @@
         "more_info": null
       },
       "metadata": {
-        "timestamp": 1791289506,
+        "timestamp": 1791897035,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -15821,7 +15821,7 @@
         "more_info": null
       },
       "metadata": {
-        "timestamp": 1791289507,
+        "timestamp": 1791897036,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -15837,7 +15837,7 @@
         "more_info": null
       },
       "metadata": {
-        "timestamp": 1791289508,
+        "timestamp": 1791897038,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -15853,7 +15853,7 @@
         "more_info": null
       },
       "metadata": {
-        "timestamp": 1791289508,
+        "timestamp": 1791897040,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -15869,7 +15869,7 @@
         "more_info": null
       },
       "metadata": {
-        "timestamp": 1791289509,
+        "timestamp": 1791897042,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -15885,7 +15885,7 @@
         "more_info": null
       },
       "metadata": {
-        "timestamp": 1791289510,
+        "timestamp": 1791897045,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -15901,7 +15901,7 @@
         "more_info": null
       },
       "metadata": {
-        "timestamp": 1791289511,
+        "timestamp": 1791897047,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
@@ -15917,7 +15917,7 @@
         "more_info": null
       },
       "metadata": {
-        "timestamp": 1791289512,
+        "timestamp": 1791897049,
         "expiry_days": 0,
         "source": "badgebase",
         "version": 2
