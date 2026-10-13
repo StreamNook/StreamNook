@@ -189,7 +189,10 @@ final class Watch {
                 status = "Failed"
                 let ns = failure as NSError
                 let underlying = (ns.userInfo[NSUnderlyingErrorKey] as? NSError).map { "\($0.domain) \($0.code)" } ?? ""
-                log.error("player item failed: \(ns.domain, privacy: .public) \(ns.code) \(ns.localizedDescription, privacy: .public) \(ns.localizedFailureReason ?? "", privacy: .public) underlying \(underlying, privacy: .public)")
+                log.error("player item failed: \(ns.domain, privacy: .public) \(ns.code) \(ns.localizedDescription, privacy: .public) \(ns.localizedFailureReason ?? "", privacy: .public) underlying \(underlying, privacy: .public) info \(String(describing: ns.userInfo), privacy: .public)")
+                for event in player.currentItem?.errorLog()?.events ?? [] {
+                    log.error("error log: \(event.errorDomain, privacy: .public) \(event.errorStatusCode) \(event.errorComment ?? "", privacy: .public) uri \(event.uri ?? "", privacy: .public)")
+                }
             }
             if tick % 4 == 0, let item = player.currentItem {
                 await sample(item, core: core)
