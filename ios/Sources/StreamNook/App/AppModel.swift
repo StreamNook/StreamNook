@@ -5,11 +5,12 @@ import SNKit
 
 let log = Logger(subsystem: "app.streamnook", category: "spike")
 
-/// The app's state: the core, whether it started, and the Browse list.
+/// The app's state: the core, whether it started, the Twitch sign-in and the Browse list.
 @Observable @MainActor
 final class AppModel {
     let core: CoreBridge = CoreHost.makeCore()
     let watch = Watch()
+    let signIn = SignIn()
 
     private(set) var started = false
     private(set) var startError: String?
@@ -45,6 +46,7 @@ final class AppModel {
             log.error("core start failed: \(String(describing: error), privacy: .public)")
             return
         }
+        await signIn.boot(core: core)
         await browse()
     }
 

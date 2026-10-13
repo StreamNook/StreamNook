@@ -1,7 +1,7 @@
 import SNKit
 import SwiftUI
 
-/// The spike's first page: the core's status, then the Browse list.
+/// The spike's first page: the core's status, the Twitch account, then the Browse list.
 struct RootView: View {
     @Bindable var model: AppModel
 
@@ -13,6 +13,9 @@ struct RootView: View {
                     LabeledContent("Core", value: model.core.kind)
                     LabeledContent("Status", value: status)
                     LabeledContent("Events", value: events)
+                }
+                Section("Twitch") {
+                    TwitchAccountRow(model: model)
                 }
                 Section("Live now") {
                     if model.loading && model.streams.isEmpty {
@@ -31,7 +34,14 @@ struct RootView: View {
             .navigationDestination(for: TwitchStream.self) { stream in
                 WatchView(model: model, stream: stream)
             }
+            .sheet(item: signInPage, onDismiss: { model.signIn.sheetClosed() }) { page in
+                SignInSheet(signIn: model.signIn, page: page)
+            }
         }
+    }
+
+    private var signInPage: Binding<SignIn.Page?> {
+        Binding(get: { model.signIn.page }, set: { model.signIn.page = $0 })
     }
 
     private var status: String {
@@ -60,6 +70,29 @@ private struct StreamRow: View {
             }
             Text(stream.title).font(.subheadline).lineLimit(1)
             Text(stream.gameName).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// Who is signed in to Twitch, or the button that signs in.
+private struct TwitchAccountRow: View {
+    let model: AppModel
+
+    private var signIn: SignIn { model.signIn }
+
+    var body: some View {
+        if let user = signIn.user {
+            LabeledContent("Signed in", value: user.displayName)
+        } else if signIn.busy && signIn.page == nil {
+            LabeledContent("Signing in") { ProgressView() }
+        } else {
+            Button("Sign in to Twitch", systemImage: "person.crop.circle.badge.plus") {
+                Task { await signIn.begin(core: model.core) }
+            }
+            .disabled(!model.started || signIn.busy)
+        }
+        if let error = signIn.error {
+            Text(error).font(.caption).foregroundStyle(.red)
         }
     }
 }

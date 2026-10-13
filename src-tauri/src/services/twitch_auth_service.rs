@@ -34,8 +34,9 @@
 // Android reads the same two cookies out of the app-global `CookieManager`,
 // which is where the native Kotlin login overlay writes them. There is no
 // hidden window and no per-account profile involved, so that path is a single
-// plugin call (see the bottom of this file). Desktop platforms other than
-// Windows have no cookie source and stay stubbed out.
+// plugin call (see the bottom of this file). iOS reads them from the jar the
+// Swift shell's sign-in sheet fills (`platform::shell_cookies`), likewise in a
+// single read with no window.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -264,7 +265,7 @@ impl TwitchAuthService {
 /// a short-lived hidden webview; on a profile with no session, falls back to the
 /// main window's default store (a pre-multi-account login lives there). Returns
 /// whatever was found (possibly empty); callers treat empty as not-logged-in.
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn harvest(app: &AppHandle) -> HashMap<String, String> {
     use crate::services::account_store::AccountStore;
 
@@ -381,15 +382,6 @@ async fn harvest_from_active_profile(app: &AppHandle) -> Option<HashMap<String, 
         let _ = window.destroy();
     }
     Some(result)
-}
-
-/// Mobile has no hidden-webview profile to read. Android harvests through the
-/// Kotlin login plugin (`harvest` below) and never calls this, so the twin only
-/// exists for other mobile targets, where the desktop `harvest` above compiles.
-#[cfg(all(mobile, not(target_os = "android")))]
-async fn harvest_from_active_profile(_app: &AppHandle) -> Option<HashMap<String, String>> {
-    log::warn!("[Auth] active-profile harvest is desktop-only; no session window on this platform");
-    None
 }
 
 /// Cookie read for the Twitch jar, used everywhere except Windows.
@@ -605,4 +597,41 @@ async fn harvest(app: &AppHandle) -> HashMap<String, String> {
 #[derive(serde::Deserialize)]
 struct CookiesResp {
     cookies: String,
+}
+
+// ---------------------------------------------------------------------------
+// iOS bridge.
+//
+// The Swift app's sign-in sheet is a WKWebView whose store holds the twitch.tv
+// session. The shell pushes that store's twitch.tv cookies into the core at
+// launch and on every change, and `platform::cookies` answers from that jar,
+// so the read is the same single call Android makes.
+// ---------------------------------------------------------------------------
+
+/// Read the twitch.tv cookies the Swift sign-in sheet handed over, and keep the
+/// two the rest of the app asks for.
+#[cfg(target_os = "ios")]
+async fn harvest(app: &AppHandle) -> HashMap<String, String> {
+    let mut found = HashMap::new();
+    let jar = match crate::platform::cookies::cookies_for_origin(app, "main", TWITCH_COOKIE_ORIGIN)
+        .await
+    {
+        Ok(jar) => jar,
+        Err(e) => {
+            log::warn!("[Auth] ios harvest: cookie read failed: {e}");
+            return found;
+        }
+    };
+    let held = jar.len();
+    for cookie in jar {
+        if COOKIE_NAMES.contains(&cookie.name.as_str()) && !cookie.value.is_empty() {
+            found.insert(cookie.name, cookie.value);
+        }
+    }
+    log::info!(
+        "[Auth] ios harvest: {} twitch.tv cookie(s) from the sign-in sheet, auth-token present = {}",
+        held,
+        found.contains_key("auth-token")
+    );
+    found
 }

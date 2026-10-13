@@ -34,6 +34,7 @@ final class Watch {
     private(set) var firstPlayMS: Int?
     private(set) var frames = FrameLog(limit: 30)
     private(set) var chatState = "Not connected"
+    private var chatLines = 0
 
     /// Set by drive steps before a stream opens.
     var route = PlayRoute.plain
@@ -83,6 +84,7 @@ final class Watch {
         status = "Idle"
         frames = FrameLog(limit: 30)
         chatState = "Not connected"
+        chatLines = 0
         Task.detached {
             _ = try? await core.invoke("stop_chat", "{}")
             _ = try? await core.invoke("stop_stream", "{}")
@@ -283,13 +285,25 @@ final class Watch {
             while !Task.isCancelled {
                 let message = try await socket.receive()
                 switch message {
-                case .string(let text): frames.append(ChatFrame(raw: text))
-                case .data(let data): frames.append(ChatFrame(raw: String(decoding: data, as: UTF8.self)))
+                case .string(let text): received(text)
+                case .data(let data): received(String(decoding: data, as: UTF8.self))
                 @unknown default: break
                 }
             }
         } onCancel: {
             socket.cancel(with: .goingAway, reason: nil)
+        }
+    }
+
+    /// Keeps the frame and logs the first few chat lines, which is how a drive run sees chat
+    /// arrive.
+    private func received(_ raw: String) {
+        let frame = ChatFrame(raw: raw)
+        frames.append(frame)
+        guard frame.kind == .message else { return }
+        chatLines += 1
+        if chatLines <= 5 {
+            log.notice("chat line \(self.chatLines): \(String(frame.summary.prefix(80)), privacy: .public)")
         }
     }
 }
