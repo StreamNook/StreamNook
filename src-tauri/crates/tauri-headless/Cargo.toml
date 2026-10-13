@@ -1,0 +1,30 @@
+# Headless stand-in for `tauri` in the iOS core build. iOS has no Tauri
+# runtime: the Swift app drives the core through UniFFI (src/ios_ffi.rs), so
+# this crate offers the slice of Tauri's API the core uses, with events going
+# to a host sink and commands dispatched from JSON. The crate root aliases it
+# as `tauri` on iOS only; every other target keeps the real crate. Versions
+# are the ones the lockfile already carries.
+[package]
+name = "sn-tauri-headless"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "sn_tauri_headless"
+
+[features]
+# Inert; they exist so the app's `custom-protocol` and `devtools` features
+# can name this crate the way they name the real one.
+custom-protocol = []
+devtools = []
+
+[dependencies]
+sn-tauri-headless-macros = { path = "../tauri-headless-macros" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tokio = { version = "1.48.0", features = ["rt-multi-thread", "sync", "time"] }
+url = "2.5.7"
+semver = "1"
+http = "1"
+log = "0.4"

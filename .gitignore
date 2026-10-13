@@ -68,3 +68,10 @@ src-tauri/potoken/mint.bundle.js
 keystore.properties
 *.jks
 *.keystore
+
+# iPhone core outputs of ios/scripts/build-core.sh: the static library link and
+# the UniFFI bindings generated from it. Rebuilt per core commit, never committed.
+ios/CoreLib/
+ios/Sources/SNCore/streamnook_lib.swift
+ios/Sources/streamnook_libFFI/include/streamnook_libFFI.h
+ios/tools/uniffi-bindgen/target/

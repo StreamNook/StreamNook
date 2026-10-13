@@ -26,12 +26,9 @@ tauri-build = { version = "2.5.2", features = [] }
 [dependencies]
 # `tauri` itself is declared per target below: the runtime differs on Linux
 # (CEF) and the feature set that picks the runtime cannot be expressed in one
-# line. Every other dependency is runtime-agnostic and stays here.
-tauri-plugin-shell = { git = "https://github.com/tauri-apps/plugins-workspace", branch = "v2" }
-tauri-plugin-opener = { git = "https://github.com/tauri-apps/plugins-workspace", branch = "v2" }
-tauri-plugin-window-state = { git = "https://github.com/tauri-apps/plugins-workspace", branch = "v2" }
-# tauri-plugin-dialog is declared per target below: its Linux backend differs.
-serde = { version = "1.0.228", features = ["derive"] }
+# line. Every other dependency is runtime-agnostic and stays here. The
+# tauri-plugin-* crates sit in the table below that leaves out iOS.
+serde ={ version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 tokio = { version = "1.48.0", features = ["full"] }
 cookie_store = "0.22.0"
@@ -87,6 +84,20 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 
 log = "0.4"
 env_logger = "0.11"
+
+# Token vault (services/token_vault): AES-256-GCM over every stored credential.
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+getrandom = "0.3"
+
+# Tauri plugins, on every target that runs Tauri. iOS does not: the Swift app
+# is the shell there and the core builds against sn-tauri-headless (see the
+# iOS table below), so no crate that depends on the real `tauri` may enter
+# the iOS graph. `cargo tree --target aarch64-apple-ios -i tauri` is the proof.
+# tauri-plugin-dialog is declared per target below: its Linux backend differs.
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+tauri-plugin-shell = { git = "https://github.com/tauri-apps/plugins-workspace", branch = "v2" }
+tauri-plugin-opener = { git = "https://github.com/tauri-apps/plugins-workspace", branch = "v2" }
+tauri-plugin-window-state = { git = "https://github.com/tauri-apps/plugins-workspace", branch = "v2" }
 tauri-plugin-deep-link = "2.4.7"
 # Companion to deep-link: when a streamnook:// URL is opened while the app is
 # already running, Windows launches a second copy with the URL as its argv.
@@ -104,17 +115,14 @@ tauri-plugin-os = "2"
 # had no way to request permission or actually post one.
 tauri-plugin-notification = "2"
 
-# Token vault (services/token_vault): AES-256-GCM over every stored credential.
-aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
-getrandom = "0.3"
-
 # The Tauri runtime, per target.
 #
-# Windows, macOS, Android and iOS: Tauri's default features, which select the
-# wry runtime (WebView2, WKWebView, the Android System WebView). This is the
-# line the app has always had, only moved into a target table so the Linux
-# table below can differ; the dependency graph on these targets is unchanged.
-[target.'cfg(not(target_os = "linux"))'.dependencies]
+# Windows, macOS and Android: Tauri's default features, which select the wry
+# runtime (WebView2, WKWebView, the Android System WebView). This is the line
+# the app has always had, only moved into a target table so the Linux table
+# below can differ; the dependency graph on these targets is unchanged. iOS
+# has no Tauri runtime at all (its table is further down).
+[target.'cfg(not(any(target_os = "linux", target_os = "ios")))'.dependencies]
 tauri = { version = "2.9.4", features = ["protocol-asset", "tray-icon", "image-png"] }
 tauri-plugin-dialog = "2.2.0"
 
@@ -233,6 +241,19 @@ tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"]
 # default-features = false drops it, so it is named here.
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "gzip", "cookies", "multipart", "rustls-tls", "http2"] }
 
+# iOS: the core is a static library the Swift app links and drives through
+# UniFFI (src/ios_ffi.rs). There is no Tauri runtime; sn-tauri-headless offers
+# the Tauri API the core uses and the crate root aliases it as `tauri`. It is
+# declared under its own name because Cargo refuses one dependency key with a
+# different source per target, and the real crate keeps the `tauri` key the
+# `custom-protocol`/`devtools` features forward to. Transport is Android's:
+# rustls with the bundled Mozilla roots, http2 for Kick, same versions.
+[target.'cfg(target_os = "ios")'.dependencies]
+sn-tauri-headless = { path = "crates/tauri-headless" }
+uniffi = { version = "0.32.2", default-features = false }
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
+reqwest = { version = "0.12.24", default-features = false, features = ["json", "gzip", "cookies", "multipart", "rustls-tls", "http2"] }
+
 # webview2-com powers services/twitch_auth_service.rs (CookieManager).
 # The windows crate features cover both that and the DXGI Output
 # Duplication pipeline that backs commands/screen_capture.rs's animated
@@ -303,7 +324,7 @@ objc2-web-kit = { version = "0.3", default-features = false, features = [
 
 [features]
 default = ["custom-protocol"]
-custom-protocol = ["tauri/custom-protocol"]
+custom-protocol = ["tauri/custom-protocol", "sn-tauri-headless/custom-protocol"]
 
 # Remote WebView inspection in a RELEASE build. Deliberately NOT in `default`.
 #
@@ -324,7 +345,7 @@ custom-protocol = ["tauri/custom-protocol"]
 # On Linux the CEF runtime has a `devtools` feature of its own that tauri's
 # does not switch on (and vice versa); naming a target-specific dependency
 # here is legal and inert on the targets that do not have it.
-devtools = ["tauri/devtools", "tauri-runtime-cef/devtools"]
+devtools = ["tauri/devtools", "tauri-runtime-cef/devtools", "sn-tauri-headless/devtools"]
 [profile.release]
 # opt-level 3: chat parsing and song-id FFT are CPU-hot, size-opt would cost them.
 # panic stays "unwind": tokio tasks and warp handlers contain isolated panics

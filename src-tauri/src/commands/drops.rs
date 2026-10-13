@@ -801,6 +801,7 @@ pub async fn get_streams_in_categories(
     .map_err(|e| e.to_string())
 }
 
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 pub async fn open_drop_details(app_handle: AppHandle, url: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
@@ -809,6 +810,12 @@ pub async fn open_drop_details(app_handle: AppHandle, url: String) -> Result<(),
         .opener()
         .open_url(url, None::<String>)
         .map_err(|e| format!("Failed to open drops details: {}", e))
+}
+
+#[cfg(target_os = "ios")]
+#[tauri::command]
+pub async fn open_drop_details(_app_handle: AppHandle, _url: String) -> Result<(), String> {
+    Err(crate::ios_ffi::not_wired("Opening drop details"))
 }
 
 // Prediction commands

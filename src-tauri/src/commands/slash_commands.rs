@@ -306,6 +306,7 @@ pub async fn slash_export_text(file: String, text: String) -> Result<String, Str
 /// `/openfile [file]`: show an exported file selected in its folder, or open
 /// the exports folder. A file is only ever revealed, never opened: opening
 /// hands it to whatever program the system runs for its ending.
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 pub async fn slash_open_export(file: Option<String>) -> Result<String, String> {
     let dir = sc::exports_dir()?;
@@ -325,6 +326,12 @@ pub async fn slash_open_export(file: Option<String>) -> Result<String, String> {
             Ok(dir.display().to_string())
         }
     }
+}
+
+#[cfg(target_os = "ios")]
+#[tauri::command]
+pub async fn slash_open_export(_file: Option<String>) -> Result<String, String> {
+    Err(crate::ios_ffi::not_wired("/openfile"))
 }
 
 /// `/streamlink [quality]`: open the channel in Streamlink, when installed.
@@ -385,6 +392,7 @@ pub async fn slash_inject_fake_message(line: String) -> Result<(), String> {
 
 /// `/proc <program> [args]`: run a program on this computer after you confirm
 /// it in a system dialog. No shell is involved.
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 pub async fn slash_run_program(app: AppHandle, command_line: String) -> Result<String, String> {
     if !cfg!(desktop) {
@@ -417,9 +425,22 @@ pub async fn slash_run_program(app: AppHandle, command_line: String) -> Result<S
     Ok(format!("Started {program} (process {}).", child.id()))
 }
 
+#[cfg(target_os = "ios")]
+#[tauri::command]
+pub async fn slash_run_program(_app: AppHandle, _command_line: String) -> Result<String, String> {
+    Err("/proc only runs on the desktop app".into())
+}
+
 /// `/copy <text>`: put text on the clipboard.
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 pub fn slash_copy_text(app: AppHandle, text: String) -> Result<(), String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
     app.clipboard().write_text(text).map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "ios")]
+#[tauri::command]
+pub fn slash_copy_text(_app: AppHandle, _text: String) -> Result<(), String> {
+    Err(crate::ios_ffi::not_wired("Copying to the clipboard"))
 }

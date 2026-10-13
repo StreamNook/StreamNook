@@ -453,6 +453,7 @@ pub async fn get_settings_dir() -> Result<String, String> {
 
 /// Open the settings folder in the OS file browser. Routed through the opener
 /// plugin from Rust (so it needs no extra JS-side capability).
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 pub async fn open_settings_folder(app: AppHandle) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
@@ -461,6 +462,12 @@ pub async fn open_settings_folder(app: AppHandle) -> Result<(), String> {
     app.opener()
         .open_path(dir.to_string_lossy().to_string(), None::<String>)
         .map_err(|e| format!("Failed to open settings folder: {}", e))
+}
+
+#[cfg(target_os = "ios")]
+#[tauri::command]
+pub async fn open_settings_folder(_app: AppHandle) -> Result<(), String> {
+    Err(crate::ios_ffi::not_wired("Opening the settings folder"))
 }
 
 /// Write the user's portable preferences to `path` (chosen via a save dialog on

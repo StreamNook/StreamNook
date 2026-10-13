@@ -22,6 +22,14 @@
 #![allow(clippy::manual_flatten)]
 #![allow(clippy::collapsible_match)]
 
+// iOS has no Tauri runtime: the Swift app drives the core through ios_ffi,
+// and sn-tauri-headless stands in for the `tauri` crate (see Cargo.toml).
+#[cfg(target_os = "ios")]
+extern crate sn_tauri_headless as tauri;
+
+#[cfg(target_os = "ios")]
+uniffi::setup_scaffolding!();
+
 use commands::chat_query::{
     get_chat_history_stats, get_chat_rule_errors, search_chat, validate_chat_filter,
     validate_chat_phrase,
@@ -63,6 +71,7 @@ use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
+#[cfg(not(target_os = "ios"))]
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tokio::sync::Mutex as TokioMutex;
 
@@ -349,6 +358,8 @@ fn close_main_window(app: crate::rt::AppHandle) {
 #[cfg(target_os = "android")]
 mod android_notify;
 mod commands;
+#[cfg(target_os = "ios")]
+mod ios_ffi;
 /// Process entry for the CEF-based Linux build; `main.rs` calls `enter`
 /// before anything else.
 #[cfg(target_os = "linux")]
@@ -480,9 +491,16 @@ fn cleanup_legacy_streamlink_bundle() {
 /// pasteboard read blocks until the app that owns the clipboard delivers its
 /// promised data. A hung source app then hung our window (macOS). The
 /// clipboard plugin's own `read_text` command is async for the same reason.
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 async fn read_clipboard_text_native(app: crate::rt::AppHandle) -> Result<String, String> {
     app.clipboard().read_text().map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "ios")]
+#[tauri::command]
+async fn read_clipboard_text_native(_app: crate::rt::AppHandle) -> Result<String, String> {
+    Err(ios_ffi::not_wired("Reading the clipboard"))
 }
 
 /// Development builds only: `StreamNook --print-credential <file name>` prints
@@ -589,6 +607,21 @@ mod webview_args_tests {
             "--disable-features=A,B,C --force-color-profile=srgb --disable-direct-composition-video-overlays"
         );
     }
+}
+
+/// Flush every debounced store before the process dies; each is a no-op when
+/// nothing is dirty. The run loop's `Exit` arm calls it, and on iOS so does
+/// the move to the background, after which the app may be ended unseen.
+pub(crate) fn flush_debounced_stores() {
+    let _ = commands::settings::flush_settings_now();
+    let _ = services::universal_cache_service::flush_manifest_now();
+    let _ = services::mod_log_storage_service::ModLogStorageService::flush_now();
+    let _ = services::whisper_storage_service::WhisperStorageService::flush_now();
+    let _ = services::vod_progress_service::flush_now();
+    #[cfg(desktop)]
+    let _ = commands::popout_window::flush_now();
+    let _ = services::activity_history_service::flush_now();
+    let _ = services::chat_logger_service::ChatLoggerService::flush_all();
 }
 
 /// Shared app entry point. Desktop's `main.rs` calls this directly; on mobile
@@ -865,6 +898,8 @@ pub fn run() {
     } else {
         builder
     };
+    // iOS registers no plugins: the Swift app is the shell there.
+    #[cfg(not(target_os = "ios"))]
     let builder = builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init());
@@ -912,7 +947,8 @@ pub fn run() {
     // frame (linux_window_frame).
     #[cfg(target_os = "linux")]
     let builder = builder.plugin(linux_window_frame::plugin());
-    builder
+    #[cfg(not(target_os = "ios"))]
+    let builder = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -920,7 +956,8 @@ pub fn run() {
         // Native OS notifications. Cross-platform: on Android this is the system
         // notification shade, which is where live alerts belong on a phone rather
         // than the in-app Dynamic Island the desktop uses.
-        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_notification::init());
+    builder
         .manage(live_notification_service.clone())
         .manage(whisper_service.clone())
         .manage(layout_service.clone())
@@ -1134,9 +1171,12 @@ pub fn run() {
             //  - Cold (app launched by the link): the plugin already emitted before this
             //    listener (and the webview) existed, so we also drain get_current()
             //    into PendingWatchLink, which the frontend pulls on mount.
+            //
+            // iOS has no deep-link plugin; the Swift app receives the links.
+            app.manage(PendingWatchLink::default());
+            #[cfg(not(target_os = "ios"))]
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
-                app.manage(PendingWatchLink::default());
 
                 let watch_handle = app_handle.clone();
                 app.deep_link().on_open_url(move |event| {
@@ -2496,17 +2536,7 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 services::app_exit::on_run_exit();
                 let shutdown_started = std::time::Instant::now();
-                // Flush every debounced store before the process dies; each is
-                // a no-op when nothing is dirty.
-                let _ = commands::settings::flush_settings_now();
-                let _ = services::universal_cache_service::flush_manifest_now();
-                let _ = services::mod_log_storage_service::ModLogStorageService::flush_now();
-                let _ = services::whisper_storage_service::WhisperStorageService::flush_now();
-                let _ = services::vod_progress_service::flush_now();
-                #[cfg(desktop)]
-                let _ = commands::popout_window::flush_now();
-                let _ = services::activity_history_service::flush_now();
-            let _ = services::chat_logger_service::ChatLoggerService::flush_all();
+                flush_debounced_stores();
                 // Ask running plugin processes to shut down before the app
                 // process dies, waiting briefly so well-behaved plugins exit
                 // gracefully (stragglers are killed with the supervisor).

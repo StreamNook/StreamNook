@@ -1457,6 +1457,7 @@ pub async fn get_recommended_streams_paginated(
     .map_err(|e| e.to_string())
 }
 
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 pub async fn open_browser_url(app: AppHandle, url: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
@@ -1464,6 +1465,12 @@ pub async fn open_browser_url(app: AppHandle, url: String) -> Result<(), String>
     app.opener()
         .open_url(url, None::<String>)
         .map_err(|e| format!("Failed to open browser: {}", e))
+}
+
+#[cfg(target_os = "ios")]
+#[tauri::command]
+pub async fn open_browser_url(_app: AppHandle, _url: String) -> Result<(), String> {
+    Err(crate::ios_ffi::not_wired("Opening links"))
 }
 
 #[cfg(desktop)]

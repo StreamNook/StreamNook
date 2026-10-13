@@ -1,0 +1,18 @@
+# Host-only tool: generates the core's Swift bindings from the built static
+# library (ios/scripts/build-core.sh runs it). Its own workspace, so it never
+# joins the app's dependency graph.
+[package]
+name = "uniffi-bindgen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+
+[dependencies]
+# Must match the uniffi version src-tauri/Cargo.toml builds the core with.
+uniffi = { version = "=0.32.2", features = ["cli"] }
+
+[workspace]

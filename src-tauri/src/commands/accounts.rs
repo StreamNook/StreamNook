@@ -43,6 +43,7 @@ pub async fn get_credential_storage() -> Result<CredentialStorage, String> {
 /// or writes the primary's cached token, and `add_secondary` rejects the attempt
 /// if the chosen account is already the primary. Resolves with the linked
 /// account, or an error string the UI can surface (cancelled, timed out, etc.).
+#[cfg(not(target_os = "ios"))]
 #[tauri::command]
 pub async fn add_twitch_account(app: AppHandle) -> Result<StoredAccount, String> {
     use tauri_plugin_opener::OpenerExt;
@@ -86,6 +87,12 @@ pub async fn add_twitch_account(app: AppHandle) -> Result<StoredAccount, String>
     AccountStore::add_secondary(token)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "ios")]
+#[tauri::command]
+pub async fn add_twitch_account(_app: AppHandle) -> Result<StoredAccount, String> {
+    Err(crate::ios_ffi::not_wired("Linking an account in the browser"))
 }
 
 /// Unlink a secondary account (removes its stored token and registry entry).
