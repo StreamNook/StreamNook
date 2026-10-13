@@ -37,7 +37,7 @@ final class RustCore: CoreBridge, @unchecked Sendable {
     }
 
     func lifecycle(_ state: String) {
-        try? SNCore.lifecycle(state: state)
+        SNCore.lifecycle(state: state)
     }
 
     /// Where the core calls back into the app. Rust calls it on its own threads.

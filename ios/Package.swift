@@ -14,8 +14,9 @@ let coreLib = "\(Context.packageDirectory)/CoreLib"
 let hasCore = !kitOnly && FileManager.default.fileExists(atPath: "\(coreLib)/libstreamnook_lib.a")
 
 let coreTargets: [Target] = hasCore ? [
-    // The C header and module map UniFFI generates for the core's exported functions.
-    .systemLibrary(name: "streamnook_libFFI", path: "Sources/streamnook_libFFI"),
+    // The C header and module map UniFFI generates for the core's exported functions. A system
+    // library's module map must sit at its path, so the path is the include folder.
+    .systemLibrary(name: "streamnook_libFFI", path: "Sources/streamnook_libFFI/include"),
     // The Swift side UniFFI generates. It is written for Swift 5, so it builds in that mode and
     // the app imports it with @preconcurrency.
     .target(name: "SNCore", dependencies: ["streamnook_libFFI"], path: "Sources/SNCore",

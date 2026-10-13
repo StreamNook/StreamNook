@@ -9,7 +9,7 @@ import Foundation
 /// - `back` closes the watch page
 /// - `wait:SECONDS`
 /// - `pause` pauses the player
-/// - `shot` marks the moment a screenshot is due (the host takes it) and holds still for three
+/// - `shot` marks the moment a screenshot is due (the host takes it) and holds still for five
 ///   seconds so it lands on a settled screen
 @MainActor
 enum Drive {
@@ -19,7 +19,7 @@ enum Drive {
             log.error("drive skipped: the core did not start")
             return
         }
-        log.notice("drive \(script, privacy: .public)")
+        log.notice("drive steps \(script, privacy: .public)")
         for step in script.split(separator: ";").map({ $0.trimmingCharacters(in: .whitespaces) }) where !step.isEmpty {
             let (name, value) = split(step)
             switch name {
@@ -36,7 +36,7 @@ enum Drive {
             case "pause": model.watch.pause()
             case "shot":
                 log.notice("drive shot")
-                try? await Task.sleep(for: .seconds(3))
+                try? await Task.sleep(for: .seconds(5))
             default: log.error("drive: unknown step \(name, privacy: .public)")
             }
             try? await Task.sleep(for: .milliseconds(400))
