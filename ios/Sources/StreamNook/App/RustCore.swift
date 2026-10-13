@@ -12,7 +12,7 @@ final class RustCore: CoreBridge, @unchecked Sendable {
         do {
             try SNCore.start(
                 sink: Sink(events: events),
-                dirs: SNCore.CoreDirs(data: dirs.data, cache: dirs.cache, logs: dirs.logs),
+                dirs: SNCore.HostDirs(data: dirs.data, cache: dirs.cache, logs: dirs.logs),
                 version: version, vaultKey: vaultKey, codecs: codecs
             )
         } catch let error as CoreError {
@@ -29,11 +29,7 @@ final class RustCore: CoreBridge, @unchecked Sendable {
     }
 
     func setWebCookies(origin: String, cookiesJSON: String) throws {
-        do {
-            try SNCore.setWebCookies(origin: origin, cookiesJson: cookiesJSON)
-        } catch let error as CoreError {
-            throw error.failure
-        }
+        SNCore.setWebCookies(origin: origin, cookiesJson: cookiesJSON)
     }
 
     func lifecycle(_ state: String) {

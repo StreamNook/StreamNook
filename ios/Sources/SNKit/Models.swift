@@ -69,9 +69,37 @@ public struct StreamStart: Decodable, Sendable, Equatable {
     public var quality: String
 }
 
-/// The Browse list: the most watched categories' live streams, until there are enough.
+/// The part of the core's home snapshot the Browse list reads.
+public struct HomeRecommended: Decodable, Sendable {
+    public var recommended: [TwitchStream]
+}
+
+/// The Browse list: the home snapshot's recommended streams, which need no sign-in; without
+/// them, the most watched categories' live streams until there are enough.
 public enum Browse {
     public static func load(_ core: CoreBridge, count: Int = 20) async throws -> [TwitchStream] {
+        if let recommended = await recommended(core), !recommended.isEmpty {
+            return Array(recommended.prefix(count))
+        }
+        return try await topCategories(core, count: count)
+    }
+
+    /// Asks the core to refresh the recommended section, then reads the snapshot until the
+    /// refresh lands (the core fills it in the background).
+    static func recommended(_ core: CoreBridge) async -> [TwitchStream]? {
+        let refresh: [String: Any?] = ["section": "recommended", "languages": [String](), "personalized": false]
+        guard (try? await core.invoke("refresh_home_section", args: refresh)) != nil else { return nil }
+        for _ in 0..<20 {
+            if let snapshot = try? await core.invoke("get_home_snapshot", args: [:], as: HomeRecommended.self),
+               !snapshot.recommended.isEmpty {
+                return snapshot.recommended
+            }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        return nil
+    }
+
+    static func topCategories(_ core: CoreBridge, count: Int) async throws -> [TwitchStream] {
         let games = try await core.invoke(
             "get_top_games_paginated", args: ["cursor": nil, "limit": 20], as: Page<TwitchCategory>.self
         ).items

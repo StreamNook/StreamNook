@@ -101,7 +101,8 @@ import Testing
         #expect(Set(streams.map(\.id)).count == 20)
         #expect(streams.first?.userLogin == "fakestreamer0")
         #expect(streams.last?.gameName == "League of Legends")
-        #expect(core.calls == ["get_top_games_paginated", "get_streams_by_game", "get_streams_by_game"])
+        // FakeCore has no home snapshot, so Browse falls back to the top categories.
+        #expect(core.calls == ["refresh_home_section", "get_top_games_paginated", "get_streams_by_game", "get_streams_by_game"])
     }
 
     @Test func streamsByGameNeedsTheTypeScriptArgumentName() async throws {

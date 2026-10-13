@@ -47,6 +47,7 @@ let package = Package(
             linkerSettings: hasCore ? [
                 .unsafeFlags(["-L\(coreLib)"]),
                 .linkedLibrary("streamnook_lib"),
+                .linkedLibrary("iconv"),
                 .linkedFramework("Security"),
                 .linkedFramework("SystemConfiguration"),
                 .linkedFramework("CoreFoundation"),
