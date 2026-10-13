@@ -1229,7 +1229,7 @@ pub async fn get_channel_points_for_channel(
 
 // Persisted query hash for ChannelPointsContext - captured from Twitch's network traffic
 // This should return communityPointsSettings including customRewards
-const CHANNEL_POINTS_CONTEXT_HASH: &str =
+pub(crate) const CHANNEL_POINTS_CONTEXT_HASH: &str =
     "374314de591e69925fce3ddc2bcf085796f56ebb8cad67a0daa3165c03adc345";
 
 // Captured GQL hashes for channel points redemptions
@@ -1416,6 +1416,15 @@ fn parse_automatic_reward(
         description: built_in_description(reward_type).map(str::to_string),
         availability: Default::default(),
     })
+}
+
+/// The last reward list read for a channel, judged now, or `None`. The menu
+/// paints this at once and fetches a fresh list beside it.
+#[tauri::command]
+pub async fn get_cached_channel_rewards(
+    channel_login: String,
+) -> Result<Option<crate::models::drops::ChannelRewardsSnapshot>, String> {
+    Ok(crate::services::channel_rewards::cached(&channel_login).await)
 }
 
 #[tauri::command]

@@ -32,6 +32,7 @@ import { matchEmotes, rowsToTabCandidates, createRequestSeq } from '../../servic
 import { useChatUserStore } from '../../stores/chatUserStore';
 import { useEmoteOwnerNames } from './useEmoteOwnerNames';
 import { ComposerMenuSheet } from './ComposerMenuSheet';
+import { MobileSheet } from '../ui/MobileSheet';
 import { MobileCommandSheet } from './MobileCommandSheet';
 import { handleSlashCommand } from '../../utils/commandHandler';
 import { StreakBanners } from './StreakBanners';
@@ -70,6 +71,8 @@ interface Props {
   gating: ChatGating;
   /** The room's chat modes in Rust's words, or null while hidden or none. */
   roomModes?: RoomModeView | null;
+  /** Name the modes in place of "Send a message" instead of the chip. */
+  roomModesAsPrompt?: boolean;
   emotes: EmoteSet | null;
   replyTo?: { messageId: string; username: string } | null;
   onCancelReply?: () => void;
@@ -94,6 +97,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
   channelLabel,
   gating,
   roomModes = null,
+  roomModesAsPrompt = false,
   emotes,
   replyTo,
   onCancelReply,
@@ -140,6 +144,13 @@ const MobileChatInputImpl: React.FC<Props> = ({
   const pointsChannel = streamLogin && streamIsTwitch ? streamLogin : isTwitch ? channel : null;
   const pointsChannelId = streamId && streamIsTwitch ? streamId : isTwitch ? channelId : null;
   const points = useChannelPoints(pointsChannel, pointsChannelId);
+  // One rewards read per channel while it has a points button, so the sheet's
+  // first open paints Rust's list instead of waiting on Twitch.
+  const hasPointsButton = !!channel && !!channelId && points.balance !== null;
+  useEffect(() => {
+    if (!hasPointsButton || !channel) return;
+    invoke('get_channel_rewards', { channelId: channel }).catch(() => {});
+  }, [hasPointsButton, channel]);
   const emoteOwnerNames = useEmoteOwnerNames(emotes);
 
   // Points feedback.
@@ -457,7 +468,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
                 }
               }}
               placeholder={
-                gating.blocked ? (gating.reason ?? 'Chat restricted') : (roomModes?.prompt ?? 'Send a message')
+                gating.blocked
+                  ? (gating.reason ?? 'Chat restricted')
+                  : ((roomModesAsPrompt ? roomModes?.prompt : null) ?? 'Send a message')
               }
               // Typing is switched off, not just discouraged, when the badges prove
               // the send would be rejected. The amber placeholder says why.
@@ -471,9 +484,9 @@ const MobileChatInputImpl: React.FC<Props> = ({
               enterKeyHint="send"
             />
           )}
-          {/* The room's chat modes, staying while you type. A tap opens the
-              chat menu, which lists them in full. */}
-          {roomModes && !needsKickSignIn && (
+          {/* The room's chat modes as one chip, staying while you type. A tap
+              opens the chat menu, which lists them in full. */}
+          {roomModes && !roomModesAsPrompt && !needsKickSignIn && (
             <RoomModeIndicator view={roomModes} inline onActivate={() => setMenuOpen(true)} />
           )}
           {/* Icon only. The balance was briefly shown here to prove earning was
@@ -633,48 +646,31 @@ const MobileChatInputImpl: React.FC<Props> = ({
           onInsert={insertEmote}
           className={PANEL_CLASS}
         />
-        {/* Mounted as soon as there is a points button, not on tap.
-            Opening used to flash a spinner: the menu fetches its rewards on
-            mount, that is a GQL round trip with no backend cache, and mounting
-            only when tapped put the whole trip inside the open. Mounting it up
-            front spends the request while nobody is waiting on it, so the tap
-            reveals a list that is already there.
 
-            Safe to mount early because the only work it does on mount is that
-            one fetch plus an Escape listener; everything else (emote lists,
-            unlockables) is triggered by interaction. The cost is one rewards
-            request per channel whether or not the menu gets opened, which is a
-            fair trade for the primary action on this bar never stuttering.
-
-            Hidden with opacity and visibility rather than `display`, so the
-            reveal can transition. NO transform on this wrapper: the menu
-            positions itself `absolute bottom-full` against the composer, and a
-            transform here would make this element its containing block and
-            throw it out of place. */}
-        {channel && channelId && points.balance !== null && (
-          <div
-            className={`transition-[opacity] duration-150 ease-out ${
-              pointsOpen ? 'opacity-100' : 'opacity-0 invisible pointer-events-none'
-            }`}
-            aria-hidden={!pointsOpen}
-          >
-            <ChannelPointsMenu
-              channelLogin={channel}
-              channelId={channelId}
-              currentBalance={points.balance}
-              customPointsName={points.name}
-              customPointsIconUrl={points.iconUrl}
-              onClose={() => setPointsOpen(false)}
-              onBalanceUpdate={points.refresh}
-              onEmotesChange={() => {
-                // Redeeming an emote-unlock reward changes the picker's contents.
-                void refreshChannelEmotes(channel, channelId);
-              }}
-            />
-          </div>
-        )}
       </div>
 
+      {/* The rewards, as a sheet: the phone's own surface for a menu like this.
+          Its first open does not wait on Twitch: the read below fills Rust's
+          list as soon as there is a points button, and the menu paints that
+          list at once while it reads a fresh one. */}
+      {channel && channelId && points.balance !== null && (
+        <MobileSheet open={pointsOpen} onClose={() => setPointsOpen(false)} maxHeightFraction={0.78}>
+          <ChannelPointsMenu
+            variant="sheet"
+            channelLogin={channel}
+            channelId={channelId}
+            currentBalance={points.balance}
+            customPointsName={points.name}
+            customPointsIconUrl={points.iconUrl}
+            onClose={() => setPointsOpen(false)}
+            onBalanceUpdate={points.refresh}
+            onEmotesChange={() => {
+              // Redeeming an emote-unlock reward changes the picker's contents.
+              void refreshChannelEmotes(channel, channelId);
+            }}
+          />
+        </MobileSheet>
+      )}
       <ComposerMenuSheet
         open={menuOpen}
         onClose={() => setMenuOpen(false)}

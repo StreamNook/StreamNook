@@ -43,6 +43,9 @@ interface ChannelPointsMenuProps {
   // state for exactly as long as the fetch actually takes.
   onBalanceUpdate: () => void | Promise<void>;
   onEmotesChange?: () => void; // Callback to refresh emotes after unlocking
+  /** `popover` (desktop): a panel over the composer. `sheet` (phone): the
+   *  content of a bottom sheet, rewards as a grid of tiles. Same logic. */
+  variant?: 'popover' | 'sheet';
 }
 
 const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
@@ -54,7 +57,9 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
   onClose,
   onBalanceUpdate,
   onEmotesChange,
+  variant = 'popover',
 }) => {
+  const isSheet = variant === 'sheet';
   const [rewards, setRewards] = useState<ChannelReward[]>([]);
   // The balance the backend judged the list against.
   const [snapshotBalance, setSnapshotBalance] = useState<number | null>(null);
@@ -148,7 +153,8 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
       (err: unknown) => {
         if (seq !== fetchSeqRef.current) return;
         Logger.error('[ChannelPointsMenu] Failed to fetch rewards:', err);
-        if (initial) {
+        // A list already on screen (Rust's last one) stays rather than an error.
+        if (initial && fetchedAtRef.current === 0) {
           setError(typeof err === 'string' ? err : 'Failed to load rewards');
           setIsLoading(false);
         }
@@ -156,13 +162,26 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     );
   }, [channelLogin]);
 
-  // Fetch rewards when menu opens
+  // Fetch rewards when menu opens. Rust's last judged list for the channel
+  // paints first, so a reopened menu never waits on Twitch; the fresh read
+  // replaces it when it lands.
   useEffect(() => {
     const seqRef = fetchSeqRef;
+    const seq = seqRef.current;
+    void invoke<ChannelRewardsSnapshot | null>('get_cached_channel_rewards', { channelLogin })
+      .then((cached) => {
+        // Never over the fresh read, and never after an unmount or a channel switch.
+        if (!cached || seqRef.current !== seq + 1 || fetchedAtRef.current >= cached.fetched_at_ms) return;
+        fetchedAtRef.current = cached.fetched_at_ms;
+        setRewards(cached.rewards);
+        setSnapshotBalance(cached.balance);
+        setIsLoading(false);
+      })
+      .catch(() => {});
     void refreshRewards(true);
     // Unmounting (or a channel switch) voids any call still in flight.
     return () => { seqRef.current++; };
-  }, [refreshRewards]);
+  }, [refreshRewards, channelLogin]);
 
   // Rust re-judges the list when chat enters or leaves sub-only mode, the
   // viewer's sub badge changes, or the stream goes live or offline.
@@ -554,11 +573,15 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
   return (
     <div
       ref={menuRef}
-      className="glass-panel absolute bottom-full left-0 right-0 mb-2 flex flex-col max-h-[400px] overflow-hidden z-50"
-      style={{ ...panelGlass, minHeight: overlayOpen ? OVERLAY_MIN_HEIGHT : undefined }}
+      className={
+        isSheet
+          ? 'relative flex flex-col'
+          : 'glass-panel absolute bottom-full left-0 right-0 mb-2 flex flex-col max-h-[400px] overflow-hidden z-50'
+      }
+      style={isSheet ? { minHeight: overlayOpen ? OVERLAY_MIN_HEIGHT : undefined } : { ...panelGlass, minHeight: overlayOpen ? OVERLAY_MIN_HEIGHT : undefined }}
     >
       {/* Header with balance */}
-      <div className="px-4 py-3 border-b border-borderSubtle bg-black/20">
+      <div className={isSheet ? `px-1 pb-3 ${overlayOpen ? 'invisible' : ''}` : 'px-4 py-3 border-b border-borderSubtle bg-black/20'}>
         <div className="flex items-center justify-between gap-2">
           <span className="text-sm font-medium text-textSecondary truncate">
             {customPointsName || 'Channel Points'}
@@ -591,8 +614,8 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
         </div>
       </div>
 
-      {/* Content */}
-      <div className="overflow-y-auto max-h-[300px] custom-scrollbar">
+      {/* Content. In a sheet the sheet scrolls. */}
+      <div className={isSheet ? (overlayOpen ? 'invisible' : '') : 'overflow-y-auto max-h-[300px] custom-scrollbar'}>
         {isLoading ? (
           <div className="flex items-center justify-center py-8">
             <div className="animate-spin w-6 h-6 border-2 border-accent border-t-transparent rounded-full" />
@@ -613,6 +636,59 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
             <p className="text-textMuted text-xs mt-1">
               This channel hasn't set up any rewards yet
             </p>
+          </div>
+        ) : isSheet ? (
+          // Tiles, Twitch's own layout on a phone: the art, the cost under it,
+          // the name on two lines, and why it is blocked when it is.
+          <div className="grid grid-cols-3 gap-2">
+            {rewards.map((reward) => {
+              const available = reward.availability.redeemable;
+              const status = rewardStatusText(reward.availability, nowMs, 'label');
+              const canAfford = reward.availability.affordable;
+              return (
+                <button
+                  key={reward.id}
+                  type="button"
+                  onClick={() => openDetail(reward)}
+                  aria-label={status ? `${reward.title}, ${status}` : reward.title}
+                  className={`flex min-w-0 flex-col gap-1.5 rounded-xl p-1.5 text-left transition-colors active:bg-surface-hover ${
+                    redeemingId === reward.id ? 'animate-pulse bg-accent/10' : ''
+                  }`}
+                >
+                  <div
+                    className={`relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg ${available ? '' : 'opacity-50 grayscale'}`}
+                    style={{ backgroundColor: reward.background_color || '#9147FF' }}
+                  >
+                    {reward.image_url ? (
+                      <img
+                        src={reward.image_url}
+                        alt=""
+                        className="h-3/5 w-3/5 object-contain"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                        }}
+                      />
+                    ) : (
+                      <ChannelPointsIcon size={26} className="text-white/85" />
+                    )}
+                  </div>
+                  <span
+                    className={`flex items-center gap-1 text-[12px] font-semibold tabular-nums ${
+                      canAfford ? (available ? 'text-accent' : 'text-textSecondary') : 'text-red-400'
+                    }`}
+                  >
+                    {pointsGlyph(12)}
+                    {formatCostShort(reward.cost)}
+                  </span>
+                  <span
+                    className={`line-clamp-2 break-words text-[12px] leading-snug ${available ? 'text-textPrimary' : 'text-textSecondary'}`}
+                  >
+                    {reward.title}
+                  </span>
+                  {status && <StatusLine text={status} />}
+                </button>
+              );
+            })}
           </div>
         ) : (
           <div className="p-2 space-y-0.5">
@@ -690,12 +766,12 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
           the text box for rewards that ask for one */}
       {detail && (
         <div
-          className="glass-panel animate-scale-in absolute inset-0 flex flex-col overflow-hidden z-50"
-          style={panelGlass}
+          className={`${isSheet ? '' : 'glass-panel '}animate-scale-in absolute inset-0 flex flex-col overflow-hidden z-50`}
+          style={isSheet ? undefined : panelGlass}
           role="dialog"
           aria-label={detail.title}
         >
-          <div className="flex items-center justify-between gap-2 px-2 py-2 border-b border-borderSubtle bg-black/20">
+          <div className={`flex items-center justify-between gap-2 px-2 py-2 border-b border-borderSubtle ${isSheet ? '' : 'bg-black/20'}`}>
             <button
               type="button"
               onClick={closeDetail}
@@ -751,7 +827,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                 maxLength={INPUT_MAX}
                 rows={3}
                 autoFocus
-                className="w-full min-h-[72px] glass-input px-3 py-2 text-sm text-textPrimary placeholder-textMuted resize-none focus:outline-none"
+                className={`w-full min-h-[72px] glass-input px-3 py-2 ${isSheet ? 'text-[15px]' : 'text-sm'} text-textPrimary placeholder-textMuted resize-none focus:outline-none`}
                 onKeyDown={(e) => {
                   // Enter that confirms an IME candidate is not a send: it would
                   // post half-typed text and spend the points.
@@ -777,7 +853,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
               onClick={() => { void handleDetailAction(); }}
               disabled={!detailCanAct}
               className={`
-                flex-shrink-0 px-4 py-1.5 text-xs font-semibold glass-button transition-all whitespace-nowrap
+                flex-shrink-0 ${isSheet ? 'px-5 py-2.5 text-sm' : 'px-4 py-1.5 text-xs'} font-semibold glass-button transition-all whitespace-nowrap
                 ${detailCanAct
                   ? (detailKind === 'highlight' ? 'text-yellow-400 hover:text-yellow-300' : 'text-accent hover:text-accent-neon active:scale-[0.98]')
                   : 'opacity-50 cursor-not-allowed'}
@@ -792,8 +868,8 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
       {/* Emote Reveal Popup */}
       {showEmoteReveal && revealedEmote && (
         <div 
-          className="glass-panel animate-scale-in absolute inset-0 flex flex-col items-center justify-center overflow-hidden z-50"
-          style={panelGlass}
+          className={`${isSheet ? '' : 'glass-panel '}animate-scale-in absolute inset-0 flex flex-col items-center justify-center overflow-hidden z-50`}
+          style={isSheet ? undefined : panelGlass}
           onClick={() => {
             setShowEmoteReveal(false);
             setRevealedEmote(null);
@@ -841,8 +917,8 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
       {/* Modify Emote Picker Modal */}
       {showModifyEmoteModal && modifyEmoteReward && (
         <div 
-          className="glass-panel animate-scale-in absolute inset-0 z-50 flex flex-col overflow-hidden"
-          style={panelGlass}
+          className={`${isSheet ? '' : 'glass-panel '}animate-scale-in absolute inset-0 z-50 flex flex-col overflow-hidden`}
+          style={isSheet ? undefined : panelGlass}
         >
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b border-borderSubtle">
@@ -1069,8 +1145,8 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
       {/* Choose Emote Modal - Single step emote picker */}
       {showChooseEmoteModal && chooseEmoteReward && (
         <div 
-          className="glass-panel animate-scale-in absolute inset-0 z-50 flex flex-col overflow-hidden"
-          style={panelGlass}
+          className={`${isSheet ? '' : 'glass-panel '}animate-scale-in absolute inset-0 z-50 flex flex-col overflow-hidden`}
+          style={isSheet ? undefined : panelGlass}
         >
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b border-borderSubtle">
