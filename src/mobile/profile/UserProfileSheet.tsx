@@ -27,12 +27,17 @@ import { MobileSheet } from '../ui/MobileSheet';
 import { useNameColorAdjust } from '../../hooks/useNameColor';
 import { Logger } from '../../utils/logger';
 import { SevenTvAvatar } from '../../components/SevenTvAvatar';
+import { SubStandingRow } from '../../components/profile/SubStandingRow';
+import { wornSubBadgeArt, type WornBadge } from '../../utils/wornSubBadge';
+import type { SubStanding } from '../../types';
 
 export interface SheetUser {
   userId: string;
   username: string;
   displayName: string;
   color: string;
+  /** The badges on the message the sheet was opened from, when there was one. */
+  badges?: WornBadge[];
 }
 
 /** One row of what this person has said this session. */
@@ -135,6 +140,7 @@ const ProfileBody: React.FC<{
   // null until the store has answered, so "nothing yet" is never painted
   // over a list that is still on its way.
   const [history, setHistory] = useState<HistoryRow[] | null>(null);
+  const [standing, setStanding] = useState<SubStanding | null>(null);
 
   const userId = user.userId;
   const username = user.username;
@@ -183,6 +189,26 @@ const ProfileBody: React.FC<{
       void invoke('unwatch_user_history', { userKey: key }).catch(() => {});
     };
   }, [userId]);
+
+  // Their sub in this room, with Rust's words for it. The sheet is keyed on the
+  // user, so the badges it was opened with are fixed for its life.
+  const wornBadges = user.badges;
+  useEffect(() => {
+    if (!channelName) return;
+    let cancelled = false;
+    void invoke<SubStanding | null>('get_sub_standing', {
+      login: username,
+      channel: channelName,
+      wornBadges: (wornBadges ?? []).map((b) => b.key),
+    })
+      .then((s) => {
+        if (!cancelled) setStanding(s);
+      })
+      .catch((err) => Logger.debug('[UserProfile] sub standing unavailable:', err));
+    return () => {
+      cancelled = true;
+    };
+  }, [username, channelName, wornBadges]);
 
   useEffect(() => {
     let cancelled = false;
@@ -257,6 +283,12 @@ const ProfileBody: React.FC<{
             )}
           </div>
         </div>
+
+        {standing && (
+          <div className="mt-3">
+            <SubStandingRow standing={standing} badgeArt={wornSubBadgeArt(wornBadges)} size="sheet" />
+          </div>
+        )}
 
         {/* Tapping a badge names it here rather than in a tooltip, which does
             nothing under a thumb. */}
