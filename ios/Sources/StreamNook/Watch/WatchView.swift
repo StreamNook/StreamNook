@@ -1,7 +1,7 @@
 import SNKit
 import SwiftUI
 
-/// The watch page: the video with its edge readout, and the chat socket's last frames under it.
+/// The watch page: the video with how far behind the relay's live edge it plays, and the chat socket's last frames under it.
 /// Landscape is immersive: the video alone, no system bars.
 struct WatchView: View {
     let model: AppModel
@@ -48,8 +48,8 @@ struct WatchView: View {
     }
 
     private var edgeText: String {
-        guard let edge = watch.edgeMS else { return watch.status }
-        return String(format: "Edge %.1f s", Double(edge) / 1000)
+        guard let behind = watch.behindMS else { return watch.status }
+        return String(format: "Behind %.1f s", Double(behind) / 1000)
     }
 
     private var details: some View {

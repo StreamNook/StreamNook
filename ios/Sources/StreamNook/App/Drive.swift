@@ -9,6 +9,11 @@ import Foundation
 /// - `back` closes the watch page
 /// - `wait:SECONDS`
 /// - `pause` pauses the player
+/// - `route:NAME` picks how the next stream reaches the relay (`plain`, `promote`, `ll`,
+///   `llhttp`; see `PlayRoute`)
+/// - `offset:SECONDS` sets the next player item's configured offset from live
+/// - `preserve` makes the next player item keep its offset from live after a stall
+/// - `catchup:MS` holds that distance behind the relay's edge with a gentle catch-up rate
 /// - `shot` marks the moment a screenshot is due (the host takes it) and holds still for five
 ///   seconds so it lands on a settled screen
 @MainActor
@@ -34,6 +39,10 @@ enum Drive {
             case "back": model.path = []
             case "wait": try? await Task.sleep(for: .seconds(Double(value) ?? 1))
             case "pause": model.watch.pause()
+            case "route": model.watch.route = PlayRoute(rawValue: value) ?? .plain
+            case "offset": model.watch.offsetFromLive = Double(value)
+            case "preserve": model.watch.preservesOffset = true
+            case "catchup": model.watch.catchUpTargetMS = Int(value)
             case "shot":
                 log.notice("drive shot")
                 try? await Task.sleep(for: .seconds(5))

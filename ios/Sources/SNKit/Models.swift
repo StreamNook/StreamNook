@@ -69,6 +69,18 @@ public struct StreamStart: Decodable, Sendable, Equatable {
     public var quality: String
 }
 
+/// How far the player sits behind the relay's live edge (`get_relay_live_distance`), the
+/// catch-up rate to run at, and the player's requests the relay saw since the last ask.
+public struct LiveDistance: Decodable, Sendable, Equatable {
+    public var behindMs: Int?
+    public var behindNewestMs: Int?
+    public var edgeSn: Int?
+    public var edgePart: Int?
+    public var edgeAgeMs: Int?
+    public var rate: Double
+    public var fetches: [String]
+}
+
 /// The part of the core's home snapshot the Browse list reads.
 public struct HomeRecommended: Decodable, Sendable {
     public var recommended: [TwitchStream]
