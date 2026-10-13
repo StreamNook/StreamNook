@@ -7,9 +7,8 @@
 //! `run()`. Everything the core emits arrives at [`HostSink::event`].
 //! `tauri` here is sn-tauri-headless (see the crate root).
 
-use log::{info, warn};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use log::{debug, info, warn};
+use std::sync::{Arc, OnceLock};
 
 /// Implemented in Swift: where the core's events and shell requests go.
 #[uniffi::export(foreign)]
@@ -70,12 +69,6 @@ struct Launch {
 
 static LAUNCH: OnceLock<Launch> = OnceLock::new();
 
-/// Cookies the shell read from its sign-in web view, by origin, as JSON.
-fn web_cookies() -> &'static Mutex<HashMap<String, String>> {
-    static COOKIES: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
-    COOKIES.get_or_init(Default::default)
-}
-
 /// Starts the core: installs the sink and directories, then runs the same
 /// `run()` the desktop and Android apps run, which returns once setup is done.
 #[uniffi::export]
@@ -127,11 +120,14 @@ pub async fn invoke(cmd: String, args_json: String) -> Result<String, CoreError>
     }
 }
 
-/// Hands over the cookies the shell's sign-in web view holds for `origin`.
+/// Hands over the cookies the shell's sign-in web view holds for `origin`: a
+/// JSON list of `{name, value, domain, path, expires, secure, httpOnly}`,
+/// the whole of that origin's cookies each time (see `platform::shell_cookies`).
 #[uniffi::export]
 pub fn set_web_cookies(origin: String, cookies_json: String) {
-    if let Ok(mut cookies) = web_cookies().lock() {
-        cookies.insert(origin, cookies_json);
+    match crate::platform::shell_cookies::replace(&origin, &cookies_json) {
+        Ok(held) => debug!("[iOS] {origin}: {held} web cookie(s) held"),
+        Err(e) => warn!("[iOS] {origin}: web cookies not taken: {e}"),
     }
 }
 
