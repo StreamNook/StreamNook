@@ -57,6 +57,7 @@ pub mod discord_service;
 // crate's Unix finder cannot locate Discord there.
 #[cfg(target_os = "macos")]
 pub mod discord_ipc_macos;
+pub mod drop_playback;
 pub mod drops_auth_service;
 pub mod drops_overview;
 pub mod drops_service;

@@ -7,8 +7,9 @@
 //! credits drop progress but not channel points, while the legacy spade
 //! track endpoint still credits channel points but not drops. Reporting on
 //! one path only silently stops the other kind of crediting. This is the
-//! piece that makes channel points accrue and drop progress advance for the
-//! on-screen stream. It never reports more than one channel, never reports
+//! piece that makes channel points accrue for the on-screen stream; drop
+//! progress also needs that stream's segments requested for the viewer,
+//! which `drop_playback` does alongside it. It never reports more than one channel, never reports
 //! an off-screen channel, and never claims anything.
 //!
 //! The target follows the active-channel chokepoints (stream start and stop,
@@ -80,6 +81,12 @@ impl WatchHeartbeatService {
         if self.loop_started.swap(true, Ordering::SeqCst) {
             return;
         }
+        // Drop minutes also need the stream's segments requested for this
+        // viewer; that traffic follows the same target and playing flag.
+        tauri::async_runtime::spawn(crate::services::drop_playback::run(
+            self.client.clone(),
+            self.clone(),
+        ));
         let service = self.clone();
         tauri::async_runtime::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(60));
@@ -126,6 +133,14 @@ impl WatchHeartbeatService {
     /// only happen while true.
     pub fn set_playing(&self, playing: bool) {
         self.playing.store(playing, Ordering::SeqCst);
+    }
+
+    /// The channel on screen while it plays, which segment traffic follows.
+    async fn playing_login(&self) -> Option<String> {
+        if !self.playing.load(Ordering::SeqCst) {
+            return None;
+        }
+        self.target.read().await.as_ref().map(|t| t.login.clone())
     }
 
     async fn tick(&self) {
@@ -417,5 +432,11 @@ impl WatchHeartbeatService {
         })
         .await?;
         Ok(response.status().as_u16() == 204)
+    }
+}
+
+impl crate::services::drop_playback::Follow for WatchHeartbeatService {
+    async fn following(&self) -> Option<String> {
+        self.playing_login().await
     }
 }
