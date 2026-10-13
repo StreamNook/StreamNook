@@ -3,6 +3,7 @@ import {
   DEFAULT_PROFILE_PICTURE_ANIMATION,
   DEFAULT_PROFILE_PICTURE_SOURCE,
   isAnimatedPicture,
+  isPictureRendition,
   isSevenTvCosmeticsId,
   profilePictureSource,
   sevenTvLookupId,
@@ -174,5 +175,15 @@ describe('pictureMovesNow', () => {
 
   it('never plays a still picture', () => {
     expect(pictureMovesNow('still', { hovered: true, onScreen: true, windowHidden: false })).toBe(false);
+  });
+});
+
+describe('isPictureRendition', () => {
+  it('knows the still and moving renditions of one picture, and nothing else', () => {
+    expect(isPictureRendition(animated, `${base}/2x_static.webp`)).toBe(true);
+    expect(isPictureRendition(animated, `${base}/2x.webp`)).toBe(true);
+    expect(isPictureRendition(animated, 'https://static-cdn.jtvnw.net/x.png')).toBe(false);
+    expect(isPictureRendition(null, `${base}/2x.webp`)).toBe(false);
+    expect(isPictureRendition(animated, null)).toBe(false);
   });
 });

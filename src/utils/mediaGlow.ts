@@ -1,6 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { isWindowHidden, onWindowVisibility } from './windowVisibility';
+// Is something full-screen sitting over the player? Shared with the moving
+// profile pictures, so both agree on what covers the window.
+import { coveredByOverlay } from './coverage';
 import { Logger } from './logger';
 import { IS_LINUX } from './platform';
 import {
@@ -239,17 +242,6 @@ const WATCHDOG_MS = 2000;
  *  timescales. Short enough that the light is gone before an overlay has
  *  finished animating in, long enough to be free. */
 const COVER_CHECK_MS = 150;
-
-/** Is something full-screen sitting over the player?
- *
- *  Same criterion as the CSS rule in globals.css, and for the same reason: a
- *  `fixed inset-0` element carrying a backdrop filter re-samples everything
- *  behind it whenever that content changes, so sampling a frame to drive light
- *  underneath one is worse than useless. Kept structural rather than a list of
- *  overlay flags because those overlays live in a dozen components. */
-function coveredByOverlay(): boolean {
-  return !!document.querySelector('.fixed.inset-0[class*="backdrop-blur"]');
-}
 
 /** Publish it for the stylesheet.
  *

@@ -10,6 +10,7 @@ import {
 import { useAppStore } from '../stores/AppStore';
 import {
   isAnimatedPicture,
+  isPictureRendition,
   pickSevenTvPictureUrl,
   pictureMovesNow,
   picturePlan,
@@ -19,6 +20,7 @@ import {
 } from '../services/sevenTvPictures';
 import { useProfilePicture } from '../hooks/useProfilePicture';
 import { isWindowHidden, onWindowVisibility } from '../utils/windowVisibility';
+import { watchPictureVisibility } from '../utils/pictureVisibility';
 
 export type { SevenTvMotion } from '../services/sevenTvPictures';
 
@@ -53,29 +55,27 @@ export interface SevenTvAvatarProps extends Omit<ImgHTMLAttributes<HTMLImageElem
 const subscribeNothing = () => () => {};
 const neverHidden = () => false;
 
-// One IntersectionObserver for every moving picture in the window, so a list
-// of a hundred costs one observer, not a hundred. A small margin starts the
-// animation just before a picture scrolls in.
-const onScreenListeners = new Map<Element, (onScreen: boolean) => void>();
-let onScreenObserver: IntersectionObserver | null = null;
+// Renditions this window has drawn or is about to, held so a paused picture
+// resumes without a blank frame: the swap waits for `decode()`, which is
+// instant for one already held. Bounded; dropping one only costs a re-decode.
+const HELD_MAX = 64;
+const held = new Map<string, HTMLImageElement>();
 
-function watchOnScreen(el: Element, notify: (onScreen: boolean) => void): () => void {
-  if (typeof IntersectionObserver === 'undefined') {
-    notify(true);
-    return () => {};
+function decodeRendition(url: string): Promise<void> {
+  let img = held.get(url);
+  if (img) {
+    held.delete(url);
+  } else {
+    img = new Image();
+    img.decoding = 'async';
+    img.src = url;
   }
-  onScreenObserver ??= new IntersectionObserver(
-    (entries) => {
-      for (const entry of entries) onScreenListeners.get(entry.target)?.(entry.isIntersecting);
-    },
-    { rootMargin: '64px' },
-  );
-  onScreenListeners.set(el, notify);
-  onScreenObserver.observe(el);
-  return () => {
-    onScreenObserver?.unobserve(el);
-    onScreenListeners.delete(el);
-  };
+  held.set(url, img);
+  if (held.size > HELD_MAX) {
+    const oldest = held.keys().next().value;
+    if (oldest !== undefined) held.delete(oldest);
+  }
+  return img.decode();
 }
 
 /**
@@ -106,9 +106,11 @@ export const SevenTvAvatar = forwardRef<HTMLImageElement, SevenTvAvatarProps>(fu
   const animated = isAnimatedPicture(picture);
   const plan = picturePlan(animation ?? chosen, motion);
   // A focal surface (`animate`) is in view when it mounts; a list upgraded to
-  // moving by Always draws its still until the observer says it is in view,
-  // so pictures scrolled out of sight never fetch their animation.
-  const [onScreen, setOnScreen] = useState(motion === 'animate');
+  // moving by Always draws its still until the watcher says it is in view,
+  // so pictures scrolled out of sight never fetch their animation. In view
+  // means seen: on screen, drawn, and not under an overlay or the full-screen
+  // player (utils/pictureVisibility).
+  const [inView, setInView] = useState(motion === 'animate');
   const [ownHover, setOwnHover] = useState(false);
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
@@ -128,23 +130,45 @@ export const SevenTvAvatar = forwardRef<HTMLImageElement, SevenTvAvatarProps>(fu
     tracksVisibility ? onWindowVisibility : subscribeNothing,
     tracksVisibility ? isWindowHidden : neverHidden,
   );
-  const tracksOnScreen = animated && plan === 'moving';
+  const tracksInView = animated && plan === 'moving';
   const tracksHover = animated && plan === 'hover' && hovered === undefined;
   const tracksScope = tracksHover && !!hoverScope;
 
-  const moving = pictureMovesNow(plan, { hovered: hovered ?? ownHover, onScreen, windowHidden });
+  const moving = pictureMovesNow(plan, { hovered: hovered ?? ownHover, onScreen: inView, windowHidden });
   const sevenTvUrl = pickSevenTvPictureUrl(picture, {
     px,
     animate: moving,
     dpr: typeof window !== 'undefined' ? window.devicePixelRatio : 1,
   });
   const useSevenTv = !!sevenTvUrl && sevenTvUrl !== failedUrl;
+  const wanted = (useSevenTv ? sevenTvUrl : src) || null;
+
+  // Pausing and resuming swap between two renditions of one picture. That
+  // swap waits until the next one is decoded, so the picture never blanks or
+  // flickers; anything else (the platform picture, a different person) is
+  // drawn at once.
+  const [shown, setShown] = useState(wanted);
+  const swapWaits = shown !== wanted && isPictureRendition(picture, shown) && isPictureRendition(picture, wanted);
+  if (shown !== wanted && !swapWaits) setShown(wanted);
+  useEffect(() => {
+    if (!swapWaits || !wanted) return;
+    let live = true;
+    const show = () => {
+      if (live) setShown(wanted);
+    };
+    // A failed decode still swaps, so the image's own error path decides.
+    decodeRendition(wanted).then(show, show);
+    return () => {
+      live = false;
+    };
+  }, [swapWaits, wanted]);
+  const showsSevenTv = isPictureRendition(picture, shown);
 
   useEffect(() => {
     const el = imgRef.current;
-    if (!tracksOnScreen || !el) return;
-    return watchOnScreen(el, setOnScreen);
-  }, [tracksOnScreen]);
+    if (!tracksInView || !el) return;
+    return watchPictureVisibility(el, setInView);
+  }, [tracksInView]);
 
   useEffect(() => {
     if (!tracksScope || !hoverScope) return;
@@ -168,11 +192,11 @@ export const SevenTvAvatar = forwardRef<HTMLImageElement, SevenTvAvatarProps>(fu
       ref={setRefs}
       decoding="async"
       {...img}
-      src={(useSevenTv ? sevenTvUrl : src) || undefined}
-      data-seventv-picture={useSevenTv ? '' : undefined}
+      src={shown || undefined}
+      data-seventv-picture={showsSevenTv ? '' : undefined}
       onError={(e) => {
-        if (useSevenTv) {
-          setFailedUrl(sevenTvUrl);
+        if (showsSevenTv) {
+          setFailedUrl(shown);
           return;
         }
         onError?.(e);
