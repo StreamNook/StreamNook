@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { motion } from 'framer-motion';
+import { MessageSquareText, Search, X } from 'lucide-react';
 import { useAppStore } from '../stores/AppStore';
-import { ChannelReward, ChannelRewardsSnapshot, RedemptionResult, UnlockedEmote } from '../types';
+import { ChannelReward, ChannelRewardsSnapshot, RedemptionResult, RewardBlock, UnlockedEmote } from '../types';
 
 import { Logger } from '../utils/logger';
 import { formatCostShort, newTransactionId, rewardKind, rewardStatusText, rewardTakesText } from '../utils/rewardStatus';
@@ -17,20 +19,69 @@ const MAX_TIMER_MS = 2_147_483_647;
 const OVERLAY_MIN_HEIGHT = 340;
 /** Shared with Twitch's own limit for a reward's typed text. */
 const INPUT_MAX = 500;
+/** The popover offers a search once the list is longer than this. */
+const SEARCH_FROM = 8;
 
-const panelGlass: React.CSSProperties = {
-  backgroundColor: 'color-mix(in srgb, var(--color-background) 95%, var(--glass-under, transparent))',
-  backdropFilter: 'blur(24px)',
-  WebkitBackdropFilter: 'blur(24px)',
+/** The dot's colour says what kind of wait it is: red for points, amber for
+ *  time, the accent for a sub perk, grey for the streamer's own switches. */
+const statusDot = (reason: RewardBlock | null): string => {
+  switch (reason) {
+    case 'not_enough_points':
+      return 'bg-red-400';
+    case 'on_cooldown':
+    case 'only_while_live':
+    case 'chat_reconnecting':
+      return 'bg-yellow-400';
+    case 'subscribers_only':
+      return 'bg-accent-neon';
+    default:
+      return 'bg-textMuted';
+  }
 };
 
 /** A status as a dot and words, never a chip. */
-const StatusLine: React.FC<{ text: string; className?: string; title?: string }> = ({ text, className = '', title }) => (
+const StatusLine: React.FC<{ text: string; reason: RewardBlock | null; className?: string; title?: string }> = ({
+  text,
+  reason,
+  className = '',
+  title,
+}) => (
   <span className={`flex items-start gap-1.5 min-w-0 text-xs leading-snug text-textSecondary ${className}`} role="status" title={title}>
-    <span className="w-1.5 h-1.5 mt-[5px] rounded-full bg-yellow-400 flex-shrink-0" aria-hidden="true" />
+    <span className={`w-1.5 h-1.5 mt-[5px] rounded-full flex-shrink-0 ${statusDot(reason)}`} aria-hidden="true" />
     <span className="line-clamp-2 break-words">{text}</span>
   </span>
 );
+
+/** A reward's picture standing free on a soft glow of its own colour, no tile
+ *  around it. No picture, or one that fails to load, shows the points glyph. */
+const RewardArt: React.FC<{ reward: ChannelReward; size: number; dim?: boolean }> = ({ reward, size, dim = false }) => {
+  const [brokenUrl, setBrokenUrl] = useState<string | null>(null);
+  const url = reward.image_url && reward.image_url !== brokenUrl ? reward.image_url : null;
+  const color = reward.background_color || '#9147FF';
+  return (
+    <span
+      className="relative flex flex-shrink-0 items-center justify-center"
+      style={{ width: size + 10, height: size + 10 }}
+      aria-hidden="true"
+    >
+      <span
+        className={`absolute inset-0 rounded-full ${dim ? 'opacity-30' : 'opacity-90'}`}
+        style={{ background: `radial-gradient(closest-side, color-mix(in srgb, ${color} 60%, transparent), transparent)` }}
+      />
+      {url ? (
+        <img
+          src={url}
+          alt=""
+          className={`relative rounded-[5px] object-contain drop-shadow-[0_1px_2px_rgba(0,0,0,0.45)] ${dim ? 'opacity-45 grayscale' : ''}`}
+          style={{ width: size, height: size }}
+          onError={() => setBrokenUrl(url)}
+        />
+      ) : (
+        <ChannelPointsIcon size={Math.round(size * 0.8)} className={`relative text-white ${dim ? 'opacity-45' : ''}`} />
+      )}
+    </span>
+  );
+};
 
 interface ChannelPointsMenuProps {
   channelLogin: string;  // Username for fetching rewards
@@ -46,6 +97,9 @@ interface ChannelPointsMenuProps {
   /** `popover` (desktop): a panel over the composer. `sheet` (phone): the
    *  content of a bottom sheet, rewards as a grid of tiles. Same logic. */
   variant?: 'popover' | 'sheet';
+  /** The button that toggles the popover: a press on it is its own toggle, not
+   *  an outside click. */
+  ignoreRef?: React.RefObject<HTMLElement | null>;
 }
 
 const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
@@ -58,6 +112,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
   onBalanceUpdate,
   onEmotesChange,
   variant = 'popover',
+  ignoreRef,
 }) => {
   const isSheet = variant === 'sheet';
   const [rewards, setRewards] = useState<ChannelReward[]>([]);
@@ -74,6 +129,21 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
   // the escape hatch for when it still looks stale.
   const [isRefreshingBalance, setIsRefreshingBalance] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  // Narrows a long list in the popover; the phone sheet scrolls instead.
+  const [query, setQuery] = useState('');
+  // The list's height when a search began, held while it runs: the popover
+  // grows up from the composer, so a shrinking list would pull the search
+  // field out from under the caret.
+  const [searchHeight, setSearchHeight] = useState<number | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const changeQuery = (next: string) => {
+    if (next === '') setSearchHeight(null);
+    else if (query === '') setSearchHeight(listRef.current?.offsetHeight ?? null);
+    setQuery(next);
+  };
+  // Motion Off opens and closes the popover in place. Reduced is MotionScope's
+  // job: it keeps the fade and drops the movement.
+  const motionOff = useAppStore((s) => s.settings.motion_mode) === 'off';
 
   const handleRefreshBalance = async () => {
     if (isRefreshingBalance) return;
@@ -276,8 +346,24 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     transactionRef.current = null;
   }, []);
 
-  // Escape backs out of the open view first, then closes the menu.
+  // A press outside the popover closes it, as the commands menu beside it
+  // does. A sheet closes on its own backdrop.
+  useEffect(() => {
+    if (isSheet) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (menuRef.current?.contains(t)) return;
+      if (ignoreRef?.current?.contains(t)) return;
+      onClose();
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [isSheet, onClose, ignoreRef]);
+
+  // Escape backs out of the open view first, then clears a search, then
+  // closes the menu.
   const detailOpen = detailReward !== null;
+  const searching = query !== '';
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
@@ -285,12 +371,17 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
         closeDetail();
         return;
       }
+      if (searching) {
+        setQuery('');
+        setSearchHeight(null);
+        return;
+      }
       onClose();
     };
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, closeDetail, detailOpen]);
+  }, [onClose, closeDetail, detailOpen, searching]);
 
   // A click on any row opens its detail, available or not, so the full name,
   // the description and the reason it is blocked are always one click away.
@@ -570,208 +661,319 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     <ChannelPointsIcon size={size} className={className} />
   ));
 
+  const pointsName = customPointsName || 'Channel Points';
+  const balance = currentBalance ?? snapshotBalance;
+  const showSearch = !isSheet && rewards.length > SEARCH_FROM;
+  const q = showSearch ? query.trim().toLowerCase() : '';
+  const shownRewards = q
+    ? rewards.filter((r) => `${r.title}\n${r.prompt ?? ''}\n${r.description ?? ''}`.toLowerCase().includes(q))
+    : rewards;
+
+  // The popover rises from the points button at the composer's left edge.
+  const popoverMotion = isSheet
+    ? {}
+    : {
+        initial: { opacity: 0, y: 6, scale: 0.98 },
+        animate: { opacity: 1, y: 0, scale: 1 },
+        exit: { opacity: 0, y: 6, scale: 0.98 },
+        transition: motionOff ? { duration: 0 } : { duration: 0.16, ease: 'easeOut' as const },
+      };
+
+  const balanceButton = (
+    <Tooltip content="Click to refresh" side="top">
+      <button
+        type="button"
+        onClick={handleRefreshBalance}
+        disabled={isRefreshingBalance}
+        aria-label={`Refresh ${customPointsName || 'channel points'} balance`}
+        className="flex items-center gap-1.5 rounded-md px-1.5 py-0.5 -mr-1.5 transition-colors hover:bg-surface-hover disabled:opacity-60 flex-shrink-0"
+      >
+        {customPointsIconUrl ? (
+          <img
+            src={customPointsIconUrl}
+            alt=""
+            className={`w-4 h-4 ${isRefreshingBalance ? 'animate-spin' : ''}`}
+          />
+        ) : (
+          <ChannelPointsIcon
+            size={16}
+            className={`text-accent-neon ${isRefreshingBalance ? 'animate-spin' : ''}`}
+          />
+        )}
+        <span className="text-base font-bold text-accent-neon">
+          {balance?.toLocaleString() ?? '--'}
+        </span>
+      </button>
+    </Tooltip>
+  );
+
+  const errorOrEmpty = error ? (
+    <div className="px-4 py-6 text-center">
+      <p className="text-textSecondary text-sm">{error}</p>
+      <button
+        onClick={retryRewards}
+        className="mt-2 text-xs text-accent hover:underline"
+      >
+        Try again
+      </button>
+    </div>
+  ) : (
+    <div className="px-4 py-6 text-center">
+      <p className="text-textSecondary text-sm">No rewards available</p>
+      <p className="text-textMuted text-xs mt-1">
+        This channel hasn't set up any rewards yet
+      </p>
+    </div>
+  );
+
   return (
-    <div
+    <motion.div
       ref={menuRef}
+      {...popoverMotion}
       className={
         isSheet
           ? 'relative flex flex-col'
-          : 'glass-panel absolute bottom-full left-0 right-0 mb-2 flex flex-col max-h-[400px] overflow-hidden z-50'
+          // glass-flyout: this can open over live video, and its base stays
+          // readable at every Glassiness.
+          : 'glass-flyout absolute bottom-full left-0 right-0 mb-2 flex flex-col max-h-[400px] overflow-hidden z-50 origin-bottom-left !p-0'
       }
-      style={isSheet ? { minHeight: overlayOpen ? OVERLAY_MIN_HEIGHT : undefined } : { ...panelGlass, minHeight: overlayOpen ? OVERLAY_MIN_HEIGHT : undefined }}
+      style={{ minHeight: overlayOpen ? OVERLAY_MIN_HEIGHT : undefined }}
     >
-      {/* Header with balance */}
-      <div className={isSheet ? `px-1 pb-3 ${overlayOpen ? 'invisible' : ''}` : 'px-4 py-3 border-b border-borderSubtle bg-black/20'}>
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-sm font-medium text-textSecondary truncate">
-            {customPointsName || 'Channel Points'}
-          </span>
-          <Tooltip content="Click to refresh" side="top">
-            <button
-              type="button"
-              onClick={handleRefreshBalance}
-              disabled={isRefreshingBalance}
-              aria-label={`Refresh ${customPointsName || 'channel points'} balance`}
-              className="flex items-center gap-1.5 rounded-md px-1.5 py-0.5 -mr-1.5 transition-colors hover:bg-surface-hover disabled:opacity-60 flex-shrink-0"
-            >
-              {customPointsIconUrl ? (
-                <img
-                  src={customPointsIconUrl}
-                  alt=""
-                  className={`w-4 h-4 ${isRefreshingBalance ? 'animate-spin' : ''}`}
-                />
-              ) : (
-                <ChannelPointsIcon
-                  size={16}
-                  className={`text-accent-neon ${isRefreshingBalance ? 'animate-spin' : ''}`}
-                />
-              )}
-              <span className="text-base font-bold text-accent-neon">
-                {currentBalance?.toLocaleString() ?? '--'}
+      {isSheet ? (
+        <>
+          {/* Header with balance */}
+          <div className={`px-1 pb-3 ${overlayOpen ? 'invisible' : ''}`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-medium text-textSecondary truncate">
+                {pointsName}
               </span>
-            </button>
-          </Tooltip>
-        </div>
-      </div>
+              {balanceButton}
+            </div>
+          </div>
 
-      {/* Content. In a sheet the sheet scrolls. */}
-      <div className={isSheet ? (overlayOpen ? 'invisible' : '') : 'overflow-y-auto max-h-[300px] custom-scrollbar'}>
-        {isLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <div className="animate-spin w-6 h-6 border-2 border-accent border-t-transparent rounded-full" />
-          </div>
-        ) : error ? (
-          <div className="px-4 py-6 text-center">
-            <p className="text-textSecondary text-sm">{error}</p>
-            <button
-              onClick={retryRewards}
-              className="mt-2 text-xs text-accent hover:underline"
-            >
-              Try again
-            </button>
-          </div>
-        ) : rewards.length === 0 ? (
-          <div className="px-4 py-6 text-center">
-            <p className="text-textSecondary text-sm">No rewards available</p>
-            <p className="text-textMuted text-xs mt-1">
-              This channel hasn't set up any rewards yet
-            </p>
-          </div>
-        ) : isSheet ? (
-          // Tiles, Twitch's own layout on a phone: the art, the cost under it,
-          // the name on two lines, and why it is blocked when it is.
-          <div className="grid grid-cols-3 gap-2">
-            {rewards.map((reward) => {
-              const available = reward.availability.redeemable;
-              const status = rewardStatusText(reward.availability, nowMs, 'label');
-              const canAfford = reward.availability.affordable;
-              return (
-                <button
-                  key={reward.id}
-                  type="button"
-                  onClick={() => openDetail(reward)}
-                  aria-label={status ? `${reward.title}, ${status}` : reward.title}
-                  className={`flex min-w-0 flex-col gap-1.5 rounded-xl p-1.5 text-left transition-colors active:bg-surface-hover ${
-                    redeemingId === reward.id ? 'animate-pulse bg-accent/10' : ''
-                  }`}
-                >
-                  <div
-                    className={`relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg ${available ? '' : 'opacity-50 grayscale'}`}
-                    style={{ backgroundColor: reward.background_color || '#9147FF' }}
-                  >
-                    {reward.image_url ? (
-                      <img
-                        src={reward.image_url}
-                        alt=""
-                        className="h-3/5 w-3/5 object-contain"
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none';
-                        }}
-                      />
-                    ) : (
-                      <ChannelPointsIcon size={26} className="text-white/85" />
-                    )}
-                  </div>
-                  <span
-                    className={`flex items-center gap-1 text-[12px] font-semibold tabular-nums ${
-                      canAfford ? (available ? 'text-accent' : 'text-textSecondary') : 'text-red-400'
-                    }`}
-                  >
-                    {pointsGlyph(12)}
-                    {formatCostShort(reward.cost)}
-                  </span>
-                  <span
-                    className={`line-clamp-2 break-words text-[12px] leading-snug ${available ? 'text-textPrimary' : 'text-textSecondary'}`}
-                  >
-                    {reward.title}
-                  </span>
-                  {status && <StatusLine text={status} />}
-                </button>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="p-2 space-y-0.5">
-            {rewards.map((reward) => {
-              const available = reward.availability.redeemable;
-              const status = rewardStatusText(reward.availability, nowMs, 'label');
-              const about = reward.prompt?.trim() || reward.description?.trim() || null;
-              const isRedeeming = redeemingId === reward.id;
-              const canAfford = reward.availability.affordable;
-
-              return (
-                <button
-                  key={reward.id}
-                  type="button"
-                  onClick={() => openDetail(reward)}
-                  aria-label={status ? `${reward.title}, ${status}` : reward.title}
-                  className={`
-                    w-full flex items-center gap-2 px-2 py-2 rounded-lg transition-colors text-left
-                    hover:bg-surface-hover cursor-pointer
-                    ${isRedeeming ? 'animate-pulse bg-accent/10' : ''}
-                  `}
-                >
-                  {/* Reward image/color */}
-                  <div
-                    className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden ${available ? '' : 'opacity-50 grayscale'}`}
-                    style={{ backgroundColor: reward.background_color || '#9147FF' }}
-                  >
-                    {reward.image_url ? (
-                      <img
-                        src={reward.image_url}
-                        alt=""
-                        className="w-full h-full object-cover"
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none';
-                        }}
-                      />
-                    ) : (
-                      <ChannelPointsIcon size={18} className="text-white/80" />
-                    )}
-                  </div>
-
-                  {/* Full name on up to two lines, then why it is blocked or what it is */}
-                  <div className="flex-1 min-w-0">
-                    <span
-                      className={`text-[13px] font-medium leading-snug line-clamp-2 break-words ${available ? 'text-textPrimary' : 'text-textSecondary'}`}
-                      title={reward.title}
+          {/* Content. The sheet scrolls. */}
+          <div className={overlayOpen ? 'invisible' : ''}>
+            {isLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="animate-spin w-6 h-6 border-2 border-accent border-t-transparent rounded-full" />
+              </div>
+            ) : error || rewards.length === 0 ? (
+              errorOrEmpty
+            ) : (
+              // Tiles, Twitch's own layout on a phone: the art, the cost under it,
+              // the name on two lines, and why it is blocked when it is.
+              <div className="grid grid-cols-3 gap-2">
+                {rewards.map((reward) => {
+                  const available = reward.availability.redeemable;
+                  const status = rewardStatusText(reward.availability, nowMs, 'label');
+                  const canAfford = reward.availability.affordable;
+                  return (
+                    <button
+                      key={reward.id}
+                      type="button"
+                      onClick={() => openDetail(reward)}
+                      aria-label={status ? `${reward.title}, ${status}` : reward.title}
+                      className={`flex min-w-0 flex-col gap-1.5 rounded-xl p-1.5 text-left transition-colors active:bg-surface-hover ${
+                        redeemingId === reward.id ? 'animate-pulse bg-accent/10' : ''
+                      }`}
                     >
-                      {reward.title}
-                    </span>
-                    {status ? (
-                      <StatusLine text={status} className="mt-0.5" title={reward.availability.detail ?? undefined} />
-                    ) : about ? (
-                      <p className="text-xs text-textMuted truncate mt-0.5">{about}</p>
-                    ) : null}
-                  </div>
-
-                  {/* Cost - always visible */}
-                  <div className={`
-                    flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold flex-shrink-0 tabular-nums
-                    ${canAfford
-                      ? (available ? 'bg-accent/20 text-accent' : 'bg-white/5 text-textSecondary')
-                      : 'bg-red-500/15 text-red-400'}
-                  `}>
-                    {pointsGlyph(12)}
-                    {formatCostShort(reward.cost)}
-                  </div>
-                </button>
-              );
-            })}
+                      <div
+                        className={`relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg ${available ? '' : 'opacity-50 grayscale'}`}
+                        style={{ backgroundColor: reward.background_color || '#9147FF' }}
+                      >
+                        {reward.image_url ? (
+                          <img
+                            src={reward.image_url}
+                            alt=""
+                            className="h-3/5 w-3/5 object-contain"
+                            onError={(e) => {
+                              e.currentTarget.style.display = 'none';
+                            }}
+                          />
+                        ) : (
+                          <ChannelPointsIcon size={26} className="text-white/85" />
+                        )}
+                      </div>
+                      <span
+                        className={`flex items-center gap-1 text-[12px] font-semibold tabular-nums ${
+                          canAfford ? (available ? 'text-accent' : 'text-textSecondary') : 'text-red-400'
+                        }`}
+                      >
+                        {pointsGlyph(12)}
+                        {formatCostShort(reward.cost)}
+                      </span>
+                      <span
+                        className={`line-clamp-2 break-words text-[12px] leading-snug ${available ? 'text-textPrimary' : 'text-textSecondary'}`}
+                      >
+                        {reward.title}
+                      </span>
+                      {status && <StatusLine text={status} reason={reward.availability.reason} />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      ) : (
+        <>
+          {/* The balance leads; a search joins it once the list is long. */}
+          <div className={`flex items-center gap-2 border-b border-white/[0.06] py-2 pl-2 pr-2.5 ${overlayOpen ? 'invisible' : ''}`}>
+            <Tooltip content="Click to refresh" side="top">
+              <button
+                type="button"
+                onClick={handleRefreshBalance}
+                disabled={isRefreshingBalance}
+                aria-label={`${pointsName}: ${balance?.toLocaleString() ?? 'unknown'}. Refresh`}
+                className="flex min-w-0 items-center gap-2 rounded-lg px-1.5 py-1 transition-colors hover:bg-white/[0.05] disabled:opacity-70"
+              >
+                {customPointsIconUrl ? (
+                  <img
+                    src={customPointsIconUrl}
+                    alt=""
+                    className={`h-[18px] w-[18px] flex-shrink-0 ${isRefreshingBalance ? 'animate-spin' : ''}`}
+                  />
+                ) : (
+                  <ChannelPointsIcon
+                    size={18}
+                    className={`flex-shrink-0 text-accent-neon ${isRefreshingBalance ? 'animate-spin' : ''}`}
+                  />
+                )}
+                <span className="text-[16px] font-bold leading-none tabular-nums text-textPrimary">
+                  {balance?.toLocaleString() ?? '--'}
+                </span>
+                <span className="truncate text-[12px] leading-none text-textMuted">{pointsName}</span>
+              </button>
+            </Tooltip>
+            {showSearch && (
+              <label className="glass-input ml-auto flex h-7 w-[38%] min-w-[96px] max-w-[140px] flex-shrink-0 items-center gap-1.5 px-2 focus-within:border-white/20">
+                <Search size={12} className="flex-shrink-0 text-textMuted" aria-hidden="true" />
+                <input
+                  value={query}
+                  onChange={(e) => changeQuery(e.target.value)}
+                  placeholder="Find a reward"
+                  spellCheck={false}
+                  aria-label="Find a reward"
+                  className="min-w-0 flex-1 bg-transparent text-[12px] text-textPrimary outline-none placeholder:text-textMuted"
+                />
+                {query && (
+                  <button
+                    type="button"
+                    onClick={() => changeQuery('')}
+                    aria-label="Clear the search"
+                    className="flex-shrink-0 text-textMuted transition-colors hover:text-textPrimary"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </label>
+            )}
+          </div>
+
+          <div
+            ref={listRef}
+            className={`custom-scrollbar max-h-[320px] overflow-y-auto py-1.5 ${overlayOpen ? 'invisible' : ''}`}
+            style={{ minHeight: q ? (searchHeight ?? undefined) : undefined }}
+          >
+            {isLoading ? (
+              // The shape of the list, so it settles in place when it lands.
+              <div className="animate-pulse" aria-busy="true" aria-label="Loading rewards">
+                {[0.62, 0.48, 0.7, 0.4, 0.56, 0.44].map((w) => (
+                  <div key={w} className="mx-1.5 flex items-center gap-2.5 px-2 py-2">
+                    <span className="h-[38px] w-[38px] flex-shrink-0 rounded-full bg-white/[0.05]" />
+                    <span className="flex min-w-0 flex-1 flex-col gap-1.5">
+                      <span className="block h-2.5 rounded-full bg-white/[0.07]" style={{ width: `${w * 100}%` }} />
+                      <span className="block h-2 w-1/3 rounded-full bg-white/[0.04]" />
+                    </span>
+                    <span className="h-2.5 w-9 flex-shrink-0 rounded-full bg-white/[0.06]" />
+                  </div>
+                ))}
+              </div>
+            ) : error || rewards.length === 0 ? (
+              errorOrEmpty
+            ) : shownRewards.length === 0 ? (
+              <p className="px-4 py-6 text-center text-[12px] text-textMuted">No rewards match “{query.trim()}”</p>
+            ) : (
+              shownRewards.map((reward) => {
+                const available = reward.availability.redeemable;
+                const status = rewardStatusText(reward.availability, nowMs, 'label');
+                const about = reward.prompt?.trim() || reward.description?.trim() || null;
+                const takesText = rewardTakesText(rewardKind(reward));
+                const canAfford = reward.availability.affordable;
+                // How close the balance is to a reward it cannot cover yet,
+                // only while points are what stands in the way.
+                const progress = !canAfford && reward.availability.reason === 'not_enough_points'
+                  && balance !== null && reward.cost > 0
+                  ? Math.max(0.04, Math.min(1, balance / reward.cost))
+                  : null;
+
+                return (
+                  <div key={reward.id} className="px-1.5">
+                    <button
+                      type="button"
+                      onClick={() => openDetail(reward)}
+                      aria-label={status ? `${reward.title}, ${status}` : reward.title}
+                      className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/[0.05] focus-visible:bg-white/[0.06] focus-visible:outline-none ${
+                        redeemingId === reward.id ? 'animate-pulse bg-white/[0.05]' : ''
+                      }`}
+                    >
+                      <RewardArt reward={reward} size={28} dim={!available} />
+
+                      {/* Full name on up to two lines, then why it is blocked or what it asks */}
+                      <span className="min-w-0 flex-1">
+                        <span
+                          className={`text-[13px] font-semibold leading-snug line-clamp-2 break-words ${available ? 'text-textPrimary' : 'text-textSecondary'}`}
+                          title={reward.title}
+                        >
+                          {reward.title}
+                        </span>
+                        {status ? (
+                          <StatusLine
+                            text={status}
+                            reason={reward.availability.reason}
+                            className="mt-0.5 !text-[11.5px]"
+                            title={reward.availability.detail ?? undefined}
+                          />
+                        ) : about || takesText ? (
+                          <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[11.5px] leading-snug text-textMuted">
+                            {takesText && <MessageSquareText size={11} className="flex-shrink-0" aria-label="Asks for a message" />}
+                            <span className="truncate">{about ?? 'Asks for a message'}</span>
+                          </span>
+                        ) : null}
+                      </span>
+
+                      {/* Cost, always visible; under it, how far off a reward out of reach is */}
+                      <span className="flex flex-shrink-0 flex-col items-end gap-1">
+                        <span
+                          className={`flex items-center gap-1 text-[12.5px] font-semibold tabular-nums ${available ? 'text-textPrimary' : 'text-textMuted'}`}
+                        >
+                          {pointsGlyph(12, available ? 'text-accent-neon' : '')}
+                          {formatCostShort(reward.cost)}
+                        </span>
+                        {progress !== null && (
+                          <span className="block h-0.5 w-9 overflow-hidden rounded-full bg-white/[0.08]" aria-hidden="true">
+                            <span className="block h-full rounded-full bg-red-400/70" style={{ width: `${progress * 100}%` }} />
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </>
+      )}
 
       {/* Reward detail: the full name, what it does, why it is blocked, and
           the text box for rewards that ask for one */}
       {detail && (
         <div
-          className={`${isSheet ? '' : 'glass-panel '}animate-scale-in absolute inset-0 flex flex-col overflow-hidden z-50`}
-          style={isSheet ? undefined : panelGlass}
+          className="animate-scale-in absolute inset-0 flex flex-col overflow-hidden z-50"
           role="dialog"
           aria-label={detail.title}
         >
-          <div className={`flex items-center justify-between gap-2 px-2 py-2 border-b border-borderSubtle ${isSheet ? '' : 'bg-black/20'}`}>
+          <div className={`flex items-center justify-between gap-2 px-2 py-2 border-b ${isSheet ? 'border-borderSubtle' : 'border-white/[0.06]'}`}>
             <button
               type="button"
               onClick={closeDetail}
@@ -783,24 +985,35 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
               </svg>
               Rewards
             </button>
-            <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-sm font-bold tabular-nums ${detail.availability.affordable ? 'bg-accent/20 text-accent' : 'bg-red-500/15 text-red-400'}`}>
-              {pointsGlyph(14)}
-              {detail.cost.toLocaleString()}
-            </div>
+            {isSheet ? (
+              <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-sm font-bold tabular-nums ${detail.availability.affordable ? 'bg-accent/20 text-accent' : 'bg-red-500/15 text-red-400'}`}>
+                {pointsGlyph(14)}
+                {detail.cost.toLocaleString()}
+              </div>
+            ) : (
+              <div className={`flex items-center gap-1.5 pr-1.5 text-sm font-bold tabular-nums ${detail.availability.affordable ? 'text-textPrimary' : 'text-textMuted'}`}>
+                {pointsGlyph(14, detail.availability.affordable ? 'text-accent-neon' : '')}
+                {detail.cost.toLocaleString()}
+              </div>
+            )}
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-4 pt-3 pb-2 flex flex-col gap-2.5">
             <div className="flex items-center gap-3">
-              <div
-                className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden"
-                style={{ backgroundColor: detail.background_color || '#9147FF' }}
-              >
-                {detail.image_url ? (
-                  <img src={detail.image_url} alt="" className="w-full h-full object-cover" />
-                ) : (
-                  <ChannelPointsIcon size={20} className="text-white/80" />
-                )}
-              </div>
+              {isSheet ? (
+                <div
+                  className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden"
+                  style={{ backgroundColor: detail.background_color || '#9147FF' }}
+                >
+                  {detail.image_url ? (
+                    <img src={detail.image_url} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    <ChannelPointsIcon size={20} className="text-white/80" />
+                  )}
+                </div>
+              ) : (
+                <RewardArt reward={detail} size={34} dim={!detail.availability.redeemable} />
+              )}
               <h3 className={`text-sm font-semibold leading-snug break-words min-w-0 ${detailKind === 'highlight' ? 'text-yellow-400' : 'text-textPrimary'}`}>
                 {detail.title}
               </h3>
@@ -815,7 +1028,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
                 className="flex items-start gap-1.5 text-xs text-textPrimary leading-snug"
                 role="status"
               >
-                <span className="w-1.5 h-1.5 mt-[5px] rounded-full bg-yellow-400 flex-shrink-0" aria-hidden="true" />
+                <span className={`w-1.5 h-1.5 mt-[5px] rounded-full flex-shrink-0 ${statusDot(detail.availability.reason)}`} aria-hidden="true" />
                 <span className="break-words">{detailStatus}</span>
               </span>
             )}
@@ -840,7 +1053,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
             )}
           </div>
 
-          <div className="flex items-center justify-between gap-2 px-4 py-2.5 border-t border-borderSubtle">
+          <div className={`flex items-center justify-between gap-2 px-4 py-2.5 border-t ${isSheet ? 'border-borderSubtle' : 'border-white/[0.06]'}`}>
             {detailStatus ? (
               <span aria-hidden="true" />
             ) : detailTakesText ? (
@@ -868,8 +1081,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
       {/* Emote Reveal Popup */}
       {showEmoteReveal && revealedEmote && (
         <div 
-          className={`${isSheet ? '' : 'glass-panel '}animate-scale-in absolute inset-0 flex flex-col items-center justify-center overflow-hidden z-50`}
-          style={isSheet ? undefined : panelGlass}
+          className={`animate-scale-in absolute inset-0 flex flex-col items-center justify-center overflow-hidden z-50`}
           onClick={() => {
             setShowEmoteReveal(false);
             setRevealedEmote(null);
@@ -917,8 +1129,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
       {/* Modify Emote Picker Modal */}
       {showModifyEmoteModal && modifyEmoteReward && (
         <div 
-          className={`${isSheet ? '' : 'glass-panel '}animate-scale-in absolute inset-0 z-50 flex flex-col overflow-hidden`}
-          style={isSheet ? undefined : panelGlass}
+          className={`animate-scale-in absolute inset-0 z-50 flex flex-col overflow-hidden`}
         >
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b border-borderSubtle">
@@ -1145,8 +1356,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
       {/* Choose Emote Modal - Single step emote picker */}
       {showChooseEmoteModal && chooseEmoteReward && (
         <div 
-          className={`${isSheet ? '' : 'glass-panel '}animate-scale-in absolute inset-0 z-50 flex flex-col overflow-hidden`}
-          style={isSheet ? undefined : panelGlass}
+          className={`animate-scale-in absolute inset-0 z-50 flex flex-col overflow-hidden`}
         >
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b border-borderSubtle">
@@ -1274,7 +1484,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
           </div>
         </div>
       )}
-    </div>
+    </motion.div>
   );
 };
 

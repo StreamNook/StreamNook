@@ -1811,6 +1811,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const claimCelebrationTimer = useRef<number | null>(null);
   const autoClaimWatching = useAppStore((s) => s.settings.auto_claim_points_watching ?? true);
   const [showChannelPointsMenu, setShowChannelPointsMenu] = useState(false);
+  const pointsButtonRef = useRef<HTMLButtonElement>(null);
   const [isLoadingChannelPoints, setIsLoadingChannelPoints] = useState(false);
   const [customPointsName, setCustomPointsName] = useState<string | null>(null);
   const [customPointsIconUrl, setCustomPointsIconUrl] = useState<string | null>(null);
@@ -5715,18 +5716,21 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   onClose={() => setComposerKind(null)}
                 />
               )}
-              {showChannelPointsMenu && currentStream && (
-                <ChannelPointsMenu
-                  channelLogin={currentStream.user_login}
-                  channelId={currentStream.user_id}
-                  currentBalance={channelPoints}
-                  customPointsName={customPointsName}
-                  customPointsIconUrl={customPointsIconUrl}
-                  onClose={() => setShowChannelPointsMenu(false)}
-                  onBalanceUpdate={fetchChannelPoints}
-                  onEmotesChange={() => loadEmotes(currentStream.user_login, currentStream.user_id)}
-                />
-              )}
+              <AnimatePresence>
+                {showChannelPointsMenu && currentStream && (
+                  <ChannelPointsMenu
+                    channelLogin={currentStream.user_login}
+                    channelId={currentStream.user_id}
+                    currentBalance={channelPoints}
+                    customPointsName={customPointsName}
+                    customPointsIconUrl={customPointsIconUrl}
+                    onClose={() => setShowChannelPointsMenu(false)}
+                    ignoreRef={pointsButtonRef}
+                    onBalanceUpdate={fetchChannelPoints}
+                    onEmotesChange={() => loadEmotes(currentStream.user_login, currentStream.user_id)}
+                  />
+                )}
+              </AnimatePresence>
               {/* Resub Notification Banner - shows when user has a shareable resub */}
               {resubNotification && !resubDismissed && currentStream && (
                 <ResubNotificationBanner
@@ -5872,6 +5876,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                     </Tooltip>
                   ) : (
                     <button
+                      ref={pointsButtonRef}
                       onClick={() => setShowChannelPointsMenu(!showChannelPointsMenu)}
                       className={`sn-composer-tool group flex items-center justify-center h-9 gap-1.5 transition-all duration-200 ${pointsBalanceInline && channelPoints !== null ? 'px-1.5' : 'w-9'} ${showChannelPointsMenu ? 'text-accent-neon' : channelPoints !== null ? 'text-accent-neon' : 'text-textSecondary hover:text-accent-neon'}`}
                     >
