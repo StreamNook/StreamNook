@@ -3342,14 +3342,15 @@ export async function acquireChannel(
     reviewHold(key);
     if (channelId && !existing.channelId) {
       existing.channelId = channelId;
-      // MultiChat opens panes before the channel's broadcaster_id has resolved
-      // (the stream-info poll runs after first render). That means the initial
-      // acquireChannel call comes through with channelId=null, preloadChannel
-      // bails, and the badge metadata cache never gets populated for this
-      // channel. When the real channelId arrives a moment later and the caller
-      // re-acquires to refresh it, kick off the badge init we deferred so
-      // Twitch channel badges (subscriber/bits/etc.) start resolving.
-      if (provider === 'twitch') void initializeBadgesForChannel(channelId);
+      // The slice was opened without an id: MultiChat panes before their
+      // stream info resolves, the chat dock's held channel before its live
+      // row arrives, the blended feed's companion chats. That first open
+      // skipped the badge init AND the recent-history backfill, so when the
+      // main chat then opened the same channel with its id it landed here and
+      // a quiet channel sat on "Waiting for messages" with no history. Now
+      // that the id is known, run the whole preload; it skips rows the slice
+      // already holds, so a backfill that did run is never doubled.
+      if (provider === 'twitch') void preloadChannel(key, channelId);
     }
     bumpRevision();
     Logger.debug(`[ChatStore] +1 ref on ${key} (now ${existing.refCount})`);
