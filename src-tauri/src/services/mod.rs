@@ -139,6 +139,7 @@ pub mod twitch_auth_service;
 pub mod twitch_resolver;
 pub mod twitch_limits;
 pub mod token_vault;
+pub mod twitch_chat_history;
 pub mod twitch_service;
 pub mod twitch_signin;
 pub mod universal_cache_service;

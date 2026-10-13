@@ -6584,6 +6584,29 @@ mod native_emote_priority_tests {
             .collect()
     }
 
+    #[tokio::test]
+    async fn twitch_history_rows_get_twitch_and_seventv_emotes() {
+        let chan = "twitch_history_7tv";
+        channel_with_seventv_xqcl(chan);
+        let answer = serde_json::json!({ "data": { "channel": { "id": "71092938", "recentChatMessages": [{
+            "id": "h1", "deletedAt": null, "sentAt": "2026-10-13T17:45:08Z",
+            "content": { "text": "xqcL RainTime gg", "fragments": [
+                { "text": "xqcL", "content": { "emoteID": "1035663" } },
+                { "text": " RainTime gg", "content": null }
+            ] },
+            "parentMessage": null,
+            "sender": { "id": "237719657", "login": "fossabot", "displayName": "Fossabot" },
+            "senderBadges": [], "senderChatColor": null, "sourceChannel": null
+        }] } } });
+        let lines = crate::services::twitch_chat_history::lines_from(&answer, chan).unwrap();
+        let rows = IrcService::parse_historical_messages(lines).await;
+        assert_eq!(rows.len(), 1);
+        let found = emotes(&rows[0].segments);
+        assert_eq!(found.len(), 2, "{:?}", rows[0].segments);
+        assert_eq!(found[0], ("xqcL".to_string(), "1035663".to_string(), false), "Twitch's emote from its fragment");
+        assert_eq!(found[1].0, "RainTime", "the 7TV word from the channel's table");
+    }
+
     #[test]
     fn a_tagged_sub_emote_beats_a_same_name_seventv_channel_emote() {
         let chan = "native_priority_fossabot";
