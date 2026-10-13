@@ -5,6 +5,15 @@
 #   bash ios/scripts/build-core.sh            # release library + bindings
 #   bash ios/scripts/build-core.sh --check    # type-check only, no library
 #
+# WSL runs every process in one systemd scope, and an OOM kill there ends the
+# whole scope: every session's shells and builds, not just this one. On a busy
+# VM, give the build a scope of its own with a memory cap, so running out of
+# memory ends only the build:
+#
+#   systemd-run --unit=sn-ios-core-build -p MemoryMax=9G -p MemorySwapMax=1G \
+#       --working-directory="$PWD" --setenv=HOME="$HOME" \
+#       bash -lc 'bash ios/scripts/build-core.sh > /root/sn-ios-core/build.log 2>&1'
+#
 # Outputs (all gitignored):
 #   /root/sn-ios-core/<commit>/libstreamnook_lib.a   one copy per commit built
 #   ios/CoreLib/libstreamnook_lib.a                  symlink to the newest copy
@@ -26,7 +35,12 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo"
 
 tc="$HOME/.local/share/swiftly/bin"
-sdks="$HOME/.swiftpm/swift-sdks/darwin.artifactbundle/Developer/Platforms/iPhoneOS.platform/Developer/SDKs"
+bundle="$HOME/.swiftpm/swift-sdks/darwin.artifactbundle"
+sdks="$bundle/Developer/Platforms/iPhoneOS.platform/Developer/SDKs"
+# The bundle's own ld64.lld, the one xtool links the app with. swiftly's lld
+# refuses iOS and cannot read the SDK's .tbd stubs; it is only reached at all
+# because some dependencies (sevenz-rust) also build a dylib.
+ld="$bundle/toolset/bin/ld64.lld"
 if [[ -z "${SDKROOT:-}" ]]; then
     SDKROOT="$(ls -d "$sdks"/iPhoneOS[0-9]*.sdk 2>/dev/null | sort -V | tail -1)"
 fi
@@ -45,8 +59,13 @@ export AR_aarch64_apple_ios="$tc/llvm-ar"
 export CARGO_TARGET_AARCH64_APPLE_IOS_LINKER="$tc/clang"
 # Target-scoped so host build scripts keep their own flags. strip=debuginfo
 # is the same size rule scripts/android-build.sh applies.
-export CARGO_TARGET_AARCH64_APPLE_IOS_RUSTFLAGS="-C link-arg=-fuse-ld=lld -C link-arg=-isysroot -C link-arg=$SDKROOT -C strip=debuginfo"
+# -fuse-ld=lld tells clang the linker is lld (so it passes -platform_version
+# and -arch); --ld-path picks which lld.
+export CARGO_TARGET_AARCH64_APPLE_IOS_RUSTFLAGS="-C link-arg=-fuse-ld=lld -C link-arg=--ld-path=$ld -C link-arg=-isysroot -C link-arg=$SDKROOT -C strip=debuginfo"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/root/sn-ios-target}"
+# The WSL VM has 16 GB shared with other builds; a full-width release build
+# got rustc OOM-killed and took the VM down with it.
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-6}"
 
 echo "SDK: $SDKROOT"
 
