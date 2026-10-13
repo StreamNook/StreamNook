@@ -154,6 +154,7 @@ fn build_set(identifier: &str) -> EmoteSet {
                     ffz_sub_only: None,
                     animated: None,
                     width: None,
+                    height: None,
                 })
                 .collect();
         }

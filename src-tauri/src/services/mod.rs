@@ -31,6 +31,7 @@ pub mod automod_queue;
 pub mod chat_bridge_route;
 pub mod chat_history;
 pub mod chat_rules;
+pub mod chat_row_view;
 pub mod chat_send_limiter;
 pub mod room_modes;
 pub mod chatter_name;

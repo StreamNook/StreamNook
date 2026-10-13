@@ -114,6 +114,7 @@ pub async fn fetch_global_badges() -> Result<HelixBadgesResponse, String> {
                             "[Badges] Using cached badges (age: {} days)",
                             cache_age_days
                         );
+                        note_row_view_badges(None, &cached_data.badges);
                         return Ok(cached_data.badges);
                     } else {
                         debug!(
@@ -156,7 +157,21 @@ pub async fn fetch_global_badges() -> Result<HelixBadgesResponse, String> {
         debug!("[Badges] Cached global badges for 7 days");
     }
 
+    note_row_view_badges(None, &badges);
     Ok(badges)
+}
+
+/// Hands badge art to the native row view, which stamps it onto rows (the web
+/// renderers resolve it themselves from what these commands return).
+fn note_row_view_badges(room_id: Option<&str>, badges: &HelixBadgesResponse) {
+    crate::services::chat_row_view::note_twitch_badges(
+        room_id,
+        badges.data.iter().flat_map(|set| {
+            set.versions
+                .iter()
+                .map(move |v| (set.set_id.as_str(), v.id.as_str(), v.image_url_2x.as_str(), v.title.as_str()))
+        }),
+    );
 }
 
 /// Get cached global badges without fetching from API
@@ -171,6 +186,7 @@ pub async fn get_cached_global_badges() -> Result<Option<HelixBadgesResponse>, S
                     "[Badges] Retrieved {} badge sets from cache",
                     cached_data.badges.data.len()
                 );
+                note_row_view_badges(None, &cached_data.badges);
                 Ok(Some(cached_data.badges))
             }
             Err(e) => {
@@ -649,6 +665,7 @@ pub async fn fetch_channel_badges(channel_id: String) -> Result<HelixBadgesRespo
     }
     crate::services::ffz_room_badges::apply_if_enabled(&channel_id, &mut badges, role_art);
 
+    note_row_view_badges(Some(&channel_id), &badges);
     Ok(badges)
 }
 

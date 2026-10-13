@@ -924,6 +924,160 @@ fn drop_parse_lookup(key: &str) {
     }
 }
 
+/// What a CLEARMSG line says: one message deleted by a moderator.
+struct ClearMsg {
+    channel: Option<String>,
+    target_msg_id: String,
+    login: String,
+    text: Option<String>,
+}
+
+impl ClearMsg {
+    fn frame(&self) -> Value {
+        json!({
+            "type": "CLEARMSG",
+            "channel": self.channel,
+            "target_msg_id": self.target_msg_id,
+            "login": self.login,
+            "message": self.text
+        })
+    }
+}
+
+/// What a CLEARCHAT line says: a timeout or ban of one user, or a full clear.
+struct ClearChat {
+    channel: Option<String>,
+    target_user_id: Option<String>,
+    target_user: Option<String>,
+    ban_duration_secs: Option<u64>,
+}
+
+impl ClearChat {
+    fn frame(&self) -> Value {
+        json!({
+            "type": "CLEARCHAT",
+            "channel": self.channel,
+            "target_user_id": self.target_user_id,
+            "target_user": self.target_user,
+            "ban_duration": self.ban_duration_secs
+        })
+    }
+}
+
+impl IrcService {
+    /// Format: `@login=<user>;room-id=<room>;target-msg-id=<msg-id>;tmi-sent-ts=<ts> :tmi.twitch.tv CLEARMSG #<channel> :<message>`
+    fn parse_clearmsg(line: &str) -> Option<ClearMsg> {
+        let target_msg_id = Self::extract_tag_value(line, "target-msg-id")?;
+        Some(ClearMsg {
+            channel: extract_channel_from_irc_line(line),
+            target_msg_id,
+            login: Self::extract_tag_value(line, "login").unwrap_or_default(),
+            // The deleted message text is the trailing param after the last " :".
+            text: line.rfind(" :").map(|idx| line[idx + 2..].trim().to_string()),
+        })
+    }
+
+    /// Format: `@ban-duration=<sec>;room-id=<room>;target-user-id=<id>;tmi-sent-ts=<ts> :tmi.twitch.tv CLEARCHAT #<channel> :<user>`,
+    /// or `:tmi.twitch.tv CLEARCHAT #<channel>` for a full clear.
+    fn parse_clearchat(line: &str) -> ClearChat {
+        ClearChat {
+            channel: extract_channel_from_irc_line(line),
+            target_user_id: Self::extract_tag_value(line, "target-user-id"),
+            // The target username is the trailing param. A full clear has no
+            // trailing " :", so an earlier inline colon is never read as one.
+            target_user: line.rfind(" :").map(|idx| line[idx + 2..].trim().to_string()),
+            ban_duration_secs: Self::extract_tag_value(line, "ban-duration").map(|d| d.parse::<u64>().unwrap_or(0)),
+        }
+    }
+
+    /// The ROOMSTATE frame for a line, merged with what the room already said
+    /// so the page and the replay cache never hold a partial frame.
+    fn roomstate_frame(line: &str, channel: Option<&str>) -> String {
+        // Forward room state to frontend — only include tags actually present
+        // Twitch sends FULL roomstate on join, PARTIAL on setting changes
+        let mut room_state = serde_json::Map::new();
+        room_state.insert("type".into(), serde_json::json!("ROOMSTATE"));
+        if let Some(ch) = channel {
+            room_state.insert("channel".into(), serde_json::json!(ch));
+        }
+
+        if let Some(v) = Self::extract_tag_value(line, "followers-only") {
+            if let Ok(n) = v.parse::<i64>() {
+                room_state.insert("followers_only".into(), serde_json::json!(n));
+            }
+        }
+        if let Some(v) = Self::extract_tag_value(line, "slow") {
+            if let Ok(n) = v.parse::<u64>() {
+                room_state.insert("slow".into(), serde_json::json!(n));
+            }
+        }
+        if let Some(v) = Self::extract_tag_value(line, "subs-only") {
+            if let Ok(n) = v.parse::<u8>() {
+                room_state.insert("subs_only".into(), serde_json::json!(n == 1));
+                if let Some(ch) = channel {
+                    crate::services::channel_rewards::note_subs_only(ch, n == 1);
+                }
+            }
+        }
+        if let Some(v) = Self::extract_tag_value(line, "emote-only") {
+            if let Ok(n) = v.parse::<u8>() {
+                room_state.insert("emote_only".into(), serde_json::json!(n == 1));
+            }
+        }
+        if let Some(v) = Self::extract_tag_value(line, "r9k") {
+            if let Ok(n) = v.parse::<u8>() {
+                room_state.insert("r9k".into(), serde_json::json!(n == 1));
+            }
+        }
+
+        if let Some(ch) = channel {
+            let tag_u8 = |name: &str| {
+                Self::extract_tag_value(line, name)
+                    .and_then(|v| v.parse::<u8>().ok())
+                    .map(|n| n == 1)
+            };
+            crate::services::chat_send_limiter::note_room_state(
+                ch,
+                crate::services::chat_send_limiter::RoomModes {
+                    slow_seconds: Self::extract_tag_value(line, "slow").and_then(|v| v.parse().ok()),
+                    followers_only_minutes: Self::extract_tag_value(line, "followers-only")
+                        .and_then(|v| v.parse().ok()),
+                    subs_only: tag_u8("subs-only"),
+                    emote_only: tag_u8("emote-only"),
+                    r9k: tag_u8("r9k"),
+                },
+            );
+            // Ship the merged room, with its modes in words, so the page
+            // and the replay cache never hold a partial frame.
+            if let Some(fields) = crate::services::chat_send_limiter::room_state_fields(ch) {
+                room_state.extend(fields);
+            }
+        }
+        serde_json::Value::Object(room_state).to_string()
+    }
+}
+
+/// An emote's size at 1x in CSS pixels, where it is known before the image
+/// loads: Twitch emotes are square at 28; a 7TV emote's 1x file size is in
+/// the room's table.
+pub(crate) fn emote_size_hint(channel: &str, code: &str, url: &str) -> Option<(u32, u32)> {
+    if url.contains("static-cdn.jtvnw.net/emoticons/") {
+        return Some((28, 28));
+    }
+    let lookup = channel_parse_lookup().read().ok()?.get(channel).cloned()?;
+    let emote = lookup.get(code)?;
+    let width = emote.width?;
+    match emote.provider {
+        crate::services::emote_service::EmoteProvider::SevenTV => Some((width, emote.height.unwrap_or(32))),
+        _ => None,
+    }
+}
+
+/// Sends one non-row frame to the windows reading `channel`.
+pub(crate) async fn post_channel_frame(channel: &str, frame: String) {
+    send_to_bridge(BridgeFrame::channel(channel, frame), false).await;
+}
+
 fn clear_parse_lookups() {
     if let Ok(mut guard) = channel_parse_lookup().write() {
         guard.clear();
@@ -1334,11 +1488,16 @@ fn history_segment_updates(before: &HashMap<String, String>, again: &[ChatMessag
         .iter()
         .filter(|m| before.get(&m.id).is_some_and(|sig| *sig != history_row_signature(m)))
         .map(|m| {
-            json!({
+            let mut row = json!({
                 "id": m.id,
                 "segments": m.segments,
                 "parent_segments": m.metadata.reply_info.as_ref().and_then(|r| r.parent_segments.as_ref()),
-            })
+            });
+            // A native renderer draws from the view, so the patch carries the new one.
+            if let Some(view) = &m.metadata.view {
+                row["view"] = json!(view);
+            }
+            row
         })
         .collect()
 }
@@ -2237,6 +2396,7 @@ impl IrcService {
                         verdict.mentioned,
                         verdict.reply_to_me,
                     );
+                    crate::services::chat_row_view::stamp(&mut chat_msg);
                 }
 
                 // Deliver to the frontend FIRST (wire order is the only order
@@ -2306,6 +2466,9 @@ impl IrcService {
                 // Rule engine (raid tint, sub-message filters, ignores).
                 let rules = ChatRules::snapshot();
                 let verdict = ChatRules::evaluate(&mut chat_msg, &rules);
+                if !verdict.drop {
+                    crate::services::chat_row_view::stamp(&mut chat_msg);
+                }
 
                 // Frontend first, side effects on the ordered lane (no history:
                 // USERNOTICE never fed the profile-card history).
@@ -2343,68 +2506,7 @@ impl IrcService {
             // is keyed per channel.
             let channel_name = extract_channel_from_irc_line(trimmed);
 
-            // Forward room state to frontend — only include tags actually present
-            // Twitch sends FULL roomstate on join, PARTIAL on setting changes
-            let mut room_state = serde_json::Map::new();
-            room_state.insert("type".into(), serde_json::json!("ROOMSTATE"));
-            if let Some(ref ch) = channel_name {
-                room_state.insert("channel".into(), serde_json::json!(ch));
-            }
-
-            if let Some(v) = Self::extract_tag_value(trimmed, "followers-only") {
-                if let Ok(n) = v.parse::<i64>() {
-                    room_state.insert("followers_only".into(), serde_json::json!(n));
-                }
-            }
-            if let Some(v) = Self::extract_tag_value(trimmed, "slow") {
-                if let Ok(n) = v.parse::<u64>() {
-                    room_state.insert("slow".into(), serde_json::json!(n));
-                }
-            }
-            if let Some(v) = Self::extract_tag_value(trimmed, "subs-only") {
-                if let Ok(n) = v.parse::<u8>() {
-                    room_state.insert("subs_only".into(), serde_json::json!(n == 1));
-                    if let Some(ref ch) = channel_name {
-                        crate::services::channel_rewards::note_subs_only(ch, n == 1);
-                    }
-                }
-            }
-            if let Some(v) = Self::extract_tag_value(trimmed, "emote-only") {
-                if let Ok(n) = v.parse::<u8>() {
-                    room_state.insert("emote_only".into(), serde_json::json!(n == 1));
-                }
-            }
-            if let Some(v) = Self::extract_tag_value(trimmed, "r9k") {
-                if let Ok(n) = v.parse::<u8>() {
-                    room_state.insert("r9k".into(), serde_json::json!(n == 1));
-                }
-            }
-
-            if let Some(ref ch) = channel_name {
-                let tag_u8 = |name: &str| {
-                    Self::extract_tag_value(trimmed, name)
-                        .and_then(|v| v.parse::<u8>().ok())
-                        .map(|n| n == 1)
-                };
-                crate::services::chat_send_limiter::note_room_state(
-                    ch,
-                    crate::services::chat_send_limiter::RoomModes {
-                        slow_seconds: Self::extract_tag_value(trimmed, "slow").and_then(|v| v.parse().ok()),
-                        followers_only_minutes: Self::extract_tag_value(trimmed, "followers-only")
-                            .and_then(|v| v.parse().ok()),
-                        subs_only: tag_u8("subs-only"),
-                        emote_only: tag_u8("emote-only"),
-                        r9k: tag_u8("r9k"),
-                    },
-                );
-                // Ship the merged room, with its modes in words, so the page
-                // and the replay cache never hold a partial frame.
-                if let Some(fields) = crate::services::chat_send_limiter::room_state_fields(ch) {
-                    room_state.extend(fields);
-                }
-            }
-
-            let room_state_str = serde_json::Value::Object(room_state).to_string();
+            let room_state_str = Self::roomstate_frame(trimmed, channel_name.as_deref());
 
             // Cache the room state per channel so late-mounting MultiChat tabs
             // for any subscribed channel get its current state on connect.
@@ -2519,26 +2621,13 @@ impl IrcService {
             // Format: @login=<user>;room-id=<room>;target-msg-id=<msg-id>;tmi-sent-ts=<ts> :tmi.twitch.tv CLEARMSG #<channel> :<message>
             debug!("[IRC Chat] Message deleted: {}", trimmed);
 
-            if let Some(target_msg_id) = Self::extract_tag_value(trimmed, "target-msg-id") {
-                let channel_name = extract_channel_from_irc_line(trimmed);
-                // The deleted message text is the trailing param after the last " :".
-                let deleted_text = trimmed
-                    .rfind(" :")
-                    .map(|idx| trimmed[idx + 2..].trim().to_string());
-                let login = Self::extract_tag_value(trimmed, "login").unwrap_or_default();
-                if let Some(ch) = &channel_name {
-                    ChatLoggerService::log_deleted_message(ch, &login, deleted_text.as_deref());
-                    ChatHistory::mark_deleted(ch, &target_msg_id);
+            if let Some(clear) = Self::parse_clearmsg(trimmed) {
+                if let Some(ch) = &clear.channel {
+                    ChatLoggerService::log_deleted_message(ch, &clear.login, clear.text.as_deref());
+                    ChatHistory::mark_deleted(ch, &clear.target_msg_id);
                 }
                 // Send deletion event to frontend, tagged with channel for routing
-                let delete_event = json!({
-                    "type": "CLEARMSG",
-                    "channel": channel_name,
-                    "target_msg_id": target_msg_id,
-                    "login": login,
-                    "message": deleted_text
-                });
-                send_to_bridge(BridgeFrame::maybe_channel(channel_name.as_deref(), delete_event.to_string()), false).await;
+                send_to_bridge(BridgeFrame::maybe_channel(clear.channel.as_deref(), clear.frame().to_string()), false).await;
             }
         } else if trimmed.contains("CLEARCHAT") {
             // User timed out/banned (clear all their messages) or chat cleared
@@ -2546,38 +2635,17 @@ impl IrcService {
             // Or for full chat clear: :tmi.twitch.tv CLEARCHAT #<channel>
             debug!("[IRC Chat] Chat clear/timeout: {}", trimmed);
 
-            let target_user_id = Self::extract_tag_value(trimmed, "target-user-id");
-            let ban_duration = Self::extract_tag_value(trimmed, "ban-duration");
-            let channel_name = extract_channel_from_irc_line(trimmed);
-
-            // Extract target username from the message content (after the colon at the end).
-            // For full chat clears there's no trailing " :" so be careful not to misinterpret
-            // an earlier inline colon as the username delimiter.
-            let target_user = if let Some(idx) = trimmed.rfind(" :") {
-                Some(trimmed[idx + 2..].trim().to_string())
-            } else {
-                None
-            };
-
-            let ban_duration_secs = ban_duration.map(|d| d.parse::<u64>().unwrap_or(0));
-            if let Some(ch) = &channel_name {
-                match &target_user {
-                    Some(user) => ChatLoggerService::log_timeout(ch, user, ban_duration_secs),
+            let clear = Self::parse_clearchat(trimmed);
+            if let Some(ch) = &clear.channel {
+                match &clear.target_user {
+                    Some(user) => ChatLoggerService::log_timeout(ch, user, clear.ban_duration_secs),
                     None => ChatLoggerService::log_chat_cleared(ch),
                 }
-                if let Some(uid) = &target_user_id {
+                if let Some(uid) = &clear.target_user_id {
                     ChatHistory::mark_user_cleared(ch, uid);
                 }
             }
-
-            let clear_event = json!({
-                "type": "CLEARCHAT",
-                "channel": channel_name,
-                "target_user_id": target_user_id,
-                "target_user": target_user,
-                "ban_duration": ban_duration_secs
-            });
-            send_to_bridge(BridgeFrame::maybe_channel(channel_name.as_deref(), clear_event.to_string()), false).await;
+            send_to_bridge(BridgeFrame::maybe_channel(clear.channel.as_deref(), clear.frame().to_string()), false).await;
         } else if trimmed.contains("NOTICE") {
             // System notices — forward to frontend for user-facing handling
             debug!("[IRC Chat] Notice: {}", trimmed);
@@ -4955,6 +5023,7 @@ impl IrcService {
                     continue;
                 }
                 chat_msg.metadata.from_backfill = true;
+                crate::services::chat_row_view::stamp(&mut chat_msg);
                 results.push(chat_msg);
             }
         }
@@ -5844,6 +5913,7 @@ mod personal_emote_tests {
             owner_id: None,
             owner_name: None,
             width: None,
+            height: None,
             modifier_flags: None,
             ffz_sub_only: None,
             animated: None,
@@ -6167,6 +6237,7 @@ mod tests {
             owner_id: None,
             owner_name: None,
             width: None,
+            height: None,
             modifier_flags: None,
             ffz_sub_only: None,
             animated: None,
@@ -6778,5 +6849,132 @@ mod history_notice_tests {
         get_channel_emotes().lock().await.remove(key);
 
         assert!(!wait_for_channel_emotes("history_wait_none", std::time::Duration::from_millis(30)).await);
+    }
+}
+
+/// Chat frames for the iPhone app's replay fixtures, made by the same parse and
+/// stamp path the socket uses, from real emote, badge and paint data and raw
+/// IRC lines in `ios/Tests/Fixtures/chat-inputs.json`. Always checks the frames;
+/// with `SN_WRITE_CHAT_FIXTURES=<path>` it also writes them there.
+#[cfg(test)]
+mod chat_fixture_tests {
+    use super::*;
+    use crate::models::chat_layout::ViewSpan;
+
+    const INPUTS: &str = include_str!("../../../ios/Tests/Fixtures/chat-inputs.json");
+
+    fn frames() -> (Value, Vec<String>) {
+        let inputs: Value = serde_json::from_str(INPUTS).expect("chat inputs parse");
+        let channel = inputs["channel"].as_str().unwrap().to_string();
+        let set: EmoteSet = serde_json::from_value(inputs["emotes"].clone()).expect("emote set");
+        rebuild_parse_lookup(&channel, &set);
+        crate::services::chat_row_view::note_twitch_badges(
+            None,
+            inputs["twitch_badges"].as_array().unwrap().iter().map(|b| {
+                (
+                    b["set_id"].as_str().unwrap(),
+                    b["version"].as_str().unwrap(),
+                    b["url"].as_str().unwrap(),
+                    b["title"].as_str().unwrap(),
+                )
+            }),
+        );
+        for (user_id, worn) in inputs["cosmetics"].as_object().unwrap() {
+            let mark = |v: &Value| {
+                let mut v = v.clone();
+                v["selected"] = json!(true);
+                v
+            };
+            crate::services::seventv_cosmetics_resolver::remember_for_test(
+                user_id,
+                crate::services::seventv_cosmetics_resolver::UserCosmetics {
+                    paints: worn["paint"].as_object().map(|_| vec![mark(&worn["paint"])]).unwrap_or_default(),
+                    badges: worn["badge"].as_object().map(|_| vec![mark(&worn["badge"])]).unwrap_or_default(),
+                    ..Default::default()
+                },
+            );
+        }
+        ChatRules::set_own_identity(
+            inputs["own"]["login"].as_str().unwrap(),
+            inputs["own"]["user_id"].as_str().unwrap(),
+        );
+        let rules = crate::services::chat_rules::CompiledRules::defaults_for_test();
+
+        let mut out = vec!["IRC_CONNECTED".to_string()];
+        for line in inputs["lines"].as_array().unwrap() {
+            let line = line.as_str().unwrap();
+            let frame = match irc_command(line) {
+                Some("PRIVMSG") | Some("USERNOTICE") => {
+                    let parsed = if irc_command(line) == Some("PRIVMSG") {
+                        IrcService::parse_privmsg(line)
+                    } else {
+                        IrcService::parse_usernotice(line).filter(usernotice_has_visible_content)
+                    };
+                    let mut msg = parsed.unwrap_or_else(|| panic!("line did not parse: {line}"));
+                    assert!(!ChatRules::evaluate_unrecorded(&mut msg, &rules).drop);
+                    crate::services::chat_row_view::stamp_view(&mut msg);
+                    serde_json::to_string(&msg).unwrap()
+                }
+                Some("ROOMSTATE") => IrcService::roomstate_frame(line, Some(&channel)),
+                Some("CLEARMSG") => IrcService::parse_clearmsg(line).unwrap().frame().to_string(),
+                Some("CLEARCHAT") => IrcService::parse_clearchat(line).frame().to_string(),
+                other => panic!("no fixture path for {other:?}"),
+            };
+            out.push(frame);
+        }
+        out.push("HEARTBEAT".to_string());
+        (inputs, out)
+    }
+
+    fn row<'a>(frames: &'a [Value], id: &str) -> &'a Value {
+        frames.iter().find(|f| f["id"] == id).unwrap_or_else(|| panic!("no row {id}"))
+    }
+
+    #[test]
+    fn fixture_frames_carry_the_native_view() {
+        let (inputs, frames) = frames();
+        let parsed: Vec<Value> = frames.iter().filter_map(|f| serde_json::from_str(f).ok()).collect();
+        assert_eq!(frames.len(), inputs["lines"].as_array().unwrap().len() + 2);
+
+        // Overlays ride their base emote.
+        let pet = row(&parsed, "fx-0003");
+        let spans: Vec<ViewSpan> = serde_json::from_value(pet["metadata"]["view"]["spans"].clone()).unwrap();
+        assert!(matches!(&spans[0], ViewSpan::Emote { emote, overlays, .. }
+            if emote.code == "PepePls" && overlays.len() == 1 && overlays[0].code == "PETPET" && emote.width == Some(22)));
+
+        // A mention of the viewer is stamped by the rule engine.
+        assert_eq!(row(&parsed, "fx-0007")["metadata"]["is_mentioned"], json!(true));
+
+        // Paints, Twitch badge art and the 7TV badge for a chatter the cache knows.
+        let owl = row(&parsed, "fx-0001");
+        assert_eq!(owl["metadata"]["view"]["paint"]["kind"], json!("linear"));
+        let badges = owl["metadata"]["view"]["badges"].as_array().unwrap();
+        assert_eq!(badges.len(), 3);
+        assert_eq!(badges[2]["provider"], json!("7tv"));
+
+        // A navy name reads light on the dark theme.
+        let navy = row(&parsed, "fx-clap")["metadata"]["view"]["name_color"].as_str().unwrap().to_string();
+        assert_ne!(navy.to_lowercase(), "#000080");
+
+        // Room state, deletions and timeouts are frames of their own.
+        assert!(frames.iter().any(|f| f.contains("\"type\":\"ROOMSTATE\"") && f.contains("\"modes\"")));
+        assert!(frames.iter().any(|f| f.contains("\"type\":\"CLEARMSG\"")));
+        assert!(frames.iter().any(|f| f.contains("\"type\":\"CLEARCHAT\"") && f.contains("\"ban_duration\":600")));
+
+        if let Ok(path) = std::env::var("SN_WRITE_CHAT_FIXTURES") {
+            let mut design = serde_json::to_value(crate::models::settings::ChatDesignSettings::first_run()).unwrap();
+            // The phone's first-run text size and spacing (this test runs on a desktop build).
+            design["font_size"] = json!(14);
+            design["message_spacing"] = json!(8);
+            let fixture = json!({
+                "channel": inputs["channel"],
+                "room_id": inputs["room_id"],
+                "own": inputs["own"],
+                "chat_design": design,
+                "emotes": inputs["emotes"],
+                "frames": frames,
+            });
+            std::fs::write(&path, serde_json::to_string_pretty(&fixture).unwrap() + "\n").expect("write fixtures");
+        }
     }
 }

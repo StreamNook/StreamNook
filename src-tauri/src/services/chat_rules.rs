@@ -389,6 +389,12 @@ pub fn channel_filter_key(provider: &str, channel: &str) -> String {
 }
 
 impl CompiledRules {
+    /// What a fresh install compiles to, without installing it.
+    #[cfg(test)]
+    pub(crate) fn defaults_for_test() -> CompiledRules {
+        Self::compile(&Default::default(), &Default::default(), &Default::default())
+    }
+
     fn compile(
         hl: &ChatHighlightSettings,
         cf: &ChatFilterSettings,
@@ -979,6 +985,8 @@ impl ChatRules {
         );
         // So is the composer's emote match mode.
         crate::services::emote_match::refresh_settings(settings);
+        // And what the native row view reads.
+        crate::services::chat_row_view::refresh(settings);
         let hl_v = settings.extra.get("chat_highlights");
         let cf_v = settings.extra.get("chat_filters");
         let cq_v = settings.extra.get("chat_query");

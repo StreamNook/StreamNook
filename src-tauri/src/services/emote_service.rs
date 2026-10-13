@@ -195,6 +195,10 @@ pub async fn fetch_personal_emote_set(set_id: &str) -> Vec<Emote> {
                 .pointer("/host/files/0/width")
                 .and_then(|v| v.as_u64())
                 .map(|v| v as u32);
+            let height = data
+                .pointer("/host/files/0/height")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
             let owner_name = data
                 .pointer("/owner/display_name")
                 .and_then(|v| v.as_str())
@@ -210,6 +214,7 @@ pub async fn fetch_personal_emote_set(set_id: &str) -> Vec<Emote> {
                 emote_type: None,
                 owner_id: None,
                 width,
+                height,
                 owner_name,
                 modifier_flags: None,
                 ffz_sub_only: None,
@@ -399,6 +404,10 @@ pub(crate) fn parse_seventv_active_emotes(items: &[serde_json::Value]) -> Vec<Em
                 .pointer("/host/files/0/width")
                 .and_then(|v| v.as_u64())
                 .map(|v| v as u32);
+            let height = emote_data
+                .pointer("/host/files/0/height")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
             let owner_name = emote_data
                 .pointer("/owner/display_name")
                 .and_then(|v| v.as_str())
@@ -414,6 +423,7 @@ pub(crate) fn parse_seventv_active_emotes(items: &[serde_json::Value]) -> Vec<Em
                 emote_type: None,
                 owner_id: None,
                 width,
+                height,
                 owner_name,
                 modifier_flags: None,
                 ffz_sub_only: None,
@@ -499,6 +509,10 @@ pub struct Emote {
     /// Emote width in pixels (for aspect ratio sorting - wide emotes > 32)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<u32>,
+    /// Emote height in pixels at the same scale as `width`, where the provider
+    /// says, so a renderer knows the shape before the image loads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
     /// Modifier bitmask (see the MOD_* constants above). Some(_) marks the
     /// emote as a modifier: it attaches to the preceding emote by default, or
     /// to the following one when MOD_PREFIX is set (BetterTTV's `w!` and
@@ -1236,6 +1250,7 @@ impl EmoteService {
                             emote_type,
                             owner_id,
                             width: None,
+                            height: None,
                             owner_name: None,
                             modifier_flags: None,
                             ffz_sub_only: None,
@@ -1306,6 +1321,7 @@ impl EmoteService {
             emote_type: None,
             owner_id: None,
             width: None,
+            height: None,
             owner_name: None,
             modifier_flags,
             ffz_sub_only: None,
@@ -1587,6 +1603,7 @@ impl EmoteService {
             emote_type: None,
             owner_id: None,
             width: None,
+            height: None,
             owner_name: None,
             modifier_flags,
             ffz_sub_only: if sub_only { Some(true) } else { None },
@@ -1737,6 +1754,7 @@ impl EmoteService {
                 emote_type: None,
                 owner_id: None,
                 width: None,
+                height: None,
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
@@ -1752,6 +1770,7 @@ impl EmoteService {
                 emote_type: None,
                 owner_id: None,
                 width: None,
+                height: None,
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
@@ -1768,6 +1787,7 @@ impl EmoteService {
                 emote_type: None,
                 owner_id: None,
                 width: None,
+                height: None,
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
@@ -1784,6 +1804,7 @@ impl EmoteService {
                 emote_type: None,
                 owner_id: None,
                 width: None,
+                height: None,
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
@@ -1799,6 +1820,7 @@ impl EmoteService {
                 emote_type: None,
                 owner_id: None,
                 width: None,
+                height: None,
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
@@ -1814,6 +1836,7 @@ impl EmoteService {
                 emote_type: None,
                 owner_id: None,
                 width: None,
+                height: None,
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
@@ -1829,6 +1852,7 @@ impl EmoteService {
                 emote_type: None,
                 owner_id: None,
                 width: None,
+                height: None,
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
@@ -1844,6 +1868,7 @@ impl EmoteService {
                 emote_type: None,
                 owner_id: None,
                 width: None,
+                height: None,
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
@@ -1859,6 +1884,7 @@ impl EmoteService {
                 emote_type: None,
                 owner_id: None,
                 width: None,
+                height: None,
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
@@ -1874,6 +1900,7 @@ impl EmoteService {
                 emote_type: None,
                 owner_id: None,
                 width: None,
+                height: None,
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
@@ -1890,6 +1917,7 @@ impl EmoteService {
                 emote_type: None,
                 owner_id: None,
                 width: None,
+                height: None,
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
@@ -1906,6 +1934,7 @@ impl EmoteService {
                 emote_type: None,
                 owner_id: None,
                 width: None,
+                height: None,
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
@@ -1922,6 +1951,7 @@ impl EmoteService {
                 emote_type: None,
                 owner_id: None,
                 width: None,
+                height: None,
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
@@ -1937,6 +1967,7 @@ impl EmoteService {
                 emote_type: None,
                 owner_id: None,
                 width: None,
+                height: None,
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
@@ -1952,6 +1983,7 @@ impl EmoteService {
                 emote_type: None,
                 owner_id: None,
                 width: None,
+                height: None,
                 owner_name: None,
                 modifier_flags: None,
                 ffz_sub_only: None,
@@ -2082,6 +2114,7 @@ mod tests {
             emote_type: None,
             owner_id: None,
             width: None,
+            height: None,
             owner_name: None,
             modifier_flags: None,
             ffz_sub_only: None,
@@ -2483,6 +2516,7 @@ mod keep_held_rows_tests {
             emote_type: None,
             owner_id: None,
             width: None,
+            height: None,
             owner_name: None,
             modifier_flags: None,
             ffz_sub_only: None,
