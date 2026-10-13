@@ -161,6 +161,7 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
   // The room's chat modes in Rust's words (services/room_modes.rs), shown in
   // the composer while the setting is on.
   const showRoomModes = useAppStore((s) => s.settings.chat_input?.show_room_modes ?? true);
+  const roomModesAsPrompt = useAppStore((s) => s.settings.chat_input?.room_modes_style === 'prompt');
   const roomModes =
     showRoomModes && roomState?.modes && roomState.modes.modes.length > 0 ? roomState.modes : null;
   const gating = useMemo(() => {
@@ -463,11 +464,19 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
   );
 
   const onUsernameClick = useCallback(
-    (userId: string, username: string, displayName: string, color: string) => {
+    (
+      userId: string,
+      username: string,
+      displayName: string,
+      color: string,
+      badges: Array<{ key: string; info: Record<string, unknown> }>,
+    ) => {
       // The profile sheet is Helix-backed; a Kick chatter's id would open an
       // unrelated Twitch account.
       if (!isTwitchRoom) return;
-      setSheetUser({ userId, username, displayName, color });
+      // The row's badges ride along: a worn sub badge is the live answer to
+      // "subscribed here right now".
+      setSheetUser({ userId, username, displayName, color, badges });
     },
     [isTwitchRoom],
   );
@@ -692,6 +701,7 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
           channelLabel={activeTab?.label ?? null}
           gating={gating}
           roomModes={roomModes}
+          roomModesAsPrompt={roomModesAsPrompt}
           emotes={emotes}
           replyTo={replyTo}
           onCancelReply={handleCancelReply}

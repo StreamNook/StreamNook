@@ -60,7 +60,7 @@ const REPEAT_DEFAULT_COLOR = '#8b8b8b';
 // Everything defaults to on; the toggle stores `false` to hide.
 const USER_CARD_ROWS: { key: keyof UserCardSettings; title: string; description: string }[] = [
   { key: 'show_join_date', title: 'Join date', description: 'When their Twitch account was created.' },
-  { key: 'show_followage', title: 'Following since', description: 'When they followed this channel, or that they are not following.' },
+  { key: 'show_followage', title: 'Following since', description: "When they followed this channel. Twitch shares this with a channel's moderators, and for your own account." },
   { key: 'show_follows_count', title: 'Follow count', description: 'How many channels this person follows.' },
   { key: 'show_chatter_count', title: 'Chatters', description: "How many people are in this person's own chat right now." },
   { key: 'show_past_subscriber', title: 'Past subscriber', description: 'Total months subscribed, for people who are not subscribed now.' },
@@ -74,7 +74,7 @@ import { useChatUserStore } from '../../stores/chatUserStore';
 import { getUserCosmetics, computePaintStyle } from '../../services/seventvService';
 import { StyledChatName, type NameSeparator, type NameStyle } from '../chat/StyledChatName';
 import type { DeletedMessageStyle } from '../chat/deletedMessage';
-import { DeletedMessagePreview, EventRowPreview, MentionPreview, MessageLayoutPreview, SettingPreview } from './ChatPreview';
+import { DeletedMessagePreview, EventRowPreview, MentionPreview, MessageLayoutPreview, RoomModesPreview, SettingPreview } from './ChatPreview';
 import { ProfilePicturePreview } from './ProfilePicturePreview';
 import {
   DEFAULT_PROFILE_PICTURE_ANIMATION,
@@ -396,6 +396,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     });
   const mentionSoundOptions = useSoundOptions({ noneLabel: 'No sound' });
   const [eventStyleHover, setEventStyleHover] = useState<'cards' | 'outline' | 'plain' | null>(null);
+  const [roomModesStyleHover, setRoomModesStyleHover] = useState<'chip' | 'prompt' | null>(null);
   const [glintHover, setGlintHover] = useState<'none' | 'sheen' | 'pulse' | 'chase' | null>(null);
   const [pictureAnimationHover, setPictureAnimationHover] = useState<ProfilePictureAnimation | null>(null);
   const [pictureSourceHover, setPictureSourceHover] = useState<ProfilePictureSource | null>(null);
@@ -2277,15 +2278,40 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         <SettingsRow
           title="Chat modes"
           onReset={resetFor(['chat_input.show_room_modes', true])}
-          description="Shows when a channel limits who can chat, like emote-only, followers-only or slow mode. The message box names the mode and keeps a small icon for it while you type."
-          help="Hover the icons for what each mode means and whether you can still chat, for example as a moderator. During slow mode the send button counts down until you can send again. Shown for Twitch and Kick."
+          description="Shows when a channel limits who can chat, like emote-only, followers-only or slow mode."
+          help="Chip puts one small chip at the end of the message box that stays while you type; hover it for every mode and whether you can still chat, for example as a moderator. Placeholder names the mode in place of Send a message. During slow mode the send button counts down until you can send again. Shown for Twitch and Kick."
           control={
             <Toggle
               enabled={settings.chat_input?.show_room_modes ?? true}
               onChange={() => setInput({ show_room_modes: !(settings.chat_input?.show_room_modes ?? true) })}
             />
           }
-        />
+        >
+          {(settings.chat_input?.show_room_modes ?? true) && (
+            <SubControls>
+              <SubControl
+                title="Style"
+                onReset={resetFor(['chat_input.room_modes_style', 'chip'])}
+                control={
+                  <SegmentedSelect<'chip' | 'prompt'>
+                    value={settings.chat_input?.room_modes_style ?? 'chip'}
+                    onChange={(room_modes_style) => setInput({ room_modes_style })}
+                    onPreview={setRoomModesStyleHover}
+                    options={[
+                      { value: 'chip', label: 'Chip' },
+                      { value: 'prompt', label: 'Placeholder' },
+                    ]}
+                  />
+                }
+              />
+            </SubControls>
+          )}
+          {(settings.chat_input?.show_room_modes ?? true) && (
+            <div className="pt-3">
+              <RoomModesPreview style={roomModesStyleHover ?? settings.chat_input?.room_modes_style ?? 'chip'} />
+            </div>
+          )}
+        </SettingsRow>
         <SettingsRow
           title="Hide placeholder"
           onReset={resetFor(['chat_input.hide_placeholder', false])}

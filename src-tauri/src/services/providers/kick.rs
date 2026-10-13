@@ -2399,6 +2399,7 @@ mod roomstate_tests {
             .collect();
         assert_eq!(kinds, vec!["subs_only", "followers_only", "slow"]);
         assert_eq!(out["modes"]["modes"][1]["label"], "Followers-only chat (10 minutes)");
+        assert_eq!(out["modes"]["chip"], "Sub-only");
         assert_eq!(out["modes"]["prompt"], "Subscriber-only");
         assert_eq!(out["modes"]["prompt_short"], "Sub-only");
         assert_eq!(out["modes"]["standing"], Value::Null);

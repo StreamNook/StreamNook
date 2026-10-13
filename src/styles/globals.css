@@ -1958,23 +1958,33 @@ html[data-motion="off"] .sn-bulb-rainbow stop {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* The room's chat modes at the field's trailing edge (chat/RoomModeIndicator).
-   The field, its overlays and the length count read `--sn-room-pad`, so the
-   icons' width is reserved inside the box and nothing outside it moves when a
-   mode switches. A narrow row keeps the first icon and a "+N" count. */
+/* The room's chat modes, one chip at the field's trailing edge
+   (chat/RoomModeIndicator). The field, its overlays and the length count read
+   `--sn-room-pad`, which the chip sets to its own width, so the typed text
+   never runs under it and nothing outside the box moves when a mode switches.
+   A narrow row drops the "+N"; hovering still lists every mode. */
 .sn-composer-field {
   --sn-room-pad: 12px;
 }
-.sn-composer-field[data-room-modes] {
-  --sn-room-pad: var(--sn-room-pad-wide, 12px);
+.sn-room-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  cursor: default;
 }
-.sn-composer-row[data-narrow] .sn-composer-field[data-room-modes] {
-  --sn-room-pad: var(--sn-room-pad-narrow, 12px);
+.sn-room-chip-more {
+  opacity: 0.7;
 }
-.sn-composer-row[data-narrow] .sn-room-modes [data-room-mode-rest] {
-  display: none;
-}
-.sn-composer-row:not([data-narrow]) .sn-room-modes [data-room-mode-count] {
+.sn-composer-row[data-narrow] .sn-room-chip-more {
   display: none;
 }
 
@@ -3059,6 +3069,19 @@ html[data-motion="reduced"] .animate-ping,
 html[data-motion="reduced"] .animate-pulse,
 html[data-motion="reduced"] .animate-shimmer {
   animation: none !important;
+}
+
+/* A profile card's sub tile: the progress line to the next sub badge fills once
+   as it appears. Transform only, so it never repaints; off and reduced still it. */
+@keyframes sub-progress-grow {
+  from { transform: scaleX(0); }
+}
+.sub-progress-fill {
+  transform-origin: left center;
+  animation: sub-progress-grow 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.1s both;
+}
+html[data-motion="reduced"] .sub-progress-fill {
+  animation: none;
 }
 
 .glass-button:hover {

@@ -106,7 +106,11 @@ export interface RoomMode {
 /** Mirrors Rust `room_modes::RoomModeView`. */
 export interface RoomModeView {
   modes: RoomMode[];
-  /** Replaces "Send a message" while a mode may hold you back. */
+  /** The chip style's words: the most limiting mode, in a word or two. */
+  chip: string | null;
+  /** Every mode spares you: the chip is drawn a shade quieter. */
+  exempt: boolean;
+  /** The prompt style: replaces "Send a message" while a mode may hold you back. */
   prompt: string | null;
   prompt_short: string | null;
   /** "You can chat as a moderator" when every mode spares you. */

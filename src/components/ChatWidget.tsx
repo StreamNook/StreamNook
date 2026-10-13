@@ -134,7 +134,6 @@ import { BackendChatMessage } from '../services/twitchChat';
 import { registerChatModController, getChatModController, type ChatModController } from '../keybindings';
 import { Tooltip } from './ui/Tooltip';
 import { RoomModeIndicator } from './chat/RoomModeIndicator';
-import { roomModesFieldStyle } from './chat/roomModeLayout';
 
 interface ParsedMessage {
   username: string;
@@ -1886,13 +1885,16 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const isInputDisabled =
     !canSendHere || !isConnected || (isTwitch && isSubOnly && !canBypassSubOnly) || twitchSignInOwed;
   // The room's chat modes, worded by Rust (services/room_modes.rs) and shipped
-  // on the ROOMSTATE frame, for every platform that reports them. While the
-  // setting is on, the prompt names them and their icons sit at the end of
-  // the field, where they stay while you type.
+  // on the ROOMSTATE frame, for every platform that reports them. One place
+  // shows them, the viewer's pick: a chip at the field's end that stays while
+  // you type (the default), or the prompt in place of "Send a message".
   const roomModes =
     (settings.chat_input?.show_room_modes ?? true) && roomState?.modes && roomState.modes.modes.length > 0
       ? roomState.modes
       : null;
+  const roomModesAsPrompt = settings.chat_input?.room_modes_style === 'prompt';
+  const roomModePrompt = roomModesAsPrompt ? (roomModes?.prompt ?? null) : null;
+  const roomModePromptShort = roomModesAsPrompt ? (roomModes?.prompt_short ?? null) : null;
   const chatPlaceholder = isReplayReadOnly
     ? 'Viewing chat replay (read-only)'
     : !canSendHere
@@ -1907,7 +1909,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     ? 'Sign in again to chat'
     : isWatchStreakMode
     ? "Add a message (optional)..."
-    : roomModes?.prompt ?? (isSubOnly && !canBypassSubOnly ? "Subscriber-Only Mode" : "Send a message");
+    : roomModePrompt ?? (isSubOnly && !canBypassSubOnly ? "Subscriber-Only Mode" : "Send a message");
   // The same prompt in a word or two for a narrow composer row, where the
   // full one is cut mid-word: Chromium draws no ellipsis on a textarea
   // placeholder. utils/composerNarrow.ts swaps between the two.
@@ -1921,7 +1923,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     ? 'Sign in'
     : isWatchStreakMode
     ? 'Message'
-    : roomModes?.prompt_short ?? (isSubOnly && !canBypassSubOnly ? 'Sub-only' : 'Message');
+    : roomModePromptShort ?? (isSubOnly && !canBypassSubOnly ? 'Sub-only' : 'Message');
 
   // Optional composer chrome. The placeholder keeps its text whenever it is
   // saying something the user can act on (read-only, connect your account,
@@ -1932,7 +1934,7 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
   const showPointsBalance = !chatInputPrefs?.hide_points_balance;
   const pointsBalanceInline = !!chatInputPrefs?.show_points_balance_inline;
   const visiblePlaceholder =
-    chatInputPrefs?.hide_placeholder && !isInputDisabled && !isWatchStreakMode && !roomModes?.prompt
+    chatInputPrefs?.hide_placeholder && !isInputDisabled && !isWatchStreakMode && !roomModePrompt
       ? ''
       : chatPlaceholder;
   const visiblePlaceholderNarrow = visiblePlaceholder ? chatPlaceholderNarrow : '';
@@ -3663,7 +3665,21 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
             return;
           }
 
-          // Unhandled slash commands (like /mods, /vips, /me) get sent directly
+          // /me is a chat line: it takes the normal send, whose own row Rust
+          // builds as an action. IRC never echoes your own line, so without
+          // that row it never showed.
+          if (messageToSend.startsWith('/me ') && currentUser) {
+            await sendMessage(messageToSend, {
+              username: currentUser.login || currentUser.username,
+              displayName: currentUser.display_name || currentUser.username,
+              userId: currentUser.user_id,
+              color: undefined,
+              badges: ''
+            });
+            return;
+          }
+
+          // Other unhandled slash commands (like /mods, /vips) get sent directly
           // through IRC without optimistic rendering. Twitch IRC responds with
           // a NOTICE message which the frontend already handles inline.
           await invoke('send_chat_message', {
@@ -5950,12 +5966,8 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                   </div>
                 )}
                 {/* Input container with emoji button inset on the left and
-                    the room's chat modes inset on the right. */}
-                <div
-                  className="sn-composer-field relative flex-1 min-w-0 flex items-center"
-                  data-room-modes={roomModes ? '' : undefined}
-                  style={roomModesFieldStyle(roomModes)}
-                >
+                    the room's chat-mode chip inset on the right. */}
+                <div className="sn-composer-field relative flex-1 min-w-0 flex items-center">
                   {/* Command menu button, first inset on the left */}
                   {showCommandButton && (
                   <Tooltip content={showCommandMenu ? 'Close commands' : 'Commands'} side="top">
@@ -6182,9 +6194,9 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                       if (emoteList) closeEmoteList();
                     }}
                   />
-                  {/* The room's chat modes, at the field's right edge. */}
-                  {roomModes && <RoomModeIndicator view={roomModes} />}
-                  {/* Length label, bottom-right of the field, clear of the mode icons. */}
+                  {/* The room's chat modes as one chip at the field's right edge. */}
+                  {roomModes && !roomModesAsPrompt && <RoomModeIndicator view={roomModes} />}
+                  {/* Length label, bottom-right of the field, clear of the chip. */}
                   {messageInput.length > 0 && (
                     <span
                       className="pointer-events-none absolute bottom-1 z-10 flex items-center text-[10px] tabular-nums text-textSecondary/70"
