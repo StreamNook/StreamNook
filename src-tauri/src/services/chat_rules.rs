@@ -190,7 +190,12 @@ fn default_true() -> bool {
 }
 
 const DEFAULT_COOLDOWN_SECONDS: f64 = 3.0;
-const VALID_SOUND_IDS: [&str; 5] = ["boop", "tick", "soft", "whisper", "gentle"];
+/// The built-in tones; `BUILT_IN_SOUNDS` in src/utils/notificationSound.ts
+/// lists the same ids (checked by its test).
+const VALID_SOUND_IDS: [&str; 12] = [
+    "boop", "tick", "soft", "whisper", "gentle", "morse", "pager", "flip", "arcade", "gadget",
+    "ringtone", "granvals",
+];
 
 fn normalize_sound(raw: &Option<String>) -> Option<String> {
     let s = raw.as_deref()?;

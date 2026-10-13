@@ -3,13 +3,13 @@ import { invoke } from '@tauri-apps/api/core';
 import { Dropdown } from '../ui/Dropdown';
 import { ChevronDown, ChevronUp, Plus, Trash2, Volume2 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
-import { SOUND_LABELS, playSound, type SoundId } from '../../utils/notificationSound';
+import { BUILT_IN_SOUNDS, SOUND_LABELS, playSound, type SoundId } from '../../utils/notificationSound';
 import { SettingsSection } from './_primitives';
 import type { HighlightPhrase } from '../../types';
 
 const DEFAULT_PHRASE_COLOR = '#fbbf24';
 const DEFAULT_COOLDOWN_SECONDS = 3;
-const SOUND_OPTIONS: SoundId[] = ['boop', 'tick', 'soft', 'whisper', 'gentle'];
+const SOUND_OPTIONS: SoundId[] = BUILT_IN_SOUNDS;
 
 function makeDefaultPhrase(): HighlightPhrase {
   return {

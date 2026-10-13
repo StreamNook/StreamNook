@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 vi.mock('@tauri-apps/api/core', () => ({ convertFileSrc: (p: string) => p }));
 
@@ -57,5 +59,24 @@ describe('playNotificationSound', () => {
     playSound('boop');
     playSound('tick');
     expect(tonesStarted).toBe(3);
+  });
+
+  it('plays a retro tone as its run of notes', async () => {
+    const { playSound } = await import('./notificationSound');
+    playSound('morse');
+    // ... -- ... is eight marks.
+    expect(tonesStarted).toBe(8);
+  });
+});
+
+describe('built-in tones', () => {
+  it('every built-in has a label, and Rust accepts exactly the same ids', async () => {
+    const { BUILT_IN_SOUNDS, SOUND_LABELS } = await import('./notificationSound');
+    expect(Object.keys(SOUND_LABELS).sort()).toEqual([...BUILT_IN_SOUNDS].sort());
+    const rules = readFileSync(resolve(__dirname, '..', '..', 'src-tauri/src/services/chat_rules.rs'), 'utf8');
+    const list = rules.match(/const VALID_SOUND_IDS: \[&str; \d+\] = \[([^\]]*)\]/);
+    expect(list).not.toBeNull();
+    const rustIds = [...list![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    expect(rustIds.sort()).toEqual([...BUILT_IN_SOUNDS].sort());
   });
 });
