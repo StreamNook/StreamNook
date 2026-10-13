@@ -204,11 +204,16 @@ final class Watch {
         if catchUpTargetMS != nil, player.timeControlStatus == .playing, player.rate != Float(distance.rate) {
             player.rate = Float(distance.rate)
         }
-        let now = item.currentTime().seconds
-        let ahead = item.loadedTimeRanges.map(\.timeRangeValue)
-            .first { $0.start.seconds <= now + 0.1 && $0.end.seconds >= now }
-            .map { Int((($0.end.seconds - now) * 1000).rounded()) } ?? 0
-        log.notice("behind \(distance.behindMs ?? -1) newest \(distance.behindNewestMs ?? -1) edge \(distance.edgeSn ?? -1)/\(distance.edgePart ?? -1) age \(distance.edgeAgeMs ?? -1) buf \(ahead) rate \(self.player.rate) rec \(Self.ms(item.recommendedTimeOffsetFromLive)) cfg \(Self.ms(item.configuredTimeOffsetFromLive)) pdt \(pdt == nil ? "none" : "ok", privacy: .public)")
+        let ahead = Self.bufferedAhead(item)
+        let behind = distance.behindMs ?? -1
+        let newest = distance.behindNewestMs ?? -1
+        let edge = "\(distance.edgeSn ?? -1)/\(distance.edgePart ?? -1)"
+        let age = distance.edgeAgeMs ?? -1
+        let rate = player.rate
+        let recommended = Self.ms(item.recommendedTimeOffsetFromLive)
+        let configured = Self.ms(item.configuredTimeOffsetFromLive)
+        let dated = pdt == nil ? "none" : "ok"
+        log.notice("behind \(behind) newest \(newest) edge \(edge, privacy: .public) age \(age) buf \(ahead) rate \(rate) rec \(recommended) cfg \(configured) pdt \(dated, privacy: .public)")
         for chunk in stride(from: 0, to: distance.fetches.count, by: 14) {
             let slice = distance.fetches[chunk..<min(chunk + 14, distance.fetches.count)]
             log.notice("fetch \(slice.joined(separator: " | "), privacy: .public)")
@@ -223,6 +228,20 @@ final class Watch {
         } else {
             log.notice("summary route \(self.route.rawValue, privacy: .public) first \(self.firstPlayMS ?? -1) stalls \(self.stalls) errors \(errors)")
         }
+    }
+
+    /// Milliseconds buffered past the playhead.
+    private static func bufferedAhead(_ item: AVPlayerItem) -> Int {
+        let now = item.currentTime().seconds
+        for value in item.loadedTimeRanges {
+            let range = value.timeRangeValue
+            let start = range.start.seconds
+            let end = range.end.seconds
+            if start <= now + 0.1, end >= now {
+                return Int(((end - now) * 1000).rounded())
+            }
+        }
+        return 0
     }
 
     private static func ms(_ time: CMTime) -> Int {
