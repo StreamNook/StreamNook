@@ -16,6 +16,7 @@ use reqwest::Method;
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use crate::services::follow_lookup;
 use crate::services::twitch_service::TwitchService;
 
 const APP_CLIENT_ID: &str = env!("TWITCH_APP_CLIENT_ID");
@@ -262,7 +263,8 @@ pub fn followage_text(user: &str, channel: &str, followed_at: Option<DateTime<Ut
 }
 
 /// `/followage [user] [channel]`. Your own follow comes from Helix; anyone
-/// else's from api.ivr.fi, which reports public follows.
+/// else's from the channel's follower list where Helix shows it (you own or
+/// moderate the channel), else api.ivr.fi.
 pub async fn followage(channel_login: &str, user_login: Option<&str>) -> Result<String, String> {
     let channel = require_user(channel_login).await?;
     let channel_id = channel["id"].as_str().unwrap_or_default().to_string();
@@ -282,8 +284,26 @@ pub async fn followage(channel_login: &str, user_login: Option<&str>) -> Result<
         return Ok(followage_text("You", &display(&channel), at, Utc::now()));
     }
     let user = require_user(&target).await?;
-    let ivr = crate::services::ivr::subage(&target, channel_login).await?;
-    Ok(followage_text(&display(&user), &display(&channel), parse_time(&ivr["followedAt"]), Utc::now()))
+    let user_id = user["id"].as_str().unwrap_or_default();
+    let (ivr, from_helix) = tokio::join!(
+        crate::services::ivr::subage(&target, channel_login),
+        follow_lookup::helix_follow(user_id, &channel_id, follow_lookup::ViewerRole::Unknown)
+    );
+    let ivr_at = ivr.as_ref().ok().and_then(|v| v["followedAt"].as_str());
+    let (who, chan) = (display(&user), display(&channel));
+    Ok(match follow_lookup::merge(ivr_at, from_helix) {
+        follow_lookup::FollowAnswer::Following(at) => {
+            followage_text(&who, &chan, parse_time(&Value::String(at)), Utc::now())
+        }
+        follow_lookup::FollowAnswer::NotFollowing => followage_text(&who, &chan, None, Utc::now()),
+        follow_lookup::FollowAnswer::Unknown => followage_unknown_text(&who, &chan),
+    })
+}
+
+/// When no source can say: Twitch shares a channel's followers only with the
+/// channel's broadcaster and moderators.
+pub fn followage_unknown_text(user: &str, channel: &str) -> String {
+    format!("StreamNook can't see whether {user} follows {channel}: Twitch only shares a channel's followers with its moderators.")
 }
 
 pub fn follower_count_text(channel: &str, total: Option<i64>) -> String {
@@ -1719,10 +1739,112 @@ pub fn find_on_path(program: &str) -> Option<PathBuf> {
     None
 }
 
+// ──────────────────────────────────── lurk ───────────────────────────────────
+
+/// What `/lurk` says. Each reads after the sender's name as a `/me` action
+/// ("br_winters melts into the shadows"), and as plain words where a chat has
+/// no actions.
+pub const LURK_LINES: &[&str] = &[
+    "is now lurking",
+    "fades into the background",
+    "melts into the shadows",
+    "slips into lurk mode",
+    "goes full ninja",
+    "becomes one with the chat",
+    "tiptoes away from the keyboard",
+    "is lurking with intent",
+    "is watching quietly from the bushes",
+    "puts on the invisibility cloak",
+    "turns the volume up and the typing down",
+    "is now a silent supporter",
+    "leaves the stream running and wanders off",
+    "is lurking, but the view still counts",
+    "dissolves into the viewer count",
+    "hides behind the chat box",
+    "goes into stealth mode",
+    "retreats to the lurk cave",
+    "is AFK, but the tab stays open",
+    "switches to passive viewing",
+    "lurks responsibly",
+    "is a professional lurker now",
+    "stays for the vibes and leaves the chatting to you",
+    "is lurking from the back row",
+    "goes quiet but never leaves",
+    "joins the lurker guild",
+    "sneaks off with the stream still on",
+    "has entered lurk-o-vision",
+    "is now part of the furniture",
+    "becomes a quiet little gremlin in the corner",
+    "is now a ghost in the chat",
+    "is camouflaged as a regular viewer",
+    "switches to background mode",
+    "watches from a safe distance",
+    "is lurking hard",
+    "parks in the back and enjoys the show",
+    "goes radio silent",
+    "blends in with the wallpaper",
+    "clocks out of chat but stays on stream",
+    "is here in spirit (and in the viewer count)",
+];
+
+/// The `/lurk` message built from line `index`: a `/me` action on Twitch,
+/// plain words elsewhere, with the viewer's note after a colon.
+pub fn lurk_message(index: usize, note: Option<&str>, action: bool) -> String {
+    let line = LURK_LINES[index % LURK_LINES.len()];
+    let said = match note.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) => format!("{line}: {n}"),
+        None => line.to_string(),
+    };
+    if action {
+        format!("/me {said}")
+    } else {
+        said
+    }
+}
+
+/// A random `/lurk` message, never the same line twice in a row.
+pub fn lurk(note: Option<&str>, action: bool) -> String {
+    static LAST: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(usize::MAX);
+    let n = LURK_LINES.len();
+    let last = LAST.load(Ordering::Relaxed);
+    let mut index = (rand::random::<u64>() % n as u64) as usize;
+    if index == last {
+        index = (index + 1 + (rand::random::<u64>() % (n as u64 - 1)) as usize) % n;
+    }
+    LAST.store(index, Ordering::Relaxed);
+    lurk_message(index, note, action)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn lurk_is_an_action_on_twitch_and_words_elsewhere() {
+        assert_eq!(lurk_message(0, None, true), "/me is now lurking");
+        assert_eq!(lurk_message(0, Some("  making dinner "), true), "/me is now lurking: making dinner");
+        assert_eq!(lurk_message(0, Some("   "), false), "is now lurking");
+        assert_eq!(lurk_message(LURK_LINES.len() + 2, None, false), LURK_LINES[2]);
+    }
+
+    #[test]
+    fn lurk_never_repeats_back_to_back() {
+        let mut prev = lurk(None, false);
+        for _ in 0..200 {
+            let next = lurk(None, false);
+            assert_ne!(next, prev);
+            prev = next;
+        }
+    }
+
+    #[test]
+    fn lurk_lines_read_after_a_name() {
+        for line in LURK_LINES {
+            assert!(!line.is_empty() && line.chars().next().unwrap().is_lowercase(), "{line}");
+            assert!(!line.contains('\u{2014}') && !line.ends_with('.'), "{line}");
+        }
+    }
 
     fn t(y: i32, mo: u32, d: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(y, mo, d, 12, 0, 0).unwrap()
@@ -1769,6 +1891,10 @@ mod tests {
         );
         assert_eq!(followage_text("You", "Chan", None, t(2024, 1, 1)), "You do not follow Chan.");
         assert_eq!(followage_text("bob", "Chan", None, t(2024, 1, 1)), "bob does not follow Chan.");
+        assert_eq!(
+            followage_unknown_text("bob", "Chan"),
+            "StreamNook can't see whether bob follows Chan: Twitch only shares a channel's followers with its moderators."
+        );
     }
 
     #[test]

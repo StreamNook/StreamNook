@@ -129,7 +129,7 @@ export const COMMAND_DEFINITIONS: CommandDefinition[] = [
   { name: 'reply', aliases: ['msgreply'], usage: '/reply <@user> <message>', description: "Reply to someone's last message", category: 'Everyone' , examples: ['/reply @someuser good point'] },
   { name: 'say', usage: '/say <text>', description: 'Send text exactly as typed, skipping your custom commands', category: 'Everyone' , examples: ['/say !discord'] },
   { name: 'shrug', usage: '/shrug [message]', description: 'Send your message with ¯\\_(ツ)_/¯ on the end', category: 'Everyone' , examples: ['/shrug', '/shrug no idea'] },
-  { name: 'lurk', usage: '/lurk [note]', description: 'Tell chat you are lurking', category: 'Everyone' , examples: ['/lurk', '/lurk making dinner'] },
+  { name: 'lurk', usage: '/lurk [note]', description: 'Tell chat you are lurking, with a random line each time',category: 'Everyone' , examples: ['/lurk', '/lurk making dinner'] },
   { name: 'squishy', usage: '/squishy', description: 'Post the notsquishY copypasta', category: 'Everyone' },
   { name: 'redeem', usage: '/redeem', description: "Open this channel's rewards", category: 'Everyone' , local: true, desktopOnly: true },
   { name: 'reconnect', aliases: ['rejoin'], usage: '/reconnect', description: 'Reconnect this chat without restarting the stream', category: 'Everyone' , local: true },

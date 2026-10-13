@@ -159,6 +159,13 @@ pub async fn slash_last_message(
         .map_err(|e| e.to_string())
 }
 
+/// `/lurk [note]`: a random lurk line, as a `/me` action when `action` is set
+/// (Twitch) and plain words otherwise.
+#[tauri::command]
+pub fn slash_lurk_line(note: Option<String>, action: bool) -> String {
+    sc::lurk(note.as_deref(), action)
+}
+
 /// `/delete <message id | @user>`.
 #[tauri::command]
 pub async fn slash_delete_message(broadcaster_id: String, channel: String, target: String) -> Result<String, String> {

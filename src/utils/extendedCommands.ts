@@ -805,10 +805,13 @@ const handlers: Record<string, Handler> = {
   },
 
   async lurk(ctx) {
-    const text = ctx.rest.trim();
     // /me is Twitch's; Kick and YouTube would post it as the letters "/me".
-    const said = text ? `is now lurking: ${text}` : 'is now lurking';
-    ctx.send(isProviderChat(ctx.broadcasterLogin) ? said : `/me ${said}`);
+    ctx.send(
+      await invoke<string>('slash_lurk_line', {
+        note: ctx.rest.trim() || null,
+        action: !isProviderChat(ctx.broadcasterLogin),
+      }),
+    );
   },
 
   async squishy(ctx) {

@@ -307,9 +307,11 @@ describe('platform differences', () => {
       send: kickSend,
       dispatch: async () => true,
     });
-    expect(kickSend).toHaveBeenCalledWith('is now lurking');
-    await run('/lurk');
-    expect(send).toHaveBeenCalledWith('/me is now lurking');
+    expect(calls('slash_lurk_line')[0]).toEqual({ note: null, action: false });
+    expect(kickSend).toHaveBeenCalledWith('ok');
+    await run('/lurk making dinner');
+    expect(calls('slash_lurk_line')[1]).toEqual({ note: 'making dinner', action: true });
+    expect(send).toHaveBeenCalledWith('ok');
   });
 
   it('/help on the phone leaves out desktop-only commands', () => {
