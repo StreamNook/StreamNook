@@ -2354,6 +2354,107 @@ fn fallback_apple_part_target(edge: &LiveEdge) -> f64 {
         Container::Cmaf => APPLE_CMAF_PART_TARGET,
     }
 }
+
+/// CMAF parts for AVPlayer. Twitch's own fragments run 6 to 9 frames (0.100
+/// to 0.150 s at 60 fps), a spread no PART-TARGET fits within its 85% window,
+/// so the Apple playlist lists runs of consecutive fragments instead, served
+/// as one part of back-to-back moof+mdat pairs. A run closes once it reaches
+/// this length: three 6- or 7-frame fragments, 0.300 to 0.350 s, which does
+/// fit. An in-progress segment lists only its closed runs; the remainder
+/// becomes its final part when it completes.
+const APPLE_CMAF_RUN_MIN: f64 = 0.295;
+/// The CMAF run target before any complete segment exists (never kept).
+const APPLE_CMAF_RUN_TARGET: f64 = 0.351;
+
+/// One segment's fragment runs, as (first fragment, end, duration).
+fn apple_runs(seg: &Segment) -> Vec<(usize, usize, f64)> {
+    let mut runs = Vec::new();
+    let (mut start, mut sum) = (0, 0.0);
+    for (i, p) in seg.parts.iter().enumerate() {
+        sum += p.duration;
+        if sum >= APPLE_CMAF_RUN_MIN {
+            runs.push((start, i + 1, sum));
+            start = i + 1;
+            sum = 0.0;
+        }
+    }
+    if seg.complete && start < seg.parts.len() {
+        runs.push((start, seg.parts.len(), sum));
+    }
+    runs
+}
+
+/// The edge as AVPlayer is served it: for CMAF, each segment's parts are its
+/// fragment runs (`apple_runs`); `None` for TS, whose parts already fit. With
+/// a `target`, declared durations are held inside its window: a segment's
+/// first run carries the longer keyframe fragment and can run a frame or two
+/// past it, and the segment's EXTINF stays exact either way.
+fn apple_view(edge: &LiveEdge, target: Option<f64>) -> Option<LiveEdge> {
+    if edge.container != Container::Cmaf {
+        return None;
+    }
+    let empty = Arc::new(Vec::new());
+    let segments = edge
+        .segments
+        .iter()
+        .map(|seg| {
+            let runs = apple_runs(seg);
+            let last = runs.len().saturating_sub(1);
+            let parts = runs
+                .iter()
+                .enumerate()
+                .map(|(i, &(_, _, d))| {
+                    let duration = match target {
+                        None => d,
+                        Some(t) if seg.complete && i == last => d.min(t),
+                        Some(t) => d.clamp(((t * 0.85) * 1000.0).ceil() / 1000.0, t),
+                    };
+                    Part { duration, bytes: empty.clone() }
+                })
+                .collect();
+            Segment {
+                sn: seg.sn,
+                pdt: seg.pdt.clone(),
+                complete: seg.complete,
+                duration: seg.duration,
+                parts,
+                assembled: None,
+            }
+        })
+        .collect();
+    Some(LiveEdge {
+        init_url: edge.init_url.clone(),
+        init_bytes: edge.init_bytes.clone(),
+        container: edge.container,
+        target_duration: edge.target_duration,
+        part_target: edge.part_target,
+        segments,
+    })
+}
+
+/// The CMAF run target: the longest run that is neither a segment's first nor
+/// its last, rounded up to the millisecond, with no headroom (0.300 s runs
+/// must stay within 85% of it). `None` before a complete segment has one.
+fn fitted_apple_run_target(view: &LiveEdge) -> Option<f64> {
+    let longest = view
+        .segments
+        .iter()
+        .filter(|s| s.complete && s.parts.len() > 2)
+        .flat_map(|s| s.parts[1..s.parts.len() - 1].iter())
+        .map(|p| p.duration)
+        .fold(0.0, f64::max);
+    (longest > 0.0).then(|| (longest * 1000.0 - 1e-6).ceil() / 1000.0)
+}
+
+/// The bytes of CMAF run `idx` of a segment: its fragments back to back.
+fn apple_run_bytes(seg: &Segment, idx: usize) -> Option<Arc<Vec<u8>>> {
+    let &(first, end, _) = apple_runs(seg).get(idx)?;
+    let mut bytes = Vec::with_capacity(seg.parts[first..end].iter().map(|p| p.bytes.len()).sum());
+    for p in &seg.parts[first..end] {
+        bytes.extend_from_slice(&p.bytes);
+    }
+    Some(Arc::new(bytes))
+}
 /// How long an Apple blocking reload waits for its part before answering with
 /// the current playlist. AVPlayer allows a blocking reload about three target
 /// durations, far above hls.js's 2 s budget that bounds `BLOCK_TIMEOUT`.
@@ -2490,9 +2591,13 @@ impl LlOrigin {
         if let Some(m) = msn {
             let deadline = tokio::time::Instant::now() + APPLE_BLOCK_TIMEOUT;
             let held = self
-                .wait_for(deadline, |edge| match part {
-                    Some(p) => blocking_satisfied(edge, m, p),
-                    None => segment_satisfied(edge, m),
+                .wait_for(deadline, |edge| {
+                    let view = apple_view(edge, None);
+                    let edge = view.as_ref().unwrap_or(edge);
+                    match part {
+                        Some(p) => blocking_satisfied(edge, m, p),
+                        None => segment_satisfied(edge, m),
+                    }
                 })
                 .await;
             if !held {
@@ -2501,27 +2606,50 @@ impl LlOrigin {
         }
         let g = self.live_edge.lock().unwrap();
         let edge = g.as_ref()?;
+        let runs = apple_view(edge, None);
         let target = {
             let mut kept = self.apple_part_target.lock().unwrap();
-            match *kept {
-                Some(t) => t,
-                None => match fitted_apple_part_target(edge) {
+            match (*kept, &runs) {
+                (Some(t), _) => t,
+                (None, Some(view)) => match fitted_apple_run_target(view) {
+                    Some(t) => *kept.insert(t),
+                    None => APPLE_CMAF_RUN_TARGET,
+                },
+                (None, None) => match fitted_apple_part_target(edge) {
                     Some(t) => *kept.insert(t),
                     None => fallback_apple_part_target(edge),
                 },
             }
         };
-        Some(render_apple(edge, base, target, hold_parts))
+        let view = runs.and_then(|_| apple_view(edge, Some(target)));
+        Some(render_apple(view.as_ref().unwrap_or(edge), base, target, hold_parts))
     }
 
     /// A part for AVPlayer: held while it is still to come (a preload hint).
+    /// For CMAF, `idx` names a fragment run (`apple_runs`).
     pub async fn get_part_apple(&self, sn: u64, idx: usize) -> Option<Arc<Vec<u8>>> {
         let deadline = tokio::time::Instant::now() + APPLE_PART_WAIT;
         self.wait_for(deadline, |edge| {
+            let view = apple_view(edge, None);
+            let edge = view.as_ref().unwrap_or(edge);
             has_part_locked(edge, sn, idx as u64) || part_never_comes(edge, sn, idx)
         })
         .await;
-        self.get_part(sn, idx)
+        let cmaf = {
+            let g = self.live_edge.lock().unwrap();
+            let edge = g.as_ref()?;
+            if edge.container == Container::Cmaf {
+                Some(edge.segments.iter().find(|s| s.sn == sn).and_then(|s| apple_run_bytes(s, idx)))
+            } else {
+                None
+            }
+        };
+        match cmaf {
+            Some(Some(bytes)) => Some(bytes),
+            // Retirement grace, as `get_part` gives single parts.
+            Some(None) => self.retired.lock().unwrap().iter().find(|s| s.sn == sn).and_then(|s| apple_run_bytes(s, idx)),
+            None => self.get_part(sn, idx),
+        }
     }
 }
 
@@ -2598,16 +2726,6 @@ pub fn upstream_has_prefetch() -> bool {
 
 pub fn is_active() -> bool {
     SOLO.is_active()
-}
-
-/// Whether the active origin can serve AVPlayer a low-latency playlist it
-/// accepts. AVPlayer refuses any non-final part under 85% of PART-TARGET; TS
-/// parts are cut here on whole frames of the decode clock and pass, but CMAF
-/// parts are Twitch's own fragments, which run 6 to 9 frames (0.100 to
-/// 0.150 s at 60 fps), and no PART-TARGET fits that spread. A CMAF stream
-/// plays on the whole-segment playlist instead.
-pub fn apple_parts_fit() -> bool {
-    SOLO.is_active() && SOLO.container() == Container::Ts
 }
 
 /// True when the experimental low-latency engine is OFF (the hard kill switch is
@@ -3648,5 +3766,84 @@ http://127.0.0.1:9/seg/50.ts\n\
         assert!(segment_satisfied(&edge, 51));
         assert!(part_never_comes(&edge, 51, 1));
         assert_eq!(next_part(&edge), Some((52, 0)));
+    }
+
+    /// Twitch's CMAF fragment lengths for one 60 fps segment, as the iPhone saw them.
+    const CMAF_FRAGMENTS: [f64; 19] = [
+        0.134, 0.116, 0.100, 0.100, 0.117, 0.100, 0.117, 0.100, 0.100, 0.116, 0.100, 0.117, 0.100, 0.100,
+        0.117, 0.100, 0.116, 0.100, 0.050,
+    ];
+
+    /// A native CMAF edge: one complete segment of Twitch fragments, one in progress.
+    fn cmaf_fixture() -> LiveEdge {
+        let parts = |n: usize| -> Vec<(Vec<u8>, f64)> {
+            CMAF_FRAGMENTS.iter().take(n).enumerate().map(|(i, d)| (vec![i as u8], *d)).collect()
+        };
+        let mut segs = VecDeque::new();
+        segs.push_back(make_segment(60, Some("P0".into()), true, parts(19)));
+        let mut open = make_segment(61, Some("P1".into()), false, parts(5));
+        open.duration = 2.0;
+        segs.push_back(open);
+        LiveEdge {
+            init_url: "https://cdn/init.mp4".into(),
+            init_bytes: None,
+            container: Container::Cmaf,
+            target_duration: 2,
+            part_target: PART_TARGET,
+            segments: segs,
+        }
+    }
+
+    #[test]
+    fn cmaf_fragments_run_into_parts_that_fit_the_apple_window() {
+        let edge = cmaf_fixture();
+        let runs = apple_runs(&edge.segments[0]);
+        let ends: Vec<usize> = runs.iter().map(|r| r.1).collect();
+        assert_eq!(ends, [3, 6, 9, 12, 15, 18, 19]);
+        // The open segment lists only its closed run.
+        assert_eq!(apple_runs(&edge.segments[1]).len(), 1);
+
+        let view = apple_view(&edge, None).unwrap();
+        let target = fitted_apple_run_target(&view).unwrap();
+        assert_eq!(target, 0.333);
+        let fitted = apple_view(&edge, Some(target)).unwrap();
+        let seg = &fitted.segments[0];
+        for p in &seg.parts[..seg.parts.len() - 1] {
+            assert!(p.duration <= target && p.duration >= target * 0.85, "{} outside the window", p.duration);
+        }
+        assert!(seg.parts.last().unwrap().duration <= target);
+        // TS edges keep their own parts.
+        assert!(apple_view(&apple_fixture(), None).is_none());
+    }
+
+    #[test]
+    fn the_apple_cmaf_playlist_lists_runs_and_the_hls_js_one_is_unchanged() {
+        let edge = cmaf_fixture();
+        let before = render_locked(&edge);
+        assert_eq!(before.matches("#EXT-X-PART:").count(), 24, "every fragment for hls.js");
+        let view = apple_view(&edge, Some(0.333)).unwrap();
+        let pl = render_apple(&view, "http://127.0.0.1:9/", 0.333, APPLE_HOLD_BACK_PARTS);
+        assert_eq!(render_locked(&edge), before);
+        assert_eq!(pl.matches("#EXT-X-PART:").count(), 8);
+        assert!(pl.contains("#EXT-X-PART-INF:PART-TARGET=0.333\n"));
+        assert!(pl.contains("#EXT-X-MAP:URI=\"https://cdn/init.mp4\"\n"));
+        assert!(pl.contains(
+            "#EXT-X-PART:DURATION=0.333,URI=\"http://127.0.0.1:9/part/60/0.mp4?apple=1\",INDEPENDENT=YES\n"
+        ));
+        assert!(pl.contains("#EXT-X-PART:DURATION=0.050,URI=\"http://127.0.0.1:9/part/60/6.mp4?apple=1\"\n"));
+        assert!(pl.ends_with("#EXT-X-PRELOAD-HINT:TYPE=PART,URI=\"http://127.0.0.1:9/part/61/1.mp4?apple=1\"\n"));
+    }
+
+    #[test]
+    fn a_cmaf_run_is_its_fragments_back_to_back() {
+        let edge = cmaf_fixture();
+        assert_eq!(apple_run_bytes(&edge.segments[0], 0).unwrap().as_slice(), &[0, 1, 2]);
+        assert_eq!(apple_run_bytes(&edge.segments[0], 6).unwrap().as_slice(), &[18]);
+        assert!(apple_run_bytes(&edge.segments[0], 7).is_none());
+        let view = apple_view(&edge, None).unwrap();
+        assert!(part_never_comes(&view, 60, 7));
+        assert!(!part_never_comes(&view, 61, 1));
+        assert!(blocking_satisfied(&view, 61, 0));
+        assert!(!blocking_satisfied(&view, 61, 1));
     }
 }
