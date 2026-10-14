@@ -602,11 +602,11 @@ pub async fn start_stream(
     )
     .await;
 
-    // Android can't host a resolution plugin (it would be a spawned native
+    // A phone can't host a resolution plugin (it would be a spawned native
     // process), so ad-free playback occupies the same seam in-core. It obeys
     // the same contract: it declines the entitled case and any failure, and
     // declining means the core resolution serves.
-    #[cfg(target_os = "android")]
+    #[cfg(mobile)]
     let resolved = match resolved {
         Some(r) => Some(r),
         None => {

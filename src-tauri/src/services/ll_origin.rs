@@ -1067,7 +1067,7 @@ impl LlOrigin {
         // cannot both run. The kill switch below is no help here, because CMAF
         // (HEVC/AV1) deliberately ignores it, which is exactly where ads would slip
         // through with the feature reporting itself as on.
-        #[cfg(target_os = "android")]
+        #[cfg(mobile)]
         if crate::services::ad_bypass::active() {
             debug!("[LLOrigin] ad-free playback owns this stream; origin inactive");
             return inactive;
@@ -2611,7 +2611,7 @@ pub fn engine_disabled() -> bool {
     // `seg/` playlist for this stream no matter where the kill switch sits. Say
     // so, or the viewer who has the experimental setting on loses the stable
     // projection as well as the origin and ends up worse off than with it off.
-    #[cfg(target_os = "android")]
+    #[cfg(mobile)]
     if crate::services::ad_bypass::active() {
         return true;
     }

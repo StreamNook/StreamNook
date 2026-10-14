@@ -1019,9 +1019,9 @@ impl StreamServer {
                     return finish_playlist_response(status, request_path, bytes);
                 }
                 detect_ads_in_playlist(text);
-                #[cfg(target_os = "android")]
+                #[cfg(mobile)]
                 let filtered = crate::services::ad_bypass::filter_and_escalate(text);
-                #[cfg(target_os = "android")]
+                #[cfg(mobile)]
                 let text = filtered.as_str();
                 // Lower the over-declared TARGETDURATION, then (LIVE only) pin every
                 // segment URL stable across refreshes so Twitch re-signing a path
