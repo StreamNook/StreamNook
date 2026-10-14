@@ -41,9 +41,10 @@ struct BrowseScreen: View {
         }
         .refreshable { await refresh() }
         .task { if !home.recommendedLoaded { await home.loadRecommended() } }
-        .task(id: "\(browse.mode)|\(browse.query)|\(model.signedIn)") { if model.signedIn { await browse.search(model.core) } }
+        // The core answers these signed out too (the public GQL), so Browse never waits on a sign-in.
+        .task(id: "\(browse.mode)|\(browse.query)|\(model.signedIn)") { await browse.search(model.core) }
         .task(id: "\(browse.mode)|\(model.signedIn)") {
-            if model.signedIn && browse.mode == .categories { await browse.loadCategories(model.core) }
+            if browse.mode == .categories { await browse.loadCategories(model.core) }
         }
     }
 
@@ -51,15 +52,7 @@ struct BrowseScreen: View {
         Binding(get: { browse.mode }, set: { if let mode = $0 { browse.mode = mode } })
     }
 
-    @ViewBuilder
-    private var content: some View {
-        if !model.signedIn && (browse.mode == .categories || !browse.trimmed.isEmpty) {
-            SignInNote(model: model, text: browse.mode == .categories
-                       ? "Sign in with Twitch to browse every category." : "Sign in with Twitch to search channels.")
-        } else {
-            results
-        }
-    }
+    private var content: some View { results }
 
     @ViewBuilder
     private var results: some View {
