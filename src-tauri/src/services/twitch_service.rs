@@ -82,6 +82,174 @@ pub(crate) fn live_row_from_gql(user: &serde_json::Value) -> Option<TwitchStream
     })
 }
 
+/// "partner" or "affiliate" from a GQL `roles` node (GQL `User` has no
+/// `broadcasterType`).
+fn broadcaster_type_from_roles(roles: Option<&serde_json::Value>) -> Option<String> {
+    let has = |key: &str| roles.and_then(|r| r.get(key)).and_then(|v| v.as_bool()).unwrap_or(false);
+    if has("isPartner") {
+        Some("partner".to_string())
+    } else if has("isAffiliate") {
+        Some("affiliate".to_string())
+    } else {
+        None
+    }
+}
+
+/// A Helix-shaped live row from a GQL `Stream` node (recommendations, a
+/// category's streams, tag-filtered streams). The node's own `game` wins;
+/// `fallback_game` (id, name) names the category when the query did not ask
+/// for it. `None` when the node has no broadcaster.
+pub(crate) fn stream_row_from_gql_node(
+    node: &serde_json::Value,
+    fallback_game: (&str, &str),
+) -> Option<TwitchStream> {
+    let broadcaster = node.get("broadcaster").filter(|b| !b.is_null())?;
+    let s = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_str()).unwrap_or_default().to_string();
+    let user_login = s(broadcaster, "login");
+    let user_name = Some(s(broadcaster, "displayName")).filter(|n| !n.is_empty()).unwrap_or_else(|| user_login.clone());
+    let tags: Vec<String> = node
+        .get("freeformTags")
+        .and_then(|t| t.as_array())
+        .map(|arr| arr.iter().filter_map(|t| t.get("name").and_then(|n| n.as_str()).map(String::from)).collect())
+        .unwrap_or_default();
+    let (game_id, game_name) = match node.get("game").filter(|g| !g.is_null()) {
+        Some(g) => (
+            s(g, "id"),
+            g.get("displayName")
+                .and_then(|v| v.as_str())
+                .filter(|n| !n.is_empty())
+                .or_else(|| g.get("name").and_then(|v| v.as_str()))
+                .unwrap_or_default()
+                .to_string(),
+        ),
+        None => (fallback_game.0.to_string(), fallback_game.1.to_string()),
+    };
+    Some(TwitchStream {
+        id: s(node, "id"),
+        user_id: s(broadcaster, "id"),
+        user_name,
+        user_login,
+        title: s(node, "title"),
+        viewer_count: node.get("viewersCount").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        game_id,
+        game_name,
+        thumbnail_url: s(node, "previewImageURL"),
+        started_at: s(node, "createdAt"),
+        broadcaster_type: broadcaster_type_from_roles(broadcaster.get("roles")),
+        profile_image_url: broadcaster.get("profileImageURL").and_then(|v| v.as_str()).map(String::from),
+        is_live: Some(true),
+        tags: if tags.is_empty() { None } else { Some(tags) },
+        language: node.get("language").and_then(|v| v.as_str()).map(normalize_gql_language),
+    })
+}
+
+/// Signed-out cursors carry this prefix, so a list paged from the public GQL
+/// keeps paging there even when a token appears mid-scroll: Helix cannot read
+/// a GQL cursor, nor GQL a Helix one.
+const PUBLIC_CURSOR: &str = "gql:";
+
+/// The GQL cursor inside a signed-out cursor, or `None` for a Helix one.
+fn public_cursor(cursor: Option<&str>) -> Option<&str> {
+    cursor.and_then(|c| c.strip_prefix(PUBLIC_CURSOR))
+}
+
+/// The next signed-out cursor for a GQL connection: its last edge's cursor
+/// while `pageInfo.hasNextPage` holds.
+fn public_next_cursor(connection: Option<&serde_json::Value>) -> Option<String> {
+    let connection = connection?;
+    let has_next = connection.pointer("/pageInfo/hasNextPage").and_then(|v| v.as_bool()).unwrap_or(false);
+    if !has_next {
+        return None;
+    }
+    connection
+        .get("edges")
+        .and_then(|e| e.as_array())
+        .and_then(|e| e.last())
+        .and_then(|e| e.get("cursor"))
+        .and_then(|c| c.as_str())
+        .filter(|c| !c.is_empty())
+        .map(|c| format!("{PUBLIC_CURSOR}{c}"))
+}
+
+/// Whether `s` could be a Twitch login (lowercase letters, digits and
+/// underscores, 1 to 25 long), so it is safe to ask GQL for that user.
+fn is_twitch_login(s: &str) -> bool {
+    (1..=25).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
+/// The nodes of a GQL connection's edges, nulls skipped.
+fn gql_nodes(connection: Option<&serde_json::Value>) -> Vec<&serde_json::Value> {
+    connection
+        .and_then(|c| c.get("edges"))
+        .and_then(|e| e.as_array())
+        .map(|edges| edges.iter().filter_map(|e| e.get("node").filter(|n| !n.is_null())).collect())
+        .unwrap_or_default()
+}
+
+/// A Helix `games` row (`id`, `name`, `box_art_url`, plus the `viewer_count`
+/// the Categories grid sorts by) from a GQL `Game` node. The box art keeps
+/// Helix's `{width}x{height}` template.
+pub(crate) fn category_row_from_gql(node: &serde_json::Value) -> Option<serde_json::Value> {
+    let id = node.get("id").and_then(|v| v.as_str()).filter(|v| !v.is_empty())?;
+    let name = node
+        .get("name")
+        .and_then(|v| v.as_str())
+        .filter(|n| !n.is_empty())
+        .or_else(|| node.get("displayName").and_then(|v| v.as_str()))
+        .unwrap_or_default();
+    let mut row = serde_json::json!({
+        "id": id,
+        "name": name,
+        "box_art_url": node.get("boxArtURL").and_then(|v| v.as_str()).unwrap_or_default(),
+        "igdb_id": "",
+    });
+    if let Some(viewers) = node.get("viewersCount").and_then(|v| v.as_i64()) {
+        row["viewer_count"] = serde_json::json!(viewers);
+    }
+    Some(row)
+}
+
+/// A Helix `search/channels`-shaped row from a GQL `User` node: a live
+/// channel carries its stream id, preview and start time, an offline one its
+/// user id and avatar, and both the channel title and category.
+pub(crate) fn channel_row_from_gql(user: &serde_json::Value) -> Option<TwitchStream> {
+    let s = |v: Option<&serde_json::Value>, key: &str| {
+        v.and_then(|v| v.get(key)).and_then(|x| x.as_str()).unwrap_or_default().to_string()
+    };
+    let user_id = s(Some(user), "id");
+    let user_login = s(Some(user), "login");
+    if user_id.is_empty() || user_login.is_empty() {
+        return None;
+    }
+    let stream = user.get("stream").filter(|v| !v.is_null());
+    let settings = user.get("broadcastSettings").filter(|v| !v.is_null());
+    let game = stream
+        .and_then(|st| st.get("game"))
+        .filter(|g| !g.is_null())
+        .or_else(|| settings.and_then(|b| b.get("game")).filter(|g| !g.is_null()));
+    let avatar = s(Some(user), "profileImageURL");
+    Some(TwitchStream {
+        id: stream.map(|st| s(Some(st), "id")).filter(|id| !id.is_empty()).unwrap_or_else(|| user_id.clone()),
+        user_name: Some(s(Some(user), "displayName")).filter(|n| !n.is_empty()).unwrap_or_else(|| user_login.clone()),
+        user_id,
+        user_login,
+        title: s(settings, "title"),
+        viewer_count: stream.and_then(|st| st.get("viewersCount")).and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        game_id: s(game, "id"),
+        game_name: s(game, "displayName"),
+        thumbnail_url: match stream {
+            Some(st) => s(Some(st), "previewImageURL"),
+            None => avatar.clone(),
+        },
+        started_at: s(stream, "createdAt"),
+        broadcaster_type: broadcaster_type_from_roles(user.get("roles")),
+        profile_image_url: Some(avatar).filter(|a| !a.is_empty()),
+        is_live: Some(stream.is_some()),
+        tags: None,
+        language: None,
+    })
+}
+
 static GQL_DEVICE_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// Stable per-install device id for first-party GQL calls (recommendations,
@@ -1703,117 +1871,13 @@ impl TwitchService {
         Ok(streams)
     }
 
-    /// Map GQL `recommendedStreams` edges into the app's stream shape,
-    /// mirroring the get_streams_by_game_with_tags mapping.
+    /// Map GQL `recommendedStreams` edges into the app's stream shape.
     fn map_recommended_edges(edges: &[serde_json::Value]) -> Vec<TwitchStream> {
-        let mut streams: Vec<TwitchStream> = Vec::new();
-        {
-            for edge in edges {
-                let node = match edge.get("node") {
-                    Some(n) if !n.is_null() => n,
-                    _ => continue,
-                };
-                let broadcaster = match node.get("broadcaster") {
-                    Some(b) if !b.is_null() => b,
-                    _ => continue,
-                };
-
-                let user_login = broadcaster
-                    .get("login")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let user_name = broadcaster
-                    .get("displayName")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or(&user_login)
-                    .to_string();
-                let roles = broadcaster.get("roles");
-                let broadcaster_type = if roles
-                    .and_then(|r| r.get("isPartner"))
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-                {
-                    Some("partner".to_string())
-                } else if roles
-                    .and_then(|r| r.get("isAffiliate"))
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-                {
-                    Some("affiliate".to_string())
-                } else {
-                    None
-                };
-
-                let stream_tags: Vec<String> = node
-                    .get("freeformTags")
-                    .and_then(|t| t.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|t| {
-                                t.get("name").and_then(|n| n.as_str()).map(|s| s.to_string())
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                let game = node.get("game").filter(|g| !g.is_null());
-                let game_name = game
-                    .and_then(|g| {
-                        g.get("displayName")
-                            .and_then(|v| v.as_str())
-                            .filter(|s| !s.is_empty())
-                            .or_else(|| g.get("name").and_then(|v| v.as_str()))
-                    })
-                    .unwrap_or("")
-                    .to_string();
-
-                streams.push(TwitchStream {
-                    id: node.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    user_id: broadcaster
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    user_name,
-                    user_login,
-                    title: node.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    viewer_count: node
-                        .get("viewersCount")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as u32,
-                    game_id: game
-                        .and_then(|g| g.get("id"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    game_name,
-                    thumbnail_url: node
-                        .get("previewImageURL")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    started_at: node
-                        .get("createdAt")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    broadcaster_type,
-                    profile_image_url: broadcaster
-                        .get("profileImageURL")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    is_live: Some(true),
-                    tags: if stream_tags.is_empty() { None } else { Some(stream_tags) },
-                    language: node
-                        .get("language")
-                        .and_then(|v| v.as_str())
-                        .map(normalize_gql_language),
-                });
-            }
-        }
-        streams
+        edges
+            .iter()
+            .filter_map(|edge| edge.get("node").filter(|n| !n.is_null()))
+            .filter_map(|node| stream_row_from_gql_node(node, ("", "")))
+            .collect()
     }
 
     /// Helix top-live-streams list (the pre-recommendations Discover source),
@@ -1825,8 +1889,14 @@ impl TwitchService {
         limit: u32,
         languages: &[String],
     ) -> Result<(Vec<TwitchStream>, Option<String>)> {
-        // Try to get token, but don't fail if not authenticated
         let token = Self::get_token().await.ok();
+        let public = |after: Option<String>| async move {
+            let (streams, next) = Self::top_streams_public(after.as_deref(), limit, languages).await?;
+            Ok::<_, anyhow::Error>((streams, next.map(|c| format!("helix:{c}"))))
+        };
+        if token.is_none() || public_cursor(cursor.as_deref()).is_some() {
+            return public(public_cursor(cursor.as_deref()).map(String::from)).await;
+        }
         let client = crate::services::http::client().clone();
 
         // Build URL with pagination
@@ -1850,7 +1920,12 @@ impl TwitchService {
             request = request.header(AUTHORIZATION, format!("Bearer {}", token));
         }
 
-        let response = request.send().await?.json::<serde_json::Value>().await?;
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            debug!("[Discovery] top streams: HTTP {}, asking the public GQL", response.status());
+            return public(None).await;
+        }
+        let response = response.json::<serde_json::Value>().await?;
 
         // Get pagination cursor
         let next_cursor = response
@@ -1935,6 +2010,9 @@ impl TwitchService {
         limit: u32,
     ) -> Result<(Vec<serde_json::Value>, Option<String>)> {
         let token = Self::get_token().await.ok();
+        if token.is_none() || public_cursor(cursor.as_deref()).is_some() {
+            return Self::top_games_public(public_cursor(cursor.as_deref()), limit).await;
+        }
         let client = crate::services::http::client().clone();
 
         let mut url = format!("https://api.twitch.tv/helix/games/top?first={}", limit);
@@ -1948,7 +2026,12 @@ impl TwitchService {
             request = request.header(AUTHORIZATION, format!("Bearer {}", token));
         }
 
-        let response = request.send().await?.json::<serde_json::Value>().await?;
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            debug!("[TwitchService] top games: HTTP {}, asking the public GQL", response.status());
+            return Self::top_games_public(None, limit).await;
+        }
+        let response = response.json::<serde_json::Value>().await?;
 
         // Get pagination cursor
         let next_cursor = response
@@ -2067,6 +2150,9 @@ impl TwitchService {
         limit: u32,
     ) -> Result<(Vec<TwitchStream>, Option<String>)> {
         let token = Self::get_token().await.ok();
+        if token.is_none() || public_cursor(cursor.as_deref()).is_some() {
+            return Self::game_streams_public(game_id, public_cursor(cursor.as_deref()), limit).await;
+        }
         let client = crate::services::http::client().clone();
 
         let mut url = format!(
@@ -2083,7 +2169,12 @@ impl TwitchService {
             request = request.header(AUTHORIZATION, format!("Bearer {}", token));
         }
 
-        let response = request.send().await?.json::<serde_json::Value>().await?;
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            debug!("[TwitchService] category streams: HTTP {}, asking the public GQL", response.status());
+            return Self::game_streams_public(game_id, None, limit).await;
+        }
+        let response = response.json::<serde_json::Value>().await?;
 
         let next_cursor = response
             .get("pagination")
@@ -2147,6 +2238,9 @@ impl TwitchService {
 
     pub async fn search_channels(_state: &AppState, query: &str) -> Result<Vec<TwitchStream>> {
         let token = Self::get_token().await.ok();
+        if token.is_none() {
+            return Self::search_channels_public(query).await;
+        }
         let client = crate::services::http::client().clone();
 
         let url = format!(
@@ -2160,7 +2254,12 @@ impl TwitchService {
             request = request.header(AUTHORIZATION, format!("Bearer {}", token));
         }
 
-        let response = request.send().await?.json::<serde_json::Value>().await?;
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            debug!("[TwitchService] channel search: HTTP {}, asking the public GQL", response.status());
+            return Self::search_channels_public(query).await;
+        }
+        let response = response.json::<serde_json::Value>().await?;
 
         let data = response.get("data").and_then(|d| d.as_array());
 
@@ -3103,6 +3202,9 @@ impl TwitchService {
     /// Get the game ID by game name
     pub async fn get_game_id_by_name(game_name: &str) -> Result<Option<String>> {
         let token = Self::get_token().await.ok();
+        if token.is_none() {
+            return Self::game_id_by_name_public(game_name).await;
+        }
         let client = crate::services::http::client().clone();
 
         let url = format!(
@@ -3116,7 +3218,12 @@ impl TwitchService {
             request = request.header(AUTHORIZATION, format!("Bearer {}", token));
         }
 
-        let response = request.send().await?.json::<serde_json::Value>().await?;
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            debug!("[TwitchService] category lookup: HTTP {}, asking the public GQL", response.status());
+            return Self::game_id_by_name_public(game_name).await;
+        }
+        let response = response.json::<serde_json::Value>().await?;
 
         let game_id = response
             .get("data")
@@ -3163,6 +3270,9 @@ impl TwitchService {
     /// Returns a list of matching categories with id, name, and box_art_url
     pub async fn search_categories(query: &str, limit: u32) -> Result<Vec<serde_json::Value>> {
         let token = Self::get_token().await.ok();
+        if token.is_none() {
+            return Self::search_categories_public(query, limit).await;
+        }
         let client = crate::services::http::client().clone();
 
         let url = format!(
@@ -3177,7 +3287,12 @@ impl TwitchService {
             request = request.header(AUTHORIZATION, format!("Bearer {}", token));
         }
 
-        let response = request.send().await?.json::<serde_json::Value>().await?;
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            debug!("[TwitchService] category search: HTTP {}, asking the public GQL", response.status());
+            return Self::search_categories_public(query, limit).await;
+        }
+        let response = response.json::<serde_json::Value>().await?;
 
         let data = response
             .get("data")
@@ -3286,6 +3401,16 @@ impl TwitchService {
         limit: u32,
     ) -> Result<(Vec<TwitchStream>, Option<String>)> {
         let token = Self::get_token().await.ok();
+        let public = |after: Option<String>| async move {
+            let (mut streams, next) = Self::game_streams_public(game_id, after.as_deref(), limit).await?;
+            if let Some(exclude_login) = exclude_user_login {
+                streams.retain(|s| !s.user_login.eq_ignore_ascii_case(exclude_login));
+            }
+            Ok::<_, anyhow::Error>((streams, next))
+        };
+        if token.is_none() || public_cursor(cursor).is_some() {
+            return public(public_cursor(cursor).map(String::from)).await;
+        }
         let client = crate::services::http::client().clone();
 
         let mut url = format!(
@@ -3303,7 +3428,12 @@ impl TwitchService {
             request = request.header(AUTHORIZATION, format!("Bearer {}", token));
         }
 
-        let response = request.send().await?.json::<serde_json::Value>().await?;
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            debug!("[TwitchService] category streams: HTTP {}, asking the public GQL", response.status());
+            return public(None).await;
+        }
+        let response = response.json::<serde_json::Value>().await?;
 
         let data = response.get("data").and_then(|d| d.as_array());
 
@@ -3687,6 +3817,180 @@ impl TwitchService {
         }
 
         Ok(resp)
+    }
+
+    /// The category directory with no account, most-watched first: the
+    /// signed-out answer for `get_top_games_paginated`. `after` is the GQL
+    /// cursor (without the signed-out prefix).
+    async fn top_games_public(after: Option<&str>, limit: u32) -> Result<(Vec<serde_json::Value>, Option<String>)> {
+        let body = serde_json::json!({
+            "operationName": "StreamNookTopGames",
+            "query": "query StreamNookTopGames($first: Int!, $after: Cursor) { \
+                games(first: $first, after: $after, options: { sort: VIEWER_COUNT }) { \
+                    edges { cursor node { id name displayName boxArtURL viewersCount } } \
+                    pageInfo { hasNextPage } } }",
+            "variables": { "first": limit.clamp(1, 100), "after": after },
+        });
+        let resp = Self::gql_public_read(body).await?;
+        let games = resp.pointer("/data/games");
+        let rows = gql_nodes(games).into_iter().filter_map(category_row_from_gql).collect();
+        Ok((rows, public_next_cursor(games)))
+    }
+
+    /// A category's live streams with no account, most-watched first: the
+    /// signed-out answer for `get_streams_by_game` and the by-id and by-name
+    /// variants. `game_id` may join several ids with `&game_id=` (the Helix
+    /// form `get_streams_in_categories` builds); those are read one by one,
+    /// merged by viewers and answered as a single page.
+    async fn game_streams_public(
+        game_id: &str,
+        after: Option<&str>,
+        limit: u32,
+    ) -> Result<(Vec<TwitchStream>, Option<String>)> {
+        let ids: Vec<&str> = game_id.split("&game_id=").filter(|id| !id.is_empty()).collect();
+        if ids.len() > 1 {
+            let mut streams = Vec::new();
+            for id in ids.iter().take(25) {
+                match Self::game_streams_public_one(id, None, limit).await {
+                    Ok((rows, _)) => streams.extend(rows),
+                    Err(e) => debug!("[TwitchService] public streams for category {id}: {e}"),
+                }
+            }
+            streams.sort_by(|a, b| b.viewer_count.cmp(&a.viewer_count));
+            streams.truncate(limit as usize);
+            return Ok((streams, None));
+        }
+        match ids.first() {
+            Some(id) => Self::game_streams_public_one(id, after, limit).await,
+            None => Ok((Vec::new(), None)),
+        }
+    }
+
+    async fn game_streams_public_one(
+        game_id: &str,
+        after: Option<&str>,
+        limit: u32,
+    ) -> Result<(Vec<TwitchStream>, Option<String>)> {
+        let body = serde_json::json!({
+            "operationName": "StreamNookGameStreams",
+            "query": "query StreamNookGameStreams($id: ID!, $first: Int!, $after: Cursor) { \
+                game(id: $id) { id name \
+                    streams(first: $first, after: $after, options: { sort: VIEWER_COUNT }) { \
+                        edges { cursor node { id title viewersCount createdAt type language previewImageURL \
+                            freeformTags { name } \
+                            broadcaster { id login displayName profileImageURL(width: 70) roles { isPartner isAffiliate } } } } \
+                        pageInfo { hasNextPage } } } }",
+            "variables": { "id": game_id, "first": limit.clamp(1, 100), "after": after },
+        });
+        let resp = Self::gql_public_read(body).await?;
+        let game = resp.pointer("/data/game").filter(|g| !g.is_null());
+        let id = game.and_then(|g| g.get("id")).and_then(|v| v.as_str()).unwrap_or(game_id);
+        let name = game.and_then(|g| g.get("name")).and_then(|v| v.as_str()).unwrap_or_default();
+        let connection = game.and_then(|g| g.get("streams"));
+        let rows = gql_nodes(connection)
+            .into_iter()
+            .filter_map(|node| stream_row_from_gql_node(node, (id, name)))
+            .collect();
+        Ok((rows, public_next_cursor(connection)))
+    }
+
+    /// Live streams across Twitch with no account, most-watched first: the
+    /// signed-out continuation of the Discover feed after its first page.
+    /// Languages filter here, as in the recommendations read.
+    async fn top_streams_public(
+        after: Option<&str>,
+        limit: u32,
+        languages: &[String],
+    ) -> Result<(Vec<TwitchStream>, Option<String>)> {
+        let body = serde_json::json!({
+            "operationName": "StreamNookTopStreams",
+            "query": "query StreamNookTopStreams($first: Int!, $after: Cursor) { \
+                streams(first: $first, after: $after, options: { sort: VIEWER_COUNT }) { \
+                    edges { cursor node { id title viewersCount createdAt type language previewImageURL \
+                        freeformTags { name } game { id name displayName } \
+                        broadcaster { id login displayName profileImageURL(width: 70) roles { isPartner isAffiliate } } } } \
+                    pageInfo { hasNextPage } } }",
+            // Twitch refuses more than 30 here.
+            "variables": { "first": limit.clamp(1, 30), "after": after },
+        });
+        let resp = Self::gql_public_read(body).await?;
+        let connection = resp.pointer("/data/streams");
+        let mut rows: Vec<TwitchStream> = gql_nodes(connection)
+            .into_iter()
+            .filter_map(|node| stream_row_from_gql_node(node, ("", "")))
+            .collect();
+        if !languages.is_empty() {
+            let wanted: Vec<String> = languages.iter().map(|l| l.to_ascii_lowercase()).collect();
+            rows.retain(|s| s.language.as_deref().is_some_and(|l| wanted.iter().any(|w| w == l)));
+        }
+        Ok((rows, public_next_cursor(connection)))
+    }
+
+    /// Channel search with no account: the signed-out answer for
+    /// `search_channels`, ranked the same way. The exact login rides the same
+    /// request, so a channel Twitch's search leaves out still leads.
+    async fn search_channels_public(query: &str) -> Result<Vec<TwitchStream>> {
+        let trimmed = query.trim();
+        let login = trimmed.trim_start_matches('@').to_lowercase();
+        let fields = "id login displayName profileImageURL(width: 300) roles { isPartner isAffiliate } \
+            broadcastSettings { title game { id displayName } } \
+            stream { id viewersCount createdAt previewImageURL game { id displayName } }";
+        let body = if is_twitch_login(&login) {
+            serde_json::json!({
+                "operationName": "StreamNookSearchChannels",
+                "query": format!(
+                    "query StreamNookSearchChannels($query: String!, $login: String!) {{ \
+                     searchUsers(userQuery: $query, first: 60) {{ edges {{ node {{ {fields} }} }} }} \
+                     exact: user(login: $login) {{ {fields} }} }}"
+                ),
+                "variables": { "query": trimmed, "login": login },
+            })
+        } else {
+            serde_json::json!({
+                "operationName": "StreamNookSearchChannels",
+                "query": format!(
+                    "query StreamNookSearchChannels($query: String!) {{ \
+                     searchUsers(userQuery: $query, first: 60) {{ edges {{ node {{ {fields} }} }} }} }}"
+                ),
+                "variables": { "query": trimmed },
+            })
+        };
+        let resp = Self::gql_public_read(body).await?;
+        let mut rows: Vec<TwitchStream> = gql_nodes(resp.pointer("/data/searchUsers"))
+            .into_iter()
+            .filter_map(channel_row_from_gql)
+            .collect();
+        if let Some(exact) = resp.pointer("/data/exact").and_then(channel_row_from_gql) {
+            if !rows.iter().any(|r| r.user_id == exact.user_id) {
+                rows.insert(0, exact);
+            }
+        }
+        rank_search_results(query, &mut rows);
+        Ok(rows)
+    }
+
+    /// Category search with no account: the signed-out answer for
+    /// `search_categories`, in the Helix row shape.
+    async fn search_categories_public(query: &str, limit: u32) -> Result<Vec<serde_json::Value>> {
+        let body = serde_json::json!({
+            "operationName": "StreamNookSearchCategories",
+            "query": "query StreamNookSearchCategories($query: String!, $first: Int!) { \
+                searchCategories(query: $query, first: $first) { edges { node { id name displayName boxArtURL } } } }",
+            "variables": { "query": query.trim(), "first": limit.clamp(1, 100) },
+        });
+        let resp = Self::gql_public_read(body).await?;
+        Ok(gql_nodes(resp.pointer("/data/searchCategories")).into_iter().filter_map(category_row_from_gql).collect())
+    }
+
+    /// A category's id from its exact name, with no account.
+    async fn game_id_by_name_public(name: &str) -> Result<Option<String>> {
+        let body = serde_json::json!({
+            "operationName": "StreamNookGameId",
+            "query": "query StreamNookGameId($name: String!) { game(name: $name) { id } }",
+            "variables": { "name": name },
+        });
+        let resp = Self::gql_public_read(body).await?;
+        Ok(resp.pointer("/data/game/id").and_then(|v| v.as_str()).filter(|id| !id.is_empty()).map(String::from))
     }
 
     /// Shared Viewership for a batch of Twitch channel ids, one aliased
@@ -6654,6 +6958,95 @@ mod discovery_tests {
         assert_eq!(second.language.as_deref(), Some("zh-hk"));
         assert_eq!(second.broadcaster_type.as_deref(), Some("affiliate"));
         assert_eq!(second.game_name, "");
+    }
+
+    #[test]
+    fn signed_out_categories_read_like_helix_games() {
+        let games = serde_json::json!({
+            "edges": [
+                { "cursor": "c1", "node": { "id": "509658", "name": "Just Chatting", "displayName": "Just Chatting",
+                  "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/509658-{width}x{height}.jpg", "viewersCount": 247184 } },
+                { "cursor": "c2", "node": null },
+                { "cursor": "c3", "node": { "id": "", "name": "no id" } }
+            ],
+            "pageInfo": { "hasNextPage": true }
+        });
+        let rows: Vec<_> = gql_nodes(Some(&games)).into_iter().filter_map(category_row_from_gql).collect();
+        assert_eq!(rows.len(), 1, "null and id-less nodes are skipped");
+        assert_eq!(rows[0]["id"], "509658");
+        assert_eq!(rows[0]["name"], "Just Chatting");
+        assert_eq!(rows[0]["viewer_count"], 247184);
+        assert!(rows[0]["box_art_url"].as_str().unwrap().ends_with("509658-{width}x{height}.jpg"));
+        assert_eq!(public_next_cursor(Some(&games)).as_deref(), Some("gql:c3"));
+    }
+
+    #[test]
+    fn signed_out_cursors_page_only_on_the_public_side() {
+        assert_eq!(public_cursor(Some("gql:abc")), Some("abc"));
+        assert_eq!(public_cursor(Some("eyJiIjp7")), None, "a Helix cursor stays on Helix");
+        assert_eq!(public_cursor(None), None);
+        let last_page = serde_json::json!({ "edges": [{ "cursor": "z", "node": {} }], "pageInfo": { "hasNextPage": false } });
+        assert_eq!(public_next_cursor(Some(&last_page)), None);
+        assert_eq!(public_next_cursor(None), None);
+    }
+
+    #[test]
+    fn signed_out_category_streams_carry_the_category() {
+        let node = serde_json::json!({
+            "id": "320736562012", "title": "news", "viewersCount": 25168, "createdAt": "2026-10-13T18:08:56Z",
+            "type": "live", "language": "EN",
+            "previewImageURL": "https://static-cdn.jtvnw.net/previews-ttv/live_user_hasanabi-{width}x{height}.jpg",
+            "broadcaster": { "id": "207813352", "login": "hasanabi", "displayName": "HasanAbi",
+                "profileImageURL": "https://x/p.jpeg", "roles": { "isPartner": true, "isAffiliate": false } }
+        });
+        let row = stream_row_from_gql_node(&node, ("509658", "Just Chatting")).expect("a row");
+        assert_eq!((row.game_id.as_str(), row.game_name.as_str()), ("509658", "Just Chatting"));
+        assert_eq!((row.user_login.as_str(), row.viewer_count), ("hasanabi", 25168));
+        assert_eq!(row.broadcaster_type.as_deref(), Some("partner"));
+        assert_eq!(row.language.as_deref(), Some("en"));
+        assert!(row.thumbnail_url.contains("{width}x{height}"));
+        assert!(stream_row_from_gql_node(&serde_json::json!({ "id": "1", "broadcaster": null }), ("", "")).is_none());
+    }
+
+    #[test]
+    fn signed_out_channel_search_rows_read_like_helix_search() {
+        let live = serde_json::json!({
+            "id": "71092938", "login": "xqc", "displayName": "xQc", "profileImageURL": "https://x/xqc-300x300.jpeg",
+            "roles": { "isPartner": true, "isAffiliate": false },
+            "broadcastSettings": { "title": "LOCK IN", "game": { "id": "32982", "displayName": "Grand Theft Auto V" } },
+            "stream": { "id": "320737343964", "viewersCount": 26948, "createdAt": "2026-10-13T19:31:06Z",
+                "previewImageURL": "https://static-cdn.jtvnw.net/previews-ttv/live_user_xqc-{width}x{height}.jpg",
+                "game": { "id": "32982", "displayName": "Grand Theft Auto V" } }
+        });
+        let row = channel_row_from_gql(&live).expect("a row");
+        assert_eq!((row.id.as_str(), row.user_id.as_str()), ("320737343964", "71092938"));
+        assert_eq!((row.is_live, row.viewer_count), (Some(true), 26948));
+        assert_eq!(row.title, "LOCK IN");
+        assert!(row.thumbnail_url.contains("live_user_xqc"));
+        assert_eq!(row.profile_image_url.as_deref(), Some("https://x/xqc-300x300.jpeg"));
+
+        let offline = serde_json::json!({
+            "id": "251183247", "login": "xqcisoffline", "displayName": "", "profileImageURL": "https://x/d.png",
+            "roles": { "isPartner": false, "isAffiliate": false },
+            "broadcastSettings": { "title": "f", "game": { "id": "509658", "displayName": "Just Chatting" } },
+            "stream": null
+        });
+        let row = channel_row_from_gql(&offline).expect("a row");
+        assert_eq!((row.id.as_str(), row.user_name.as_str()), ("251183247", "xqcisoffline"));
+        assert_eq!((row.is_live, row.started_at.as_str()), (Some(false), ""));
+        assert_eq!((row.game_name.as_str(), row.thumbnail_url.as_str()), ("Just Chatting", "https://x/d.png"));
+        assert_eq!(row.broadcaster_type, None);
+        assert!(channel_row_from_gql(&serde_json::json!({ "id": "", "login": "x" })).is_none());
+    }
+
+    #[test]
+    fn only_login_shaped_queries_ask_for_the_exact_user() {
+        assert!(is_twitch_login("xqc"));
+        assert!(is_twitch_login("some_user_42"));
+        assert!(!is_twitch_login("two words"));
+        assert!(!is_twitch_login(""));
+        assert!(!is_twitch_login("UPPER"));
+        assert!(!is_twitch_login(&"a".repeat(26)));
     }
 }
 
