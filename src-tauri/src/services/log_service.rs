@@ -269,7 +269,7 @@ impl LogService {
         ));
         block.push_str(&format!(
             "App {} on {}\n",
-            env!("CARGO_PKG_VERSION"),
+            crate::services::client_identity::build_version(),
             std::env::consts::OS
         ));
         block.push_str(&format!(

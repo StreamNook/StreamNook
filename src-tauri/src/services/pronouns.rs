@@ -63,7 +63,7 @@ async fn ensure_map() {
     let client = crate::services::http::client().clone();
     let Ok(resp) = client
         .get(format!("{}/pronouns", BASE))
-        .header("User-Agent", format!("StreamNook/{}", env!("CARGO_PKG_VERSION")))
+        .header("User-Agent", format!("StreamNook/{}", crate::services::client_identity::build_version()))
         .send()
         .await
     else {
@@ -107,7 +107,7 @@ impl Pronouns {
         let client = crate::services::http::client().clone();
         let fetched: Option<String> = match client
             .get(format!("{}/users/{}", BASE, key))
-            .header("User-Agent", format!("StreamNook/{}", env!("CARGO_PKG_VERSION")))
+            .header("User-Agent", format!("StreamNook/{}", crate::services::client_identity::build_version()))
             .send()
             .await
         {

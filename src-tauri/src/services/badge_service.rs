@@ -1557,10 +1557,9 @@ impl BadgeService {
                 .get(MOLTORINO_BADGES_URL)
                 .header(
                     "User-Agent",
-                    concat!(
-                        "StreamNook/",
-                        env!("CARGO_PKG_VERSION"),
-                        " (+https://streamnook.app)"
+                    format!(
+                        "StreamNook/{} (+https://streamnook.app)",
+                        crate::services::client_identity::build_version()
                     ),
                 )
                 .header("Accept", "application/json")

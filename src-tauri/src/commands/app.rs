@@ -56,7 +56,7 @@ pub fn emoji_cache_len() -> Option<usize> {
 
 #[command]
 pub fn get_app_version() -> String {
-    env!("CARGO_PKG_VERSION").to_string()
+    crate::services::client_identity::build_version().to_string()
 }
 
 /// Which client this is: version, OS, arch, target key, build channel.

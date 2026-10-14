@@ -429,7 +429,7 @@ mod imp {
             let _ = writeln!(
                 f,
                 "ui-hang-watchdog armed: app {} pid {}",
-                env!("CARGO_PKG_VERSION"),
+                crate::services::client_identity::build_version(),
                 std::process::id()
             );
         }
@@ -523,7 +523,7 @@ mod imp {
         let _ = writeln!(
             b,
             " | app {} {} ==========",
-            env!("CARGO_PKG_VERSION"),
+            crate::services::client_identity::build_version(),
             std::env::consts::OS
         );
         let _ = writeln!(
@@ -560,7 +560,7 @@ mod imp {
         let _ = writeln!(
             b,
             " | app {} {} ==========",
-            env!("CARGO_PKG_VERSION"),
+            crate::services::client_identity::build_version(),
             std::env::consts::OS
         );
         let _ = writeln!(b, "ERROR [UIHang] UI thread recovered after ~{total_ms}ms");

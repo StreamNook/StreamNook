@@ -787,8 +787,7 @@ pub async fn get_latest_app_version() -> Result<String, String> {
 
 #[tauri::command]
 pub fn get_current_app_version() -> Result<String, String> {
-    // Get the version from Cargo.toml at compile time
-    Ok(env!("CARGO_PKG_VERSION").to_string())
+    Ok(crate::services::client_identity::build_version().to_string())
 }
 
 #[derive(serde::Serialize)]

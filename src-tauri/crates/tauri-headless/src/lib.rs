@@ -511,7 +511,13 @@ impl<R: Runtime> Builder<R> {
         self
     }
 
-    pub fn build(self, context: Context) -> Result<App<R>> {
+    pub fn build(self, mut context: Context) -> Result<App<R>> {
+        // The app's version is the shell's own line (the version it passed to
+        // `host_install`), not the crate version the context was built with.
+        if let Some(version) = host_version().and_then(|v| semver::Version::parse(v).ok()) {
+            context.config.version = Some(version.to_string());
+            context.package_info.version = version;
+        }
         let _ = CONTEXT.set(context);
         Ok(App {
             handle: AppHandle::new(),
