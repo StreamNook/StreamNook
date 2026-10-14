@@ -27,6 +27,11 @@ use crate::rt::AppHandle;
 /// always stops there, whatever page it was opened on.
 const KICK_REDIRECT: &str = "http://localhost:3000/callback";
 
+/// Where the Twitch Drops grant lands, with its credential on the fragment
+/// (`DropsAuthService::authorize_url`). The sheet stops there too, so the
+/// token is taken before any page could show it.
+const DROPS_REDIRECT: &str = "https://www.twitch.tv/#";
+
 /// The sites whose cookies the core reads while a sheet is up.
 const COOKIE_ORIGINS: &[&str] = &["https://kick.com", "https://id.kick.com", "https://www.twitch.tv"];
 
@@ -58,7 +63,7 @@ pub fn open_overlay(_app: &AppHandle, url: &str, title: &str) -> Result<(), Stri
         &serde_json::json!({
             "url": url,
             "title": title,
-            "stop_at": [KICK_REDIRECT],
+            "stop_at": [KICK_REDIRECT, DROPS_REDIRECT],
             "cookie_origins": COOKIE_ORIGINS,
         }),
     );
@@ -103,11 +108,40 @@ pub fn expire_cookies(_app: &AppHandle, urls: &[&str]) {
     tauri::host_request("clear_cookies", &serde_json::json!({ "origins": urls }));
 }
 
+/// The Twitch Drops sign-in in the sheet: the Drops client's authorize page,
+/// which the twitch.tv session from sign-in already answers, so the person
+/// only taps Authorize. The grant comes back through `sheet_redirected`, which
+/// stores it and announces `drops-login-complete` or `drops-login-error`, as
+/// the desktop overlay and Android do.
+#[tauri::command]
+pub fn open_drops_sheet(app: AppHandle) -> Result<(), String> {
+    let url = crate::services::drops_auth_service::DropsAuthService::authorize_url();
+    open_overlay(&app, &url, "Connect drops")
+}
+
 /// The sheet stopped at a `stop_at` URL.
 #[tauri::command]
-pub fn sheet_redirected(url: String) {
+pub fn sheet_redirected(app: AppHandle, url: String) {
     if url.starts_with(KICK_REDIRECT) {
         sheet().kick_redirect = Some(url);
+    } else if url.starts_with(DROPS_REDIRECT) {
+        let token = crate::services::drops_auth_service::DropsAuthService::access_token_from_redirect(&url);
+        close_overlay(&app);
+        tauri::async_runtime::spawn(async move {
+            use tauri::Emitter;
+            let outcome = match token {
+                Some(token) => {
+                    crate::services::drops_auth_service::DropsAuthService::store_access_token(token)
+                        .await
+                        .map_err(|e| e.to_string())
+                }
+                None => Err("Twitch did not hand back a drops credential".to_string()),
+            };
+            let _ = match outcome {
+                Ok(()) => app.emit("drops-login-complete", ()),
+                Err(e) => app.emit("drops-login-error", e),
+            };
+        });
     } else {
         log::warn!("[iOS] the sheet stopped at a URL nothing waits for");
     }

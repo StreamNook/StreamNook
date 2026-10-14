@@ -2600,6 +2600,16 @@ pub fn is_active() -> bool {
     SOLO.is_active()
 }
 
+/// Whether the active origin can serve AVPlayer a low-latency playlist it
+/// accepts. AVPlayer refuses any non-final part under 85% of PART-TARGET; TS
+/// parts are cut here on whole frames of the decode clock and pass, but CMAF
+/// parts are Twitch's own fragments, which run 6 to 9 frames (0.100 to
+/// 0.150 s at 60 fps), and no PART-TARGET fits that spread. A CMAF stream
+/// plays on the whole-segment playlist instead.
+pub fn apple_parts_fit() -> bool {
+    SOLO.is_active() && SOLO.container() == Container::Ts
+}
+
 /// True when the experimental low-latency engine is OFF (the hard kill switch is
 /// engaged), so no origin will ever serve a parts/`seg/` playlist this session.
 /// The whole-segment stable projection keys on this: it must run ONLY when the

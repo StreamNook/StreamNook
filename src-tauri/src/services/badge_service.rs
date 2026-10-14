@@ -2336,6 +2336,15 @@ impl BadgeService {
     /// This is the chat path, so it answers what the chatter WEARS: one badge
     /// per wear category (`worn_third_party`). The profile and picker paths below
     /// list everything the user owns.
+    /// What a chatter wears from the third-party feeds, read without waiting:
+    /// empty while a refresh holds the cache, so a row stamped then carries
+    /// none rather than holding up chat. Chatty's painted variants are not
+    /// built here; their raw image is drawn.
+    pub fn worn_third_party_now(&self, user_id: &str) -> Vec<UserBadge> {
+        let Ok(cache) = self.cache.try_read() else { return Vec::new() };
+        cache.third_party.by_user.get(user_id).map(|entries| worn_third_party(entries)).unwrap_or_default()
+    }
+
     pub async fn get_third_party_badges_only(&self, user_id: &str) -> UserBadgesResponse {
         UserBadgesResponse {
             display_badges: Vec::new(),

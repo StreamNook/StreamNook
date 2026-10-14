@@ -27,6 +27,13 @@ pub async fn initialize_badge_service() {
     debug!("[BadgeService] Service initialized and pre-warmed");
 }
 
+/// The third-party badges a chatter wears, without waiting on the service
+/// (see `BadgeService::worn_third_party_now`); empty before it is ready.
+pub fn third_party_worn_now(user_id: &str) -> Vec<crate::services::badge_service::UserBadge> {
+    let Ok(guard) = BADGE_SERVICE.try_read() else { return Vec::new() };
+    guard.as_ref().map(|s| s.worn_third_party_now(user_id)).unwrap_or_default()
+}
+
 pub async fn get_service() -> Result<Arc<RwLock<Option<BadgeService>>>, String> {
     Ok(BADGE_SERVICE.clone())
 }

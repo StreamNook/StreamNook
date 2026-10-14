@@ -872,8 +872,13 @@ pub async fn stop_stream() -> Result<(), String> {
 /// blocking reload is being served). The player reads this once at construction to
 /// pick the hls.js mode. NOT the same as "the channel is low-latency" — see
 /// `get_stream_prefetch_present`.
+/// On the iPhone it answers whether AVPlayer can ride the origin's playlist:
+/// see `ll_origin::apple_parts_fit`.
 #[tauri::command]
 pub fn get_stream_low_latency() -> bool {
+    #[cfg(target_os = "ios")]
+    return crate::services::ll_origin::apple_parts_fit();
+    #[cfg(not(target_os = "ios"))]
     crate::services::stream_server::is_low_latency()
 }
 

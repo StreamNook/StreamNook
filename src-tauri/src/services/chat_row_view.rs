@@ -797,6 +797,21 @@ fn badges(msg: &ChatMessage, prefs: &Prefs, worn: Option<&WornView>) -> Vec<View
             out.push(badge);
         }
     }
+    // Third-party badges (FFZ, BTTV, Chatterino, Homies and the rest) after 7TV,
+    // in the providers' one shared order, as the desktop row draws them.
+    if prefs.show_third_party_badges && twitch && !msg.user_id.is_empty() {
+        for badge in crate::commands::badge_service::third_party_worn_now(&msg.user_id) {
+            let provider = badge.provider.as_key();
+            if prefs.hidden_badge_providers.iter().any(|p| p == provider) {
+                continue;
+            }
+            let info = badge.badge_info;
+            let url = [info.image_2x, info.image_4x, info.image_1x].into_iter().find(|u| !u.is_empty());
+            if let Some(url) = url {
+                out.push(ViewBadge { url, title: info.title, provider: provider.to_string() });
+            }
+        }
+    }
     out
 }
 

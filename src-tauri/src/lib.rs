@@ -1573,6 +1573,8 @@ pub fn run() {
             #[cfg(mobile)]
             export_logs,
             #[cfg(target_os = "ios")]
+            services::ios_sheet::open_drops_sheet,
+            #[cfg(target_os = "ios")]
             services::ios_sheet::sheet_redirected,
             #[cfg(target_os = "ios")]
             services::ios_sheet::sheet_closed,
