@@ -5235,6 +5235,47 @@ impl IrcService {
         Ok(port)
     }
 
+    /// Serve the bridge on a fresh listener, keeping its broadcaster. iOS can
+    /// reclaim a suspended app's listening socket while the server task keeps
+    /// running on it, so `ensure_local_ws_bridge` still reports it alive and
+    /// nothing answers. The broadcaster stays, so publishers and the IRC
+    /// session are untouched; the port is the old one when it is free again,
+    /// a new one otherwise, and the shell reconnects to whichever this returns.
+    pub async fn rebind_local_ws_bridge() -> Result<u16> {
+        let guard = get_bridge_bringup_lock().lock().await;
+        let Some(tx) = get_message_broadcaster().lock().await.clone() else {
+            drop(guard);
+            return Self::ensure_local_ws_bridge().await;
+        };
+        if let Some(old) = get_ws_server_handle().lock().await.take() {
+            old.abort();
+        }
+        let previous = *get_ws_port().lock().await;
+        let tx_for_warp = tx.clone();
+        let local_ws = warp::ws().map(move |ws: warp::ws::Ws| {
+            let tx_clone = tx_for_warp.clone();
+            ws.on_upgrade(move |socket| Self::handle_local_ws(socket, tx_clone))
+        });
+        let probe = match previous {
+            Some(p) => match tokio::net::TcpListener::bind(("127.0.0.1", p)).await {
+                Ok(listener) => listener,
+                Err(_) => tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?,
+            },
+            None => tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?,
+        };
+        let port = probe.local_addr()?.port();
+        drop(probe);
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        let handle = tokio::spawn(async move {
+            warp::serve(local_ws).run(addr).await;
+        });
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+        *get_ws_server_handle().lock().await = Some(handle);
+        *get_ws_port().lock().await = Some(port);
+        record_lifecycle("WS bridge listener re-bound after a resume");
+        Ok(port)
+    }
+
     /// The shared broadcast sender for the local WS bridge, if it is up. Provider
     /// adapters serialize a `ChatMessage`/`ActivityEvent` frame and `send` it here
     /// to reach the frontend over the same socket the Twitch path uses.

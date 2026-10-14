@@ -181,7 +181,8 @@ struct Foregrounded {
 }
 
 /// iOS may reclaim a suspended app's listening sockets. Re-bind the relay if
-/// its listener died, and bring the chat bridge back if its task ended.
+/// its listener died, and bring the chat bridge back if its task ended or its
+/// listener stopped answering.
 async fn foregrounded() {
     use tauri::Emitter;
 
@@ -192,13 +193,20 @@ async fn foregrounded() {
             false
         }
     };
-    let chat_port = crate::services::irc_service::IrcService::ensure_local_ws_bridge().await.ok();
-    let chat_alive = match chat_port {
+    let mut chat_port = crate::services::irc_service::IrcService::ensure_local_ws_bridge().await.ok();
+    let mut chat_alive = match chat_port {
         Some(port) => loopback_answers(port).await,
         None => false,
     };
     if chat_port.is_some() && !chat_alive {
-        warn!("[iOS] the chat bridge's listener does not answer after the resume");
+        warn!("[iOS] the chat bridge's listener does not answer after the resume; re-binding it");
+        match crate::services::irc_service::IrcService::rebind_local_ws_bridge().await {
+            Ok(port) => {
+                chat_alive = loopback_answers(port).await;
+                chat_port = Some(port);
+            }
+            Err(e) => warn!("[iOS] chat bridge re-bind failed: {e}"),
+        }
     }
     info!("[iOS] foreground: relay re-bound {relay_rebound}, chat port {chat_port:?} answers {chat_alive}");
     if let Some(app) = crate::services::providers::app_handle() {
