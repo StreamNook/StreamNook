@@ -70,3 +70,54 @@ Path shorthand follows the parity contract: `m:` is `src/mobile/`, `s:` is `src/
 - **Replaces:** m:rewards/badgeGalleryStore.ts:L105-L152, s:services/badgeStanding.ts:L113-L135.
 - **rust-moves:** "the badge gallery store" in the list after the top 15.
 - **Until then:** the Badges segment is a frame with a placeholder line; the Drops segment shows the connect card from `is_drops_authenticated` with its button not yet wired (the drops sign-in sheet belongs to the accounts lane).
+
+## Answers from the core lane (branch `ios/core2`)
+
+What the core now offers for the items above and for the plan's phase 2, and the contract Swift codes against. Command arguments and answers are JSON, as `invoke` sends and returns them.
+
+### #4 and #5: boot answer, finishing setup, sign-in reason
+
+- `get_boot_state` (no arguments) answers `{needs_setup, signed_in, sign_in_reason, sign_in_text}`. `needs_setup` is `!setup_complete`; `signed_in` means a Twitch sign-in is stored; `sign_in_reason` is `"new_permissions"` or `null`; `sign_in_text` is `{sentence, short}` or `null` (sentence for the signed-out landing, short for a row that already says Twitch). The roster still carries the reason too (`account-roster-changed`).
+- `complete_setup` (no arguments) writes `setup_complete: true` to disk at once and answers `{baseline_announcements}`: `true` the first time setup finishes on this install, so the announcements banner, once Swift has one, marks the current backlog seen instead of showing it. Replaces `patch_settings {setup_complete: true}`.
+- The mobile `setup_complete` revert is already handled in `run()` (settings re-read once the data dir resolves); there is no localStorage backstop on iOS.
+
+### #6: browsing signed out
+
+- `get_top_games_paginated`, `get_streams_by_game` (and the by-id and by-name variants), `search_channels`, `search_categories` and the Discover tail after the recommendations page answer from Twitch's public GQL when no Twitch token is stored, or when Helix refuses one. Row shapes match Helix (box art and previews keep the `{width}x{height}` template).
+- Cursors stay opaque. A signed-out cursor starts `gql:` and keeps paging on the public side even if a sign-in lands mid-scroll; just pass back what came.
+- The reads use the Android client id with no account, not the web client id: Twitch fails the integrity check on anonymous web-client reads from the second page on (checked for categories and a category's streams), and the Android id is exempt. No Drops token is involved.
+
+### Host requests (`HostSink.host_request(kind, payload)`)
+
+| Kind | Payload | What Swift does |
+| --- | --- | --- |
+| `open_url` | `{url}` (http or https only) | Open the link outside the app (`UIApplication.open`). |
+| `copy_text` | `{text}` | Put the text on `UIPasteboard.general`. |
+| `share` | `{path, mime, name}` | Present a share sheet for the file at `path` (Save to Files is one of its choices), offered as `name`. |
+| `open_sheet` | `{url, title, stop_at: [prefix], cookie_origins: [origin]}` | Show (or re-navigate) the in-app web sheet at `url`, persistent default store. A navigation whose URL starts with a `stop_at` prefix is cancelled and sent to `sheet_redirected`; the sheet stays up. While it is up, push the cookies of each `cookie_origins` site through `set_web_cookies` as they change. |
+| `close_sheet` | `{}` | Take the sheet down (do not call `sheet_closed` for this). |
+| `clear_cookies` | `{origins: [origin]}` | Delete every cookie of those sites from the sheet's store, then push the new snapshots. |
+| `exit`, `restart` | as before | Unchanged. |
+
+New commands for the sheet (iOS only, allowlisted in `mobile-commands.toml`):
+
+- `sheet_redirected {url}`: the sheet stopped at a `stop_at` URL.
+- `sheet_closed` (no arguments): the person dismissed the sheet.
+
+### Kick, Subscribe, chat identity badges, log export
+
+- `kick_account_sync {interactive: true}` runs the Android flow on iOS: `open_sheet` at `https://kick.com/login`, then the consent page in the same sheet; the core polls the `https://kick.com` cookies (`session_token`) and takes the consent redirect (`http://localhost:3000/callback?...`) from `sheet_redirected`, then sends `close_sheet`. `interactive: false` only reads the pushed `kick.com` cookies, so `WebSessionSite` should gain Kick (origin `https://kick.com`, session cookie `session_token`) to keep a silent import working after launch.
+- `kick_disconnect` sends `clear_cookies {origins: ["https://kick.com", "https://id.kick.com"]}`.
+- `open_subscribe_window {channelLogin, title?, provider?}` sends `open_sheet` at the platform's checkout and answers `subscribe-<login>`; the person closes the sheet.
+- `fetch_chat_identity_badges_gql {username}` and `update_chat_identity_gql {badgeId, badgeVersion}` are registered on iOS (GQL with the Drops token; `NEEDS_DROPS_AUTH` when it is missing).
+- `export_logs {to: "share" | "downloads"}` zips the logs into the cache dir and sends `share`; answers `"shared"`, or `"empty"` when there is nothing to send.
+
+### Start inputs, lifecycle and events
+
+- `start(..., version, vaultKey, codecs)`: `version` is now the app's version everywhere (package info, `get_client_identity`, `get_app_version`, version reports, log headers, user agents). `vaultKey` (32 bytes) is the token vault's key; files an older build sealed under the sandbox key file move to it on the first vault pass and the key file is then deleted. `codecs` names the hardware decoders (`h264`, `hevc`/`h265`/`hvc1`, `av1`/`av01`): AV1 and HEVC tiers the phone cannot decode are dropped from every master, so they never reach the quality menu or `best`; with Enhanced Broadcasting on, H.264 still leads and HEVC then AV1 serve only the tiers Twitch offers in nothing else.
+- `lifecycle("memory_warning")` drops the in-memory caches that refill on their own (emote sets, badges, profiles, 7TV cosmetics and pictures, BTTV Pro, emoji).
+- `lifecycle("foreground")` re-binds the relay listener on its own port if a loopback connect finds it dead (the player URL keeps working), brings back the chat bridge if its task ended, and emits `app-foregrounded {relay_rebound, chat_port, chat_alive}`. Reconnect the chat socket to `chat_port`. A bridge whose task still runs on a dead socket (`chat_alive: false`) cannot be forced back without changing `irc_service.rs` (chat lane).
+- Audio only: `start_stream {quality: "audio_only"}` answers a URL ending `audio.m3u8?...`, a master that declares `CODECS="mp4a.40.2"` over `plain.m3u8`; play it as returned.
+- Ad-free playback now runs on iOS (`video_player.ad_bypass_enabled`, default on). A mid-stream pivot emits `ad-pivot {url, channel}`: reload the player on `url`.
+- Caches live under the cache dir Swift passes (`Library/Caches/StreamNook`); settings, tokens and logs stay in the data dir. The startup log names both.
+- Every event name the core emits is listed in `src-tauri/tests/event_names.txt` (kept exact by `tests/event_registry.rs`).

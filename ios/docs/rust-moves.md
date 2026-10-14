@@ -74,13 +74,13 @@ Next after these: channel points and the bonus chest (Rust already auto-claims; 
 
 These are not TypeScript moves but block the matching Swift screens; they belong with the core lane's phase 2 work.
 
-- [ ] Ad-free relay and the low-latency stand-down checks compile for Android only (`#[cfg(target_os = "android")] pub mod ad_bypass`); widen to `cfg(mobile)`, since iOS cannot spawn the desktop playback plugin either (r:services/mod.rs:L19-L20) [P1]
-- [ ] `fetch_chat_identity_badges_gql` and `update_chat_identity_gql` are Android-only; the Cosmetics screen's Twitch badge choice needs them on iOS: `#[cfg(mobile)]` (r:commands/chat_identity.rs:L378-L400) [P1]
+- [x] Ad-free relay and the low-latency stand-down checks compile for Android only (`#[cfg(target_os = "android")] pub mod ad_bypass`); widen to `cfg(mobile)`, since iOS cannot spawn the desktop playback plugin either (r:services/mod.rs:L19-L20) [P1]
+- [x] `fetch_chat_identity_badges_gql` and `update_chat_identity_gql` are Android-only; the Cosmetics screen's Twitch badge choice needs them on iOS: `#[cfg(mobile)]` (r:commands/chat_identity.rs:L378-L400) [P1]
 - [ ] Push register and unregister live in the Android-only `android_notify.rs`; split the platform-free collector and dedupe (`collect_all`, `collect_live`, `collect_badges`, `notify_state.json`) from the JNI lanes so APNs registration and a notification service extension can call them (r:android_notify.rs:L18, L426-L484)
-- [ ] `export_logs` is Android-only; add an iOS arm that hands the zip to Swift for a Files export or the share sheet (r:commands/logs.rs:L172-L225)
-- [ ] Kick import and sign-in are iOS stubs ("Kick account sync is not available on this platform", "Kick sign-in is not available on this platform"); port the Android arms over the sheet's cookie jar fed by `set_web_cookies` (r:services/providers/kick_account.rs:L107-L111, L670-L673) [P1]
-- [ ] `open_subscribe_window` is registered for desktop and Android only; iOS needs an arm that opens the checkout in the sign-in sheet (r:commands/twitch.rs:L1342-L1365)
-- [ ] The desktop live-notification poll is gated `not(target_os = "android")`, so it would arm on iOS; gate it `cfg(desktop)` (r:lib.rs:L1220-L1223, L1291-L1304)
+- [x] `export_logs` is Android-only; add an iOS arm that hands the zip to Swift for a Files export or the share sheet (r:commands/logs.rs:L172-L225)
+- [x] Kick import and sign-in are iOS stubs ("Kick account sync is not available on this platform", "Kick sign-in is not available on this platform"); port the Android arms over the sheet's cookie jar fed by `set_web_cookies` (r:services/providers/kick_account.rs:L107-L111, L670-L673) [P1]
+- [x] `open_subscribe_window` is registered for desktop and Android only; iOS needs an arm that opens the checkout in the sign-in sheet (r:commands/twitch.rs:L1342-L1365)
+- [x] The desktop live-notification poll is gated `not(target_os = "android")`, so it would arm on iOS; gate it `cfg(desktop)` (r:lib.rs:L1220-L1223, L1291-L1304)
 - [ ] The desktop Twitch cookie harvest compiles on iOS and reads the main webview's (empty) jar through the nested-run-loop cookie API that froze macOS 8.6.2; give iOS its own arm over the sign-in sheet's cookies (r:services/twitch_auth_service.rs:L267)
 - [ ] `get_android_changelog` reads the Android update manifest only; What's New on iOS needs an iOS-line twin (source to be decided) (r:services/changelog.rs:L16, L531-L547)
 - [ ] The setup wizard's Components page runs `check_components_installed` and `extract_bundled_components` on phones although both are no-ops; drop the page on `cfg(mobile)` (d:components/SetupWizard.tsx:L247-L310)
