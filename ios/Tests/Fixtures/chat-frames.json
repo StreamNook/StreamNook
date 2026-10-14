@@ -66,6 +66,997 @@
     "username_separator": "none",
     "username_style": "plain"
   },
+  "commands": [
+    {
+      "category": "Everyone",
+      "description": "Display a list of all chat moderators",
+      "label": "Everyone",
+      "name": "mods",
+      "usage": "/mods"
+    },
+    {
+      "category": "Everyone",
+      "description": "Display a list of VIPs for this channel",
+      "label": "Everyone",
+      "name": "vips",
+      "usage": "/vips"
+    },
+    {
+      "category": "Everyone",
+      "description": "Change the color of your username",
+      "label": "Everyone",
+      "name": "color",
+      "usage": "/color <colorname|hex>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Block all messages from a specific user",
+      "label": "Everyone",
+      "name": "block",
+      "usage": "/block <username>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Remove user from block list",
+      "label": "Everyone",
+      "name": "unblock",
+      "usage": "/unblock <username>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Disconnect from the chat server",
+      "label": "Everyone",
+      "name": "disconnect",
+      "usage": "/disconnect"
+    },
+    {
+      "category": "Everyone",
+      "description": "Send a private whisper",
+      "label": "Everyone",
+      "name": "w",
+      "usage": "/w <username> <message>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Gift subs to this community",
+      "label": "Everyone",
+      "name": "gift",
+      "usage": "/gift [quantity]"
+    },
+    {
+      "category": "Everyone",
+      "description": "Vote in the running poll",
+      "label": "Everyone",
+      "name": "vote",
+      "usage": "/vote <number|option>"
+    },
+    {
+      "category": "Moderator",
+      "description": "Permanently ban a user",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "ban",
+      "usage": "/ban <username> [reason]"
+    },
+    {
+      "category": "Moderator",
+      "description": "Temporarily ban a user",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "timeout",
+      "usage": "/timeout <username> [seconds] [reason]"
+    },
+    {
+      "category": "Moderator",
+      "description": "Lift a permanent ban or timeout",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "unban",
+      "usage": "/unban <username>"
+    },
+    {
+      "category": "Moderator",
+      "description": "Start monitoring a user's messages",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "monitor",
+      "usage": "/monitor <username>"
+    },
+    {
+      "category": "Moderator",
+      "description": "Stop monitoring a user's messages",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "unmonitor",
+      "usage": "/unmonitor <username>"
+    },
+    {
+      "category": "Moderator",
+      "description": "Start restricting a user's messages",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "restrict",
+      "usage": "/restrict <username>"
+    },
+    {
+      "category": "Moderator",
+      "description": "Stop restricting a user's messages",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "unrestrict",
+      "usage": "/unrestrict <username>"
+    },
+    {
+      "category": "Chat Flow",
+      "description": "Wipe the chat history",
+      "label": "Chat modes",
+      "lock": "Needs moderator status in this channel",
+      "name": "clear",
+      "usage": "/clear"
+    },
+    {
+      "category": "Chat Flow",
+      "description": "Set limit on how often users can send messages",
+      "label": "Chat modes",
+      "lock": "Needs moderator status in this channel",
+      "name": "slow",
+      "usage": "/slow <seconds>"
+    },
+    {
+      "category": "Chat Flow",
+      "description": "Disable slow mode",
+      "label": "Chat modes",
+      "lock": "Needs moderator status in this channel",
+      "name": "slowoff",
+      "usage": "/slowoff"
+    },
+    {
+      "category": "Chat Flow",
+      "description": "Restrict chat to followers",
+      "label": "Chat modes",
+      "lock": "Needs moderator status in this channel",
+      "name": "followers",
+      "usage": "/followers [duration]"
+    },
+    {
+      "category": "Chat Flow",
+      "description": "Disable followers only mode",
+      "label": "Chat modes",
+      "lock": "Needs moderator status in this channel",
+      "name": "followersoff",
+      "usage": "/followersoff"
+    },
+    {
+      "category": "Chat Flow",
+      "description": "Restrict chat to subscribers",
+      "label": "Chat modes",
+      "lock": "Needs moderator status in this channel",
+      "name": "subscribers",
+      "usage": "/subscribers"
+    },
+    {
+      "category": "Chat Flow",
+      "description": "Disable subscribers only mode",
+      "label": "Chat modes",
+      "lock": "Needs moderator status in this channel",
+      "name": "subscribersoff",
+      "usage": "/subscribersoff"
+    },
+    {
+      "category": "Chat Flow",
+      "description": "Disallow non-unique messages (r9k)",
+      "label": "Chat modes",
+      "lock": "Needs moderator status in this channel",
+      "name": "uniquechat",
+      "usage": "/uniquechat"
+    },
+    {
+      "category": "Chat Flow",
+      "description": "Disable uniquechat mode",
+      "label": "Chat modes",
+      "lock": "Needs moderator status in this channel",
+      "name": "uniquechatoff",
+      "usage": "/uniquechatoff"
+    },
+    {
+      "category": "Chat Flow",
+      "description": "Set chat to emotes only",
+      "label": "Chat modes",
+      "lock": "Needs moderator status in this channel",
+      "name": "emoteonly",
+      "usage": "/emoteonly"
+    },
+    {
+      "category": "Chat Flow",
+      "description": "Disable emote only mode",
+      "label": "Chat modes",
+      "lock": "Needs moderator status in this channel",
+      "name": "emoteonlyoff",
+      "usage": "/emoteonlyoff"
+    },
+    {
+      "category": "Engagement",
+      "description": "Highlight a message for chat's attention",
+      "label": "Engagement",
+      "lock": "Needs moderator status in this channel",
+      "name": "announce",
+      "usage": "/announce <message>"
+    },
+    {
+      "category": "Engagement",
+      "description": "Share another streamer's channel",
+      "label": "Engagement",
+      "lock": "Needs moderator status in this channel",
+      "name": "shoutout",
+      "usage": "/shoutout <username>"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Open the poll builder. Channel owner only, because Twitch does not let moderators run polls through the API",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "poll",
+      "usage": "/poll"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Run a commercial for all viewers (30-180s)",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "commercial",
+      "usage": "/commercial [seconds]"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Make or edit a sub or follower goal",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "goal",
+      "usage": "/goal"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Open the prediction builder. Channel owner only, because Twitch does not let moderators run predictions through the API",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "prediction",
+      "usage": "/prediction"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Send viewers to another live channel",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "raid",
+      "usage": "/raid <channel>"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Cancel the active raid",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "unraid",
+      "usage": "/unraid"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Add a stream marker",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "marker",
+      "usage": "/marker [description]"
+    },
+    {
+      "category": "Everyone",
+      "description": "Hide messages currently shown in this chat. Visual only, not the moderator /clear.",
+      "label": "Everyone",
+      "name": "clearmessages",
+      "usage": "/clearmessages"
+    },
+    {
+      "category": "Everyone",
+      "description": "Open a link in your default browser",
+      "label": "Everyone",
+      "name": "openurl",
+      "usage": "/openurl <url>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Open this (or another) channel's popout chat in your browser",
+      "label": "Everyone",
+      "name": "popout",
+      "usage": "/popout [channel]"
+    },
+    {
+      "category": "Everyone",
+      "description": "Reply to the last whisper you received",
+      "label": "Everyone",
+      "name": "r",
+      "usage": "/r <message>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Create a clip of the last 30 seconds of the current stream",
+      "label": "Everyone",
+      "name": "clip",
+      "usage": "/clip"
+    },
+    {
+      "category": "Everyone",
+      "description": "Show how many chatters are connected right now",
+      "label": "Everyone",
+      "name": "chatters",
+      "usage": "/chatters"
+    },
+    {
+      "category": "Everyone",
+      "description": "Hide a user from your chat everywhere (local only)",
+      "label": "Everyone",
+      "name": "ignore",
+      "usage": "/ignore <user>"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Set the stream title (broadcaster only)",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "settitle",
+      "usage": "/settitle <title>"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Set the stream category by name (broadcaster only)",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "setgame",
+      "usage": "/setgame <category>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Show this channel's current stream uptime",
+      "label": "Everyone",
+      "name": "uptime",
+      "usage": "/uptime"
+    },
+    {
+      "category": "Everyone",
+      "description": "Identify the music currently playing in the stream",
+      "label": "Everyone",
+      "name": "song",
+      "usage": "/song"
+    },
+    {
+      "category": "Everyone",
+      "description": "Auto-post reminders to chat: every N min, after a delay, at a time, at uptime, or on a keyword. Manage with /remind list, remove, enable, disable, clear. Add x3 to repeat.",
+      "label": "Everyone",
+      "name": "remind",
+      "usage": "/remind every 20m <message>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Open a user's StreamNook profile card",
+      "label": "Everyone",
+      "name": "usercard",
+      "usage": "/usercard <user>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Open a user's StreamNook profile card",
+      "label": "Everyone",
+      "name": "user",
+      "usage": "/user <user>"
+    },
+    {
+      "category": "Moderator",
+      "description": "Ban by Twitch user ID (works on suspended accounts that /ban no longer reaches)",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "banid",
+      "usage": "/banid <userID> [reason]"
+    },
+    {
+      "category": "Moderator",
+      "description": "Mass-action by phrase or /regex/. action = delete | ban | duration. Example: /nuke spam ban 5m:1m. Use /nuke stop to end a running window early.",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "nuke",
+      "usage": "/nuke <pattern> <action> <past[:future]>"
+    },
+    {
+      "category": "Moderator",
+      "description": "Reverse the most recent /nuke on this channel (bans and timeouts only, deletes are permanent)",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "undo",
+      "usage": "/undo"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "End the running poll and leave the result on screen. Channel owner only",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "endpoll",
+      "usage": "/endpoll"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Cancel the running poll and hide it entirely. Channel owner only",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "cancelpoll",
+      "usage": "/cancelpoll"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Stop taking bets on the running prediction. Channel owner only",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "lockprediction",
+      "usage": "/lockprediction"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Cancel the running prediction and refund everyone. Channel owner only",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "cancelprediction",
+      "usage": "/cancelprediction"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Pay out the running prediction to a winning outcome, by position or name. Channel owner only",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "completeprediction",
+      "usage": "/completeprediction <number|title>"
+    },
+    {
+      "category": "Moderator",
+      "description": "Pin a message by its id, pin that person's most recent one, or send a message and pin it. Length from 30s to 30m for an id or a user; leave it off to pin until the stream ends",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "pin",
+      "usage": "/pin <id|@user> [duration] | /pin <message>"
+    },
+    {
+      "category": "Moderator",
+      "description": "Remove the currently pinned message",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "unpin",
+      "usage": "/unpin"
+    },
+    {
+      "category": "Moderator",
+      "description": "Add a phrase to the channel's AutoMod blocked terms",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "blockterm",
+      "usage": "/blockterm <phrase>"
+    },
+    {
+      "category": "Moderator",
+      "description": "Remove a phrase from the channel's AutoMod blocked terms",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "unblockterm",
+      "usage": "/unblockterm <phrase>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Force re-fetch emotes for this channel (busts the local cache)",
+      "label": "Everyone",
+      "name": "refresh",
+      "usage": "/refresh"
+    },
+    {
+      "category": "Everyone",
+      "description": "Hard refresh: restart the stream and reconnect/reload chat (not just emotes)",
+      "label": "Everyone",
+      "name": "reload",
+      "usage": "/reload"
+    },
+    {
+      "category": "Everyone",
+      "description": "Send a message several times in a row (up to 1000). /spam stop ends it early.",
+      "label": "Everyone",
+      "name": "spam",
+      "usage": "/spam <count> <message>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Stack a word or emote 1, 2, 3... up to the height and back down (height up to 100). /pyramid stop ends it early.",
+      "label": "Everyone",
+      "name": "pyramid",
+      "usage": "/pyramid <height> <word>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Send your message as an action, in your name colour",
+      "label": "Everyone",
+      "name": "me",
+      "usage": "/me <message>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Show how a command works, or list them all",
+      "label": "Everyone",
+      "name": "help",
+      "usage": "/help [command]"
+    },
+    {
+      "category": "Moderator",
+      "description": "End a timeout early",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "untimeout",
+      "usage": "/untimeout <username>"
+    },
+    {
+      "category": "Moderator",
+      "description": "Send a warning they must acknowledge before chatting again",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "warn",
+      "usage": "/warn <username> <reason>"
+    },
+    {
+      "category": "Moderator",
+      "description": "Turn on Shield Mode",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "shield",
+      "usage": "/shield"
+    },
+    {
+      "category": "Moderator",
+      "description": "Turn off Shield Mode",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "shieldoff",
+      "usage": "/shieldoff"
+    },
+    {
+      "category": "Engagement",
+      "description": "Announcement with a blue band",
+      "label": "Engagement",
+      "lock": "Needs moderator status in this channel",
+      "name": "announceblue",
+      "usage": "/announceblue <message>"
+    },
+    {
+      "category": "Engagement",
+      "description": "Announcement with a green band",
+      "label": "Engagement",
+      "lock": "Needs moderator status in this channel",
+      "name": "announcegreen",
+      "usage": "/announcegreen <message>"
+    },
+    {
+      "category": "Engagement",
+      "description": "Announcement with an orange band",
+      "label": "Engagement",
+      "lock": "Needs moderator status in this channel",
+      "name": "announceorange",
+      "usage": "/announceorange <message>"
+    },
+    {
+      "category": "Engagement",
+      "description": "Announcement with a purple band",
+      "label": "Engagement",
+      "lock": "Needs moderator status in this channel",
+      "name": "announcepurple",
+      "usage": "/announcepurple <message>"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Make someone a moderator",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "mod",
+      "usage": "/mod <username>"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Remove a moderator",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "unmod",
+      "usage": "/unmod <username>"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Make someone a VIP",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "vip",
+      "usage": "/vip <username>"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Remove a VIP",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "unvip",
+      "usage": "/unvip <username>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Show the channel's chat rules",
+      "label": "Everyone",
+      "name": "rules",
+      "usage": "/rules [channel]"
+    },
+    {
+      "category": "Everyone",
+      "description": "How long you (or someone) have followed this channel",
+      "label": "Everyone",
+      "name": "followage",
+      "usage": "/followage [user] [channel]"
+    },
+    {
+      "category": "Everyone",
+      "description": "Show the channel's follower count",
+      "label": "Everyone",
+      "name": "follows",
+      "usage": "/follows [channel]"
+    },
+    {
+      "category": "Everyone",
+      "description": "How old your (or someone’s) Twitch account is",
+      "label": "Everyone",
+      "name": "accountage",
+      "usage": "/accountage [user]"
+    },
+    {
+      "category": "Everyone",
+      "description": "Show how many people are watching",
+      "label": "Everyone",
+      "name": "viewers",
+      "usage": "/viewers [channel]"
+    },
+    {
+      "category": "Everyone",
+      "description": "List the channel's founders",
+      "label": "Everyone",
+      "name": "founders",
+      "usage": "/founders [channel]"
+    },
+    {
+      "category": "Everyone",
+      "description": "Show the names someone used before",
+      "label": "Everyone",
+      "name": "namehistory",
+      "usage": "/namehistory <user>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Show someone's last messages in this chat",
+      "label": "Everyone",
+      "name": "logs",
+      "usage": "/logs <user>"
+    },
+    {
+      "category": "Everyone",
+      "description": "See who this chat is shared with",
+      "label": "Everyone",
+      "name": "sharedchat",
+      "usage": "/sharedchat"
+    },
+    {
+      "category": "Everyone",
+      "description": "Reply to someone's last message",
+      "label": "Everyone",
+      "name": "reply",
+      "usage": "/reply <@user> <message>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Send text exactly as typed, skipping your custom commands",
+      "label": "Everyone",
+      "name": "say",
+      "usage": "/say <text>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Send your message with ¯\\_(ツ)_/¯ on the end",
+      "label": "Everyone",
+      "name": "shrug",
+      "usage": "/shrug [message]"
+    },
+    {
+      "category": "Everyone",
+      "description": "Tell chat you are lurking",
+      "label": "Everyone",
+      "name": "lurk",
+      "usage": "/lurk [note]"
+    },
+    {
+      "category": "Everyone",
+      "description": "Post the notsquishY copypasta",
+      "label": "Everyone",
+      "name": "squishy",
+      "usage": "/squishy"
+    },
+    {
+      "category": "Everyone",
+      "description": "Reconnect this chat without restarting the stream",
+      "label": "Everyone",
+      "name": "reconnect",
+      "usage": "/reconnect"
+    },
+    {
+      "category": "Everyone",
+      "description": "Show someone you hid with /ignore again",
+      "label": "Everyone",
+      "name": "unignore",
+      "usage": "/unignore <user>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Show someone's name in a colour you pick (only you see it)",
+      "label": "Everyone",
+      "name": "setcolor",
+      "usage": "/setcolor <user> <color|off>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Give someone a nickname only you see",
+      "label": "Everyone",
+      "name": "setname",
+      "usage": "/setname <user> <nickname|off>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Add this (or another) channel to your favorites",
+      "label": "Everyone",
+      "name": "favorite",
+      "usage": "/favorite [channel]"
+    },
+    {
+      "category": "Everyone",
+      "description": "Remove a channel from your favorites",
+      "label": "Everyone",
+      "name": "unfavorite",
+      "usage": "/unfavorite [channel]"
+    },
+    {
+      "category": "Everyone",
+      "description": "Print a line in this chat that only you see",
+      "label": "Everyone",
+      "name": "echo",
+      "usage": "/echo <text>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Copy text to your clipboard",
+      "label": "Everyone",
+      "name": "copy",
+      "usage": "/copy <text>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Read text aloud on this computer",
+      "label": "Everyone",
+      "name": "tts",
+      "usage": "/tts <text>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Note this moment of the stream in your highlights file",
+      "label": "Everyone",
+      "name": "addstreamhighlight",
+      "usage": "/addstreamhighlight [note]"
+    },
+    {
+      "category": "Everyone",
+      "description": "Count the emotes loaded for this channel, per provider",
+      "label": "Everyone",
+      "name": "emoteinfo",
+      "usage": "/emoteinfo"
+    },
+    {
+      "category": "Everyone",
+      "description": "Find 7TV emotes, or edit this channel's set if you are its 7TV editor",
+      "label": "Everyone",
+      "name": "7tv",
+      "usage": "/7tv <search|add|remove|rename> ..."
+    },
+    {
+      "category": "Everyone",
+      "description": "Read or change a setting by its name",
+      "label": "Everyone",
+      "name": "setting",
+      "usage": "/setting <get|set|reset> <name> [value]"
+    },
+    {
+      "category": "Everyone",
+      "description": "Run a command or send a message after a delay",
+      "label": "Everyone",
+      "name": "timer",
+      "usage": "/timer <delay> <command or message>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Run a command or send a message in another open chat",
+      "label": "Everyone",
+      "name": "runin",
+      "usage": "/runin <channel> <command or message>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Run one command for each item in a list",
+      "label": "Everyone",
+      "name": "foreach",
+      "usage": "/foreach <a,b,c> <command with $>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Run several commands one after another",
+      "label": "Everyone",
+      "name": "chain",
+      "usage": "/chain <command> | <command>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Do a barrel roll",
+      "label": "Everyone",
+      "name": "barrelroll",
+      "usage": "/barrelroll"
+    },
+    {
+      "category": "Everyone",
+      "description": "Flash party colours over the app for a few seconds",
+      "label": "Everyone",
+      "name": "party",
+      "usage": "/party"
+    },
+    {
+      "category": "Everyone",
+      "description": "Send a raw IRC line on your chat connection",
+      "label": "Everyone",
+      "name": "raw",
+      "usage": "/raw <IRC line>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Show a made-up chat message only you see (development builds)",
+      "label": "Everyone",
+      "name": "fakemsg",
+      "usage": "/fakemsg <IRC line>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Show the app version, system and data folders",
+      "label": "Everyone",
+      "name": "debug-env",
+      "usage": "/debug-env"
+    },
+    {
+      "category": "Everyone",
+      "description": "Show recent chat connection events",
+      "label": "Everyone",
+      "name": "debug-chat",
+      "usage": "/debug-chat"
+    },
+    {
+      "category": "Everyone",
+      "description": "Show whether EventSub is connected",
+      "label": "Everyone",
+      "name": "debug-eventsub",
+      "usage": "/debug-eventsub"
+    },
+    {
+      "category": "Everyone",
+      "description": "Turn detailed logging on or off",
+      "label": "Everyone",
+      "name": "debug-logging",
+      "usage": "/debug-logging <on|off>"
+    },
+    {
+      "category": "Everyone",
+      "description": "Show your message limits in this chat",
+      "label": "Everyone",
+      "name": "debug-limits",
+      "usage": "/debug-limits"
+    },
+    {
+      "category": "Moderator",
+      "description": "Clear someone's messages with a one-second timeout",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "purge",
+      "usage": "/purge <username> [reason]"
+    },
+    {
+      "category": "Moderator",
+      "description": "Delete one message, or someone’s last message",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "delete",
+      "usage": "/delete <message id | @user>"
+    },
+    {
+      "category": "Moderator",
+      "description": "Allow or deny the newest message AutoMod held",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "automod",
+      "usage": "/automod <allow|deny> [message id]"
+    },
+    {
+      "category": "Moderator",
+      "description": "List monitored and restricted users here, with their messages",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "lowtrust",
+      "usage": "/lowtrust"
+    },
+    {
+      "category": "Moderator",
+      "description": "Open the reward requests queue",
+      "label": "Moderator",
+      "lock": "Needs moderator status in this channel",
+      "name": "requests",
+      "usage": "/requests"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "List live channels you follow to raid",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "raidbrowser",
+      "usage": "/raidbrowser"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Send the raid now instead of waiting for the countdown",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "raidsend",
+      "usage": "/raidsend"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Unban everyone in your channel",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "massunban",
+      "usage": "/massunban [stop]"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Make a moderator a lead moderator",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "leadmod",
+      "usage": "/leadmod <username>"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Remove a lead moderator",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "unleadmod",
+      "usage": "/unleadmod <username>"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Make someone an editor of your channel",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "editor",
+      "usage": "/editor <username>"
+    },
+    {
+      "category": "Broadcaster",
+      "description": "Remove an editor",
+      "label": "Broadcaster",
+      "lock": "Needs the broadcaster in this channel",
+      "name": "uneditor",
+      "usage": "/uneditor <username>"
+    }
+  ],
   "emotes": {
     "7tv": [
       {
@@ -302,43 +1293,93 @@
       }
     ],
     "kick": [],
-    "twitch": []
+    "twitch": [
+      {
+        "emote_type": "globals",
+        "id": "25",
+        "name": "Kappa",
+        "provider": "twitch",
+        "url": "https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/1.0"
+      },
+      {
+        "emote_type": "globals",
+        "id": "425618",
+        "name": "LUL",
+        "provider": "twitch",
+        "url": "https://static-cdn.jtvnw.net/emoticons/v2/425618/default/dark/1.0"
+      },
+      {
+        "emote_type": "globals",
+        "id": "305954156",
+        "name": "PogChamp",
+        "provider": "twitch",
+        "url": "https://static-cdn.jtvnw.net/emoticons/v2/305954156/default/dark/1.0"
+      },
+      {
+        "emote_type": "globals",
+        "id": "41",
+        "name": "Kreygasm",
+        "provider": "twitch",
+        "url": "https://static-cdn.jtvnw.net/emoticons/v2/41/default/dark/1.0"
+      },
+      {
+        "emote_type": "globals",
+        "id": "30259",
+        "name": "HeyGuys",
+        "provider": "twitch",
+        "url": "https://static-cdn.jtvnw.net/emoticons/v2/30259/default/dark/1.0"
+      },
+      {
+        "emote_type": "globals",
+        "id": "64138",
+        "name": "SeemsGood",
+        "provider": "twitch",
+        "url": "https://static-cdn.jtvnw.net/emoticons/v2/64138/default/dark/1.0"
+      },
+      {
+        "emote_type": "globals",
+        "id": "86",
+        "name": "BibleThump",
+        "provider": "twitch",
+        "url": "https://static-cdn.jtvnw.net/emoticons/v2/86/default/dark/1.0"
+      }
+    ]
   },
   "frames": [
     "IRC_CONNECTED",
     "{\"channel\":\"nookroom\",\"emote_only\":false,\"followers_only\":10,\"modes\":{\"modes\":[{\"applies_to_you\":null,\"compact\":\"Followers-only (10m)\",\"detail\":\"Only accounts that have followed for 10 minutes can chat.\",\"kind\":\"followers_only\",\"label\":\"Followers-only chat (10 minutes)\",\"short\":\"Followers 10m\"},{\"applies_to_you\":null,\"compact\":\"Slow mode (30s)\",\"detail\":\"Chatters wait 30 seconds between messages.\",\"kind\":\"slow\",\"label\":\"Slow mode (30 seconds)\",\"short\":\"Slow 30s\"}],\"prompt\":\"Followers-only (10m)\",\"prompt_short\":\"Followers 10m\",\"slow_seconds\":30,\"standing\":null},\"r9k\":false,\"slow\":30,\"subs_only\":false,\"type\":\"ROOMSTATE\"}",
-    "{\"id\":\"fx-0001\",\"user_id\":\"1001\",\"username\":\"glassowl\",\"display_name\":\"Glassowl\",\"color\":\"#1E90FF\",\"badges\":[{\"name\":\"moderator\",\"version\":\"1\"},{\"name\":\"subscriber\",\"version\":\"12\"}],\"timestamp\":\"1760360001700\",\"content\":\"hi chat Kappa welcome in\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"badge-info\":\"\",\"room-id\":\"41245072\",\"id\":\"fx-0001\",\"tmi-sent-ts\":\"1760360001700\",\"display-name\":\"Glassowl\",\"badges\":\"moderator/1,subscriber/12\",\"turbo\":\"0\",\"first-msg\":\"0\",\"flags\":\"\",\"returning-chatter\":\"0\",\"emotes\":\"25:8-12\",\"user-type\":\"\",\"user-id\":\"1001\",\"color\":\"#1E90FF\",\"mod\":\"1\",\"subscriber\":\"1\"},\"segments\":[{\"type\":\"text\",\"content\":\"hi\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"chat\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"Kappa\",\"emote_id\":\"25\",\"emote_url\":\"https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/3.0\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"welcome\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"in\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:21 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Glassowl\",\"view\":{\"name_color\":\"#359bff\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/2\",\"title\":\"Moderator\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"1-Year Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://cdn.7tv.app/badge/01GXP5DNHR000CV9HPMT8GM9JZ/2x.webp\",\"title\":\"7TV Subscriber (1 Year, 9 Months)\",\"provider\":\"7tv\"}],\"paint\":{\"id\":\"01GHA42XER0001KT343YQ6DM2E\",\"kind\":\"linear\",\"angle\":66.0,\"repeating\":true,\"stops\":[{\"at\":0.57,\"color\":\"#ca804eff\"},{\"at\":0.65,\"color\":\"#503611ff\"},{\"at\":0.67,\"color\":\"#dc8b18ff\"},{\"at\":0.8,\"color\":\"#402807ff\"},{\"at\":0.87,\"color\":\"#ffeaccff\"},{\"at\":1.0,\"color\":\"#c89041ff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.5,\"color\":\"#000000ff\"}]},\"spans\":[{\"type\":\"text\",\"text\":\"hi chat \"},{\"type\":\"emote\",\"code\":\"Kappa\",\"url\":\"https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/3.0\",\"width\":28,\"height\":28},{\"type\":\"text\",\"text\":\" welcome in\"}]}}}",
-    "{\"id\":\"fx-clap\",\"user_id\":\"1002\",\"username\":\"pixelpine\",\"display_name\":\"Pixelpine\",\"color\":\"#000080\",\"badges\":[{\"name\":\"subscriber\",\"version\":\"3\"},{\"name\":\"premium\",\"version\":\"1\"}],\"timestamp\":\"1760360003400\",\"content\":\"Clap Clap that was clean\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"display-name\":\"Pixelpine\",\"mod\":\"0\",\"badge-info\":\"\",\"badges\":\"subscriber/3,premium/1\",\"emotes\":\"\",\"flags\":\"\",\"subscriber\":\"1\",\"user-type\":\"\",\"color\":\"#000080\",\"user-id\":\"1002\",\"tmi-sent-ts\":\"1760360003400\",\"room-id\":\"41245072\",\"returning-chatter\":\"0\",\"turbo\":\"0\",\"id\":\"fx-clap\",\"first-msg\":\"0\"},\"segments\":[{\"type\":\"emote\",\"content\":\"Clap\",\"emote_id\":\"01GF9MNXQ8000E85YTZ0P4TWJ7\",\"emote_url\":\"https://cdn.7tv.app/emote/01GF9MNXQ8000E85YTZ0P4TWJ7/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"Clap\",\"emote_id\":\"01GF9MNXQ8000E85YTZ0P4TWJ7\",\"emote_url\":\"https://cdn.7tv.app/emote/01GF9MNXQ8000E85YTZ0P4TWJ7/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"that\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"was\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"clean\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:23 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:sub\",\"local:ascii\"],\"shown_name\":\"Pixelpine\",\"view\":{\"name_color\":\"#7a7aff\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"3-Month Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/bbbe0db0-a598-423e-86d0-f9fb98ca1933/2\",\"title\":\"Prime Gaming\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"emote\",\"code\":\"Clap\",\"url\":\"https://cdn.7tv.app/emote/01GF9MNXQ8000E85YTZ0P4TWJ7/1x.avif\",\"width\":26,\"height\":32},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"Clap\",\"url\":\"https://cdn.7tv.app/emote/01GF9MNXQ8000E85YTZ0P4TWJ7/1x.avif\",\"width\":26,\"height\":32},{\"type\":\"text\",\"text\":\" that was clean\"}]}}}",
-    "{\"id\":\"fx-0003\",\"user_id\":\"1003\",\"username\":\"latebloomer\",\"display_name\":\"Latebloomer\",\"color\":\"#8A2BE2\",\"badges\":[{\"name\":\"vip\",\"version\":\"1\"}],\"timestamp\":\"1760360005100\",\"content\":\"PepePls PETPET vibing\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"first-msg\":\"0\",\"display-name\":\"Latebloomer\",\"user-id\":\"1003\",\"returning-chatter\":\"0\",\"color\":\"\",\"badges\":\"vip/1\",\"badge-info\":\"\",\"user-type\":\"\",\"subscriber\":\"0\",\"id\":\"fx-0003\",\"mod\":\"0\",\"flags\":\"\",\"turbo\":\"0\",\"tmi-sent-ts\":\"1760360005100\",\"room-id\":\"41245072\",\"emotes\":\"\"},\"segments\":[{\"type\":\"emote\",\"content\":\"PepePls\",\"emote_id\":\"01GCMQJGB0000D8ZK13J8KVCDX\",\"emote_url\":\"https://cdn.7tv.app/emote/01GCMQJGB0000D8ZK13J8KVCDX/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"PETPET\",\"emote_id\":\"01FSNK0GP000038GDBZ91HT6SQ\",\"emote_url\":\"https://cdn.7tv.app/emote/01FSNK0GP000038GDBZ91HT6SQ/1x.avif\",\"is_zero_width\":true},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"vibing\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:25 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Latebloomer\",\"view\":{\"name_color\":\"#aa64ea\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/b817aba4-fad8-49e2-b88a-7cc744dfa6ec/2\",\"title\":\"VIP\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"emote\",\"code\":\"PepePls\",\"url\":\"https://cdn.7tv.app/emote/01GCMQJGB0000D8ZK13J8KVCDX/1x.avif\",\"width\":22,\"height\":32,\"overlays\":[{\"code\":\"PETPET\",\"url\":\"https://cdn.7tv.app/emote/01FSNK0GP000038GDBZ91HT6SQ/1x.avif\",\"width\":32,\"height\":32}]},{\"type\":\"text\",\"text\":\" vibing\"}]}}}",
-    "{\"id\":\"fx-0004\",\"user_id\":\"1007\",\"username\":\"mossyfrog\",\"display_name\":\"Mossyfrog\",\"color\":\"#2E8B57\",\"badges\":[{\"name\":\"glhf-pledge\",\"version\":\"1\"}],\"timestamp\":\"1760360006800\",\"content\":\"RainTime starts the message on its own\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"subscriber\":\"0\",\"returning-chatter\":\"0\",\"emotes\":\"\",\"badge-info\":\"\",\"first-msg\":\"0\",\"flags\":\"\",\"display-name\":\"Mossyfrog\",\"tmi-sent-ts\":\"1760360006800\",\"user-id\":\"1007\",\"mod\":\"0\",\"room-id\":\"41245072\",\"turbo\":\"0\",\"badges\":\"glhf-pledge/1\",\"color\":\"#2E8B57\",\"user-type\":\"\",\"id\":\"fx-0004\"},\"segments\":[{\"type\":\"emote\",\"content\":\"RainTime\",\"emote_id\":\"01FGH9W5BG00047CPSV86K5JE7\",\"emote_url\":\"https://cdn.7tv.app/emote/01FGH9W5BG00047CPSV86K5JE7/1x.avif\",\"is_zero_width\":true},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"starts\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"the\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"message\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"on\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"its\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"own\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:26 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Mossyfrog\",\"view\":{\"name_color\":\"#3db974\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3158e758-3cb4-43c5-94b3-7639810451c5/2\",\"title\":\"GLHF Pledge\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"emote\",\"code\":\"RainTime\",\"url\":\"https://cdn.7tv.app/emote/01FGH9W5BG00047CPSV86K5JE7/1x.avif\",\"width\":32,\"height\":32},{\"type\":\"text\",\"text\":\" starts the message on its own\"}]}}}",
-    "{\"id\":\"fx-0005\",\"user_id\":\"1006\",\"username\":\"midnightmod\",\"display_name\":\"Midnightmod\",\"color\":\"#8A2BE2\",\"badges\":[{\"name\":\"moderator\",\"version\":\"1\"},{\"name\":\"turbo\",\"version\":\"1\"}],\"timestamp\":\"1760360008500\",\"content\":\"AlienDance SteerR RainTime stacking two overlays\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"badges\":\"moderator/1,turbo/1\",\"first-msg\":\"0\",\"turbo\":\"0\",\"user-id\":\"1006\",\"id\":\"fx-0005\",\"badge-info\":\"\",\"returning-chatter\":\"0\",\"user-type\":\"\",\"room-id\":\"41245072\",\"emotes\":\"\",\"subscriber\":\"0\",\"mod\":\"1\",\"tmi-sent-ts\":\"1760360008500\",\"flags\":\"\",\"display-name\":\"Midnightmod\",\"color\":\"#8A2BE2\"},\"segments\":[{\"type\":\"emote\",\"content\":\"AlienDance\",\"emote_id\":\"01G9F2Q3H800080GCW6BK843J7\",\"emote_url\":\"https://cdn.7tv.app/emote/01G9F2Q3H800080GCW6BK843J7/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"SteerR\",\"emote_id\":\"01FSNK8QC80000JPZ36BHMFQWQ\",\"emote_url\":\"https://cdn.7tv.app/emote/01FSNK8QC80000JPZ36BHMFQWQ/1x.avif\",\"is_zero_width\":true},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"RainTime\",\"emote_id\":\"01FGH9W5BG00047CPSV86K5JE7\",\"emote_url\":\"https://cdn.7tv.app/emote/01FGH9W5BG00047CPSV86K5JE7/1x.avif\",\"is_zero_width\":true},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"stacking\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"two\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"overlays\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:28 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Midnightmod\",\"view\":{\"name_color\":\"#aa64ea\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/2\",\"title\":\"Moderator\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/bd444ec6-8f34-4bf9-91f4-af1e3428d80f/2\",\"title\":\"Turbo\",\"provider\":\"twitch\"},{\"url\":\"https://cdn.7tv.app/badge/01GXP5DNHR000CV9HPMT8GM9JZ/2x.webp\",\"title\":\"7TV Subscriber (1 Year, 9 Months)\",\"provider\":\"7tv\"}],\"paint\":{\"id\":\"01H6PWABE00001XFYVRFENNHQM\",\"kind\":\"linear\",\"angle\":315.0,\"repeating\":false,\"stops\":[{\"at\":0.0,\"color\":\"#a03bfeff\"},{\"at\":0.25,\"color\":\"#fe4ec4ff\"},{\"at\":0.5,\"color\":\"#f3f0f1ff\"},{\"at\":0.5,\"color\":\"#c8e6fdff\"},{\"at\":0.75,\"color\":\"#00eaedff\"},{\"at\":1.0,\"color\":\"#0d59eaff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.5,\"color\":\"#a03bfeff\"}]},\"spans\":[{\"type\":\"emote\",\"code\":\"AlienDance\",\"url\":\"https://cdn.7tv.app/emote/01G9F2Q3H800080GCW6BK843J7/1x.avif\",\"width\":32,\"height\":32,\"overlays\":[{\"code\":\"SteerR\",\"url\":\"https://cdn.7tv.app/emote/01FSNK8QC80000JPZ36BHMFQWQ/1x.avif\",\"width\":32,\"height\":32},{\"code\":\"RainTime\",\"url\":\"https://cdn.7tv.app/emote/01FGH9W5BG00047CPSV86K5JE7/1x.avif\",\"width\":32,\"height\":32}]},{\"type\":\"text\",\"text\":\" stacking two overlays\"}]}}}",
-    "{\"id\":\"fx-0006\",\"user_id\":\"1005\",\"username\":\"kappakid\",\"display_name\":\"KappaKid\",\"color\":\"#FF4500\",\"badges\":[],\"timestamp\":\"1760360010200\",\"content\":\"first time here, hello everyone HeyGuys\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"first-msg\":\"1\",\"turbo\":\"0\",\"badge-info\":\"\",\"room-id\":\"41245072\",\"display-name\":\"KappaKid\",\"returning-chatter\":\"0\",\"flags\":\"\",\"user-type\":\"\",\"id\":\"fx-0006\",\"color\":\"#FF4500\",\"subscriber\":\"0\",\"mod\":\"0\",\"emotes\":\"30259:32-38\",\"user-id\":\"1005\",\"badges\":\"\",\"tmi-sent-ts\":\"1760360010200\"},\"segments\":[{\"type\":\"text\",\"content\":\"first\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"time\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"here,\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"hello\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"everyone\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"HeyGuys\",\"emote_id\":\"30259\",\"emote_url\":\"https://static-cdn.jtvnw.net/emoticons/v2/30259/default/dark/3.0\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":true,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:30 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"built_in\":{\"kind\":\"first_time\",\"color\":\"#a855f7\",\"label\":\"First message in chat\"},\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"KappaKid\",\"scrollbar_mark\":{\"kind\":\"first_time\",\"color\":\"#a855f7\"},\"view\":{\"name_color\":\"#ff581a\",\"spans\":[{\"type\":\"text\",\"text\":\"first time here, hello everyone \"},{\"type\":\"emote\",\"code\":\"HeyGuys\",\"url\":\"https://static-cdn.jtvnw.net/emoticons/v2/30259/default/dark/3.0\",\"width\":28,\"height\":28}]}}}",
-    "{\"id\":\"fx-0007\",\"user_id\":\"1008\",\"username\":\"lootgoblin\",\"display_name\":\"Lootgoblin\",\"color\":\"#DAA520\",\"badges\":[{\"name\":\"bits\",\"version\":\"100\"}],\"timestamp\":\"1760360011900\",\"content\":\"@nookviewer did you catch that play?\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"mod\":\"0\",\"room-id\":\"41245072\",\"tmi-sent-ts\":\"1760360011900\",\"badge-info\":\"\",\"color\":\"#DAA520\",\"user-type\":\"\",\"turbo\":\"0\",\"subscriber\":\"0\",\"returning-chatter\":\"0\",\"id\":\"fx-0007\",\"user-id\":\"1008\",\"display-name\":\"Lootgoblin\",\"flags\":\"\",\"emotes\":\"\",\"first-msg\":\"0\",\"badges\":\"bits/100\"},\"segments\":[{\"type\":\"text\",\"content\":\"@nookviewer\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"did\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"you\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"catch\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"that\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"play?\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":true,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:31 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Lootgoblin\",\"scrollbar_mark\":{\"kind\":\"mention\"},\"view\":{\"name_color\":\"#daa520\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/73b5c3fb-24f9-4a82-a852-2f475b59411c/2\",\"title\":\"cheer 100\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"mention\",\"text\":\"@nookviewer\",\"login\":\"nookviewer\"},{\"type\":\"text\",\"text\":\" did you catch that play?\"}]}}}",
-    "{\"id\":\"fx-0008\",\"user_id\":\"1009\",\"username\":\"quietstorm\",\"display_name\":\"Quietstorm\",\"color\":\"#5F9EA0\",\"badges\":[{\"name\":\"subscriber\",\"version\":\"0\"}],\"timestamp\":\"1760360013600\",\"content\":\"@glassowl LUL fair point\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"first-msg\":\"0\",\"returning-chatter\":\"0\",\"badges\":\"subscriber/0\",\"user-type\":\"\",\"mod\":\"0\",\"turbo\":\"0\",\"id\":\"fx-0008\",\"color\":\"#5F9EA0\",\"badge-info\":\"\",\"emotes\":\"425618:10-12\",\"room-id\":\"41245072\",\"subscriber\":\"1\",\"flags\":\"\",\"display-name\":\"Quietstorm\",\"tmi-sent-ts\":\"1760360013600\",\"user-id\":\"1009\"},\"segments\":[{\"type\":\"text\",\"content\":\"@glassowl\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"LUL\",\"emote_id\":\"425618\",\"emote_url\":\"https://static-cdn.jtvnw.net/emoticons/v2/425618/default/dark/3.0\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"fair\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"point\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:33 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:sub\",\"local:ascii\"],\"shown_name\":\"Quietstorm\",\"view\":{\"name_color\":\"#5f9ea0\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"Subscriber\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"mention\",\"text\":\"@glassowl\",\"login\":\"glassowl\",\"color\":\"#359bff\"},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"LUL\",\"url\":\"https://static-cdn.jtvnw.net/emoticons/v2/425618/default/dark/3.0\",\"width\":28,\"height\":28},{\"type\":\"text\",\"text\":\" fair point\"}]}}}",
-    "{\"id\":\"fx-0009\",\"user_id\":\"1001\",\"username\":\"glassowl\",\"display_name\":\"Glassowl\",\"color\":\"#1E90FF\",\"badges\":[{\"name\":\"moderator\",\"version\":\"1\"},{\"name\":\"subscriber\",\"version\":\"12\"}],\"timestamp\":\"1760360015300\",\"content\":\"agreed EZ\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"tmi-sent-ts\":\"1760360015300\",\"returning-chatter\":\"0\",\"room-id\":\"41245072\",\"color\":\"#1E90FF\",\"reply-thread-parent-msg-id\":\"fx-clap\",\"id\":\"fx-0009\",\"emotes\":\"\",\"display-name\":\"Glassowl\",\"reply-thread-parent-user-id\":\"1002\",\"reply-thread-parent-display-name\":\"Pixelpine\",\"reply-parent-msg-body\":\"Clap\\\\sClap\\\\sthat\\\\swas\\\\sclean\",\"turbo\":\"0\",\"subscriber\":\"1\",\"badge-info\":\"\",\"reply-thread-parent-user-login\":\"pixelpine\",\"reply-parent-display-name\":\"Pixelpine\",\"reply-parent-user-login\":\"pixelpine\",\"reply-parent-msg-id\":\"fx-clap\",\"user-id\":\"1001\",\"badges\":\"moderator/1,subscriber/12\",\"user-type\":\"\",\"first-msg\":\"0\",\"flags\":\"\",\"mod\":\"1\",\"reply-parent-user-id\":\"1002\"},\"segments\":[{\"type\":\"text\",\"content\":\"agreed\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"EZ\",\"emote_id\":\"01K6WWG0R4T5A9FVNN4TWCWXA7\",\"emote_url\":\"https://cdn.7tv.app/emote/01K6WWG0R4T5A9FVNN4TWCWXA7/1x.avif\",\"is_zero_width\":false}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:35 AM\",\"reply_info\":{\"parent_msg_id\":\"fx-clap\",\"parent_display_name\":\"Pixelpine\",\"parent_msg_body\":\"Clap Clap that was clean\",\"parent_user_id\":\"1002\",\"parent_user_login\":\"pixelpine\",\"parent_shown_name\":\"Pixelpine\",\"parent_segments\":[{\"type\":\"emote\",\"content\":\"Clap\",\"emote_id\":\"01GF9MNXQ8000E85YTZ0P4TWJ7\",\"emote_url\":\"https://cdn.7tv.app/emote/01GF9MNXQ8000E85YTZ0P4TWJ7/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"Clap\",\"emote_id\":\"01GF9MNXQ8000E85YTZ0P4TWJ7\",\"emote_url\":\"https://cdn.7tv.app/emote/01GF9MNXQ8000E85YTZ0P4TWJ7/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"that\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"was\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"clean\"}]},\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Glassowl\",\"view\":{\"name_color\":\"#359bff\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/2\",\"title\":\"Moderator\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"1-Year Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://cdn.7tv.app/badge/01GXP5DNHR000CV9HPMT8GM9JZ/2x.webp\",\"title\":\"7TV Subscriber (1 Year, 9 Months)\",\"provider\":\"7tv\"}],\"paint\":{\"id\":\"01GHA42XER0001KT343YQ6DM2E\",\"kind\":\"linear\",\"angle\":66.0,\"repeating\":true,\"stops\":[{\"at\":0.57,\"color\":\"#ca804eff\"},{\"at\":0.65,\"color\":\"#503611ff\"},{\"at\":0.67,\"color\":\"#dc8b18ff\"},{\"at\":0.8,\"color\":\"#402807ff\"},{\"at\":0.87,\"color\":\"#ffeaccff\"},{\"at\":1.0,\"color\":\"#c89041ff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.5,\"color\":\"#000000ff\"}]},\"spans\":[{\"type\":\"text\",\"text\":\"agreed \"},{\"type\":\"emote\",\"code\":\"EZ\",\"url\":\"https://cdn.7tv.app/emote/01K6WWG0R4T5A9FVNN4TWCWXA7/1x.avif\",\"width\":32,\"height\":32}],\"parent_spans\":[{\"type\":\"emote\",\"code\":\"Clap\",\"url\":\"https://cdn.7tv.app/emote/01GF9MNXQ8000E85YTZ0P4TWJ7/1x.avif\",\"width\":26,\"height\":32},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"Clap\",\"url\":\"https://cdn.7tv.app/emote/01GF9MNXQ8000E85YTZ0P4TWJ7/1x.avif\",\"width\":26,\"height\":32},{\"type\":\"text\",\"text\":\" that was clean\"}]}}}",
-    "{\"id\":\"fx-0010\",\"user_id\":\"41245072\",\"username\":\"nookstreamer\",\"display_name\":\"Nookstreamer\",\"color\":\"#DA70D6\",\"badges\":[{\"name\":\"broadcaster\",\"version\":\"1\"},{\"name\":\"subscriber\",\"version\":\"0\"},{\"name\":\"partner\",\"version\":\"1\"}],\"timestamp\":\"1760360017000\",\"content\":\"clip it: https://www.twitch.tv/videos/2581234567?t=1h02m33s and the vod is up\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"turbo\":\"0\",\"room-id\":\"41245072\",\"subscriber\":\"1\",\"badge-info\":\"\",\"flags\":\"\",\"user-type\":\"\",\"emotes\":\"\",\"user-id\":\"41245072\",\"first-msg\":\"0\",\"badges\":\"broadcaster/1,subscriber/0,partner/1\",\"tmi-sent-ts\":\"1760360017000\",\"display-name\":\"Nookstreamer\",\"color\":\"#DA70D6\",\"id\":\"fx-0010\",\"mod\":\"0\",\"returning-chatter\":\"0\"},\"segments\":[{\"type\":\"text\",\"content\":\"clip\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"it:\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"link\",\"content\":\"https://www.twitch.tv/videos/2581234567?t=1h02m33s\",\"url\":\"https://www.twitch.tv/videos/2581234567?t=1h02m33s\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"and\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"the\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"vod\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"is\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"up\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:37 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Nookstreamer\",\"view\":{\"name_color\":\"#da70d6\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5527c58c-fb7d-422d-b71b-f309dcb85cc1/2\",\"title\":\"Broadcaster\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/d12a2e27-16f6-41d0-ab77-b780518f00a3/2\",\"title\":\"Verified\",\"provider\":\"twitch\"}],\"paint\":{\"id\":\"01HQE7KJWG0000D7GK7EKRAPN3\",\"kind\":\"radial\",\"angle\":0.0,\"repeating\":false,\"stops\":[{\"at\":0.0,\"color\":\"#ffef8aff\"},{\"at\":0.25,\"color\":\"#eaff47ff\"},{\"at\":0.4,\"color\":\"#ff7a33ff\"},{\"at\":1.0,\"color\":\"#1ac6ffff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.1,\"color\":\"#006080ff\"}]},\"spans\":[{\"type\":\"text\",\"text\":\"clip it: \"},{\"type\":\"link\",\"label\":\"twitch.tv/videos/2581234567?t=1h02m33s\",\"url\":\"https://www.twitch.tv/videos/2581234567?t=1h02m33s\"},{\"type\":\"text\",\"text\":\" and the vod is up\"}]}}}",
-    "{\"id\":\"fx-0011\",\"user_id\":\"1002\",\"username\":\"pixelpine\",\"display_name\":\"Pixelpine\",\"color\":\"#000080\",\"badges\":[{\"name\":\"subscriber\",\"version\":\"3\"},{\"name\":\"premium\",\"version\":\"1\"}],\"timestamp\":\"1760360018700\",\"content\":\"lets go 🔥🔥 PogChamp\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"mod\":\"0\",\"badges\":\"subscriber/3,premium/1\",\"returning-chatter\":\"0\",\"first-msg\":\"0\",\"user-id\":\"1002\",\"user-type\":\"\",\"turbo\":\"0\",\"color\":\"#000080\",\"badge-info\":\"\",\"flags\":\"\",\"room-id\":\"41245072\",\"tmi-sent-ts\":\"1760360018700\",\"id\":\"fx-0011\",\"display-name\":\"Pixelpine\",\"emotes\":\"305954156:11-18\",\"subscriber\":\"1\"},\"segments\":[{\"type\":\"text\",\"content\":\"lets\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"go\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emoji\",\"content\":\"🔥\",\"emoji_url\":\"https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/img/apple/64/1f525.png\"},{\"type\":\"emoji\",\"content\":\"🔥\",\"emoji_url\":\"https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/img/apple/64/1f525.png\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"PogChamp\",\"emote_id\":\"305954156\",\"emote_url\":\"https://static-cdn.jtvnw.net/emoticons/v2/305954156/default/dark/3.0\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:38 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:sub\"],\"shown_name\":\"Pixelpine\",\"view\":{\"name_color\":\"#7a7aff\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"3-Month Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/bbbe0db0-a598-423e-86d0-f9fb98ca1933/2\",\"title\":\"Prime Gaming\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"text\",\"text\":\"lets go \"},{\"type\":\"emoji\",\"text\":\"🔥\",\"url\":\"https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/img/apple/64/1f525.png\"},{\"type\":\"emoji\",\"text\":\"🔥\",\"url\":\"https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/img/apple/64/1f525.png\"},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"PogChamp\",\"url\":\"https://static-cdn.jtvnw.net/emoticons/v2/305954156/default/dark/3.0\",\"width\":28,\"height\":28}]}}}",
-    "{\"id\":\"fx-0012\",\"user_id\":\"1007\",\"username\":\"mossyfrog\",\"display_name\":\"Mossyfrog\",\"color\":\"#2E8B57\",\"badges\":[{\"name\":\"glhf-pledge\",\"version\":\"1\"}],\"timestamp\":\"1760360020400\",\"content\":\"SourPls monkaS KKona\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"first-msg\":\"0\",\"mod\":\"0\",\"display-name\":\"Mossyfrog\",\"turbo\":\"0\",\"room-id\":\"41245072\",\"user-type\":\"\",\"returning-chatter\":\"0\",\"emotes\":\"\",\"flags\":\"\",\"tmi-sent-ts\":\"1760360020400\",\"subscriber\":\"0\",\"id\":\"fx-0012\",\"badge-info\":\"\",\"user-id\":\"1007\",\"badges\":\"glhf-pledge/1\",\"color\":\"#2E8B57\"},\"segments\":[{\"type\":\"emote\",\"content\":\"SourPls\",\"emote_id\":\"566ca38765dbbdab32ec0560\",\"emote_url\":\"https://cdn.betterttv.net/emote/566ca38765dbbdab32ec0560/1x\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"monkaS\",\"emote_id\":\"56e9f494fff3cc5c35e5287e\",\"emote_url\":\"https://cdn.betterttv.net/emote/56e9f494fff3cc5c35e5287e/1x\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"KKona\",\"emote_id\":\"566ca04265dbbdab32ec054a\",\"emote_url\":\"https://cdn.betterttv.net/emote/566ca04265dbbdab32ec054a/1x\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:40 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Mossyfrog\",\"view\":{\"name_color\":\"#3db974\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3158e758-3cb4-43c5-94b3-7639810451c5/2\",\"title\":\"GLHF Pledge\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"emote\",\"code\":\"SourPls\",\"url\":\"https://cdn.betterttv.net/emote/566ca38765dbbdab32ec0560/1x\"},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"monkaS\",\"url\":\"https://cdn.betterttv.net/emote/56e9f494fff3cc5c35e5287e/1x\"},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"KKona\",\"url\":\"https://cdn.betterttv.net/emote/566ca04265dbbdab32ec054a/1x\"}]}}}",
-    "{\"id\":\"fx-0013\",\"user_id\":\"1003\",\"username\":\"latebloomer\",\"display_name\":\"Latebloomer\",\"color\":\"#8A2BE2\",\"badges\":[{\"name\":\"vip\",\"version\":\"1\"}],\"timestamp\":\"1760360022100\",\"content\":\"AngelThump h! FeelsGoodMan\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"mod\":\"0\",\"badge-info\":\"\",\"flags\":\"\",\"user-type\":\"\",\"badges\":\"vip/1\",\"id\":\"fx-0013\",\"emotes\":\"\",\"room-id\":\"41245072\",\"user-id\":\"1003\",\"first-msg\":\"0\",\"subscriber\":\"0\",\"returning-chatter\":\"0\",\"tmi-sent-ts\":\"1760360022100\",\"turbo\":\"0\",\"color\":\"\",\"display-name\":\"Latebloomer\"},\"segments\":[{\"type\":\"emote\",\"content\":\"AngelThump\",\"emote_id\":\"566ca1a365dbbdab32ec055b\",\"emote_url\":\"https://cdn.betterttv.net/emote/566ca1a365dbbdab32ec055b/1x\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"h!\",\"emote_id\":\"6468f845aee1f7f47567709b\",\"emote_url\":\"https://cdn.betterttv.net/emote/6468f845aee1f7f47567709b/1x\",\"is_zero_width\":true,\"modifier_flags\":262147},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"FeelsGoodMan\",\"emote_id\":\"566c9fde65dbbdab32ec053e\",\"emote_url\":\"https://cdn.betterttv.net/emote/566c9fde65dbbdab32ec053e/1x\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:42 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Latebloomer\",\"view\":{\"name_color\":\"#aa64ea\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/b817aba4-fad8-49e2-b88a-7cc744dfa6ec/2\",\"title\":\"VIP\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"emote\",\"code\":\"AngelThump\",\"url\":\"https://cdn.betterttv.net/emote/566ca1a365dbbdab32ec055b/1x\"},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"FeelsGoodMan\",\"url\":\"https://cdn.betterttv.net/emote/566c9fde65dbbdab32ec053e/1x\",\"effects\":2}]}}}",
-    "{\"id\":\"fx-0014\",\"user_id\":\"1009\",\"username\":\"quietstorm\",\"display_name\":\"Quietstorm\",\"color\":\"#5F9EA0\",\"badges\":[{\"name\":\"subscriber\",\"version\":\"0\"}],\"timestamp\":\"1760360023800\",\"content\":\"CatBag ffzX CatBag ffzW CatBag ffzRainbow\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"badges\":\"subscriber/0\",\"mod\":\"0\",\"badge-info\":\"\",\"room-id\":\"41245072\",\"emotes\":\"\",\"returning-chatter\":\"0\",\"turbo\":\"0\",\"flags\":\"\",\"id\":\"fx-0014\",\"user-id\":\"1009\",\"display-name\":\"Quietstorm\",\"tmi-sent-ts\":\"1760360023800\",\"subscriber\":\"1\",\"first-msg\":\"0\",\"color\":\"#5F9EA0\",\"user-type\":\"\"},\"segments\":[{\"type\":\"emote\",\"content\":\"CatBag\",\"emote_id\":\"25927\",\"emote_url\":\"https://cdn.frankerfacez.com/emote/25927/1\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"ffzX\",\"emote_id\":\"720508\",\"emote_url\":\"https://cdn.frankerfacez.com/emote/720508/1\",\"is_zero_width\":true,\"modifier_flags\":3},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"CatBag\",\"emote_id\":\"25927\",\"emote_url\":\"https://cdn.frankerfacez.com/emote/25927/1\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"ffzW\",\"emote_id\":\"723890\",\"emote_url\":\"https://cdn.frankerfacez.com/emote/723890/1\",\"is_zero_width\":true,\"modifier_flags\":9},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"CatBag\",\"emote_id\":\"25927\",\"emote_url\":\"https://cdn.frankerfacez.com/emote/25927/1\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"ffzRainbow\",\"emote_id\":\"720510\",\"emote_url\":\"https://cdn.frankerfacez.com/emote/720510/1\",\"is_zero_width\":true,\"modifier_flags\":2049}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:43 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:sub\",\"local:ascii\"],\"shown_name\":\"Quietstorm\",\"view\":{\"name_color\":\"#5f9ea0\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"Subscriber\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"emote\",\"code\":\"CatBag\",\"url\":\"https://cdn.frankerfacez.com/emote/25927/1\",\"effects\":2},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"CatBag\",\"url\":\"https://cdn.frankerfacez.com/emote/25927/1\",\"effects\":8},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"CatBag\",\"url\":\"https://cdn.frankerfacez.com/emote/25927/1\",\"effects\":2048}]}}}",
-    "{\"id\":\"fx-0015\",\"user_id\":\"1008\",\"username\":\"lootgoblin\",\"display_name\":\"Lootgoblin\",\"color\":\"#DAA520\",\"badges\":[{\"name\":\"bits\",\"version\":\"100\"}],\"timestamp\":\"1760360025500\",\"content\":\"Cheer100 great run\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"user-id\":\"1008\",\"tmi-sent-ts\":\"1760360025500\",\"emotes\":\"\",\"mod\":\"0\",\"turbo\":\"0\",\"user-type\":\"\",\"returning-chatter\":\"0\",\"bits\":\"100\",\"flags\":\"\",\"badge-info\":\"\",\"badges\":\"bits/100\",\"subscriber\":\"0\",\"id\":\"fx-0015\",\"room-id\":\"41245072\",\"color\":\"#DAA520\",\"first-msg\":\"0\",\"display-name\":\"Lootgoblin\"},\"segments\":[{\"type\":\"cheermote\",\"content\":\"Cheer100\",\"prefix\":\"cheer\",\"bits\":100,\"tier\":\"100\",\"color\":\"#9c3ee8\",\"cheermote_url\":\"https://d3aqoihi2n8ty8.cloudfront.net/actions/cheer/dark/animated/100/2.gif\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"great\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"run\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:45 AM\",\"is_from_shared_chat\":false,\"bits_amount\":100,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Lootgoblin\",\"view\":{\"name_color\":\"#daa520\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/73b5c3fb-24f9-4a82-a852-2f475b59411c/2\",\"title\":\"cheer 100\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"cheer\",\"text\":\"Cheer100\",\"bits\":100,\"color\":\"#9c3ee8\",\"url\":\"https://d3aqoihi2n8ty8.cloudfront.net/actions/cheer/dark/animated/100/2.gif\"},{\"type\":\"text\",\"text\":\" great run\"}]}}}",
-    "{\"id\":\"fx-0016\",\"user_id\":\"1006\",\"username\":\"midnightmod\",\"display_name\":\"Midnightmod\",\"color\":\"#8A2BE2\",\"badges\":[{\"name\":\"moderator\",\"version\":\"1\"},{\"name\":\"turbo\",\"version\":\"1\"}],\"timestamp\":\"1760360027200\",\"content\":\"hands out snacks to chat\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"room-id\":\"41245072\",\"display-name\":\"Midnightmod\",\"user-type\":\"\",\"flags\":\"\",\"badge-info\":\"\",\"turbo\":\"0\",\"color\":\"#8A2BE2\",\"tmi-sent-ts\":\"1760360027200\",\"first-msg\":\"0\",\"mod\":\"1\",\"subscriber\":\"0\",\"id\":\"fx-0016\",\"user-id\":\"1006\",\"returning-chatter\":\"0\",\"emotes\":\"\",\"badges\":\"moderator/1,turbo/1\"},\"segments\":[{\"type\":\"text\",\"content\":\"hands\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"out\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"snacks\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"to\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"chat\"}],\"metadata\":{\"is_action\":true,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:47 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Midnightmod\",\"view\":{\"name_color\":\"#aa64ea\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/2\",\"title\":\"Moderator\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/bd444ec6-8f34-4bf9-91f4-af1e3428d80f/2\",\"title\":\"Turbo\",\"provider\":\"twitch\"},{\"url\":\"https://cdn.7tv.app/badge/01GXP5DNHR000CV9HPMT8GM9JZ/2x.webp\",\"title\":\"7TV Subscriber (1 Year, 9 Months)\",\"provider\":\"7tv\"}],\"paint\":{\"id\":\"01H6PWABE00001XFYVRFENNHQM\",\"kind\":\"linear\",\"angle\":315.0,\"repeating\":false,\"stops\":[{\"at\":0.0,\"color\":\"#a03bfeff\"},{\"at\":0.25,\"color\":\"#fe4ec4ff\"},{\"at\":0.5,\"color\":\"#f3f0f1ff\"},{\"at\":0.5,\"color\":\"#c8e6fdff\"},{\"at\":0.75,\"color\":\"#00eaedff\"},{\"at\":1.0,\"color\":\"#0d59eaff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.5,\"color\":\"#a03bfeff\"}]},\"spans\":[{\"type\":\"text\",\"text\":\"hands out snacks to chat\"}]}}}",
-    "{\"id\":\"fx-0017\",\"user_id\":\"1001\",\"username\":\"glassowl\",\"display_name\":\"Glassowl\",\"color\":\"#1E90FF\",\"badges\":[{\"name\":\"moderator\",\"version\":\"1\"},{\"name\":\"subscriber\",\"version\":\"12\"}],\"timestamp\":\"1760360028900\",\"content\":\"this is a longer message that wraps onto a second and maybe a third line with emotes Clap peepoHappy AYAYA mixed into the text so the layout has to place them mid-line\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"tmi-sent-ts\":\"1760360028900\",\"badge-info\":\"\",\"first-msg\":\"0\",\"color\":\"#1E90FF\",\"user-type\":\"\",\"mod\":\"1\",\"turbo\":\"0\",\"flags\":\"\",\"returning-chatter\":\"0\",\"user-id\":\"1001\",\"badges\":\"moderator/1,subscriber/12\",\"room-id\":\"41245072\",\"subscriber\":\"1\",\"emotes\":\"\",\"display-name\":\"Glassowl\",\"id\":\"fx-0017\"},\"segments\":[{\"type\":\"text\",\"content\":\"this\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"is\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"a\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"longer\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"message\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"that\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"wraps\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"onto\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"a\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"second\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"and\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"maybe\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"a\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"third\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"line\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"with\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"emotes\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"Clap\",\"emote_id\":\"01GF9MNXQ8000E85YTZ0P4TWJ7\",\"emote_url\":\"https://cdn.7tv.app/emote/01GF9MNXQ8000E85YTZ0P4TWJ7/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"peepoHappy\",\"emote_id\":\"01GE9J9VYR00035T18VJ6D2H2P\",\"emote_url\":\"https://cdn.7tv.app/emote/01GE9J9VYR00035T18VJ6D2H2P/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"AYAYA\",\"emote_id\":\"01GE732B7R0002G1FA1JB1A2RR\",\"emote_url\":\"https://cdn.7tv.app/emote/01GE732B7R0002G1FA1JB1A2RR/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"mixed\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"into\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"the\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"text\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"so\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"the\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"layout\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"has\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"to\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"place\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"them\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"mid-line\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:48 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Glassowl\",\"view\":{\"name_color\":\"#359bff\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/2\",\"title\":\"Moderator\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"1-Year Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://cdn.7tv.app/badge/01GXP5DNHR000CV9HPMT8GM9JZ/2x.webp\",\"title\":\"7TV Subscriber (1 Year, 9 Months)\",\"provider\":\"7tv\"}],\"paint\":{\"id\":\"01GHA42XER0001KT343YQ6DM2E\",\"kind\":\"linear\",\"angle\":66.0,\"repeating\":true,\"stops\":[{\"at\":0.57,\"color\":\"#ca804eff\"},{\"at\":0.65,\"color\":\"#503611ff\"},{\"at\":0.67,\"color\":\"#dc8b18ff\"},{\"at\":0.8,\"color\":\"#402807ff\"},{\"at\":0.87,\"color\":\"#ffeaccff\"},{\"at\":1.0,\"color\":\"#c89041ff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.5,\"color\":\"#000000ff\"}]},\"spans\":[{\"type\":\"text\",\"text\":\"this is a longer message that wraps onto a second and maybe a third line with emotes \"},{\"type\":\"emote\",\"code\":\"Clap\",\"url\":\"https://cdn.7tv.app/emote/01GF9MNXQ8000E85YTZ0P4TWJ7/1x.avif\",\"width\":26,\"height\":32},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"peepoHappy\",\"url\":\"https://cdn.7tv.app/emote/01GE9J9VYR00035T18VJ6D2H2P/1x.avif\",\"width\":32,\"height\":32},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"AYAYA\",\"url\":\"https://cdn.7tv.app/emote/01GE732B7R0002G1FA1JB1A2RR/1x.avif\",\"width\":32,\"height\":32},{\"type\":\"text\",\"text\":\" mixed into the text so the layout has to place them mid-line\"}]}}}",
-    "{\"id\":\"fx-0018\",\"user_id\":\"1005\",\"username\":\"kappakid\",\"display_name\":\"KappaKid\",\"color\":\"#FF4500\",\"badges\":[],\"timestamp\":\"1760360030600\",\"content\":\"7Cinema WineTime gachiBASS Stare\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"turbo\":\"0\",\"color\":\"#FF4500\",\"flags\":\"\",\"id\":\"fx-0018\",\"emotes\":\"\",\"tmi-sent-ts\":\"1760360030600\",\"room-id\":\"41245072\",\"first-msg\":\"0\",\"display-name\":\"KappaKid\",\"user-id\":\"1005\",\"badge-info\":\"\",\"subscriber\":\"0\",\"badges\":\"\",\"returning-chatter\":\"0\",\"mod\":\"0\",\"user-type\":\"\"},\"segments\":[{\"type\":\"emote\",\"content\":\"7Cinema\",\"emote_id\":\"01J8G2CEC8000A5QBDAQ50YTX8\",\"emote_url\":\"https://cdn.7tv.app/emote/01J8G2CEC8000A5QBDAQ50YTX8/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"WineTime\",\"emote_id\":\"01HBBVDK500005HE0A9M4Z4M9J\",\"emote_url\":\"https://cdn.7tv.app/emote/01HBBVDK500005HE0A9M4Z4M9J/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"gachiBASS\",\"emote_id\":\"01GEYY13PG0009AX18SNGDJ3C2\",\"emote_url\":\"https://cdn.7tv.app/emote/01GEYY13PG0009AX18SNGDJ3C2/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"Stare\",\"emote_id\":\"01HBBMRDVR0004CB92YXKWS4F9\",\"emote_url\":\"https://cdn.7tv.app/emote/01HBBMRDVR0004CB92YXKWS4F9/1x.avif\",\"is_zero_width\":false}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:50 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"KappaKid\",\"view\":{\"name_color\":\"#ff581a\",\"spans\":[{\"type\":\"emote\",\"code\":\"7Cinema\",\"url\":\"https://cdn.7tv.app/emote/01J8G2CEC8000A5QBDAQ50YTX8/1x.avif\",\"width\":57,\"height\":32},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"WineTime\",\"url\":\"https://cdn.7tv.app/emote/01HBBVDK500005HE0A9M4Z4M9J/1x.avif\",\"width\":18,\"height\":19},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"gachiBASS\",\"url\":\"https://cdn.7tv.app/emote/01GEYY13PG0009AX18SNGDJ3C2/1x.avif\",\"width\":33,\"height\":32},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"Stare\",\"url\":\"https://cdn.7tv.app/emote/01HBBMRDVR0004CB92YXKWS4F9/1x.avif\",\"width\":37,\"height\":32}]}}}",
-    "{\"id\":\"fx-0019\",\"user_id\":\"1002\",\"username\":\"pixelpine\",\"display_name\":\"Pixelpine\",\"color\":\"#000080\",\"badges\":[{\"name\":\"subscriber\",\"version\":\"3\"},{\"name\":\"premium\",\"version\":\"1\"}],\"timestamp\":\"1760360032300\",\"content\":\"Kreygasm Kreygasm Kreygasm\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"mod\":\"0\",\"returning-chatter\":\"0\",\"badges\":\"subscriber/3,premium/1\",\"turbo\":\"0\",\"user-id\":\"1002\",\"user-type\":\"\",\"display-name\":\"Pixelpine\",\"room-id\":\"41245072\",\"id\":\"fx-0019\",\"subscriber\":\"1\",\"tmi-sent-ts\":\"1760360032300\",\"badge-info\":\"\",\"color\":\"#000080\",\"emotes\":\"41:0-7,9-16,18-25\",\"flags\":\"\",\"first-msg\":\"0\"},\"segments\":[{\"type\":\"emote\",\"content\":\"Kreygasm\",\"emote_id\":\"41\",\"emote_url\":\"https://static-cdn.jtvnw.net/emoticons/v2/41/default/dark/3.0\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"Kreygasm\",\"emote_id\":\"41\",\"emote_url\":\"https://static-cdn.jtvnw.net/emoticons/v2/41/default/dark/3.0\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"Kreygasm\",\"emote_id\":\"41\",\"emote_url\":\"https://static-cdn.jtvnw.net/emoticons/v2/41/default/dark/3.0\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:52 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:sub\",\"local:ascii\"],\"shown_name\":\"Pixelpine\",\"view\":{\"name_color\":\"#7a7aff\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"3-Month Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/bbbe0db0-a598-423e-86d0-f9fb98ca1933/2\",\"title\":\"Prime Gaming\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"emote\",\"code\":\"Kreygasm\",\"url\":\"https://static-cdn.jtvnw.net/emoticons/v2/41/default/dark/3.0\",\"width\":28,\"height\":28},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"Kreygasm\",\"url\":\"https://static-cdn.jtvnw.net/emoticons/v2/41/default/dark/3.0\",\"width\":28,\"height\":28},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"Kreygasm\",\"url\":\"https://static-cdn.jtvnw.net/emoticons/v2/41/default/dark/3.0\",\"width\":28,\"height\":28}]}}}",
-    "{\"id\":\"fx-deleted\",\"user_id\":\"1008\",\"username\":\"lootgoblin\",\"display_name\":\"Lootgoblin\",\"color\":\"#DAA520\",\"badges\":[{\"name\":\"bits\",\"version\":\"100\"}],\"timestamp\":\"1760360034000\",\"content\":\"this message will be deleted by a mod\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"color\":\"#DAA520\",\"emotes\":\"\",\"user-id\":\"1008\",\"turbo\":\"0\",\"returning-chatter\":\"0\",\"display-name\":\"Lootgoblin\",\"badge-info\":\"\",\"tmi-sent-ts\":\"1760360034000\",\"room-id\":\"41245072\",\"first-msg\":\"0\",\"user-type\":\"\",\"badges\":\"bits/100\",\"mod\":\"0\",\"flags\":\"\",\"subscriber\":\"0\",\"id\":\"fx-deleted\"},\"segments\":[{\"type\":\"text\",\"content\":\"this\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"message\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"will\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"be\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"deleted\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"by\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"a\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"mod\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:54 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Lootgoblin\",\"view\":{\"name_color\":\"#daa520\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/73b5c3fb-24f9-4a82-a852-2f475b59411c/2\",\"title\":\"cheer 100\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"text\",\"text\":\"this message will be deleted by a mod\"}]}}}",
-    "{\"id\":\"fx-0021\",\"user_id\":\"1007\",\"username\":\"mossyfrog\",\"display_name\":\"Mossyfrog\",\"color\":\"#2E8B57\",\"badges\":[{\"name\":\"glhf-pledge\",\"version\":\"1\"}],\"timestamp\":\"1760360035700\",\"content\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa long words wrap anywhere\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"mod\":\"0\",\"user-type\":\"\",\"tmi-sent-ts\":\"1760360035700\",\"emotes\":\"\",\"user-id\":\"1007\",\"badges\":\"glhf-pledge/1\",\"display-name\":\"Mossyfrog\",\"returning-chatter\":\"0\",\"color\":\"#2E8B57\",\"flags\":\"\",\"badge-info\":\"\",\"room-id\":\"41245072\",\"turbo\":\"0\",\"subscriber\":\"0\",\"first-msg\":\"0\",\"id\":\"fx-0021\"},\"segments\":[{\"type\":\"text\",\"content\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"long\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"words\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"wrap\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"anywhere\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:55 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Mossyfrog\",\"view\":{\"name_color\":\"#3db974\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3158e758-3cb4-43c5-94b3-7639810451c5/2\",\"title\":\"GLHF Pledge\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"text\",\"text\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa long words wrap anywhere\"}]}}}",
-    "{\"id\":\"fx-0022\",\"user_id\":\"41245072\",\"username\":\"nookstreamer\",\"display_name\":\"Nookstreamer\",\"color\":\"#DA70D6\",\"badges\":[{\"name\":\"broadcaster\",\"version\":\"1\"},{\"name\":\"subscriber\",\"version\":\"0\"},{\"name\":\"partner\",\"version\":\"1\"}],\"timestamp\":\"1760360037400\",\"content\":\"thanks for hanging out everyone peepoHappy\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"first-msg\":\"0\",\"id\":\"fx-0022\",\"user-id\":\"41245072\",\"turbo\":\"0\",\"display-name\":\"Nookstreamer\",\"mod\":\"0\",\"color\":\"#DA70D6\",\"user-type\":\"\",\"subscriber\":\"1\",\"flags\":\"\",\"badges\":\"broadcaster/1,subscriber/0,partner/1\",\"room-id\":\"41245072\",\"badge-info\":\"\",\"returning-chatter\":\"0\",\"tmi-sent-ts\":\"1760360037400\",\"emotes\":\"\"},\"segments\":[{\"type\":\"text\",\"content\":\"thanks\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"for\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"hanging\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"out\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"everyone\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"peepoHappy\",\"emote_id\":\"01GE9J9VYR00035T18VJ6D2H2P\",\"emote_url\":\"https://cdn.7tv.app/emote/01GE9J9VYR00035T18VJ6D2H2P/1x.avif\",\"is_zero_width\":false}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:57 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Nookstreamer\",\"view\":{\"name_color\":\"#da70d6\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5527c58c-fb7d-422d-b71b-f309dcb85cc1/2\",\"title\":\"Broadcaster\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/d12a2e27-16f6-41d0-ab77-b780518f00a3/2\",\"title\":\"Verified\",\"provider\":\"twitch\"}],\"paint\":{\"id\":\"01HQE7KJWG0000D7GK7EKRAPN3\",\"kind\":\"radial\",\"angle\":0.0,\"repeating\":false,\"stops\":[{\"at\":0.0,\"color\":\"#ffef8aff\"},{\"at\":0.25,\"color\":\"#eaff47ff\"},{\"at\":0.4,\"color\":\"#ff7a33ff\"},{\"at\":1.0,\"color\":\"#1ac6ffff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.1,\"color\":\"#006080ff\"}]},\"spans\":[{\"type\":\"text\",\"text\":\"thanks for hanging out everyone \"},{\"type\":\"emote\",\"code\":\"peepoHappy\",\"url\":\"https://cdn.7tv.app/emote/01GE9J9VYR00035T18VJ6D2H2P/1x.avif\",\"width\":32,\"height\":32}]}}}",
-    "{\"id\":\"fx-0023\",\"user_id\":\"1003\",\"username\":\"latebloomer\",\"display_name\":\"Latebloomer\",\"color\":\"#8A2BE2\",\"badges\":[{\"name\":\"vip\",\"version\":\"1\"}],\"timestamp\":\"1760360039100\",\"content\":\"PartyParrot WAYTOODANK PartyParrot\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"display-name\":\"Latebloomer\",\"room-id\":\"41245072\",\"emotes\":\"\",\"badges\":\"vip/1\",\"turbo\":\"0\",\"first-msg\":\"0\",\"badge-info\":\"\",\"color\":\"\",\"id\":\"fx-0023\",\"returning-chatter\":\"0\",\"user-id\":\"1003\",\"flags\":\"\",\"mod\":\"0\",\"tmi-sent-ts\":\"1760360039100\",\"subscriber\":\"0\",\"user-type\":\"\"},\"segments\":[{\"type\":\"emote\",\"content\":\"PartyParrot\",\"emote_id\":\"01GD9MAQYR0005BTNYM8DG0TNH\",\"emote_url\":\"https://cdn.7tv.app/emote/01GD9MAQYR0005BTNYM8DG0TNH/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"WAYTOODANK\",\"emote_id\":\"01FGYPRTT0000BF1F0BAH6R39Q\",\"emote_url\":\"https://cdn.7tv.app/emote/01FGYPRTT0000BF1F0BAH6R39Q/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"PartyParrot\",\"emote_id\":\"01GD9MAQYR0005BTNYM8DG0TNH\",\"emote_url\":\"https://cdn.7tv.app/emote/01GD9MAQYR0005BTNYM8DG0TNH/1x.avif\",\"is_zero_width\":false}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:59 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Latebloomer\",\"view\":{\"name_color\":\"#aa64ea\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/b817aba4-fad8-49e2-b88a-7cc744dfa6ec/2\",\"title\":\"VIP\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"emote\",\"code\":\"PartyParrot\",\"url\":\"https://cdn.7tv.app/emote/01GD9MAQYR0005BTNYM8DG0TNH/1x.avif\",\"width\":32,\"height\":32},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"WAYTOODANK\",\"url\":\"https://cdn.7tv.app/emote/01FGYPRTT0000BF1F0BAH6R39Q/1x.avif\",\"width\":32,\"height\":32},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"PartyParrot\",\"url\":\"https://cdn.7tv.app/emote/01GD9MAQYR0005BTNYM8DG0TNH/1x.avif\",\"width\":32,\"height\":32}]}}}",
-    "{\"id\":\"fx-0024\",\"user_id\":\"1009\",\"username\":\"quietstorm\",\"display_name\":\"Quietstorm\",\"color\":\"#5F9EA0\",\"badges\":[{\"name\":\"subscriber\",\"version\":\"0\"}],\"timestamp\":\"1760360040800\",\"content\":\"highlighted message test\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"badge-info\":\"\",\"returning-chatter\":\"0\",\"msg-id\":\"highlighted-message\",\"mod\":\"0\",\"user-id\":\"1009\",\"subscriber\":\"1\",\"id\":\"fx-0024\",\"first-msg\":\"0\",\"color\":\"#5F9EA0\",\"badges\":\"subscriber/0\",\"turbo\":\"0\",\"tmi-sent-ts\":\"1760360040800\",\"flags\":\"\",\"emotes\":\"\",\"user-type\":\"\",\"display-name\":\"Quietstorm\",\"room-id\":\"41245072\"},\"segments\":[{\"type\":\"text\",\"content\":\"highlighted\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"message\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"test\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:54 AM\",\"formatted_timestamp_with_seconds\":\"5:54:00 AM\",\"is_from_shared_chat\":false,\"msg_type\":\"highlighted-message\",\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:sub\",\"local:ascii\"],\"shown_name\":\"Quietstorm\",\"scrollbar_mark\":{\"kind\":\"redeem\"},\"view\":{\"name_color\":\"#5f9ea0\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"Subscriber\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"text\",\"text\":\"highlighted message test\"}]}}}",
-    "{\"id\":\"fx-0025\",\"user_id\":\"1001\",\"username\":\"glassowl\",\"display_name\":\"Glassowl\",\"color\":\"#1E90FF\",\"badges\":[{\"name\":\"moderator\",\"version\":\"1\"},{\"name\":\"subscriber\",\"version\":\"12\"}],\"timestamp\":\"1760360042500\",\"content\":\"giant SeemsGood\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"display-name\":\"Glassowl\",\"color\":\"#1E90FF\",\"turbo\":\"0\",\"first-msg\":\"0\",\"subscriber\":\"1\",\"room-id\":\"41245072\",\"tmi-sent-ts\":\"1760360042500\",\"user-id\":\"1001\",\"emotes\":\"64138:6-14\",\"id\":\"fx-0025\",\"returning-chatter\":\"0\",\"badges\":\"moderator/1,subscriber/12\",\"mod\":\"1\",\"badge-info\":\"\",\"flags\":\"\",\"user-type\":\"\",\"msg-id\":\"gigantified-emote-message\"},\"segments\":[{\"type\":\"text\",\"content\":\"giant\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"SeemsGood\",\"emote_id\":\"64138\",\"emote_url\":\"https://static-cdn.jtvnw.net/emoticons/v2/64138/default/dark/3.0\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:54 AM\",\"formatted_timestamp_with_seconds\":\"5:54:02 AM\",\"is_from_shared_chat\":false,\"msg_type\":\"gigantified-emote-message\",\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Glassowl\",\"view\":{\"name_color\":\"#359bff\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/2\",\"title\":\"Moderator\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"1-Year Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://cdn.7tv.app/badge/01GXP5DNHR000CV9HPMT8GM9JZ/2x.webp\",\"title\":\"7TV Subscriber (1 Year, 9 Months)\",\"provider\":\"7tv\"}],\"paint\":{\"id\":\"01GHA42XER0001KT343YQ6DM2E\",\"kind\":\"linear\",\"angle\":66.0,\"repeating\":true,\"stops\":[{\"at\":0.57,\"color\":\"#ca804eff\"},{\"at\":0.65,\"color\":\"#503611ff\"},{\"at\":0.67,\"color\":\"#dc8b18ff\"},{\"at\":0.8,\"color\":\"#402807ff\"},{\"at\":0.87,\"color\":\"#ffeaccff\"},{\"at\":1.0,\"color\":\"#c89041ff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.5,\"color\":\"#000000ff\"}]},\"spans\":[{\"type\":\"text\",\"text\":\"giant \"},{\"type\":\"emote\",\"code\":\"SeemsGood\",\"url\":\"https://static-cdn.jtvnw.net/emoticons/v2/64138/default/dark/3.0\",\"width\":28,\"height\":28}]}}}",
-    "{\"id\":\"fx-0026\",\"user_id\":\"1009\",\"username\":\"quietstorm\",\"display_name\":\"Quietstorm\",\"color\":\"#5F9EA0\",\"badges\":[{\"name\":\"subscriber\",\"version\":\"0\"}],\"timestamp\":\"1760360044200\",\"content\":\"\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"system-msg\":\"quietstorm\\\\ssubscribed\\\\swith\\\\sPrime.\",\"emotes\":\"\",\"subscriber\":\"1\",\"user-type\":\"\",\"msg-param-sub-plan\":\"Prime\",\"msg-param-cumulative-months\":\"1\",\"badge-info\":\"\",\"display-name\":\"Quietstorm\",\"login\":\"quietstorm\",\"mod\":\"0\",\"badges\":\"subscriber/0\",\"tmi-sent-ts\":\"1760360044200\",\"msg-id\":\"sub\",\"user-id\":\"1009\",\"flags\":\"\",\"color\":\"#5F9EA0\",\"id\":\"fx-0026\",\"room-id\":\"41245072\"},\"segments\":[],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:54 AM\",\"formatted_timestamp_with_seconds\":\"5:54:04 AM\",\"is_from_shared_chat\":false,\"msg_type\":\"sub\",\"system_message\":\"quietstorm subscribed with Prime.\",\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:sub\",\"local:ascii\"],\"shown_name\":\"Quietstorm\",\"scrollbar_mark\":{\"kind\":\"sub\"},\"view\":{\"name_color\":\"#5f9ea0\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"Subscriber\",\"provider\":\"twitch\"}],\"spans\":[]}}}",
-    "{\"id\":\"fx-0027\",\"user_id\":\"1001\",\"username\":\"glassowl\",\"display_name\":\"Glassowl\",\"color\":\"#1E90FF\",\"badges\":[{\"name\":\"moderator\",\"version\":\"1\"},{\"name\":\"subscriber\",\"version\":\"12\"}],\"timestamp\":\"1760360045900\",\"content\":\"still here PogChamp\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"emotes\":\"305954156:11-18\",\"tmi-sent-ts\":\"1760360045900\",\"user-id\":\"1001\",\"display-name\":\"Glassowl\",\"flags\":\"\",\"msg-param-cumulative-months\":\"14\",\"msg-param-should-share-streak\":\"1\",\"subscriber\":\"1\",\"color\":\"#1E90FF\",\"msg-param-sub-plan\":\"1000\",\"id\":\"fx-0027\",\"user-type\":\"\",\"msg-id\":\"resub\",\"badge-info\":\"\",\"badges\":\"moderator/1,subscriber/12\",\"system-msg\":\"glassowl\\\\ssubscribed\\\\sat\\\\sTier\\\\s1.\\\\sThey've\\\\ssubscribed\\\\sfor\\\\s14\\\\smonths!\",\"mod\":\"0\",\"login\":\"glassowl\",\"msg-param-streak-months\":\"3\",\"room-id\":\"41245072\"},\"segments\":[{\"type\":\"text\",\"content\":\"still\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"here\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"PogChamp\",\"emote_id\":\"305954156\",\"emote_url\":\"https://static-cdn.jtvnw.net/emoticons/v2/305954156/default/dark/3.0\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:54 AM\",\"formatted_timestamp_with_seconds\":\"5:54:05 AM\",\"is_from_shared_chat\":false,\"msg_type\":\"resub\",\"system_message\":\"glassowl subscribed at Tier 1. They've subscribed for 14 months!\",\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Glassowl\",\"scrollbar_mark\":{\"kind\":\"sub\"},\"view\":{\"name_color\":\"#359bff\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/2\",\"title\":\"Moderator\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"1-Year Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://cdn.7tv.app/badge/01GXP5DNHR000CV9HPMT8GM9JZ/2x.webp\",\"title\":\"7TV Subscriber (1 Year, 9 Months)\",\"provider\":\"7tv\"}],\"paint\":{\"id\":\"01GHA42XER0001KT343YQ6DM2E\",\"kind\":\"linear\",\"angle\":66.0,\"repeating\":true,\"stops\":[{\"at\":0.57,\"color\":\"#ca804eff\"},{\"at\":0.65,\"color\":\"#503611ff\"},{\"at\":0.67,\"color\":\"#dc8b18ff\"},{\"at\":0.8,\"color\":\"#402807ff\"},{\"at\":0.87,\"color\":\"#ffeaccff\"},{\"at\":1.0,\"color\":\"#c89041ff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.5,\"color\":\"#000000ff\"}]},\"spans\":[{\"type\":\"text\",\"text\":\"still here \"},{\"type\":\"emote\",\"code\":\"PogChamp\",\"url\":\"https://static-cdn.jtvnw.net/emoticons/v2/305954156/default/dark/3.0\",\"width\":28,\"height\":28}]}}}",
-    "{\"id\":\"fx-0028\",\"user_id\":\"1006\",\"username\":\"midnightmod\",\"display_name\":\"Midnightmod\",\"color\":\"#8A2BE2\",\"badges\":[{\"name\":\"moderator\",\"version\":\"1\"},{\"name\":\"turbo\",\"version\":\"1\"}],\"timestamp\":\"1760360047600\",\"content\":\"\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"user-type\":\"\",\"id\":\"fx-0028\",\"badges\":\"moderator/1,turbo/1\",\"mod\":\"0\",\"msg-param-recipient-id\":\"1005\",\"msg-param-recipient-user-name\":\"kappakid\",\"badge-info\":\"\",\"system-msg\":\"midnightmod\\\\sgifted\\\\sa\\\\sTier\\\\s1\\\\ssub\\\\sto\\\\skappakid!\",\"user-id\":\"1006\",\"msg-id\":\"subgift\",\"emotes\":\"\",\"subscriber\":\"1\",\"flags\":\"\",\"msg-param-recipient-display-name\":\"KappaKid\",\"msg-param-sub-plan\":\"1000\",\"tmi-sent-ts\":\"1760360047600\",\"color\":\"#8A2BE2\",\"msg-param-months\":\"1\",\"display-name\":\"Midnightmod\",\"room-id\":\"41245072\",\"login\":\"midnightmod\"},\"segments\":[],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:54 AM\",\"formatted_timestamp_with_seconds\":\"5:54:07 AM\",\"is_from_shared_chat\":false,\"msg_type\":\"subgift\",\"system_message\":\"midnightmod gifted a Tier 1 sub to kappakid!\",\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Midnightmod\",\"scrollbar_mark\":{\"kind\":\"sub\"},\"view\":{\"name_color\":\"#aa64ea\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/2\",\"title\":\"Moderator\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/bd444ec6-8f34-4bf9-91f4-af1e3428d80f/2\",\"title\":\"Turbo\",\"provider\":\"twitch\"},{\"url\":\"https://cdn.7tv.app/badge/01GXP5DNHR000CV9HPMT8GM9JZ/2x.webp\",\"title\":\"7TV Subscriber (1 Year, 9 Months)\",\"provider\":\"7tv\"}],\"paint\":{\"id\":\"01H6PWABE00001XFYVRFENNHQM\",\"kind\":\"linear\",\"angle\":315.0,\"repeating\":false,\"stops\":[{\"at\":0.0,\"color\":\"#a03bfeff\"},{\"at\":0.25,\"color\":\"#fe4ec4ff\"},{\"at\":0.5,\"color\":\"#f3f0f1ff\"},{\"at\":0.5,\"color\":\"#c8e6fdff\"},{\"at\":0.75,\"color\":\"#00eaedff\"},{\"at\":1.0,\"color\":\"#0d59eaff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.5,\"color\":\"#a03bfeff\"}]},\"spans\":[]}}}",
-    "{\"id\":\"fx-0029\",\"user_id\":\"1008\",\"username\":\"lootgoblin\",\"display_name\":\"Lootgoblin\",\"color\":\"#DAA520\",\"badges\":[{\"name\":\"bits\",\"version\":\"100\"}],\"timestamp\":\"1760360049300\",\"content\":\"\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"msg-param-sub-plan\":\"1000\",\"badges\":\"bits/100\",\"subscriber\":\"1\",\"system-msg\":\"lootgoblin\\\\sis\\\\sgifting\\\\s5\\\\sTier\\\\s1\\\\sSubs\\\\sto\\\\snookstreamer's\\\\scommunity!\\\\sThey've\\\\sgifted\\\\sa\\\\stotal\\\\sof\\\\s20\\\\sin\\\\sthe\\\\schannel!\",\"mod\":\"0\",\"msg-id\":\"submysterygift\",\"flags\":\"\",\"emotes\":\"\",\"room-id\":\"41245072\",\"tmi-sent-ts\":\"1760360049300\",\"user-id\":\"1008\",\"user-type\":\"\",\"msg-param-mass-gift-count\":\"5\",\"color\":\"#DAA520\",\"display-name\":\"Lootgoblin\",\"badge-info\":\"\",\"msg-param-sender-count\":\"20\",\"id\":\"fx-0029\",\"login\":\"lootgoblin\"},\"segments\":[],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:54 AM\",\"formatted_timestamp_with_seconds\":\"5:54:09 AM\",\"is_from_shared_chat\":false,\"msg_type\":\"submysterygift\",\"system_message\":\"lootgoblin is gifting 5 Tier 1 Subs to nookstreamer's community! They've gifted a total of 20 in the channel!\",\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Lootgoblin\",\"scrollbar_mark\":{\"kind\":\"sub\"},\"view\":{\"name_color\":\"#daa520\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/73b5c3fb-24f9-4a82-a852-2f475b59411c/2\",\"title\":\"cheer 100\",\"provider\":\"twitch\"}],\"spans\":[]}}}",
-    "{\"id\":\"fx-0030\",\"user_id\":\"1007\",\"username\":\"mossyfrog\",\"display_name\":\"Mossyfrog\",\"color\":\"#2E8B57\",\"badges\":[{\"name\":\"glhf-pledge\",\"version\":\"1\"}],\"timestamp\":\"1760360051000\",\"content\":\"\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"user-type\":\"\",\"id\":\"fx-0030\",\"display-name\":\"Mossyfrog\",\"user-id\":\"1007\",\"badges\":\"glhf-pledge/1\",\"login\":\"mossyfrog\",\"msg-param-displayName\":\"Mossyfrog\",\"msg-param-viewerCount\":\"1234\",\"color\":\"#2E8B57\",\"subscriber\":\"1\",\"emotes\":\"\",\"system-msg\":\"1234\\\\sraiders\\\\sfrom\\\\sMossyfrog\\\\shave\\\\sjoined!\",\"msg-id\":\"raid\",\"mod\":\"0\",\"msg-param-login\":\"mossyfrog\",\"flags\":\"\",\"room-id\":\"41245072\",\"tmi-sent-ts\":\"1760360051000\",\"badge-info\":\"\"},\"segments\":[],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:54 AM\",\"formatted_timestamp_with_seconds\":\"5:54:11 AM\",\"is_from_shared_chat\":false,\"msg_type\":\"raid\",\"system_message\":\"1234 raiders from Mossyfrog have joined!\",\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Mossyfrog\",\"scrollbar_mark\":{\"kind\":\"raid\"},\"view\":{\"name_color\":\"#3db974\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3158e758-3cb4-43c5-94b3-7639810451c5/2\",\"title\":\"GLHF Pledge\",\"provider\":\"twitch\"}],\"spans\":[]}}}",
-    "{\"id\":\"fx-0031\",\"user_id\":\"41245072\",\"username\":\"nookstreamer\",\"display_name\":\"Nookstreamer\",\"color\":\"#DA70D6\",\"badges\":[{\"name\":\"broadcaster\",\"version\":\"1\"},{\"name\":\"subscriber\",\"version\":\"0\"},{\"name\":\"partner\",\"version\":\"1\"}],\"timestamp\":\"1760360052700\",\"content\":\"Stream schedule updated, see the panels!\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"user-id\":\"41245072\",\"room-id\":\"41245072\",\"msg-id\":\"announcement\",\"flags\":\"\",\"emotes\":\"\",\"badges\":\"broadcaster/1,subscriber/0,partner/1\",\"login\":\"nookstreamer\",\"subscriber\":\"1\",\"tmi-sent-ts\":\"1760360052700\",\"badge-info\":\"\",\"id\":\"fx-0031\",\"msg-param-color\":\"PURPLE\",\"user-type\":\"\",\"system-msg\":\"\",\"display-name\":\"Nookstreamer\",\"color\":\"#DA70D6\",\"mod\":\"0\"},\"segments\":[{\"type\":\"text\",\"content\":\"Stream\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"schedule\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"updated,\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"see\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"the\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"panels!\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:54 AM\",\"formatted_timestamp_with_seconds\":\"5:54:12 AM\",\"is_from_shared_chat\":false,\"msg_type\":\"announcement\",\"system_message\":\"\",\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Nookstreamer\",\"scrollbar_mark\":{\"kind\":\"announcement\",\"color\":\"#a855f7\"},\"view\":{\"name_color\":\"#da70d6\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5527c58c-fb7d-422d-b71b-f309dcb85cc1/2\",\"title\":\"Broadcaster\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/d12a2e27-16f6-41d0-ab77-b780518f00a3/2\",\"title\":\"Verified\",\"provider\":\"twitch\"}],\"paint\":{\"id\":\"01HQE7KJWG0000D7GK7EKRAPN3\",\"kind\":\"radial\",\"angle\":0.0,\"repeating\":false,\"stops\":[{\"at\":0.0,\"color\":\"#ffef8aff\"},{\"at\":0.25,\"color\":\"#eaff47ff\"},{\"at\":0.4,\"color\":\"#ff7a33ff\"},{\"at\":1.0,\"color\":\"#1ac6ffff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.1,\"color\":\"#006080ff\"}]},\"spans\":[{\"type\":\"text\",\"text\":\"Stream schedule updated, see the panels!\"}]}}}",
-    "{\"id\":\"fx-0032\",\"user_id\":\"1002\",\"username\":\"pixelpine\",\"display_name\":\"Pixelpine\",\"color\":\"#000080\",\"badges\":[{\"name\":\"subscriber\",\"version\":\"3\"},{\"name\":\"premium\",\"version\":\"1\"}],\"timestamp\":\"1760360054400\",\"content\":\"love this stream\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"id\":\"fx-0032\",\"system-msg\":\"Pixelpine\\\\swatched\\\\s5\\\\sconsecutive\\\\sstreams\\\\sand\\\\ssparked\\\\sa\\\\swatch\\\\sstreak!\",\"emotes\":\"\",\"room-id\":\"41245072\",\"flags\":\"\",\"msg-param-category\":\"watch-streak\",\"display-name\":\"Pixelpine\",\"msg-param-value\":\"5\",\"msg-id\":\"viewermilestone\",\"login\":\"pixelpine\",\"mod\":\"0\",\"color\":\"#000080\",\"user-id\":\"1002\",\"user-type\":\"\",\"msg-param-copoReward\":\"350\",\"tmi-sent-ts\":\"1760360054400\",\"subscriber\":\"1\",\"badge-info\":\"\",\"badges\":\"subscriber/3,premium/1\"},\"segments\":[{\"type\":\"text\",\"content\":\"love\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"this\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"stream\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:54 AM\",\"formatted_timestamp_with_seconds\":\"5:54:14 AM\",\"is_from_shared_chat\":false,\"msg_type\":\"viewermilestone\",\"system_message\":\"Pixelpine watched 5 consecutive streams and sparked a watch streak!\",\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:sub\",\"local:ascii\"],\"shown_name\":\"Pixelpine\",\"view\":{\"name_color\":\"#7a7aff\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"3-Month Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/bbbe0db0-a598-423e-86d0-f9fb98ca1933/2\",\"title\":\"Prime Gaming\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"text\",\"text\":\"love this stream\"}]}}}",
+    "{\"id\":\"fx-0001\",\"user_id\":\"1001\",\"username\":\"glassowl\",\"display_name\":\"Glassowl\",\"color\":\"#1E90FF\",\"badges\":[{\"name\":\"moderator\",\"version\":\"1\"},{\"name\":\"subscriber\",\"version\":\"12\"}],\"timestamp\":\"1760360001700\",\"content\":\"hi chat Kappa welcome in\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"first-msg\":\"0\",\"turbo\":\"0\",\"user-id\":\"1001\",\"emotes\":\"25:8-12\",\"room-id\":\"41245072\",\"user-type\":\"\",\"subscriber\":\"1\",\"flags\":\"\",\"display-name\":\"Glassowl\",\"tmi-sent-ts\":\"1760360001700\",\"color\":\"#1E90FF\",\"mod\":\"1\",\"badge-info\":\"\",\"badges\":\"moderator/1,subscriber/12\",\"returning-chatter\":\"0\",\"id\":\"fx-0001\"},\"segments\":[{\"type\":\"text\",\"content\":\"hi\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"chat\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"Kappa\",\"emote_id\":\"25\",\"emote_url\":\"https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/3.0\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"welcome\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"in\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:21 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Glassowl\",\"view\":{\"name_color\":\"#359bff\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/2\",\"title\":\"Moderator\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"1-Year Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://cdn.7tv.app/badge/01GXP5DNHR000CV9HPMT8GM9JZ/2x.webp\",\"title\":\"7TV Subscriber (1 Year, 9 Months)\",\"provider\":\"7tv\"}],\"paint\":{\"id\":\"01GHA42XER0001KT343YQ6DM2E\",\"kind\":\"linear\",\"angle\":66.0,\"repeating\":true,\"stops\":[{\"at\":0.57,\"color\":\"#ca804eff\"},{\"at\":0.65,\"color\":\"#503611ff\"},{\"at\":0.67,\"color\":\"#dc8b18ff\"},{\"at\":0.8,\"color\":\"#402807ff\"},{\"at\":0.87,\"color\":\"#ffeaccff\"},{\"at\":1.0,\"color\":\"#c89041ff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.5,\"color\":\"#000000ff\"}]},\"spans\":[{\"type\":\"text\",\"text\":\"hi chat \"},{\"type\":\"emote\",\"code\":\"Kappa\",\"url\":\"https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/3.0\",\"width\":28,\"height\":28},{\"type\":\"text\",\"text\":\" welcome in\"}]}}}",
+    "{\"id\":\"fx-clap\",\"user_id\":\"1002\",\"username\":\"pixelpine\",\"display_name\":\"Pixelpine\",\"color\":\"#000080\",\"badges\":[{\"name\":\"subscriber\",\"version\":\"3\"},{\"name\":\"premium\",\"version\":\"1\"}],\"timestamp\":\"1760360003400\",\"content\":\"Clap Clap that was clean\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"badges\":\"subscriber/3,premium/1\",\"user-type\":\"\",\"flags\":\"\",\"mod\":\"0\",\"badge-info\":\"\",\"first-msg\":\"0\",\"returning-chatter\":\"0\",\"color\":\"#000080\",\"emotes\":\"\",\"tmi-sent-ts\":\"1760360003400\",\"room-id\":\"41245072\",\"subscriber\":\"1\",\"id\":\"fx-clap\",\"user-id\":\"1002\",\"display-name\":\"Pixelpine\",\"turbo\":\"0\"},\"segments\":[{\"type\":\"emote\",\"content\":\"Clap\",\"emote_id\":\"01GF9MNXQ8000E85YTZ0P4TWJ7\",\"emote_url\":\"https://cdn.7tv.app/emote/01GF9MNXQ8000E85YTZ0P4TWJ7/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"Clap\",\"emote_id\":\"01GF9MNXQ8000E85YTZ0P4TWJ7\",\"emote_url\":\"https://cdn.7tv.app/emote/01GF9MNXQ8000E85YTZ0P4TWJ7/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"that\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"was\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"clean\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:23 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:sub\",\"local:ascii\"],\"shown_name\":\"Pixelpine\",\"view\":{\"name_color\":\"#7a7aff\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"3-Month Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/bbbe0db0-a598-423e-86d0-f9fb98ca1933/2\",\"title\":\"Prime Gaming\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"emote\",\"code\":\"Clap\",\"url\":\"https://cdn.7tv.app/emote/01GF9MNXQ8000E85YTZ0P4TWJ7/1x.avif\",\"width\":26,\"height\":32},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"Clap\",\"url\":\"https://cdn.7tv.app/emote/01GF9MNXQ8000E85YTZ0P4TWJ7/1x.avif\",\"width\":26,\"height\":32},{\"type\":\"text\",\"text\":\" that was clean\"}]}}}",
+    "{\"id\":\"fx-0003\",\"user_id\":\"1003\",\"username\":\"latebloomer\",\"display_name\":\"Latebloomer\",\"color\":\"#8A2BE2\",\"badges\":[{\"name\":\"vip\",\"version\":\"1\"}],\"timestamp\":\"1760360005100\",\"content\":\"PepePls PETPET vibing\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"mod\":\"0\",\"id\":\"fx-0003\",\"turbo\":\"0\",\"emotes\":\"\",\"user-type\":\"\",\"subscriber\":\"0\",\"badge-info\":\"\",\"room-id\":\"41245072\",\"returning-chatter\":\"0\",\"tmi-sent-ts\":\"1760360005100\",\"display-name\":\"Latebloomer\",\"color\":\"\",\"first-msg\":\"0\",\"flags\":\"\",\"badges\":\"vip/1\",\"user-id\":\"1003\"},\"segments\":[{\"type\":\"emote\",\"content\":\"PepePls\",\"emote_id\":\"01GCMQJGB0000D8ZK13J8KVCDX\",\"emote_url\":\"https://cdn.7tv.app/emote/01GCMQJGB0000D8ZK13J8KVCDX/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"PETPET\",\"emote_id\":\"01FSNK0GP000038GDBZ91HT6SQ\",\"emote_url\":\"https://cdn.7tv.app/emote/01FSNK0GP000038GDBZ91HT6SQ/1x.avif\",\"is_zero_width\":true},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"vibing\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:25 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Latebloomer\",\"view\":{\"name_color\":\"#aa64ea\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/b817aba4-fad8-49e2-b88a-7cc744dfa6ec/2\",\"title\":\"VIP\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"emote\",\"code\":\"PepePls\",\"url\":\"https://cdn.7tv.app/emote/01GCMQJGB0000D8ZK13J8KVCDX/1x.avif\",\"width\":22,\"height\":32,\"overlays\":[{\"code\":\"PETPET\",\"url\":\"https://cdn.7tv.app/emote/01FSNK0GP000038GDBZ91HT6SQ/1x.avif\",\"width\":32,\"height\":32}]},{\"type\":\"text\",\"text\":\" vibing\"}]}}}",
+    "{\"id\":\"fx-0004\",\"user_id\":\"1007\",\"username\":\"mossyfrog\",\"display_name\":\"Mossyfrog\",\"color\":\"#2E8B57\",\"badges\":[{\"name\":\"glhf-pledge\",\"version\":\"1\"}],\"timestamp\":\"1760360006800\",\"content\":\"RainTime starts the message on its own\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"id\":\"fx-0004\",\"color\":\"#2E8B57\",\"room-id\":\"41245072\",\"mod\":\"0\",\"badges\":\"glhf-pledge/1\",\"first-msg\":\"0\",\"tmi-sent-ts\":\"1760360006800\",\"display-name\":\"Mossyfrog\",\"turbo\":\"0\",\"badge-info\":\"\",\"emotes\":\"\",\"user-id\":\"1007\",\"returning-chatter\":\"0\",\"user-type\":\"\",\"flags\":\"\",\"subscriber\":\"0\"},\"segments\":[{\"type\":\"emote\",\"content\":\"RainTime\",\"emote_id\":\"01FGH9W5BG00047CPSV86K5JE7\",\"emote_url\":\"https://cdn.7tv.app/emote/01FGH9W5BG00047CPSV86K5JE7/1x.avif\",\"is_zero_width\":true},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"starts\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"the\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"message\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"on\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"its\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"own\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:26 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Mossyfrog\",\"view\":{\"name_color\":\"#3db974\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3158e758-3cb4-43c5-94b3-7639810451c5/2\",\"title\":\"GLHF Pledge\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"emote\",\"code\":\"RainTime\",\"url\":\"https://cdn.7tv.app/emote/01FGH9W5BG00047CPSV86K5JE7/1x.avif\",\"width\":32,\"height\":32},{\"type\":\"text\",\"text\":\" starts the message on its own\"}]}}}",
+    "{\"id\":\"fx-0005\",\"user_id\":\"1006\",\"username\":\"midnightmod\",\"display_name\":\"Midnightmod\",\"color\":\"#8A2BE2\",\"badges\":[{\"name\":\"moderator\",\"version\":\"1\"},{\"name\":\"turbo\",\"version\":\"1\"}],\"timestamp\":\"1760360008500\",\"content\":\"AlienDance SteerR RainTime stacking two overlays\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"display-name\":\"Midnightmod\",\"tmi-sent-ts\":\"1760360008500\",\"turbo\":\"0\",\"room-id\":\"41245072\",\"user-id\":\"1006\",\"user-type\":\"\",\"id\":\"fx-0005\",\"returning-chatter\":\"0\",\"badge-info\":\"\",\"first-msg\":\"0\",\"emotes\":\"\",\"subscriber\":\"0\",\"color\":\"#8A2BE2\",\"badges\":\"moderator/1,turbo/1\",\"mod\":\"1\",\"flags\":\"\"},\"segments\":[{\"type\":\"emote\",\"content\":\"AlienDance\",\"emote_id\":\"01G9F2Q3H800080GCW6BK843J7\",\"emote_url\":\"https://cdn.7tv.app/emote/01G9F2Q3H800080GCW6BK843J7/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"SteerR\",\"emote_id\":\"01FSNK8QC80000JPZ36BHMFQWQ\",\"emote_url\":\"https://cdn.7tv.app/emote/01FSNK8QC80000JPZ36BHMFQWQ/1x.avif\",\"is_zero_width\":true},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"RainTime\",\"emote_id\":\"01FGH9W5BG00047CPSV86K5JE7\",\"emote_url\":\"https://cdn.7tv.app/emote/01FGH9W5BG00047CPSV86K5JE7/1x.avif\",\"is_zero_width\":true},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"stacking\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"two\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"overlays\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:28 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Midnightmod\",\"view\":{\"name_color\":\"#aa64ea\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/2\",\"title\":\"Moderator\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/bd444ec6-8f34-4bf9-91f4-af1e3428d80f/2\",\"title\":\"Turbo\",\"provider\":\"twitch\"},{\"url\":\"https://cdn.7tv.app/badge/01GXP5DNHR000CV9HPMT8GM9JZ/2x.webp\",\"title\":\"7TV Subscriber (1 Year, 9 Months)\",\"provider\":\"7tv\"}],\"paint\":{\"id\":\"01H6PWABE00001XFYVRFENNHQM\",\"kind\":\"linear\",\"angle\":315.0,\"repeating\":false,\"stops\":[{\"at\":0.0,\"color\":\"#a03bfeff\"},{\"at\":0.25,\"color\":\"#fe4ec4ff\"},{\"at\":0.5,\"color\":\"#f3f0f1ff\"},{\"at\":0.5,\"color\":\"#c8e6fdff\"},{\"at\":0.75,\"color\":\"#00eaedff\"},{\"at\":1.0,\"color\":\"#0d59eaff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.5,\"color\":\"#a03bfeff\"}]},\"spans\":[{\"type\":\"emote\",\"code\":\"AlienDance\",\"url\":\"https://cdn.7tv.app/emote/01G9F2Q3H800080GCW6BK843J7/1x.avif\",\"width\":32,\"height\":32,\"overlays\":[{\"code\":\"SteerR\",\"url\":\"https://cdn.7tv.app/emote/01FSNK8QC80000JPZ36BHMFQWQ/1x.avif\",\"width\":32,\"height\":32},{\"code\":\"RainTime\",\"url\":\"https://cdn.7tv.app/emote/01FGH9W5BG00047CPSV86K5JE7/1x.avif\",\"width\":32,\"height\":32}]},{\"type\":\"text\",\"text\":\" stacking two overlays\"}]}}}",
+    "{\"id\":\"fx-0006\",\"user_id\":\"1005\",\"username\":\"kappakid\",\"display_name\":\"KappaKid\",\"color\":\"#FF4500\",\"badges\":[],\"timestamp\":\"1760360010200\",\"content\":\"first time here, hello everyone HeyGuys\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"id\":\"fx-0006\",\"first-msg\":\"1\",\"badges\":\"\",\"color\":\"#FF4500\",\"room-id\":\"41245072\",\"emotes\":\"30259:32-38\",\"returning-chatter\":\"0\",\"badge-info\":\"\",\"display-name\":\"KappaKid\",\"subscriber\":\"0\",\"user-type\":\"\",\"tmi-sent-ts\":\"1760360010200\",\"user-id\":\"1005\",\"turbo\":\"0\",\"flags\":\"\",\"mod\":\"0\"},\"segments\":[{\"type\":\"text\",\"content\":\"first\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"time\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"here,\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"hello\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"everyone\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"HeyGuys\",\"emote_id\":\"30259\",\"emote_url\":\"https://static-cdn.jtvnw.net/emoticons/v2/30259/default/dark/3.0\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":true,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:30 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"built_in\":{\"kind\":\"first_time\",\"color\":\"#a855f7\",\"label\":\"First message in chat\"},\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"KappaKid\",\"scrollbar_mark\":{\"kind\":\"first_time\",\"color\":\"#a855f7\"},\"view\":{\"name_color\":\"#ff581a\",\"spans\":[{\"type\":\"text\",\"text\":\"first time here, hello everyone \"},{\"type\":\"emote\",\"code\":\"HeyGuys\",\"url\":\"https://static-cdn.jtvnw.net/emoticons/v2/30259/default/dark/3.0\",\"width\":28,\"height\":28}]}}}",
+    "{\"id\":\"fx-0007\",\"user_id\":\"1008\",\"username\":\"lootgoblin\",\"display_name\":\"Lootgoblin\",\"color\":\"#DAA520\",\"badges\":[{\"name\":\"bits\",\"version\":\"100\"}],\"timestamp\":\"1760360011900\",\"content\":\"@nookviewer did you catch that play?\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"display-name\":\"Lootgoblin\",\"turbo\":\"0\",\"user-id\":\"1008\",\"returning-chatter\":\"0\",\"badge-info\":\"\",\"subscriber\":\"0\",\"emotes\":\"\",\"id\":\"fx-0007\",\"color\":\"#DAA520\",\"first-msg\":\"0\",\"user-type\":\"\",\"mod\":\"0\",\"room-id\":\"41245072\",\"badges\":\"bits/100\",\"flags\":\"\",\"tmi-sent-ts\":\"1760360011900\"},\"segments\":[{\"type\":\"text\",\"content\":\"@nookviewer\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"did\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"you\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"catch\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"that\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"play?\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":true,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:31 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Lootgoblin\",\"scrollbar_mark\":{\"kind\":\"mention\"},\"view\":{\"name_color\":\"#daa520\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/73b5c3fb-24f9-4a82-a852-2f475b59411c/2\",\"title\":\"cheer 100\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"mention\",\"text\":\"@nookviewer\",\"login\":\"nookviewer\"},{\"type\":\"text\",\"text\":\" did you catch that play?\"}]}}}",
+    "{\"id\":\"fx-0008\",\"user_id\":\"1009\",\"username\":\"quietstorm\",\"display_name\":\"Quietstorm\",\"color\":\"#5F9EA0\",\"badges\":[{\"name\":\"subscriber\",\"version\":\"0\"}],\"timestamp\":\"1760360013600\",\"content\":\"@glassowl LUL fair point\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"mod\":\"0\",\"color\":\"#5F9EA0\",\"first-msg\":\"0\",\"turbo\":\"0\",\"flags\":\"\",\"subscriber\":\"1\",\"emotes\":\"425618:10-12\",\"user-type\":\"\",\"returning-chatter\":\"0\",\"badge-info\":\"\",\"badges\":\"subscriber/0\",\"id\":\"fx-0008\",\"room-id\":\"41245072\",\"tmi-sent-ts\":\"1760360013600\",\"display-name\":\"Quietstorm\",\"user-id\":\"1009\"},\"segments\":[{\"type\":\"text\",\"content\":\"@glassowl\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"LUL\",\"emote_id\":\"425618\",\"emote_url\":\"https://static-cdn.jtvnw.net/emoticons/v2/425618/default/dark/3.0\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"fair\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"point\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:33 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:sub\",\"local:ascii\"],\"shown_name\":\"Quietstorm\",\"view\":{\"name_color\":\"#5f9ea0\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"Subscriber\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"mention\",\"text\":\"@glassowl\",\"login\":\"glassowl\",\"color\":\"#359bff\"},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"LUL\",\"url\":\"https://static-cdn.jtvnw.net/emoticons/v2/425618/default/dark/3.0\",\"width\":28,\"height\":28},{\"type\":\"text\",\"text\":\" fair point\"}]}}}",
+    "{\"id\":\"fx-0009\",\"user_id\":\"1001\",\"username\":\"glassowl\",\"display_name\":\"Glassowl\",\"color\":\"#1E90FF\",\"badges\":[{\"name\":\"moderator\",\"version\":\"1\"},{\"name\":\"subscriber\",\"version\":\"12\"}],\"timestamp\":\"1760360015300\",\"content\":\"agreed EZ\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"tmi-sent-ts\":\"1760360015300\",\"user-type\":\"\",\"badge-info\":\"\",\"reply-thread-parent-display-name\":\"Pixelpine\",\"flags\":\"\",\"reply-parent-msg-body\":\"Clap\\\\sClap\\\\sthat\\\\swas\\\\sclean\",\"room-id\":\"41245072\",\"turbo\":\"0\",\"subscriber\":\"1\",\"reply-thread-parent-user-login\":\"pixelpine\",\"id\":\"fx-0009\",\"reply-parent-user-login\":\"pixelpine\",\"badges\":\"moderator/1,subscriber/12\",\"emotes\":\"\",\"reply-thread-parent-msg-id\":\"fx-clap\",\"user-id\":\"1001\",\"returning-chatter\":\"0\",\"display-name\":\"Glassowl\",\"reply-thread-parent-user-id\":\"1002\",\"reply-parent-user-id\":\"1002\",\"mod\":\"1\",\"first-msg\":\"0\",\"reply-parent-msg-id\":\"fx-clap\",\"reply-parent-display-name\":\"Pixelpine\",\"color\":\"#1E90FF\"},\"segments\":[{\"type\":\"text\",\"content\":\"agreed\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"EZ\",\"emote_id\":\"01K6WWG0R4T5A9FVNN4TWCWXA7\",\"emote_url\":\"https://cdn.7tv.app/emote/01K6WWG0R4T5A9FVNN4TWCWXA7/1x.avif\",\"is_zero_width\":false}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:35 AM\",\"reply_info\":{\"parent_msg_id\":\"fx-clap\",\"parent_display_name\":\"Pixelpine\",\"parent_msg_body\":\"Clap Clap that was clean\",\"parent_user_id\":\"1002\",\"parent_user_login\":\"pixelpine\",\"parent_shown_name\":\"Pixelpine\",\"parent_segments\":[{\"type\":\"emote\",\"content\":\"Clap\",\"emote_id\":\"01GF9MNXQ8000E85YTZ0P4TWJ7\",\"emote_url\":\"https://cdn.7tv.app/emote/01GF9MNXQ8000E85YTZ0P4TWJ7/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"Clap\",\"emote_id\":\"01GF9MNXQ8000E85YTZ0P4TWJ7\",\"emote_url\":\"https://cdn.7tv.app/emote/01GF9MNXQ8000E85YTZ0P4TWJ7/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"that\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"was\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"clean\"}]},\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Glassowl\",\"view\":{\"name_color\":\"#359bff\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/2\",\"title\":\"Moderator\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"1-Year Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://cdn.7tv.app/badge/01GXP5DNHR000CV9HPMT8GM9JZ/2x.webp\",\"title\":\"7TV Subscriber (1 Year, 9 Months)\",\"provider\":\"7tv\"}],\"paint\":{\"id\":\"01GHA42XER0001KT343YQ6DM2E\",\"kind\":\"linear\",\"angle\":66.0,\"repeating\":true,\"stops\":[{\"at\":0.57,\"color\":\"#ca804eff\"},{\"at\":0.65,\"color\":\"#503611ff\"},{\"at\":0.67,\"color\":\"#dc8b18ff\"},{\"at\":0.8,\"color\":\"#402807ff\"},{\"at\":0.87,\"color\":\"#ffeaccff\"},{\"at\":1.0,\"color\":\"#c89041ff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.5,\"color\":\"#000000ff\"}]},\"spans\":[{\"type\":\"text\",\"text\":\"agreed \"},{\"type\":\"emote\",\"code\":\"EZ\",\"url\":\"https://cdn.7tv.app/emote/01K6WWG0R4T5A9FVNN4TWCWXA7/1x.avif\",\"width\":32,\"height\":32}],\"parent_spans\":[{\"type\":\"emote\",\"code\":\"Clap\",\"url\":\"https://cdn.7tv.app/emote/01GF9MNXQ8000E85YTZ0P4TWJ7/1x.avif\",\"width\":26,\"height\":32},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"Clap\",\"url\":\"https://cdn.7tv.app/emote/01GF9MNXQ8000E85YTZ0P4TWJ7/1x.avif\",\"width\":26,\"height\":32},{\"type\":\"text\",\"text\":\" that was clean\"}]}}}",
+    "{\"id\":\"fx-0010\",\"user_id\":\"41245072\",\"username\":\"nookstreamer\",\"display_name\":\"Nookstreamer\",\"color\":\"#DA70D6\",\"badges\":[{\"name\":\"broadcaster\",\"version\":\"1\"},{\"name\":\"subscriber\",\"version\":\"0\"},{\"name\":\"partner\",\"version\":\"1\"}],\"timestamp\":\"1760360017000\",\"content\":\"clip it: https://www.twitch.tv/videos/2581234567?t=1h02m33s and the vod is up\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"color\":\"#DA70D6\",\"room-id\":\"41245072\",\"flags\":\"\",\"tmi-sent-ts\":\"1760360017000\",\"returning-chatter\":\"0\",\"badge-info\":\"\",\"id\":\"fx-0010\",\"user-id\":\"41245072\",\"turbo\":\"0\",\"emotes\":\"\",\"mod\":\"0\",\"display-name\":\"Nookstreamer\",\"user-type\":\"\",\"badges\":\"broadcaster/1,subscriber/0,partner/1\",\"first-msg\":\"0\",\"subscriber\":\"1\"},\"segments\":[{\"type\":\"text\",\"content\":\"clip\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"it:\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"link\",\"content\":\"https://www.twitch.tv/videos/2581234567?t=1h02m33s\",\"url\":\"https://www.twitch.tv/videos/2581234567?t=1h02m33s\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"and\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"the\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"vod\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"is\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"up\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:37 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Nookstreamer\",\"view\":{\"name_color\":\"#da70d6\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5527c58c-fb7d-422d-b71b-f309dcb85cc1/2\",\"title\":\"Broadcaster\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/d12a2e27-16f6-41d0-ab77-b780518f00a3/2\",\"title\":\"Verified\",\"provider\":\"twitch\"}],\"paint\":{\"id\":\"01HQE7KJWG0000D7GK7EKRAPN3\",\"kind\":\"radial\",\"angle\":0.0,\"repeating\":false,\"stops\":[{\"at\":0.0,\"color\":\"#ffef8aff\"},{\"at\":0.25,\"color\":\"#eaff47ff\"},{\"at\":0.4,\"color\":\"#ff7a33ff\"},{\"at\":1.0,\"color\":\"#1ac6ffff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.1,\"color\":\"#006080ff\"}]},\"spans\":[{\"type\":\"text\",\"text\":\"clip it: \"},{\"type\":\"link\",\"label\":\"twitch.tv/videos/2581234567?t=1h02m33s\",\"url\":\"https://www.twitch.tv/videos/2581234567?t=1h02m33s\"},{\"type\":\"text\",\"text\":\" and the vod is up\"}]}}}",
+    "{\"id\":\"fx-0011\",\"user_id\":\"1002\",\"username\":\"pixelpine\",\"display_name\":\"Pixelpine\",\"color\":\"#000080\",\"badges\":[{\"name\":\"subscriber\",\"version\":\"3\"},{\"name\":\"premium\",\"version\":\"1\"}],\"timestamp\":\"1760360018700\",\"content\":\"lets go 🔥🔥 PogChamp\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"mod\":\"0\",\"turbo\":\"0\",\"display-name\":\"Pixelpine\",\"badges\":\"subscriber/3,premium/1\",\"user-id\":\"1002\",\"room-id\":\"41245072\",\"color\":\"#000080\",\"badge-info\":\"\",\"emotes\":\"305954156:11-18\",\"subscriber\":\"1\",\"returning-chatter\":\"0\",\"user-type\":\"\",\"flags\":\"\",\"tmi-sent-ts\":\"1760360018700\",\"id\":\"fx-0011\",\"first-msg\":\"0\"},\"segments\":[{\"type\":\"text\",\"content\":\"lets\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"go\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emoji\",\"content\":\"🔥\",\"emoji_url\":\"https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/img/apple/64/1f525.png\"},{\"type\":\"emoji\",\"content\":\"🔥\",\"emoji_url\":\"https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/img/apple/64/1f525.png\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"PogChamp\",\"emote_id\":\"305954156\",\"emote_url\":\"https://static-cdn.jtvnw.net/emoticons/v2/305954156/default/dark/3.0\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:38 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:sub\"],\"shown_name\":\"Pixelpine\",\"view\":{\"name_color\":\"#7a7aff\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"3-Month Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/bbbe0db0-a598-423e-86d0-f9fb98ca1933/2\",\"title\":\"Prime Gaming\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"text\",\"text\":\"lets go \"},{\"type\":\"emoji\",\"text\":\"🔥\",\"url\":\"https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/img/apple/64/1f525.png\"},{\"type\":\"emoji\",\"text\":\"🔥\",\"url\":\"https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/img/apple/64/1f525.png\"},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"PogChamp\",\"url\":\"https://static-cdn.jtvnw.net/emoticons/v2/305954156/default/dark/3.0\",\"width\":28,\"height\":28}]}}}",
+    "{\"id\":\"fx-0012\",\"user_id\":\"1007\",\"username\":\"mossyfrog\",\"display_name\":\"Mossyfrog\",\"color\":\"#2E8B57\",\"badges\":[{\"name\":\"glhf-pledge\",\"version\":\"1\"}],\"timestamp\":\"1760360020400\",\"content\":\"SourPls monkaS KKona\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"id\":\"fx-0012\",\"flags\":\"\",\"room-id\":\"41245072\",\"first-msg\":\"0\",\"subscriber\":\"0\",\"mod\":\"0\",\"user-id\":\"1007\",\"emotes\":\"\",\"badges\":\"glhf-pledge/1\",\"display-name\":\"Mossyfrog\",\"turbo\":\"0\",\"color\":\"#2E8B57\",\"user-type\":\"\",\"tmi-sent-ts\":\"1760360020400\",\"badge-info\":\"\",\"returning-chatter\":\"0\"},\"segments\":[{\"type\":\"emote\",\"content\":\"SourPls\",\"emote_id\":\"566ca38765dbbdab32ec0560\",\"emote_url\":\"https://cdn.betterttv.net/emote/566ca38765dbbdab32ec0560/1x\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"monkaS\",\"emote_id\":\"56e9f494fff3cc5c35e5287e\",\"emote_url\":\"https://cdn.betterttv.net/emote/56e9f494fff3cc5c35e5287e/1x\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"KKona\",\"emote_id\":\"566ca04265dbbdab32ec054a\",\"emote_url\":\"https://cdn.betterttv.net/emote/566ca04265dbbdab32ec054a/1x\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:40 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Mossyfrog\",\"view\":{\"name_color\":\"#3db974\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3158e758-3cb4-43c5-94b3-7639810451c5/2\",\"title\":\"GLHF Pledge\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"emote\",\"code\":\"SourPls\",\"url\":\"https://cdn.betterttv.net/emote/566ca38765dbbdab32ec0560/1x\"},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"monkaS\",\"url\":\"https://cdn.betterttv.net/emote/56e9f494fff3cc5c35e5287e/1x\"},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"KKona\",\"url\":\"https://cdn.betterttv.net/emote/566ca04265dbbdab32ec054a/1x\"}]}}}",
+    "{\"id\":\"fx-0013\",\"user_id\":\"1003\",\"username\":\"latebloomer\",\"display_name\":\"Latebloomer\",\"color\":\"#8A2BE2\",\"badges\":[{\"name\":\"vip\",\"version\":\"1\"}],\"timestamp\":\"1760360022100\",\"content\":\"AngelThump h! FeelsGoodMan\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"user-type\":\"\",\"flags\":\"\",\"mod\":\"0\",\"first-msg\":\"0\",\"room-id\":\"41245072\",\"badges\":\"vip/1\",\"badge-info\":\"\",\"id\":\"fx-0013\",\"turbo\":\"0\",\"color\":\"\",\"subscriber\":\"0\",\"tmi-sent-ts\":\"1760360022100\",\"user-id\":\"1003\",\"display-name\":\"Latebloomer\",\"emotes\":\"\",\"returning-chatter\":\"0\"},\"segments\":[{\"type\":\"emote\",\"content\":\"AngelThump\",\"emote_id\":\"566ca1a365dbbdab32ec055b\",\"emote_url\":\"https://cdn.betterttv.net/emote/566ca1a365dbbdab32ec055b/1x\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"h!\",\"emote_id\":\"6468f845aee1f7f47567709b\",\"emote_url\":\"https://cdn.betterttv.net/emote/6468f845aee1f7f47567709b/1x\",\"is_zero_width\":true,\"modifier_flags\":262147},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"FeelsGoodMan\",\"emote_id\":\"566c9fde65dbbdab32ec053e\",\"emote_url\":\"https://cdn.betterttv.net/emote/566c9fde65dbbdab32ec053e/1x\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:42 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Latebloomer\",\"view\":{\"name_color\":\"#aa64ea\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/b817aba4-fad8-49e2-b88a-7cc744dfa6ec/2\",\"title\":\"VIP\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"emote\",\"code\":\"AngelThump\",\"url\":\"https://cdn.betterttv.net/emote/566ca1a365dbbdab32ec055b/1x\"},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"FeelsGoodMan\",\"url\":\"https://cdn.betterttv.net/emote/566c9fde65dbbdab32ec053e/1x\",\"effects\":2}]}}}",
+    "{\"id\":\"fx-0014\",\"user_id\":\"1009\",\"username\":\"quietstorm\",\"display_name\":\"Quietstorm\",\"color\":\"#5F9EA0\",\"badges\":[{\"name\":\"subscriber\",\"version\":\"0\"}],\"timestamp\":\"1760360023800\",\"content\":\"CatBag ffzX CatBag ffzW CatBag ffzRainbow\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"id\":\"fx-0014\",\"turbo\":\"0\",\"display-name\":\"Quietstorm\",\"mod\":\"0\",\"flags\":\"\",\"color\":\"#5F9EA0\",\"room-id\":\"41245072\",\"returning-chatter\":\"0\",\"tmi-sent-ts\":\"1760360023800\",\"user-type\":\"\",\"badges\":\"subscriber/0\",\"badge-info\":\"\",\"emotes\":\"\",\"user-id\":\"1009\",\"subscriber\":\"1\",\"first-msg\":\"0\"},\"segments\":[{\"type\":\"emote\",\"content\":\"CatBag\",\"emote_id\":\"25927\",\"emote_url\":\"https://cdn.frankerfacez.com/emote/25927/1\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"ffzX\",\"emote_id\":\"720508\",\"emote_url\":\"https://cdn.frankerfacez.com/emote/720508/1\",\"is_zero_width\":true,\"modifier_flags\":3},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"CatBag\",\"emote_id\":\"25927\",\"emote_url\":\"https://cdn.frankerfacez.com/emote/25927/1\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"ffzW\",\"emote_id\":\"723890\",\"emote_url\":\"https://cdn.frankerfacez.com/emote/723890/1\",\"is_zero_width\":true,\"modifier_flags\":9},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"CatBag\",\"emote_id\":\"25927\",\"emote_url\":\"https://cdn.frankerfacez.com/emote/25927/1\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"ffzRainbow\",\"emote_id\":\"720510\",\"emote_url\":\"https://cdn.frankerfacez.com/emote/720510/1\",\"is_zero_width\":true,\"modifier_flags\":2049}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:43 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:sub\",\"local:ascii\"],\"shown_name\":\"Quietstorm\",\"view\":{\"name_color\":\"#5f9ea0\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"Subscriber\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"emote\",\"code\":\"CatBag\",\"url\":\"https://cdn.frankerfacez.com/emote/25927/1\",\"effects\":2},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"CatBag\",\"url\":\"https://cdn.frankerfacez.com/emote/25927/1\",\"effects\":8},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"CatBag\",\"url\":\"https://cdn.frankerfacez.com/emote/25927/1\",\"effects\":2048}]}}}",
+    "{\"id\":\"fx-0015\",\"user_id\":\"1008\",\"username\":\"lootgoblin\",\"display_name\":\"Lootgoblin\",\"color\":\"#DAA520\",\"badges\":[{\"name\":\"bits\",\"version\":\"100\"}],\"timestamp\":\"1760360025500\",\"content\":\"Cheer100 great run\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"returning-chatter\":\"0\",\"subscriber\":\"0\",\"tmi-sent-ts\":\"1760360025500\",\"mod\":\"0\",\"display-name\":\"Lootgoblin\",\"flags\":\"\",\"turbo\":\"0\",\"badges\":\"bits/100\",\"room-id\":\"41245072\",\"bits\":\"100\",\"emotes\":\"\",\"first-msg\":\"0\",\"id\":\"fx-0015\",\"user-type\":\"\",\"badge-info\":\"\",\"color\":\"#DAA520\",\"user-id\":\"1008\"},\"segments\":[{\"type\":\"cheermote\",\"content\":\"Cheer100\",\"prefix\":\"cheer\",\"bits\":100,\"tier\":\"100\",\"color\":\"#9c3ee8\",\"cheermote_url\":\"https://d3aqoihi2n8ty8.cloudfront.net/actions/cheer/dark/animated/100/2.gif\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"great\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"run\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:45 AM\",\"is_from_shared_chat\":false,\"bits_amount\":100,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Lootgoblin\",\"view\":{\"name_color\":\"#daa520\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/73b5c3fb-24f9-4a82-a852-2f475b59411c/2\",\"title\":\"cheer 100\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"cheer\",\"text\":\"Cheer100\",\"bits\":100,\"color\":\"#9c3ee8\",\"url\":\"https://d3aqoihi2n8ty8.cloudfront.net/actions/cheer/dark/animated/100/2.gif\"},{\"type\":\"text\",\"text\":\" great run\"}]}}}",
+    "{\"id\":\"fx-0016\",\"user_id\":\"1006\",\"username\":\"midnightmod\",\"display_name\":\"Midnightmod\",\"color\":\"#8A2BE2\",\"badges\":[{\"name\":\"moderator\",\"version\":\"1\"},{\"name\":\"turbo\",\"version\":\"1\"}],\"timestamp\":\"1760360027200\",\"content\":\"hands out snacks to chat\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"flags\":\"\",\"mod\":\"1\",\"id\":\"fx-0016\",\"turbo\":\"0\",\"badge-info\":\"\",\"emotes\":\"\",\"subscriber\":\"0\",\"user-id\":\"1006\",\"first-msg\":\"0\",\"room-id\":\"41245072\",\"returning-chatter\":\"0\",\"badges\":\"moderator/1,turbo/1\",\"color\":\"#8A2BE2\",\"display-name\":\"Midnightmod\",\"user-type\":\"\",\"tmi-sent-ts\":\"1760360027200\"},\"segments\":[{\"type\":\"text\",\"content\":\"hands\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"out\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"snacks\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"to\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"chat\"}],\"metadata\":{\"is_action\":true,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:47 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Midnightmod\",\"view\":{\"name_color\":\"#aa64ea\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/2\",\"title\":\"Moderator\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/bd444ec6-8f34-4bf9-91f4-af1e3428d80f/2\",\"title\":\"Turbo\",\"provider\":\"twitch\"},{\"url\":\"https://cdn.7tv.app/badge/01GXP5DNHR000CV9HPMT8GM9JZ/2x.webp\",\"title\":\"7TV Subscriber (1 Year, 9 Months)\",\"provider\":\"7tv\"}],\"paint\":{\"id\":\"01H6PWABE00001XFYVRFENNHQM\",\"kind\":\"linear\",\"angle\":315.0,\"repeating\":false,\"stops\":[{\"at\":0.0,\"color\":\"#a03bfeff\"},{\"at\":0.25,\"color\":\"#fe4ec4ff\"},{\"at\":0.5,\"color\":\"#f3f0f1ff\"},{\"at\":0.5,\"color\":\"#c8e6fdff\"},{\"at\":0.75,\"color\":\"#00eaedff\"},{\"at\":1.0,\"color\":\"#0d59eaff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.5,\"color\":\"#a03bfeff\"}]},\"spans\":[{\"type\":\"text\",\"text\":\"hands out snacks to chat\"}]}}}",
+    "{\"id\":\"fx-0017\",\"user_id\":\"1001\",\"username\":\"glassowl\",\"display_name\":\"Glassowl\",\"color\":\"#1E90FF\",\"badges\":[{\"name\":\"moderator\",\"version\":\"1\"},{\"name\":\"subscriber\",\"version\":\"12\"}],\"timestamp\":\"1760360028900\",\"content\":\"this is a longer message that wraps onto a second and maybe a third line with emotes Clap peepoHappy AYAYA mixed into the text so the layout has to place them mid-line\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"badge-info\":\"\",\"subscriber\":\"1\",\"mod\":\"1\",\"display-name\":\"Glassowl\",\"room-id\":\"41245072\",\"tmi-sent-ts\":\"1760360028900\",\"emotes\":\"\",\"first-msg\":\"0\",\"flags\":\"\",\"badges\":\"moderator/1,subscriber/12\",\"color\":\"#1E90FF\",\"user-id\":\"1001\",\"user-type\":\"\",\"turbo\":\"0\",\"returning-chatter\":\"0\",\"id\":\"fx-0017\"},\"segments\":[{\"type\":\"text\",\"content\":\"this\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"is\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"a\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"longer\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"message\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"that\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"wraps\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"onto\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"a\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"second\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"and\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"maybe\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"a\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"third\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"line\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"with\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"emotes\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"Clap\",\"emote_id\":\"01GF9MNXQ8000E85YTZ0P4TWJ7\",\"emote_url\":\"https://cdn.7tv.app/emote/01GF9MNXQ8000E85YTZ0P4TWJ7/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"peepoHappy\",\"emote_id\":\"01GE9J9VYR00035T18VJ6D2H2P\",\"emote_url\":\"https://cdn.7tv.app/emote/01GE9J9VYR00035T18VJ6D2H2P/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"AYAYA\",\"emote_id\":\"01GE732B7R0002G1FA1JB1A2RR\",\"emote_url\":\"https://cdn.7tv.app/emote/01GE732B7R0002G1FA1JB1A2RR/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"mixed\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"into\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"the\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"text\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"so\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"the\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"layout\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"has\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"to\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"place\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"them\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"mid-line\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:48 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Glassowl\",\"view\":{\"name_color\":\"#359bff\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/2\",\"title\":\"Moderator\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"1-Year Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://cdn.7tv.app/badge/01GXP5DNHR000CV9HPMT8GM9JZ/2x.webp\",\"title\":\"7TV Subscriber (1 Year, 9 Months)\",\"provider\":\"7tv\"}],\"paint\":{\"id\":\"01GHA42XER0001KT343YQ6DM2E\",\"kind\":\"linear\",\"angle\":66.0,\"repeating\":true,\"stops\":[{\"at\":0.57,\"color\":\"#ca804eff\"},{\"at\":0.65,\"color\":\"#503611ff\"},{\"at\":0.67,\"color\":\"#dc8b18ff\"},{\"at\":0.8,\"color\":\"#402807ff\"},{\"at\":0.87,\"color\":\"#ffeaccff\"},{\"at\":1.0,\"color\":\"#c89041ff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.5,\"color\":\"#000000ff\"}]},\"spans\":[{\"type\":\"text\",\"text\":\"this is a longer message that wraps onto a second and maybe a third line with emotes \"},{\"type\":\"emote\",\"code\":\"Clap\",\"url\":\"https://cdn.7tv.app/emote/01GF9MNXQ8000E85YTZ0P4TWJ7/1x.avif\",\"width\":26,\"height\":32},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"peepoHappy\",\"url\":\"https://cdn.7tv.app/emote/01GE9J9VYR00035T18VJ6D2H2P/1x.avif\",\"width\":32,\"height\":32},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"AYAYA\",\"url\":\"https://cdn.7tv.app/emote/01GE732B7R0002G1FA1JB1A2RR/1x.avif\",\"width\":32,\"height\":32},{\"type\":\"text\",\"text\":\" mixed into the text so the layout has to place them mid-line\"}]}}}",
+    "{\"id\":\"fx-0018\",\"user_id\":\"1005\",\"username\":\"kappakid\",\"display_name\":\"KappaKid\",\"color\":\"#FF4500\",\"badges\":[],\"timestamp\":\"1760360030600\",\"content\":\"7Cinema WineTime gachiBASS Stare\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"room-id\":\"41245072\",\"display-name\":\"KappaKid\",\"id\":\"fx-0018\",\"subscriber\":\"0\",\"turbo\":\"0\",\"mod\":\"0\",\"badges\":\"\",\"emotes\":\"\",\"first-msg\":\"0\",\"user-id\":\"1005\",\"badge-info\":\"\",\"returning-chatter\":\"0\",\"flags\":\"\",\"user-type\":\"\",\"color\":\"#FF4500\",\"tmi-sent-ts\":\"1760360030600\"},\"segments\":[{\"type\":\"emote\",\"content\":\"7Cinema\",\"emote_id\":\"01J8G2CEC8000A5QBDAQ50YTX8\",\"emote_url\":\"https://cdn.7tv.app/emote/01J8G2CEC8000A5QBDAQ50YTX8/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"WineTime\",\"emote_id\":\"01HBBVDK500005HE0A9M4Z4M9J\",\"emote_url\":\"https://cdn.7tv.app/emote/01HBBVDK500005HE0A9M4Z4M9J/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"gachiBASS\",\"emote_id\":\"01GEYY13PG0009AX18SNGDJ3C2\",\"emote_url\":\"https://cdn.7tv.app/emote/01GEYY13PG0009AX18SNGDJ3C2/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"Stare\",\"emote_id\":\"01HBBMRDVR0004CB92YXKWS4F9\",\"emote_url\":\"https://cdn.7tv.app/emote/01HBBMRDVR0004CB92YXKWS4F9/1x.avif\",\"is_zero_width\":false}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:50 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"KappaKid\",\"view\":{\"name_color\":\"#ff581a\",\"spans\":[{\"type\":\"emote\",\"code\":\"7Cinema\",\"url\":\"https://cdn.7tv.app/emote/01J8G2CEC8000A5QBDAQ50YTX8/1x.avif\",\"width\":57,\"height\":32},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"WineTime\",\"url\":\"https://cdn.7tv.app/emote/01HBBVDK500005HE0A9M4Z4M9J/1x.avif\",\"width\":18,\"height\":19},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"gachiBASS\",\"url\":\"https://cdn.7tv.app/emote/01GEYY13PG0009AX18SNGDJ3C2/1x.avif\",\"width\":33,\"height\":32},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"Stare\",\"url\":\"https://cdn.7tv.app/emote/01HBBMRDVR0004CB92YXKWS4F9/1x.avif\",\"width\":37,\"height\":32}]}}}",
+    "{\"id\":\"fx-0019\",\"user_id\":\"1002\",\"username\":\"pixelpine\",\"display_name\":\"Pixelpine\",\"color\":\"#000080\",\"badges\":[{\"name\":\"subscriber\",\"version\":\"3\"},{\"name\":\"premium\",\"version\":\"1\"}],\"timestamp\":\"1760360032300\",\"content\":\"Kreygasm Kreygasm Kreygasm\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"id\":\"fx-0019\",\"first-msg\":\"0\",\"tmi-sent-ts\":\"1760360032300\",\"color\":\"#000080\",\"user-type\":\"\",\"mod\":\"0\",\"emotes\":\"41:0-7,9-16,18-25\",\"turbo\":\"0\",\"display-name\":\"Pixelpine\",\"returning-chatter\":\"0\",\"user-id\":\"1002\",\"room-id\":\"41245072\",\"flags\":\"\",\"badges\":\"subscriber/3,premium/1\",\"badge-info\":\"\",\"subscriber\":\"1\"},\"segments\":[{\"type\":\"emote\",\"content\":\"Kreygasm\",\"emote_id\":\"41\",\"emote_url\":\"https://static-cdn.jtvnw.net/emoticons/v2/41/default/dark/3.0\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"Kreygasm\",\"emote_id\":\"41\",\"emote_url\":\"https://static-cdn.jtvnw.net/emoticons/v2/41/default/dark/3.0\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"Kreygasm\",\"emote_id\":\"41\",\"emote_url\":\"https://static-cdn.jtvnw.net/emoticons/v2/41/default/dark/3.0\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:52 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:sub\",\"local:ascii\"],\"shown_name\":\"Pixelpine\",\"view\":{\"name_color\":\"#7a7aff\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"3-Month Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/bbbe0db0-a598-423e-86d0-f9fb98ca1933/2\",\"title\":\"Prime Gaming\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"emote\",\"code\":\"Kreygasm\",\"url\":\"https://static-cdn.jtvnw.net/emoticons/v2/41/default/dark/3.0\",\"width\":28,\"height\":28},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"Kreygasm\",\"url\":\"https://static-cdn.jtvnw.net/emoticons/v2/41/default/dark/3.0\",\"width\":28,\"height\":28},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"Kreygasm\",\"url\":\"https://static-cdn.jtvnw.net/emoticons/v2/41/default/dark/3.0\",\"width\":28,\"height\":28}]}}}",
+    "{\"id\":\"fx-deleted\",\"user_id\":\"1008\",\"username\":\"lootgoblin\",\"display_name\":\"Lootgoblin\",\"color\":\"#DAA520\",\"badges\":[{\"name\":\"bits\",\"version\":\"100\"}],\"timestamp\":\"1760360034000\",\"content\":\"this message will be deleted by a mod\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"emotes\":\"\",\"user-type\":\"\",\"user-id\":\"1008\",\"display-name\":\"Lootgoblin\",\"first-msg\":\"0\",\"subscriber\":\"0\",\"returning-chatter\":\"0\",\"mod\":\"0\",\"turbo\":\"0\",\"tmi-sent-ts\":\"1760360034000\",\"room-id\":\"41245072\",\"id\":\"fx-deleted\",\"flags\":\"\",\"badge-info\":\"\",\"color\":\"#DAA520\",\"badges\":\"bits/100\"},\"segments\":[{\"type\":\"text\",\"content\":\"this\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"message\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"will\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"be\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"deleted\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"by\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"a\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"mod\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:54 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Lootgoblin\",\"view\":{\"name_color\":\"#daa520\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/73b5c3fb-24f9-4a82-a852-2f475b59411c/2\",\"title\":\"cheer 100\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"text\",\"text\":\"this message will be deleted by a mod\"}]}}}",
+    "{\"id\":\"fx-0021\",\"user_id\":\"1007\",\"username\":\"mossyfrog\",\"display_name\":\"Mossyfrog\",\"color\":\"#2E8B57\",\"badges\":[{\"name\":\"glhf-pledge\",\"version\":\"1\"}],\"timestamp\":\"1760360035700\",\"content\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa long words wrap anywhere\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"user-type\":\"\",\"color\":\"#2E8B57\",\"emotes\":\"\",\"badge-info\":\"\",\"room-id\":\"41245072\",\"turbo\":\"0\",\"first-msg\":\"0\",\"user-id\":\"1007\",\"subscriber\":\"0\",\"flags\":\"\",\"id\":\"fx-0021\",\"mod\":\"0\",\"badges\":\"glhf-pledge/1\",\"display-name\":\"Mossyfrog\",\"tmi-sent-ts\":\"1760360035700\",\"returning-chatter\":\"0\"},\"segments\":[{\"type\":\"text\",\"content\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"long\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"words\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"wrap\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"anywhere\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:55 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Mossyfrog\",\"view\":{\"name_color\":\"#3db974\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3158e758-3cb4-43c5-94b3-7639810451c5/2\",\"title\":\"GLHF Pledge\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"text\",\"text\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa long words wrap anywhere\"}]}}}",
+    "{\"id\":\"fx-0022\",\"user_id\":\"41245072\",\"username\":\"nookstreamer\",\"display_name\":\"Nookstreamer\",\"color\":\"#DA70D6\",\"badges\":[{\"name\":\"broadcaster\",\"version\":\"1\"},{\"name\":\"subscriber\",\"version\":\"0\"},{\"name\":\"partner\",\"version\":\"1\"}],\"timestamp\":\"1760360037400\",\"content\":\"thanks for hanging out everyone peepoHappy\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"badges\":\"broadcaster/1,subscriber/0,partner/1\",\"display-name\":\"Nookstreamer\",\"color\":\"#DA70D6\",\"turbo\":\"0\",\"flags\":\"\",\"user-type\":\"\",\"mod\":\"0\",\"returning-chatter\":\"0\",\"tmi-sent-ts\":\"1760360037400\",\"user-id\":\"41245072\",\"emotes\":\"\",\"subscriber\":\"1\",\"badge-info\":\"\",\"first-msg\":\"0\",\"id\":\"fx-0022\",\"room-id\":\"41245072\"},\"segments\":[{\"type\":\"text\",\"content\":\"thanks\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"for\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"hanging\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"out\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"everyone\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"peepoHappy\",\"emote_id\":\"01GE9J9VYR00035T18VJ6D2H2P\",\"emote_url\":\"https://cdn.7tv.app/emote/01GE9J9VYR00035T18VJ6D2H2P/1x.avif\",\"is_zero_width\":false}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:57 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Nookstreamer\",\"view\":{\"name_color\":\"#da70d6\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5527c58c-fb7d-422d-b71b-f309dcb85cc1/2\",\"title\":\"Broadcaster\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/d12a2e27-16f6-41d0-ab77-b780518f00a3/2\",\"title\":\"Verified\",\"provider\":\"twitch\"}],\"paint\":{\"id\":\"01HQE7KJWG0000D7GK7EKRAPN3\",\"kind\":\"radial\",\"angle\":0.0,\"repeating\":false,\"stops\":[{\"at\":0.0,\"color\":\"#ffef8aff\"},{\"at\":0.25,\"color\":\"#eaff47ff\"},{\"at\":0.4,\"color\":\"#ff7a33ff\"},{\"at\":1.0,\"color\":\"#1ac6ffff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.1,\"color\":\"#006080ff\"}]},\"spans\":[{\"type\":\"text\",\"text\":\"thanks for hanging out everyone \"},{\"type\":\"emote\",\"code\":\"peepoHappy\",\"url\":\"https://cdn.7tv.app/emote/01GE9J9VYR00035T18VJ6D2H2P/1x.avif\",\"width\":32,\"height\":32}]}}}",
+    "{\"id\":\"fx-0023\",\"user_id\":\"1003\",\"username\":\"latebloomer\",\"display_name\":\"Latebloomer\",\"color\":\"#8A2BE2\",\"badges\":[{\"name\":\"vip\",\"version\":\"1\"}],\"timestamp\":\"1760360039100\",\"content\":\"PartyParrot WAYTOODANK PartyParrot\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"color\":\"\",\"id\":\"fx-0023\",\"room-id\":\"41245072\",\"first-msg\":\"0\",\"user-id\":\"1003\",\"turbo\":\"0\",\"mod\":\"0\",\"badges\":\"vip/1\",\"tmi-sent-ts\":\"1760360039100\",\"badge-info\":\"\",\"returning-chatter\":\"0\",\"display-name\":\"Latebloomer\",\"user-type\":\"\",\"flags\":\"\",\"emotes\":\"\",\"subscriber\":\"0\"},\"segments\":[{\"type\":\"emote\",\"content\":\"PartyParrot\",\"emote_id\":\"01GD9MAQYR0005BTNYM8DG0TNH\",\"emote_url\":\"https://cdn.7tv.app/emote/01GD9MAQYR0005BTNYM8DG0TNH/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"WAYTOODANK\",\"emote_id\":\"01FGYPRTT0000BF1F0BAH6R39Q\",\"emote_url\":\"https://cdn.7tv.app/emote/01FGYPRTT0000BF1F0BAH6R39Q/1x.avif\",\"is_zero_width\":false},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"PartyParrot\",\"emote_id\":\"01GD9MAQYR0005BTNYM8DG0TNH\",\"emote_url\":\"https://cdn.7tv.app/emote/01GD9MAQYR0005BTNYM8DG0TNH/1x.avif\",\"is_zero_width\":false}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:53 AM\",\"formatted_timestamp_with_seconds\":\"5:53:59 AM\",\"is_from_shared_chat\":false,\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Latebloomer\",\"view\":{\"name_color\":\"#aa64ea\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/b817aba4-fad8-49e2-b88a-7cc744dfa6ec/2\",\"title\":\"VIP\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"emote\",\"code\":\"PartyParrot\",\"url\":\"https://cdn.7tv.app/emote/01GD9MAQYR0005BTNYM8DG0TNH/1x.avif\",\"width\":32,\"height\":32},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"WAYTOODANK\",\"url\":\"https://cdn.7tv.app/emote/01FGYPRTT0000BF1F0BAH6R39Q/1x.avif\",\"width\":32,\"height\":32},{\"type\":\"text\",\"text\":\" \"},{\"type\":\"emote\",\"code\":\"PartyParrot\",\"url\":\"https://cdn.7tv.app/emote/01GD9MAQYR0005BTNYM8DG0TNH/1x.avif\",\"width\":32,\"height\":32}]}}}",
+    "{\"id\":\"fx-0024\",\"user_id\":\"1009\",\"username\":\"quietstorm\",\"display_name\":\"Quietstorm\",\"color\":\"#5F9EA0\",\"badges\":[{\"name\":\"subscriber\",\"version\":\"0\"}],\"timestamp\":\"1760360040800\",\"content\":\"highlighted message test\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"mod\":\"0\",\"color\":\"#5F9EA0\",\"turbo\":\"0\",\"user-type\":\"\",\"subscriber\":\"1\",\"display-name\":\"Quietstorm\",\"msg-id\":\"highlighted-message\",\"user-id\":\"1009\",\"badge-info\":\"\",\"room-id\":\"41245072\",\"id\":\"fx-0024\",\"first-msg\":\"0\",\"emotes\":\"\",\"flags\":\"\",\"returning-chatter\":\"0\",\"tmi-sent-ts\":\"1760360040800\",\"badges\":\"subscriber/0\"},\"segments\":[{\"type\":\"text\",\"content\":\"highlighted\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"message\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"test\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:54 AM\",\"formatted_timestamp_with_seconds\":\"5:54:00 AM\",\"is_from_shared_chat\":false,\"msg_type\":\"highlighted-message\",\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:sub\",\"local:ascii\"],\"shown_name\":\"Quietstorm\",\"scrollbar_mark\":{\"kind\":\"redeem\"},\"view\":{\"name_color\":\"#5f9ea0\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"Subscriber\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"text\",\"text\":\"highlighted message test\"}]}}}",
+    "{\"id\":\"fx-0025\",\"user_id\":\"1001\",\"username\":\"glassowl\",\"display_name\":\"Glassowl\",\"color\":\"#1E90FF\",\"badges\":[{\"name\":\"moderator\",\"version\":\"1\"},{\"name\":\"subscriber\",\"version\":\"12\"}],\"timestamp\":\"1760360042500\",\"content\":\"giant SeemsGood\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"subscriber\":\"1\",\"room-id\":\"41245072\",\"mod\":\"1\",\"display-name\":\"Glassowl\",\"turbo\":\"0\",\"first-msg\":\"0\",\"returning-chatter\":\"0\",\"badges\":\"moderator/1,subscriber/12\",\"user-type\":\"\",\"badge-info\":\"\",\"color\":\"#1E90FF\",\"msg-id\":\"gigantified-emote-message\",\"id\":\"fx-0025\",\"user-id\":\"1001\",\"flags\":\"\",\"tmi-sent-ts\":\"1760360042500\",\"emotes\":\"64138:6-14\"},\"segments\":[{\"type\":\"text\",\"content\":\"giant\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"SeemsGood\",\"emote_id\":\"64138\",\"emote_url\":\"https://static-cdn.jtvnw.net/emoticons/v2/64138/default/dark/3.0\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:54 AM\",\"formatted_timestamp_with_seconds\":\"5:54:02 AM\",\"is_from_shared_chat\":false,\"msg_type\":\"gigantified-emote-message\",\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Glassowl\",\"view\":{\"name_color\":\"#359bff\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/2\",\"title\":\"Moderator\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"1-Year Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://cdn.7tv.app/badge/01GXP5DNHR000CV9HPMT8GM9JZ/2x.webp\",\"title\":\"7TV Subscriber (1 Year, 9 Months)\",\"provider\":\"7tv\"}],\"paint\":{\"id\":\"01GHA42XER0001KT343YQ6DM2E\",\"kind\":\"linear\",\"angle\":66.0,\"repeating\":true,\"stops\":[{\"at\":0.57,\"color\":\"#ca804eff\"},{\"at\":0.65,\"color\":\"#503611ff\"},{\"at\":0.67,\"color\":\"#dc8b18ff\"},{\"at\":0.8,\"color\":\"#402807ff\"},{\"at\":0.87,\"color\":\"#ffeaccff\"},{\"at\":1.0,\"color\":\"#c89041ff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.5,\"color\":\"#000000ff\"}]},\"spans\":[{\"type\":\"text\",\"text\":\"giant \"},{\"type\":\"emote\",\"code\":\"SeemsGood\",\"url\":\"https://static-cdn.jtvnw.net/emoticons/v2/64138/default/dark/3.0\",\"width\":28,\"height\":28}]}}}",
+    "{\"id\":\"fx-0026\",\"user_id\":\"1009\",\"username\":\"quietstorm\",\"display_name\":\"Quietstorm\",\"color\":\"#5F9EA0\",\"badges\":[{\"name\":\"subscriber\",\"version\":\"0\"}],\"timestamp\":\"1760360044200\",\"content\":\"\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"room-id\":\"41245072\",\"id\":\"fx-0026\",\"mod\":\"0\",\"user-id\":\"1009\",\"tmi-sent-ts\":\"1760360044200\",\"msg-id\":\"sub\",\"badge-info\":\"\",\"msg-param-cumulative-months\":\"1\",\"user-type\":\"\",\"display-name\":\"Quietstorm\",\"system-msg\":\"quietstorm\\\\ssubscribed\\\\swith\\\\sPrime.\",\"badges\":\"subscriber/0\",\"color\":\"#5F9EA0\",\"flags\":\"\",\"msg-param-sub-plan\":\"Prime\",\"emotes\":\"\",\"subscriber\":\"1\",\"login\":\"quietstorm\"},\"segments\":[],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:54 AM\",\"formatted_timestamp_with_seconds\":\"5:54:04 AM\",\"is_from_shared_chat\":false,\"msg_type\":\"sub\",\"system_message\":\"quietstorm subscribed with Prime.\",\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:sub\",\"local:ascii\"],\"shown_name\":\"Quietstorm\",\"scrollbar_mark\":{\"kind\":\"sub\"},\"view\":{\"name_color\":\"#5f9ea0\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"Subscriber\",\"provider\":\"twitch\"}],\"spans\":[]}}}",
+    "{\"id\":\"fx-0027\",\"user_id\":\"1001\",\"username\":\"glassowl\",\"display_name\":\"Glassowl\",\"color\":\"#1E90FF\",\"badges\":[{\"name\":\"moderator\",\"version\":\"1\"},{\"name\":\"subscriber\",\"version\":\"12\"}],\"timestamp\":\"1760360045900\",\"content\":\"still here PogChamp\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"system-msg\":\"glassowl\\\\ssubscribed\\\\sat\\\\sTier\\\\s1.\\\\sThey've\\\\ssubscribed\\\\sfor\\\\s14\\\\smonths!\",\"subscriber\":\"1\",\"msg-id\":\"resub\",\"user-id\":\"1001\",\"msg-param-streak-months\":\"3\",\"room-id\":\"41245072\",\"msg-param-should-share-streak\":\"1\",\"msg-param-sub-plan\":\"1000\",\"badges\":\"moderator/1,subscriber/12\",\"badge-info\":\"\",\"display-name\":\"Glassowl\",\"color\":\"#1E90FF\",\"id\":\"fx-0027\",\"emotes\":\"305954156:11-18\",\"flags\":\"\",\"mod\":\"0\",\"tmi-sent-ts\":\"1760360045900\",\"user-type\":\"\",\"msg-param-cumulative-months\":\"14\",\"login\":\"glassowl\"},\"segments\":[{\"type\":\"text\",\"content\":\"still\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"here\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"emote\",\"content\":\"PogChamp\",\"emote_id\":\"305954156\",\"emote_url\":\"https://static-cdn.jtvnw.net/emoticons/v2/305954156/default/dark/3.0\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:54 AM\",\"formatted_timestamp_with_seconds\":\"5:54:05 AM\",\"is_from_shared_chat\":false,\"msg_type\":\"resub\",\"system_message\":\"glassowl subscribed at Tier 1. They've subscribed for 14 months!\",\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Glassowl\",\"scrollbar_mark\":{\"kind\":\"sub\"},\"view\":{\"name_color\":\"#359bff\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/2\",\"title\":\"Moderator\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"1-Year Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://cdn.7tv.app/badge/01GXP5DNHR000CV9HPMT8GM9JZ/2x.webp\",\"title\":\"7TV Subscriber (1 Year, 9 Months)\",\"provider\":\"7tv\"}],\"paint\":{\"id\":\"01GHA42XER0001KT343YQ6DM2E\",\"kind\":\"linear\",\"angle\":66.0,\"repeating\":true,\"stops\":[{\"at\":0.57,\"color\":\"#ca804eff\"},{\"at\":0.65,\"color\":\"#503611ff\"},{\"at\":0.67,\"color\":\"#dc8b18ff\"},{\"at\":0.8,\"color\":\"#402807ff\"},{\"at\":0.87,\"color\":\"#ffeaccff\"},{\"at\":1.0,\"color\":\"#c89041ff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.5,\"color\":\"#000000ff\"}]},\"spans\":[{\"type\":\"text\",\"text\":\"still here \"},{\"type\":\"emote\",\"code\":\"PogChamp\",\"url\":\"https://static-cdn.jtvnw.net/emoticons/v2/305954156/default/dark/3.0\",\"width\":28,\"height\":28}]}}}",
+    "{\"id\":\"fx-0028\",\"user_id\":\"1006\",\"username\":\"midnightmod\",\"display_name\":\"Midnightmod\",\"color\":\"#8A2BE2\",\"badges\":[{\"name\":\"moderator\",\"version\":\"1\"},{\"name\":\"turbo\",\"version\":\"1\"}],\"timestamp\":\"1760360047600\",\"content\":\"\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"badges\":\"moderator/1,turbo/1\",\"id\":\"fx-0028\",\"msg-param-recipient-user-name\":\"kappakid\",\"emotes\":\"\",\"subscriber\":\"1\",\"msg-param-sub-plan\":\"1000\",\"tmi-sent-ts\":\"1760360047600\",\"room-id\":\"41245072\",\"msg-param-recipient-display-name\":\"KappaKid\",\"user-type\":\"\",\"user-id\":\"1006\",\"system-msg\":\"midnightmod\\\\sgifted\\\\sa\\\\sTier\\\\s1\\\\ssub\\\\sto\\\\skappakid!\",\"msg-param-recipient-id\":\"1005\",\"flags\":\"\",\"msg-param-months\":\"1\",\"color\":\"#8A2BE2\",\"display-name\":\"Midnightmod\",\"mod\":\"0\",\"msg-id\":\"subgift\",\"login\":\"midnightmod\",\"badge-info\":\"\"},\"segments\":[],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:54 AM\",\"formatted_timestamp_with_seconds\":\"5:54:07 AM\",\"is_from_shared_chat\":false,\"msg_type\":\"subgift\",\"system_message\":\"midnightmod gifted a Tier 1 sub to kappakid!\",\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Midnightmod\",\"scrollbar_mark\":{\"kind\":\"sub\"},\"view\":{\"name_color\":\"#aa64ea\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/2\",\"title\":\"Moderator\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/bd444ec6-8f34-4bf9-91f4-af1e3428d80f/2\",\"title\":\"Turbo\",\"provider\":\"twitch\"},{\"url\":\"https://cdn.7tv.app/badge/01GXP5DNHR000CV9HPMT8GM9JZ/2x.webp\",\"title\":\"7TV Subscriber (1 Year, 9 Months)\",\"provider\":\"7tv\"}],\"paint\":{\"id\":\"01H6PWABE00001XFYVRFENNHQM\",\"kind\":\"linear\",\"angle\":315.0,\"repeating\":false,\"stops\":[{\"at\":0.0,\"color\":\"#a03bfeff\"},{\"at\":0.25,\"color\":\"#fe4ec4ff\"},{\"at\":0.5,\"color\":\"#f3f0f1ff\"},{\"at\":0.5,\"color\":\"#c8e6fdff\"},{\"at\":0.75,\"color\":\"#00eaedff\"},{\"at\":1.0,\"color\":\"#0d59eaff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.5,\"color\":\"#a03bfeff\"}]},\"spans\":[]}}}",
+    "{\"id\":\"fx-0029\",\"user_id\":\"1008\",\"username\":\"lootgoblin\",\"display_name\":\"Lootgoblin\",\"color\":\"#DAA520\",\"badges\":[{\"name\":\"bits\",\"version\":\"100\"}],\"timestamp\":\"1760360049300\",\"content\":\"\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"color\":\"#DAA520\",\"mod\":\"0\",\"emotes\":\"\",\"msg-param-mass-gift-count\":\"5\",\"badge-info\":\"\",\"user-type\":\"\",\"badges\":\"bits/100\",\"msg-id\":\"submysterygift\",\"msg-param-sender-count\":\"20\",\"id\":\"fx-0029\",\"room-id\":\"41245072\",\"display-name\":\"Lootgoblin\",\"msg-param-sub-plan\":\"1000\",\"login\":\"lootgoblin\",\"tmi-sent-ts\":\"1760360049300\",\"system-msg\":\"lootgoblin\\\\sis\\\\sgifting\\\\s5\\\\sTier\\\\s1\\\\sSubs\\\\sto\\\\snookstreamer's\\\\scommunity!\\\\sThey've\\\\sgifted\\\\sa\\\\stotal\\\\sof\\\\s20\\\\sin\\\\sthe\\\\schannel!\",\"user-id\":\"1008\",\"flags\":\"\",\"subscriber\":\"1\"},\"segments\":[],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:54 AM\",\"formatted_timestamp_with_seconds\":\"5:54:09 AM\",\"is_from_shared_chat\":false,\"msg_type\":\"submysterygift\",\"system_message\":\"lootgoblin is gifting 5 Tier 1 Subs to nookstreamer's community! They've gifted a total of 20 in the channel!\",\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Lootgoblin\",\"scrollbar_mark\":{\"kind\":\"sub\"},\"view\":{\"name_color\":\"#daa520\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/73b5c3fb-24f9-4a82-a852-2f475b59411c/2\",\"title\":\"cheer 100\",\"provider\":\"twitch\"}],\"spans\":[]}}}",
+    "{\"id\":\"fx-0030\",\"user_id\":\"1007\",\"username\":\"mossyfrog\",\"display_name\":\"Mossyfrog\",\"color\":\"#2E8B57\",\"badges\":[{\"name\":\"glhf-pledge\",\"version\":\"1\"}],\"timestamp\":\"1760360051000\",\"content\":\"\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"user-id\":\"1007\",\"subscriber\":\"1\",\"user-type\":\"\",\"id\":\"fx-0030\",\"msg-id\":\"raid\",\"emotes\":\"\",\"flags\":\"\",\"badges\":\"glhf-pledge/1\",\"msg-param-login\":\"mossyfrog\",\"room-id\":\"41245072\",\"tmi-sent-ts\":\"1760360051000\",\"color\":\"#2E8B57\",\"msg-param-viewerCount\":\"1234\",\"login\":\"mossyfrog\",\"badge-info\":\"\",\"system-msg\":\"1234\\\\sraiders\\\\sfrom\\\\sMossyfrog\\\\shave\\\\sjoined!\",\"display-name\":\"Mossyfrog\",\"msg-param-displayName\":\"Mossyfrog\",\"mod\":\"0\"},\"segments\":[],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:54 AM\",\"formatted_timestamp_with_seconds\":\"5:54:11 AM\",\"is_from_shared_chat\":false,\"msg_type\":\"raid\",\"system_message\":\"1234 raiders from Mossyfrog have joined!\",\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:ascii\"],\"shown_name\":\"Mossyfrog\",\"scrollbar_mark\":{\"kind\":\"raid\"},\"view\":{\"name_color\":\"#3db974\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/3158e758-3cb4-43c5-94b3-7639810451c5/2\",\"title\":\"GLHF Pledge\",\"provider\":\"twitch\"}],\"spans\":[]}}}",
+    "{\"id\":\"fx-0031\",\"user_id\":\"41245072\",\"username\":\"nookstreamer\",\"display_name\":\"Nookstreamer\",\"color\":\"#DA70D6\",\"badges\":[{\"name\":\"broadcaster\",\"version\":\"1\"},{\"name\":\"subscriber\",\"version\":\"0\"},{\"name\":\"partner\",\"version\":\"1\"}],\"timestamp\":\"1760360052700\",\"content\":\"Stream schedule updated, see the panels!\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"color\":\"#DA70D6\",\"user-type\":\"\",\"room-id\":\"41245072\",\"msg-param-color\":\"PURPLE\",\"emotes\":\"\",\"subscriber\":\"1\",\"user-id\":\"41245072\",\"id\":\"fx-0031\",\"system-msg\":\"\",\"badges\":\"broadcaster/1,subscriber/0,partner/1\",\"badge-info\":\"\",\"login\":\"nookstreamer\",\"flags\":\"\",\"mod\":\"0\",\"display-name\":\"Nookstreamer\",\"tmi-sent-ts\":\"1760360052700\",\"msg-id\":\"announcement\"},\"segments\":[{\"type\":\"text\",\"content\":\"Stream\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"schedule\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"updated,\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"see\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"the\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"panels!\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:54 AM\",\"formatted_timestamp_with_seconds\":\"5:54:12 AM\",\"is_from_shared_chat\":false,\"msg_type\":\"announcement\",\"system_message\":\"\",\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:mod\",\"local:sub\",\"local:ascii\"],\"shown_name\":\"Nookstreamer\",\"scrollbar_mark\":{\"kind\":\"announcement\",\"color\":\"#a855f7\"},\"view\":{\"name_color\":\"#da70d6\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5527c58c-fb7d-422d-b71b-f309dcb85cc1/2\",\"title\":\"Broadcaster\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/d12a2e27-16f6-41d0-ab77-b780518f00a3/2\",\"title\":\"Verified\",\"provider\":\"twitch\"}],\"paint\":{\"id\":\"01HQE7KJWG0000D7GK7EKRAPN3\",\"kind\":\"radial\",\"angle\":0.0,\"repeating\":false,\"stops\":[{\"at\":0.0,\"color\":\"#ffef8aff\"},{\"at\":0.25,\"color\":\"#eaff47ff\"},{\"at\":0.4,\"color\":\"#ff7a33ff\"},{\"at\":1.0,\"color\":\"#1ac6ffff\"}],\"shadows\":[{\"x\":0.0,\"y\":0.0,\"blur\":0.1,\"color\":\"#006080ff\"}]},\"spans\":[{\"type\":\"text\",\"text\":\"Stream schedule updated, see the panels!\"}]}}}",
+    "{\"id\":\"fx-0032\",\"user_id\":\"1002\",\"username\":\"pixelpine\",\"display_name\":\"Pixelpine\",\"color\":\"#000080\",\"badges\":[{\"name\":\"subscriber\",\"version\":\"3\"},{\"name\":\"premium\",\"version\":\"1\"}],\"timestamp\":\"1760360054400\",\"content\":\"love this stream\",\"provider\":\"twitch\",\"channel\":\"nookroom\",\"tags\":{\"user-type\":\"\",\"msg-param-copoReward\":\"350\",\"msg-id\":\"viewermilestone\",\"msg-param-value\":\"5\",\"msg-param-category\":\"watch-streak\",\"mod\":\"0\",\"display-name\":\"Pixelpine\",\"badges\":\"subscriber/3,premium/1\",\"login\":\"pixelpine\",\"emotes\":\"\",\"color\":\"#000080\",\"flags\":\"\",\"subscriber\":\"1\",\"tmi-sent-ts\":\"1760360054400\",\"room-id\":\"41245072\",\"user-id\":\"1002\",\"id\":\"fx-0032\",\"system-msg\":\"Pixelpine\\\\swatched\\\\s5\\\\sconsecutive\\\\sstreams\\\\sand\\\\ssparked\\\\sa\\\\swatch\\\\sstreak!\",\"badge-info\":\"\"},\"segments\":[{\"type\":\"text\",\"content\":\"love\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"this\"},{\"type\":\"text\",\"content\":\" \"},{\"type\":\"text\",\"content\":\"stream\"}],\"metadata\":{\"is_action\":false,\"is_mentioned\":false,\"is_first_message\":false,\"formatted_timestamp\":\"5:54 AM\",\"formatted_timestamp_with_seconds\":\"5:54:14 AM\",\"is_from_shared_chat\":false,\"msg_type\":\"viewermilestone\",\"system_message\":\"Pixelpine watched 5 consecutive streams and sparked a watch streak!\",\"rules_evaluated\":true,\"is_reply_to_me\":false,\"filter_ids\":[\"local:sub\",\"local:ascii\"],\"shown_name\":\"Pixelpine\",\"view\":{\"name_color\":\"#7a7aff\",\"badges\":[{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/5d9f2208-5dd8-11e7-8513-2ff4adfae661/2\",\"title\":\"3-Month Subscriber\",\"provider\":\"twitch\"},{\"url\":\"https://static-cdn.jtvnw.net/badges/v1/bbbe0db0-a598-423e-86d0-f9fb98ca1933/2\",\"title\":\"Prime Gaming\",\"provider\":\"twitch\"}],\"spans\":[{\"type\":\"text\",\"text\":\"love this stream\"}]}}}",
     "{\"channel\":\"nookroom\",\"login\":\"lootgoblin\",\"message\":\"this message will be deleted by a mod\",\"target_msg_id\":\"fx-deleted\",\"type\":\"CLEARMSG\"}",
     "{\"ban_duration\":600,\"channel\":\"nookroom\",\"target_user\":\"lootgoblin\",\"target_user_id\":\"1008\",\"type\":\"CLEARCHAT\"}",
     "{\"channel\":\"nookroom\",\"emote_only\":false,\"followers_only\":10,\"modes\":{\"modes\":[{\"applies_to_you\":null,\"compact\":\"Subscriber-only\",\"detail\":\"Only subscribers can chat.\",\"kind\":\"subs_only\",\"label\":\"Subscriber-only chat\",\"short\":\"Sub-only\"},{\"applies_to_you\":null,\"compact\":\"Followers-only (10m)\",\"detail\":\"Only accounts that have followed for 10 minutes can chat.\",\"kind\":\"followers_only\",\"label\":\"Followers-only chat (10 minutes)\",\"short\":\"Followers 10m\"}],\"prompt\":\"Subscriber-only\",\"prompt_short\":\"Sub-only\",\"slow_seconds\":0,\"standing\":null},\"r9k\":false,\"slow\":0,\"subs_only\":true,\"type\":\"ROOMSTATE\"}",
