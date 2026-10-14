@@ -20,6 +20,9 @@ struct StreamNookApp: App {
                     await Drive.run(model: model)
                     #endif
                 }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                    model.lifecycle("memory_warning")
+                }
         }
         .onChange(of: phase) { _, phase in
             switch phase {
