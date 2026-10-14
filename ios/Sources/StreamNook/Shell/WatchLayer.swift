@@ -62,18 +62,19 @@ struct WatchLayer: View {
                     }
                 }
 
-                ChatArea(model: model, readOnly: false)
-                    .frame(width: layer.width, height: max(0, layer.maxY - band.maxY - insets.bottom * (1 - progress)))
-                    .offset(x: layer.minX, y: band.maxY)
-                    .opacity(showChatBelow ? 1 : 0)
-                    .allowsHitTesting(showChatBelow && !dragging)
-
-                if landscape && !mini && nav.landscapeChat {
-                    LandscapeChat(model: model, outerInset: insets.trailing)
-                        .frame(width: overlayWidth + insets.trailing, height: screen.height)
-                        .offset(x: screen.width - overlayWidth - insets.trailing)
-                        .transition(.opacity)
-                }
+                // One chat for every mode, so rotating moves the same list instead of building a
+                // second one: below the player in portrait, over the video's trailing side in
+                // landscape (read-only, when asked for), hidden but still reading while mini.
+                let overlayChat = landscape && !mini
+                let chatShown = showChatBelow || (overlayChat && nav.landscapeChat)
+                ChatArea(model: model, overlay: overlayChat, outerInset: overlayChat ? insets.trailing : 0)
+                    .frame(width: overlayChat ? overlayWidth + insets.trailing : layer.width,
+                           height: overlayChat ? screen.height : max(0, layer.maxY - band.maxY - insets.bottom * (1 - progress)))
+                    .offset(x: overlayChat ? screen.width - overlayWidth - insets.trailing : layer.minX,
+                            y: overlayChat ? 0 : band.maxY)
+                    .opacity(chatShown ? 1 : 0)
+                    .animation(SNMotion.run(.easeOut(duration: 0.2)), value: nav.landscapeChat)
+                    .allowsHitTesting(chatShown && !dragging)
 
                 if mini {
                     MiniClose { model.stopWatching() }
@@ -236,36 +237,42 @@ private struct MiniClose: View {
     }
 }
 
-/// Landscape chat over the video: the theme background at 55 percent, a faint sheen at the top
-/// and a hairline on the video edge. No blur: video moves under it.
-private struct LandscapeChat: View {
-    let model: AppModel
-    let outerInset: CGFloat
-
+/// Landscape chat's backdrop over the video: the theme background at 55 percent, a faint sheen at
+/// the top and a hairline on the video edge. No blur: video moves under it.
+private struct LandscapeBackdrop: View {
     var body: some View {
-        ChatArea(model: model, readOnly: true)
-            .padding(.trailing, outerInset)
-            .background {
-                ZStack {
-                    SN.background.opacity(0.55)
-                    LinearGradient(stops: [.init(color: .white.opacity(0.035), location: 0), .init(color: .clear, location: 0.25)],
-                                   startPoint: .top, endPoint: .bottom)
-                }
-                .overlay(alignment: .leading) { Color.white.opacity(0.1).frame(width: 1) }
-                .shadow(color: .black.opacity(0.6), radius: 20)
-            }
+        ZStack {
+            SN.background.opacity(0.55)
+            LinearGradient(stops: [.init(color: .white.opacity(0.035), location: 0), .init(color: .clear, location: 0.25)],
+                           startPoint: .top, endPoint: .bottom)
+        }
+        .overlay(alignment: .leading) { Color.white.opacity(0.1).frame(width: 1) }
+        .shadow(color: .black.opacity(0.6), radius: 20)
     }
 }
 
-/// Chat in the watch layer: the chat slot when signed in; signed out, what signing in gets you.
+/// Chat in the watch layer: the room's chat panel when signed in (the overlay variant in
+/// landscape: read-only, over the video); signed out, what signing in gets you.
 private struct ChatArea: View {
     let model: AppModel
-    let readOnly: Bool
+    let overlay: Bool
+    let outerInset: CGFloat
 
     var body: some View {
-        if model.signedIn {
-            ChatSlot(model: model, readOnly: readOnly)
+        content
+            .padding(.trailing, outerInset)
+            .background { if overlay { LandscapeBackdrop() } }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if model.signedIn, let session = model.watch.chat {
+            ChatPanel(session: session, overlay: overlay)
+                .id(ObjectIdentifier(session))
+        } else if model.signedIn {
+            Color.clear
         } else {
+            let readOnly = overlay
             VStack(spacing: 14) {
                 Text("Sign in with Twitch to read and send chat.")
                     .font(.snBody)

@@ -18,10 +18,12 @@ enum PlayRoute: String, Sendable {
     case llhttp
     /// `ll` when the core's origin took the stream, `plain` when it did not.
     case auto
+    /// The URL exactly as the core answered it (an audio-only master, a VOD).
+    case direct
 }
 
 /// One stream being watched: the player on the URL the core serves, how far behind the live
-/// edge it sits, and the chat socket's last frames.
+/// edge it sits, and the room's chat.
 @Observable @MainActor
 final class Watch {
     let player = AVPlayer()
@@ -34,12 +36,15 @@ final class Watch {
     private(set) var behindMS: Int?
     /// From the tap to the player first playing, in milliseconds.
     private(set) var firstPlayMS: Int?
-    private(set) var frames = FrameLog(limit: 30)
-    private(set) var chatState = "Not connected"
-    private var chatLines = 0
+    /// The open stream's chat room; the chat panel starts it when it shows.
+    private(set) var chat: ChatSession?
+    /// The route the player is on now (after any fallback).
+    private(set) var playing: PlayRoute?
 
     /// Set by drive steps before a stream opens.
     var route = PlayRoute.auto
+    /// The quality asked of `start_stream`: `best`, a variant name, or `audio_only`.
+    var requestedQuality = "best"
     var offsetFromLive: Double?
     var preservesOffset = false
     /// The distance behind the edge a gentle catch-up rate holds, in milliseconds.
@@ -54,6 +59,9 @@ final class Watch {
     private var observers: [NSObjectProtocol] = []
     private var stalls = 0
     private var loader: LLPlaylistLoader?
+    /// The relay URL `start_stream` answered, kept for a fallback to the whole-segment route.
+    private var startURL: String?
+    private var fellBack = false
 
     func open(_ stream: TwitchStream, core: CoreBridge) {
         guard self.stream?.id != stream.id else { return }
@@ -61,8 +69,22 @@ final class Watch {
         self.stream = stream
         opened = .now
         status = "Resolving"
+        chat = ChatSession(channel: stream.userLogin, core: core, source: .core)
         tasks.append(Task { await self.play(stream, core: core) })
-        tasks.append(Task { await self.chat(stream, core: core) })
+    }
+
+    /// Back from the background: the core's chat bridge may listen on a new port.
+    func foregrounded(chatPort: Int) {
+        chat?.reconnect(port: chatPort)
+    }
+
+    /// The core moved playback to another upstream mid-stream (an ad-free pivot): the player
+    /// reloads on the new URL, on the route it was on.
+    func pivot(url: String, channel: String?) {
+        guard let stream, channel == nil || channel?.lowercased() == stream.userLogin.lowercased() else { return }
+        log.notice("ad pivot to \(url, privacy: .public)")
+        startURL = url
+        load(url, route: playing ?? .plain)
     }
 
     func pause() {
@@ -88,11 +110,12 @@ final class Watch {
         quality = nil
         error = nil
         status = "Idle"
-        frames = FrameLog(limit: 30)
-        chatState = "Not connected"
-        chatLines = 0
+        startURL = nil
+        playing = nil
+        fellBack = false
+        chat?.stop()
+        chat = nil
         Task.detached {
-            _ = try? await core.invoke("stop_chat", "{}")
             _ = try? await core.invoke("stop_stream", "{}")
         }
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -104,26 +127,18 @@ final class Watch {
         do {
             _ = try? await core.invoke("set_experimental_low_latency", args: ["enabled": true])
             let start = try await core.invoke(
-                "start_stream", args: ["url": "https://twitch.tv/\(stream.userLogin)", "quality": "best"],
+                "start_stream", args: ["url": "https://twitch.tv/\(stream.userLogin)", "quality": requestedQuality],
                 as: StreamStart.self
             )
             guard !Task.isCancelled else { return }
-            let lowLatency = (try? await core.invoke("get_stream_low_latency", args: [:], as: Bool.self)) ?? false
             quality = start.quality
-            let chosen = route == .auto ? (lowLatency ? PlayRoute.ll : .plain) : route
-            log.notice("start_stream \(stream.userLogin, privacy: .public) -> \(start.url, privacy: .public) (\(start.quality, privacy: .public)) origin \(lowLatency ? "on" : "off", privacy: .public) route \(chosen.rawValue, privacy: .public)")
-            guard let item = makeItem(start.url, route: chosen) else { return }
-            if let offsetFromLive {
-                item.configuredTimeOffsetFromLive = CMTime(seconds: offsetFromLive, preferredTimescale: 1000)
-            }
-            item.automaticallyPreservesTimeOffsetFromLive = preservesOffset
-            observe(item)
+            startURL = start.url
+            let chosen = await Self.route(for: start, asked: route, core: core)
+            log.notice("start_stream \(stream.userLogin, privacy: .public) -> \(start.url, privacy: .public) (\(start.quality, privacy: .public)) route \(chosen.rawValue, privacy: .public)")
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .moviePlayback)
             try session.setActive(true)
-            player.replaceCurrentItem(with: item)
-            player.play()
-            status = "Buffering"
+            load(start.url, route: chosen)
             await measure(core: core)
         } catch {
             guard !Task.isCancelled else { return }
@@ -133,9 +148,46 @@ final class Watch {
         }
     }
 
+    /// Puts a new item for `url` on `route` in the player and plays it.
+    private func load(_ url: String, route: PlayRoute) {
+        guard let item = makeItem(url, route: route) else { return }
+        if let offsetFromLive {
+            item.configuredTimeOffsetFromLive = CMTime(seconds: offsetFromLive, preferredTimescale: 1000)
+        }
+        item.automaticallyPreservesTimeOffsetFromLive = preservesOffset
+        observe(item)
+        playing = route
+        error = nil
+        player.replaceCurrentItem(with: item)
+        player.play()
+        if firstPlayMS == nil { status = "Buffering" }
+    }
+
+    /// The route for what `start_stream` answered: an audio-only master plays as it came; `auto`
+    /// rides the low-latency playlist only while the core's origin serves the stream (it stands
+    /// down under ad-free playback), the whole-segment one otherwise.
+    static func route(for start: StreamStart, asked: PlayRoute, core: CoreBridge) async -> PlayRoute {
+        if start.url.contains("/audio.m3u8") || !start.url.contains("/stream.m3u8") { return .direct }
+        guard asked == .auto else { return asked }
+        let lowLatency = (try? await core.invoke("get_stream_low_latency", args: [:], as: Bool.self)) ?? false
+        return lowLatency ? .ll : .plain
+    }
+
+    /// The low-latency playlist failed to play (AVPlayer refuses some part layouts outright):
+    /// the same relay serves the whole-segment playlist, so the player moves there once.
+    private func fallBack(from failure: String) -> Bool {
+        guard !fellBack, let startURL, let route = playing, route != .plain, route != .direct else { return false }
+        fellBack = true
+        log.notice("route \(route.rawValue, privacy: .public) failed (\(failure, privacy: .public)); falling back to plain")
+        load(startURL, route: .plain)
+        return true
+    }
+
     /// The player item for the URL the core answered, on the chosen route.
     private func makeItem(_ url: String, route: PlayRoute) -> AVPlayerItem? {
         switch route {
+        case .direct:
+            return URL(string: url).map(AVPlayerItem.init(url:))
         case .plain, .promote:
             let plain = url.replacingOccurrences(of: "/stream.m3u8", with: "/plain.m3u8")
             return URL(string: route == .promote ? plain + "&promote=1" : plain).map(AVPlayerItem.init(url:))
@@ -197,14 +249,19 @@ final class Watch {
                 }
             }
             if let failure = player.currentItem?.error, error == nil {
-                error = failure.localizedDescription
-                status = "Failed"
                 let ns = failure as NSError
-                let underlying = (ns.userInfo[NSUnderlyingErrorKey] as? NSError).map { "\($0.domain) \($0.code)" } ?? ""
-                log.error("player item failed: \(ns.domain, privacy: .public) \(ns.code) \(ns.localizedDescription, privacy: .public) \(ns.localizedFailureReason ?? "", privacy: .public) underlying \(underlying, privacy: .public) info \(String(describing: ns.userInfo), privacy: .public)")
+                let reason = player.currentItem?.errorLog()?.events.last?.errorComment ?? "\(ns.domain) \(ns.code)"
                 for event in player.currentItem?.errorLog()?.events ?? [] {
                     log.error("error log: \(event.errorDomain, privacy: .public) \(event.errorStatusCode) \(event.errorComment ?? "", privacy: .public) uri \(event.uri ?? "", privacy: .public)")
                 }
+                if fallBack(from: reason) {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    continue
+                }
+                error = "Playback failed. Try again in a moment."
+                status = "Failed"
+                let underlying = (ns.userInfo[NSUnderlyingErrorKey] as? NSError).map { "\($0.domain) \($0.code)" } ?? ""
+                log.error("player item failed: \(ns.domain, privacy: .public) \(ns.code) \(ns.localizedDescription, privacy: .public) \(ns.localizedFailureReason ?? "", privacy: .public) underlying \(underlying, privacy: .public) info \(String(describing: ns.userInfo), privacy: .public)")
             }
             if tick % 4 == 0, let item = player.currentItem {
                 await sample(item, core: core)
@@ -271,62 +328,5 @@ final class Watch {
 
     private static func ms(_ time: CMTime) -> Int {
         time.isNumeric ? Int((time.seconds * 1000).rounded()) : -1
-    }
-
-    // MARK: Chat
-
-    private func chat(_ stream: TwitchStream, core: CoreBridge) async {
-        do {
-            chatState = "Connecting"
-            let port = try await core.invoke(
-                "start_chat", args: ["channel": stream.userLogin, "reattach": false], as: Int.self
-            )
-            guard !Task.isCancelled else { return }
-            if port == 0, let fake = core as? FakeCore {
-                chatState = "FakeCore ticker"
-                for await raw in fake.chatTicker(channel: stream.userLogin) {
-                    frames.append(ChatFrame(raw: raw))
-                }
-            } else {
-                chatState = "ws://127.0.0.1:\(port)"
-                log.notice("chat socket port \(port)")
-                try await readSocket(port: port)
-            }
-        } catch {
-            guard !Task.isCancelled else { return }
-            chatState = "Chat failed: \(error)"
-            log.error("chat failed: \(String(describing: error), privacy: .public)")
-        }
-    }
-
-    private func readSocket(port: Int) async throws {
-        guard let url = URL(string: "ws://127.0.0.1:\(port)") else { return }
-        let socket = URLSession.shared.webSocketTask(with: url)
-        socket.resume()
-        defer { socket.cancel(with: .goingAway, reason: nil) }
-        try await withTaskCancellationHandler {
-            while !Task.isCancelled {
-                let message = try await socket.receive()
-                switch message {
-                case .string(let text): received(text)
-                case .data(let data): received(String(decoding: data, as: UTF8.self))
-                @unknown default: break
-                }
-            }
-        } onCancel: {
-            socket.cancel(with: .goingAway, reason: nil)
-        }
-    }
-
-    /// Keeps the frame and logs the first few chat lines, which is how a drive run sees chat
-    /// arrive.
-    private func received(_ raw: String) {
-        let frame = ChatFrame(raw: raw)
-        frames.append(frame)
-        guard frame.kind == .message else { return }
-        chatLines += 1
-        if chatLines <= 5 {
-            log.notice("chat line \(self.chatLines): \(String(frame.summary.prefix(80)), privacy: .public)")
-        }
     }
 }

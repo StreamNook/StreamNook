@@ -120,7 +120,19 @@ struct ChatLabView: View {
 /// - `chatclose` closes the stage
 @MainActor
 enum ChatDrive {
+    private static weak var model: AppModel?
+    /// The chat stage when it is open, otherwise the watch layer's room.
+    static var currentSession: ChatSession? { ChatLab.session ?? model?.watch.chat }
+    static var currentList: ChatListView? { currentSession.flatMap { ChatRegistry.shared.list(for: $0) } }
+
     static func run(_ name: String, _ value: String, model: AppModel) async -> Bool {
+        self.model = model
+        // Steps that write (send, fan actions that can delete, time out or ban, moderator tools)
+        // only ever run against a fake core, never a signed-in account.
+        if ["chatsend", "chatfan", "chatfanend", "chatmod"].contains(name), !(currentSession?.core is FakeCore) {
+            log.error("drive: \(name, privacy: .public) refused on a real core")
+            return true
+        }
         switch name {
         case "chatlab":
             ChatLab.open(core: model.core, mode: value)
@@ -134,12 +146,12 @@ enum ChatDrive {
                 }
             }
         case "chatpause":
-            guard let list = ChatLab.list else { return true }
+            guard let list = currentList else { return true }
             list.pauseForJump()
             list.scroll.setContentOffset(CGPoint(x: 0, y: max(-list.scroll.contentInset.top, list.scroll.contentOffset.y - 420)),
                                          animated: true)
         case "chatresume":
-            ChatLab.list?.resume(force: true, glide: true)
+            currentList?.resume(force: true, glide: true)
         case "chatperf":
             await perf(seconds: Double(value) ?? 60)
         case "chattype":
@@ -157,17 +169,17 @@ enum ChatDrive {
         case "chatcommands":
             composer?.commandsOpen = true
         case "chatreply":
-            if let session = ChatLab.session, let last = session.pipeline.recentMessages(1).last {
+            if let session = currentSession, let last = session.pipeline.recentMessages(1).last {
                 session.replyTo = last
             }
         case "chatfan":
             let parts = value.split(separator: ",")
             let bucket = FanBucket.allCases.first { $0.title.lowercased() == parts.first.map(String.init) }
-            ChatLab.list?.debugFan(select: bucket, reach: parts.count > 1 ? CGFloat(Double(parts[1]) ?? 0) : 0)
+            currentList?.debugFan(select: bucket, reach: parts.count > 1 ? CGFloat(Double(parts[1]) ?? 0) : 0)
         case "chatfanend":
-            ChatLab.list?.debugEndFan()
+            currentList?.debugEndFan()
         case "chatmod":
-            ChatLab.session?.moderatorTools = value != "off"
+            currentSession?.moderatorTools = value != "off"
         case "chatclose":
             ChatLab.close()
         default:
@@ -177,11 +189,11 @@ enum ChatDrive {
     }
 
     private static var composer: ChatComposerModel? {
-        ChatLab.session.flatMap { ComposerRegistry.shared.models[ObjectIdentifier($0)] }
+        currentSession.flatMap { ComposerRegistry.shared.models[ObjectIdentifier($0)] }
     }
 
     private static func perf(seconds: Double) async {
-        guard let list = ChatLab.list, let session = ChatLab.session else {
+        guard let list = currentList, let session = currentSession else {
             log.error("chatperf: no chat stage")
             return
         }

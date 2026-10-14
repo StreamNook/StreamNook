@@ -76,6 +76,11 @@ final class ChatSession {
                     self?.connected = true
                     chatLog.notice("chat socket \(channel, privacy: .public) port \(port)")
                     Task { await self?.loadHistory() }
+                    if port == 0, let fake = core as? FakeCore {
+                        // FakeCore has no socket: its ticker speaks the socket's format.
+                        for await frame in fake.chatTicker(channel: channel) { pipeline.ingest(frame) }
+                        return
+                    }
                     try await Self.read(port: port, into: pipeline)
                 } catch {
                     guard !Task.isCancelled else { return }
@@ -99,6 +104,28 @@ final class ChatSession {
     /// Takes the room's connection again after `stop()`.
     func restart() {
         start()
+    }
+
+    /// Reads the core's chat bridge again on `port`, keeping the rows: back from the background,
+    /// the socket the room was read from may be gone and the bridge may have a new port. The
+    /// room's claim in the core never lapsed, so no new `start_chat` is needed.
+    func reconnect(port: Int) {
+        guard case .core = source, reader != nil, port > 0 else { return }
+        reader?.cancel()
+        error = nil
+        let pipeline = pipeline
+        let channel = channel
+        chatLog.notice("chat socket \(channel, privacy: .public) reconnecting on port \(port)")
+        reader = Task { [weak self] in
+            do {
+                self?.connected = true
+                try await Self.read(port: port, into: pipeline)
+            } catch {
+                guard !Task.isCancelled else { return }
+                self?.error = "\(error)"
+                chatLog.error("chat reconnect failed: \(String(describing: error), privacy: .public)")
+            }
+        }
     }
 
     func setPaused(_ paused: Bool) {
