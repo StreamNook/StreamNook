@@ -827,6 +827,13 @@ pub fn clear() {
     }
 }
 
+/// Drop every cached profile picture; the next lookup asks 7TV again.
+pub fn clear_pictures() {
+    if let Ok(mut guard) = PICTURES.lock() {
+        *guard = None;
+    }
+}
+
 /// Everything an account OWNS, and the 7TV profile picture it has set (on
 /// `cosmetics.profile_picture`).
 #[derive(Debug, Clone, Default)]

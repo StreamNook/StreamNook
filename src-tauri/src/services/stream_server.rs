@@ -692,6 +692,56 @@ impl StreamServer {
 
         Ok(port)
     }
+
+    /// Bring the relay's listener back after iOS suspended the app and
+    /// reclaimed its sockets. A loopback connect tells a live listener from a
+    /// defunct one (its accept loop can keep running on a dead socket); only a
+    /// dead one is replaced, on the same port, so the player's URL still works.
+    /// True when it re-bound.
+    #[cfg(target_os = "ios")]
+    pub async fn rebind_if_dead() -> Result<bool> {
+        let _init_guard = SOLO_START_LOCK.lock().await;
+        let Some(port) = *CURRENT_PORT.lock().await else {
+            return Ok(false);
+        };
+        let finished = SERVER_HANDLE
+            .lock()
+            .await
+            .as_ref()
+            .map(|h| h.is_finished())
+            .unwrap_or(true);
+        let answers = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            tokio::net::TcpStream::connect(("127.0.0.1", port)),
+        )
+        .await
+        .map(|r| r.is_ok())
+        .unwrap_or(false);
+        if answers && !finished {
+            return Ok(false);
+        }
+        if let Some(old) = SERVER_HANDLE.lock().await.take() {
+            old.abort();
+        }
+        let proxy_url_clone = PROXY_URL.clone();
+        let proxy = warp::path::full()
+            .and(warp::method())
+            .and(opt_raw_query())
+            .and(warp::any().map(move || proxy_url_clone.clone()))
+            .and_then(Self::dynamic_proxy_handler)
+            .boxed();
+        let socket = tokio::net::TcpSocket::new_v4()?;
+        socket.set_reuseaddr(true)?;
+        socket.bind(SocketAddr::from(([127, 0, 0, 1], port)))?;
+        let listener = socket.listen(1024)?;
+        let handle = tokio::spawn(async move {
+            warp::serve(proxy).incoming(listener).run().await;
+        });
+        *SERVER_HANDLE.lock().await = Some(handle);
+        warn!("[StreamServer] relay listener on {port} was dead after a resume; re-bound it");
+        Ok(true)
+    }
+
     async fn dynamic_proxy_handler(
         path: warp::path::FullPath,
         method: warp::http::Method,

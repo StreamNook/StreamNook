@@ -155,9 +155,86 @@ pub fn lifecycle(state: String) {
             info!("[iOS] terminating");
             sn_tauri_headless::host_run_event(sn_tauri_headless::RunEvent::Exit);
         }
-        "foreground" | "memory_warning" => info!("[iOS] {state}"),
+        "foreground" => {
+            info!("[iOS] back in the foreground");
+            sn_tauri_headless::async_runtime::spawn(foregrounded());
+        }
+        "memory_warning" => {
+            info!("[iOS] memory warning; dropping the in-memory caches");
+            sn_tauri_headless::async_runtime::spawn(purge_memory_caches());
+        }
         other => warn!("[iOS] unknown lifecycle state {other}"),
     }
+}
+
+/// What the core found on the way back to the foreground, emitted as
+/// `app-foregrounded`: whether the relay's listener had to be re-bound (same
+/// port, same player URL), and the chat bridge's port and whether it answers,
+/// so the shell reconnects its chat socket there.
+#[derive(Clone, serde::Serialize)]
+struct Foregrounded {
+    relay_rebound: bool,
+    chat_port: Option<u16>,
+    chat_alive: bool,
+}
+
+/// iOS may reclaim a suspended app's listening sockets. Re-bind the relay if
+/// its listener died, and bring the chat bridge back if its task ended.
+async fn foregrounded() {
+    use tauri::Emitter;
+
+    let relay_rebound = match crate::services::stream_server::StreamServer::rebind_if_dead().await {
+        Ok(rebound) => rebound,
+        Err(e) => {
+            warn!("[iOS] relay re-bind failed: {e}");
+            false
+        }
+    };
+    let chat_port = crate::services::irc_service::IrcService::ensure_local_ws_bridge().await.ok();
+    let chat_alive = match chat_port {
+        Some(port) => loopback_answers(port).await,
+        None => false,
+    };
+    if chat_port.is_some() && !chat_alive {
+        warn!("[iOS] the chat bridge's listener does not answer after the resume");
+    }
+    info!("[iOS] foreground: relay re-bound {relay_rebound}, chat port {chat_port:?} answers {chat_alive}");
+    if let Some(app) = crate::services::providers::app_handle() {
+        let _ = app.emit("app-foregrounded", Foregrounded { relay_rebound, chat_port, chat_alive });
+    }
+}
+
+async fn loopback_answers(port: u16) -> bool {
+    tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        tokio::net::TcpStream::connect(("127.0.0.1", port)),
+    )
+    .await
+    .map(|r| r.is_ok())
+    .unwrap_or(false)
+}
+
+/// The in-memory caches that refill on their own: channel emote sets, badge
+/// and profile caches, 7TV cosmetics and pictures, BTTV Pro badges and emoji
+/// images. Live chat state (the joined channels' emotes, personal emotes) is
+/// kept, so nothing on screen loses what it shows.
+async fn purge_memory_caches() {
+    use tauri::Manager;
+
+    if let Some(app) = crate::services::providers::app_handle() {
+        if let Some(emotes) = app.try_state::<crate::commands::emotes::EmoteServiceState>() {
+            emotes.0.read().await.clear_cache().await;
+        }
+    }
+    if let Err(e) = crate::commands::badge_service::clear_badge_cache_unified().await {
+        debug!("[iOS] badge caches not cleared: {e}");
+    }
+    let _ = crate::commands::profile_cache::clear_profile_cache().await;
+    crate::services::seventv_cosmetics_resolver::clear();
+    crate::services::seventv_cosmetics_resolver::clear_pictures();
+    crate::services::bttv_pro_service::clear_cache().await;
+    crate::commands::app::clear_emoji_cache();
+    info!("[iOS] in-memory caches dropped");
 }
 
 /// Asks the shell to open a web link outside the app (`host_request` kind
