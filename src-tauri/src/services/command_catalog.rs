@@ -405,7 +405,7 @@ mod tests {
 
     #[test]
     fn every_search_token_must_appear() {
-        let rows = catalog(true, true, true, &[], "slow mode");
+        let rows = catalog(true, true, true, &[], "slow messages");
         assert!(rows.iter().any(|r| r.name == "slow"));
         assert!(catalog(true, true, true, &[], "zzzz nothing").is_empty());
     }
