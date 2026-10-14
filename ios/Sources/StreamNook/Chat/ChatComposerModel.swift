@@ -83,7 +83,12 @@ final class ChatComposerModel {
     var toast: String?
     private var lastSent: String?
     private var suggestSeq = 0
-    private var focusRequest = 0
+    /// Asks the field to take or give up focus (drive steps, inserts).
+    private(set) var focusRequest: (Int, Bool) = (0, false)
+
+    func requestFocus(_ on: Bool) {
+        focusRequest = (focusRequest.0 + 1, on)
+    }
 
     init(session: ChatSession) {
         self.session = session

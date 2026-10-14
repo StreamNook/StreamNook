@@ -32,6 +32,8 @@ final class ChatSession {
     private(set) var paused = false
     /// The room's numeric Twitch id, once known.
     var roomID: String?
+    /// Moderator tools are on wherever the viewer moderates, unless turned off for the room.
+    var moderatorTools = false
 
     @ObservationIgnored private var reader: Task<Void, Never>?
     @ObservationIgnored private var settingsTask: Task<Void, Never>?
@@ -52,6 +54,7 @@ final class ChatSession {
     func start() {
         guard reader == nil else { return }
         loadSettings()
+        loadRole()
         switch source {
         case .fixture(let fixture, let rate):
             roomID = fixture.roomID
@@ -114,12 +117,34 @@ final class ChatSession {
         }
     }
 
-    /// The join backfill: recent history above the live rows.
+    /// Whether the viewer moderates this room, from the core's send budget (USERSTATE badges).
+    private func loadRole() {
+        let core = core
+        let channel = channel
+        Task { [weak self] in
+            guard let json = try? await core.invoke("chat_send_budget", args: ["channel": channel]),
+                  let budget = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
+                  let role = budget["role"] as? String else { return }
+            self?.moderatorTools = role == "moderator" || role == "broadcaster"
+        }
+    }
+
+    /// The join backfill: recent history above the live rows, then the room's badge art.
     private func loadHistory() async {
-        guard let json = try? await core.invoke("load_channel_history", args: ["channel": channel]),
-              let rows = try? JSONDecoder().decode([ChatMessage].self, from: Data(json.utf8)) else { return }
-        pipeline.prepend(rows)
-        if roomID == nil { roomID = rows.first?.tags["room-id"] }
+        _ = try? await core.invoke("get_cached_global_badges", "{}")
+        if let json = try? await core.invoke("load_channel_history", args: ["channel": channel]),
+           let rows = try? JSONDecoder().decode([ChatMessage].self, from: Data(json.utf8)) {
+            pipeline.prepend(rows)
+            if roomID == nil { roomID = rows.first?.tags["room-id"] }
+        }
+        // Without history the first live row names the room.
+        for _ in 0..<60 where roomID == nil {
+            try? await Task.sleep(for: .milliseconds(500))
+            roomID = pipeline.recentMessages(1).first?.tags["room-id"]
+        }
+        if let roomID {
+            _ = try? await core.invoke("fetch_channel_badges", args: ["channelId": roomID])
+        }
     }
 
     private nonisolated static func read(port: Int, into pipeline: ChatPipeline) async throws {

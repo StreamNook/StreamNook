@@ -6,18 +6,16 @@ import SwiftUI
 /// text and the chat menu otherwise. Suggestions and the emote picker open upward over the list.
 struct ChatComposer: View {
     let session: ChatSession
-    @State private var model: ChatComposerModel?
+    @State private var model: ChatComposerModel
+
+    init(session: ChatSession) {
+        self.session = session
+        _model = State(initialValue: ChatComposerModel(session: session))
+    }
 
     var body: some View {
-        Group {
-            if let model {
-                ComposerBar(model: model, session: session)
-            }
-        }
-        .onAppear {
-            if model == nil { model = ChatComposerModel(session: session) }
-            ComposerRegistry.shared.models[ObjectIdentifier(session)] = model
-        }
+        ComposerBar(model: model, session: session)
+            .onAppear { ComposerRegistry.shared.models[ObjectIdentifier(session)] = model }
     }
 }
 
@@ -49,6 +47,7 @@ private struct ComposerBar: View {
             inputRow
         }
         .padding(.bottom, 10)
+        .onChange(of: model.focusRequest.0) { _, _ in focused = model.focusRequest.1 }
         .overlay(alignment: .top) {
             VStack(spacing: 8) {
                 if let toast = model.toast {

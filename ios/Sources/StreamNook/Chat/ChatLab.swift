@@ -112,6 +112,11 @@ struct ChatLabView: View {
 /// - `chatpause` scrolls the list up as a reader would, which pauses it
 /// - `chatresume` taps Resume live
 /// - `chatperf:SECONDS` logs frame pacing and memory every five seconds, then a summary
+/// - `chattype:TEXT` puts TEXT in the composer, `chatsend` sends it
+/// - `chatfocus` focuses the composer (raises the keyboard), `chatblur` lowers it
+/// - `chatpicker`, `chatmenu`, `chatcommands` open the emote picker, the chat menu, the command list
+/// - `chatreply` drafts a reply to the newest row
+/// - `chatmod[:off]` turns the room's moderator tools on (or off) for the fan
 /// - `chatclose` closes the stage
 @MainActor
 enum ChatDrive {
@@ -120,7 +125,14 @@ enum ChatDrive {
         case "chatlab":
             ChatLab.open(core: model.core, mode: value)
         case "chatoverlay":
-            ChatLab.state.overlay = value != "off"
+            let on = value != "off"
+            ChatLab.state.overlay = on
+            // Immersive landscape, as the watch page turns when the phone does.
+            if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
+                scene.requestGeometryUpdate(.iOS(interfaceOrientations: on ? .landscapeRight : .portrait)) { error in
+                    log.error("chatoverlay: \(error.localizedDescription, privacy: .public)")
+                }
+            }
         case "chatpause":
             guard let list = ChatLab.list else { return true }
             list.pauseForJump()
@@ -130,12 +142,42 @@ enum ChatDrive {
             ChatLab.list?.resume(force: true, glide: true)
         case "chatperf":
             await perf(seconds: Double(value) ?? 60)
+        case "chattype":
+            composer?.draft = value
+        case "chatsend":
+            await composer?.send()
+        case "chatfocus":
+            composer?.requestFocus(true)
+        case "chatblur":
+            composer?.requestFocus(false)
+        case "chatpicker":
+            composer?.panel = .emotes
+        case "chatmenu":
+            composer?.menuOpen = true
+        case "chatcommands":
+            composer?.commandsOpen = true
+        case "chatreply":
+            if let session = ChatLab.session, let last = session.pipeline.recentMessages(1).last {
+                session.replyTo = last
+            }
+        case "chatfan":
+            let parts = value.split(separator: ",")
+            let bucket = FanBucket.allCases.first { $0.title.lowercased() == parts.first.map(String.init) }
+            ChatLab.list?.debugFan(select: bucket, reach: parts.count > 1 ? CGFloat(Double(parts[1]) ?? 0) : 0)
+        case "chatfanend":
+            ChatLab.list?.debugEndFan()
+        case "chatmod":
+            ChatLab.session?.moderatorTools = value != "off"
         case "chatclose":
             ChatLab.close()
         default:
             return false
         }
         return true
+    }
+
+    private static var composer: ChatComposerModel? {
+        ChatLab.session.flatMap { ComposerRegistry.shared.models[ObjectIdentifier($0)] }
     }
 
     private static func perf(seconds: Double) async {

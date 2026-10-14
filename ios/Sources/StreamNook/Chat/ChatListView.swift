@@ -309,7 +309,11 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
                 }
                 let frame = CGRect(x: 0, y: row.y, width: bounds.width, height: row.height)
                 if cell.frame != frame { cell.frame = frame }
-                if cell.layout !== row.layout { cell.configure(row.layout, scale: scale, animateImages: animate) }
+                if cell.layout !== row.layout {
+                    cell.configure(row.layout, scale: scale, animateImages: animate)
+                    // Built only for VoiceOver: it reads the row from the chat queue.
+                    cell.accessibilityCustomActions = UIAccessibility.isVoiceOverRunning ? accessibilityActions?(row.layout) : nil
+                }
                 if row.layout.decor.flash != nil, row.layout.live, !flashed.contains(row.id) {
                     flashed.insert(row.id)
                     cell.flash()
@@ -432,13 +436,82 @@ final class ChatListView: UIView, UIScrollViewDelegate, UIGestureRecognizerDeleg
         if paused, !readOnly { onReply?(row.id) }
     }
 
+    /// The fan's actions for VoiceOver, which cannot make the long-press gesture.
+    var accessibilityActions: ((ChatRowLayout) -> [UIAccessibilityCustomAction])?
+    /// The fan's buckets, the chatter's name and colour for a row; nil when the row has none.
+    var fanContext: ((ChatRowLayout) -> (buckets: [FanBucket], name: String, color: UIColor)?)?
+    /// A released bucket, with the dialled timeout in seconds.
+    var onFanCommit: ((FanBucket, ChatRowLayout, Int?) -> Void)?
+    private var fan: ChatFanOverlay?
+    private var fanRow: ChatRowLayout?
+
     @objc private func pressed(_ gesture: UILongPressGestureRecognizer) {
-        guard gesture.state == .began else { return }
-        let point = gesture.location(in: scroll)
-        guard let (row, _) = row(at: point) else { return }
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        onLongPress?(row.layout, gesture.location(in: self))
+        guard let window else { return }
+        switch gesture.state {
+        case .began:
+            let point = gesture.location(in: scroll)
+            guard let (row, _) = row(at: point), let context = fanContext?(row.layout), !context.buckets.isEmpty else { return }
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            onLongPress?(row.layout, gesture.location(in: self))
+            // Once armed the list holds still for the rest of the gesture.
+            scroll.isScrollEnabled = false
+            let overlay = ChatFanOverlay(frame: window.bounds, buckets: context.buckets, press: gesture.location(in: window),
+                                         name: context.name, nameColor: context.color)
+            window.addSubview(overlay)
+            overlay.present()
+            fan = overlay
+            fanRow = row.layout
+        case .changed:
+            fan?.track(gesture.location(in: window))
+        case .ended:
+            if let fan, let row = fanRow, let bucket = fan.active {
+                if bucket.danger {
+                    UINotificationFeedbackGenerator().notificationOccurred(.warning)
+                } else {
+                    UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+                }
+                onFanCommit?(bucket, row, bucket == .timeout ? (fan.dialled ?? 600) : nil)
+            }
+            endFan()
+        default:
+            endFan()
+        }
     }
+
+    private func endFan() {
+        fan?.dismiss()
+        fan = nil
+        fanRow = nil
+        scroll.isScrollEnabled = true
+    }
+
+    #if DEBUG
+    /// Opens the fan over the newest visible row as a press there would, then moves the finger to
+    /// `bucket` (and `reach` points past it), for screenshots of the fan.
+    func debugFan(select bucket: FanBucket?, reach: CGFloat) {
+        guard let window, let row = rows.last(where: { cells[$0.id] != nil }),
+              let context = fanContext?(row.layout) else { return }
+        endFan()
+        let cell = cells[row.id]!
+        let press = cell.convert(CGPoint(x: cell.bounds.midX, y: cell.bounds.midY), to: window)
+        let overlay = ChatFanOverlay(frame: window.bounds, buckets: context.buckets, press: press, name: context.name,
+                                     nameColor: context.color)
+        window.addSubview(overlay)
+        overlay.present()
+        fan = overlay
+        fanRow = row.layout
+        guard let bucket else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            guard let target = overlay.center(of: bucket) else { return }
+            overlay.track(target)
+            if reach > 0 { overlay.track(CGPoint(x: target.x, y: target.y - reach)) }
+        }
+    }
+
+    func debugEndFan() {
+        endFan()
+    }
+    #endif
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
         false

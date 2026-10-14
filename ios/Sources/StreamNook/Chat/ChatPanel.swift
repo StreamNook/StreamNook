@@ -78,6 +78,37 @@ struct ChatListHost: UIViewRepresentable {
                 }
             }
         }
+        list.fanContext = { layout in
+            guard let message = session.pipeline.message(layout.id), !message.isSystem else { return nil }
+            let twitch = message.provider == "twitch"
+            var buckets: [FanBucket] = []
+            if !readOnly { buckets.append(.reply) }
+            if twitch { buckets.append(.profile) }
+            buckets.append(.copy)
+            if session.moderatorTools, twitch, session.roomID != nil {
+                buckets += [.delete, .timeout, .ban, .pin]
+            }
+            let color = ChatTheme.color(message.metadata.view?.nameColor ?? message.color) ?? ChatTheme.fallbackName
+            return (buckets, message.shownName, color)
+        }
+        list.accessibilityActions = { [weak list] layout in
+            guard let context = list?.fanContext?(layout) else { return [] }
+            return context.buckets.map { bucket in
+                UIAccessibilityCustomAction(name: bucket.title) { _ in
+                    list?.onFanCommit?(bucket, layout, bucket == .timeout ? 600 : nil)
+                    return true
+                }
+            }
+        }
+        list.onFanCommit = { bucket, layout, seconds in
+            guard let message = session.pipeline.message(layout.id) else { return }
+            Task { @MainActor in
+                if let toast = await ChatModActions.run(bucket, message: message, seconds: seconds, session: session,
+                                                         onProfile: onProfile) {
+                    onToast(toast)
+                }
+            }
+        }
         context.coordinator.list = list
         ChatRegistry.shared.lists[ObjectIdentifier(session)] = WeakList(list)
         return list
