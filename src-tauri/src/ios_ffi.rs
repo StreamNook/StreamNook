@@ -69,6 +69,12 @@ struct Launch {
 
 static LAUNCH: OnceLock<Launch> = OnceLock::new();
 
+/// The token vault key the shell keeps in the Keychain, when it passed a
+/// 256-bit one.
+pub(crate) fn vault_key() -> Option<[u8; 32]> {
+    LAUNCH.get().and_then(|l| <[u8; 32]>::try_from(l.vault_key.as_slice()).ok())
+}
+
 /// The codecs the shell reported the phone decodes in hardware.
 pub(crate) fn launch_codecs() -> Vec<String> {
     LAUNCH.get().map(|l| l.codecs.clone()).unwrap_or_default()
