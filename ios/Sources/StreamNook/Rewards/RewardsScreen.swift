@@ -7,6 +7,7 @@ struct RewardsScreen: View {
     let model: AppModel
     @State private var segment: Part = .drops
     @State private var dropsConnected: Bool?
+    @State private var connecting = false
 
     enum Part: Hashable { case drops, badges }
 
@@ -36,6 +37,8 @@ struct RewardsScreen: View {
         .refreshable { await checkDrops() }
         .task(id: model.signedIn) { if model.signedIn { await checkDrops() } }
         .onAppear { segment = .drops }
+        .task { await followDropsSignIn() }
+        .onChange(of: model.host.sheet == nil) { _, closed in if closed { connecting = false } }
     }
 
     @ViewBuilder
@@ -44,7 +47,7 @@ struct RewardsScreen: View {
         case nil:
             EmptyView()
         case false?:
-            ConnectDropsCard()
+            ConnectDropsCard(connecting: connecting) { Task { await connectDrops() } }
         case true?:
             EmptyNote(text: "Your drop campaigns show here once the Drops screen is built.", hint: nil)
         }
@@ -57,10 +60,42 @@ struct RewardsScreen: View {
     private func checkDrops() async {
         dropsConnected = (try? await model.core.invoke("is_drops_authenticated", args: [:], as: Bool.self)) ?? false
     }
+
+    /// The core opens Twitch's Drops authorize page in the web sheet; the grant comes back
+    /// through the sheet and the core announces it.
+    private func connectDrops() async {
+        connecting = true
+        do {
+            _ = try await model.core.invoke("open_drops_sheet", "{}")
+        } catch {
+            connecting = false
+            model.toasts.show("Could not open the drops sign-in. Try again in a moment.")
+            log.error("open_drops_sheet failed: (String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// Drops sign-in outcomes, from the sheet or anywhere else, and the sheet closing unfinished.
+    private func followDropsSignIn() async {
+        for await event in model.core.events.all() {
+            switch event.name {
+            case "drops-login-complete":
+                connecting = false
+                await checkDrops()
+            case "drops-login-error":
+                connecting = false
+                model.toasts.show("Drops sign-in failed. Try again.")
+            default:
+                continue
+            }
+        }
+    }
 }
 
 /// Drops not connected: the gift, "Twitch Drops", what connecting gets you, and the button.
 private struct ConnectDropsCard: View {
+    let connecting: Bool
+    let connect: () -> Void
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
@@ -72,9 +107,9 @@ private struct ConnectDropsCard: View {
                 .foregroundStyle(SN.textSecondary)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
-            Button {} label: {
+            Button(action: connect) {
                 HStack(spacing: 6) {
-                    Text("Connect drops").font(.sn(14, 600))
+                    Text(connecting ? "Connecting…" : "Connect drops").font(.sn(14, 600))
                     Image(systemName: Symbol.openOutside).font(.system(size: 14))
                 }
                 .foregroundStyle(SN.textPrimary)
@@ -83,7 +118,8 @@ private struct ConnectDropsCard: View {
             }
             .buttonStyle(.glass)
             .buttonBorderShape(.capsule)
-            .disabled(true)
+            .disabled(connecting)
+            .opacity(connecting ? 0.6 : 1)
         }
         .padding(16)
         .snPanel()
