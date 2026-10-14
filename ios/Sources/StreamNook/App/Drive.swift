@@ -24,6 +24,9 @@ import SwiftUI
 /// - `glass:PERCENT`, `motion:full|reduced|off` preview a look without saving it
 /// - `toast:TEXT` an error toast; `undo:TEXT` a toast with an Undo action
 /// - `wait:SECONDS`, `pause` (pauses the player), `signin` (opens the Twitch sign-in sheet)
+/// - `fakelogin`, `fakelogout` sign FakeCore's account in or out the way the core announces it;
+///   `signinstate` logs who the app thinks is signed in
+/// - `quality:NAME` the quality the next stream asks for (`audio_only`, a variant, `best`)
 /// - `edge` shows how far behind the live edge the player sits
 /// - `route:NAME`, `offset:SECONDS`, `preserve`, `catchup:MS`, `hold:PARTS`: the player's
 ///   low-latency knobs for the next stream (see `Watch`)
@@ -95,6 +98,16 @@ enum Drive {
             case "catchup": model.watch.catchUpTargetMS = Int(value)
             case "hold": model.watch.holdParts = Int(value)
             case "signin": await model.signIn.begin(core: model.core)
+            case "fakelogin", "fakelogout":
+                guard let fake = model.core as? FakeCore else {
+                    log.error("drive: \(name, privacy: .public) needs FakeCore")
+                    continue
+                }
+                fake.simulateTwitchSignIn(name == "fakelogin")
+            case "signinstate":
+                await model.signIn.refresh()
+                log.notice("sign-in state: signed in \(model.signedIn) user \(model.signIn.user?.login ?? "none", privacy: .public) busy \(model.signIn.busy)")
+            case "quality": model.watch.requestedQuality = value.isEmpty ? "best" : value
             case "shot":
                 log.notice("drive shot")
                 try? await Task.sleep(for: .seconds(5))

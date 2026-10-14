@@ -17,6 +17,7 @@ final class AppModel {
     let signIn = SignIn()
     let nav = Navigator()
     let toasts = Toasts()
+    let host = HostRequests()
     let look = Look.shared
     let home: HomeStore
     /// Browse's mode and search, kept here so they survive the tab being rebuilt.
@@ -37,7 +38,7 @@ final class AppModel {
         home = HomeStore(core: core)
     }
 
-    var signedIn: Bool { signIn.user != nil }
+    var signedIn: Bool { signIn.signedIn }
 
     /// The Browse list, which drive steps open streams from.
     var streams: [TwitchStream] { home.recommended }
@@ -65,11 +66,14 @@ final class AppModel {
         }
         let settings = await loadSettings()
         await signIn.boot(core: core)
+        host.start(core: core, cookies: signIn.cookies)
         home.start()
         #if DEBUG
         if Drive.skipsSetup { setupClosed = true }
         #endif
-        phase = settings?.setupComplete == false && !setupClosed ? .setup : .main
+        let boot = try? await core.invoke("get_boot_state", args: [:], as: BootState.self)
+        let needsSetup = boot?.needsSetup ?? (settings?.setupComplete == false)
+        phase = needsSetup && !setupClosed ? .setup : .main
     }
 
     /// Reads the settings and applies the look. A failed read keeps the look it has.
@@ -104,7 +108,12 @@ final class AppModel {
 
     /// The wizard finished: the core remembers, and the tabs come up.
     func finishSetup() async {
-        await patchSettings(["setup_complete": true])
+        do {
+            _ = try await core.invoke("complete_setup", "{}")
+        } catch {
+            log.error("complete_setup failed: \(String(describing: error), privacy: .public)")
+        }
+        await loadSettings()
         phase = .main
     }
 
@@ -143,6 +152,7 @@ final class AppModel {
     func lifecycle(_ state: String) {
         guard started else { return }
         core.lifecycle(state)
+        if state == "foreground" { Task { await signIn.refresh() } }
     }
 
     private func listenForEvents() {
@@ -152,8 +162,31 @@ final class AppModel {
                 guard let self else { return }
                 self.eventCount += 1
                 self.lastEvent = event.name
-                if event.name == "streamnook-settings-updated" { await self.loadSettings() }
+                switch event.name {
+                case "streamnook-settings-updated":
+                    await self.loadSettings()
+                case "app-foregrounded":
+                    let payload = Self.object(event.payloadJSON)
+                    log.notice("foregrounded: chat port \(payload["chat_port"] as? Int ?? 0) alive \(payload["chat_alive"] as? Bool ?? false) relay rebound \(payload["relay_rebound"] as? Bool ?? false)")
+                    if let port = payload["chat_port"] as? Int {
+                        self.watch.foregrounded(chatPort: port)
+                        #if DEBUG
+                        ChatLab.session?.reconnect(port: port)
+                        #endif
+                    }
+                case "ad-pivot":
+                    let payload = Self.object(event.payloadJSON)
+                    if let url = payload["url"] as? String {
+                        self.watch.pivot(url: url, channel: payload["channel"] as? String)
+                    }
+                default:
+                    break
+                }
             }
         }
+    }
+
+    private static func object(_ json: String) -> [String: Any] {
+        (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] ?? [:]
     }
 }

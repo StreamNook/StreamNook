@@ -19,6 +19,11 @@ struct AppRoot: View {
         .sheet(item: signInPage, onDismiss: { model.signIn.sheetClosed() }) { page in
             SignInSheet(signIn: model.signIn, page: page)
         }
+        .sheet(isPresented: webSheetShown, onDismiss: { model.host.sheetDismissed() }) {
+            if let request = model.host.sheet {
+                WebSheet(host: model.host, request: request)
+            }
+        }
         .onChange(of: model.signIn.error) { _, error in
             if let error { model.toasts.show(error) }
         }
@@ -31,6 +36,12 @@ struct AppRoot: View {
 
     private var signInPage: Binding<SignIn.Page?> {
         Binding(get: { model.signIn.page }, set: { model.signIn.page = $0 })
+    }
+
+    /// The core's web sheet is up. Setting it false (a swipe down) is the dismissal, which
+    /// `sheetDismissed` reports.
+    private var webSheetShown: Binding<Bool> {
+        Binding(get: { model.host.sheet != nil }, set: { shown in if !shown { model.host.sheetDismissed() } })
     }
 }
 
@@ -54,6 +65,7 @@ struct SignedOutLanding: View {
     var reason: String?
 
     private var signIn: SignIn { model.signIn }
+    private var shownReason: String? { reason ?? signIn.reason }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,13 +73,13 @@ struct SignedOutLanding: View {
                 .font(.snHero)
                 .foregroundStyle(SN.textPrimary)
                 .padding(.bottom, 8)
-            Text(reason ?? "Watch Twitch with your emotes, badges, and cosmetics everywhere.")
+            Text(shownReason ?? "Watch Twitch with your emotes, badges, and cosmetics everywhere.")
                 .font(.snBody)
                 .foregroundStyle(SN.textMuted)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 280)
                 .padding(.bottom, 40)
-            SignInButton(model: model, again: reason != nil)
+            SignInButton(model: model, again: shownReason != nil)
         }
         .padding(.horizontal, 32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
