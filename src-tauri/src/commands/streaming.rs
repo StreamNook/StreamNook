@@ -643,8 +643,18 @@ pub async fn start_stream(
     // plugin protocol's "solo" stream id (set_upstream, on_ad_window) always
     // addresses a live relay.
     crate::services::stream_server::set_solo_session(Some(channel.clone()));
+    // The iPhone plays the audio-only rendition through a master that says it
+    // is audio only (see `stream_server::AUDIO_PLAYLIST`).
+    #[cfg(target_os = "ios")]
+    let url = if r.quality.contains("audio") {
+        local_player_url(port).replacen("/stream.m3u8", "/audio.m3u8", 1)
+    } else {
+        local_player_url(port)
+    };
+    #[cfg(not(target_os = "ios"))]
+    let url = local_player_url(port);
     Ok(StreamStartResult {
-        url: local_player_url(port),
+        url,
         quality: r.quality,
         mode: Some(r.status.mode),
         entitled: r.status.entitled,

@@ -100,6 +100,24 @@ async fn resign_blocking(stale: &str) -> Option<String> {
 /// it, so `relay_probe` measures both paths against the same edge.
 const PLAIN_PLAYLIST: &str = "plain.m3u8";
 
+/// A one-variant master over `plain.m3u8` that declares the stream as AAC
+/// audio only. Played for the `audio_only` rendition on the iPhone: given the
+/// bare media playlist, AVPlayer cannot tell there is no video and keeps a
+/// video pipeline it then tears down in the background.
+#[cfg(any(target_os = "ios", test))]
+const AUDIO_PLAYLIST: &str = "audio.m3u8";
+
+/// The audio-only master's text. The query rides along to `plain.m3u8`, so the
+/// directives a player appends (`promote=1`, the cache stamp) still reach it.
+#[cfg(any(target_os = "ios", test))]
+fn audio_only_master(raw_query: &str) -> String {
+    let query = if raw_query.is_empty() { String::new() } else { format!("?{raw_query}") };
+    format!(
+        "#EXTM3U\n#EXT-X-INDEPENDENT-SEGMENTS\n\
+         #EXT-X-STREAM-INF:BANDWIDTH=160000,CODECS=\"mp4a.40.2\"\n{PLAIN_PLAYLIST}{query}\n"
+    )
+}
+
 /// Local request path -> upstream url, against a given manifest url.
 ///
 /// Pulled out of the handler so the same mapping can be re-applied to a freshly
@@ -714,6 +732,12 @@ impl StreamServer {
 
         let request_path = path.as_str().trim_start_matches('/');
 
+        #[cfg(target_os = "ios")]
+        if request_path == AUDIO_PLAYLIST {
+            let master = audio_only_master(&raw_query).into_bytes();
+            return finish_playlist_response(warp::http::StatusCode::OK, request_path, master);
+        }
+
         // ── LL-HLS origin path (active only on low-latency channels) ──
         // When the origin is live it owns the media playlist, parts, and complete
         // segments (served from memory). This must come before the non-LL stable-URL
@@ -1207,6 +1231,17 @@ impl StreamServer {
 #[cfg(test)]
 mod relay_rewrite_tests {
     use super::*;
+
+    #[test]
+    fn the_audio_only_master_declares_aac_alone_over_the_plain_playlist() {
+        let master = audio_only_master("t=1&promote=1");
+        assert!(master.starts_with("#EXTM3U\n"));
+        assert!(master.contains("CODECS=\"mp4a.40.2\""));
+        assert!(!master.contains("avc1") && !master.contains("RESOLUTION"));
+        assert!(master.trim_end().ends_with("\nplain.m3u8?t=1&promote=1"));
+        assert!(audio_only_master("").trim_end().ends_with("\nplain.m3u8"));
+        assert_eq!(AUDIO_PLAYLIST, "audio.m3u8");
+    }
 
     #[test]
     fn the_init_named_by_ext_x_map_comes_through_the_relay_too() {
