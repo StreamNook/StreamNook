@@ -1355,13 +1355,14 @@ pub fn open_subscribe_window(
     Ok(label)
 }
 
-/// The phone's Subscribe: the platform's own checkout in the login overlay.
-/// The overlay shares the app's one cookie jar, which already holds the Twitch
-/// session from the activation page and the Kick session from Kick sign-in, so
-/// the checkout opens as the signed-in account. Async so the plugin call stays
-/// off the main thread. Returns a label for parity with desktop; the phone
-/// closes the overlay with `close_mobile_login`.
-#[cfg(target_os = "android")]
+/// The phone's Subscribe: the platform's own checkout in the login overlay
+/// (Android) or sheet (iPhone). Either shares the app's one cookie jar, which
+/// already holds the Twitch session from sign-in and the Kick session from
+/// Kick sign-in, so the checkout opens as the signed-in account. Async so the
+/// plugin call stays off the main thread. Returns a label for parity with
+/// desktop; Android closes the overlay with `close_mobile_login`, the iPhone
+/// sheet is closed by the person.
+#[cfg(mobile)]
 #[tauri::command]
 pub async fn open_subscribe_window(
     app: AppHandle,
@@ -1371,7 +1372,10 @@ pub async fn open_subscribe_window(
 ) -> Result<String, String> {
     let (url, _) = subscribe_target(provider.as_deref(), &channel_login)?;
     let title = title.unwrap_or_else(|| format!("Subscribe to {}", channel_login));
+    #[cfg(target_os = "android")]
     crate::twitch_login_plugin::open_overlay(&app, &url, &title)?;
+    #[cfg(target_os = "ios")]
+    crate::services::ios_sheet::open_overlay(&app, &url, &title)?;
     Ok(format!("subscribe-{}", channel_login))
 }
 

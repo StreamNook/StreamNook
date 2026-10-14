@@ -382,6 +382,8 @@ pub async fn kick_disconnect(app: crate::rt::AppHandle, state: State<'_, AppStat
     // a profile directory. Expire only Kick's cookies so Twitch stays signed in.
     #[cfg(target_os = "android")]
     crate::twitch_login_plugin::expire_cookies(&app, &["https://kick.com", "https://id.kick.com"]);
+    #[cfg(target_os = "ios")]
+    crate::services::ios_sheet::expire_cookies(&app, &["https://kick.com", "https://id.kick.com"]);
     if let Err(e) = crate::commands::provider_browse::clear_imported_follows("kick", &state) {
         log::warn!("[Kick] could not clear imported follows: {}", e);
     }

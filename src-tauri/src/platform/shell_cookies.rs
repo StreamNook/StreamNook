@@ -77,6 +77,19 @@ impl Jar {
         }
         seen.into_values().collect()
     }
+
+    /// Drops every cookie that applies to any of these sites' hosts, from
+    /// whichever origin reported it.
+    fn forget(&mut self, urls: &[&str]) {
+        let hosts: Vec<String> = urls
+            .iter()
+            .filter_map(|u| url::Url::parse(u).ok())
+            .filter_map(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
+            .collect();
+        for cookies in self.by_origin.values_mut() {
+            cookies.retain(|c| !hosts.iter().any(|h| super::cookies::domain_matches(&c.domain, h)));
+        }
+    }
 }
 
 /// `https://www.twitch.tv/` and `https://WWW.twitch.tv` are one origin.
@@ -106,6 +119,14 @@ pub fn rows() -> Vec<CookieRow> {
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0);
     jar().lock().map(|jar| jar.rows(now)).unwrap_or_default()
+}
+
+/// Forgets the cookies of these sites until the shell pushes them again (a
+/// sign-out that the shell clears from its store as well).
+pub fn forget(urls: &[&str]) {
+    if let Ok(mut jar) = jar().lock() {
+        jar.forget(urls);
+    }
 }
 
 #[cfg(test)]
@@ -170,6 +191,21 @@ mod tests {
         jar.replace("https://www.twitch.tv", r#"[{"name":"auth-token","value":"t","domain":".twitch.tv"}]"#)
             .unwrap();
         assert!(jar.replace("https://www.twitch.tv", "{not json").is_err());
+        assert_eq!(names(&jar), ["auth-token"]);
+    }
+
+    #[test]
+    fn forgetting_a_site_leaves_the_others_signed_in() {
+        let mut jar = Jar::default();
+        jar.replace("https://www.twitch.tv", r#"[{"name":"auth-token","value":"t","domain":".twitch.tv"}]"#)
+            .unwrap();
+        jar.replace(
+            "https://kick.com",
+            r#"[{"name":"session_token","value":"k","domain":"kick.com"},
+                {"name":"XSRF","value":"x","domain":".id.kick.com"}]"#,
+        )
+        .unwrap();
+        jar.forget(&["https://kick.com", "https://id.kick.com"]);
         assert_eq!(names(&jar), ["auth-token"]);
     }
 

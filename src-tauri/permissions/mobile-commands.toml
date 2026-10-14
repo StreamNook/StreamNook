@@ -22,4 +22,6 @@ allow = [
   "update_chat_identity_gql",
   "flush_persistent_stores",
   "export_logs",
+  "sheet_redirected",
+  "sheet_closed",
 ]

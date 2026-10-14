@@ -175,8 +175,10 @@ pub(crate) fn zip_logs(logs_dir: &std::path::Path, dest: &std::path::Path) -> an
 /// cache and then saved to Downloads (`to = "downloads"`) or offered to the
 /// share sheet (`to = "share"`). Answers "saved", "shared" or "empty". On
 /// Android 9 and older, Downloads needs a storage permission the app does not
-/// hold, so a save falls back to the share sheet and answers "shared".
-#[cfg(target_os = "android")]
+/// hold, so a save falls back to the share sheet and answers "shared". The
+/// iPhone's share sheet offers Save to Files itself, so there both
+/// destinations open it (a `share` host request) and answer "shared".
+#[cfg(mobile)]
 #[command]
 pub async fn export_logs(app: crate::rt::AppHandle, to: String) -> Result<String, String> {
     use tauri::Manager;
@@ -207,6 +209,15 @@ pub async fn export_logs(app: crate::rt::AppHandle, to: String) -> Result<String
 
     // Dated, so a second save sits beside the first instead of "(1)".
     let saved_name = format!("streamnook-logs-{}.zip", chrono::Local::now().format("%Y-%m-%d-%H%M"));
+    #[cfg(target_os = "ios")]
+    let result = match to.as_str() {
+        "downloads" | "share" => {
+            crate::ios_ffi::share_file(&dest, MIME, &saved_name);
+            "shared"
+        }
+        other => return Err(format!("unknown log destination: {}", other)),
+    };
+    #[cfg(target_os = "android")]
     let result = match to.as_str() {
         "downloads" => match crate::twitch_login_plugin::save_to_downloads(&app, &dest, &saved_name, MIME)? {
             true => "saved",

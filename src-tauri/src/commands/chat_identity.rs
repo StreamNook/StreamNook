@@ -375,7 +375,7 @@ pub struct ChatIdentityBadge {
 // `is_drops_authenticated` first and says so plainly.
 
 /// Global badges you can wear, and which one you are wearing.
-#[cfg(target_os = "android")]
+#[cfg(mobile)]
 #[tauri::command]
 pub async fn fetch_chat_identity_badges_gql(
     username: String,
@@ -387,7 +387,7 @@ pub async fn fetch_chat_identity_badges_gql(
 }
 
 /// Wear a global badge. `badge_version` comes back with the badge from the fetch.
-#[cfg(target_os = "android")]
+#[cfg(mobile)]
 #[tauri::command]
 pub async fn update_chat_identity_gql(
     badge_id: String,

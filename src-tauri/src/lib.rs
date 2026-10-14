@@ -1570,8 +1570,12 @@ pub fn run() {
             twitch_login_plugin::finish_mobile_drops_login,
             #[cfg(target_os = "android")]
             twitch_login_plugin::clear_mobile_login_cookies,
-            #[cfg(target_os = "android")]
+            #[cfg(mobile)]
             export_logs,
+            #[cfg(target_os = "ios")]
+            services::ios_sheet::sheet_redirected,
+            #[cfg(target_os = "ios")]
+            services::ios_sheet::sheet_closed,
             #[cfg(target_os = "android")]
             android_notify::push_register,
             #[cfg(target_os = "android")]
@@ -1653,8 +1657,7 @@ pub fn run() {
             open_twitch_login_window,
             #[cfg(desktop)]
             open_drops_login_window,
-            // Two bodies: a desktop panel, and the Android login overlay.
-            #[cfg(any(desktop, target_os = "android"))]
+            // Two bodies: a desktop panel, and the phone's login overlay or sheet.
             open_subscribe_window,
             #[cfg(desktop)]
             open_youtube_channel_switcher,
@@ -2231,11 +2234,11 @@ pub fn run() {
             receive_badge_data,
             #[cfg(desktop)]
             receive_update_result,
-            // Same feature on Android, GQL only — there is no second webview to
-            // fall back to, so the scrape half simply does not exist there.
-            #[cfg(target_os = "android")]
+            // Same feature on the phones, GQL only — there is no second webview
+            // to fall back to, so the scrape half simply does not exist there.
+            #[cfg(mobile)]
             fetch_chat_identity_badges_gql,
-            #[cfg(target_os = "android")]
+            #[cfg(mobile)]
             update_chat_identity_gql,
             // StreamNook Identity (badge loadout) commands
             get_streamnook_identity,

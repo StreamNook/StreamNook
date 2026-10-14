@@ -78,7 +78,7 @@ pub async fn cookies_for_origin(
 /// domain cookie (with or without the leading dot) matches the host and
 /// every subdomain of it.
 #[cfg_attr(windows, allow(dead_code))]
-fn domain_matches(cookie_domain: &str, host: &str) -> bool {
+pub(crate) fn domain_matches(cookie_domain: &str, host: &str) -> bool {
     let d = cookie_domain.trim_start_matches('.').to_ascii_lowercase();
     if d.is_empty() {
         return false;
