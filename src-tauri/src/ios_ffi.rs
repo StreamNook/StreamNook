@@ -69,6 +69,11 @@ struct Launch {
 
 static LAUNCH: OnceLock<Launch> = OnceLock::new();
 
+/// The codecs the shell reported the phone decodes in hardware.
+pub(crate) fn launch_codecs() -> Vec<String> {
+    LAUNCH.get().map(|l| l.codecs.clone()).unwrap_or_default()
+}
+
 /// Starts the core: installs the sink and directories, then runs the same
 /// `run()` the desktop and Android apps run, which returns once setup is done.
 #[uniffi::export]

@@ -41,6 +41,53 @@ pub fn set_codec_preference(mut prefs: Vec<String>) {
     *CODEC_PREF.lock().unwrap() = prefs;
 }
 
+/// A selection preference from the codecs a phone decodes in hardware, as its
+/// shell names them (`av1`/`av01`, `hevc`/`h265`/`hvc1`/`hev1`, `h264`/`avc1`).
+/// H.264 leads, so a tier Twitch offers in H.264 keeps the transport stream the
+/// low-latency route is built on; HEVC, then AV1, serve the tiers only Enhanced
+/// Broadcasting offers, when that setting is on and the phone decodes them. A
+/// codec the phone has no hardware decoder for is never selected, so its tiers
+/// drop out of the quality menu and of `best`.
+pub fn device_codec_preference(hardware: &[String], enhanced: bool) -> Vec<String> {
+    let has = |family: &str| {
+        hardware.iter().any(|c| {
+            let c = c.trim().to_ascii_lowercase();
+            match family {
+                "av1" => c == "av1" || c.starts_with("av01"),
+                "hevc" => c == "hevc" || c == "h265" || c.starts_with("hvc1") || c.starts_with("hev1"),
+                _ => false,
+            }
+        })
+    };
+    let mut prefs = vec!["h264".to_string()];
+    if enhanced {
+        for family in ["hevc", "av1"] {
+            if has(family) {
+                prefs.push(family.to_string());
+            }
+        }
+    }
+    prefs
+}
+
+/// Apply the phone's hardware codecs (passed to `start` by the shell) and the
+/// Enhanced Broadcasting setting to selection. Run at startup and after every
+/// settings save, since the setting can change.
+#[cfg(target_os = "ios")]
+pub fn refresh_device_codecs(settings: &crate::models::settings::Settings) {
+    let prefs = device_codec_preference(&crate::ios_ffi::launch_codecs(), settings.streamlink.enhanced_codecs);
+    if *CODEC_PREF.lock().unwrap() != prefs {
+        log::info!("[Resolver] video codecs this phone may select: {}", prefs.join(", "));
+        set_codec_preference(prefs);
+    }
+}
+
+/// Whether a variant can play here: audio, or video in an allowed codec.
+#[cfg(target_os = "ios")]
+fn decodable(v: &Variant, pref: &[String]) -> bool {
+    v.height.is_none() || codec_rank(v, pref) != usize::MAX
+}
+
 /// The effective preference (never empty: defaults to H.264-only before the
 /// frontend reports).
 fn effective_codec_pref() -> Vec<String> {
@@ -295,6 +342,13 @@ pub fn parse_master(master: &str) -> Vec<Variant> {
             url: lines[j].trim().to_string(),
         });
         i = j + 1;
+    }
+    // The iPhone never sees a tier it cannot decode in hardware: not in the
+    // quality menu, not for `best`, not as a fallback.
+    #[cfg(target_os = "ios")]
+    {
+        let pref = effective_codec_pref();
+        out.retain(|v| decodable(v, &pref));
     }
     out
 }
@@ -1015,6 +1069,17 @@ pub async fn resolve_clip(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_phone_selects_only_codecs_it_decodes_in_hardware() {
+        let all = vec!["avc1".to_string(), "hvc1".to_string(), "av01".to_string()];
+        assert_eq!(device_codec_preference(&all, true), ["h264", "hevc", "av1"]);
+        let no_av1 = vec!["h264".to_string(), "hevc".to_string()];
+        assert_eq!(device_codec_preference(&no_av1, true), ["h264", "hevc"]);
+        assert_eq!(device_codec_preference(&["H265".to_string()], true), ["h264", "hevc"]);
+        assert_eq!(device_codec_preference(&[], true), ["h264"]);
+        assert_eq!(device_codec_preference(&all, false), ["h264"], "Enhanced Broadcasting off keeps H.264");
+    }
 
     // A realistic Twitch master: source ("chunked") + standard tiers + audio_only,
     // in the nickmercs shape (fps suffix on every tier).

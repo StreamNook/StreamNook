@@ -490,6 +490,8 @@ fn after_settings_change(settings: &Settings, favorites_changed: bool) {
     // Spawns or aborts the gifted-membership poll with the master switch.
     crate::services::membership_gifts::refresh(settings);
     crate::services::reminder_service::refresh(settings);
+    #[cfg(target_os = "ios")]
+    crate::services::twitch_resolver::refresh_device_codecs(settings);
     // Home's unified Discover list leaves out live favourites, so a heart
     // toggled anywhere changes it. Unhearting in particular is announced by
     // nothing else: the favourites sweep only notices on its next pass.

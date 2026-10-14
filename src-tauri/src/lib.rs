@@ -1057,6 +1057,11 @@ pub fn run() {
                         .await;
                 });
             }
+            // The phone's hardware decoders decide which codec tiers it may play.
+            #[cfg(target_os = "ios")]
+            if let Ok(s) = settings_arc.lock() {
+                services::twitch_resolver::refresh_device_codecs(&s);
+            }
             // Runtime stall detector: measures backend freezes (tokio-blocked vs
             // whole-process) and records them to the capture file. Started here,
             // inside the tokio runtime Tauri set up.
