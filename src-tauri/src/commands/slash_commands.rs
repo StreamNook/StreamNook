@@ -268,6 +268,9 @@ pub async fn slash_add_stream_highlight(channel: String, comment: Option<String>
 }
 
 fn open_path(path: &std::path::Path) -> Result<(), String> {
+    if cfg!(target_os = "ios") {
+        return Err("Opening files is not available on iPhone".into());
+    }
     let program = if cfg!(target_os = "windows") {
         "explorer"
     } else if cfg!(target_os = "macos") {
@@ -441,6 +444,7 @@ pub fn slash_copy_text(app: AppHandle, text: String) -> Result<(), String> {
 
 #[cfg(target_os = "ios")]
 #[tauri::command]
-pub fn slash_copy_text(_app: AppHandle, _text: String) -> Result<(), String> {
-    Err(crate::ios_ffi::not_wired("Copying to the clipboard"))
+pub fn slash_copy_text(_app: AppHandle, text: String) -> Result<(), String> {
+    crate::ios_ffi::copy_text(&text);
+    Ok(())
 }

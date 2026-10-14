@@ -1505,8 +1505,8 @@ pub async fn open_browser_url(app: AppHandle, url: String) -> Result<(), String>
 
 #[cfg(target_os = "ios")]
 #[tauri::command]
-pub async fn open_browser_url(_app: AppHandle, _url: String) -> Result<(), String> {
-    Err(crate::ios_ffi::not_wired("Opening links"))
+pub async fn open_browser_url(_app: AppHandle, url: String) -> Result<(), String> {
+    crate::ios_ffi::open_url(&url)
 }
 
 #[cfg(desktop)]

@@ -814,8 +814,8 @@ pub async fn open_drop_details(app_handle: AppHandle, url: String) -> Result<(),
 
 #[cfg(target_os = "ios")]
 #[tauri::command]
-pub async fn open_drop_details(_app_handle: AppHandle, _url: String) -> Result<(), String> {
-    Err(crate::ios_ffi::not_wired("Opening drop details"))
+pub async fn open_drop_details(_app_handle: AppHandle, url: String) -> Result<(), String> {
+    crate::ios_ffi::open_url(&url)
 }
 
 // Prediction commands

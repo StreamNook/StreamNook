@@ -160,6 +160,34 @@ pub fn lifecycle(state: String) {
     }
 }
 
+/// Asks the shell to open a web link outside the app (`host_request` kind
+/// `open_url`, payload `{url}`). Only http and https links are sent.
+pub(crate) fn open_url(url: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(url).map_err(|e| format!("not a link: {e}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(format!("{} links are not opened", parsed.scheme()));
+    }
+    sn_tauri_headless::host_request("open_url", &serde_json::json!({ "url": url }));
+    Ok(())
+}
+
+/// Asks the shell to put text on the clipboard (`host_request` kind
+/// `copy_text`, payload `{text}`).
+pub(crate) fn copy_text(text: &str) {
+    sn_tauri_headless::host_request("copy_text", &serde_json::json!({ "text": text }));
+}
+
+/// Asks the shell to offer a file in the share sheet, where Save to Files is
+/// one of the choices (`host_request` kind `share`, payload
+/// `{path, mime, name}`). The file stays where it is until the next share
+/// replaces it.
+pub(crate) fn share_file(path: &std::path::Path, mime: &str, name: &str) {
+    sn_tauri_headless::host_request(
+        "share",
+        &serde_json::json!({ "path": path.to_string_lossy(), "mime": mime, "name": name }),
+    );
+}
+
 /// The error a feature the iPhone app does not offer yet answers with.
 pub(crate) fn not_wired(what: &str) -> String {
     warn!("[iOS] {what} is not wired to the iPhone app yet");
