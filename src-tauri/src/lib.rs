@@ -1805,6 +1805,7 @@ pub fn run() {
             debug_unjoin_channel,
             nudge_chat_channels,
             send_chat_message,
+            commands::chat::command_catalog,
             commands::chat_burst::run_chat_burst,
             commands::chat_burst::stop_chat_burst,
             commands::chat_burst::get_chat_burst,

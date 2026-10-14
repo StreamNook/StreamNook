@@ -1,0 +1,179 @@
+import Foundation
+
+/// How a moderator touched a row.
+public enum ChatModeration: Sendable, Equatable, Hashable {
+    case deleted
+    case timedOut(seconds: Int)
+    case banned
+}
+
+/// One row as a room holds it: the core's message, a revision that grows whenever what the row
+/// draws changes, and the moderation mark the room applied.
+public struct ChatRowModel: Sendable, Equatable, Identifiable {
+    public var message: ChatMessage
+    public var revision: Int
+    public var moderation: ChatModeration?
+    /// Arrived live (not from history), so it may animate in and buzz for a mention.
+    public var live: Bool
+
+    public var id: String { message.id }
+
+    public init(message: ChatMessage, revision: Int = 0, moderation: ChatModeration? = nil, live: Bool = true) {
+        self.message = message
+        self.revision = revision
+        self.moderation = moderation
+        self.live = live
+    }
+}
+
+/// What one batch did to a room, for the list to apply.
+public struct ChatBufferChange: Sendable, Equatable {
+    /// Rows added at the bottom, oldest first.
+    public var appended: [ChatRowModel] = []
+    /// Rows dropped from the top.
+    public var trimmed = 0
+    /// Rows whose drawing changed, by id.
+    public var updated: [ChatRowModel] = []
+
+    public init(appended: [ChatRowModel] = [], trimmed: Int = 0, updated: [ChatRowModel] = []) {
+        self.appended = appended
+        self.trimmed = trimmed
+        self.updated = updated
+    }
+
+    public var isEmpty: Bool { appended.isEmpty && trimmed == 0 && updated.isEmpty }
+}
+
+/// A room's rows: applies the core's frames and keeps the newest `cap` rows, plus up to 150 more
+/// while the reader is paused so the scrollback being read is not cut, decaying 5 rows per
+/// batch after resume.
+public struct ChatRoomBuffer: Sendable {
+    public private(set) var rows: [ChatRowModel] = []
+    public var cap: Int
+    public var paused = false {
+        didSet { if paused { pausedOverflowAllowance = Self.pausedOverflow } }
+    }
+    public private(set) var modes: ChatRoomModes?
+
+    static let pausedOverflow = 150
+    static let decayPerBatch = 5
+    private var pausedOverflowAllowance = 0
+    private var index: [String: Int] = [:]
+    private var base = 0
+
+    public init(cap: Int = 100) {
+        self.cap = cap
+    }
+
+    public func row(_ id: String) -> ChatRowModel? {
+        guard let i = index[id] else { return nil }
+        return rows[i - base]
+    }
+
+    /// Applies a batch of frames for this room and trims.
+    public mutating func apply(_ frames: [ChatSocketFrame]) -> ChatBufferChange {
+        var change = ChatBufferChange()
+        var updated: [String: ChatRowModel] = [:]
+        for frame in frames {
+            switch frame {
+            case .row(let message):
+                if let i = index[message.id] {
+                    var row = rows[i - base]
+                    row.message = message
+                    row.revision += 1
+                    rows[i - base] = row
+                    updated[row.id] = row
+                } else {
+                    let row = ChatRowModel(message: message, live: !message.metadata.fromBackfill)
+                    index[message.id] = base + rows.count
+                    rows.append(row)
+                    change.appended.append(row)
+                }
+            case .clearMessage(_, let targetID):
+                mark(id: targetID, .deleted, &updated, &change)
+            case .clearChat(_, let userID, _, let duration):
+                guard let userID else { continue }
+                let mark: ChatModeration = duration.map { .timedOut(seconds: $0) } ?? .banned
+                for (offset, row) in rows.enumerated() where row.message.userID == userID && row.moderation != mark {
+                    self.mark(id: rows[offset].id, mark, &updated, &change)
+                }
+            case .cosmetics(_, let userID, let paint, let badge):
+                for (offset, row) in rows.enumerated() where row.message.userID == userID {
+                    guard var view = row.message.metadata.view else { continue }
+                    let before = view
+                    view.paint = paint ?? view.paint
+                    if let badge, !view.badges.contains(badge) { view.badges.append(badge) }
+                    guard view != before else { continue }
+                    var next = row
+                    next.message.metadata.view = view
+                    next.revision += 1
+                    rows[offset] = next
+                    replaceAppended(next, &change)
+                    updated[next.id] = next
+                }
+            case .patch(_, let patches):
+                for patch in patches {
+                    guard let i = index[patch.id] else { continue }
+                    var row = rows[i - base]
+                    if !patch.segments.isEmpty { row.message.segments = patch.segments }
+                    if let view = patch.view { row.message.metadata.view = view }
+                    row.revision += 1
+                    rows[i - base] = row
+                    replaceAppended(row, &change)
+                    updated[row.id] = row
+                }
+            case .roomState(_, let modes):
+                if let modes { self.modes = modes }
+            default:
+                break
+            }
+        }
+        change.trimmed = trim()
+        let appendedIDs = Set(change.appended.map(\.id))
+        // The list appends first and then drops `trimmed` rows from the top, so a batch larger
+        // than the cap keeps its appended rows listed and lets the trim take them.
+        change.updated = updated.values.filter { index[$0.id] != nil && !appendedIDs.contains($0.id) }
+        return change
+    }
+
+    /// Rows a moderation mark touches are drawn again; the row stays unless the style hides it.
+    private mutating func mark(id: String, _ mark: ChatModeration, _ updated: inout [String: ChatRowModel],
+                               _ change: inout ChatBufferChange) {
+        guard let i = index[id] else { return }
+        var row = rows[i - base]
+        guard row.moderation != mark else { return }
+        row.moderation = mark
+        row.revision += 1
+        rows[i - base] = row
+        replaceAppended(row, &change)
+        updated[id] = row
+    }
+
+    /// A row appended earlier in the same batch carries its newest state.
+    private func replaceAppended(_ row: ChatRowModel, _ change: inout ChatBufferChange) {
+        if let at = change.appended.firstIndex(where: { $0.id == row.id }) { change.appended[at] = row }
+    }
+
+    private mutating func trim() -> Int {
+        let limit: Int
+        if paused {
+            limit = cap + Self.pausedOverflow
+        } else {
+            pausedOverflowAllowance = max(0, pausedOverflowAllowance - Self.decayPerBatch)
+            limit = cap + pausedOverflowAllowance
+        }
+        let excess = rows.count - limit
+        guard excess > 0 else { return 0 }
+        for row in rows.prefix(excess) { index[row.id] = nil }
+        rows.removeFirst(excess)
+        base += excess
+        return excess
+    }
+
+    /// Rows older than these were dropped; the room starts empty again.
+    public mutating func removeAll() {
+        rows.removeAll()
+        index.removeAll()
+        base = 0
+    }
+}

@@ -1073,3 +1073,30 @@ pub async fn build_own_chat_message(
 ) -> Option<ChatMessage> {
     IrcService::build_own_message(message).await
 }
+
+/// The chat commands a composer lists for the room: the built-in table with
+/// each row's lock for the viewer's role there, then the viewer's own slash
+/// commands, filtered by `query`. `platform` "desktop" keeps the
+/// desktop-only commands a phone leaves out.
+#[tauri::command]
+pub fn command_catalog(
+    channel: String,
+    platform: Option<String>,
+    query: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::services::command_catalog::CatalogRow>, String> {
+    use crate::services::chat_send_limiter::Role;
+    let own = {
+        let settings = state.settings.lock().map_err(|e| e.to_string())?;
+        crate::services::command_catalog::user_commands(settings.extra.get("chat_commands"))
+    };
+    let key = channel.trim().trim_start_matches('#').to_lowercase();
+    let role = crate::services::chat_send_limiter::budget(&key).role;
+    Ok(crate::services::command_catalog::catalog(
+        platform.as_deref() != Some("desktop"),
+        matches!(role, Role::Moderator | Role::Broadcaster),
+        matches!(role, Role::Broadcaster),
+        &own,
+        query.as_deref().unwrap_or_default(),
+    ))
+}

@@ -1,0 +1,175 @@
+import Foundation
+import os
+import SNKit
+import Synchronization
+import UIKit
+
+/// Turns a room's socket frames into laid-out rows off the main thread. Frames are decoded,
+/// applied to the room's buffer and laid out (with their text bitmaps drawn) on one serial
+/// queue; the list picks up the finished batches at its next display frame, so the main thread
+/// only places views.
+final class ChatPipeline: @unchecked Sendable {
+    struct Batch: @unchecked Sendable {
+        var appended: [ChatRowLayout] = []
+        var prepended: [ChatRowLayout] = []
+        var trimmed = 0
+        var updated: [ChatRowLayout] = []
+        /// Every row laid out again (a new width or style); replaces the list's rows.
+        var reset: [ChatRowLayout]?
+        var forceLive = false
+    }
+
+    private let queue = DispatchQueue(label: "app.streamnook.chat.pipeline", qos: .userInitiated)
+    private let ready = Mutex<[Batch]>([])
+    private var pending: [ChatSocketFrame] = []
+    private var flushScheduled = false
+    private var buffer: ChatRoomBuffer
+    private var style: ChatStyle
+    private var width: CGFloat = 0
+    private var scale: CGFloat
+    private var layouts: [String: ChatRowLayout] = [:]
+    private let onModes: @Sendable (ChatRoomModes) -> Void
+    private let onRowCount: @Sendable (Int) -> Void
+
+    /// Rows decoded so far, for the performance log.
+    private let counters = Mutex<(frames: Int, rows: Int, layoutNanos: UInt64)>((0, 0, 0))
+
+    @MainActor weak var list: ChatListView?
+
+    init(style: ChatStyle, scale: CGFloat, onModes: @escaping @Sendable (ChatRoomModes) -> Void,
+         onRowCount: @escaping @Sendable (Int) -> Void = { _ in }) {
+        self.style = style
+        self.scale = scale
+        self.onModes = onModes
+        self.onRowCount = onRowCount
+        buffer = ChatRoomBuffer(cap: style.bufferCap)
+    }
+
+    // MARK: Input
+
+    /// A frame from the socket, from any thread.
+    func ingest(_ raw: String) {
+        let frame = ChatSocketFrame.decode(raw)
+        queue.async { [self] in
+            pending.append(frame)
+            counters.withLock { $0.frames += 1 }
+            scheduleFlush()
+        }
+    }
+
+    /// History rows that go above everything live (the join backfill).
+    func prepend(_ messages: [ChatMessage]) {
+        queue.async { [self] in
+            let fresh = messages.filter { buffer.row($0.id) == nil }
+            guard !fresh.isEmpty else { return }
+            // History lands at the top in time order; the buffer holds rows in arrival order.
+            let ids = Set(fresh.map(\.id))
+            let rows = fresh + buffer.rows.map(\.message)
+            buffer.removeAll()
+            _ = buffer.apply(rows.map { .row($0) })
+            // The cap trims the oldest history first; only what survived goes on the list.
+            let kept = buffer.rows.prefix { ids.contains($0.id) }
+            guard width > 0, !kept.isEmpty else { return }
+            let built = kept.map { layout($0, bitmap: false) }
+            ready.withLock { $0.append(Batch(prepended: built)) }
+        }
+    }
+
+    func setPaused(_ paused: Bool) {
+        queue.async { [self] in buffer.paused = paused }
+    }
+
+    func setWidth(_ width: CGFloat, scale: CGFloat) {
+        queue.async { [self] in
+            guard abs(width - self.width) > 0.5 || scale != self.scale else { return }
+            self.width = width
+            self.scale = scale
+            relayoutAll()
+        }
+    }
+
+    func setStyle(_ style: ChatStyle) {
+        queue.async { [self] in
+            guard style != self.style else { return }
+            self.style = style
+            buffer.cap = style.bufferCap
+            relayoutAll()
+        }
+    }
+
+    /// The batches finished since the last call (main thread, every display frame).
+    func takeReady() -> [Batch] {
+        ready.withLock { batches in
+            defer { batches.removeAll(keepingCapacity: true) }
+            return batches
+        }
+    }
+
+    /// A row's message, for taps and replies (rare, so a short wait on the queue is fine).
+    func message(_ id: String) -> ChatMessage? {
+        queue.sync { buffer.row(id)?.message }
+    }
+
+    /// The newest rows' messages, for composer suggestions (chatters to mention).
+    func recentMessages(_ count: Int) -> [ChatMessage] {
+        queue.sync { buffer.rows.suffix(count).map(\.message) }
+    }
+
+    func stats() -> (frames: Int, rows: Int, layoutMS: Double) {
+        counters.withLock { ($0.frames, $0.rows, Double($0.layoutNanos) / 1_000_000) }
+    }
+
+    // MARK: Work on the queue
+
+    private func scheduleFlush() {
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        // About one display frame of frames per batch.
+        queue.asyncAfter(deadline: .now() + .milliseconds(8)) { [self] in
+            flushScheduled = false
+            flush()
+        }
+    }
+
+    private func flush() {
+        guard !pending.isEmpty else { return }
+        let frames = pending
+        pending.removeAll(keepingCapacity: true)
+        let change = buffer.apply(frames)
+        if let modes = buffer.modes { onModes(modes) }
+        guard width > 0, !change.isEmpty else { return }
+        var batch = Batch(trimmed: change.trimmed)
+        // Rows pushed straight off by a burst never need a bitmap.
+        let drawFrom = max(0, change.appended.count - 40)
+        for (i, row) in change.appended.enumerated() {
+            batch.appended.append(layout(row, bitmap: i >= drawFrom))
+        }
+        for row in change.updated {
+            batch.updated.append(layout(row, bitmap: true))
+        }
+        for (id, _) in layouts where buffer.row(id) == nil { layouts[id] = nil }
+        onRowCount(buffer.rows.count)
+        ready.withLock { $0.append(batch) }
+    }
+
+    private func layout(_ row: ChatRowModel, bitmap: Bool) -> ChatRowLayout {
+        let start = DispatchTime.now().uptimeNanoseconds
+        let built = ChatRowLayoutBuilder(style: style, width: width, scale: scale).build(row)
+        if bitmap { built.renderBitmap(scale: scale) }
+        layouts[row.id] = built
+        let spent = DispatchTime.now().uptimeNanoseconds - start
+        counters.withLock {
+            $0.rows += 1
+            $0.layoutNanos += spent
+        }
+        return built
+    }
+
+    private func relayoutAll() {
+        guard width > 0 else { return }
+        let rows = buffer.rows
+        let drawFrom = max(0, rows.count - 40)
+        let all = rows.enumerated().map { layout($0.element, bitmap: $0.offset >= drawFrom) }
+        ready.withLock { $0.append(Batch(reset: all)) }
+    }
+}

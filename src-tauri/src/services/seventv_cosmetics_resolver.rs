@@ -771,6 +771,21 @@ fn start_drain(immediate: bool) {
     });
 }
 
+/// Puts a chatter's cosmetics in the cache as if 7TV had answered.
+#[cfg(test)]
+pub(crate) fn remember_for_test(id: &str, data: UserCosmetics) {
+    remember(id, &CosmeticsLookup { data, hard_fail: false }, true);
+}
+
+/// What a chatter is wearing when the cache already knows, without asking
+/// 7TV. A failed lookup reads as unknown so the caller asks again.
+pub fn peek(id: &str) -> Option<UserCosmetics> {
+    let guard = USERS.lock().ok()?;
+    let entry = guard.as_ref()?.peek(id)?;
+    let ttl = if entry.hard_fail { HARD_FAIL_TTL } else { USER_TTL };
+    (!entry.hard_fail && entry.at.elapsed() < ttl).then(|| entry.data.clone())
+}
+
 /// What one chatter is wearing. Cached for every window; concurrent asks for
 /// the same chatter share one lookup.
 pub async fn resolve(id: String) -> CosmeticsLookup {

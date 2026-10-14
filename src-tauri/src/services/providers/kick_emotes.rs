@@ -182,6 +182,7 @@ pub async fn channel_emote_set(slug: &str) -> EmoteSet {
                     ffz_sub_only: None,
                     animated: None,
                     width: None,
+                    height: None,
                 })
                 .collect();
         }
@@ -206,6 +207,7 @@ pub async fn channel_emote_set(slug: &str) -> EmoteSet {
                     ffz_sub_only: None,
                     animated: None,
                     width: None,
+                    height: None,
                 })
                 .collect();
         }

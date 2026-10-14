@@ -37,7 +37,7 @@ let package = Package(
     targets: [
         // The bridge to the core, its fake, and the shapes of what the core answers. Foundation
         // only, so it builds and tests on Linux.
-        .target(name: "SNKit"),
+        .target(name: "SNKit", resources: [.copy("Resources/chat-frames.json")]),
         .testTarget(name: "SNKitTests", dependencies: ["SNKit"]),
     ] + (kitOnly ? [] : coreTargets + [
         // The iPhone app: SwiftUI and AVFoundation over the core.

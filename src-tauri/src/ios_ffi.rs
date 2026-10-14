@@ -108,6 +108,8 @@ pub fn start(
         });
     }
     let _ = LAUNCH.set(Launch { vault_key, codecs });
+    // The shell draws chat natively, so rows carry the worked-out view.
+    crate::services::chat_row_view::set_enabled(true);
     std::panic::catch_unwind(crate::run).map_err(|panic| CoreError::Start {
         message: panic
             .downcast_ref::<&str>()

@@ -285,6 +285,12 @@ pub struct MessageMetadata {
     /// rule engine with the rest of the highlight verdict; the page only draws.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scrollbar_mark: Option<ScrollbarMark>,
+    /// The row worked out for a native renderer (`services::chat_row_view`):
+    /// readable name colour, badge art, paint and the grouped body. Stamped
+    /// only while a native shell asked for it; the web renderers derive the
+    /// same things themselves and never see it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<RowView>,
 }
 
 /// One row's scrollbar tick, stamped by the rule engine.
@@ -419,4 +425,138 @@ pub struct ChatMessage {
     /// All message analysis done in Rust, frontend just renders
     #[serde(default)]
     pub metadata: MessageMetadata,
+}
+
+/// A chat row as a native renderer draws it, built once in Rust so the shell
+/// never re-derives colours, badge art or emote grouping.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct RowView {
+    /// The author colour after the readability pass (`chat_design.name_color_adjustment`).
+    pub name_color: String,
+    /// Badges in draw order, already filtered by the badge settings.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub badges: Vec<ViewBadge>,
+    /// The 7TV paint the author wears, when known at parse time. Later
+    /// answers arrive as a `ROW_COSMETICS` frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paint: Option<PaintView>,
+    /// The body, grouped: overlays and modifiers ride their target emote.
+    #[serde(default)]
+    pub spans: Vec<ViewSpan>,
+    /// The quoted parent of a reply, grouped the same way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_spans: Option<Vec<ViewSpan>>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ViewBadge {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    /// "twitch" | "7tv" | another provider name.
+    pub provider: String,
+}
+
+/// One piece of a drawn body.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum ViewSpan {
+    Text {
+        text: String,
+    },
+    /// `@name`; `color` is the named chatter's readable colour when they have
+    /// spoken in a room this app shows.
+    Mention {
+        text: String,
+        login: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<String>,
+    },
+    Link {
+        /// What the row prints (shortened per `chat_design.shorten_links`).
+        label: String,
+        url: String,
+    },
+    Emoji {
+        text: String,
+        url: String,
+    },
+    Emote {
+        #[serde(flatten)]
+        emote: ViewEmote,
+        /// Zero-width emotes stacked over this one, bottom first.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        overlays: Vec<ViewEmote>,
+        /// Effect bits the attached modifiers lend the group (the modifier
+        /// table in `emote_service`, routing bits removed).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        effects: u32,
+    },
+    Cheer {
+        text: String,
+        bits: u32,
+        color: String,
+        url: String,
+    },
+    Gif {
+        text: String,
+        url: String,
+    },
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ViewEmote {
+    pub code: String,
+    pub url: String,
+    /// The emote's size at 1x in CSS pixels, when the provider says, so the
+    /// row lays out once before the image arrives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub personal: bool,
+    /// A modifier that draws nothing itself and only lends its effect.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+}
+
+/// A 7TV paint reduced to what a renderer fills a name with.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct PaintView {
+    pub id: String,
+    /// "linear" | "radial" | "image" | "solid"
+    pub kind: String,
+    /// Degrees, CSS convention (0 points up), for linear paints.
+    #[serde(default)]
+    pub angle: f32,
+    #[serde(default)]
+    pub repeating: bool,
+    /// Gradient stops, `at` from 0 to 1, colours as `#rrggbbaa`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stops: Vec<PaintStop>,
+    /// The animated image of an image paint, never the `_static` still.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
+    /// Drop shadows, outermost last.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shadows: Vec<PaintShadow>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct PaintStop {
+    pub at: f32,
+    pub color: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct PaintShadow {
+    pub x: f32,
+    pub y: f32,
+    pub blur: f32,
+    pub color: String,
 }

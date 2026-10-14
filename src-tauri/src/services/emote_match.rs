@@ -725,6 +725,7 @@ mod tests {
             owner_id: owner.map(String::from),
             owner_name: None,
             width: None,
+            height: None,
             modifier_flags: None,
             ffz_sub_only: None,
             animated: None,
