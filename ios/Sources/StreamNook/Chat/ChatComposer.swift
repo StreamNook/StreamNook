@@ -52,7 +52,7 @@ private struct ComposerBar: View {
             VStack(spacing: 8) {
                 if let toast = model.toast {
                     Text(toast)
-                        .font(.footnote)
+                        .font(.snCaption)
                         .foregroundStyle(.primary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 7)
@@ -90,7 +90,7 @@ private struct ComposerBar: View {
     private func replyChip(_ reply: ChatMessage) -> some View {
         HStack(spacing: 6) {
             Text("Replying to \(Text("@\(reply.shownName)").fontWeight(.semibold))")
-                .font(.system(size: 12.5))
+                .font(.sn(12.5))
                 .foregroundStyle(Color(ChatTheme.textSecondary))
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -116,7 +116,7 @@ private struct ComposerBar: View {
                     emoteButton
                 }
                 TextField("", text: $model.draft, prompt: Text(model.placeholder).foregroundStyle(Color(ChatTheme.textMuted)))
-                    .font(.system(size: 15))
+                    .font(.sn(15))
                     .foregroundStyle(Color(ChatTheme.textPrimary))
                     .padding(.vertical, 8)
                     .padding(.leading, session.style.hideEmoteButton ? 8 : 0)
@@ -185,7 +185,7 @@ private struct ComposerBar: View {
                         .foregroundStyle(Color(ChatTheme.accent))
                 } else {
                     Text(smiley)
-                        .font(.system(size: 20))
+                        .font(.sn(20))
                         .opacity(smileyOut ? 0 : 1)
                         .scaleEffect(smileyOut ? 0.8 : 1)
                 }
@@ -270,15 +270,15 @@ private struct SuggestionStrip: View {
             HStack(spacing: 6) {
                 let current = model.suggestions.first { $0.id == active } ?? model.suggestions.first
                 Text(current?.name ?? "")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.sn(12, 600))
                     .foregroundStyle(Color(ChatTheme.textPrimary))
                 Text((current?.kind ?? "").uppercased())
-                    .font(.system(size: 9))
+                    .font(.sn(9))
                     .tracking(0.8)
                     .foregroundStyle(Color(ChatTheme.textMuted))
                 Spacer()
                 Text("Swipe, tap to use")
-                    .font(.system(size: 10))
+                    .font(.sn(10))
                     .foregroundStyle(Color(ChatTheme.textMuted))
             }
             .padding(.horizontal, 14)
@@ -298,7 +298,7 @@ private struct SuggestionStrip: View {
                 ChatImageView(url: ChatImageURL.thumbnail(emote.url), size: 36)
             case .chatter(let display, _):
                 Text(display)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.sn(10, 600))
                     .foregroundStyle(Color(ChatTheme.textSecondary))
                     .multilineTextAlignment(.center)
                     .lineLimit(2)

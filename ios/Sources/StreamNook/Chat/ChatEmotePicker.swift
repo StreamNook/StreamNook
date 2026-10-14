@@ -21,7 +21,7 @@ struct ChatEmotePicker: View {
     var body: some View {
         VStack(spacing: 6) {
             TextField("", text: $query, prompt: Text("Search emotes...").foregroundStyle(Color(ChatTheme.textMuted)))
-                .font(.system(size: 13))
+                .font(.sn(13))
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .padding(.horizontal, 12)
@@ -35,7 +35,7 @@ struct ChatEmotePicker: View {
                     } label: {
                         VStack(spacing: 1) {
                             Text(item.title).font(.system(size: 12, weight: tab == item.id ? .heavy : .medium)).lineLimit(1)
-                            Text("\(count)").font(.system(size: 10)).opacity(0.7)
+                            Text("\(count)").font(.sn(10)).opacity(0.7)
                         }
                         .foregroundStyle(tab == item.id ? item.color : Color(ChatTheme.textSecondary))
                         .frame(maxWidth: .infinity)
@@ -119,7 +119,7 @@ struct ChatEmotePicker: View {
 
     private func centered(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 12))
+            .font(.sn(12))
             .foregroundStyle(Color(ChatTheme.textMuted))
             .frame(maxWidth: .infinity, minHeight: 128)
     }

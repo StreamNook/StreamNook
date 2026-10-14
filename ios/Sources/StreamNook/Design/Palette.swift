@@ -53,6 +53,7 @@ struct RGBA: Equatable, Sendable {
     func opacity(_ alpha: Double) -> RGBA { RGBA(r, g, b, alpha) }
 
     var color: Color { Color(.sRGB, red: r, green: g, blue: b, opacity: a) }
+    var uiColor: UIColor { UIColor(red: r, green: g, blue: b, alpha: a) }
 
     /// Rec. 709 luminance of the colour, 0 to 1.
     var luminance: Double { 0.2126 * r + 0.7152 * g + 0.0722 * b }

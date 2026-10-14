@@ -19,10 +19,10 @@ struct ChatMenuSheet: View {
                                 .foregroundStyle(.secondary)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("This chat is in")
-                                    .font(.system(size: 13.5))
+                                    .font(.sn(13.5))
                                     .foregroundStyle(.secondary)
                                 Text(modes.modes.map(\.label).joined(separator: " · "))
-                                    .font(.system(size: 14))
+                                    .font(.sn(14))
                             }
                         }
                         .accessibilityElement(children: .combine)
@@ -73,7 +73,7 @@ struct ChatCommandSheet: View {
             List {
                 if rows.isEmpty {
                     Text("Nothing matches. Try a word from what you want to do, like ban, slow or reminder.")
-                        .font(.system(size: 13))
+                        .font(.sn(13))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: .infinity)
@@ -88,13 +88,13 @@ struct ChatCommandSheet: View {
                             } label: {
                                 HStack(alignment: .top) {
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text("/\(row.name)").font(.system(size: 14, weight: .medium))
+                                        Text("/\(row.name)").font(.sn(14, 500))
                                             .foregroundStyle(Color(ChatTheme.textPrimary))
                                         Text(row.description)
-                                            .font(.system(size: 12.5))
+                                            .font(.sn(12.5))
                                             .foregroundStyle(Color(ChatTheme.textSecondary))
                                         if let lock = row.lock {
-                                            Text(lock).font(.system(size: 11.5)).foregroundStyle(.tertiary)
+                                            Text(lock).font(.sn(11.5)).foregroundStyle(.tertiary)
                                         }
                                     }
                                     Spacer(minLength: 0)

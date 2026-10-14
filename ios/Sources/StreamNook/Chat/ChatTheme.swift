@@ -1,22 +1,24 @@
 import UIKit
 
-/// Chat's own colours until the app's design system takes them over: the dark theme's text,
-/// surface and status tones the shared row components use.
+/// Chat's colours as UIKit takes them: the design system's theme tokens (text, surface, border,
+/// accent and status tones) plus chat's own highlight tones. Immutable, so the pipeline's
+/// background layout reads them freely.
 enum ChatTheme {
-    static let textPrimary = UIColor(white: 0.93, alpha: 1)
-    static let textSecondary = UIColor(white: 0.70, alpha: 1)
-    static let textMuted = UIColor(white: 0.52, alpha: 1)
-    static let borderSubtle = UIColor(white: 1, alpha: 0.08)
-    static let surface = UIColor(white: 1, alpha: 0.045)
-    static let accent = color("#9147ff")!
-    static let info = color("#60a5fa")!
-    static let warning = color("#f59e0b")!
-    static let error = color("#ef4444")!
-    static let success = color("#22c55e")!
+    private static let theme = Palette.frostedGlass
+    static let textPrimary = theme.textPrimary.uiColor
+    static let textSecondary = theme.textSecondary.uiColor
+    static let textMuted = theme.textMuted.uiColor
+    static let borderSubtle = theme.borderSubtle.uiColor
+    static let surface = theme.surface.uiColor
+    static let accent = theme.accent.uiColor
+    static let info = theme.info.uiColor
+    static let warning = theme.warning.uiColor
+    static let error = theme.error.uiColor
+    static let success = theme.success.uiColor
     static let highlightOrange = color("#ff8c1a")!
     static let highlightRed = color("#ff4d4d")!
     static let highlightCyan = color("#22d3ee")!
-    static let background = UIColor(red: 0.055, green: 0.055, blue: 0.063, alpha: 1)
+    static let background = theme.background.uiColor
     /// The colour Twitch gives a chatter who never picked one.
     static let fallbackName = color("#9147FF")!
 

@@ -18,7 +18,7 @@ struct ChatPanel: View {
                 .overlay(alignment: .top) {
                     if let toast {
                         Text(toast)
-                            .font(.footnote)
+                            .font(.snCaption)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 7)
                             .glassEffect()
