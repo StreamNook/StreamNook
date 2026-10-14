@@ -51,10 +51,13 @@ fn without_line_comments(source: &str) -> String {
         .join("\n")
 }
 
-/// `const NAME: &str = "value";` (any visibility) across the crate.
-fn str_constants(sources: &[(String, String)]) -> BTreeMap<String, String> {
-    let mut out = BTreeMap::new();
-    for (_, source) in sources {
+/// `const NAME: &str = "value";` (any visibility), by the file that defines it:
+/// names repeat across modules (a dozen services each have an `EVENT`), so a
+/// constant resolves in its own module, never by name alone.
+fn str_constants(sources: &[(String, String)]) -> BTreeMap<String, BTreeMap<String, String>> {
+    let mut all = BTreeMap::new();
+    for (rel, source) in sources {
+        let out: &mut BTreeMap<String, String> = all.entry(rel.clone()).or_default();
         for line in source.lines() {
             let line = line.trim();
             let Some(at) = line.find("const ") else { continue };
@@ -75,7 +78,40 @@ fn str_constants(sources: &[(String, String)]) -> BTreeMap<String, String> {
             }
         }
     }
-    out
+    all
+}
+
+/// The value of the constant an emit names: `NAME` in the emitting file,
+/// `module::NAME` in a file of that module (`use path as alias` followed), or
+/// a name only one file defines. `source` is the emitting file.
+fn resolve_constant<'a>(
+    constants: &'a BTreeMap<String, BTreeMap<String, String>>,
+    rel: &str,
+    source: &str,
+    arg: &str,
+) -> Option<&'a String> {
+    let mut path: Vec<&str> = arg.split("::").collect();
+    let name = path.pop()?;
+    if let Some(module) = path.last() {
+        let alias = format!(" as {module};");
+        let module = source
+            .lines()
+            .find(|l| l.trim_start().starts_with("use ") && l.trim_end().ends_with(&alias))
+            .and_then(|l| l.trim_end().strip_suffix(&alias)?.rsplit("::").next())
+            .unwrap_or(module);
+        let file = format!("{module}.rs");
+        let dir = format!("{module}/mod.rs");
+        return constants
+            .iter()
+            .filter(|(r, _)| *r == &file || r.ends_with(&format!("/{file}")) || *r == &dir || r.ends_with(&format!("/{dir}")))
+            .find_map(|(_, c)| c.get(name));
+    }
+    if let Some(own) = constants.get(rel).and_then(|c| c.get(name)) {
+        return Some(own);
+    }
+    let mut found = constants.values().filter_map(|c| c.get(name));
+    let first = found.next()?;
+    found.next().is_none().then_some(first)
 }
 
 /// The first two top-level arguments of the call whose `(` ends at `start`.
@@ -178,8 +214,7 @@ fn emitted() -> (BTreeSet<String>, Vec<String>) {
                 names.insert(arg[1..arg.len() - 1].to_string());
                 continue;
             }
-            let last = arg.rsplit("::").next().unwrap_or(arg);
-            if let Some(value) = constants.get(last) {
+            if let Some(value) = resolve_constant(&constants, rel, source, arg) {
                 names.insert(value.clone());
                 continue;
             }
@@ -233,5 +268,12 @@ fn the_scan_resolves_literals_constants_and_targets() {
     let at = source.find(".emit_to(").unwrap() + ".emit_to(".len();
     assert_eq!(call_args(&source, at), ["\"main\"", "\"targeted\""]);
     let constants = str_constants(&[("x.rs".into(), source)]);
-    assert_eq!(constants.get("NAME").map(String::as_str), Some("named"));
+    assert_eq!(resolve_constant(&constants, "x.rs", "", "NAME").map(String::as_str), Some("named"));
+    let mut two = BTreeMap::new();
+    two.insert("services/a.rs".to_string(), BTreeMap::from([("EVENT".to_string(), "a-event".to_string())]));
+    two.insert("commands/b.rs".to_string(), BTreeMap::from([("EVENT".to_string(), "b-event".to_string())]));
+    assert_eq!(resolve_constant(&two, "services/a.rs", "", "EVENT").map(String::as_str), Some("a-event"));
+    assert_eq!(resolve_constant(&two, "lib.rs", "", "crate::commands::b::EVENT").map(String::as_str), Some("b-event"));
+    assert_eq!(resolve_constant(&two, "lib.rs", "use crate::commands::b as bee;", "bee::EVENT").map(String::as_str), Some("b-event"));
+    assert_eq!(resolve_constant(&two, "lib.rs", "", "EVENT"), None);
 }
