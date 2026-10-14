@@ -160,7 +160,7 @@ final class ImagePipeline: @unchecked Sendable {
         frames.reserveCapacity(indices.count)
         for (n, i) in indices.enumerated() {
             guard let image = CGImageSourceCreateThumbnailAtIndex(source, i, options as CFDictionary) else { continue }
-            frames.append(image)
+            frames.append(Self.native(image) ?? image)
             if indices.count > 1 {
                 let next = n + 1 < indices.count ? indices[n + 1] : count
                 var span = 0.0
@@ -170,6 +170,19 @@ final class ImagePipeline: @unchecked Sendable {
         }
         guard !frames.isEmpty else { return nil }
         return DecodedImage(frames: frames, durations: durations)
+    }
+
+    private static let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+
+    /// The frame redrawn as premultiplied BGRA, the layout Core Animation shows without converting
+    /// it on the main thread every time a layer's frame changes.
+    private static func native(_ image: CGImage) -> CGImage? {
+        let info = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        if image.bitmapInfo.rawValue & ~CGBitmapInfo.floatComponents.rawValue == info, image.bitsPerPixel == 32 { return image }
+        guard let context = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: colorSpace, bitmapInfo: info) else { return nil }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return context.makeImage()
     }
 
     private static func delay(_ source: CGImageSource, _ index: Int) -> Double {

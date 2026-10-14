@@ -45,6 +45,7 @@ struct ChatMenuSheet: View {
                     }
                 }
             }
+            .tint(Color(ChatTheme.textPrimary))
             .navigationTitle(session.channel)
             .navigationBarTitleDisplayMode(.inline)
         }
@@ -88,9 +89,10 @@ struct ChatCommandSheet: View {
                                 HStack(alignment: .top) {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text("/\(row.name)").font(.system(size: 14, weight: .medium))
+                                            .foregroundStyle(Color(ChatTheme.textPrimary))
                                         Text(row.description)
                                             .font(.system(size: 12.5))
-                                            .foregroundStyle(.secondary)
+                                            .foregroundStyle(Color(ChatTheme.textSecondary))
                                         if let lock = row.lock {
                                             Text(lock).font(.system(size: 11.5)).foregroundStyle(.tertiary)
                                         }
@@ -108,6 +110,7 @@ struct ChatCommandSheet: View {
                     }
                 }
             }
+            .tint(Color(ChatTheme.textPrimary))
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search commands")
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()

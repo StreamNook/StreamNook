@@ -143,7 +143,14 @@ final class ChatSession {
             roomID = pipeline.recentMessages(1).first?.tags["room-id"]
         }
         if let roomID {
-            _ = try? await core.invoke("fetch_channel_badges", args: ["channelId": roomID])
+            do {
+                _ = try await core.invoke("fetch_channel_badges", args: ["channelId": roomID])
+                chatLog.notice("channel badges for \(roomID, privacy: .public) loaded")
+            } catch {
+                chatLog.notice("channel badges failed: \(String(describing: error), privacy: .public)")
+            }
+        } else {
+            chatLog.notice("channel badges skipped: room id unknown")
         }
     }
 

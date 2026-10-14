@@ -49,7 +49,12 @@ struct RowText {
 
     // MARK: Appending
 
-    mutating func append(_ text: String, _ font: UIFont, _ color: UIColor, extra: [NSAttributedString.Key: Any] = [:]) {
+    mutating func append(_ raw: String, _ font: UIFont, _ color: UIColor, extra: [NSAttributedString.Key: Any] = [:]) {
+        // Unicode tag characters (the invisible suffix chat clients add to send a line twice) draw
+        // nothing in a browser but as wide blanks through Core Text's font fallback.
+        let text = raw.unicodeScalars.contains { (0xE0000...0xE007F).contains($0.value) }
+            ? String(String.UnicodeScalarView(raw.unicodeScalars.filter { !(0xE0000...0xE007F).contains($0.value) }))
+            : raw
         guard !text.isEmpty else { return }
         var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
         attrs.merge(extra) { $1 }
