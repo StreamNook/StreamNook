@@ -1908,6 +1908,8 @@ pub fn run() {
             load_settings,
             patch_settings,
             get_default_settings,
+            get_boot_state,
+            complete_setup,
             set_chat_user_hidden,
             set_chat_user_override,
             get_settings_dir,

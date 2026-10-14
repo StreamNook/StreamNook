@@ -162,6 +162,74 @@ pub async fn patch_settings(
     Ok(())
 }
 
+/// What a shell needs before it draws its first screen, in one answer.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct BootState {
+    /// The first-run setup has not been finished on this install.
+    pub needs_setup: bool,
+    /// A Twitch sign-in is stored.
+    pub signed_in: bool,
+    /// Why StreamNook signed the viewer out of Twitch, when it did so itself.
+    pub sign_in_reason: Option<crate::services::twitch_signin::SignInReason>,
+    /// That reason worded for the viewer, or `None` when none is owed.
+    pub sign_in_text: Option<SignInText>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct SignInText {
+    /// A full sentence, for a signed-out screen.
+    pub sentence: &'static str,
+    /// A short line, for a row that already says "Twitch".
+    pub short: &'static str,
+}
+
+fn boot_state(settings: &Settings, signed_in: bool) -> BootState {
+    let reason = crate::services::twitch_signin::current();
+    BootState {
+        needs_setup: !settings.setup_complete,
+        signed_in,
+        sign_in_reason: reason,
+        sign_in_text: reason.map(|r| SignInText { sentence: r.sentence(), short: r.short() }),
+    }
+}
+
+/// The boot answer: whether the first-run setup is owed, whether Twitch is
+/// signed in and, when StreamNook signed the viewer out itself, why.
+#[tauri::command]
+pub async fn get_boot_state(state: State<'_, AppState>) -> Result<BootState, String> {
+    let signed_in = crate::services::twitch_service::TwitchService::has_stored_credentials().await;
+    let settings = state.settings.lock().map_err(|e| e.to_string())?;
+    Ok(boot_state(&settings, signed_in))
+}
+
+/// What finishing the first-run setup changed.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct SetupCompleted {
+    /// Setup was finished for the first time on this install (not a re-run),
+    /// so notices meant for existing users should be marked seen rather than
+    /// shown.
+    pub baseline_announcements: bool,
+}
+
+/// Finish the first-run setup: records `setup_complete` and writes it to disk
+/// at once, so closing the app right after cannot bring the wizard back.
+#[tauri::command]
+pub async fn complete_setup(app: AppHandle, state: State<'_, AppState>) -> Result<SetupCompleted, String> {
+    let (settings, first_time) = {
+        let mut current = state.settings.lock().map_err(|e| e.to_string())?;
+        let first_time = !current.setup_complete;
+        current.setup_complete = true;
+        (current.clone(), first_time)
+    };
+    write_settings_to_disk(&settings)?;
+    flush_settings_now()?;
+    let _ = app.emit(
+        SETTINGS_UPDATED_EVENT,
+        SettingsUpdated { source: None, keys: vec!["setup_complete".to_string()] },
+    );
+    Ok(SetupCompleted { baseline_announcements: first_time })
+}
+
 /// What a fresh install starts with: the values the settings page's reset
 /// arrows compare against and restore. `Settings::default()` carries the
 /// first-run look and, on a phone build, the phone's own values. Groups the
@@ -1066,5 +1134,20 @@ mod patch_tests {
     fn a_malformed_value_is_refused_not_half_applied() {
         let current = Settings::default();
         assert!(apply_settings_patch(&current, patch(json!({ "favorite_streamers": "nope" }))).is_err());
+    }
+
+    #[test]
+    fn boot_state_owes_setup_until_it_is_finished() {
+        let mut settings = Settings::default();
+        settings.setup_complete = false;
+        assert!(boot_state(&settings, false).needs_setup);
+        settings.setup_complete = true;
+        let state = boot_state(&settings, true);
+        assert!(!state.needs_setup);
+        assert!(state.signed_in);
+        let json = serde_json::to_value(&state).unwrap();
+        for key in ["needs_setup", "signed_in", "sign_in_reason", "sign_in_text"] {
+            assert!(json.get(key).is_some(), "{key} reaches the shell");
+        }
     }
 }
