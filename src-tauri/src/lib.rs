@@ -1008,6 +1008,30 @@ pub fn run() {
             if let Ok(dir) = app.path().app_data_dir() {
                 services::app_paths::set_base(dir);
             }
+            // iOS backs up Application Support, so every cache goes under the
+            // shell's Library/Caches instead; caches an older build left in
+            // the data dir are removed once.
+            #[cfg(target_os = "ios")]
+            if let Ok(dir) = app.path().app_cache_dir() {
+                services::app_paths::set_cache_base(dir);
+                log::info!(
+                    "[Startup] data dir {:?}, cache dir {:?}",
+                    services::cache_service::get_app_data_dir().ok(),
+                    services::cache_service::get_cache_dir().ok()
+                );
+                if let Ok(data) = services::cache_service::get_app_data_dir() {
+                    tauri::async_runtime::spawn_blocking(move || {
+                        let old_cache = data.join("cache");
+                        if old_cache.is_dir() {
+                            match std::fs::remove_dir_all(&old_cache) {
+                                Ok(()) => log::info!("[Startup] removed the old cache from the data dir"),
+                                Err(e) => log::warn!("[Startup] old cache in the data dir not removed: {e}"),
+                            }
+                        }
+                        let _ = std::fs::remove_file(data.join("seventv_cosmetic_catalog.json"));
+                    });
+                }
+            }
             #[cfg(mobile)]
             services::token_vault::warm_up();
             // Mobile: the settings load at the top of run() executed BEFORE the

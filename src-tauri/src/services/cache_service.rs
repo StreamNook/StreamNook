@@ -95,7 +95,10 @@ pub fn get_app_data_dir() -> Result<PathBuf> {
 
 /// Get the StreamNook cache directory in AppData/Local
 pub fn get_cache_dir() -> Result<PathBuf> {
-    let cache_dir = get_app_data_dir()?.join("cache");
+    let cache_dir = match crate::services::app_paths::cache_base() {
+        Some(base) => base.join("StreamNook"),
+        None => get_app_data_dir()?.join("cache"),
+    };
 
     // Create the directory if it doesn't exist
     if !cache_dir.exists() {

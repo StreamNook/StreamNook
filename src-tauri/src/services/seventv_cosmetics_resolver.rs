@@ -153,6 +153,11 @@ static CATALOG_LOAD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static CATALOG_REFRESHING: AtomicBool = AtomicBool::new(false);
 
 fn catalog_path() -> Option<std::path::PathBuf> {
+    // A copy of 7TV's public catalog: with a separate cache dir (iOS) it goes
+    // there, so it is never backed up.
+    if crate::services::app_paths::cache_base().is_some() {
+        return crate::services::cache_service::get_cache_dir().ok().map(|d| d.join(CATALOG_FILE));
+    }
     crate::services::cache_service::get_app_data_dir()
         .ok()
         .map(|d| d.join(CATALOG_FILE))
