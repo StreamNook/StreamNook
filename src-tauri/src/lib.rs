@@ -1273,7 +1273,7 @@ pub fn run() {
 
             // Clone the app_state before managing it (only the desktop live
             // notification spawn below consumes it)
-            #[cfg(not(target_os = "android"))]
+            #[cfg(desktop)]
             let app_state_for_live_notif = app_state.clone();
             let app_state_for_provider_live = app_state.clone();
             let app_state_for_favorite_live = app_state.clone();
@@ -1345,8 +1345,8 @@ pub fn run() {
             // Start live notification service. Desktop only: on Android the
             // WorkManager worker (android_notify.rs) is the single delivery
             // lane, and this unthrottled 60s poll is exactly the background
-            // churn it replaces.
-            #[cfg(not(target_os = "android"))]
+            // churn it replaces; the iPhone gets push alerts instead.
+            #[cfg(desktop)]
             {
                 let live_notif_service = live_notification_service.clone();
                 let live_app_handle = app_handle.clone();
