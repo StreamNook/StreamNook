@@ -105,6 +105,14 @@ public final class FakeCore: CoreBridge {
 
     public func setWebCookies(origin: String, cookiesJSON: String) throws {}
 
+    /// Signs the fixture account in or out the way the core announces it: a sign-in emits
+    /// `twitch-login-complete`, and either way the roster changes.
+    public func simulateTwitchSignIn(_ signedIn: Bool) {
+        fixtures?.setSignedIn(signedIn)
+        if signedIn { events.emit(name: "twitch-login-complete", payloadJSON: "null", target: nil) }
+        events.emit(name: "account-roster-changed", payloadJSON: "{}", target: nil)
+    }
+
     public func lifecycle(_ state: String) {
         events.emit(name: "app-lifecycle", payloadJSON: #"{"state":"\#(state)"}"#, target: nil)
     }

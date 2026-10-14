@@ -22,6 +22,11 @@ public final class FakeFixtures: Sendable {
 
     public var signedIn: Bool { state.withLock { $0.signedIn } }
 
+    /// Stores or forgets the fixture account, as a sign-in or sign-out in the core would.
+    public func setSignedIn(_ signedIn: Bool) {
+        state.withLock { $0.signedIn = signedIn }
+    }
+
     static let user = TwitchUser(id: "424242", login: "nookviewer", displayName: "NookViewer")
 
     /// The answer to `cmd`, or nil when the fixtures do not know it.
@@ -38,6 +43,16 @@ public final class FakeFixtures: Sendable {
             }
             state.withLock { $0.settings.merge(encoded) { $1 } }
             return "null"
+        case "get_boot_state":
+            let (setupDone, signedIn) = state.withLock { ($0.settings["setup_complete"] == "true", $0.signedIn) }
+            return try FakeCore.json(["needs_setup": !setupDone, "signed_in": signedIn,
+                                      "sign_in_reason": NSNull(), "sign_in_text": NSNull()])
+        case "complete_setup":
+            let first = state.withLock { state -> Bool in
+                defer { state.settings["setup_complete"] = "true" }
+                return state.settings["setup_complete"] != "true"
+            }
+            return try FakeCore.json(["baseline_announcements": first])
         case "has_stored_credentials":
             return signedIn ? "true" : "false"
         case "get_user_info":

@@ -100,3 +100,94 @@ public struct SignInNavigator: Sendable {
         return scheme == "https" || scheme == "http" || scheme == "about"
     }
 }
+
+/// What `get_boot_state` answers: whether the first-run setup is done, whether a Twitch sign-in
+/// is stored, and, when StreamNook ended the last one, why.
+public struct BootState: Decodable, Sendable, Equatable {
+    /// The sentence for the signed-out landing, and the short form for a row that already says
+    /// Twitch.
+    public struct SignInText: Decodable, Sendable, Equatable {
+        public var sentence: String
+        public var short: String
+
+        public init(sentence: String, short: String) {
+            self.sentence = sentence
+            self.short = short
+        }
+    }
+
+    public var needsSetup: Bool
+    public var signedIn: Bool
+    public var signInReason: String?
+    public var signInText: SignInText?
+
+    enum CodingKeys: String, CodingKey {
+        case needsSetup = "needs_setup"
+        case signedIn = "signed_in"
+        case signInReason = "sign_in_reason"
+        case signInText = "sign_in_text"
+    }
+
+    public init(needsSetup: Bool, signedIn: Bool, signInReason: String? = nil, signInText: SignInText? = nil) {
+        self.needsSetup = needsSetup
+        self.signedIn = signedIn
+        self.signInReason = signInReason
+        self.signInText = signInText
+    }
+}
+
+/// The in-app web sheet the core asks for with `open_sheet`: a page, its title, the URL
+/// prefixes that end it (sent to `sheet_redirected` instead of loading), and the sites whose
+/// cookies the core reads while it is up.
+public struct WebSheetRequest: Decodable, Sendable, Equatable, Identifiable {
+    public var url: String
+    public var title: String?
+    public var stopAt: [String]
+    public var cookieOrigins: [String]
+
+    public var id: String { url }
+
+    enum CodingKeys: String, CodingKey {
+        case url, title
+        case stopAt = "stop_at"
+        case cookieOrigins = "cookie_origins"
+    }
+
+    public init(url: String, title: String? = nil, stopAt: [String] = [], cookieOrigins: [String] = []) {
+        self.url = url
+        self.title = title
+        self.stopAt = stopAt
+        self.cookieOrigins = cookieOrigins
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        url = try c.decode(String.self, forKey: .url)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        stopAt = try c.decodeIfPresent([String].self, forKey: .stopAt) ?? []
+        cookieOrigins = try c.decodeIfPresent([String].self, forKey: .cookieOrigins) ?? []
+    }
+
+    /// Whether loading `url` ends the sheet: it starts with one of the `stop_at` prefixes.
+    public func stops(at url: URL) -> Bool {
+        let text = url.absoluteString
+        return stopAt.contains { !$0.isEmpty && text.hasPrefix($0) }
+    }
+}
+
+extension WebCookie {
+    /// Whether the cookie is sent to `host`, or was set for it or a subdomain: what clearing a
+    /// site's cookies removes.
+    public func matches(host: String) -> Bool {
+        let host = host.lowercased()
+        let domain = domain.lowercased().drop(while: { $0 == "." })
+        guard !domain.isEmpty else { return false }
+        return host == domain || host.hasSuffix("." + domain) || belongs(to: host)
+    }
+
+    /// The site a cookie origin names, as `belongs(to:)` takes it: its host without `www.`.
+    public static func site(ofOrigin origin: String) -> String? {
+        guard let host = URL(string: origin)?.host?.lowercased(), !host.isEmpty else { return nil }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+}

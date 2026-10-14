@@ -138,4 +138,52 @@ import Testing
         _ = try await core.invoke("sign_out_active_twitch_account", "{}")
         await #expect(throws: CoreFailure.self) { try await core.invoke("get_user_info", "{}") }
     }
+
+    @Test func bootStateFollowsSetupAndSignIn() async throws {
+        let core = try started(signedIn: false)
+        var boot = try await core.invoke("get_boot_state", args: [:], as: BootState.self)
+        #expect(!boot.needsSetup && !boot.signedIn && boot.signInText == nil)
+        _ = try await core.invoke("patch_settings", args: ["patch": ["setup_complete": false]])
+        boot = try await core.invoke("get_boot_state", args: [:], as: BootState.self)
+        #expect(boot.needsSetup)
+        let done = try await core.invoke("complete_setup", "{}")
+        #expect(done.contains(#""baseline_announcements":true"#))
+        boot = try await core.invoke("get_boot_state", args: [:], as: BootState.self)
+        #expect(!boot.needsSetup)
+    }
+
+    @Test func aSimulatedSignInIsAnnounced() async throws {
+        let core = try started(signedIn: false)
+        let events = core.events.stream("twitch-login-complete")
+        core.simulateTwitchSignIn(true)
+        var iterator = events.makeAsyncIterator()
+        #expect(await iterator.next()?.name == "twitch-login-complete")
+        let boot = try await core.invoke("get_boot_state", args: [:], as: BootState.self)
+        #expect(boot.signedIn)
+        let user = try await core.invoke("get_user_info", args: [:], as: TwitchUser.self)
+        #expect(user.login == "nookviewer")
+    }
+}
+
+@Suite struct WebSheetTests {
+    @Test func theRequestDecodesWithDefaults() throws {
+        let json = #"{"url":"https://kick.com/login","title":"Kick","stop_at":["http://localhost:3000/callback"],"cookie_origins":["https://kick.com"]}"#
+        let request = try JSONDecoder().decode(WebSheetRequest.self, from: Data(json.utf8))
+        #expect(request.title == "Kick" && request.cookieOrigins == ["https://kick.com"])
+        #expect(request.stops(at: URL(string: "http://localhost:3000/callback?code=1")!))
+        #expect(!request.stops(at: URL(string: "https://kick.com/")!))
+        let bare = try JSONDecoder().decode(WebSheetRequest.self, from: Data(#"{"url":"https://x.test"}"#.utf8))
+        #expect(bare.stopAt.isEmpty && bare.cookieOrigins.isEmpty && bare.title == nil)
+    }
+
+    @Test func clearingASiteMatchesItsCookies() {
+        let parent = WebCookie(name: "session_token", value: "v", domain: ".kick.com")
+        let sub = WebCookie(name: "x", value: "v", domain: "id.kick.com")
+        let other = WebCookie(name: "x", value: "v", domain: "notkick.com")
+        #expect(parent.matches(host: "kick.com") && parent.matches(host: "id.kick.com"))
+        #expect(sub.matches(host: "kick.com") && sub.matches(host: "id.kick.com"))
+        #expect(!other.matches(host: "kick.com"))
+        #expect(WebCookie.site(ofOrigin: "https://www.twitch.tv") == "twitch.tv")
+        #expect(WebCookie.site(ofOrigin: "https://kick.com") == "kick.com")
+    }
 }

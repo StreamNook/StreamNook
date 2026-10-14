@@ -45,16 +45,20 @@ public struct WebCookie: Codable, Sendable, Equatable {
 /// The sites whose web sessions the core reads, with the origin each snapshot is filed under.
 public enum WebSessionSite: CaseIterable, Sendable {
     case twitch
+    /// Kick's session, which a silent Kick import reads after launch.
+    case kick
 
     public var origin: String {
         switch self {
         case .twitch: return "https://www.twitch.tv"
+        case .kick: return "https://kick.com"
         }
     }
 
     public var site: String {
         switch self {
         case .twitch: return "twitch.tv"
+        case .kick: return "kick.com"
         }
     }
 
@@ -62,6 +66,7 @@ public enum WebSessionSite: CaseIterable, Sendable {
     public var sessionCookie: String {
         switch self {
         case .twitch: return "auth-token"
+        case .kick: return "session_token"
         }
     }
 }
