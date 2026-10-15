@@ -17,7 +17,8 @@ export interface EmoteMatchRow {
   insertText?: string;
   url: string;
   localUrl?: string;
-  provider: NonNullable<EmoteTabCandidate['emote']>['provider'];
+  /** `user` marks a chatter row, which follows the emotes in a cycle answer. */
+  provider: NonNullable<EmoteTabCandidate['emote']>['provider'] | 'user';
   /** Where the emote comes from: "Twitch Global", "Channel Sub", "7TV", ... */
   sourceLabel: string;
   /** The same without the provider ("Global", "Channel Sub", "Personal"), for
@@ -28,6 +29,8 @@ export interface EmoteMatchRow {
   matchLen?: number;
   /** Section heading while browsing with nothing typed. */
   group?: string;
+  /** A chatter row's login. */
+  login?: string;
   isZeroWidth?: boolean;
   modifierFlags?: number;
 }
@@ -61,6 +64,7 @@ interface WireRow {
   group?: string;
   is_zero_width?: boolean;
   modifier_flags?: number;
+  login?: string;
 }
 
 const EMPTY: EmoteMatchResult = { rows: [], total: 0, ready: false };
@@ -100,6 +104,7 @@ export async function matchEmotes(
         group: r.group,
         isZeroWidth: r.is_zero_width,
         modifierFlags: r.modifier_flags,
+        login: r.login,
       })),
     };
   } catch {
@@ -133,24 +138,37 @@ export async function personalEmoteOverrides(
   }
 }
 
-/** Rows as Tab-cycle candidates, in the order Rust ranked them. */
+/** Rows as Tab-cycle candidates, in the order Rust ranked them. Chatter rows
+ *  (provider `user`, after the emotes) insert what Rust chose: the login when
+ *  a display name is localized. */
 export function rowsToTabCandidates(rows: EmoteMatchRow[]): EmoteTabCandidate[] {
-  return rows.map((r, i) => ({
-    name: r.name,
-    insertText: r.insertText,
-    priority: i,
-    emote: {
-      id: r.id,
+  return rows.map((r, i): EmoteTabCandidate => {
+    if (r.provider === 'user') {
+      const displayName = r.name.replace(/^@/, '');
+      return {
+        name: r.name,
+        insertText: r.insertText,
+        priority: i,
+        chatter: { username: r.login ?? displayName, displayName },
+      };
+    }
+    return {
       name: r.name,
-      url: r.url,
-      localUrl: r.localUrl,
-      provider: r.provider,
-      isZeroWidth: r.isZeroWidth,
-      modifierFlags: r.modifierFlags,
-    },
-    sourceLabel: r.sourceLabel,
-    sourceDetail: r.sourceDetail,
-  }));
+      insertText: r.insertText,
+      priority: i,
+      emote: {
+        id: r.id,
+        name: r.name,
+        url: r.url,
+        localUrl: r.localUrl,
+        provider: r.provider,
+        isZeroWidth: r.isZeroWidth,
+        modifierFlags: r.modifierFlags,
+      },
+      sourceLabel: r.sourceLabel,
+      sourceDetail: r.sourceDetail,
+    };
+  });
 }
 
 /**

@@ -113,6 +113,11 @@ export interface RoomModeView {
   standing: string | null;
   /** The slow-mode wait that applies to you; 0 when none does. */
   slow_seconds: number;
+  /** The mode that certainly keeps you from sending (your badges or your
+   *  follow prove it), or null. Never set on a guess. */
+  blocked?: RoomModeKind | null;
+  /** What a disabled message box says while `blocked` is set. */
+  reason?: string | null;
 }
 
 export const EMPTY_ROOM_STATE: RoomState = {

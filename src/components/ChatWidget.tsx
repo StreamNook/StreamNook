@@ -81,7 +81,6 @@ import ModeratorMenu from './chat/ModeratorMenu';
 import ResubNotificationBanner, { ResubNotification } from './ResubNotificationBanner';
 import WatchStreakBanner, { WatchStreakMilestone } from './WatchStreakBanner';
 import { EmoteSet, queueChannelEmotesForCaching, setEmoteCacheBurst, youTubeChannelEmojiRows, type YouTubeChannelEmoji } from '../services/emoteService';
-import { useEmoteOwnerNames } from '../hooks/useEmoteOwnerNames';
 import { useEmotePalette, type PaletteChannel } from '../hooks/useEmotePalette';
 import { prefetchChannelBadges } from '../services/badgeService';
 import { initializeBadgeImageCache } from '../services/badgeImageCacheService';
@@ -102,7 +101,6 @@ import {
   getWordRange,
   wordBeforeCaret,
   emoteSearchTrigger,
-  withChatterCandidates,
   wrapIndex,
   emoteOptionId,
   EmoteTabCandidate,
@@ -1319,8 +1317,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       youtube: harvestedYouTube ? Array.from(harvestedYouTube.values()) : [],
     };
   }, [baseEmotes, harvestedYouTube, provider]);
-  // Display names for the Twitch subscription emote groups in the picker.
-  const channelNameCache = useEmoteOwnerNames(emotes);
   // Forget a channel's harvested emoji when its chat goes away. Bounded per
   // channel already, but without this every YouTube channel opened in a session
   // stays resident for the life of the app.
@@ -4395,7 +4391,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
 
     const lookup = { value, cursor, steps: 0 };
     tabLookupRef.current = lookup;
-    const chatInput = settings.chat_input;
     const request = atGap
       ? matchEmotes(emoteMatchTarget, '', 'search', { limit: 50 })
       : matchEmotes(emoteMatchTarget, word, 'cycle');
@@ -4405,18 +4400,13 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       // Applied only to the text it was asked about.
       const ta = inputRef.current;
       if (!ta || ta.value !== value || ta.selectionStart !== cursor) return;
-      const includeChatters = !atGap && (chatInput?.emote_tab_complete_include_chatters ?? true);
-      const matches = withChatterCandidates(
-        rowsToTabCandidates(res.rows),
-        word,
-        includeChatters ? getMatchingUsers(word.replace(/^@/, '')) : [],
-        chatInput?.emote_tab_complete_match_mode ?? 'starts_with',
-      );
+      // A cycle answer carries the room's recent chatters after the emotes.
+      const matches = rowsToTabCandidates(res.rows);
       if (matches.length === 0) return;
       applyTabMatch(matches, wrapIndex(0, lookup.steps, matches.length), ws, word, word.length, value);
     });
     return true;
-  }, [emoteTabState, emoteMatchTarget, applyTabMatch, getMatchingUsers, settings.chat_input]);
+  }, [emoteTabState, emoteMatchTarget, applyTabMatch]);
 
   /**
    * Swap what Tab opens from the popover itself, and show the other view on the
@@ -5638,7 +5628,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
                 channelId={channelOverride?.user_id ?? currentStream?.user_id}
                 channelLogin={channelOverride?.user_login ?? currentStream?.user_login}
                 isLoadingEmotes={isLoadingEmotes}
-                channelNameCache={channelNameCache}
                 onInsert={insertEmote}
                 onPopOut={
                   popOutEmotes

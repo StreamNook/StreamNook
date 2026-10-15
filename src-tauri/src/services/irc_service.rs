@@ -696,6 +696,58 @@ fn get_room_state_cache() -> &'static Mutex<HashMap<String, String>> {
     ROOM_STATE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Send `channel`'s room again, worded for the account as it stands now, when
+/// something other than a ROOMSTATE changed what the modes mean for it (a new
+/// role, a follow). Also refreshes the replay cache for late-mounting panes.
+pub(crate) async fn reship_room_state(channel: &str) {
+    let Some(fields) = crate::services::chat_send_limiter::room_state_fields(channel) else {
+        return;
+    };
+    let mut frame = serde_json::Map::new();
+    frame.insert("type".into(), serde_json::json!("ROOMSTATE"));
+    frame.insert("channel".into(), serde_json::json!(channel));
+    frame.extend(fields);
+    let frame = serde_json::Value::Object(frame).to_string();
+    get_room_state_cache().lock().await.insert(channel.to_string(), frame.clone());
+    send_to_bridge(BridgeFrame::channel(channel, frame), false).await;
+}
+
+/// Look up the account's own follow of a followers-only room (one Helix call),
+/// word the room again with it, and keep a "you can chat in N minutes" line
+/// current until the wait is over.
+async fn learn_own_follow(channel: String, room_id: String) {
+    use crate::services::follow_lookup::{own_follow, FollowAnswer};
+    let answer = match own_follow(&room_id).await {
+        FollowAnswer::Following(at) => chrono::DateTime::parse_from_rfc3339(&at)
+            .ok()
+            .map(|t| Some(t.with_timezone(&chrono::Utc))),
+        FollowAnswer::NotFollowing => Some(None),
+        FollowAnswer::Unknown => None,
+    };
+    let gen = crate::services::chat_send_limiter::note_own_follow(&channel, answer);
+    reship_room_state(&channel).await;
+    run_follow_countdown(channel, gen).await;
+}
+
+/// Word the room again each time the followers-only wait crosses a minute,
+/// until it ends. Stops as soon as a newer follow answer, a role change or the
+/// mode going off makes it moot. Nothing runs when there is no wait.
+pub(crate) async fn run_follow_countdown(channel: String, gen: u64) {
+    while let Some(wait) = crate::services::chat_send_limiter::own_follow_tick(&channel, gen) {
+        tokio::time::sleep(wait).await;
+        reship_room_state(&channel).await;
+    }
+}
+
+/// The account followed or unfollowed `room_id` from inside the app: word every
+/// open room of that channel again.
+pub async fn own_follow_changed(room_id: &str, following: bool) {
+    for (channel, gen) in crate::services::chat_send_limiter::note_own_follow_by_room_id(room_id, following) {
+        reship_room_state(&channel).await;
+        tauri::async_runtime::spawn(run_follow_countdown(channel, gen));
+    }
+}
+
 /// Chat messages published while nothing was subscribed to the bus.
 ///
 /// `broadcast::send` discards when there are no receivers, and a provider's
@@ -1047,10 +1099,18 @@ impl IrcService {
                     r9k: tag_u8("r9k"),
                 },
             );
+            if let Some(room_id) = Self::extract_tag_value(line, "room-id") {
+                crate::services::chat_send_limiter::note_room_id(ch, &room_id);
+            }
             // Ship the merged room, with its modes in words, so the page
             // and the replay cache never hold a partial frame.
             if let Some(fields) = crate::services::chat_send_limiter::room_state_fields(ch) {
                 room_state.extend(fields);
+            }
+            // A followers-only room: learn whether the account already
+            // follows long enough, then word the room again.
+            if let Some(room_id) = crate::services::chat_send_limiter::own_follow_wanted(ch) {
+                tauri::async_runtime::spawn(learn_own_follow(ch.to_string(), room_id));
             }
         }
         serde_json::Value::Object(room_state).to_string()
@@ -2559,15 +2619,7 @@ impl IrcService {
                     // A new role (or subscribing) changes what the room's
                     // modes mean for the account: resend the room in words.
                     if crate::services::chat_send_limiter::note_own_badges(ch, &badges) {
-                        if let Some(fields) = crate::services::chat_send_limiter::room_state_fields(ch) {
-                            let mut frame = serde_json::Map::new();
-                            frame.insert("type".into(), serde_json::json!("ROOMSTATE"));
-                            frame.insert("channel".into(), serde_json::json!(ch));
-                            frame.extend(fields);
-                            let frame = serde_json::Value::Object(frame).to_string();
-                            get_room_state_cache().lock().await.insert(ch.clone(), frame.clone());
-                            send_to_bridge(BridgeFrame::channel(ch, frame), false).await;
-                        }
+                        reship_room_state(ch).await;
                     }
                     get_user_badges_cache()
                         .lock()

@@ -15,7 +15,6 @@ import { Tooltip } from '../ui/Tooltip';
 import { useAppStore } from '../../stores/AppStore';
 import { useChannelEmotes } from '../../stores/chatConnectionStore';
 import { useThemeBoot } from '../../boot/useThemeBoot';
-import { useEmoteOwnerNames } from '../../hooks/useEmoteOwnerNames';
 import type { PaletteChannel } from '../../hooks/useEmotePalette';
 import {
   youTubeChannelEmojiRows,
@@ -108,7 +107,6 @@ export default function EmotePaletteWindow() {
       youtube: youTubeRows?.key === youTubeKey ? youTubeRows.rows : [],
     };
   }, [baseEmotes, provider, youTubeRows, youTubeKey]);
-  const channelNameCache = useEmoteOwnerNames(emotes);
 
   const insert = useCallback((text: string) => {
     invoke('emote_palette_insert', { text }).catch((err) => Logger.warn('[EmotePalette] insert failed:', err));
@@ -189,7 +187,6 @@ export default function EmotePaletteWindow() {
           channelId={channel.id ?? undefined}
           channelLogin={channel.login}
           isLoadingEmotes={!emotes}
-          channelNameCache={channelNameCache}
           onInsert={insert}
           className={PANEL_CLASS}
         />
