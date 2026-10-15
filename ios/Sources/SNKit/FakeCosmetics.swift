@@ -136,6 +136,15 @@ final class FakeCosmetics: Sendable {
             }
             let answer = ["display_name": name, "description": bio]
             return String(decoding: try JSONEncoder().encode(answer), as: UTF8.self)
+        case "upload_seventv_profile_picture":
+            guard state.withLock({ $0.sevenTvSignedIn }) else {
+                throw CoreFailure.command(json: #""SESSION_EXPIRED: 7TV session has expired. Please reconnect your 7TV account.""#)
+            }
+            guard let data = Data(base64Encoded: args["dataBase64"] as? String ?? ""), !data.isEmpty else {
+                throw CoreFailure.command(json: #""That image could not be read.""#)
+            }
+            state.withLock { $0.uploads.append("seventv") }
+            return #""01FAKEPENDINGPICTURE""#
         case "upload_twitch_profile_image":
             let kind = args["kind"] as? String ?? ""
             guard kind == "picture" || kind == "banner" else { throw CoreFailure.command(json: #""Unknown image kind.""#) }
