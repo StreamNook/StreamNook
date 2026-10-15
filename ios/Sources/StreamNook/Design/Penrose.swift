@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The StreamNook mark: nine isometric cubes forming a Penrose triangle, each marching one slot
-/// around it on a 1.5 s loop, coloured from the theme accent. It keeps marching whatever the
+/// around it on a 1.5 s loop, colored from the theme accent. It keeps marching whatever the
 /// Motion setting says, because a frozen loader reads as a hung app, and draws at the display's
 /// full rate.
 ///
@@ -11,14 +11,14 @@ import SwiftUI
 /// edges never show what is behind them.
 struct PenroseMark: View {
     var width: CGFloat = 56
-    /// Drawn centred on something: the mark is a triangle pointing right, its cubes massed toward
+    /// Drawn centered on something: the mark is a triangle pointing right, its cubes massed toward
     /// its upright left side (their mean sits a tenth of the width left of the box's middle), so a
-    /// mark centred by its box looks pushed left. It moves right by most of that.
-    var centred = true
+    /// mark centered by its box looks pushed left. It moves right by most of that.
+    var centered = true
 
     private static let box = CGRect(x: 14.68, y: 12, width: 128.64, height: 146)
     private static let loop = 1.5
-    /// How far right a centred mark moves, as a share of its width.
+    /// How far right a centered mark moves, as a share of its width.
     static let opticalShift: CGFloat = 0.06
 
     var body: some View {
@@ -30,7 +30,7 @@ struct PenroseMark: View {
             }
         }
         .frame(width: width, height: width * Self.box.height / Self.box.width)
-        .offset(x: centred ? width * Self.opticalShift : 0)
+        .offset(x: centered ? width * Self.opticalShift : 0)
         .accessibilityLabel("Loading")
     }
 

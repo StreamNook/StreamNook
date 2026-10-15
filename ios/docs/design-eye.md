@@ -21,7 +21,7 @@ Ask these of every screen before showing it, in this order.
    `@login` that matches the display name. Say it once.
 1. **Does any control out-pull the content?** Buttons, chips and icons serve
    the title beside them. They are lighter, smaller or quieter than it.
-1. **Does anything look off-centre or misaligned?** Check left edges line up
+1. **Does anything look off-center or misaligned?** Check left edges line up
    down the screen, and that asymmetric shapes are nudged (see Optical
    nudges). Look at a full-resolution crop, not the third-size shot.
 
@@ -82,7 +82,7 @@ Satoshi throughout (`Font.sn(size, weight)`; tokens in `Typography.swift`).
 Rules:
 
 - Two neighbouring levels of one block differ in at least two of size,
-  weight and color. 13 medium over 13 regular in a slightly different grey
+  weight and color. 13 medium over 13 regular in a slightly different gray
   reads as one level; that was the old card title.
 - Three color levels at most in one block: primary, secondary, muted.
 - No sizes off the table. Retire 13.5, 11.5, 10 and 8 when you touch a file.
@@ -104,18 +104,18 @@ Rules:
 
 ## Optical nudges
 
-Box-centred is not eye-centred. These are in `Optical.swift` and the views
+Box-centered is not eye-centered. These are in `Optical.swift` and the views
 named; reuse them rather than re-deriving.
 
 - **Play triangle** (`play.fill` in a round or square button): move it right
   by 7 percent of the symbol's point size (2 points at 28). Its mass sits at
   the flat left side. Pause needs nothing.
 - **Penrose mark**: a right-pointing triangle whose cubes mass at the
-  upright left side, a tenth of the width left of the box's middle. Centred
-  marks move right by 6 percent of their width (`PenroseMark.centred`, on by
+  upright left side, a tenth of the width left of the box's middle. Centered
+  marks move right by 6 percent of their width (`PenroseMark.centered`, on by
   default). Turn it off only when the mark sits beside text on a left edge.
 - **Chevrons** (disclosure, back): no horizontal nudge; they sit on the row
-  title's centre line, not the centre of a two-line block.
+  title's center line, not the center of a two-line block.
 - **Circles next to squares**: a round control looks smaller than a square
   of the same size; give it about 10 percent more.
 - **Avatars beside a text column** align to the column's top line and are
@@ -163,7 +163,31 @@ drawn on box art are "hard to read on top of some of the category art").
 Labels go in a chin below the picture or in a row beside it. The one
 exception is the small status chips over a stream preview (DROPS, hype
 train, viewers, streak): they sit on a frosted veil, never bare on the
-picture.
+picture. A chat row's Atmosphere wash is the other: it is how the row
+really looks, so its preview shows it.
+
+## Brands are logos, not words
+
+Plain text feels cheap where a brand is named (Brandon). Where Twitch,
+Kick, 7TV, BTTV, FFZ, YouTube or StreamNook is named, show its real logo:
+alone where the logo says it (a badge group's title, an account row's
+picture, a platform tab), logo plus name where the name helps (a sign-in
+button, a sentence).
+
+- Draw marks with `PlatformMark` (`Design/PlatformMark.swift`), from the
+  desktop's vector artwork. Add a missing mark there from the desktop's
+  SVG (`src/components`, for example `emotesets/SevenTVLogo.tsx`), never as
+  an SF Symbol or a word in a tinted box.
+- Size a mark to the cap height of the text beside it, or about 1.2 times
+  it for a wordmark like 7TV; in its own tile, about half the tile.
+- StreamNook's own mark is the Penrose triangle (`PenroseMark`).
+- Brand colors stay with their brand: Twitch purple, Kick green, 7TV blue
+  (`FixedColor.sevenTV`). Never borrow one for something else.
+
+## Spelling
+
+US spelling only, in every string and comment: color, favorite, center,
+gray, canceled, behavior, license.
 
 ## Chips and pills
 

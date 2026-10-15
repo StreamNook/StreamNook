@@ -132,7 +132,7 @@ final class BrowseModel {
         searching = false
     }
 
-    /// Searches 350 ms after the last keystroke, in the mode showing; a cancelled search writes
+    /// Searches 350 ms after the last keystroke, in the mode showing; a canceled search writes
     /// nothing, and a failed one shows no results.
     func search(_ core: CoreBridge, immediate: Bool = false) async {
         let text = trimmed

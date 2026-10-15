@@ -45,7 +45,7 @@ struct StreamGrid: View {
 }
 
 /// The two toolbar buttons that pick cards or rows, one choice shared by every stream list: the
-/// chosen one in the accent colour (cards filled, the list bold), the other muted.
+/// chosen one in the accent color (cards filled, the list bold), the other muted.
 struct StreamViewButtons: View {
     @Binding var view: StreamView
 
