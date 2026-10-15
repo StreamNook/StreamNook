@@ -26,8 +26,14 @@ import Testing
     @Test func qualityLabelsMatchTheSheet() {
         #expect(PlayerText.qualityLabel("best") == "Auto")
         #expect(PlayerText.qualityLabel("1080p60") == "1080p60")
-        #expect(PlayerText.qualityLabel("audio_only") == "Audio_only")
-        #expect(PlayerText.qualityLabel("worst") == "Worst")
+        #expect(PlayerText.qualityLabel("audio_only") == "Audio only")
+        #expect(PlayerText.qualityLabel("worst") == "Lowest")
+    }
+
+    @Test func autoLeadsTheSheet() {
+        #expect(PlayerText.qualityRows(["1080p60", "720p60", "160p", "best", "audio_only", "worst"])
+            == ["best", "1080p60", "720p60", "160p", "audio_only", "worst"])
+        #expect(PlayerText.qualityRows(["best", "720p"]) == ["best", "720p"])
     }
 
     @Test func theTickIsThePickThenTheSavedOneThenAuto() {

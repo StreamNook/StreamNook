@@ -64,13 +64,14 @@ struct IconButton: View {
     let symbol: String
     let label: String
     var size: CGFloat = 20
+    var weight: Font.Weight = .regular
     var tint: Color?
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: size, weight: .regular))
+                .font(.system(size: size, weight: weight))
                 .foregroundStyle(tint ?? SN.textSecondary)
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
@@ -128,6 +129,56 @@ struct CardPress: ButtonStyle {
             .opacity(configuration.isPressed ? 0.8 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
+}
+
+/// The app's worded buttons: one height and one shape, in three strengths, so a screen's main
+/// action is found by color rather than by size. Primary is the theme accent filled (one per
+/// screen at most), brand is a platform's own color for its sign-in, secondary is glass. The
+/// label fills the width it is given; wrap the button in `.frame(maxWidth:)` to cap it.
+struct SNButtonStyle: ButtonStyle {
+    enum Kind { case primary, secondary, brand(Color) }
+
+    var kind = Kind.primary
+    /// Every worded button is this tall, so swapping one for another never moves what is
+    /// around it.
+    static let height: CGFloat = 50
+    @Environment(\.isEnabled) private var enabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        let shape = Capsule()
+        configuration.label
+            .font(.sn(16, 600))
+            .lineLimit(1)
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 20)
+            .frame(maxWidth: .infinity)
+            .frame(height: Self.height)
+            .background {
+                switch kind {
+                case .primary: shape.fill(SN.accent)
+                case .brand(let color): shape.fill(color)
+                case .secondary: Color.clear.snGlass(shape, interactive: true)
+                }
+            }
+            .contentShape(shape)
+            .opacity(enabled ? (configuration.isPressed ? 0.82 : 1) : 0.45)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+
+    private var foreground: Color {
+        switch kind {
+        case .primary: Look.shared.palette.accent.luminance > 0.5 ? Color.black.opacity(0.88) : .white
+        case .brand: .white
+        case .secondary: SN.textPrimary
+        }
+    }
+}
+
+extension ButtonStyle where Self == SNButtonStyle {
+    static var snPrimary: SNButtonStyle { SNButtonStyle(kind: .primary) }
+    static var snSecondary: SNButtonStyle { SNButtonStyle(kind: .secondary) }
+    static func snBrand(_ color: Color) -> SNButtonStyle { SNButtonStyle(kind: .brand(color)) }
 }
 
 /// A pill that needs two taps: the first arms it (it turns red and says "Confirm"), a second

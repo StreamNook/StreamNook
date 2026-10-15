@@ -56,6 +56,10 @@ enum Drive {
     /// A drive run lands on the tabs unless it asks for the wizard.
     static var skipsSetup: Bool { !steps.isEmpty && !steps.contains { $0.hasPrefix("setup") } }
 
+    /// A run that shows the controls keeps them up, so a screenshot taken seconds later still
+    /// has them.
+    static var pinsControls: Bool { steps.contains("controls") }
+
     /// The edge readout shows on drive runs that measure latency.
     static var showsEdge: Bool { steps.contains {
         ["edge", "route", "offset", "preserve", "catchup", "hold"].contains(split($0).0)

@@ -188,6 +188,12 @@ import Testing
         #expect(last.items.isEmpty && last.cursor == nil)
     }
 
+    @Test func categoriesCarryTheirViewersWhenTheCoreSendsThem() throws {
+        let json = #"[[{"id":"1","name":"A","box_art_url":"x","viewer_count":182345},{"id":"2","name":"B"}],null]"#
+        let page = try JSONDecoder().decode(Page<TwitchCategory>.self, from: Data(json.utf8))
+        #expect(page.items.map(\.viewerCount) == [182345, nil])
+    }
+
     @Test func streamsIgnoreFieldsTheyDoNotUse() throws {
         let json = #"{"id":"9","user_id":"1","user_name":"Name","user_login":"name","title":"t","viewer_count":5,"game_name":"g","thumbnail_url":"u","started_at":"s","tags":["English"]}"#
         let stream = try JSONDecoder().decode(TwitchStream.self, from: Data(json.utf8))

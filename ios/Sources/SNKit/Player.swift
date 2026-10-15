@@ -79,11 +79,21 @@ public enum PlayerText {
         return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
     }
 
-    /// The quality sheet's row name: `best` is "Auto"; any other name keeps its spelling with the
-    /// first letter capitalised ("Audio_only", "1080p60").
+    /// The quality sheet's row name: `best` is "Auto", `audio_only` "Audio only", `worst`
+    /// "Lowest"; a named tier keeps its spelling ("1080p60 (source)").
     public static func qualityLabel(_ name: String) -> String {
-        if name == "best" { return "Auto" }
-        return name.prefix(1).uppercased() + name.dropFirst()
+        switch name {
+        case "best": return "Auto"
+        case "audio_only": return "Audio only"
+        case "worst": return "Lowest"
+        default: return name.prefix(1).uppercased() + name.dropFirst()
+        }
+    }
+
+    /// The sheet's rows: Auto first (the way back to the screen cap), then the core's tiers in
+    /// its order.
+    public static func qualityRows(_ available: [String]) -> [String] {
+        available.filter { $0 == "best" } + available.filter { $0 != "best" }
     }
 
     /// The ticked quality row: this session's pick, else the saved one, else `best`.

@@ -96,12 +96,15 @@ private struct SNGlass<S: Shape>: ViewModifier {
     }
 }
 
-/// Corner sizes.
+/// Corner sizes. A corner inside another is the outer one less the gap between them, so the two
+/// curves run parallel (ios/docs/design-eye.md).
 enum SNRadius {
-    /// Stream and category cards: a continuous corner reads like the desktop's 24 px squircle.
-    static let card: CGFloat = 16
+    /// Stream cards: the 10 point thumbnail plus the card's 8 point inset.
+    static let card: CGFloat = 18
     /// A thumbnail inside a card, concentric with the card's corner.
     static let thumb: CGFloat = 10
+    /// A category tile, which is its box art with nothing around it.
+    static let tile: CGFloat = 12
     static let panel: CGFloat = 12
     static let chip: CGFloat = 8
     static let row: CGFloat = 8
