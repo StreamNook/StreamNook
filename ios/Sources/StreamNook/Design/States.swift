@@ -58,20 +58,14 @@ struct SkeletonTiles: View {
                     RoundedRectangle(cornerRadius: SNRadius.tile, style: .continuous)
                         .fill(SN.surface)
                         .aspectRatio(3 / 4, contentMode: .fit)
-                    // The tile's chin height, taken from its own fonts: the name's lines, then viewers.
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(verbatim: " ").font(.sn(12.5, 500)).lineLimit(nameLines, reservesSpace: true)
-                        Text(verbatim: " ").font(.snCaption)
-                    }
-                    .hidden()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .overlay(alignment: .topLeading) {
-                        VStack(alignment: .leading, spacing: 7) {
-                            Capsule().fill(SN.surface).frame(height: 10).padding(.trailing, 28)
-                            Capsule().fill(SN.surface).frame(height: 8).padding(.trailing, 52)
+                    CategoryChin.height(nameLines: nameLines)
+                        .overlay(alignment: .topLeading) {
+                            VStack(alignment: .leading, spacing: 7) {
+                                Capsule().fill(SN.surface).frame(height: 10).padding(.trailing, 28)
+                                Capsule().fill(SN.surface).frame(height: 8).padding(.trailing, 52)
+                            }
+                            .padding(.top, 3)
                         }
-                        .padding(.top, 3)
-                    }
                 }
             }
         }

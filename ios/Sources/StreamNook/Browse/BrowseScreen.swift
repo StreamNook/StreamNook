@@ -232,8 +232,9 @@ struct CategoryGrid: View {
 }
 
 /// One category: the box art is the tile, with nothing around it and nothing over it, and a chin
-/// under it: the name, then the live viewers the core sums. The name's lines are reserved, so
-/// every chin in a grid is one height and the rows step evenly.
+/// under it: the name, then the live viewers the core sums right under it. The chin is as tall as
+/// its longest case (every name line plus viewers), so every chin in a grid is one height and the
+/// rows step evenly, while a short name keeps its viewers close.
 struct CategoryTile: View {
     let category: TwitchCategory
     /// The box art's size in pixels, the size the tile is drawn at.
@@ -259,18 +260,21 @@ struct CategoryTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             artwork
-            VStack(alignment: .leading, spacing: 0) {
-                Text(category.name)
-                    .font(.sn(12.5, 500))
-                    .foregroundStyle(SN.textPrimary)
-                    .lineLimit(nameLines, reservesSpace: true)
-                if let viewers {
-                    Text(viewers)
-                        .font(.snCaption)
-                        .foregroundStyle(SN.textSecondary)
-                        .lineLimit(1)
+            CategoryChin.height(nameLines: nameLines)
+                .overlay(alignment: .topLeading) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(category.name)
+                            .font(CategoryChin.nameFont)
+                            .foregroundStyle(SN.textPrimary)
+                            .lineLimit(nameLines)
+                        if let viewers {
+                            Text(viewers)
+                                .font(CategoryChin.viewersFont)
+                                .foregroundStyle(SN.textSecondary)
+                                .lineLimit(1)
+                        }
+                    }
                 }
-            }
         }
     }
 
@@ -291,6 +295,26 @@ struct CategoryTile: View {
     /// Absent only when the core could not count (its fallback search carries no viewers).
     private var viewers: String? {
         guard let count = category.viewerCount else { return nil }
-        return count > 0 ? "\(count.formatted(.number.notation(.compactName))) viewers" : "No live streams"
+        switch count {
+        case 0: return "No live streams"
+        case 1: return "1 viewer"
+        default: return "\(count.formatted(.number.notation(.compactName))) viewers"
+        }
+    }
+}
+
+/// The category chin's type and its fixed height, shared by the tile and its skeleton.
+enum CategoryChin {
+    static let nameFont = Font.sn(12.5, 500)
+    static let viewersFont = Font.snCaption
+
+    /// An invisible block as tall as the chin's longest case: every name line, then viewers.
+    static func height(nameLines: Int) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(verbatim: " ").font(nameFont).lineLimit(nameLines, reservesSpace: true)
+            Text(verbatim: " ").font(viewersFont)
+        }
+        .hidden()
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
