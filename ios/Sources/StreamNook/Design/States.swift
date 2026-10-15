@@ -1,3 +1,4 @@
+import SNKit
 import SwiftUI
 
 /// First-load placeholders shaped like stream cards: a 16:9 block, then a bar at 75 percent and
@@ -28,6 +29,53 @@ struct SkeletonCards: View {
             }
         }
         .padding(.horizontal, 16)
+        .padding(.bottom, 16)
+        .opacity(dim ? 0.5 : 1)
+        .onAppear {
+            guard !still else { return }
+            withAnimation(.easeInOut(duration: 1).repeatForever(autoreverses: true)) { dim = true }
+        }
+        .accessibilityLabel("Loading")
+    }
+}
+
+/// First-load placeholders shaped like category tiles: the art's 3:4 block and two bars in a chin
+/// as tall as the tile's, in the grid's columns, pulsing like the cards. The rows land where the
+/// tiles will, so nothing moves when they arrive.
+struct SkeletonTiles: View {
+    var rows = 3
+    @Environment(\.snStill) private var still
+    @State private var dim = false
+    @State private var width: CGFloat = 402
+
+    var body: some View {
+        let count = WindowShape(width: width, height: 874).categoryColumns
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: CategoryTile.gap, alignment: .top), count: count),
+                  spacing: CategoryTile.rowGap) {
+            ForEach(0..<rows * count, id: \.self) { _ in
+                VStack(alignment: .leading, spacing: 5) {
+                    RoundedRectangle(cornerRadius: SNRadius.tile, style: .continuous)
+                        .fill(SN.surface)
+                        .aspectRatio(3 / 4, contentMode: .fit)
+                    // The tile's chin height, taken from its name font on two lines.
+                    Text(verbatim: " ")
+                        .font(.sn(12.5, 500))
+                        .lineLimit(2, reservesSpace: true)
+                        .hidden()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .overlay(alignment: .topLeading) {
+                            VStack(alignment: .leading, spacing: 7) {
+                                Capsule().fill(SN.surface).frame(height: 10).padding(.trailing, 28)
+                                Capsule().fill(SN.surface).frame(height: 8).padding(.trailing, 52)
+                            }
+                            .padding(.top, 3)
+                        }
+                }
+            }
+        }
+        .padding(.horizontal, CategoryTile.inset)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .padding(.top, CategoryTile.top)
         .padding(.bottom, 16)
         .opacity(dim ? 0.5 : 1)
         .onAppear {

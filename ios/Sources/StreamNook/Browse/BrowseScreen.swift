@@ -73,7 +73,7 @@ struct BrowseScreen: View {
         case .categories:
             let shown = browse.categoryResults ?? browse.categories
             if (browse.categoriesLoading || browse.searching) && shown.isEmpty {
-                SkeletonCards()
+                SkeletonTiles()
             } else if shown.isEmpty {
                 EmptyNote(text: browse.categoryResults != nil ? "No categories found." : "No categories yet, pull to refresh.", hint: nil)
             } else {
@@ -203,41 +203,90 @@ struct CategoryGrid: View {
     let open: (TwitchCategory) -> Void
     let more: (() async -> Void)?
     @State private var width: CGFloat = 402
+    @Environment(\.displayScale) private var scale
 
     var body: some View {
         let playing = latch.playing(settleKey)
         let count = WindowShape(width: width, height: 874).categoryColumns
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: count), spacing: 12) {
+        let art = CategoryTile.artSize(gridWidth: width, columns: count, scale: scale)
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: CategoryTile.gap, alignment: .top), count: count),
+                  spacing: CategoryTile.rowGap) {
             ForEach(Array(categories.enumerated()), id: \.element.id) { index, category in
-                Button { open(category) } label: {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Color.clear
-                            .aspectRatio(3 / 4, contentMode: .fit)
-                            .background {
-                                AsyncImage(url: TwitchImage.boxArt(category.boxArtURL)) { phase in
-                                    if let image = phase.image { image.resizable().scaledToFill() } else { SN.surface }
-                                }
-                            }
-                            .clipShape(RoundedRectangle(cornerRadius: SNRadius.thumb, style: .continuous))
-                        Text(category.name)
-                            .font(.snCardTitle)
-                            .foregroundStyle(SN.textPrimary)
-                            .lineLimit(1)
-                            .padding(.horizontal, 2)
+                Button { open(category) } label: { CategoryTile(category: category, art: art) }
+                    .buttonStyle(CardPress())
+                    .settleIn(index: index, active: playing)
+                    .onAppear {
+                        if let more, index >= categories.count - 3 * count { Task { await more() } }
                     }
-                    .padding(8)
-                    .snMediaCard()
-                }
-                .buttonStyle(CardPress())
-                .settleIn(index: index, active: playing)
-                .onAppear {
-                    if let more, index >= categories.count - 3 * count { Task { await more() } }
+            }
+        }
+        .padding(.horizontal, CategoryTile.inset)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .padding(.top, CategoryTile.top)
+        .padding(.bottom, 24)
+        .settles(latch, key: settleKey, ready: !categories.isEmpty)
+    }
+}
+
+/// One category: the box art is the tile, with nothing around it and nothing over it, and a chin
+/// under it of the same height everywhere: the name and the live viewers when the core sends them
+/// (the top list), or the name on up to two lines when it does not (search), so long names that
+/// share a start ("Tom Clancy's Rainbow Six ...") stay apart.
+struct CategoryTile: View {
+    let category: TwitchCategory
+    /// The box art's size in pixels, the size the tile is drawn at.
+    let art: (width: Int, height: Int)
+    @Environment(\.displayScale) private var scale
+
+    static let gap: CGFloat = 10
+    static let rowGap: CGFloat = 14
+    /// The page's 16 pt margin, so the art lines up with the search field and segments above it.
+    static let inset: CGFloat = 16
+    /// The space between the header and the first row of tiles.
+    static let top: CGFloat = 4
+
+    /// The art's pixel size for a column, rounded up a step so small width changes ask for the
+    /// same picture.
+    static func artSize(gridWidth: CGFloat, columns: Int, scale: CGFloat) -> (width: Int, height: Int) {
+        let column = (gridWidth - 2 * inset - CGFloat(columns - 1) * gap) / CGFloat(columns)
+        let width = Int((max(column, 60) * scale / 30).rounded(.up)) * 30
+        return (width, width * 4 / 3)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            artwork
+            VStack(alignment: .leading, spacing: 0) {
+                Text(category.name)
+                    .font(.sn(12.5, 500))
+                    .foregroundStyle(SN.textPrimary)
+                    .lineLimit(viewers == nil ? 2 : 1, reservesSpace: viewers == nil)
+                if let viewers {
+                    Text(viewers)
+                        .font(.snCaption)
+                        .foregroundStyle(SN.textSecondary)
+                        .lineLimit(1)
                 }
             }
         }
-        .padding(.horizontal, 16)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
-        .padding(.bottom, 24)
-        .settles(latch, key: settleKey, ready: !categories.isEmpty)
+    }
+
+    private var artwork: some View {
+        let shape = RoundedRectangle(cornerRadius: SNRadius.tile, style: .continuous)
+        return Color.clear
+            .aspectRatio(3 / 4, contentMode: .fit)
+            .background {
+                AsyncImage(url: TwitchImage.boxArt(category.boxArtURL, width: art.width, height: art.height)) { phase in
+                    if let image = phase.image { image.resizable().scaledToFill() } else { SN.surface }
+                }
+            }
+            .clipShape(shape)
+            // A pixel-thin edge so art as dark as the page keeps its shape; on bright art it vanishes.
+            .overlay { shape.strokeBorder(SN.textPrimary.opacity(0.10), lineWidth: 1 / scale) }
+    }
+
+    private var viewers: String? {
+        guard let count = category.viewerCount, count > 0 else { return nil }
+        return "\(count.formatted(.number.notation(.compactName))) viewers"
     }
 }

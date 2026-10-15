@@ -102,6 +102,8 @@ enum SNRadius {
     static let card: CGFloat = 16
     /// A thumbnail inside a card, concentric with the card's corner.
     static let thumb: CGFloat = 10
+    /// A category tile, which is its box art with nothing around it.
+    static let tile: CGFloat = 12
     static let panel: CGFloat = 12
     static let chip: CGFloat = 8
     static let row: CGFloat = 8

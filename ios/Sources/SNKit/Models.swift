@@ -68,17 +68,22 @@ public struct TwitchCategory: Codable, Sendable, Hashable, Identifiable {
     public var id: String
     public var name: String
     public var boxArtURL: String?
+    /// Live viewers across the category, summed by the core; the top list carries it, search
+    /// results do not.
+    public var viewerCount: Int?
 
     enum CodingKeys: String, CodingKey {
         case id
         case name
         case boxArtURL = "box_art_url"
+        case viewerCount = "viewer_count"
     }
 
-    public init(id: String, name: String, boxArtURL: String? = nil) {
+    public init(id: String, name: String, boxArtURL: String? = nil, viewerCount: Int? = nil) {
         self.id = id
         self.name = name
         self.boxArtURL = boxArtURL
+        self.viewerCount = viewerCount
     }
 }
 
