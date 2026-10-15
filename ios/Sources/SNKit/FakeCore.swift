@@ -164,14 +164,13 @@ public final class FakeCore: CoreBridge {
         case "midnightmod": ("midnight", "#4ade80")
         default: nil
         }
+        var view: [String: Any] = ["spans": [["type": "text", "text": lines[n % lines.count]]]]
         if let member {
-            message["metadata"] = ["view": [
-                "name_color": member.color,
-                "badges": [["url": "streamnook-house:streamnook-default", "title": "StreamNook", "provider": "streamnook"]],
-                "spans": [["type": "text", "text": lines[n % lines.count]]],
-                "atmosphere": member.atmosphere,
-            ] as [String: Any]]
+            view["name_color"] = member.color
+            view["badges"] = [["url": "streamnook-house:streamnook-default", "title": "StreamNook", "provider": "streamnook"]]
+            view["atmosphere"] = member.atmosphere
         }
+        message["metadata"] = ["view": view]
         return (try? json(message)) ?? "{}"
     }
 

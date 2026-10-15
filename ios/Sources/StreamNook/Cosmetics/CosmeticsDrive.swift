@@ -92,6 +92,10 @@ enum CosmeticsDrive {
             if let badge = screen.ext?.sevenTvBadges.first(where: { $0.id == id }) { await screen.equipSevenTvBadge(badge) }
         case "twitch":
             if let badge = screen.ext?.twitchSelectable.first(where: { $0.setID == id }) { await screen.equipTwitchBadge(badge) }
+        case "color":
+            if let color = screen.ext?.namedColors.first(where: { $0.value == id }) { await screen.setChatColor(color) }
+        case "bio":
+            _ = await screen.saveBio(id.replacingOccurrences(of: "_", with: " "))
         default:
             log.error("drive cosmetics: unknown equip \(parts[1], privacy: .public)")
         }
