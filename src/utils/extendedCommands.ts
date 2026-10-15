@@ -206,7 +206,7 @@ export function helpLines(arg: string | undefined, mobile = IS_MOBILE): string[]
       list.push(`/${c.name}`);
       byCategory.set(c.category, list);
     }
-    const lines = ['Commands (try /help <command> for one of them, or the command button left of the emote picker):'];
+    const lines = ['Commands (try /help <command> for one of them, or Commands in the emote menu, the smiley in the message box):'];
     byCategory.forEach((names, cat) => lines.push(`${cat}: ${names.join(' ')}`));
     return lines;
   }

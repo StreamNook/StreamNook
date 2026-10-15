@@ -398,7 +398,7 @@ export async function executeUndo(channel: string): Promise<void> {
  * Quick check used by the slash handler to short-circuit if the user isn't a
  * moderator (or broadcaster) of the current channel. The user-badges cache
  * in chatConnectionStore is the source of truth — same string format the
- * existing ModeratorMenu mounting check uses.
+ * moderator check behind the Tools menu uses.
  */
 export function isUserModeratorOf(channel: string): boolean {
   const chKey = channel.toLowerCase();
