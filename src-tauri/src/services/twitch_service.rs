@@ -211,6 +211,78 @@ pub(crate) fn category_row_from_gql(node: &serde_json::Value) -> Option<serde_js
     Some(row)
 }
 
+/// A category as category search answers it, under Helix's `games` field
+/// names so every caller reads it as before. `viewer_count` is the live
+/// viewers across the category (0 when nobody is live); it is absent only
+/// when Twitch's GQL was unreachable and the answer came from Helix's search,
+/// which carries no viewers. The box art keeps the `{width}x{height}` template.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CategoryRow {
+    pub id: String,
+    pub name: String,
+    pub box_art_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewer_count: Option<u64>,
+}
+
+impl CategoryRow {
+    /// A row from a GQL `Game` node; a null `viewersCount` means nobody is live.
+    fn from_gql(node: &serde_json::Value) -> Option<Self> {
+        let id = node.get("id").and_then(|v| v.as_str()).filter(|v| !v.is_empty())?;
+        let name = node
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|n| !n.is_empty())
+            .or_else(|| node.get("displayName").and_then(|v| v.as_str()))?;
+        Some(Self {
+            id: id.to_string(),
+            name: name.to_string(),
+            box_art_url: node.get("boxArtURL").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+            viewer_count: Some(node.get("viewersCount").and_then(|v| v.as_u64()).unwrap_or(0)),
+        })
+    }
+
+    /// A row from a Helix `search/categories` or `games` row, which carries no viewers.
+    fn from_helix(row: &serde_json::Value) -> Option<Self> {
+        let id = row.get("id").and_then(|v| v.as_str()).filter(|v| !v.is_empty())?;
+        let name = row.get("name").and_then(|v| v.as_str()).filter(|n| !n.is_empty())?;
+        Some(Self {
+            id: id.to_string(),
+            name: name.to_string(),
+            box_art_url: row.get("box_art_url").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+            viewer_count: None,
+        })
+    }
+}
+
+/// Category search order: the category named exactly what was typed first
+/// (case-insensitive), then names that start with it, then the rest; within
+/// each, the most live viewers first, and Twitch's own order on a tie. Repeats
+/// of an id keep their first place (the exact lookup and the search can both
+/// return the same category). Cut to `limit`.
+pub fn rank_category_results(query: &str, rows: Vec<CategoryRow>, limit: usize) -> Vec<CategoryRow> {
+    let q = query.trim().to_lowercase();
+    let mut seen = std::collections::HashSet::new();
+    let mut rows: Vec<CategoryRow> = rows.into_iter().filter(|r| seen.insert(r.id.clone())).collect();
+    let tier = |r: &CategoryRow| -> u8 {
+        let name = r.name.trim().to_lowercase();
+        if name == q {
+            0
+        } else if name.starts_with(&q) {
+            1
+        } else {
+            2
+        }
+    };
+    rows.sort_by(|a, b| {
+        tier(a)
+            .cmp(&tier(b))
+            .then_with(|| b.viewer_count.unwrap_or(0).cmp(&a.viewer_count.unwrap_or(0)))
+    });
+    rows.truncate(limit);
+    rows
+}
+
 /// A Helix `search/channels`-shaped row from a GQL `User` node: a live
 /// channel carries its stream id, preview and start time, an offline one its
 /// user id and avatar, and both the channel title and category.
@@ -3273,13 +3345,33 @@ impl TwitchService {
             .unwrap_or_default())
     }
 
-    /// Search for categories by name (uses Twitch search API for fuzzy matching)
-    /// Returns a list of matching categories with id, name, and box_art_url
-    pub async fn search_categories(query: &str, limit: u32) -> Result<Vec<serde_json::Value>> {
-        let token = Self::get_token().await.ok();
-        if token.is_none() {
-            return Self::search_categories_public(query, limit).await;
+    /// Categories matching what was typed, ranked by `rank_category_results`,
+    /// each with its live viewers. One public GQL request answers both Twitch's
+    /// fuzzy search and the category named exactly what was typed, which the
+    /// search alone can miss or bury ("art" lists "Artifact" before "Art"). It
+    /// needs no account. When GQL fails, Helix's search answers (signed in),
+    /// with the exact name looked up beside it, and without viewers.
+    pub async fn search_categories(query: &str, limit: u32) -> Result<Vec<CategoryRow>> {
+        let query = query.trim();
+        let limit = limit.clamp(1, 100);
+        if query.is_empty() {
+            return Ok(Vec::new());
         }
+        let rows = match Self::search_categories_public(query, limit).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                debug!("[TwitchService] category search over GQL failed ({e}), asking Helix");
+                let exact = Self::categories_by_name(&[query.to_string()]).await.unwrap_or_default();
+                let fuzzy = Self::search_categories_helix(query, limit).await?;
+                exact.iter().chain(fuzzy.iter()).filter_map(CategoryRow::from_helix).collect()
+            }
+        };
+        Ok(rank_category_results(query, rows, limit as usize))
+    }
+
+    /// Helix's fuzzy category search, as raw rows (no viewers).
+    async fn search_categories_helix(query: &str, limit: u32) -> Result<Vec<serde_json::Value>> {
+        let token = Self::get_token().await?;
         let client = crate::services::http::client().clone();
 
         let url = format!(
@@ -3288,16 +3380,14 @@ impl TwitchService {
             limit
         );
 
-        let mut request = client.get(&url).header("Client-Id", CLIENT_ID);
-
-        if let Some(token) = &token {
-            request = request.header(AUTHORIZATION, format!("Bearer {}", token));
-        }
-
-        let response = request.send().await?;
+        let response = client
+            .get(&url)
+            .header("Client-Id", CLIENT_ID)
+            .header(AUTHORIZATION, format!("Bearer {}", token))
+            .send()
+            .await?;
         if !response.status().is_success() {
-            debug!("[TwitchService] category search: HTTP {}, asking the public GQL", response.status());
-            return Self::search_categories_public(query, limit).await;
+            return Err(anyhow::anyhow!("Helix category search: HTTP {}", response.status()));
         }
         let response = response.json::<serde_json::Value>().await?;
 
@@ -3977,17 +4067,24 @@ impl TwitchService {
         Ok(rows)
     }
 
-    /// Category search with no account: the signed-out answer for
-    /// `search_categories`, in the Helix row shape.
-    async fn search_categories_public(query: &str, limit: u32) -> Result<Vec<serde_json::Value>> {
+    /// Category search with no account, in one request: the category named
+    /// exactly `query` (`game(name:)` ignores case) first, then Twitch's fuzzy
+    /// search, every row with its live viewers. Unranked; repeats are left in.
+    async fn search_categories_public(query: &str, limit: u32) -> Result<Vec<CategoryRow>> {
         let body = serde_json::json!({
             "operationName": "StreamNookSearchCategories",
             "query": "query StreamNookSearchCategories($query: String!, $first: Int!) { \
-                searchCategories(query: $query, first: $first) { edges { node { id name displayName boxArtURL } } } }",
-            "variables": { "query": query.trim(), "first": limit.clamp(1, 100) },
+                exact: game(name: $query) { id name displayName boxArtURL viewersCount } \
+                searchCategories(query: $query, first: $first) { edges { node { id name displayName boxArtURL viewersCount } } } }",
+            "variables": { "query": query, "first": limit },
         });
         let resp = Self::gql_public_read(body).await?;
-        Ok(gql_nodes(resp.pointer("/data/searchCategories")).into_iter().filter_map(category_row_from_gql).collect())
+        let exact = resp.pointer("/data/exact").filter(|v| !v.is_null());
+        Ok(exact
+            .into_iter()
+            .chain(gql_nodes(resp.pointer("/data/searchCategories")))
+            .filter_map(CategoryRow::from_gql)
+            .collect())
     }
 
     /// A category's id from its exact name, with no account.
@@ -7160,6 +7257,62 @@ pub fn rank_search_results(query: &str, rows: &mut [TwitchStream]) {
             .then_with(|| b.is_live.unwrap_or(false).cmp(&a.is_live.unwrap_or(false)))
             .then_with(|| b.viewer_count.cmp(&a.viewer_count))
     });
+}
+
+#[cfg(test)]
+mod category_rank_tests {
+    use super::{rank_category_results, CategoryRow};
+
+    fn row(id: &str, name: &str, viewers: Option<u64>) -> CategoryRow {
+        CategoryRow { id: id.into(), name: name.into(), box_art_url: String::new(), viewer_count: viewers }
+    }
+
+    fn names(rows: &[CategoryRow]) -> Vec<&str> {
+        rows.iter().map(|r| r.name.as_str()).collect()
+    }
+
+    #[test]
+    fn the_exact_name_leads_ignoring_case() {
+        let rows = vec![row("1", "Artifact", Some(28)), row("2", "Art Alive", Some(0)), row("3", "Art", Some(7419))];
+        assert_eq!(names(&rank_category_results("art", rows, 40))[0], "Art");
+        let rows = vec![row("1", "VALORANT Mobile", Some(2)), row("2", "VALORANT", Some(27043))];
+        assert_eq!(names(&rank_category_results(" valorant ", rows, 40))[0], "VALORANT");
+    }
+
+    #[test]
+    fn prefix_beats_the_rest_and_viewers_order_each_tier() {
+        let rows = vec![
+            row("1", "Tom Clancy's Rainbow Six", Some(2)),
+            row("2", "Rainbow Six Mobile", Some(0)),
+            row("3", "Tom Clancy's Rainbow Six Extraction", Some(40)),
+            row("4", "Rainbow Six Siege", Some(6792)),
+        ];
+        assert_eq!(
+            names(&rank_category_results("rainbow six", rows, 40)),
+            ["Rainbow Six Siege", "Rainbow Six Mobile", "Tom Clancy's Rainbow Six Extraction", "Tom Clancy's Rainbow Six"]
+        );
+    }
+
+    #[test]
+    fn ties_keep_twitchs_order_and_missing_viewers_count_as_none_live() {
+        let rows = vec![row("1", "Just Cause 3", None), row("2", "Just Cause 4", Some(0)), row("3", "Just Chess", None)];
+        assert_eq!(names(&rank_category_results("just", rows, 40)), ["Just Cause 3", "Just Cause 4", "Just Chess"]);
+    }
+
+    #[test]
+    fn a_repeated_id_keeps_its_first_place_and_the_limit_cuts() {
+        let rows = vec![row("9", "Art", Some(7419)), row("1", "Artifact", Some(28)), row("9", "Art", Some(7419)), row("2", "Artisan TD", Some(0))];
+        let ranked = rank_category_results("art", rows, 2);
+        assert_eq!(names(&ranked), ["Art", "Artifact"]);
+    }
+
+    #[test]
+    fn rows_serialize_under_helix_field_names() {
+        let json = serde_json::to_value(row("509660", "Art", Some(7419))).unwrap();
+        assert_eq!(json["box_art_url"], "");
+        assert_eq!(json["viewer_count"], 7419);
+        assert!(serde_json::to_value(row("1", "A", None)).unwrap().get("viewer_count").is_none());
+    }
 }
 
 #[cfg(test)]

@@ -196,8 +196,13 @@ pub async fn suggest_drop_games(
         crate::services::twitch_service::TwitchService::search_categories(query.trim(), 25)
             .await
             .unwrap_or_default()
-            .iter()
-            .filter_map(category_suggestion)
+            .into_iter()
+            .map(|c| crate::services::game_suggest::GameSuggestion {
+                box_art_url: crate::services::game_suggest::sized_box_art(&c.box_art_url),
+                id: c.id,
+                name: c.name,
+                drop_campaigns: 0,
+            })
             .collect()
     } else {
         Vec::new()

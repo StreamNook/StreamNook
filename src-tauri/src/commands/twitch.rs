@@ -1904,13 +1904,13 @@ pub async fn refresh_whisper_history(
     Ok(out)
 }
 
-/// Search for categories by name (uses Twitch search API for fuzzy matching)
-/// Returns a list of matching categories with id, name, and box_art_url
+/// Categories matching `query`: the exact name first, then names starting with
+/// it, then the rest, each tier by live viewers (see `rank_category_results`).
 #[tauri::command]
 pub async fn search_categories(
     query: String,
     limit: u32,
-) -> Result<Vec<serde_json::Value>, String> {
+) -> Result<Vec<crate::services::twitch_service::CategoryRow>, String> {
     TwitchService::search_categories(&query, limit)
         .await
         .map_err(|e| e.to_string())

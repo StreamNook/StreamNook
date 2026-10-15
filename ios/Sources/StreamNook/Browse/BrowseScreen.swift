@@ -73,12 +73,13 @@ struct BrowseScreen: View {
         case .categories:
             let shown = browse.categoryResults ?? browse.categories
             if (browse.categoriesLoading || browse.searching) && shown.isEmpty {
-                SkeletonTiles()
+                SkeletonTiles(nameLines: browse.trimmed.isEmpty ? 1 : 2)
             } else if shown.isEmpty {
                 EmptyNote(text: browse.categoryResults != nil ? "No categories found." : "No categories yet, pull to refresh.", hint: nil)
             } else {
                 CategoryGrid(categories: shown, latch: categoryLatch,
                              settleKey: browse.categoryResults != nil ? "q:\(browse.trimmed)" : "top",
+                             nameLines: browse.categoryResults != nil ? 2 : 1,
                              open: { model.nav.push(.category($0)) },
                              more: browse.categoryResults == nil && browse.hasMore ? { await browse.loadMore(model.core) } : nil)
                 if browse.categoryResults == nil && browse.loadingMore {
@@ -195,11 +196,13 @@ final class BrowseModel {
 }
 
 /// Categories as box-art tiles, three across on a phone and more on a wider window, loading the
-/// next page as the end nears.
+/// next page as the end nears. Search results give names two lines (`nameLines`), since a search
+/// brings up families of long names that share a start ("Tom Clancy's Rainbow Six ...").
 struct CategoryGrid: View {
     let categories: [TwitchCategory]
     let latch: SettleLatch
     let settleKey: String
+    var nameLines = 1
     let open: (TwitchCategory) -> Void
     let more: (() async -> Void)?
     @State private var width: CGFloat = 402
@@ -212,7 +215,7 @@ struct CategoryGrid: View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: CategoryTile.gap, alignment: .top), count: count),
                   spacing: CategoryTile.rowGap) {
             ForEach(Array(categories.enumerated()), id: \.element.id) { index, category in
-                Button { open(category) } label: { CategoryTile(category: category, art: art) }
+                Button { open(category) } label: { CategoryTile(category: category, art: art, nameLines: nameLines) }
                     .buttonStyle(CardPress())
                     .settleIn(index: index, active: playing)
                     .onAppear {
@@ -229,13 +232,13 @@ struct CategoryGrid: View {
 }
 
 /// One category: the box art is the tile, with nothing around it and nothing over it, and a chin
-/// under it of the same height everywhere: the name and the live viewers when the core sends them
-/// (the top list), or the name on up to two lines when it does not (search), so long names that
-/// share a start ("Tom Clancy's Rainbow Six ...") stay apart.
+/// under it: the name, then the live viewers the core sums. The name's lines are reserved, so
+/// every chin in a grid is one height and the rows step evenly.
 struct CategoryTile: View {
     let category: TwitchCategory
     /// The box art's size in pixels, the size the tile is drawn at.
     let art: (width: Int, height: Int)
+    var nameLines = 1
     @Environment(\.displayScale) private var scale
 
     static let gap: CGFloat = 10
@@ -260,7 +263,7 @@ struct CategoryTile: View {
                 Text(category.name)
                     .font(.sn(12.5, 500))
                     .foregroundStyle(SN.textPrimary)
-                    .lineLimit(viewers == nil ? 2 : 1, reservesSpace: viewers == nil)
+                    .lineLimit(nameLines, reservesSpace: true)
                 if let viewers {
                     Text(viewers)
                         .font(.snCaption)
@@ -285,8 +288,9 @@ struct CategoryTile: View {
             .overlay { shape.strokeBorder(SN.textPrimary.opacity(0.10), lineWidth: 1 / scale) }
     }
 
+    /// Absent only when the core could not count (its fallback search carries no viewers).
     private var viewers: String? {
-        guard let count = category.viewerCount, count > 0 else { return nil }
-        return "\(count.formatted(.number.notation(.compactName))) viewers"
+        guard let count = category.viewerCount else { return nil }
+        return count > 0 ? "\(count.formatted(.number.notation(.compactName))) viewers" : "No live streams"
     }
 }
