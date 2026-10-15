@@ -161,7 +161,7 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
   // The room's chat modes in Rust's words (services/room_modes.rs), shown in
   // the composer while the setting is on.
   const showRoomModes = useAppStore((s) => s.settings.chat_input?.show_room_modes ?? true);
-  const roomModesAsPrompt = useAppStore((s) => s.settings.chat_input?.room_modes_style === 'prompt');
+  const roomModesAsPrompt = useAppStore((s) => s.settings.chat_input?.room_modes_style !== 'chip');
   const roomModes =
     showRoomModes && roomState?.modes && roomState.modes.modes.length > 0 ? roomState.modes : null;
   const gating = useMemo(() => {

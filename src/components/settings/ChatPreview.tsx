@@ -464,15 +464,15 @@ const SAMPLE_ROOM_MODES: RoomModeView = {
   ],
   chip: 'Followers 10m',
   exempt: false,
-  prompt: 'Followers-only (10m)',
-  prompt_short: 'Followers 10m',
+  prompt: 'You can chat in 4 minutes',
+  prompt_short: 'Chat in 4m',
   standing: null,
   slow_seconds: 30,
 };
 
 const ROOM_MODE_CAPTIONS: Record<'chip' | 'prompt', string> = {
   chip: 'a followers-only room in slow mode; hover the chip for both',
-  prompt: 'a followers-only room in slow mode',
+  prompt: 'a 10-minute followers-only room you followed 6 minutes ago',
 };
 
 /** The message box in a room with chat modes on, drawn the chosen way: the

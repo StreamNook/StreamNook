@@ -32,7 +32,10 @@
 //! - `budget(channel)`: the role, limits and room modes in force, for sizing a job.
 //! - `room_state_fields(channel)`: the merged room modes plus their words for
 //!   the message box (`room_modes`), shipped on every ROOMSTATE frame.
-//! - `note_room_state` / `note_own_badges`: fed by the IRC reader.
+//! - `note_room_state` / `note_own_badges` / `note_room_id`: fed by the IRC reader.
+//! - `own_follow_wanted` / `note_own_follow` / `own_follow_tick`: the account's
+//!   own follow of a followers-only room, looked up once per channel, so the
+//!   message box can say whether it holds the account back.
 //!
 //! Channels are bare lowercase Twitch logins (no `#`).
 
@@ -40,9 +43,10 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use crate::services::room_modes::{describe, ModesIn, Standing};
+use crate::services::room_modes::{describe_with, ModesIn, OwnFollow, Standing};
 
 /// Twitch's rolling window for the message budget.
 pub const WINDOW: Duration = Duration::from_secs(30);
@@ -152,11 +156,29 @@ pub struct Budget {
     pub followers_only_minutes: i64,
 }
 
+/// The account's own follow of a channel, learned for followers-only chat.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum FollowFact {
+    #[default]
+    NotAsked,
+    Asking,
+    /// `None` = not following.
+    Known(Option<DateTime<Utc>>),
+    /// The lookup had no answer; not asked again for this account.
+    Unanswered,
+}
+
 #[derive(Default)]
 struct ChannelFacts {
     modes: RoomModes,
     role: Option<Role>,
     viewer_is_sub: bool,
+    /// The channel's user id, from ROOMSTATE's `room-id`.
+    room_id: Option<String>,
+    follow: FollowFact,
+    /// Bumped whenever `follow` changes, so a countdown started for an older
+    /// answer stops.
+    follow_gen: u64,
     /// When the next send in this channel may go (booked or sent).
     last_slot: Option<Instant>,
     last_text: Option<(String, Instant)>,
@@ -369,6 +391,38 @@ impl Limiter {
         }
     }
 
+    /// The account's follow of `channel` as the room-mode words take it.
+    fn own_follow(&self, channel: &str, now: DateTime<Utc>) -> OwnFollow {
+        match self.channels.get(&key(channel)).map(|f| f.follow) {
+            Some(FollowFact::Known(None)) => OwnFollow::NotFollowing,
+            Some(FollowFact::Known(Some(since))) => OwnFollow::ForSecs((now - since).num_seconds().max(0)),
+            _ => OwnFollow::Unknown,
+        }
+    }
+
+    /// How long until the followers-only countdown for `channel` next changes
+    /// its words (a whole minute passes, or the wait ends). `None` when there
+    /// is no countdown, or `gen` belongs to an older follow answer.
+    fn follow_tick(&self, channel: &str, gen: u64, now: DateTime<Utc>) -> Option<Duration> {
+        let facts = self.channels.get(&key(channel))?;
+        if facts.follow_gen != gen || self.role_of(channel).privileged() {
+            return None;
+        }
+        let FollowFact::Known(Some(since)) = facts.follow else { return None };
+        let need = facts.modes.followers_only_minutes.filter(|m| *m > 0)? * 60;
+        let left = need - (now - since).num_seconds();
+        if left <= 0 {
+            return None;
+        }
+        // The words count whole minutes rounded up, so they change each time
+        // `left` crosses a minute; one more second lands just past it.
+        let to_change = match left % 60 {
+            0 => 60,
+            r => r,
+        };
+        Some(Duration::from_secs(to_change as u64 + 1))
+    }
+
     /// The room's merged ROOMSTATE fields and their words (`modes`), or `None`
     /// before any ROOMSTATE arrived for `channel`.
     fn room_fields(&self, channel: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
@@ -392,7 +446,7 @@ impl Limiter {
         if let Some(v) = m.r9k {
             out.insert("r9k".into(), v.into());
         }
-        let view = describe(
+        let view = describe_with(
             &ModesIn {
                 slow_seconds: m.slow_seconds.unwrap_or(0),
                 followers_only_minutes: m.followers_only_minutes.unwrap_or(-1),
@@ -401,6 +455,7 @@ impl Limiter {
                 unique: m.r9k.unwrap_or(false),
             },
             self.standing(channel),
+            self.own_follow(channel, Utc::now()),
         );
         out.insert("modes".into(), serde_json::to_value(view).unwrap_or_default());
         Some(out)
@@ -519,6 +574,71 @@ pub fn note_own_badges(channel: &str, badges: &str) -> bool {
     facts.role = role;
     facts.viewer_is_sub = is_sub;
     changed
+}
+
+/// The channel's user id, from ROOMSTATE's `room-id`.
+pub fn note_room_id(channel: &str, room_id: &str) {
+    let room_id = room_id.trim();
+    if !room_id.is_empty() {
+        limiter().facts(channel).room_id = Some(room_id.to_string());
+    }
+}
+
+/// Whether the account's follow of `channel` should be looked up now: the room
+/// is followers-only, the account is not known to be privileged there, and it
+/// has not been asked. Returns the channel's user id and marks it asked, so
+/// one lookup runs per channel and account.
+pub fn own_follow_wanted(channel: &str) -> Option<String> {
+    let mut l = limiter();
+    own_login_hint(&mut l);
+    if l.role_of(channel).privileged() {
+        return None;
+    }
+    let facts = l.facts(channel);
+    if facts.modes.followers_only_minutes.unwrap_or(-1) < 0 || facts.follow != FollowFact::NotAsked {
+        return None;
+    }
+    let room_id = facts.room_id.clone()?;
+    facts.follow = FollowFact::Asking;
+    Some(room_id)
+}
+
+/// The lookup's answer for `channel`: `Some(since)` following, `Some(None)`
+/// not following, `None` no answer. Returns the countdown generation.
+pub fn note_own_follow(channel: &str, answer: Option<Option<DateTime<Utc>>>) -> u64 {
+    let mut l = limiter();
+    let facts = l.facts(channel);
+    facts.follow = match answer {
+        Some(since) => FollowFact::Known(since),
+        None => FollowFact::Unanswered,
+    };
+    facts.follow_gen += 1;
+    facts.follow_gen
+}
+
+/// The account followed (or unfollowed) the channel whose user id is
+/// `room_id` from inside the app. Returns each open channel it applies to with
+/// its countdown generation, so their rooms can be worded again.
+pub fn note_own_follow_by_room_id(room_id: &str, following: bool) -> Vec<(String, u64)> {
+    let mut l = limiter();
+    let now = Utc::now();
+    let mut touched = Vec::new();
+    for (channel, facts) in l.channels.iter_mut() {
+        if facts.room_id.as_deref() == Some(room_id) {
+            facts.follow = FollowFact::Known(following.then_some(now));
+            facts.follow_gen += 1;
+            touched.push((channel.clone(), facts.follow_gen));
+        }
+    }
+    touched
+}
+
+/// How long until `channel`'s followers-only countdown next changes its words;
+/// `None` once it is over or a newer answer replaced generation `gen`.
+pub fn own_follow_tick(channel: &str, gen: u64) -> Option<Duration> {
+    let mut l = limiter();
+    own_login_hint(&mut l);
+    l.follow_tick(channel, gen, Utc::now())
 }
 
 /// The room's ROOMSTATE fields as merged so far, plus `modes`: the active
