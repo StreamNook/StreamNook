@@ -46,7 +46,8 @@ struct ChatPanel: View {
                 .overlay(alignment: .top) {
                     VStack(spacing: 4) {
                         if let rooms, !overlay, !rooms.activePins.isEmpty {
-                            PinnedBanner(pins: rooms.activePins)
+                            PinnedBanner(pins: rooms.activePins,
+                                         expanded: Binding(get: { rooms.pinsOpen }, set: { rooms.pinsOpen = $0 }))
                                 .padding(.horizontal, 10)
                                 .padding(.top, 6)
                         }

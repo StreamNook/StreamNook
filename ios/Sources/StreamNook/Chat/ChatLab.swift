@@ -124,6 +124,7 @@ struct ChatLabView: View {
 /// - `chatadd:LOGIN` opens LOGIN's chat beside the stream (found through the core's search)
 /// - `chattab:INDEX` puts the tab at INDEX on screen; `chattabclose:INDEX` closes it
 /// - `addchat[:QUERY]` opens the "Add a chat" sheet, searching QUERY; `addchat:close` closes it
+/// - `chatpins[:close]` unrolls (or rolls up) the pinned banner
 /// - `chatreload` reloads the room on screen (the core rebuilds the connection)
 /// - `chatrooms` logs the tabs, the room on screen, its pins and streaks
 /// - `findpins` opens, beside the stream, the first Browse channel with pinned messages
@@ -208,6 +209,8 @@ enum ChatDrive {
                 model.chat.addQuery = value
                 model.chat.addOpen = true
             }
+        case "chatpins":
+            withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.2)) { model.chat.pinsOpen = value != "close" }
         case "chatreload":
             if let session = model.chat.activeSession { ChatReload.reload(session) }
         case "chatrooms":

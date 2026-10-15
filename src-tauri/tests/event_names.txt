@@ -29,6 +29,8 @@ chat-identity-badges-found
 chat-identity-update-result
 chat-mention-ping
 chat-overlay-click-through
+chat-rebuilt
+chat-tabs
 drop-claimed
 drop-ready
 drops-login-complete

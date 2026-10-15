@@ -22,7 +22,7 @@ private struct StaticPopover: ViewModifier {
 /// pin never jumps to the message and there is no unpin here.
 struct PinnedBanner: View {
     let pins: [PinnedChat]
-    @State private var expanded = false
+    @Binding var expanded: Bool
 
     var body: some View {
         if let first = pins.first {

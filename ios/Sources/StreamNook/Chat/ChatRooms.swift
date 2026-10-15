@@ -30,6 +30,9 @@ final class ChatRooms {
     @ObservationIgnored var addQuery = ""
     /// Pinned messages by Twitch login, newest first, as the core's channel state reads them.
     private(set) var pins: [String: [PinnedChat]] = [:]
+    /// The pinned banner is unrolled; every room starts it collapsed.
+    var pinsOpen = false
+    @ObservationIgnored private var shownChannel: String?
     /// Watch streak and resub by room, read once when the room opens.
     private(set) var streaks: [String: Streaks] = [:]
     /// "room:watch" and "room:resub" waved away this session.
@@ -178,6 +181,10 @@ final class ChatRooms {
     /// Only the room on screen lays its rows out.
     private func showActive() {
         for (key, session) in sessions { session.pipeline.setVisible(key == state.activeChannel) }
+        if shownChannel != state.activeChannel {
+            shownChannel = state.activeChannel
+            pinsOpen = false
+        }
     }
 
     // MARK: Joining and leaving
