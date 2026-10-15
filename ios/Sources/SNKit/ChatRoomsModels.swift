@@ -294,7 +294,7 @@ extension ChatSocketFrame {
         case .roomState(let channel, _), .clearMessage(let channel, _), .clearChat(let channel, _, _, _),
              .cosmetics(let channel, _, _, _), .patch(let channel, _), .notice(let channel, _, _):
             raw = channel
-        case .status, .other: raw = nil
+        case .status, .other, .member: raw = nil
         }
         guard let raw else { return nil }
         let key = raw.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "#")).lowercased()
