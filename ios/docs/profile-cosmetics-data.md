@@ -28,6 +28,7 @@ and decoded by `ios/Sources/SNKit/CosmeticsModels.swift`. FakeCore answers every
 | `get_twitch_bio` / `update_twitch_bio` | `userId` / `description` | `String` | 300 characters max, checked in Rust; the write goes through the twitch.tv web session (no extra scope); answers what Twitch stored |
 | `update_twitch_display_name` | `displayName` | `{display_name, description}` | only the capitalization may change (checked in Rust, then by Twitch); error text is user-facing |
 | `upload_twitch_profile_image` | `kind` (`picture` or `banner`), `dataBase64` | | PNG, JPG or GIF up to 10 MB, read from the bytes; Twitch shows it a few seconds later, so re-read the header after a short wait |
+| `upload_seventv_profile_picture` | `userId` (7TV id), `dataBase64` | `String` (pending picture id) | PNG, JPG, GIF, WebP or AVIF up to 7 MB; needs the 7TV session and a 7TV subscription; 7TV processes it before it shows (the header's `picture` changes then), and refuses another while one is pending; `SESSION_EXPIRED` in the error = signed out |
 | `get_seventv_auth_status`, `get_seventv_login_url`, `store_seventv_token` (`accessToken`, `userId: ""`, `twitchId: ""`), `logout_seventv` | | | the core reads the 7TV account from the token |
 
 ## Events
