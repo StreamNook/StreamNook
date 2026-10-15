@@ -59,6 +59,12 @@ struct CosmeticsScreen: View {
                                                         as: OwnIdentityData?.self)
             }
             await screen.load()
+            // Fresh after the cache: the 7TV picture and the banner as they are now.
+            if let user, let fresh = try? await model.core.invoke("own_identity_header", args: [
+                "userId": user.id, "login": user.login, "displayName": user.displayName,
+            ], as: OwnIdentityData.self) {
+                identity = fresh
+            }
         }
         .sheet(isPresented: $screen.editingBio) {
             BioEditor(initial: screen.bio ?? "") { text in await screen.saveBio(text) }
@@ -83,7 +89,7 @@ struct CosmeticsScreen: View {
                     .animation(.easeOut(duration: 0.25), value: screen.sn?.theme)
                 HStack(alignment: .bottom, spacing: 10) {
                     CutoutAvatar(platformURL: user.profileImageURL, picture: identity?.picture, size: 56, local: localPicture)
-                        .padding(.top, -34)
+                        .padding(.top, -31)
                     HStack(spacing: 6) {
                         PaintedText(text: draftName.isEmpty ? user.displayName : draftName, font: .sn(19, 700), paint: screen.ext?.paints.first(where: \.worn)?.paint,
                                     fallback: nameColor(screen.ext?.chatColor), shadows: .all)
@@ -95,16 +101,17 @@ struct CosmeticsScreen: View {
                         }
                     }
                     .padding(.bottom, 2)
+                    .padding(.top, 3)
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 12)
                 if screen.sn != nil || screen.ext != nil {
                     ProfilePreviewRow(name: draftName.isEmpty ? user.displayName : draftName, picks: screen, framed: false)
-                        .padding(.horizontal, 10)
+                        .padding(.horizontal, 12)
                         .padding(.top, 12)
                 }
             }
-            .padding(.bottom, 10)
+            .padding(.bottom, 12)
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .snPanel(radius: 18)
             // Pinned over moving content, so it is solid at any Glassiness: choices pass behind it,
@@ -133,8 +140,8 @@ struct CosmeticsScreen: View {
     private func header(_ title: String, platform: PlatformMark.Platform? = nil, streamNook: Bool = false,
                         detail: String? = nil) -> some View {
         ProfileSectionHeader(title, platform: platform, streamNook: streamNook, detail: detail)
-            .padding(.top, 24)
-            .padding(.bottom, 10)
+            .padding(.top, 26)
+            .padding(.bottom, 12)
     }
 
     // MARK: Atmosphere
@@ -144,7 +151,7 @@ struct CosmeticsScreen: View {
         header("Atmosphere", streamNook: true)
         if let state = screen.sn {
             ScrollView(.horizontal) {
-                HStack(alignment: .top, spacing: 10) {
+                HStack(alignment: .top, spacing: 12) {
                     ForEach(state.atmospheres) { atmosphere in
                         Button { Task { await screen.equipTheme(atmosphere) } } label: {
                             AtmosphereTile(atmosphere: atmosphere,
@@ -160,17 +167,19 @@ struct CosmeticsScreen: View {
             .scrollIndicators(.hidden)
             .padding(.horizontal, -16)
             .padding(.vertical, -6)
-            if state.showChatToggle {
-                Toggle(isOn: Binding(get: { state.chatAtmosphere },
-                                     set: { show in Task { await screen.setChatAtmosphere(show) } })) {
-                    Text("Show in my chat messages").font(.snRowTitle).foregroundStyle(SN.textPrimary)
-                }
-                .tint(SN.accent)
-                .padding(.horizontal, 14)
-                .frame(minHeight: 50)
-                .snPanel()
-                .padding(.top, 12)
+            // Always here, so picking None never moves what is below; off and dimmed while nothing
+            // can show in chat.
+            Toggle(isOn: Binding(get: { state.showChatToggle && state.chatAtmosphere },
+                                 set: { show in Task { await screen.setChatAtmosphere(show) } })) {
+                Text("Show in my chat messages").font(.snRowTitle).foregroundStyle(SN.textPrimary)
             }
+            .tint(SN.accent)
+            .disabled(!state.showChatToggle)
+            .opacity(state.showChatToggle ? 1 : 0.4)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 50)
+            .snPanel()
+            .padding(.top, 12)
         }
     }
 
@@ -237,7 +246,7 @@ struct CosmeticsScreen: View {
     private func connectSevenTv(paints: Int) -> some View {
         HStack(spacing: 12) {
             BrandTile(platform: .sevenTV, size: 40)
-            Text(paints > 0 ? "Connect 7TV to wear a paint or a badge. You own \(paints) \(paints == 1 ? "paint" : "paints")."
+            Text(paints > 0 ? "Connect 7TV to switch paints. You own \(paints)."
                             : "Connect 7TV to wear your paints and badges.")
                 .font(.sn(13.5))
                 .foregroundStyle(SN.textSecondary)
@@ -257,8 +266,7 @@ struct CosmeticsScreen: View {
             .disabled(screen.signingIn)
             .opacity(screen.signingIn ? 0.6 : 1)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(12)
         .snPanel()
     }
 
@@ -307,7 +315,7 @@ struct CosmeticsScreen: View {
         if let ext = screen.ext, !ext.namedColors.isEmpty {
             header("Name color", platform: .twitch,
                    detail: ext.namedColors.first(where: { $0.hex.lowercased() == ext.chatColor?.lowercased() })?.label)
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 8), spacing: 10) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 8), spacing: 12) {
                 ForEach(ext.namedColors) { color in
                     let on = ext.chatColor?.lowercased() == color.hex.lowercased()
                     Button { Task { await screen.setChatColor(color) } } label: {
@@ -316,7 +324,7 @@ struct CosmeticsScreen: View {
                             .frame(width: 30, height: 30)
                             .overlay { if on { Circle().strokeBorder(SN.background, lineWidth: 2.5) } }
                             .overlay { if on { Circle().strokeBorder(SN.accent, lineWidth: 2).padding(-3) } }
-                            .frame(maxWidth: .infinity, minHeight: 40)
+                            .frame(maxWidth: .infinity, minHeight: 36)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(BadgePress())
@@ -324,8 +332,7 @@ struct CosmeticsScreen: View {
                     .accessibilityAddTraits(on ? .isSelected : [])
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 8)
+            .padding(12)
             .snPanel()
         }
     }
@@ -336,7 +343,8 @@ struct CosmeticsScreen: View {
     private var profileSection: some View {
         if let user {
             header("Profile", platform: .twitch)
-            TwitchProfileSection(model: model, screen: screen, user: user, picture: $localPicture, draftName: $draftName)
+            TwitchProfileSection(model: model, screen: screen, user: user, identity: identity,
+                                 picture: $localPicture, draftName: $draftName)
         }
     }
 
@@ -356,7 +364,7 @@ struct CosmeticsScreen: View {
     private func tileGrid<Item: Identifiable, Tile: View>(_ items: [Item], key: String, worn: @escaping (Item) -> Bool,
                                                          @ViewBuilder tile: @escaping (Item) -> Tile) -> some View {
         let all = store.openSections.contains(key)
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 5), spacing: 10) {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 5), spacing: 12) {
             ForEach(all || items.count <= Self.shortList + 2 ? items : Self.short(items, worn: worn)) { item in
                 tile(item)
             }
@@ -390,6 +398,8 @@ struct CosmeticsScreen: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .padding(.top, 2)
+            .padding(.bottom, -12)
         }
     }
 }
@@ -411,8 +421,10 @@ private struct BadgeTile: View {
         }
         .frame(maxWidth: .infinity)
         .aspectRatio(1, contentMode: .fit)
-        .snPanel(radius: 14)
-        .wornMarks(worn, radius: 14)
+        // A tile you can see on the page, so the grid's edge is the tiles', not the icons'.
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(SN.backgroundTertiary))
+        .overlay { RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(SN.borderSubtle, lineWidth: 0.5) }
+        .wornMarks(worn, radius: 12)
     }
 }
 

@@ -294,9 +294,11 @@ struct BadgePress: ButtonStyle {
     }
 }
 
-/// A profile picture whose box never changes size: the plain surface until the platform picture
-/// is known, then that picture, with the 7TV picture over it once it has decoded (and the
-/// platform picture back if the 7TV one fails).
+/// The one picture a person shows in StreamNook chat, in a box that never changes size: their 7TV
+/// picture when they have one, else their platform picture, never one over the other (a 7TV
+/// picture with transparent parts let the Twitch photo show through and read as one blended
+/// image). The plain surface shows until the picture decodes; the platform picture takes over
+/// only if the 7TV one fails.
 struct SevenTvAvatar: View {
     let platformURL: String?
     let picture: AvatarPick?
@@ -306,13 +308,12 @@ struct SevenTvAvatar: View {
     var body: some View {
         ZStack {
             Circle().fill(SN.surface)
-            if let platformURL {
+            if let picture, !sevenTvFailed {
+                CosmeticImage(picture.animated ?? picture.still, fallbacks: picture.animated == nil ? [] : [picture.still],
+                              animate: picture.animated != nil, alwaysMove: true, fill: true,
+                              onFailure: { sevenTvFailed = true })
+            } else if let platformURL {
                 CosmeticImage(platformURL, animate: false, fill: true)
-                if let picture, !sevenTvFailed {
-                    CosmeticImage(picture.animated ?? picture.still, fallbacks: picture.animated == nil ? [] : [picture.still],
-                                  animate: picture.animated != nil, alwaysMove: true, fill: true,
-                                  onFailure: { sevenTvFailed = true })
-                }
             }
         }
         .frame(width: size, height: size)

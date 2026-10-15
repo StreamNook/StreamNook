@@ -33,7 +33,10 @@ struct AtmosphereBand: View {
 }
 
 /// An avatar set into the card's edge: a ring of the card's own surface around it, so it reads as
-/// cut out of the band, with an optional medal (the StreamNook member badge) on its corner.
+/// cut out of the band, with an optional medal (the StreamNook member badge) on a disc at its
+/// lower right. It shows the one picture others see in chat; when that is the 7TV picture, 7TV's
+/// mark sits on its lower left, so which picture it is shows without words. With `explains`, a tap
+/// says which picture shows where.
 struct CutoutAvatar: View {
     let platformURL: String?
     let picture: AvatarPick?
@@ -42,8 +45,11 @@ struct CutoutAvatar: View {
     var medalLabel = ""
     /// A picture just picked, shown before Twitch serves it.
     var local: UIImage?
+    var explains = false
+    @State private var explaining = false
 
     private var ring: CGFloat { max(3, (size * 0.05).rounded()) }
+    private var showsSevenTv: Bool { local == nil && picture != nil }
 
     var body: some View {
         Group {
@@ -58,13 +64,63 @@ struct CutoutAvatar: View {
             .shadow(color: .black.opacity(0.35), radius: 8, y: 4)
             .overlay(alignment: .bottomTrailing) {
                 if let medal {
+                    // The badge on a disc of the card's own floor, so it reads as a medal, not a
+                    // mark scratched on the photo.
                     CosmeticImage(medal, animate: true)
-                        .frame(width: size * 0.34, height: size * 0.34)
-                        .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
-                        .offset(x: -ring * 0.2, y: -ring * 0.2)
+                        .frame(width: size * 0.24, height: size * 0.24)
+                        .frame(width: size * 0.32, height: size * 0.32)
+                        .background(Circle().fill(SN.backgroundTertiary))
+                        .overlay { Circle().stroke(Color.black.opacity(0.4), lineWidth: 0.5) }
+                        .offset(x: -ring * 0.6, y: -ring * 0.6)
                         .accessibilityLabel(medalLabel)
                 }
             }
+            .overlay(alignment: .bottomLeading) {
+                if showsSevenTv {
+                    PlatformMark(platform: .sevenTV, size: size * 0.11)
+                        .frame(width: size * 0.26, height: size * 0.26)
+                        .background(Circle().fill(SN.backgroundTertiary))
+                        .overlay { Circle().stroke(Color.black.opacity(0.4), lineWidth: 0.5) }
+                        .offset(x: ring * 0.6, y: -ring * 0.6)
+                        .accessibilityLabel("7TV picture")
+                }
+            }
+            .contentShape(Circle())
+            .onTapGesture { if explains { explaining = true } }
+            .glassPopover(isPresented: $explaining, arrowEdge: .top) {
+                PictureNote(sevenTv: showsSevenTv)
+            }
+            .accessibilityAddTraits(explains ? .isButton : [])
+            .accessibilityHint(explains ? "Says which picture shows where" : "")
+    }
+}
+
+/// Which of your two pictures shows where, as the avatar's tap explains it.
+private struct PictureNote: View {
+    let sevenTv: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            line(.sevenTV, sevenTv ? "Your 7TV picture. StreamNook and 7TV viewers see it beside your name in chat."
+                                   : "Set a 7TV picture and StreamNook and 7TV viewers see it in chat instead.")
+            line(.twitch, "Your Twitch picture shows on Twitch itself, and to everyone where you have no 7TV picture.")
+            Text("Change either in Edit profile.")
+                .font(.snCaption)
+                .foregroundStyle(SN.textMuted)
+        }
+        .padding(16)
+        .frame(width: 290)
+    }
+
+    private func line(_ platform: PlatformMark.Platform, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            PlatformMark(platform: platform, size: platform == .sevenTV ? 10 : 13)
+                .frame(width: 18)
+            Text(text)
+                .font(.sn(13.5))
+                .foregroundStyle(SN.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

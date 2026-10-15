@@ -42,7 +42,7 @@ struct CosmeticsPreviewRow: View {
     var body: some View {
         HStack(spacing: 4) {
             ForEach(Array(badges.enumerated()), id: \.offset) { _, url in
-                CosmeticImage(url, animate: true).frame(width: 18, height: 18)
+                PreviewBadge(url: url)
             }
             HStack(spacing: 0) {
                 PaintedText(text: name, font: .sn(14, 700), paint: paint, fallback: nameColor, shadows: .all)
@@ -113,5 +113,17 @@ private struct PanelIf: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         if on { content.snPanel() } else { content }
+    }
+}
+
+/// A badge in the preview row; one whose art fails takes itself out rather than leave a gap.
+private struct PreviewBadge: View {
+    let url: String
+    @State private var failed = false
+
+    var body: some View {
+        if !failed {
+            CosmeticImage(url, animate: true, onFailure: { failed = true }).frame(width: 18, height: 18)
+        }
     }
 }

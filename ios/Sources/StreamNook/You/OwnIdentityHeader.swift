@@ -11,7 +11,8 @@ struct OwnIdentityCard: View {
     let user: TwitchUser
     /// Your picks (badge, Atmosphere, paint, name color), read through the Edit profile model.
     let picks: CosmeticsScreenModel
-    @State private var identity: OwnIdentityData?
+    /// Read here, held by the You screen so the 7TV account row shows the same picture.
+    @Binding var identity: OwnIdentityData?
 
     static let band: CGFloat = 104
     static let avatar: CGFloat = 80
@@ -22,16 +23,16 @@ struct OwnIdentityCard: View {
             AtmosphereBand(look: look, tint: nameColor(picks.ext?.chatColor))
                 .frame(height: Self.band)
             CutoutAvatar(platformURL: user.profileImageURL, picture: identity?.picture, size: Self.avatar,
-                         medal: identity?.streamnook?.imageURL, medalLabel: identity?.streamnook?.label ?? "")
+                         medal: identity?.streamnook?.imageURL, medalLabel: identity?.streamnook?.label ?? "", explains: true)
                 .padding(.leading, 12)
                 .padding(.top, -(Self.avatar / 2 + 4))
             details
                 .padding(.horizontal, 16)
-                .padding(.top, 8)
+                .padding(.top, 4)
             if picks.sn != nil || picks.ext != nil {
                 ProfilePreviewRow(name: user.displayName, picks: picks, framed: false)
                     .padding(.horizontal, 12)
-                    .padding(.top, 14)
+                    .padding(.top, 16)
             }
             Rectangle().fill(SN.borderSubtle).frame(height: 0.5).padding(.top, 12)
             NavigationLink(value: Route.cosmetics) {
@@ -93,7 +94,7 @@ struct OwnIdentityCard: View {
                         Text(wearing).font(.snRowDetail).foregroundStyle(SN.textSecondary).lineLimit(1)
                     }
                 }
-                .padding(.top, 8)
+                .padding(.top, 6)
             }
         }
     }

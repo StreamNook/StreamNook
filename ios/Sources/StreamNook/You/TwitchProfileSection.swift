@@ -6,30 +6,39 @@ import UIKit
 // its own.
 import _PhotosUI_SwiftUI
 
-/// Your Twitch profile, the first section of Edit profile: your picture, your banner, your display
-/// name (its capitalization) and your bio, each a row of one panel. Picks show in the pinned
-/// preview at once; the core writes them through the twitch.tv session and answers in words when
-/// Twitch says no.
+/// Your profile, the first section of Edit profile: your two pictures (Twitch's and 7TV's, never
+/// blended into one), your Twitch banner, your display name (its capitalization) and your bio,
+/// each a row of one panel. The core writes Twitch through the twitch.tv session and 7TV through
+/// the 7TV session, and answers in words when either says no.
 struct TwitchProfileSection: View {
     let model: AppModel
     let screen: CosmeticsScreenModel
     let user: TwitchUser
-    /// A picture just picked, shown before Twitch serves it.
+    /// Your 7TV picture and Twitch banner, as the core reads them.
+    let identity: OwnIdentityData?
+    /// A Twitch picture just picked, shown before Twitch serves it.
     @Binding var picture: UIImage?
     /// The name as typed, shown in the preview while it is edited.
     @Binding var draftName: String
     @State private var banner: UIImage?
-    @State private var pictureItem: PhotosPickerItem?
+    @State private var twitchItem: PhotosPickerItem?
+    @State private var sevenTvItem: PhotosPickerItem?
     @State private var bannerItem: PhotosPickerItem?
     @State private var uploading: ImageKind?
+    /// A 7TV picture sent and waiting on 7TV's review.
+    @State private var sevenTvPending = false
     @State private var savingName = false
     @FocusState private var nameFocused: Bool
 
-    enum ImageKind: String { case picture, banner }
+    enum ImageKind: String { case picture, banner, sevenTV }
+
+    private var sevenTvSignedIn: Bool { screen.ext?.sevenTvSignedIn ?? false }
 
     var body: some View {
         VStack(spacing: 0) {
-            pictureRow
+            twitchPictureRow
+            divider
+            sevenTvPictureRow
             divider
             bannerRow
             divider
@@ -40,7 +49,8 @@ struct TwitchProfileSection: View {
             }
         }
         .snPanel()
-        .onChange(of: pictureItem) { _, item in if let item { Task { await upload(item, as: .picture) } } }
+        .onChange(of: twitchItem) { _, item in if let item { Task { await upload(item, as: .picture) } } }
+        .onChange(of: sevenTvItem) { _, item in if let item { Task { await upload(item, as: .sevenTV) } } }
         .onChange(of: bannerItem) { _, item in if let item { Task { await upload(item, as: .banner) } } }
         .onAppear { if draftName.isEmpty { draftName = user.displayName } }
     }
@@ -49,48 +59,100 @@ struct TwitchProfileSection: View {
         Rectangle().fill(SN.borderSubtle).frame(height: 0.5).padding(.leading, 14)
     }
 
-    // MARK: Rows
+    // MARK: Pictures
 
-    private var pictureRow: some View {
+    private var twitchPictureRow: some View {
         HStack(spacing: 12) {
-            Group {
+            pictureFrame(mark: .twitch) {
                 if let picture {
                     Image(uiImage: picture).resizable().scaledToFill()
                 } else {
                     CosmeticImage(user.profileImageURL ?? "", animate: false, fill: true)
                 }
             }
-            .frame(width: 44, height: 44)
-            .clipShape(Circle())
-            .overlay { Circle().stroke(Color.white.opacity(0.1), lineWidth: 1) }
-            rowText("Picture", detail: "Square, shown everywhere on Twitch")
+            rowText("Twitch picture", detail: "Shown on Twitch and in Twitch chat")
             Spacer(minLength: 8)
-            changeButton(.picture, selection: $pictureItem)
+            changeButton(.picture, selection: $twitchItem)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
     }
 
+    private var sevenTvPictureRow: some View {
+        HStack(spacing: 12) {
+            pictureFrame(mark: .sevenTV) {
+                if let pick = identity?.picture {
+                    CosmeticImage(pick.animated ?? pick.still, fallbacks: pick.animated == nil ? [] : [pick.still],
+                                  animate: pick.animated != nil, fill: true)
+                } else {
+                    ZStack {
+                        SN.surface
+                        PlatformMark(platform: .sevenTV, size: 12, color: SN.textMuted)
+                    }
+                }
+            }
+            rowText("7TV picture", detail: sevenTvPending ? "Processing on 7TV"
+                                          : identity?.picture == nil ? "Shown to StreamNook and 7TV viewers in chat"
+                                                                      : "What StreamNook and 7TV viewers see in chat")
+            Spacer(minLength: 8)
+            if sevenTvSignedIn {
+                changeButton(.sevenTV, selection: $sevenTvItem)
+            } else {
+                // Signed out of 7TV: sign in first, as the paint tiles do.
+                Button { screen.signInToSevenTv() } label: { ChangePill(label: screen.signingIn ? "Connecting" : "Connect") }
+                    .buttonStyle(.plain)
+                    .disabled(screen.signingIn)
+                    .accessibilityLabel("Connect 7TV to change your 7TV picture")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    /// A 44 point round picture with its platform's mark on the corner, so each picture says whose
+    /// it is without words.
+    private func pictureFrame<Content: View>(mark: PlatformMark.Platform, @ViewBuilder content: () -> Content) -> some View {
+        content()
+            .frame(width: 44, height: 44)
+            .clipShape(Circle())
+            .overlay { Circle().stroke(Color.white.opacity(0.1), lineWidth: 1) }
+            .overlay(alignment: .bottomTrailing) {
+                PlatformMark(platform: mark, size: mark == .sevenTV ? 9 : 13)
+                    .padding(mark == .sevenTV ? 3 : 2)
+                    .background(Circle().fill(SN.backgroundTertiary))
+                    .offset(x: 4, y: 3)
+            }
+            .accessibilityHidden(true)
+    }
+
+    // MARK: Banner
+
     private var bannerRow: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
-                rowText("Banner", detail: "The wide image across your channel page")
+                rowText("Banner", detail: "The wide image across your Twitch channel")
                 Spacer(minLength: 8)
                 changeButton(.banner, selection: $bannerItem)
             }
-            if let banner {
-                Image(uiImage: banner)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(height: 64)
-                    .frame(maxWidth: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: SNRadius.thumb, style: .continuous))
-                    .accessibilityLabel("Your new banner")
+            Group {
+                if let banner {
+                    Image(uiImage: banner).resizable().scaledToFill()
+                } else if let url = identity?.bannerURL {
+                    CosmeticImage(url, animate: false, fill: true)
+                }
             }
+            .frame(height: 64)
+            .frame(maxWidth: .infinity)
+            .clipShape(RoundedRectangle(cornerRadius: SNRadius.thumb, style: .continuous))
+            .opacity(banner == nil && identity?.bannerURL == nil ? 0 : 1)
+            .frame(height: banner == nil && identity?.bannerURL == nil ? 0 : 64)
+            .accessibilityHidden(true)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
     }
+
+    // MARK: Name
 
     private var nameRow: some View {
         let changed = draftName != user.displayName && !draftName.isEmpty
@@ -137,6 +199,8 @@ struct TwitchProfileSection: View {
         .animation(.easeOut(duration: 0.15), value: changed)
     }
 
+    // MARK: Bio
+
     private var bioRow: some View {
         Button { screen.editingBio = true } label: {
             HStack(alignment: .top, spacing: 12) {
@@ -176,28 +240,31 @@ struct TwitchProfileSection: View {
             ProgressView().tint(SN.textSecondary).frame(width: 44, height: 44)
         } else {
             PhotosPicker(selection: selection, matching: .images, photoLibrary: .shared()) {
-                Text("Change")
-                    .font(.sn(13, 600))
-                    .foregroundStyle(SN.textPrimary)
-                    .padding(.horizontal, 14)
-                    .frame(height: 32)
-                    .snGlass(Capsule(), interactive: true)
-                    .frame(minHeight: 44)
-                    .contentShape(Rectangle())
+                ChangePill(label: "Change")
             }
             .disabled(uploading != nil)
-            .accessibilityLabel(kind == .picture ? "Change your picture" : "Change your banner")
+            .accessibilityLabel(switch kind {
+            case .picture: "Change your Twitch picture"
+            case .sevenTV: "Change your 7TV picture"
+            case .banner: "Change your banner"
+            })
         }
     }
 
     // MARK: Writes
 
-    /// Crops the pick to the shape Twitch shows (square picture, 5:2 banner), sizes it down, and
-    /// hands the core the JPEG. The pick shows at once and stays if Twitch says no, with the reason.
+    /// Crops the pick to the shape it is shown in (square pictures, a 5:2 banner), sizes it down,
+    /// and hands the core the bytes. A Twitch pick shows at once and is dropped if Twitch says no;
+    /// a 7TV pick is reviewed by 7TV first, so the row says so instead of showing it as live. An
+    /// animated GIF goes to 7TV untouched, so it keeps moving.
     private func upload(_ item: PhotosPickerItem, as kind: ImageKind) async {
         defer {
             uploading = nil
-            if kind == .picture { pictureItem = nil } else { bannerItem = nil }
+            switch kind {
+            case .picture: twitchItem = nil
+            case .sevenTV: sevenTvItem = nil
+            case .banner: bannerItem = nil
+            }
         }
         guard let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data),
               let prepared = ProfileImage.prepare(image, kind: kind) else {
@@ -205,6 +272,10 @@ struct TwitchProfileSection: View {
             return
         }
         uploading = kind
+        if kind == .sevenTV {
+            await uploadSevenTv(ProfileImage.isGIF(data) && data.count <= ProfileImage.sevenTvLimit ? data : prepared.jpeg)
+            return
+        }
         if kind == .picture { picture = prepared.image } else { banner = prepared.image }
         do {
             _ = try await model.core.invoke("upload_twitch_profile_image",
@@ -216,6 +287,27 @@ struct TwitchProfileSection: View {
             if kind == .picture { picture = nil } else { banner = nil }
             let reason = (error as? CoreFailure)?.description ?? ""
             model.toasts.show(reason.isEmpty ? "Twitch did not take that image. Try again in a moment." : reason)
+        }
+    }
+
+    private func uploadSevenTv(_ bytes: Data) async {
+        guard let id = screen.ext?.sevenTvUserID else {
+            model.toasts.show("7TV did not identify your account.")
+            return
+        }
+        do {
+            _ = try await model.core.invoke("upload_seventv_profile_picture",
+                                            args: ["userId": id, "dataBase64": bytes.base64EncodedString()])
+            sevenTvPending = true
+        } catch {
+            let text = "\(error)"
+            if text.contains("SESSION_EXPIRED") {
+                model.toasts.show("Your 7TV sign-in expired. Sign back in, then pick the picture again.")
+                screen.signInToSevenTv()
+            } else {
+                let reason = (error as? CoreFailure)?.description ?? ""
+                model.toasts.show(reason.isEmpty ? "7TV did not take that picture." : reason)
+            }
         }
     }
 
@@ -234,16 +326,38 @@ struct TwitchProfileSection: View {
     }
 }
 
-/// An image cut to the shape Twitch shows and sized for upload.
+/// A row's action: a glass pill at the rows' 32 point pill height inside a 44 point target. Its own
+/// view, so a photo picker's label (not main-actor) can hold it.
+private struct ChangePill: View {
+    let label: String
+
+    var body: some View {
+        Text(label)
+            .font(.sn(13, 600))
+            .foregroundStyle(SN.textPrimary)
+            .padding(.horizontal, 14)
+            .frame(height: 32)
+            .snGlass(Capsule(), interactive: true)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+    }
+}
+
+/// An image cut to the shape it is shown in and sized for upload.
 enum ProfileImage {
     struct Prepared {
         let image: UIImage
         let jpeg: Data
     }
 
-    /// The picture is square at 600 px, the banner 5:2 at 1200 by 480; both center-cropped.
+    /// 7TV takes up to 7 MB.
+    static let sevenTvLimit = 7 * 1024 * 1024
+
+    static func isGIF(_ data: Data) -> Bool { data.starts(with: Array("GIF8".utf8)) }
+
+    /// Pictures are square at 600 px, the banner 5:2 at 1200 by 480; all center-cropped.
     static func prepare(_ source: UIImage, kind: TwitchProfileSection.ImageKind) -> Prepared? {
-        let target = kind == .picture ? CGSize(width: 600, height: 600) : CGSize(width: 1200, height: 480)
+        let target = kind == .banner ? CGSize(width: 1200, height: 480) : CGSize(width: 600, height: 600)
         let size = source.size
         guard size.width > 0, size.height > 0 else { return nil }
         let scale = max(target.width / size.width, target.height / size.height)

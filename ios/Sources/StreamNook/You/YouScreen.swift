@@ -8,6 +8,7 @@ struct YouScreen: View {
     let model: AppModel
     @AppStorage("sn-start-tab") private var startTab = MobileTab.following.rawValue
     @State private var picks: CosmeticsScreenModel?
+    @State private var identity: OwnIdentityData?
 
     private var user: TwitchUser? { model.signIn.user }
 
@@ -21,14 +22,15 @@ struct YouScreen: View {
                 // Signed out, the card above already offers the sign-in; the accounts wait for it.
                 if user != nil {
                     label("Accounts")
-                    AccountsCard(model: model, picks: picks)
+                    AccountsCard(model: model, picks: picks, sevenTvPicture: identity?.picture)
                         .padding(.horizontal, 16)
                 }
 
                 label("Open the app on")
                 GlazeSegments(MobileTab.allCases.map { Segment(value: $0, label: $0.title) },
                               selection: Binding(get: { MobileTab(rawValue: startTab) },
-                                                 set: { if let tab = $0 { startTab = tab.rawValue } }))
+                                                 set: { if let tab = $0 { startTab = tab.rawValue } }),
+                              fills: true)
                     .padding(.horizontal, 16)
 
                 label("Settings")
@@ -70,7 +72,7 @@ struct YouScreen: View {
     @ViewBuilder
     private var identity: some View {
         if let user, let picks {
-            OwnIdentityCard(model: model, user: user, picks: picks)
+            OwnIdentityCard(model: model, user: user, picks: picks, identity: $identity)
         } else {
             SignedOutIdentityCard(model: model)
         }
@@ -142,6 +144,8 @@ struct Avatar: View {
 struct AccountsCard: View {
     let model: AppModel
     let picks: CosmeticsScreenModel?
+    /// Your 7TV picture, for the 7TV row; the Twitch row shows your Twitch picture.
+    let sevenTvPicture: AvatarPick?
     @State private var twitchArmed = false
     @State private var sevenTvArmed = false
 
@@ -165,7 +169,7 @@ struct AccountsCard: View {
             }
             if user != nil, let picks {
                 divider
-                row(picture: AnyView(BrandTile(platform: .sevenTV)), title: "7TV",
+                row(picture: AnyView(SevenTvAccountPicture(picture: sevenTvPicture)), title: "7TV",
                     detail: sevenTvSignedIn ? (sevenTvArmed ? "Your paint and badge stay on 7TV" : "Connected")
                                             : "Paints and badges") {
                     if sevenTvSignedIn {
@@ -252,5 +256,29 @@ private struct BrandPill: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.6)
+    }
+}
+
+/// The 7TV row's picture: your 7TV picture with 7TV's mark on its corner, or the mark alone in its
+/// tile when you have none.
+private struct SevenTvAccountPicture: View {
+    let picture: AvatarPick?
+
+    var body: some View {
+        if let picture {
+            CosmeticImage(picture.animated ?? picture.still, fallbacks: picture.animated == nil ? [] : [picture.still],
+                          animate: picture.animated != nil, fill: true)
+                .frame(width: 44, height: 44)
+                .clipShape(Circle())
+                .overlay(alignment: .bottomTrailing) {
+                    PlatformMark(platform: .sevenTV, size: 9)
+                        .padding(3)
+                        .background(Circle().fill(SN.backgroundTertiary))
+                        .offset(x: 4, y: 2)
+                }
+                .accessibilityHidden(true)
+        } else {
+            BrandTile(platform: .sevenTV)
+        }
     }
 }
