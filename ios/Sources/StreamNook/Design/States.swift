@@ -87,17 +87,19 @@ struct SkeletonTiles: View {
 }
 
 /// A list with nothing to show: a line saying why, and a quieter line under it saying what to do.
+/// The why reads first (brighter and a little heavier); the hint is a step down.
 struct EmptyNote: View {
     let text: String
     var hint: String? = "Pull down to refresh."
 
     var body: some View {
-        VStack(spacing: 4) {
-            Text(text).font(.snBody).foregroundStyle(SN.textMuted)
+        VStack(spacing: 6) {
+            Text(text).font(.sn(15, 500)).foregroundStyle(SN.textSecondary)
             if let hint {
                 Text(hint).font(.sn(13)).foregroundStyle(SN.textMuted)
             }
         }
+        .frame(maxWidth: 300)
         .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity)
         .padding(.vertical, 80)

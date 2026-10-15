@@ -21,6 +21,9 @@ struct WatchLayer: View {
     private var watch: Watch { model.watch }
 
     static let miniSize = CGSize(width: 200, height: 112.5)
+    /// How far the portrait chat reaches into the bottom safe area. With the composer's own 10 pt
+    /// below it, the field ends 20 pt above the screen edge, just clear of the home indicator.
+    static let indicatorOverlap: CGFloat = 24
 
     var body: some View {
         GeometryReader { box in
@@ -65,11 +68,15 @@ struct WatchLayer: View {
                 // One chat for every mode, so rotating moves the same list instead of building a
                 // second one: below the player in portrait, over the video's trailing side in
                 // landscape (read-only, when asked for), hidden but still reading while mini.
+                // Portrait chat runs down into the home-indicator inset, keeping only the strip
+                // the indicator needs: stopping at the safe-area line left a black band under the
+                // composer.
                 let overlayChat = landscape && !mini
                 let chatShown = showChatBelow || (overlayChat && nav.landscapeChat)
+                let bottomKeep = max(0, insets.bottom - Self.indicatorOverlap)
                 ChatArea(model: model, overlay: overlayChat, outerInset: overlayChat ? insets.trailing : 0)
                     .frame(width: overlayChat ? overlayWidth + insets.trailing : layer.width,
-                           height: overlayChat ? screen.height : max(0, layer.maxY - band.maxY - insets.bottom * (1 - progress)))
+                           height: overlayChat ? screen.height : max(0, layer.maxY - band.maxY - bottomKeep * (1 - progress)))
                     .offset(x: overlayChat ? screen.width - overlayWidth - insets.trailing : layer.minX,
                             y: overlayChat ? 0 : band.maxY)
                     .opacity(chatShown ? 1 : 0)
@@ -107,6 +114,9 @@ struct WatchLayer: View {
             guard controlsShown else { return }
             try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled else { return }
+            #if DEBUG
+            if Drive.pinsControls { return }
+            #endif
             withAnimation(SNMotion.run(.easeOut(duration: 0.2))) { controlsShown = false }
         }
     }

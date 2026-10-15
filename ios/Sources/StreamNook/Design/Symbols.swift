@@ -41,12 +41,12 @@ enum Symbol {
     static let airplay = "airplayvideo"
     static let play = "play.fill"
     static let pause = "pause.fill"
-    static let mute = "speaker.wave.2.fill"
-    static let unmute = "speaker.slash.fill"
+    static let mute = "speaker.wave.2"
+    static let unmute = "speaker.slash"
     static let quality = "gearshape"
 
     // The You tab and settings rows.
-    static let cosmetics = "paintbrush.pointed.fill"
+    static let cosmetics = "paintbrush.pointed"
     static let player = "play.circle"
     static let adFree = "checkmark.shield"
     static let chat = "bubble.left.and.bubble.right"

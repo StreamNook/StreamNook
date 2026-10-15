@@ -95,8 +95,8 @@ extension Font {
     static var snDrillTitle: Font { Typeface.font(18, 700) }
     /// 24 bold: the signed-out landing's title.
     static var snHero: Font { Typeface.font(24, 700) }
-    /// 14 semibold: a sheet's title.
-    static var snSheetTitle: Font { Typeface.font(14, 600) }
+    /// 16 semibold: a sheet's title, a step above the 15 point rows it heads.
+    static var snSheetTitle: Font { Typeface.font(16, 600) }
     /// 12 semibold, set uppercase with wide tracking: a section label.
     static var snSection: Font { Typeface.font(12, 600) }
     /// 15 medium: a row's title.
@@ -105,10 +105,12 @@ extension Font {
     static var snRowStrong: Font { Typeface.font(15, 600) }
     /// 12.5 regular: a row's description.
     static var snRowDetail: Font { Typeface.font(12.5, 400) }
-    /// 13 medium: a stream card's title.
-    static var snCardTitle: Font { Typeface.font(13, 500) }
-    /// 13 regular: a card's name and category lines.
+    /// 14 semibold: a stream card's title, the card's anchor under the picture.
+    static var snCardTitle: Font { Typeface.font(14, 600) }
+    /// 13 regular: a card's channel line.
     static var snCardLine: Font { Typeface.font(13, 400) }
+    /// 12.5 regular: a card's quietest line (the category, the viewers in a row).
+    static var snCardMeta: Font { Typeface.font(12.5, 400) }
     /// 12 regular.
     static var snCaption: Font { Typeface.font(12, 400) }
     /// 11 semibold: the card chips.
