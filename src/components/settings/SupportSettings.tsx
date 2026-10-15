@@ -344,7 +344,7 @@ const DiagnosticLoggingSection = () => {
 const DataRecordedSection = () => (
     <SettingsSection
         label="Account Data"
-        description="Signed in, StreamNook keeps a few counts against your account. Chat messages and anything you type are not among them."
+        description="Signed in, StreamNook keeps a few things against your account. Chat messages and anything you type are not among them."
     >
         <SettingsRow
             title="Channels and emotes"
@@ -359,6 +359,11 @@ const DataRecordedSection = () => (
         <SettingsRow
             title="Linked accounts"
             description="Records which other platforms you have connected, so they survive a reinstall."
+        />
+        <SettingsRow
+            title="VOD positions"
+            description="With Device sync on, keeps where you left off in each VOD you open, so Continue Watching follows you to your other devices."
+            help="Only past broadcasts you open yourself, never live watching. Kept for 90 days. Turn off Device sync under Player > Resume VODs and nothing more is sent."
         />
     </SettingsSection>
 );

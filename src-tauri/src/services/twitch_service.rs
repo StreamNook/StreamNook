@@ -4236,12 +4236,7 @@ impl TwitchService {
                 .join(", ");
             let selections = (0..chunk.len())
                 .map(|i| {
-                    format!(
-                        "v{i}: video(id: $i{i}) {{ id title lengthSeconds status \
-                         previewThumbnailURL(width: 440, height: 248) \
-                         game {{ displayName }} \
-                         owner {{ id displayName profileImageURL(width: 70) roles {{ isPartner }} }} }}"
-                    )
+                    format!("v{i}: video(id: $i{i}) {{ {VOD_CARD_FIELDS} }}")
                 })
                 .collect::<Vec<_>>()
                 .join(" ");
@@ -4265,52 +4260,7 @@ impl TwitchService {
                 let node = resp.pointer(&format!("/data/v{i}"));
                 match node.filter(|v| !v.is_null()) {
                     None => gone.push(id.clone()),
-                    Some(v) => {
-                        let status = v
-                            .get("status")
-                            .and_then(|s| s.as_str())
-                            .unwrap_or_default()
-                            .to_string();
-                        found.push(crate::services::vod_progress_service::VodRefresh {
-                            video_id: id.clone(),
-                            title: v
-                                .get("title")
-                                .and_then(|t| t.as_str())
-                                .unwrap_or_default()
-                                .to_string(),
-                            channel_name: v
-                                .pointer("/owner/displayName")
-                                .and_then(|n| n.as_str())
-                                .unwrap_or_default()
-                                .to_string(),
-                            thumbnail_url: v
-                                .get("previewThumbnailURL")
-                                .and_then(|t| t.as_str())
-                                .unwrap_or_default()
-                                .to_string(),
-                            length_secs: v
-                                .get("lengthSeconds")
-                                .and_then(|n| n.as_f64())
-                                .unwrap_or(0.0),
-                            finished: status.eq_ignore_ascii_case("RECORDED"),
-                            profile_image_url: v
-                                .pointer("/owner/profileImageURL")
-                                .and_then(|n| n.as_str())
-                                .unwrap_or_default()
-                                .to_string(),
-                            partner: v.pointer("/owner/roles/isPartner").and_then(|b| b.as_bool()),
-                            game_name: v
-                                .pointer("/game/displayName")
-                                .and_then(|n| n.as_str())
-                                .unwrap_or_default()
-                                .to_string(),
-                            channel_id: v
-                                .pointer("/owner/id")
-                                .and_then(|n| n.as_str())
-                                .unwrap_or_default()
-                                .to_string(),
-                        });
-                    }
+                    Some(v) => found.push(vod_refresh_from_node(id, v)),
                 }
             }
         }
@@ -6259,6 +6209,41 @@ impl TwitchService {
         }
 
         Ok(())
+    }
+}
+
+/// The `Video` fields a Continue Watching card is built from. Shared by the
+/// by-id hydrate and the viewing-history sync so both read cards one way.
+pub(crate) const VOD_CARD_FIELDS: &str = "id title lengthSeconds status \
+     previewThumbnailURL(width: 440, height: 248) \
+     game { displayName } \
+     owner { id login displayName profileImageURL(width: 70) roles { isPartner } }";
+
+/// One `Video` node selected with `VOD_CARD_FIELDS`, as a card refresh.
+pub(crate) fn vod_refresh_from_node(
+    id: &str,
+    v: &serde_json::Value,
+) -> crate::services::vod_progress_service::VodRefresh {
+    let text = |ptr: &str| {
+        v.pointer(ptr)
+            .and_then(|t| t.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    crate::services::vod_progress_service::VodRefresh {
+        video_id: id.to_string(),
+        title: text("/title"),
+        channel_name: text("/owner/displayName"),
+        thumbnail_url: text("/previewThumbnailURL"),
+        length_secs: v
+            .get("lengthSeconds")
+            .and_then(|n| n.as_f64())
+            .unwrap_or(0.0),
+        finished: text("/status").eq_ignore_ascii_case("RECORDED"),
+        profile_image_url: text("/owner/profileImageURL"),
+        partner: v.pointer("/owner/roles/isPartner").and_then(|b| b.as_bool()),
+        game_name: text("/game/displayName"),
+        channel_id: text("/owner/id"),
     }
 }
 

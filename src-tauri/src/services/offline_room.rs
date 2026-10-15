@@ -33,6 +33,9 @@ pub struct RoomVod {
     pub length_seconds: u64,
     pub thumbnail_url: String,
     pub category: Option<String>,
+    /// Where the viewer left this broadcast (watching the VOD, or live), when
+    /// it is worth resuming. Filled per open, never cached with the room.
+    pub resume_secs: Option<f64>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -215,6 +218,22 @@ pub async fn open(login: &str) -> Result<OfflineRoom, String> {
     Ok(room)
 }
 
+/// Fill in where the viewer left the room's latest broadcast. Per open, since
+/// the room itself is cached and a position changes as the viewer watches.
+pub async fn attach_resume(room: &mut OfflineRoom) {
+    let Some(vod) = room.latest_vod.as_mut() else { return };
+    let id = vod.id.clone();
+    let length = vod.length_seconds as f64;
+    let stored = tokio::task::spawn_blocking(move || crate::services::vod_progress_service::resume_position(&id))
+        .await
+        .ok()
+        .flatten();
+    // The store may not know the finished length (a live bookmark never
+    // does), so the room's own length has the last word on "finished".
+    vod.resume_secs =
+        stored.and_then(|p| crate::services::vod_progress_service::resume_decision(p, length).0);
+}
+
 fn text(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(|x| x.as_str()).filter(|s| !s.is_empty()).map(String::from)
 }
@@ -239,6 +258,7 @@ fn parse(user: &Value, now: DateTime<Utc>) -> Option<OfflineRoom> {
                 length_seconds: n.get("lengthSeconds").and_then(|l| l.as_u64()).unwrap_or(0),
                 thumbnail_url: text(n, "previewThumbnailURL").unwrap_or_default(),
                 category: game_name(n),
+                resume_secs: None,
             })
         });
     let next_stream = user

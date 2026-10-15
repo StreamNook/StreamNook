@@ -729,6 +729,7 @@ pub async fn report_player_playing(
     }
     state.watch_heartbeat.set_playing(playing);
     crate::services::watch_minutes::set_playing(crate::services::watch_minutes::MAIN, playing);
+    crate::services::live_bookmark::set_playing(playing);
     Ok(())
 }
 

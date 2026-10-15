@@ -1123,6 +1123,15 @@ async fn refresh_continue_watching(inner: &Inner) {
     }
 }
 
+/// Fold in positions the viewer saved on other devices (their Twitch viewing
+/// history) and rebuild the row when any arrived. `vod_sync` floors how often
+/// this reaches Twitch.
+async fn pull_continue_watching(inner: &Inner) {
+    if crate::services::vod_sync::pull().await {
+        refresh_continue_watching(inner).await;
+    }
+}
+
 /// Reconcile the stored watch positions against Twitch in one batched call:
 /// drop VODs Twitch has deleted (the store keeps entries for 90 days, Twitch
 /// keeps VODs for 7-60), pick up final lengths, and replace the processing
@@ -1346,7 +1355,9 @@ pub async fn set_home_mounted(window: &str, context: &str, mounted: bool, unifie
                 refresh_drops(&inner).await;
             }
             // Last: reconciling the row against Twitch is the least urgent
-            // work here, and it needs the rebuild above to have run.
+            // work here, and it needs the rebuild above to have run. Positions
+            // saved on the viewer's other devices first, then card metadata.
+            pull_continue_watching(&inner).await;
             hydrate_continue_watching(&inner).await;
         });
     }
@@ -1391,6 +1402,7 @@ pub async fn refresh(
         // trains instead, with no error, for any key added above but not here.
         "continue_watching" => {
             refresh_continue_watching(inner).await;
+            pull_continue_watching(inner).await;
             hydrate_continue_watching(inner).await;
         }
         // The directories the Discover lists on screen read, where due. The
