@@ -49,7 +49,7 @@ pub fn start(app: AppHandle) {
         tokio::time::sleep(FIRST_CHECK).await;
         let mut announced = load_announced();
         loop {
-            match crate::commands::components::check_for_bundle_update().await {
+            match crate::commands::components::check_for_bundle_update(app.clone()).await {
                 Ok(status) => {
                     let announce = status.update_available && first_announcement(&mut announced, &status.latest_version);
                     if announce {

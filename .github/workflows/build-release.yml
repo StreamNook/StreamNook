@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       skip_build:
-        description: "Skip build and use exe from previous release (for dependency-only updates)"
+        description: "Unsupported: the Windows installer must be built per version, so this stops the run with an error"
         required: false
         default: false
         type: boolean
@@ -48,6 +48,8 @@ jobs:
     permissions:
       contents: write
     outputs:
+      VERSION: ${{ steps.check_release.outputs.VERSION }}
+      RELEASE_EXISTS: ${{ steps.check_release.outputs.RELEASE_EXISTS }}
       BUNDLE_NAME: ${{ steps.pack.outputs.BUNDLE_NAME }}
       SHA256: ${{ steps.pack.outputs.SHA256 }}
       SIZE: ${{ steps.pack.outputs.SIZE }}
@@ -75,6 +77,7 @@ jobs:
         run: |
           set -euo pipefail
           version=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "VERSION=$version" >> "$GITHUB_OUTPUT"
           if gh release view "v$version" >/dev/null 2>&1; then
             echo "RELEASE_EXISTS=true" >> "$GITHUB_OUTPUT"
             echo "Release v$version already exists; skipping the macOS build so its published assets are not clobbered"
@@ -235,6 +238,8 @@ jobs:
     permissions:
       contents: write
     outputs:
+      VERSION: ${{ steps.check_release.outputs.VERSION }}
+      RELEASE_EXISTS: ${{ steps.check_release.outputs.RELEASE_EXISTS }}
       BUNDLE_NAME: ${{ steps.pack.outputs.BUNDLE_NAME }}
       SHA256: ${{ steps.pack.outputs.SHA256 }}
       SIZE: ${{ steps.pack.outputs.SIZE }}
@@ -259,6 +264,7 @@ jobs:
         run: |
           set -euo pipefail
           version=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "VERSION=$version" >> "$GITHUB_OUTPUT"
           if gh release view "v$version" >/dev/null 2>&1; then
             echo "RELEASE_EXISTS=true" >> "$GITHUB_OUTPUT"
             echo "Release v$version already exists; skipping the Linux build so its published assets are not clobbered"
@@ -609,6 +615,41 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Fails in seconds instead of after the full build.
+      #
+      # skip_build used to republish the previous release's exe under the new
+      # version number. That cannot work for the installer: the setup.exe and
+      # its updater signature belong to the version they were built from, so an
+      # installed copy offered version N would install a build that reports
+      # N-1, be offered N again, and loop. Dependency-only updates need a real
+      # build, so the option now stops the run with a clear error.
+      #
+      # Every Windows release signs its setup.exe (and the bridge its 7z) with
+      # UPDATE_SIGNING_KEY, key id 3C746A225DA1775E: installed copies accept
+      # only installers signed by it, and portable copies only 7z bundles
+      # signed by it. Without it nothing can be published, so stop before the
+      # compile rather than after it.
+      - name: Preflight
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
+        shell: pwsh
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if ("${{ inputs.skip_build }}" -eq "true") {
+            echo "::error title=skip_build is not supported for Windows::The Windows release is an NSIS installer signed for its own version. Re-using the previous release's build would publish a setup.exe that reports the old version under the new one, and installed copies would update in a loop. Run without skip_build."
+            exit 1
+          }
+          if (-not $env:UPDATE_SIGNING_KEY) {
+            echo "::error title=UPDATE_SIGNING_KEY is not set::Installed copies accept only installers signed by key 3C746A225DA1775E, and portable copies only 7z bundles signed by it. Set UPDATE_SIGNING_KEY to that minisign secret key file."
+            exit 1
+          }
+          if (-not $env:CLOUDFLARE_API_TOKEN) {
+            echo "::error title=CLOUDFLARE_API_TOKEN is not set::The Windows release is delivered through R2 (installer, tauri/latest.json, latest.json) and reads the published latest.json to find the frozen bridge version. Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID."
+            exit 1
+          }
+          echo "Preflight passed: full build, update signing key and R2 token present"
+
       - name: Setup Node.js
         if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
         uses: actions/setup-node@v4
@@ -632,63 +673,13 @@ jobs:
         if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
         run: npm ci
 
-      - name: Pre-install WiX Toolset
-        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
-        shell: pwsh
-        run: |
-          # Pre-download WiX to avoid timeout during Tauri build
-          $wixDir = "$env:LOCALAPPDATA\tauri\WixTools"
-
-          if (Test-Path $wixDir) {
-            echo "WiX Toolset already cached"
-          } else {
-            echo "Downloading WiX Toolset..."
-            New-Item -ItemType Directory -Force -Path $wixDir | Out-Null
-            
-            # Download with retry and increased timeout
-            $wixUrl = "https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip"
-            $wixZip = "$env:TEMP\wix314-binaries.zip"
-            
-            $webClient = New-Object System.Net.WebClient
-            $retries = 3
-            $success = $false
-            
-            for ($i = 1; $i -le $retries; $i++) {
-              try {
-                echo "Download attempt $i of $retries..."
-                $webClient.DownloadFile($wixUrl, $wixZip)
-                $success = $true
-                break
-              } catch {
-                echo "Attempt $i failed: $_"
-                if ($i -lt $retries) {
-                  Start-Sleep -Seconds 5
-                }
-              }
-            }
-            
-            if (-not $success) {
-              echo "Failed to download WiX after $retries attempts"
-              exit 1
-            }
-            
-            echo "Extracting WiX Toolset..."
-            Expand-Archive -Path $wixZip -DestinationPath $wixDir -Force
-            Remove-Item $wixZip -Force
-            
-            echo "WiX Toolset installed to: $wixDir"
-          }
-
-          # Verify WiX installation
-          if (Test-Path "$wixDir\candle.exe") {
-            echo "WiX Toolset verified successfully"
-          } else {
-            echo "WiX Toolset verification failed"
-            exit 1
-          }
-
+      # Builds StreamNook.exe AND, through tauri.windows.conf.json, the per-user
+      # NSIS installer:
+      #   src-tauri/target/release/bundle/nsis/StreamNook_<ver>_x64-setup.exe
+      # Its updater signature is made by "Sign the installer" below, not by
+      # tauri build.
       - name: Build Tauri app
-        if: steps.check_release.outputs.RELEASE_EXISTS == 'false' && inputs.skip_build != 'true'
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
         shell: pwsh
         run: npm run tauri build
         env:
@@ -706,25 +697,163 @@ jobs:
           KICK_APP_CLIENT_ID: "01KMKM0HVR6HY0BMA101JFCTW3"
           KICK_APP_CLIENT_SECRET: ${{ secrets.KICK_APP_CLIENT_SECRET }}
 
-      - name: Download StreamNook.exe from previous release (skip_build mode)
-        if: steps.check_release.outputs.RELEASE_EXISTS == 'false' && inputs.skip_build == 'true'
+      # Refuses to go on unless the build produced exactly the installer this
+      # version should have. The name carries the version from tauri.conf.json,
+      # so a mismatch with Cargo.toml surfaces here instead of as a release
+      # whose installer name and manifest disagree.
+      - name: Locate the installer
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
+        id: installer
         shell: pwsh
         run: |
-          # Get the latest release
-          $latestRelease = gh release view --json assets,tagName | ConvertFrom-Json
-          echo "Latest release: $($latestRelease.tagName)"
-
-          # Find the exe or bundle
-          $exeAsset = $latestRelease.assets | Where-Object { $_.name -like "*.exe" -or $_.name -eq "StreamNook.7z" }
-          if ($exeAsset) {
-            echo "Downloading: $($exeAsset.name)"
-            gh release download $latestRelease.tagName -p $exeAsset.name -D ./previous-release
-          } else {
-            echo "No exe found in previous release"
-            exit 1
+          $version = "${{ steps.version.outputs.VERSION }}"
+          $exe = "src-tauri/target/release/StreamNook.exe"
+          $nsis = "src-tauri/target/release/bundle/nsis"
+          $setup = "StreamNook_${version}_x64-setup.exe"
+          if (-not (Test-Path $exe)) { throw "$exe was not built" }
+          if (-not (Test-Path "$nsis/$setup")) {
+            Write-Host "Contents of ${nsis}:"
+            Get-ChildItem $nsis -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
+            throw "Expected $nsis/$setup. Is the nsis target on in tauri.windows.conf.json and do tauri.conf.json and Cargo.toml carry the same version?"
           }
+          $magic = [System.IO.File]::ReadAllBytes((Resolve-Path "$nsis/$setup")) | Select-Object -First 2
+          if ($magic[0] -ne 0x4D -or $magic[1] -ne 0x5A) { throw "$setup is not a Windows executable" }
+          Copy-Item "$nsis/$setup" "./$setup"
+          echo "INSTALLER_NAME=$setup" >> $env:GITHUB_OUTPUT
+          $size = (Get-Item "./$setup").Length / 1MB
+          echo "Found $setup ($([math]::Round($size, 2)) MB)"
+
+      # Signs the installer for tauri-plugin-updater with the key every other
+      # StreamNook update uses (UPDATE_SIGNING_KEY, key id 3C746A225DA1775E),
+      # the way the macOS and Linux jobs sign theirs: the official minisign
+      # binary, pinned. Tauri's own signer is not used; it refuses this key
+      # unless a second, password-protected copy of it is kept as more secrets.
+      #
+      # The trusted comment is the one Tauri's signer writes (timestamp, file,
+      # version), and installed copies insist on the version
+      # (requireSignedVersion in tauri.windows.conf.json). minisign's global
+      # signature covers that comment, so a tampered manifest cannot pair this
+      # release's number with an older installer. The plugin reads a signature
+      # as base64 of the whole .minisig file, which is what the .sig holds.
+      # Checked against the public key installed copies pin before anything is
+      # published.
+      - name: Sign the installer
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
+        id: sign
+        shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
+          $setup = "${{ steps.installer.outputs.INSTALLER_NAME }}"
+          if (-not $env:UPDATE_SIGNING_KEY) { throw "UPDATE_SIGNING_KEY is not set" }
+
+          # The official binary, pinned. `npm i -g minisign-cli` was a 404 (that
+          # package does not exist) and the `minisign` npm package exits 1 with
+          # no output, so both silently did nothing.
+          $msVer = '0.12'
+          $msZip = "minisign-$msVer-win64.zip"
+          Invoke-WebRequest "https://github.com/jedisct1/minisign/releases/download/$msVer/$msZip" -OutFile $msZip -UseBasicParsing
+          Expand-Archive $msZip -DestinationPath ./minisign-bin -Force
+          # The archive carries both architectures; runners are x86_64.
+          $ms = (Get-ChildItem ./minisign-bin -Recurse -Filter minisign.exe |
+                 Where-Object { $_.FullName -match 'x86_64' } |
+                 Select-Object -First 1).FullName
+          if (-not $ms) { throw "minisign.exe (x86_64) not found in $msZip" }
+          echo "MINISIGN=$ms" >> $env:GITHUB_OUTPUT
+
+          # The public key installed copies pin: line 2 of the .pub file the
+          # config carries as base64.
+          $conf = Get-Content src-tauri/tauri.windows.conf.json -Raw | ConvertFrom-Json
+          $pubFile = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($conf.plugins.updater.pubkey))
+          $pub = ($pubFile -split "`r?`n")[1].Trim()
+          if ($pub -notmatch '^RW[A-Za-z0-9+/]{54}$') { throw "tauri.windows.conf.json plugins.updater.pubkey is not a minisign public key" }
+
+          $stamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          $comment = "timestamp:$stamp`tfile:$setup`tversion:$version"
+          $env:UPDATE_SIGNING_KEY | Out-File -FilePath ./update.key -Encoding ascii -NoNewline
+          try {
+            & $ms -S -s ./update.key -m $setup -x "$setup.minisig" -t $comment
+            if ($LASTEXITCODE -ne 0) { throw "minisign failed (exit $LASTEXITCODE)" }
+          } finally {
+            # Never leave the secret key on the runner filesystem.
+            Remove-Item ./update.key -Force -ErrorAction SilentlyContinue
+          }
+
+          & $ms -V -P $pub -m $setup -x "$setup.minisig"
+          if ($LASTEXITCODE -ne 0) { throw "The installer signature does not verify against the key installed copies pin ($pub). UPDATE_SIGNING_KEY must be the secret half of key 3C746A225DA1775E." }
+          $minisig = [IO.File]::ReadAllBytes((Resolve-Path "$setup.minisig"))
+          $trusted = ([Text.Encoding]::UTF8.GetString($minisig) -split "`r?`n") | Where-Object { $_ -like 'trusted comment: *' }
+          if (($trusted -split "`t") -notcontains "version:$version") { throw "The signature's trusted comment does not carry version:$version ('$trusted')" }
+          [Convert]::ToBase64String($minisig) | Out-File -FilePath "$setup.sig" -Encoding ascii -NoNewline
+          Write-Host "Signed $setup for v$version ($trusted)"
+
+      # The legacy update channel (R2 latest.json, read by every portable copy)
+      # is FROZEN on Windows at one release: the bridge, the last portable
+      # build, which moves its user onto the installer. Its version is stored
+      # as platforms.windows-x86_64.version.
+      #
+      # No such field yet means no bridge has shipped, so THIS release is the
+      # bridge: it builds StreamNook.7z and writes the frozen entry. Once the
+      # field exists, every later release leaves the Windows parts of
+      # latest.json exactly as they are. A field equal to this version means
+      # this release IS the bridge being re-run, so it is rebuilt as one.
+      #
+      # Read from R2 itself, not the public endpoint, and fail on any doubt:
+      # guessing wrong either moves the frozen channel or leaves components.json
+      # naming a release with no StreamNook.7z.
+      - name: Read the published update manifest
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
+        id: legacy
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
+          if (-not $env:CLOUDFLARE_API_TOKEN) {
+            throw "CLOUDFLARE_API_TOKEN is not set. The Windows release is delivered through R2 and needs the published latest.json to decide whether this is the bridge release."
+          }
+          npx --yes wrangler@4 r2 object get "streamnook-downloads/latest.json" `
+            --file="prev-latest.json" `
+            --remote
+          if ($LASTEXITCODE -ne 0) { throw "wrangler r2 get latest.json failed (exit $LASTEXITCODE)" }
+          if (-not (Test-Path ./prev-latest.json) -or (Get-Item ./prev-latest.json).Length -eq 0) {
+            throw "R2 latest.json came back empty"
+          }
+          $prev = Get-Content ./prev-latest.json -Raw | ConvertFrom-Json
+
+          $win = $null
+          if ($prev.platforms) { $win = $prev.platforms.'windows-x86_64' }
+          $frozenProp = $null
+          if ($win) { $frozenProp = $win.PSObject.Properties['version'] }
+
+          if (-not $frozenProp) {
+            $isBridge = $true
+            $bridgeVersion = $version
+            Write-Host "latest.json (v$($prev.version)) has no platforms.windows-x86_64.version: v$version is the BRIDGE release"
+          } else {
+            $frozen = [string]$frozenProp.Value
+            if ($frozen -notmatch '^\d+\.\d+\.\d+$') {
+              throw "platforms.windows-x86_64.version in R2 latest.json is '$frozen', not a version. Fix latest.json by hand; refusing to guess."
+            }
+            if ([version]$frozen -gt [version]$version) {
+              throw "The frozen bridge v$frozen is newer than this release v$version. Refusing to publish."
+            }
+            if (-not $prev.download_url -or -not $win.download_url) {
+              throw "R2 latest.json has a frozen bridge v$frozen but no Windows download_url to carry forward."
+            }
+            $bridgeVersion = $frozen
+            $isBridge = ($frozen -eq $version)
+            if ($isBridge) {
+              Write-Host "latest.json already names v$version as the bridge: re-running the bridge release"
+            } else {
+              Write-Host "Windows legacy channel is frozen at bridge v${frozen}: carrying it forward unchanged"
+            }
+          }
+          echo "IS_BRIDGE=$($isBridge.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          echo "BRIDGE_VERSION=$bridgeVersion" >> $env:GITHUB_OUTPUT
+          "Bridge release: $isBridge (frozen bridge version v$bridgeVersion)" >> $env:GITHUB_STEP_SUMMARY
 
       - name: Copy StreamNook.exe to bundle
         if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
@@ -732,23 +861,7 @@ jobs:
         run: |
           # The bundle dir used to be created by the Streamlink download step.
           New-Item -ItemType Directory -Force -Path ./bundle | Out-Null
-          if ("${{ inputs.skip_build }}" -eq "true") {
-            # Use exe from previous release
-            $exe = Get-ChildItem ./previous-release -Filter "*.exe" | Select-Object -First 1
-            if ($exe) {
-              Copy-Item $exe.FullName ./bundle/StreamNook.exe
-            } else {
-              # Extract from previous bundle
-              $bundle = Get-ChildItem ./previous-release -Filter "StreamNook.7z" | Select-Object -First 1
-              if ($bundle) {
-                7z x $bundle.FullName -o"./previous-release/extracted"
-                Copy-Item ./previous-release/extracted/StreamNook.exe ./bundle/
-              }
-            }
-          } else {
-            # Use freshly built exe
-            Copy-Item src-tauri/target/release/StreamNook.exe ./bundle/
-          }
+          Copy-Item src-tauri/target/release/StreamNook.exe ./bundle/
           echo "StreamNook.exe copied to bundle"
 
       - name: Copy CHANGELOG.md to bundle
@@ -760,11 +873,18 @@ jobs:
           # Note: Analytics dashboard is now embedded directly in the exe via rust-embed
           # No separate resources folder needed
 
+      # Clients older than 8.0.0 update ONLY from GitHub: they read
+      # releases/latest/download/components.json, then download
+      # releases/download/v<streamnook.version>/StreamNook.7z. So the version
+      # here is always the frozen BRIDGE, never this release: the bridge is the
+      # only release after the switch that carries a StreamNook.7z, and it is
+      # the one that moves those users onto the installer.
       - name: Generate components.json
         if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
         shell: pwsh
         run: |
-          $version = "${{ steps.version.outputs.VERSION }}"
+          $version = "${{ steps.legacy.outputs.BRIDGE_VERSION }}"
+          if (-not $version) { throw "No bridge version from the manifest step" }
           # Streamlink/TTV-LOL are no longer bundled. Keep the (now empty) fields
           # so the components.json schema still parses on any client.
           $streamlinkVersion = ""
@@ -794,8 +914,11 @@ jobs:
           echo "components.json created:"
           echo $json
 
+      # Bridge release only: the last portable bundle, served to every portable
+      # copy through the frozen legacy channel and to pre-8.0.0 clients through
+      # GitHub. Later releases never build or upload it again.
       - name: Create 7z bundle
-        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false' && steps.legacy.outputs.IS_BRIDGE == 'true'
         shell: pwsh
         run: |
           $bundleName = "StreamNook.7z"
@@ -819,9 +942,13 @@ jobs:
         if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
         shell: pwsh
         run: |
-          $bundleName = "${{ steps.bundle.outputs.BUNDLE_NAME }}"
-          $hash = (Get-FileHash $bundleName -Algorithm SHA256).Hash
-          "$hash  $bundleName" | Out-File -FilePath checksums.txt -Encoding utf8
+          $files = @("${{ steps.installer.outputs.INSTALLER_NAME }}")
+          if ("${{ steps.legacy.outputs.IS_BRIDGE }}" -eq "true") { $files += "${{ steps.bundle.outputs.BUNDLE_NAME }}" }
+          $lines = foreach ($f in $files) {
+            $hash = (Get-FileHash $f -Algorithm SHA256).Hash
+            "$hash  $f"
+          }
+          $lines | Out-File -FilePath checksums.txt -Encoding utf8
           echo "Checksums generated:"
           Get-Content checksums.txt
 
@@ -850,7 +977,7 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.VERSION }}"
-          $bundleName = "${{ steps.bundle.outputs.BUNDLE_NAME }}"
+          $installer = "${{ steps.installer.outputs.INSTALLER_NAME }}"
 
           # Read changelog section from temp file
           $changelogSection = Get-Content ./changelog_section.md -Raw
@@ -861,9 +988,9 @@ jobs:
           $lines += "---"
           $lines += ""
           $lines += "### Installation"
-          $lines += "1. Download ``$bundleName``"
-          $lines += "2. Extract the .7z file"
-          $lines += "3. Run ``StreamNook.exe``"
+          $lines += "1. Download ``$installer``"
+          $lines += "2. Run it. It installs StreamNook for your Windows user only and does not need administrator rights."
+          $lines += "3. Installed copies update themselves."
 
           $componentInfo = $lines -join "`n"
           $notes = $changelogSection + $componentInfo
@@ -871,39 +998,28 @@ jobs:
           # Write to file for gh release
           $notes | Out-File -FilePath ./release_notes.md -Encoding utf8
 
-          gh release create "v$version" --title "StreamNook v$version" --notes-file ./release_notes.md "$bundleName" "bundle/components.json" "checksums.txt"
+          $assets = @($installer, "$installer.sig", "bundle/components.json", "checksums.txt")
+          # The bridge also carries the last portable bundle. Never delete it
+          # from that release: components.json on every later release points
+          # pre-8.0.0 clients at it.
+          if ("${{ steps.legacy.outputs.IS_BRIDGE }}" -eq "true") { $assets += "${{ steps.bundle.outputs.BUNDLE_NAME }}" }
 
-          echo "Release v$version created!"
+          gh release create "v$version" --title "StreamNook v$version" --notes-file ./release_notes.md @assets
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed (exit $LASTEXITCODE)" }
+
+          echo "Release v$version created with: $($assets -join ', ')"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # The macOS job cannot attach to a release that does not exist yet (it
-      # runs before this job), so it parks the bundle as a workflow artifact
-      # and we attach it here. Skipped when the macOS job produced nothing.
-      - name: Push installer to Cloudflare R2
-        # Mirrors StreamNook.7z to the R2 bucket that streamnook.app serves at
-        # /download, so the website's download button always hands out this
-        # build with no GitHub redirect. Requires two repo secrets:
-        #   CLOUDFLARE_API_TOKEN  - token with "Workers R2 Storage: Edit"
-        #   CLOUDFLARE_ACCOUNT_ID - the Cloudflare account id
-        # If those secrets are absent the step is skipped (release still succeeds).
-        if: steps.check_release.outputs.RELEASE_EXISTS == 'false' && env.CLOUDFLARE_API_TOKEN != ''
+      # Bridge release only. Signs StreamNook.7z for the legacy updater and
+      # mirrors it to R2, which streamnook.app serves at /download/portable.
+      - name: Sign and push the portable bundle to Cloudflare R2
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false' && steps.legacy.outputs.IS_BRIDGE == 'true'
         shell: pwsh
         run: |
           $bundleName = "${{ steps.bundle.outputs.BUNDLE_NAME }}"
           $version = "${{ steps.version.outputs.VERSION }}"
-          Write-Host "Uploading $bundleName (v$version) to R2 bucket streamnook-downloads..."
-          npx --yes wrangler@4 r2 object put "streamnook-downloads/StreamNook.7z" `
-            --file="$bundleName" `
-            --content-type="application/x-7z-compressed" `
-            --remote
-          if ($LASTEXITCODE -ne 0) { throw "wrangler r2 upload failed (exit $LASTEXITCODE)" }
-          Write-Host "Uploaded StreamNook.7z (v$version) to R2 - live at https://streamnook.app/download"
 
-          # Build and upload the update manifest the desktop client reads at
-          # streamnook.app/api/v1/update (served from R2 as latest.json). Without
-          # this, installed clients keep seeing the previous version and either
-          # miss the update or get prompted to "update" to an older build.
           # Detached minisign signature over the bundle bytes.
           #
           # This is the only integrity control that survives a compromise of the
@@ -912,60 +1028,137 @@ jobs:
           # key exists only as a CI secret and must never reach the host serving
           # updates. The client pins the PUBLIC half as a compile-time const.
           #
-          # Skipped (not failed) while UPDATE_SIGNING_KEY is unset, so signing can
-          # be turned on without a release being blocked on it. The client is in
-          # warn-only mode until its ENFORCE_UPDATE_SIGNATURE flips, and that flip
-          # must not happen until releases here are reliably signed.
-          $signature = $null
-          if ($env:UPDATE_SIGNING_KEY) {
-            # The official binary, pinned. `npm i -g minisign-cli` was a 404 (that
-            # package does not exist) and the `minisign` npm package exits 1 with
-            # no output, so both were silently doing nothing: the moment a signing
-            # key existed, the `throw` below would have failed every release build.
-            # Verified end to end locally against 0.12 before this was enabled.
-            $msVer = '0.12'
-            $msZip = "minisign-$msVer-win64.zip"
-            Invoke-WebRequest "https://github.com/jedisct1/minisign/releases/download/$msVer/$msZip" -OutFile $msZip -UseBasicParsing
-            Expand-Archive $msZip -DestinationPath ./minisign-bin -Force
-            # The archive carries both architectures; runners are x86_64.
-            $ms = (Get-ChildItem ./minisign-bin -Recurse -Filter minisign.exe |
-                   Where-Object { $_.FullName -match 'x86_64' } |
-                   Select-Object -First 1).FullName
-            if (-not $ms) { throw "minisign.exe (x86_64) not found in $msZip" }
-            $env:UPDATE_SIGNING_KEY | Out-File -FilePath ./update.key -Encoding ascii -NoNewline
-            try {
-              & $ms -S -s ./update.key -m "$bundleName" -x "$bundleName.minisig"
-              if ($LASTEXITCODE -ne 0) { throw "minisign failed (exit $LASTEXITCODE)" }
-              $signature = (Get-Content "$bundleName.minisig" -Raw).TrimEnd()
-              Write-Host "Signed $bundleName"
-              # Also attach it to the GitHub release. The in-app updater reads the
-              # signature from the R2 manifest, not from here, but people do
-              # download straight off the releases page and this is what lets them
-              # verify that copy by hand:
-              #   minisign -Vm StreamNook.7z -P <public key>
-              gh release upload "v$version" "$bundleName.minisig" --clobber
-              if ($LASTEXITCODE -ne 0) { Write-Host "WARN: could not attach .minisig to the release" }
-            } finally {
-              # Never leave the secret key on the runner filesystem.
-              Remove-Item ./update.key -Force -ErrorAction SilentlyContinue
-            }
-          } else {
-            Write-Host "UPDATE_SIGNING_KEY not set - publishing an UNSIGNED update"
+          # Every portable client enforces it (ENFORCE_UPDATE_SIGNATURE), so an
+          # unsigned bridge would strand them all: no key, no bridge.
+          if (-not $env:UPDATE_SIGNING_KEY) { throw "UPDATE_SIGNING_KEY is not set; portable clients refuse an unsigned bundle" }
+          $ms = "${{ steps.sign.outputs.MINISIGN }}"
+          if (-not $ms -or -not (Test-Path $ms)) { throw "minisign from the installer signing step is missing" }
+          $env:UPDATE_SIGNING_KEY | Out-File -FilePath ./update.key -Encoding ascii -NoNewline
+          try {
+            & $ms -S -s ./update.key -m "$bundleName" -x "$bundleName.minisig"
+            if ($LASTEXITCODE -ne 0) { throw "minisign failed (exit $LASTEXITCODE)" }
+            Write-Host "Signed $bundleName"
+            # Also attach it to the GitHub release. The in-app updater reads the
+            # signature from the R2 manifest, not from here, but people do
+            # download straight off the releases page and this is what lets them
+            # verify that copy by hand:
+            #   minisign -Vm StreamNook.7z -P <public key>
+            gh release upload "v$version" "$bundleName.minisig" --clobber
+            if ($LASTEXITCODE -ne 0) { Write-Host "WARN: could not attach .minisig to the release" }
+          } finally {
+            # Never leave the secret key on the runner filesystem.
+            Remove-Item ./update.key -Force -ErrorAction SilentlyContinue
           }
 
-          $winSha = (Get-FileHash "$bundleName" -Algorithm SHA256).Hash.ToLower()
-          $winSize = (Get-Item "$bundleName").Length
+          Write-Host "Uploading $bundleName (v$version) to R2 bucket streamnook-downloads..."
+          npx --yes wrangler@4 r2 object put "streamnook-downloads/StreamNook.7z" `
+            --file="$bundleName" `
+            --content-type="application/x-7z-compressed" `
+            --remote
+          if ($LASTEXITCODE -ne 0) { throw "wrangler r2 upload failed (exit $LASTEXITCODE)" }
+          Write-Host "Uploaded StreamNook.7z (v$version) to R2 - live at https://streamnook.app/download/portable"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Minisign SECRET key for update signing. Generate with
+          #   minisign -G -p streamnook-update.pub -s streamnook-update.key
+          # then paste the .key contents here as a repo secret and the second
+          # line of the .pub into UPDATE_PUBKEY in commands/components.rs.
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          # For attaching the .minisig to the already-created release.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-          # Per-platform builds, keyed <os>-<arch> to match std::env::consts and
-          # the plugin index's own `platforms` map.
-          $platforms = [ordered]@{
-            "windows-x86_64" = [ordered]@{
-              download_url = "https://streamnook.app/download"
+      # Mirrors the installer to the R2 bucket streamnook.app serves:
+      #   installer/StreamNook_<ver>_x64-setup.exe  per version, never overwritten
+      #                                             (/download/installer/<ver>, the
+      #                                             URL tauri/latest.json names)
+      #   StreamNook-Setup.exe                      the latest, for the site's
+      #                                             download button
+      # Uploaded BEFORE either manifest names it, so no client is ever offered a
+      # file that is not there yet.
+      - name: Push installer to Cloudflare R2
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
+        shell: pwsh
+        run: |
+          $installer = "${{ steps.installer.outputs.INSTALLER_NAME }}"
+          foreach ($key in @("installer/$installer", "StreamNook-Setup.exe")) {
+            npx --yes wrangler@4 r2 object put "streamnook-downloads/$key" `
+              --file="$installer" `
+              --content-type="application/vnd.microsoft.portable-executable" `
+              --remote
+            if ($LASTEXITCODE -ne 0) { throw "wrangler r2 upload of $key failed (exit $LASTEXITCODE)" }
+            Write-Host "Uploaded $key to R2"
+          }
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # Builds both manifests from files only (no network), so the step can be
+      # checked offline against a sample prev-latest.json.
+      #
+      # tauri/latest.json is the static manifest tauri-plugin-updater reads on
+      # installed copies. Windows entry only, served unfiltered: the plugin
+      # compares versions itself.
+      #
+      # latest.json is the legacy manifest. Every portable copy reads it, and so
+      # do macOS and Linux. Its Windows parts are written as the frozen bridge
+      # entry on the bridge release and carried forward unchanged after it.
+      - name: Build the update manifests
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
+        id: manifests
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
+          $installer = "${{ steps.installer.outputs.INSTALLER_NAME }}"
+          $isBridge = "${{ steps.legacy.outputs.IS_BRIDGE }}" -eq "true"
+          $notes = (Get-Content ./changelog_section.md -Raw).TrimEnd()
+          $now = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+          $prev = Get-Content ./prev-latest.json -Raw | ConvertFrom-Json
+
+          # --- Windows legacy channel ---------------------------------------
+          if ($isBridge) {
+            $bundleName = "${{ steps.bundle.outputs.BUNDLE_NAME }}"
+            if (-not (Test-Path "$bundleName.minisig")) { throw "$bundleName.minisig is missing; portable clients refuse an unsigned bundle" }
+            $signature = (Get-Content "$bundleName.minisig" -Raw).TrimEnd()
+            $winSha = (Get-FileHash "$bundleName" -Algorithm SHA256).Hash.ToLower()
+            $winSize = (Get-Item "$bundleName").Length
+            $portableUrl = "https://streamnook.app/download/portable"
+            $winFlat = [ordered]@{
+              download_url = $portableUrl
               bundle_name  = $bundleName
               sha256       = $winSha
               signature    = $signature
               size         = $winSize
             }
+            # `version` is what freezes the channel: its presence is how every
+            # later release knows the bridge has shipped, and its value is the
+            # release components.json keeps naming.
+            $winEntry = [ordered]@{
+              download_url = $portableUrl
+              bundle_name  = $bundleName
+              sha256       = $winSha
+              signature    = $signature
+              size         = $winSize
+              version      = $version
+            }
+            Write-Host "Writing the frozen Windows legacy entry: bridge v$version"
+          } else {
+            # Exactly what the previous manifest said, field for field.
+            $winFlat = [ordered]@{
+              download_url = $prev.download_url
+              bundle_name  = $prev.bundle_name
+              sha256       = $prev.sha256
+              signature    = $prev.signature
+              size         = $prev.size
+            }
+            $winEntry = $prev.platforms.'windows-x86_64'
+            Write-Host "Carried the frozen Windows legacy entry forward (bridge v$($winEntry.version))"
+          }
+
+          # Per-platform builds, keyed <os>-<arch> to match std::env::consts and
+          # the plugin index's own `platforms` map.
+          $platforms = [ordered]@{
+            "windows-x86_64" = $winEntry
           }
 
           # The macOS and Linux entries for the NEW version are patched in
@@ -987,13 +1180,6 @@ jobs:
           # than nothing, and finalize-* overwrites them minutes later. A client
           # already on that version simply sees no update, which is correct.
           #
-          # linux-x86_64 joins this list while Linux releases are on, below.
-          $prevManifest = $null
-          try {
-            $prevManifest = Invoke-RestMethod -Uri "https://streamnook.app/api/v1/update" -TimeoutSec 20
-          } catch {
-            Write-Host "::warning::Could not read the previous manifest ($($_.Exception.Message)); macOS keys will be absent until finalize-macos runs."
-          }
           # Linux is carried forward only while Linux releases are on
           # (vars.LINUX_RELEASE). With them off no Linux build follows, and a
           # carried entry would point at the previous AppImage under this
@@ -1003,34 +1189,43 @@ jobs:
           $carryKeys = @("macos-aarch64", "macos-x86_64")
           if ("${{ vars.LINUX_RELEASE }}" -eq "true") { $carryKeys += "linux-x86_64" }
           else { Write-Host "Linux releases are off (vars.LINUX_RELEASE); the manifest carries no linux-x86_64 entry" }
-          if ($prevManifest -and $prevManifest.platforms) {
+          if ($prev.platforms) {
             foreach ($key in $carryKeys) {
-              $prev = $prevManifest.platforms.$key
-              if ($prev -and $prev.download_url) {
+              $prevEntry = $prev.platforms.$key
+              if ($prevEntry -and $prevEntry.download_url) {
+                # The entry keeps the version it was BUILT as. Without it a
+                # client compares this release's version against an older
+                # build and reinstalls that build on every check whenever this
+                # platform's job fails for the whole cycle. Entries written
+                # before the field existed were built as the previous release.
+                $builtAs = if ($prevEntry.version) { $prevEntry.version } else { $prev.version }
                 $platforms[$key] = [ordered]@{
-                  download_url = $prev.download_url
-                  bundle_name  = $prev.bundle_name
-                  sha256       = $prev.sha256
-                  signature    = $prev.signature
-                  size         = $prev.size
+                  version      = $builtAs
+                  download_url = $prevEntry.download_url
+                  bundle_name  = $prevEntry.bundle_name
+                  sha256       = $prevEntry.sha256
+                  signature    = $prevEntry.signature
+                  size         = $prevEntry.size
                 }
-                Write-Host "Carried forward $key from the previous manifest (v$($prevManifest.version))"
+                Write-Host "Carried forward $key from the previous manifest (v$($prev.version))"
               }
             }
           }
 
-          # The flat fields stay, and stay describing the WINDOWS bundle. Every
-          # client already installed reads them and knows nothing about
-          # `platforms`; dropping them strands that entire population.
+          # The flat fields stay, and stay describing the WINDOWS legacy bundle.
+          # Every client already installed reads them and knows nothing about
+          # `platforms`; dropping them strands that entire population. The
+          # top-level `version` still advances every release: macOS and Linux
+          # compare it.
           $manifest = [ordered]@{
             version       = $version
-            download_url  = "https://streamnook.app/download"
-            bundle_name   = $bundleName
-            sha256        = $winSha
-            signature     = $signature
-            size          = $winSize
+            download_url  = $winFlat.download_url
+            bundle_name   = $winFlat.bundle_name
+            sha256        = $winFlat.sha256
+            signature     = $winFlat.signature
+            size          = $winFlat.size
             platforms     = $platforms
-            notes         = (Get-Content ./changelog_section.md -Raw).TrimEnd()
+            notes         = $notes
             min_supported = "0.0.0"
             # Server-controlled client switches, read by src/services/clientConfig.ts.
             #
@@ -1058,9 +1253,54 @@ jobs:
               write_via_api         = $false
               min_supported_version = "0.0.0"
             }
-            published_at  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            published_at  = $now
           }
           $manifest | ConvertTo-Json -Depth 6 | Out-File -FilePath ./latest.json -Encoding utf8 -NoNewline
+
+          # --- tauri-plugin-updater static manifest -------------------------
+          # The .sig file's content IS the signature (base64, one line).
+          $tauriSig = (Get-Content "./$installer.sig" -Raw).Trim()
+          $tauri = [ordered]@{
+            version   = $version
+            notes     = $notes
+            pub_date  = $now
+            platforms = [ordered]@{
+              "windows-x86_64" = [ordered]@{
+                url       = "https://streamnook.app/download/installer/$version"
+                signature = $tauriSig
+              }
+            }
+          }
+          $tauri | ConvertTo-Json -Depth 6 | Out-File -FilePath ./tauri-latest.json -Encoding utf8 -NoNewline
+
+          # Re-read both and refuse to publish anything malformed.
+          $check = Get-Content ./latest.json -Raw | ConvertFrom-Json
+          if ($check.version -ne $version) { throw "latest.json version is '$($check.version)', expected $version" }
+          if (-not $check.platforms.'windows-x86_64'.version) { throw "latest.json lost platforms.windows-x86_64.version" }
+          if (-not $check.download_url) { throw "latest.json has no Windows download_url" }
+          $tcheck = Get-Content ./tauri-latest.json -Raw | ConvertFrom-Json
+          if (-not $tcheck.platforms.'windows-x86_64'.signature) { throw "tauri/latest.json has no signature" }
+          Write-Host "latest.json:"
+          Get-Content ./latest.json
+          Write-Host ""
+          Write-Host "tauri/latest.json:"
+          Get-Content ./tauri-latest.json
+
+      # Installed copies read tauri/latest.json (via streamnook.app); portable
+      # copies, macOS and Linux read latest.json at streamnook.app/api/v1/update.
+      # Without this, installed clients keep seeing the previous version and
+      # either miss the update or get prompted to "update" to an older build.
+      - name: Push the update manifests to Cloudflare R2
+        if: steps.check_release.outputs.RELEASE_EXISTS == 'false'
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
+          npx --yes wrangler@4 r2 object put "streamnook-downloads/tauri/latest.json" `
+            --file="tauri-latest.json" `
+            --content-type="application/json" `
+            --remote
+          if ($LASTEXITCODE -ne 0) { throw "wrangler r2 tauri/latest.json upload failed (exit $LASTEXITCODE)" }
+          Write-Host "Uploaded tauri/latest.json (v$version) to R2"
           npx --yes wrangler@4 r2 object put "streamnook-downloads/latest.json" `
             --file="latest.json" `
             --content-type="application/json" `
@@ -1070,13 +1310,6 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # Minisign SECRET key for update signing. Generate with
-          #   minisign -G -p streamnook-update.pub -s streamnook-update.key
-          # then paste the .key contents here as a repo secret and the second
-          # line of the .pub into UPDATE_PUBKEY in commands/components.rs.
-          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
-          # For attaching the .minisig to the already-created release.
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # Joins the two parallel builds. Runs only after BOTH finish, and only does
   # anything if build-macos actually produced a bundle. Everything here used to
@@ -1093,31 +1326,34 @@ jobs:
     needs: [build, build-macos]
     if: >-
       ${{ !cancelled()
-          && needs.build.result == 'success'
-          && needs.build.outputs.RELEASE_EXISTS == 'false'
+          && (needs.build-macos.outputs.RELEASE_EXISTS == 'false' || needs.build.outputs.RELEASE_EXISTS == 'false')
           && needs.build-macos.outputs.BUNDLE_NAME == '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Say that macOS did not ship
         run: |
-          echo "::warning title=macOS was not published::v${{ needs.build.outputs.VERSION }} shipped WITHOUT a macOS build (build-macos result: ${{ needs.build-macos.result }}). The manifest still carries the PREVIOUS macOS entries, so Macs are offered the older build and will not see this release. Re-run the macOS job, or ship the next release once it is fixed."
+          v="${{ needs.build-macos.outputs.VERSION || needs.build.outputs.VERSION }}"
+          echo "::warning title=macOS was not published::v$v shipped WITHOUT a macOS build (build-macos result: ${{ needs.build-macos.result }}). The manifest keeps the PREVIOUS macOS entries, each tagged with the version it was built as, so Macs stay on their build and do not see this release. Re-run the macOS job, or ship the next release once it is fixed."
           {
             echo "### macOS was not published"
             echo ""
-            echo "\`v${{ needs.build.outputs.VERSION }}\` shipped without a macOS build."
+            echo "\`v$v\` shipped without a macOS build."
             echo "build-macos result: \`${{ needs.build-macos.result }}\`"
             echo ""
-            echo "Windows users have the update. Macs are still offered the previous"
-            echo "release, which is the intended safe state, but they will not get this"
-            echo "version until a macOS bundle is published."
+            echo "Macs keep the previous release, which is the intended safe state,"
+            echo "but they will not get this version until a macOS bundle is published."
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # Does NOT require the Windows job to succeed. `needs: build` stays so this
+  # runs AFTER it (both write latest.json), but a failed Windows build must not
+  # hold every Mac back: the bundle is already in R2 (build-macos pushed it), so
+  # only the manifest entry and the GitHub asset are left, and both are handled
+  # below for the Windows-failed case. A bundle exists only when build-macos
+  # found no release for this version, so this never re-publishes an old one.
   finalize-macos:
     needs: [build, build-macos]
     if: >-
       ${{ !cancelled()
-          && needs.build.result == 'success'
-          && needs.build.outputs.RELEASE_EXISTS == 'false'
           && needs.build-macos.outputs.BUNDLE_NAME != '' }}
     runs-on: ubuntu-latest
     permissions:
@@ -1134,8 +1370,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="${{ needs.build.outputs.VERSION }}"
+          version="${{ needs.build-macos.outputs.VERSION }}"
           bundle="macos-bundle/${{ needs.build-macos.outputs.BUNDLE_NAME }}"
+          # The Windows job creates the release. When it failed there is none
+          # yet; the macOS update still ships through R2 (the patch step below).
+          # Re-running the failed Windows job re-runs this job after it, and
+          # that run attaches the bundle.
+          if ! gh release view "v$version" >/dev/null 2>&1; then
+            echo "::warning title=No GitHub release for v$version yet::The Windows job did not create it. The macOS bundle is live through R2 only. Re-run the failed Windows job: this job runs again after it and attaches the bundle."
+            exit 0
+          fi
           gh release upload "v$version" "$bundle" --clobber
           [ -f "$bundle.minisig" ] && gh release upload "v$version" "$bundle.minisig" --clobber || true
           echo "Attached $(basename "$bundle") to v$version"
@@ -1156,7 +1400,8 @@ jobs:
           MAC_SIG: ${{ needs.build-macos.outputs.SIGNATURE }}
           MAC_SIZE: ${{ needs.build-macos.outputs.SIZE }}
           MAC_URL: ${{ needs.build-macos.outputs.DOWNLOAD_URL }}
-          VERSION: ${{ needs.build.outputs.VERSION }}
+          VERSION: ${{ needs.build-macos.outputs.VERSION }}
+          WINDOWS_RESULT: ${{ needs.build.result }}
         run: |
           set -euo pipefail
 
@@ -1168,9 +1413,21 @@ jobs:
           # slow macOS job could staple its bundle onto whatever version shipped
           # next, which is exactly the "offers an update it cannot download" case
           # the Windows manifest step guards against.
+          # The Windows job writes latest.json at this version. When it FAILED,
+          # latest.json is still the previous release; then this entry is added
+          # tagged with its own version and the top-level version stays put.
+          # Moving it would offer every Windows client (whose entry is the
+          # previous build) a reinstall of what it already runs. App builds
+          # that read per-platform versions get this macOS update now; older
+          # ones get it with the next full release.
           have=$(jq -r '.version' latest.json)
-          if [ "$have" != "$VERSION" ]; then
-            echo "latest.json is v$have but this run is v$VERSION - refusing to patch"
+          if [ "$have" = "$VERSION" ]; then
+            echo "latest.json is at v$VERSION: patching macOS in"
+          elif [ "$WINDOWS_RESULT" != "success" ] \
+               && [ "$(printf '%s\n%s\n' "$have" "$VERSION" | sort -V | tail -1)" = "$VERSION" ]; then
+            echo "::warning title=macOS v$VERSION published without Windows::The Windows job did not succeed (result: $WINDOWS_RESULT), so latest.json stays at v$have. The macOS entry now says v$VERSION; app builds that read per-platform versions are offered it, older ones wait for the next full release."
+          else
+            echo "latest.json is v$have but this run is v$VERSION (Windows: $WINDOWS_RESULT) - refusing to patch"
             exit 1
           fi
 
@@ -1183,9 +1440,9 @@ jobs:
 
           # Universal binary: one artifact serves both Mac architectures, so both
           # keys point at it rather than shipping two identical files.
-          jq --arg url "$MAC_URL" --arg name "$MAC_BUNDLE" --arg sha "$MAC_SHA" \
+          jq --arg ver "$VERSION" --arg url "$MAC_URL" --arg name "$MAC_BUNDLE" --arg sha "$MAC_SHA" \
              --arg sig "$MAC_SIG" --argjson size "$MAC_SIZE" \
-             '.platforms["macos-aarch64"] = {download_url:$url, bundle_name:$name, sha256:$sha, signature:$sig, size:$size}
+             '.platforms["macos-aarch64"] = {version:$ver, download_url:$url, bundle_name:$name, sha256:$sha, signature:$sig, size:$size}
               | .platforms["macos-x86_64"] = .platforms["macos-aarch64"]' \
              latest.json > latest.patched.json
           test -s latest.patched.json
@@ -1206,23 +1463,22 @@ jobs:
     if: >-
       ${{ !cancelled()
           && vars.LINUX_RELEASE == 'true'
-          && needs.build.result == 'success'
-          && needs.build.outputs.RELEASE_EXISTS == 'false'
+          && (needs.build-linux.outputs.RELEASE_EXISTS == 'false' || needs.build.outputs.RELEASE_EXISTS == 'false')
           && needs.build-linux.outputs.BUNDLE_NAME == '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Say that Linux did not ship
         run: |
-          echo "::warning title=Linux was not published::v${{ needs.build.outputs.VERSION }} shipped WITHOUT a Linux build (build-linux result: ${{ needs.build-linux.result }}). The manifest still carries the PREVIOUS linux-x86_64 entry, so Linux clients are offered the older build and will not see this release. Re-run the Linux job, or ship the next release once it is fixed."
+          echo "::warning title=Linux was not published::v${{ needs.build-linux.outputs.VERSION || needs.build.outputs.VERSION }} shipped WITHOUT a Linux build (build-linux result: ${{ needs.build-linux.result }}). The manifest still carries the PREVIOUS linux-x86_64 entry, so Linux clients are offered the older build and will not see this release. Re-run the Linux job, or ship the next release once it is fixed."
           {
             echo "### Linux was not published"
             echo ""
-            echo "\`v${{ needs.build.outputs.VERSION }}\` shipped without a Linux build."
+            echo "\`v${{ needs.build-linux.outputs.VERSION || needs.build.outputs.VERSION }}\` shipped without a Linux build."
             echo "build-linux result: \`${{ needs.build-linux.result }}\`"
             echo ""
-            echo "Windows users have the update. Linux clients are still offered the"
-            echo "previous release, which is the intended safe state, but they will not"
-            echo "get this version until a Linux bundle is published."
+            echo "Linux clients keep the previous release, which is the intended safe"
+            echo "state, but they will not get this version until a Linux bundle is"
+            echo "published."
           } >> "$GITHUB_STEP_SUMMARY"
 
   finalize-linux:
@@ -1237,11 +1493,11 @@ jobs:
     # A SKIPPED finalize-macos (no Mac build this cycle) must not skip this job,
     # which is why the `if` leads with `!cancelled()` rather than relying on the
     # default needs-success behaviour.
+    #
+    # Like finalize-macos, it does not require the Windows job to succeed.
     needs: [build, build-linux, finalize-macos]
     if: >-
       ${{ !cancelled()
-          && needs.build.result == 'success'
-          && needs.build.outputs.RELEASE_EXISTS == 'false'
           && needs.build-linux.outputs.BUNDLE_NAME != '' }}
     runs-on: ubuntu-latest
     permissions:
@@ -1258,8 +1514,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="${{ needs.build.outputs.VERSION }}"
+          version="${{ needs.build-linux.outputs.VERSION }}"
           bundle="linux-bundle/${{ needs.build-linux.outputs.BUNDLE_NAME }}"
+          # The Windows job creates the release. When it failed there is none
+          # yet; the Linux update still ships through R2 (the patch step below).
+          # Re-running the failed Windows job re-runs this job after it, and
+          # that run attaches the bundle.
+          if ! gh release view "v$version" >/dev/null 2>&1; then
+            echo "::warning title=No GitHub release for v$version yet::The Windows job did not create it. The Linux bundle is live through R2 only. Re-run the failed Windows job: this job runs again after it and attaches the bundle."
+            exit 0
+          fi
           gh release upload "v$version" "$bundle" --clobber
           [ -f "$bundle.minisig" ] && gh release upload "v$version" "$bundle.minisig" --clobber || true
           echo "Attached $(basename "$bundle") to v$version"
@@ -1280,7 +1544,8 @@ jobs:
           LINUX_SIG: ${{ needs.build-linux.outputs.SIGNATURE }}
           LINUX_SIZE: ${{ needs.build-linux.outputs.SIZE }}
           LINUX_URL: ${{ needs.build-linux.outputs.DOWNLOAD_URL }}
-          VERSION: ${{ needs.build.outputs.VERSION }}
+          VERSION: ${{ needs.build-linux.outputs.VERSION }}
+          WINDOWS_RESULT: ${{ needs.build.result }}
         run: |
           set -euo pipefail
 
@@ -1292,9 +1557,21 @@ jobs:
           # slow Linux job could staple its bundle onto whatever version shipped
           # next, which is exactly the "offers an update it cannot download" case
           # the Windows manifest step guards against.
+          # The Windows job writes latest.json at this version. When it FAILED,
+          # latest.json is still the previous release; then this entry is added
+          # tagged with its own version and the top-level version stays put.
+          # Moving it would offer every Windows client (whose entry is the
+          # previous build) a reinstall of what it already runs. App builds
+          # that read per-platform versions get this Linux update now; older
+          # ones get it with the next full release.
           have=$(jq -r '.version' latest.json)
-          if [ "$have" != "$VERSION" ]; then
-            echo "latest.json is v$have but this run is v$VERSION - refusing to patch"
+          if [ "$have" = "$VERSION" ]; then
+            echo "latest.json is at v$VERSION: patching Linux in"
+          elif [ "$WINDOWS_RESULT" != "success" ] \
+               && [ "$(printf '%s\n%s\n' "$have" "$VERSION" | sort -V | tail -1)" = "$VERSION" ]; then
+            echo "::warning title=Linux v$VERSION published without Windows::The Windows job did not succeed (result: $WINDOWS_RESULT), so latest.json stays at v$have. The Linux entry now says v$VERSION; app builds that read per-platform versions are offered it, older ones wait for the next full release."
+          else
+            echo "latest.json is v$have but this run is v$VERSION (Windows: $WINDOWS_RESULT) - refusing to patch"
             exit 1
           fi
 
@@ -1308,9 +1585,9 @@ jobs:
           # One key only. Unlike macOS there is no universal binary to alias: the
           # AppImage is x86_64, and an arm64 Linux client correctly resolves to
           # `None` (no update offered) rather than being handed an amd64 build.
-          jq --arg url "$LINUX_URL" --arg name "$LINUX_BUNDLE" --arg sha "$LINUX_SHA" \
+          jq --arg ver "$VERSION" --arg url "$LINUX_URL" --arg name "$LINUX_BUNDLE" --arg sha "$LINUX_SHA" \
              --arg sig "$LINUX_SIG" --argjson size "$LINUX_SIZE" \
-             '.platforms["linux-x86_64"] = {download_url:$url, bundle_name:$name, sha256:$sha, signature:$sig, size:$size}' \
+             '.platforms["linux-x86_64"] = {version:$ver, download_url:$url, bundle_name:$name, sha256:$sha, signature:$sig, size:$size}' \
              latest.json > latest.patched.json
           test -s latest.patched.json
 
@@ -1319,3 +1596,24 @@ jobs:
             --content-type="application/json" \
             --remote
           echo "Patched Linux ($LINUX_BUNDLE) into latest.json for v$VERSION"
+
+  # Says what a failed Windows job means for the release. macOS and Linux no
+  # longer wait on it (finalize-*), so a red Windows job can sit beside a
+  # published Mac update; this spells out the state and the recovery.
+  windows-status:
+    needs: [build, finalize-macos, finalize-linux]
+    if: ${{ !cancelled() && needs.build.result == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Say that Windows did not ship
+        run: |
+          echo "::warning title=Windows was not published::The Windows job failed, so there is no GitHub release and latest.json stays at the previous version: no Windows client is offered anything. macOS finalize: ${{ needs.finalize-macos.result }}, Linux finalize: ${{ needs.finalize-linux.result }}. Fix the Windows job and use Re-run failed jobs; that creates the release, moves latest.json to this version, and re-runs the finalize jobs to attach their bundles."
+          {
+            echo "### Windows was not published"
+            echo ""
+            echo "- No GitHub release was created, and latest.json still names the previous version."
+            echo "- macOS finalize: \`${{ needs.finalize-macos.result }}\`, Linux finalize: \`${{ needs.finalize-linux.result }}\`."
+            echo "  A published platform entry carries its own version, so app builds that read it"
+            echo "  are offered it now; older builds get it with the next full release."
+            echo "- Recovery: fix the Windows job, then **Re-run failed jobs**."
+          } >> "$GITHUB_STEP_SUMMARY"
