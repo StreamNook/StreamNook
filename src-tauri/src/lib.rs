@@ -1762,6 +1762,10 @@ pub fn run() {
             // would just be a command the ACL denies.
             #[cfg(mobile)]
             set_max_video_height,
+            #[cfg(mobile)]
+            report_playback_health,
+            #[cfg(mobile)]
+            get_live_edge_cushion,
             start_ll_diag,
             append_ll_diag,
             stop_ll_diag,

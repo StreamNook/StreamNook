@@ -47,4 +47,5 @@ and decoded by `ios/Sources/SNKit/CosmeticsModels.swift`. FakeCore answers every
 
 `profile:LOGIN`, `profile:row`, `profile:close`, `cosmetics:open:KEY`, `cosmetics:scroll:ID`,
 `cosmetics:dump`, `wash:find`, and FakeCore-only writes `cosmetics:equip:badge|theme|paint|7tvbadge|twitch:ID`,
+`cosmetics:equip:color:VALUE` (a `named_colors[].value`), `cosmetics:equip:bio:TEXT` (`_` for spaces),
 `cosmetics:chat:on|off`.

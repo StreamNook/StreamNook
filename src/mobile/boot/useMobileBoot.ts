@@ -40,6 +40,7 @@ import {
   syncBackgroundChecks,
 } from '../notifications';
 import { consumePendingChannel } from '../nativeBridge';
+import { applyPlaybackAdapt, type PlaybackAdapt } from '../player/linkAdapt';
 import { useFollowsStore, type ProviderStreamRow } from '../../stores/followsStore';
 import type { ProviderId } from '../../types/providers';
 import { streamProvider } from '../../utils/streamProvider';
@@ -208,6 +209,13 @@ export function useMobileBoot(): void {
       await addListener<{ url: string; region?: string; channel?: string }>('ad-pivot', (event) => {
         const { url, region } = event.payload;
         if (url) useAppStore.getState().applyAdPivot(url, region);
+      });
+
+      // The core's link governor moved the rendition or the cushion (a phone
+      // on a poor link). A URL means the relay restarted and the player
+      // reloads on it; otherwise the engine picks the cushion up by itself.
+      await addListener<PlaybackAdapt>('playback-adapt', (event) => {
+        applyPlaybackAdapt(event.payload);
       });
 
       // Follow/unfollow actions elsewhere ask the shell to refresh the list.
