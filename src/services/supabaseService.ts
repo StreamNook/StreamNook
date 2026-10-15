@@ -8,8 +8,7 @@ import { Logger } from '../utils/logger';
 import type { Atmosphere } from './atmospheres';
 import { DEV_ATMOSPHERES } from './devAtmospheres';
 import { DEV_COSMETICS, isDevCosmetic, readDevActiveCosmetic, writeDevActiveCosmetic } from './devCosmetics';
-import type { ActiveEquipment, CosmeticSlot, CosmeticType } from './cosmetics/types';
-import { SLOT_FOR_TYPE } from './cosmetics/types';
+import type { ActiveEquipment, CosmeticSlot } from './cosmetics/types';
 // Supabase client singleton
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -858,16 +857,10 @@ export const getProfileViews = async (userId: string): Promise<number | null> =>
  * what is on screen alone; callers catch it.
  */
 export const getAccolades = async (userId: string): Promise<string[]> => {
-    if (!supabase || !userId) return [];
-    const { data, error } = await supabase
-        .from('user_accolades')
-        .select('accolade_id')
-        .eq('twitch_user_id', userId);
-    if (error) {
-        Logger.warn('[Supabase] Failed to get accolades (keeping the current set):', error.message);
-        throw new Error(error.message);
-    }
-    return (data || []).map((r: { accolade_id: string }) => r.accolade_id);
+    if (!userId) return [];
+    // Rust reads them (services/profile_view.rs) and rejects on a failed read
+    // rather than answering an empty set, so lit medallions never blank.
+    return invoke<string[]>('get_accolades', { userId });
 };
 
 /**
@@ -1238,25 +1231,11 @@ const defaultProfilePrefs = (): ProfilePrefs => ({
 });
 
 export const getProfilePrefs = async (userId: string): Promise<ProfilePrefs> => {
-    if (!supabase || !userId) return defaultProfilePrefs();
+    if (!userId) return defaultProfilePrefs();
+    // Read in Rust (services/member_theme.rs), with the same defaults and the
+    // legacy paint_theme derivation; a failed read answers the defaults.
     try {
-        const { data, error } = await supabase
-            .from('user_profile_prefs')
-            .select('paint_theme, profile_theme, hidden_sections, chat_atmosphere')
-            .eq('twitch_user_id', userId)
-            .maybeSingle();
-        if (error) {
-            Logger.error('[Supabase] Failed to get profile prefs:', error.message);
-            return defaultProfilePrefs();
-        }
-        const row = data as { paint_theme?: boolean; profile_theme?: string; hidden_sections?: string[]; chat_atmosphere?: boolean } | null;
-        const profileTheme = row?.profile_theme || (row?.paint_theme ? 'paint' : 'tier');
-        return {
-            paintTheme: profileTheme === 'paint',
-            profileTheme,
-            hiddenSections: Array.isArray(row?.hidden_sections) ? row!.hidden_sections! : [],
-            chatAtmosphere: row?.chat_atmosphere !== false,
-        };
+        return await invoke<ProfilePrefs>('get_profile_prefs', { userId });
     } catch (error) {
         Logger.error('[Supabase] Failed to get profile prefs:', error);
         return defaultProfilePrefs();
@@ -1335,47 +1314,21 @@ const writeViaApi = async (path: string, body: Record<string, unknown>): Promise
     return postToApi(path, body);
 };
 
+/**
+ * Set the member's profile theme ('tier' | 'paint' | an atmosphere id). Rust
+ * owns the write (services/member_theme.rs: the server path when switched on,
+ * else the direct upsert) and repaints the member's chat rows at once in every
+ * window through `member-theme-changed`. Rejects when the write did not land.
+ */
 export const setProfileTheme = async (userId: string, theme: string): Promise<void> => {
     if (!userId) return;
-    if ((await writeViaApi('/api/cosmetics/theme', { theme })).handled) return;
-    if (!supabase) return;
-    try {
-        const { error } = await supabase.from('user_profile_prefs').upsert(
-            {
-                twitch_user_id: userId,
-                profile_theme: theme,
-                paint_theme: theme === 'paint', // keep the legacy flag in sync
-                updated_at: new Date().toISOString(),
-            },
-            { onConflict: 'twitch_user_id' },
-        );
-        if (error) Logger.error('[Supabase] Failed to set profile theme:', error.message);
-    } catch (error) {
-        Logger.warn('[Supabase] setProfileTheme failed:', error);
-    }
+    await invoke('set_profile_theme', { userId, theme });
 };
 
 /** Returns whether the change was saved, so the switch can undo itself. */
 export const setChatAtmosphere = async (userId: string, show: boolean): Promise<boolean> => {
     if (!userId) return false;
-    // Through the API first; the direct write is only for when it is unreachable.
-    const api = await postToApi('/api/v1/profile/prefs', { chat_atmosphere: show });
-    if (api.handled) return api.ok;
-    if (!supabase) return false;
-    try {
-        const { error } = await supabase.from('user_profile_prefs').upsert(
-            { twitch_user_id: userId, chat_atmosphere: show, updated_at: new Date().toISOString() },
-            { onConflict: 'twitch_user_id' },
-        );
-        if (error) {
-            Logger.error('[Supabase] Failed to set chat atmosphere:', error.message);
-            return false;
-        }
-        return true;
-    } catch (error) {
-        Logger.warn('[Supabase] setChatAtmosphere failed:', error);
-        return false;
-    }
+    return invoke<boolean>('set_chat_atmosphere', { userId, show }).catch(() => false);
 };
 
 export const setHiddenSections = async (userId: string, sections: string[]): Promise<void> => {
@@ -1403,28 +1356,9 @@ export const setHiddenSections = async (userId: string, sections: string[]): Pro
  * anon key (the same way the cosmetics registry is).
  */
 export const isStripeSubscriber = async (userId: string): Promise<boolean> => {
-    if (!supabase || !userId) return false;
-    try {
-        const { data, error } = await supabase
-            .from('stripe_subscriptions')
-            .select('status')
-            .eq('twitch_user_id', userId)
-            .order('updated_at', { ascending: false })
-            .limit(1)
-            .maybeSingle();
-        if (error) {
-            Logger.warn('[Supabase] subscriber status read failed:', error.message);
-            return false;
-        }
-        const status = (data as { status?: string } | null)?.status;
-        // Entitled-while-active set mirrors the webhook's grant gate: active +
-        // past_due (payment retrying, keep access during the grace window) +
-        // trialing (no trial is configured today, but stay forward-safe).
-        return status === 'active' || status === 'past_due' || status === 'trialing';
-    } catch (error) {
-        Logger.warn('[Supabase] isStripeSubscriber failed:', error);
-        return false;
-    }
+    if (!userId) return false;
+    // Rust reads the latest row (active, past_due or trialing counts).
+    return invoke<boolean>('is_stripe_subscriber', { userId }).catch(() => false);
 };
 
 /**
@@ -1498,168 +1432,27 @@ export const getStreamNookMembership = async (
 };
 
 // ============================================================================
-// StreamNook user registry (P2P badge)
+// StreamNook registries: members, cosmetics, atmospheres (held in Rust)
 // ============================================================================
-// Backed by the `user_numbers` Postgres view (ROW_NUMBER ordered by users.created_at).
-// Loaded once on app start, kept fresh via a realtime INSERT subscription on `users`.
+// Rust reads the member registry (`user_numbers`), the cosmetics catalog with
+// every member's grants and worn badge, and the atmosphere catalog once for
+// every window (services/cosmetics_registry.rs), keeps them fresh from its own
+// realtime socket, on focus and on resume, and keeps the last good copy when a
+// read fails. This is the page's copy of that answer, for the synchronous reads
+// render paths need; `sn-registry-changed` says when to read it again.
 
-let snRegistry: Map<string, number> = new Map();
-let snRegistryChannel: RealtimeChannel | null = null;
-let snRegistryLoaded = false;
-let snRegistryLoading: Promise<void> | null = null;
-let snRegistryReloadQueued = false;
-let snRegistryVersion = 0;
-const snRegistryVersionSubscribers = new Set<() => void>();
-
-const bumpStreamNookRegistryVersion = () => {
-    snRegistryVersion++;
-    for (const cb of snRegistryVersionSubscribers) {
-        try { cb(); } catch (e) { Logger.error('[Supabase] Registry version subscriber error:', e); }
-    }
-};
-
-/**
- * Tell everything that reads "is this person a member" to look again.
- *
- * Exported for the cross-platform alias resolver, which answers the same
- * question for a Kick or YouTube chatter and lands asynchronously. Chat resolves
- * each chatter ONCE, so a member who spoke before their claim was known would be
- * classified as a non-member for the whole session; the re-resolve bridge in
- * `chatUserStore` already listens to this counter, so bumping it is the entire
- * fix rather than a second mechanism.
- */
-export const notifyMemberIdentityChanged = (): void => {
-    bumpStreamNookRegistryVersion();
-};
-
-/** PostgREST answers an unranged select with at most the project's max rows
- *  (1000 by default) and says nothing about the rest, so a whole-table
- *  registry read silently loses everyone past it once the table grows. */
-const PAGE_SIZE = 1000;
-
-/** Every row of a whole-table read, a page at a time until a short page.
- *  `page` must sort on a stable key so pages neither overlap nor skip. */
-async function selectAll<T>(
-    page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
-): Promise<{ data: T[]; error: unknown }> {
-    const rows: T[] = [];
-    for (let from = 0; ; from += PAGE_SIZE) {
-        const { data, error } = await page(from, from + PAGE_SIZE - 1);
-        if (error) return { data: rows, error };
-        rows.push(...(data ?? []));
-        if (!data || data.length < PAGE_SIZE) return { data: rows, error: null };
-    }
+interface RegistrySnapshot {
+    version: number;
+    membersLoaded: boolean;
+    cosmeticsLoaded: boolean;
+    atmospheresLoaded: boolean;
+    members: Record<string, number>;
+    catalog: CosmeticCatalogEntry[];
+    grants: Record<string, string[]>;
+    /** The badge each member wears, already checked against what they own. */
+    worn: Record<string, string>;
+    atmospheres: Atmosphere[];
 }
-
-const loadStreamNookRegistry = async (): Promise<void> => {
-    if (!supabase) return;
-    if (snRegistryLoading) { snRegistryReloadQueued = true; return snRegistryLoading; }
-    snRegistryLoading = (async () => {
-        try {
-            const { data, error } = await selectAll<{ id: string; user_number: number }>((from, to) =>
-                supabase!.from('user_numbers').select('id, user_number').order('id').range(from, to),
-            );
-            if (error) {
-                Logger.error('[Supabase] Failed to load streamnook registry:', error);
-                return;
-            }
-            snRegistry = new Map((data || []).map((r: any) => [r.id as string, r.user_number as number]));
-            snRegistryLoaded = true;
-            Logger.debug('[Supabase] StreamNook registry loaded:', snRegistry.size, 'users');
-            bumpStreamNookRegistryVersion();
-        } catch (e) {
-            Logger.error('[Supabase] loadStreamNookRegistry exception:', e);
-        } finally {
-            snRegistryLoading = null;
-            if (snRegistryReloadQueued) { snRegistryReloadQueued = false; void loadStreamNookRegistry(); }
-        }
-    })();
-    return snRegistryLoading;
-};
-
-/**
- * Subscribe to the StreamNook user registry. Idempotent: only the first call
- * triggers a fetch + opens the realtime channel; subsequent calls just add
- * listeners. Returns an unsubscribe that tears the channel down when the last
- * listener leaves.
- */
-export const subscribeToStreamNookRegistry = (
-    callback?: (map: Map<string, number>) => void
-): (() => void) | null => {
-    if (!supabase) return null;
-
-    const versionCb = () => callback?.(snRegistry);
-    snRegistryVersionSubscribers.add(versionCb);
-
-    if (!snRegistryLoaded) {
-        loadStreamNookRegistry();
-    } else {
-        callback?.(snRegistry);
-    }
-
-    if (!snRegistryChannel) {
-        // See subscribeToCosmeticsRegistry for the reconnect rationale: realtime
-        // does not replay events missed while disconnected, so re-pull on every
-        // reconnect (not the initial connect) to self-heal without a restart.
-        let connectedOnce = false;
-        snRegistryChannel = supabase
-            .channel('streamnook-registry')
-            .on('postgres_changes', {
-                event: 'INSERT',
-                schema: 'public',
-                table: 'users',
-            }, () => {
-                loadStreamNookRegistry();
-            })
-            .subscribe((status) => {
-                if (status === 'SUBSCRIBED') {
-                    if (connectedOnce) loadStreamNookRegistry();
-                    connectedOnce = true;
-                }
-            });
-    }
-
-    return () => {
-        snRegistryVersionSubscribers.delete(versionCb);
-        if (snRegistryVersionSubscribers.size === 0 && snRegistryChannel) {
-            snRegistryChannel.unsubscribe();
-            snRegistryChannel = null;
-        }
-    };
-};
-
-/** Sync read: is this Twitch user in the registry? */
-export const isStreamNookUser = (userId: string | undefined | null): boolean => {
-    if (!userId) return false;
-    return snRegistry.has(userId);
-};
-
-/** Sync read: get the user number, or null if not registered. */
-export const getStreamNookUserNumber = (userId: string | undefined | null): number | null => {
-    if (!userId) return null;
-    return snRegistry.get(userId) ?? null;
-};
-
-/** For React useSyncExternalStore: subscribe to version bumps. */
-export const subscribeStreamNookRegistryVersion = (cb: () => void): (() => void) => {
-    snRegistryVersionSubscribers.add(cb);
-    if (!snRegistryLoaded && !snRegistryLoading && supabase) {
-        loadStreamNookRegistry();
-    }
-    return () => { snRegistryVersionSubscribers.delete(cb); };
-};
-
-/** For React useSyncExternalStore: read the current version. */
-export const getStreamNookRegistryVersion = (): number => snRegistryVersion;
-
-// ============================================================================
-// Cosmetics registry (gold badge entitlements + active selection)
-// ============================================================================
-// Mirrors the StreamNook registry pattern above: single-flight load on first
-// subscribe, version counter for useSyncExternalStore, realtime sub on
-// user_cosmetics INSERT (entitlements) and user_cosmetic_active * (selection).
-// Sync reads expose: catalog row by slug, entitlement set for a user, and
-// the resolved active slug for a user.
 
 export interface CosmeticCatalogEntry {
     slug: string;
@@ -1682,159 +1475,167 @@ export interface CosmeticCatalogEntry {
     contribution_min_points?: number | null;
 }
 
+let snRegistry: Map<string, number> = new Map();
 let cosmeticsCatalog: Map<string, CosmeticCatalogEntry> = new Map();
-let cosmeticsEntitlements: Map<string, Set<string>> = new Map(); // twitch_user_id -> set of slugs
-let cosmeticsActive: Map<string, string> = new Map();            // twitch_user_id -> active slug
-let cosmeticsChannel: RealtimeChannel | null = null;
+let cosmeticsEntitlements: Map<string, Set<string>> = new Map(); // twitch_user_id -> granted slugs
+let cosmeticsWorn: Map<string, string> = new Map();              // twitch_user_id -> worn badge slug
+let atmospheresCatalog: Map<string, Atmosphere> = new Map();
+let snRegistryLoaded = false;
 let cosmeticsLoaded = false;
-let cosmeticsLoading: Promise<void> | null = null;
-let cosmeticsReloadQueued = false;
+let atmospheresLoaded = false;
+let snRegistryVersion = 0;
 let cosmeticsVersion = 0;
+let atmospheresVersion = 0;
+const snRegistryVersionSubscribers = new Set<() => void>();
 const cosmeticsVersionSubscribers = new Set<() => void>();
+const atmospheresVersionSubscribers = new Set<() => void>();
+let snapshotLoading: Promise<void> | null = null;
+let snapshotReloadQueued = false;
+let snapshotListening = false;
 
-const bumpCosmeticsVersion = () => {
-    cosmeticsVersion++;
-    for (const cb of cosmeticsVersionSubscribers) {
-        try { cb(); } catch (e) { Logger.error('[Supabase] Cosmetics subscriber error:', e); }
+const notify = (subscribers: Set<() => void>, label: string) => {
+    for (const cb of subscribers) {
+        try { cb(); } catch (e) { Logger.error(`[Supabase] ${label} subscriber error:`, e); }
     }
 };
 
-const loadCosmetics = async (): Promise<void> => {
-    if (!supabase) return;
-    // A change that lands mid-load may postdate the rows this load already read,
-    // so it queues one more pass instead of joining the stale one.
-    if (cosmeticsLoading) { cosmeticsReloadQueued = true; return cosmeticsLoading; }
-    cosmeticsLoading = (async () => {
-        try {
-            const [catalogRes, entRes, activeRes] = await Promise.all([
-                supabase!.from('cosmetics').select('*').eq('is_active', true).order('sort_order'),
-                selectAll<{ twitch_user_id: string; slug: string }>((from, to) =>
-                    supabase!
-                        .from('user_cosmetics')
-                        .select('twitch_user_id, slug')
-                        .order('twitch_user_id')
-                        .order('slug')
-                        .range(from, to),
-                ),
-                selectAll<{ twitch_user_id: string; active_slug: string | null }>((from, to) =>
-                    supabase!
-                        .from('user_cosmetic_active')
-                        .select('twitch_user_id, active_slug')
-                        .order('twitch_user_id')
-                        .range(from, to),
-                ),
-            ]);
-            if (catalogRes.error) Logger.error('[Supabase] cosmetics catalog load failed:', catalogRes.error);
-            if (entRes.error) Logger.error('[Supabase] user_cosmetics load failed:', entRes.error);
-            if (activeRes.error) Logger.error('[Supabase] user_cosmetic_active load failed:', activeRes.error);
+const bumpStreamNookRegistryVersion = () => {
+    snRegistryVersion++;
+    notify(snRegistryVersionSubscribers, 'Registry version');
+};
 
-            const nextCatalog = new Map<string, CosmeticCatalogEntry>();
-            for (const row of (catalogRes.data || []) as CosmeticCatalogEntry[]) {
-                nextCatalog.set(row.slug, row);
-            }
-            // Dev builds get candidate badge slots merged in after the live rows
-            // (see devCosmetics.ts). Tree-shaken out of production.
-            if (import.meta.env.DEV) {
-                for (const c of DEV_COSMETICS) nextCatalog.set(c.slug, c);
-            }
+const bumpCosmeticsVersion = () => {
+    cosmeticsVersion++;
+    notify(cosmeticsVersionSubscribers, 'Cosmetics');
+};
 
-            const nextEnt = new Map<string, Set<string>>();
-            for (const row of (entRes.data || []) as { twitch_user_id: string; slug: string }[]) {
-                let set = nextEnt.get(row.twitch_user_id);
-                if (!set) { set = new Set(); nextEnt.set(row.twitch_user_id, set); }
-                set.add(row.slug);
-            }
-
-            const nextActive = new Map<string, string>();
-            for (const row of (activeRes.data || []) as { twitch_user_id: string; active_slug: string | null }[]) {
-                if (row.active_slug) nextActive.set(row.twitch_user_id, row.active_slug);
-            }
-            // A dev badge equipped locally is restored over the server's answer,
-            // since the server never heard about it. Dev builds only.
-            const devActive = readDevActiveCosmetic();
-            if (devActive) nextActive.set(devActive.userId, devActive.slug);
-
-            cosmeticsCatalog = nextCatalog;
-            cosmeticsEntitlements = nextEnt;
-            cosmeticsActive = nextActive;
-            cosmeticsLoaded = true;
-            Logger.debug('[Supabase] Cosmetics loaded:', {
-                catalog: nextCatalog.size,
-                userEntitlements: nextEnt.size,
-                userActive: nextActive.size,
-            });
-            bumpCosmeticsVersion();
-        } catch (e) {
-            Logger.error('[Supabase] loadCosmetics exception:', e);
-        } finally {
-            cosmeticsLoading = null;
-            if (cosmeticsReloadQueued) { cosmeticsReloadQueued = false; void loadCosmetics(); }
-        }
-    })();
-    return cosmeticsLoading;
+const bumpAtmospheresVersion = () => {
+    atmospheresVersion++;
+    notify(atmospheresVersionSubscribers, 'Atmospheres');
 };
 
 /**
- * Subscribe to the cosmetics registry. Idempotent. The first call triggers
- * the initial fetch and opens the realtime channel; subsequent calls just
- * register the listener.
+ * Tell everything that reads "is this person a member" to look again.
+ *
+ * Exported for the cross-platform alias resolver, which answers the same
+ * question for a Kick or YouTube chatter and lands asynchronously. Chat resolves
+ * each chatter ONCE, so a member who spoke before their claim was known would be
+ * classified as a non-member for the whole session; the re-resolve bridge in
+ * `chatUserStore` already listens to this counter, so bumping it is the entire
+ * fix rather than a second mechanism.
+ */
+export const notifyMemberIdentityChanged = (): void => {
+    bumpStreamNookRegistryVersion();
+};
+
+/** Takes Rust's answer into the maps the synchronous reads use. */
+const applySnapshot = (snap: RegistrySnapshot) => {
+    snRegistry = new Map(Object.entries(snap.members ?? {}));
+    const nextCatalog = new Map<string, CosmeticCatalogEntry>();
+    for (const row of snap.catalog ?? []) nextCatalog.set(row.slug, row);
+    // Dev builds get candidate badge slots merged in after the live rows
+    // (see devCosmetics.ts). Tree-shaken out of production.
+    if (import.meta.env.DEV) {
+        for (const c of DEV_COSMETICS) nextCatalog.set(c.slug, c);
+    }
+    cosmeticsCatalog = nextCatalog;
+    cosmeticsEntitlements = new Map(Object.entries(snap.grants ?? {}).map(([id, slugs]) => [id, new Set(slugs)]));
+    cosmeticsWorn = new Map(Object.entries(snap.worn ?? {}));
+    // A dev badge equipped locally is restored over the server's answer, since
+    // the server never heard about it. Dev builds only.
+    const devActive = readDevActiveCosmetic();
+    if (devActive) cosmeticsWorn.set(devActive.userId, devActive.slug);
+    const nextAtmospheres = new Map<string, Atmosphere>();
+    for (const a of snap.atmospheres ?? []) nextAtmospheres.set(a.id, a);
+    // Dev builds get candidate slots merged in after the live rows, so an asset
+    // can be judged in the real app before it ships (see devAtmospheres.ts).
+    if (import.meta.env.DEV) {
+        for (const a of DEV_ATMOSPHERES) nextAtmospheres.set(a.id, a);
+    }
+    atmospheresCatalog = nextAtmospheres;
+    snRegistryLoaded = snap.membersLoaded;
+    cosmeticsLoaded = snap.cosmeticsLoaded;
+    atmospheresLoaded = snap.atmospheresLoaded;
+    bumpStreamNookRegistryVersion();
+    bumpCosmeticsVersion();
+    bumpAtmospheresVersion();
+};
+
+/** Reads Rust's registries into this page. One read at a time; a change that
+ *  lands mid-read queues exactly one more. */
+const loadSnapshot = (): Promise<void> => {
+    if (snapshotLoading) { snapshotReloadQueued = true; return snapshotLoading; }
+    snapshotLoading = (async () => {
+        try {
+            applySnapshot(await invoke<RegistrySnapshot>('sn_registry_snapshot'));
+        } catch (e) {
+            Logger.warn('[Supabase] registry snapshot unavailable:', e);
+        } finally {
+            snapshotLoading = null;
+            if (snapshotReloadQueued) { snapshotReloadQueued = false; void loadSnapshot(); }
+        }
+    })();
+    return snapshotLoading;
+};
+
+/** Reads the snapshot once and follows Rust's change event from then on. */
+const ensureRegistries = (): void => {
+    if (snapshotListening) return;
+    snapshotListening = true;
+    void loadSnapshot();
+    void import('@tauri-apps/api/event')
+        .then(({ listen }) => listen('sn-registry-changed', () => { void loadSnapshot(); }))
+        .catch((e) => Logger.warn('[Supabase] registry change listener unavailable:', e));
+};
+
+/**
+ * Subscribe to the StreamNook user registry. The first call reads Rust's copy;
+ * the callback runs with the member map on every change. Returns an unsubscribe.
+ */
+export const subscribeToStreamNookRegistry = (
+    callback?: (map: Map<string, number>) => void
+): (() => void) | null => {
+    const versionCb = () => callback?.(snRegistry);
+    snRegistryVersionSubscribers.add(versionCb);
+    if (snRegistryLoaded) callback?.(snRegistry);
+    ensureRegistries();
+    return () => { snRegistryVersionSubscribers.delete(versionCb); };
+};
+
+/** Sync read: is this Twitch user in the registry? */
+export const isStreamNookUser = (userId: string | undefined | null): boolean => {
+    if (!userId) return false;
+    return snRegistry.has(userId);
+};
+
+/** Sync read: get the user number, or null if not registered. */
+export const getStreamNookUserNumber = (userId: string | undefined | null): number | null => {
+    if (!userId) return null;
+    return snRegistry.get(userId) ?? null;
+};
+
+/** For React useSyncExternalStore: subscribe to version bumps. */
+export const subscribeStreamNookRegistryVersion = (cb: () => void): (() => void) => {
+    snRegistryVersionSubscribers.add(cb);
+    ensureRegistries();
+    return () => { snRegistryVersionSubscribers.delete(cb); };
+};
+
+/** For React useSyncExternalStore: read the current version. */
+export const getStreamNookRegistryVersion = (): number => snRegistryVersion;
+
+/**
+ * Subscribe to the cosmetics registry. The first call reads Rust's copy;
+ * subsequent calls just register the listener.
  */
 export const subscribeToCosmeticsRegistry = (
     callback?: () => void,
 ): (() => void) | null => {
-    if (!supabase) return null;
-
     const cb = () => callback?.();
     cosmeticsVersionSubscribers.add(cb);
-
-    if (!cosmeticsLoaded && !cosmeticsLoading) {
-        loadCosmetics();
-    } else if (cosmeticsLoaded) {
-        callback?.();
-    }
-
-    if (!cosmeticsChannel) {
-        // Supabase fires SUBSCRIBED on the initial connect AND on every reconnect
-        // after a drop (sleep/wake, network blip, server hiccup). Realtime does
-        // NOT replay events missed while disconnected, so a grant that landed
-        // during the gap (e.g. a streamnook.app purchase completing while the
-        // socket was down) would otherwise only show after an app restart.
-        // Re-pull on every reconnect (skipping the first connect, which the eager
-        // load above already covered) so a running client self-heals on its own.
-        let connectedOnce = false;
-        cosmeticsChannel = supabase
-            .channel('cosmetics-registry')
-            // Every event, not just INSERT: the Discord bot takes badges back
-            // (Uplift when a boost ends, Kindred when a recruit leaves inside
-            // the dwell period), and a DELETE that nobody listens for leaves
-            // the revoked badge on screen until the next restart. Supabase
-            // sends DELETE events regardless of RLS (primary key only), and
-            // the handler just re-pulls, so the payload shape does not matter.
-            .on('postgres_changes', {
-                event: '*',
-                schema: 'public',
-                table: 'user_cosmetics',
-            }, () => { loadCosmetics(); })
-            .on('postgres_changes', {
-                event: '*',
-                schema: 'public',
-                table: 'user_cosmetic_active',
-            }, () => { loadCosmetics(); })
-            .subscribe((status) => {
-                if (status === 'SUBSCRIBED') {
-                    if (connectedOnce) loadCosmetics();
-                    connectedOnce = true;
-                }
-            });
-    }
-
-    return () => {
-        cosmeticsVersionSubscribers.delete(cb);
-        if (cosmeticsVersionSubscribers.size === 0 && cosmeticsChannel) {
-            cosmeticsChannel.unsubscribe();
-            cosmeticsChannel = null;
-        }
-    };
+    if (cosmeticsLoaded) callback?.();
+    ensureRegistries();
+    return () => { cosmeticsVersionSubscribers.delete(cb); };
 };
 
 /** Sync read: catalog row by slug. */
@@ -1857,9 +1658,7 @@ export const getUserCosmeticSlugs = (userId: string | undefined | null): Set<str
 };
 
 /** Sync read: every slug this user can equip — explicit entitlements PLUS
- *  every `is_default` cosmetic. This is the right check for both the picker
- *  ("show what's mine") and the active-cosmetic resolver ("can the current
- *  active selection actually render"). */
+ *  every `is_default` cosmetic (the rule Rust's `owned_slugs` applies). */
 export const getOwnedCosmeticSlugs = (userId: string | undefined | null): Set<string> => {
     const owned = new Set<string>();
     for (const cosmetic of cosmeticsCatalog.values()) {
@@ -1876,267 +1675,77 @@ export const getOwnedCosmeticSlugs = (userId: string | undefined | null): Set<st
 
 /** Whether the cosmetics registry has actually loaded.
  *
- *  Needed because an empty registry and "this member owns nothing" are the same
- *  answer from `getOwnedCosmeticSlugs`, and any gate that treats missing data as
- *  "not owned" would blank a paying member's cosmetics during the load window or
- *  a Supabase outage. Callers must allow rather than deny when this is false. */
-export const isCosmeticsRegistryLoaded = (): boolean => cosmeticsCatalog.size > 0;
+ *  An empty registry and "this member owns nothing" are the same answer from
+ *  `getOwnedCosmeticSlugs`, so callers must allow rather than deny when this is
+ *  false. */
+export const isCosmeticsRegistryLoaded = (): boolean => cosmeticsLoaded && cosmeticsCatalog.size > 0;
 
-// Cosmetic kinds that own their own equip slot (see CosmeticSlot / SLOT_FOR_TYPE
-// in services/cosmetics/types). `user_cosmetic_active` predates that model: it is
-// a single UNTYPED slot, and it is what the chat badge renders. So a non-badge
-// kind landing in it replaces the member's StreamNook badge entirely.
-//
-// Derived from SLOT_FOR_TYPE rather than restated here, so a cosmetic type added
-// later is kept out of the badge slot without anyone remembering to update a
-// second list.
-//
-// An UNRECOGNISED kind is treated as badge-eligible on purpose. This is a
-// deny-list, not an allow-list of 'badge': a legacy badge row may carry an older
-// kind string, and blanking a real badge for everyone is far worse than letting
-// an unknown kind through.
-const isBadgeKind = (slug: string): boolean => {
-    const kind = cosmeticsCatalog.get(slug)?.kind ?? '';
-    const slot = SLOT_FOR_TYPE[kind as CosmeticType];
-    return slot === undefined || slot === 'badge';
-};
-
-/** Sync read: which slug is this user currently displaying? */
+/** Sync read: which slug is this user currently displaying? Rust already
+ *  dropped a worn slug the member no longer owns or that is not a badge. */
 export const getActiveCosmeticSlug = (userId: string | undefined | null): string | null => {
     if (!userId) return null;
-    const slug = cosmeticsActive.get(userId);
-    if (!slug) return null;
-    // Guard against an active row pointing at a slug the user no longer owns
-    // (manual DB tamper, default flag flipped off after equip, etc.) Catalog
-    // membership + is_default eligibility checked together.
-    const owned = getOwnedCosmeticSlugs(userId);
-    if (!owned.has(slug)) return null;
-    // Repairs existing rows, not just new ones: the badge picker stopped listing
-    // non-badge kinds, so a member who equipped one before that landed has no way
-    // to clear it from the UI. Ignoring it here restores their badge with no
-    // migration and no action from them.
-    if (!isBadgeKind(slug)) return null;
-    return slug;
+    return cosmeticsWorn.get(userId) ?? null;
 };
 
 /** For React useSyncExternalStore: subscribe to version bumps. */
 export const subscribeCosmeticsVersion = (cb: () => void): (() => void) => {
     cosmeticsVersionSubscribers.add(cb);
-    if (!cosmeticsLoaded && !cosmeticsLoading && supabase) {
-        loadCosmetics();
-    }
+    ensureRegistries();
     return () => { cosmeticsVersionSubscribers.delete(cb); };
 };
 
 /** For React useSyncExternalStore: read the current version. */
 export const getCosmeticsVersion = (): number => cosmeticsVersion;
 
-// ─── Atmosphere catalog registry ───────────────────────────────────────────
-// Server-driven Atmosphere definitions (the `atmospheres` table), mirroring the
-// cosmetics registry above: an in-memory map filled at startup + realtime, sync
-// reads, a version counter for useSyncExternalStore, and a ready-promise the
-// async resolvers await so they never resolve against an empty catalog. Ownership
-// is NOT here (an Atmosphere is unlocked by subscription or an accolade), so this
-// is a pure global catalog.
-
-let atmospheresCatalog: Map<string, Atmosphere> = new Map();
-let atmospheresChannel: RealtimeChannel | null = null;
-let atmospheresLoaded = false;
-let atmospheresLoading: Promise<void> | null = null;
-let atmospheresReloadQueued = false;
-let atmospheresVersion = 0;
-const atmospheresVersionSubscribers = new Set<() => void>();
-
-const bumpAtmospheresVersion = () => {
-    atmospheresVersion++;
-    for (const cb of atmospheresVersionSubscribers) {
-        try { cb(); } catch (e) { Logger.error('[Supabase] Atmospheres subscriber error:', e); }
-    }
-};
-
-interface AtmosphereRow {
-    id: string;
-    name: string;
-    accent: string;
-    swatch: string;
-    base_color: string;
-    base_layers: string | null;
-    image: string | null;
-    image_profile_portrait: boolean;
-    layers: string | null;
-    layers2: string | null;
-    motion: string;
-    chat_edge: string;
-    chat_frost: boolean | null;
-    chat_blur: number | null;
-    chat_rim: string | null;
-    unlock_kind: string;
-    unlock_accolade_id: string | null;
-    sort_order: number;
-    kind: string | null;
-    chrome_texture: string | null;
-    chrome_coin: string | null;
-    chrome_frame: string | null;
-}
-
-const rowToAtmosphere = (row: AtmosphereRow): Atmosphere => ({
-    id: row.id,
-    name: row.name,
-    accent: row.accent,
-    swatch: row.swatch,
-    baseColor: row.base_color,
-    baseLayers: row.base_layers ?? undefined,
-    image: row.image ?? undefined,
-    imageProfilePortrait: row.image_profile_portrait,
-    layers: row.layers ?? undefined,
-    layers2: row.layers2 ?? undefined,
-    motion: row.motion === 'drift' ? 'drift' : 'aurora',
-    chatEdge: row.chat_edge,
-    chatFrost: !!row.chat_frost,
-    chatBlur: typeof row.chat_blur === 'number' && row.chat_blur > 0 ? row.chat_blur : undefined,
-    chatRim: row.chat_rim || undefined,
-    unlock: row.unlock_kind === 'accolade' && row.unlock_accolade_id
-        ? { kind: 'accolade', accoladeId: row.unlock_accolade_id }
-        : { kind: 'subscriber' },
-    kind: row.kind === 'cologne-chrome' ? 'cologne-chrome' : undefined,
-    chromeTexture: row.chrome_texture ?? undefined,
-    chromeCoin: row.chrome_coin ?? undefined,
-    chromeFrame: row.chrome_frame ?? undefined,
-});
-
-const loadAtmospheres = async (): Promise<void> => {
-    if (!supabase) return;
-    if (atmospheresLoading) { atmospheresReloadQueued = true; return atmospheresLoading; }
-    atmospheresLoading = (async () => {
-        try {
-            const res = await supabase!
-                .from('atmospheres')
-                .select('*')
-                .eq('is_active', true)
-                .order('sort_order');
-            if (res.error) Logger.error('[Supabase] atmospheres catalog load failed:', res.error);
-            const next = new Map<string, Atmosphere>();
-            for (const row of (res.data || []) as AtmosphereRow[]) {
-                next.set(row.id, rowToAtmosphere(row));
-            }
-            // Dev builds get candidate slots merged in after the live rows, so an
-            // asset can be judged in the real app before it ships (see
-            // devAtmospheres.ts). Tree-shaken out of production.
-            if (import.meta.env.DEV) {
-                for (const a of DEV_ATMOSPHERES) next.set(a.id, a);
-            }
-            atmospheresCatalog = next;
-            atmospheresLoaded = true;
-            // Atmosphere images load LAZILY at their render sites: AtmosphereBackground
-            // paints them via background-image, so a chat row, profile, or the
-            // customization picker fetches the webp the first time it actually shows
-            // that atmosphere. We deliberately do NOT pre-decode the whole catalog here
-            // -- that scaled with the catalog and added ~120MB of decoded bitmaps to the
-            // idle baseline for atmospheres the user may never see.
-            Logger.debug('[Supabase] Atmospheres loaded:', { catalog: next.size });
-            bumpAtmospheresVersion();
-        } catch (e) {
-            Logger.error('[Supabase] loadAtmospheres exception:', e);
-        } finally {
-            atmospheresLoading = null;
-            if (atmospheresReloadQueued) { atmospheresReloadQueued = false; void loadAtmospheres(); }
-        }
-    })();
-    return atmospheresLoading;
-};
-
 /**
- * Subscribe to the atmospheres registry. Idempotent. The first call triggers the
- * initial fetch and opens a realtime channel on the `atmospheres` table itself
- * (so a new/edited row reaches running clients with no relaunch).
+ * Subscribe to the atmospheres registry. Serves the copy held now at once, and
+ * asks Rust to re-read (a newly earned atmosphere appears without a relaunch).
  */
 export const subscribeToAtmospheresRegistry = (
     callback?: () => void,
 ): (() => void) | null => {
-    if (!supabase) return null;
-
     const cb = () => callback?.();
     atmospheresVersionSubscribers.add(cb);
-
-    // Render the cached catalog instantly if we have one, then ALWAYS kick a
-    // refresh. This is what makes a newly added atmosphere (e.g. opening
-    // Customize right after earning its accolade) appear without relaunching:
-    // the initial load happens once at startup, so without this a row added
-    // mid-session is missed, and the realtime channel only catches rows added
-    // after it opens. loadAtmospheres bumps the version to repaint when done.
     if (atmospheresLoaded) callback?.();
-    if (!atmospheresLoading) loadAtmospheres();
-
-    if (!atmospheresChannel) {
-        // See subscribeToCosmeticsRegistry for the reconnect rationale.
-        let connectedOnce = false;
-        atmospheresChannel = supabase
-            .channel('atmospheres-registry')
-            .on('postgres_changes', {
-                event: '*',
-                schema: 'public',
-                table: 'atmospheres',
-            }, () => { loadAtmospheres(); })
-            .subscribe((status) => {
-                if (status === 'SUBSCRIBED') {
-                    if (connectedOnce) loadAtmospheres();
-                    connectedOnce = true;
-                }
-            });
-    }
-
-    return () => {
-        atmospheresVersionSubscribers.delete(cb);
-        if (atmospheresVersionSubscribers.size === 0 && atmospheresChannel) {
-            atmospheresChannel.unsubscribe();
-            atmospheresChannel = null;
-        }
-    };
+    ensureRegistries();
+    void invoke('sn_refresh_registries').catch(() => {});
+    return () => { atmospheresVersionSubscribers.delete(cb); };
 };
 
 // ─── Live profile-theme changes (cross-user) ────────────────────────────────
-// A realtime bridge on the world-readable user_profile_prefs table so that when
-// ANY member changes the atmosphere / Cologne look they wear, viewers already in
-// chat with them get the new value PUSHED, instead of only picking it up on a
-// later re-sighting. Theme changes are rare, so one global subscription is cheap;
-// the consumer filters to members it actually tracks. Requires the table to be in
-// the `supabase_realtime` publication (see the migration).
-// `chatAtmosphere` is undefined when the row predates the column.
+// Rust follows `user_profile_prefs` on its realtime socket and resolves each
+// member's theme (services/member_theme.rs); `member-theme-changed` carries the
+// result. `chatAtmosphere` is false when the member keeps their theme off chat.
 type ProfileThemeSubscriber = (userId: string, profileTheme: string | null, chatAtmosphere?: boolean) => void;
 const profileThemeSubscribers = new Set<ProfileThemeSubscriber>();
-let profilePrefsChannel: RealtimeChannel | null = null;
+let profileThemeListening = false;
+
+export interface MemberTheme {
+    memberId: string;
+    theme?: string | null;
+    atmosphereId?: string | null;
+    cologne?: { coin: boolean; frame: boolean } | null;
+    hiddenInChat: boolean;
+}
 
 export const subscribeToProfileThemeChanges = (
     callback: ProfileThemeSubscriber,
 ): (() => void) | null => {
-    if (!supabase) return null;
     profileThemeSubscribers.add(callback);
-
-    if (!profilePrefsChannel) {
-        profilePrefsChannel = supabase
-            .channel('profile-prefs-themes')
-            .on('postgres_changes', {
-                event: '*',
-                schema: 'public',
-                table: 'user_profile_prefs',
-            }, (payload) => {
-                const row = (payload.new ?? null) as { twitch_user_id?: string; profile_theme?: string | null; chat_atmosphere?: boolean } | null;
-                if (!row?.twitch_user_id) return; // DELETE / malformed: nothing to apply
+    if (!profileThemeListening) {
+        profileThemeListening = true;
+        void import('@tauri-apps/api/event')
+            .then(({ listen }) => listen<MemberTheme>('member-theme-changed', (event) => {
+                const t = event.payload;
+                if (!t?.memberId) return;
                 for (const fn of profileThemeSubscribers) {
-                    try { fn(row.twitch_user_id, row.profile_theme ?? null, row.chat_atmosphere); }
+                    try { fn(t.memberId, t.theme ?? null, !t.hiddenInChat); }
                     catch (e) { Logger.error('[Supabase] profile theme subscriber error:', e); }
                 }
-            })
-            .subscribe();
+            }))
+            .catch((e) => Logger.warn('[Supabase] theme change listener unavailable:', e));
     }
-
-    return () => {
-        profileThemeSubscribers.delete(callback);
-        if (profileThemeSubscribers.size === 0 && profilePrefsChannel) {
-            profilePrefsChannel.unsubscribe();
-            profilePrefsChannel = null;
-        }
-    };
+    return () => { profileThemeSubscribers.delete(callback); };
 };
 
 /** Sync read: an atmosphere definition by id (null if unknown / not loaded). */
@@ -2145,40 +1754,33 @@ export const getAtmosphereEntry = (id: string | undefined | null): Atmosphere | 
     return atmospheresCatalog.get(id) ?? null;
 };
 
-/** Sync read: the full catalog (already in sort_order from the load query). */
+/** Sync read: the full catalog (in sort_order, as Rust read it). */
 export const listAtmosphereEntries = (): Atmosphere[] =>
     Array.from(atmospheresCatalog.values());
 
 /** For React useSyncExternalStore: subscribe to / read the catalog version. */
 export const subscribeAtmospheresVersion = (cb: () => void): (() => void) => {
     atmospheresVersionSubscribers.add(cb);
-    if (!atmospheresLoaded && !atmospheresLoading && supabase) {
-        loadAtmospheres();
-    }
+    ensureRegistries();
     return () => { atmospheresVersionSubscribers.delete(cb); };
 };
 export const getAtmospheresVersion = (): number => atmospheresVersion;
 
-/** Resolves once the catalog has loaded (or immediately if Supabase is off), so
- *  async resolvers never read an empty catalog. */
+/** Resolves once the catalog has loaded (or Rust could not answer), so async
+ *  resolvers never read an empty catalog. */
 export const whenAtmospheresReady = (): Promise<void> => {
-    if (atmospheresLoaded || !supabase) return Promise.resolve();
-    return loadAtmospheres();
+    if (atmospheresLoaded) return Promise.resolve();
+    ensureRegistries();
+    return snapshotLoading ?? loadSnapshot();
 };
 
 /**
- * Force a re-pull of the entitlement-bearing registries (cosmetics + user
- * registry + atmospheres). Wired to window focus in App.tsx so that when the
- * user returns to the app after completing a purchase on streamnook.app in their
- * browser, any grant the realtime channel happened to miss (e.g. it was
- * mid-reconnect) still shows immediately, with no app restart. All three loaders
- * are single-flight + idempotent, so calling this freely is safe.
+ * Re-read the entitlement-bearing registries (cosmetics, members, atmospheres)
+ * in Rust. Wired to window focus, so a purchase completed on streamnook.app
+ * while realtime happened to be reconnecting still shows with no restart.
  */
 export const refreshEntitlementRegistries = (): void => {
-    if (!supabase) return;
-    loadCosmetics();
-    loadStreamNookRegistry();
-    loadAtmospheres();
+    void invoke('sn_refresh_registries').catch(() => {});
 };
 
 // ─── Profile snapshot cache (stale-while-revalidate) ───────────────────────
@@ -2297,31 +1899,21 @@ export const getUserIdentity = async (
 };
 
 /**
- * Set the active cosmetic for a user. Pass null to revert to the default
- * (no cosmetic, render the plain StreamNook logo). Optimistic: updates the
- * in-memory map and bumps the version immediately so the picker UI flips,
- * then upserts to Supabase. The realtime sub on user_cosmetic_active is
- * what reconciles other windows.
+ * Set the worn StreamNook badge for a user. Pass null to revert to the default
+ * (the plain StreamNook mark). The page's copy flips at once so the picker
+ * swaps instantly; Rust writes it (services/cosmetics_registry.rs: the server
+ * path when switched on, else the direct upsert), flips its own registry, and
+ * rolls both back through `sn-registry-changed` if the write is refused.
  */
 export const setActiveCosmetic = async (
     userId: string,
     slug: string | null,
 ): Promise<{ ok: boolean; error?: string }> => {
-    // No early `!supabase` bail: the API path below does not need the Supabase
-    // client, and returning here would make it unreachable.
     if (!userId) return { ok: false, error: 'no userId' };
-    // Defence in depth alongside the picker's own filter: this row is the badge
-    // slot, so refuse to write a cosmetic that belongs to a different one rather
-    // than persisting a state the reader will then have to ignore.
-    if (slug && !isBadgeKind(slug)) {
-        Logger.warn('[Supabase] refusing to equip non-badge cosmetic in the badge slot:', slug);
-        return { ok: false, error: 'not a badge cosmetic' };
-    }
 
-    // Optimistic local update so the swap is instant in this window.
-    const prev = cosmeticsActive.get(userId) ?? null;
-    if (slug) cosmeticsActive.set(userId, slug);
-    else cosmeticsActive.delete(userId);
+    const prev = cosmeticsWorn.get(userId) ?? null;
+    if (slug) cosmeticsWorn.set(userId, slug);
+    else cosmeticsWorn.delete(userId);
     bumpCosmeticsVersion();
 
     // Dev-only candidate badges equip LOCALLY: the server would refuse a slug
@@ -2333,54 +1925,14 @@ export const setActiveCosmetic = async (
     }
     if (isDevCosmetic(prev)) writeDevActiveCosmetic(userId, null);
 
-    const rollback = () => {
-        if (prev) cosmeticsActive.set(userId, prev);
-        else cosmeticsActive.delete(userId);
-        bumpCosmeticsVersion();
-    };
-
-    // Server-authoritative path. The server re-checks that the caller owns the
-    // cosmetic, which the anon policy's `USING (true)` never did.
-    const api = await writeViaApi('/api/cosmetics/equip', { slug });
-    if (api.handled) {
-        if (!api.ok) {
-            rollback();
-            return { ok: false, error: api.error ?? 'equip refused' };
-        }
-        return { ok: true };
-    }
-
-    if (!supabase) {
-        rollback();
-        return { ok: false, error: 'supabase not configured' };
-    }
-
     try {
-        const { error } = await supabase
-            .from('user_cosmetic_active')
-            .upsert(
-                {
-                    twitch_user_id: userId,
-                    active_slug: slug,
-                    updated_at: new Date().toISOString(),
-                },
-                { onConflict: 'twitch_user_id' },
-            );
-        if (error) {
-            // Roll back the optimistic update.
-            if (prev) cosmeticsActive.set(userId, prev);
-            else cosmeticsActive.delete(userId);
-            bumpCosmeticsVersion();
-            Logger.error('[Supabase] setActiveCosmetic failed:', error);
-            return { ok: false, error: error.message };
-        }
+        await invoke('equip_streamnook_badge', { userId, slug });
         return { ok: true };
     } catch (e: unknown) {
-        if (prev) cosmeticsActive.set(userId, prev);
-        else cosmeticsActive.delete(userId);
+        if (prev) cosmeticsWorn.set(userId, prev);
+        else cosmeticsWorn.delete(userId);
         bumpCosmeticsVersion();
-        Logger.error('[Supabase] setActiveCosmetic exception:', e);
-        const msg = e instanceof Error ? e.message : 'unknown';
+        const msg = typeof e === 'string' ? e : e instanceof Error ? e.message : 'Could not equip that badge.';
         return { ok: false, error: msg };
     }
 };
@@ -2393,14 +1945,14 @@ if (import.meta.env.DEV && typeof window !== 'undefined') {
         version: () => snRegistryVersion,
         isMember: (id: string) => snRegistry.has(id),
         number: (id: string) => snRegistry.get(id) ?? null,
-        reload: () => loadStreamNookRegistry(),
+        reload: () => loadSnapshot(),
         cosmetics: {
             catalog: () => cosmeticsCatalog,
             entitlements: () => cosmeticsEntitlements,
-            active: () => cosmeticsActive,
+            worn: () => cosmeticsWorn,
             loaded: () => cosmeticsLoaded,
             version: () => cosmeticsVersion,
-            reload: () => loadCosmetics(),
+            reload: () => loadSnapshot(),
         },
     };
 }

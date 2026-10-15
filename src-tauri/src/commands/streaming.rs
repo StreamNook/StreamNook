@@ -636,7 +636,14 @@ pub async fn start_stream(
         r.available
     );
     auth_proxy::set_status(r.status.clone());
-    let port = StreamServer::start_proxy_server(r.url)
+    // On the phones the link decides the rung from here on ("Auto" only); a
+    // link that just failed to hold this rung starts lower.
+    let serve_url = crate::services::link_adapt::begin(
+        &tr::parse_master(&r.master),
+        &r.url,
+        r.quality == "best",
+    );
+    let port = StreamServer::start_proxy_server(serve_url)
         .await
         .map_err(|e| e.to_string())?;
     // Register the live solo session AFTER the relay is serving it, so the
@@ -944,6 +951,38 @@ pub fn set_codec_preference(prefs: Vec<String>) {
 #[tauri::command]
 pub fn set_max_video_height(height: u32) {
     crate::services::twitch_resolver::set_max_video_height(height);
+}
+
+/// The phone player's view of the link, for `link_adapt`: the core decides
+/// the rendition and the cushion, the player only reports what it saw.
+///
+/// - `frag`: a whole segment the player downloaded itself (`bytes` in `ms`).
+///   Only the whole-segment path sends these; on the parts path the player
+///   reads from the relay over loopback and the origin's own reads count.
+/// - `stall`: playback has been frozen `ms` so far (sent while it lasts).
+/// - `stall_end`: a stall ended after `ms`.
+///
+/// Decisions come back as the `playback-adapt` event.
+#[tauri::command]
+pub fn report_playback_health(event: String, bytes: Option<u64>, ms: Option<f64>) {
+    let secs = ms.unwrap_or(0.0).max(0.0) / 1000.0;
+    match event.as_str() {
+        "frag" => {
+            if let Some(bytes) = bytes {
+                crate::services::link_adapt::note_throughput(bytes, secs);
+            }
+        }
+        "stall" => crate::services::link_adapt::note_stall(secs, false),
+        "stall_end" => crate::services::link_adapt::note_stall(secs, true),
+        _ => {}
+    }
+}
+
+/// Extra seconds behind the live edge the player should keep right now, read
+/// when a player is built (later changes arrive as `playback-adapt`).
+#[tauri::command]
+pub fn get_live_edge_cushion() -> f64 {
+    crate::services::link_adapt::extra_cushion()
 }
 
 /// Start a low-latency diagnostic recording session. Returns the full path of the

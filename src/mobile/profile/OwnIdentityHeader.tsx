@@ -1,30 +1,21 @@
 // Your own identity, at the top of the You tab: avatar, 7TV-painted display
 // name, and the badges you actually carry.
 //
-// Everything here is already in memory by the time this mounts. `useMobileBoot`
-// pre-fetches the signed-in account's cosmetics at startup
-// (registerOwnCosmeticAccounts -> revalidateOwnCosmetics -> getFullProfileWithFallback),
-// so the LRU seed below paints on frame one and the fetch is only a refresh.
-//
-// Badge normalisation and paint computation are the SAME calls the chat row and
-// the user profile sheet make, deliberately: a second implementation of "which
-// badges does this person have" is how the two surfaces drift apart.
+// Rust builds it (`own_identity_header`, services/profile_view.rs): Twitch's
+// displayed badges minus the channel-only sets, the selected 7TV badge, your
+// StreamNook Identity loadout (or your raw chat-client badges when you have
+// none), deduped and capped at eight, StreamNook last. It saves the answer for
+// the next cold launch, so `own_identity_header_cached` paints the first frame
+// and the fresh read follows. The iPhone draws the same answer.
 import React, { useEffect, useState } from 'react';
-import { useChatUserStore } from '../../stores/chatUserStore';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { computePaintStyle } from '../../services/seventvService';
-import { getFullProfileWithFallback, getProfileFromMemoryCache } from '../../services/cosmeticsCache';
-import { getStreamNookUserNumber } from '../../services/supabaseService';
-import {
-  getResolvedIdentity,
-  getResolvedIdentityFromCache,
-  subscribeResolvedIdentity,
-  type ResolvedIdentity,
-} from '../../services/identityService';
-import { normalizeProfileBadges, type NormalizedBadge } from '../../utils/profileBadges';
+import { subscribeResolvedIdentity } from '../../services/identityService';
+import type { OwnIdentityView } from '../../types/profileView';
 import { FallbackImage } from '../../components/FallbackImage';
 import { StreamNookBadge } from '../../components/StreamNookBadge';
 import { Logger } from '../../utils/logger';
-import { isChannelScopedTwitchBadge } from '../../utils/badgeOrder';
 
 // The avatar stays with YouScreen: it is the one piece that needs no cosmetics
 // lookup, and keeping it there lets the layout own its own alignment.
@@ -51,135 +42,46 @@ function nameSizeClass(name: string): string {
   return 'text-[18.5px]';
 }
 
-
 export const OwnIdentityHeader: React.FC<Props> = ({ userId, displayName, login }) => {
-  // Chat already holds paint and badge for anyone who has spoken, including
-  // you, so prefer it and let the profile fill in what chat does not carry.
-  const storeUser = useChatUserStore((s) => s.users.get(userId));
-  const [profile, setProfile] = useState(() => getProfileFromMemoryCache(userId));
+  const [identity, setIdentity] = useState<OwnIdentityView | null>(null);
 
-  // The StreamNook Identity loadout: the badges you chose to display on your
-  // profile, resolved cross-client. This is the same set the desktop profile
-  // card shows and the same set chat renders for a member, per chatUserStore:
-  // "Members: their CURATED loadout ... which overrides their raw set."
-  // useMobileBoot already warms it, so the cache seed usually paints at once.
-  const [resolved, setResolved] = useState<ResolvedIdentity | null>(() =>
-    getResolvedIdentityFromCache(userId),
-  );
   useEffect(() => {
     let cancelled = false;
-    void getResolvedIdentity(userId)
-      .then((r) => {
-        if (!cancelled) setResolved(r);
+    const selfLogin = login || displayName;
+    const refresh = () =>
+      invoke<OwnIdentityView>('own_identity_header', { userId, login: selfLogin, displayName })
+        .then((fresh) => {
+          if (!cancelled) setIdentity(fresh);
+        })
+        .catch((err) => Logger.debug('[OwnIdentity] header unavailable:', err));
+    void invoke<OwnIdentityView | null>('own_identity_header_cached', { userId })
+      .then((cached) => {
+        if (!cancelled && cached) setIdentity((now) => now ?? cached);
       })
-      .catch(() => {
-        /* not a member, or the identity API is unreachable */
-      });
-    // Equipping a badge elsewhere in the app writes through this cache, so the
-    // header follows a change without needing a remount.
+      .catch(() => {})
+      .finally(() => void refresh());
+    // A change elsewhere (a badge equipped, the loadout edited, a grant landing)
+    // re-reads the header without a remount.
     const unsubscribe = subscribeResolvedIdentity((changedId) => {
-      if (changedId === userId) setResolved(getResolvedIdentityFromCache(userId));
+      if (changedId === userId) void refresh();
     });
+    const unlisten = listen('sn-registry-changed', () => void refresh());
     return () => {
       cancelled = true;
       unsubscribe();
-    };
-  }, [userId]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        // Argument for argument what useMobileBoot already calls:
-        // (selfId, selfLogin, selfId, selfLogin), with selfLogin falling back to
-        // the username. Passing anything different here (a bare `login` that can
-        // be undefined, say) keys a SECOND cache entry and throws away the warm
-        // one the boot pre-fetch just filled.
-        const selfLogin = login || displayName;
-        const p = await getFullProfileWithFallback(userId, selfLogin, userId, selfLogin);
-        if (!cancelled) setProfile(p);
-      } catch (err) {
-        Logger.debug('[OwnIdentity] cosmetics unavailable:', err);
-      }
-    })();
-    return () => {
-      cancelled = true;
+      void unlisten.then((fn) => fn());
     };
   }, [userId, login, displayName]);
 
-  const paint = storeUser?.paint ?? profile?.seventvCosmetics?.paints?.find((p) => p.selected);
+  const paint = identity?.paint_def;
   // No paint is the common case and must stay legible: fall back to the primary
   // text colour rather than a chat username colour, because this is a heading
   // on a settings screen, not a chat line.
   const nameStyle = paint
     ? computePaintStyle(paint, 'var(--color-text-primary)', 'all')
     : undefined;
-
-  const grouped = normalizeProfileBadges({ cachedProfile: profile });
-
-  // Twitch: the badges you DISPLAY, never the earned inventory. Asked in the
-  // context of your own channel, so channel-only badges (broadcaster, your own
-  // sub or mod badge and the like) are dropped: the header is who you are
-  // everywhere, not in one room.
-  const displayed = new Set<string>(profile?.displayBadgeIds ?? []);
-  const twitchWornIds = new Set<string>(
-    ((profile?.twitchBadges ?? []) as { id?: string; setID?: string }[])
-      .filter((b) => b.id && displayed.has(b.id) && !isChannelScopedTwitchBadge(b.setID))
-      .map((b) => b.id as string),
-  );
-  const twitchWorn = grouped.twitch.filter((b) => twitchWornIds.has(b.id));
-
-  // WORN, not OWNED.
-  //
-  // `normalizeProfileBadges` returns COLLECTIONS, which is right for the profile
-  // sheet (a scrollable inventory view) and wrong for a header. Measured on a
-  // real account: 22 owned 7TV badges + 102 owned Twitch badges, and the first
-  // cut of this header rendered all 127, burying the entire You tab under a wall
-  // of icons. A header shows identity; the Cosmetics row directly below it is
-  // where the collection belongs.
-  //
-  // 7TV: the same rule chatUserStore uses to pick the badge a chat row shows,
-  // `badges.find((b) => b.selected)`, since 7TV marks only the active one.
-  const selectedBadgeId: string | undefined =
-    storeUser?.seventvBadge?.id ??
-    profile?.seventvCosmetics?.badges?.find((b: { selected?: boolean; id?: string }) => b.selected)?.id;
-  const seventvWorn = selectedBadgeId
-    ? grouped.seventv.filter((b) => b.id === selectedBadgeId)
-    : [];
-
-  // Everything else comes from the Identity loadout, which is already the
-  // curated "what I display" set rather than an inventory. It carries whatever
-  // the member promoted into it, including a `twitch:` badge, so this covers
-  // the other active badges without going near the raw Twitch group.
-  //
-  // Twitch's own group from the normaliser stays OUT: it merges
-  // `display_badges` with `earned_badges`, so on this account it is 102 earned
-  // badges rather than worn ones, and a settings screen has no channel context
-  // to resolve worn ones from anyway.
-  const loadoutBadges: NormalizedBadge[] = (resolved?.badges ?? []).map((b) => ({
-    id: b.key,
-    src: b.image_url,
-    title: b.title,
-    name: b.title,
-    provider: b.provider,
-  }));
-
-  // Non-members have no loadout, so fall back to their raw third-party badges,
-  // mirroring the member/non-member split in chatUserStore.
-  const otherActive = loadoutBadges.length > 0 ? loadoutBadges : grouped.thirdParty;
-
-  // Deduped because a 7TV badge promoted into the loadout would otherwise
-  // appear twice. The slice is a backstop, not a design: nothing should reach
-  // it, but this header must never again be able to eat the screen.
-  const seen = new Set<string>();
-  const badges: NormalizedBadge[] = [...twitchWorn, ...seventvWorn, ...otherActive]
-    .filter((b) => {
-      if (!b.src || seen.has(b.id)) return false;
-      seen.add(b.id);
-      return true;
-    })
-    .slice(0, 8);
-  const userNumber = getStreamNookUserNumber(userId);
+  const badges = identity?.badges ?? [];
+  const member = !!identity?.streamnook;
 
   return (
     <div className="min-w-0 flex-1">
@@ -215,25 +117,23 @@ export const OwnIdentityHeader: React.FC<Props> = ({ userId, displayName, login 
         <div className="text-[13px] text-textMuted truncate">@{login}</div>
       )}
 
-      {(badges.length > 0 || userNumber !== null) && (
+      {(badges.length > 0 || member) && (
         // Canonical badge order (utils/badgeOrder): Twitch, 7TV, the other chat
         // apps, then StreamNook last.
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
           {badges.map((b, i) => (
             <FallbackImage
               key={`${b.id}-${i}`}
-              src={b.src as string}
-              fallbackUrls={b.fallbackUrls}
-              srcSet={b.srcSet}
+              src={b.url}
+              fallbackUrls={b.fallbacks}
               alt={b.title || b.name || ''}
               title={b.title || b.name}
               className="w-[18px] h-[18px] object-contain shrink-0"
             />
           ))}
-          {userNumber !== null && (
-            // Gated on membership: StreamNookBadge has no guard of its own and
-            // falls back to a plain "StreamNook Member" label, which would hand
-            // a badge to everyone who is not one.
+          {member && (
+            // Rust sends `streamnook` for members alone: StreamNookBadge has no
+            // guard of its own and would hand a badge to everyone who is not one.
             // `side="bottom"` because this sits at the top of the viewport and
             // a popover growing upward clips off screen.
             <StreamNookBadge userId={userId} side="bottom" />

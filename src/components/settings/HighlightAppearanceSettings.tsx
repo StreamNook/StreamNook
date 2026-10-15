@@ -1,4 +1,6 @@
+import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
+import { Logger } from '../../utils/logger';
 // Rendered inside ChatSettings, so this reaches the phone too. Shared panel,
 // so a platform branch here is legitimate.
 import { IS_MOBILE } from '../../utils/platform';
@@ -43,13 +45,13 @@ const HighlightAppearanceSettings = () => {
     updateSettings({ ...settings, chat_design: { ...(design as ChatDesignSettings), ...patch } });
   const marksOn = design?.scrollbar_marks ?? true;
   const markKinds = design?.scrollbar_mark_kinds ?? [...FALLBACK_MARK_KINDS];
-  // Saved in the settings order, so a list toggled back to the default
-  // compares equal to it and the reset arrow goes away.
+  // Rust keeps the set in the settings order, so a list toggled back to the
+  // default compares equal to it and the reset arrow goes away.
   const toggleMarkKind = (kind: string) => {
-    const next = markKinds.includes(kind) ? markKinds.filter((k) => k !== kind) : [...markKinds, kind];
-    const order = MARK_KIND_OPTIONS.map((o) => o.kind as string);
-    next.sort((a, b) => order.indexOf(a) - order.indexOf(b));
-    writeDesign({ scrollbar_mark_kinds: next });
+    void invoke('edit_settings_list', {
+      path: 'chat_design.scrollbar_mark_kinds',
+      edit: { op: 'toggle', value: kind },
+    }).catch((err) => Logger.warn('[HighlightAppearance] mark kind toggle failed:', err));
   };
   const previewDesign: PreviewDesign = {
     show_dividers: design?.show_dividers ?? true,

@@ -277,7 +277,7 @@ private struct ChatArea: View {
     @ViewBuilder
     private var content: some View {
         if model.signedIn, let session = model.watch.chat {
-            ChatPanel(session: session, overlay: overlay)
+            ChatPanel(session: session, overlay: overlay, onProfile: { model.cosmetics.open($0) })
                 .id(ObjectIdentifier(session))
         } else if model.signedIn {
             Color.clear

@@ -81,6 +81,9 @@ public enum ChatSocketFrame: Sendable, Equatable {
     case clearChat(channel: String?, targetUserID: String?, targetUser: String?, duration: Int?)
     /// A chatter's 7TV cosmetics that arrived after their first row.
     case cosmetics(channel: String?, userID: String, paint: ChatPaint?, badge: ChatViewBadge?)
+    /// A StreamNook member's look changed (their Atmosphere, Cologne look or member badge), for
+    /// every row of theirs in every room.
+    case member(userID: String, atmosphere: String?, cologne: CologneLook?, badge: ChatViewBadge?)
     case patch(channel: String?, rows: [ChatRowPatch])
     case notice(channel: String?, msgID: String?, message: String?)
     case status(String)
@@ -117,6 +120,9 @@ public enum ChatSocketFrame: Sendable, Equatable {
         case "ROW_COSMETICS":
             guard let frame = try? decoder.decode(CosmeticsFrame.self, from: data) else { return .other(text) }
             return .cosmetics(channel: head.channel, userID: frame.userID, paint: frame.paint, badge: frame.badge)
+        case "ROW_MEMBER":
+            guard let frame = try? decoder.decode(MemberFrame.self, from: data) else { return .other(text) }
+            return .member(userID: frame.userID, atmosphere: frame.atmosphere, cologne: frame.cologne, badge: frame.badge)
         case "HISTORY_SEGMENTS":
             guard let frame = try? decoder.decode(PatchFrame.self, from: data) else { return .other(text) }
             return .patch(channel: head.channel, rows: frame.rows.map {
@@ -187,6 +193,14 @@ public enum ChatSocketFrame: Sendable, Equatable {
         var paint: ChatPaint?
         var badge: ChatViewBadge?
         enum CodingKeys: String, CodingKey { case userID = "user_id", paint, badge }
+    }
+
+    private struct MemberFrame: Decodable {
+        var userID: String
+        var atmosphere: String?
+        var cologne: CologneLook?
+        var badge: ChatViewBadge?
+        enum CodingKeys: String, CodingKey { case userID = "user_id", atmosphere, cologne, badge }
     }
 
     private struct PatchFrame: Decodable {

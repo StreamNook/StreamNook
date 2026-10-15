@@ -1,7 +1,17 @@
 import { useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Plus, X } from 'lucide-react';
 
 import { useAppStore } from '../../stores/AppStore';
+
+/** One edit to the stored dictionary. Rust keeps the first word typed,
+ *  lowercased, once: the checker works a word at a time, so a phrase would
+ *  never match anything. */
+function editWords(edit: Record<string, unknown>) {
+  void invoke('edit_settings_list', { path: 'chat_input.spellcheck_custom_words', edit }).catch((err) =>
+    useAppStore.getState().addToast(typeof err === 'string' ? err : 'Could not update the dictionary.', 'error'),
+  );
+}
 
 /**
  * The words the spell checker has been taught, with a way to add and remove
@@ -9,26 +19,13 @@ import { useAppStore } from '../../stores/AppStore';
  * right-click menu; this panel is how you take one back out after a mis-click.
  */
 export const SpellcheckDictionary: React.FC = () => {
-  const settings = useAppStore((s) => s.settings);
-  const updateSettings = useAppStore((s) => s.updateSettings);
+  const words = useAppStore((s) => s.settings.chat_input?.spellcheck_custom_words) ?? [];
   const [draft, setDraft] = useState('');
 
-  const words = settings.chat_input?.spellcheck_custom_words ?? [];
-
-  const save = (next: string[]) =>
-    void updateSettings({
-      ...settings,
-      chat_input: { ...settings.chat_input, spellcheck_custom_words: next },
-    });
-
   const add = () => {
-    // One word per entry: the checker works a word at a time, so a phrase would
-    // never match anything.
-    const word = draft.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
-    if (!word) return;
+    if (!draft.trim()) return;
+    editWords({ op: 'add', item: draft });
     setDraft('');
-    if (words.some((w) => w.toLowerCase() === word)) return;
-    save([...words, word]);
   };
 
   return (
@@ -72,7 +69,7 @@ export const SpellcheckDictionary: React.FC = () => {
             >
               {word}
               <button
-                onClick={() => save(words.filter((w) => w !== word))}
+                onClick={() => editWords({ op: 'remove', value: word })}
                 className="text-textMuted transition-colors hover:text-textPrimary"
                 aria-label={`Remove ${word}`}
               >

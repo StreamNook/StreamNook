@@ -2443,6 +2443,19 @@ pub async fn update_suspicious_user_status(
         .map_err(|e| e.to_string())
 }
 
+/// A user's Twitch bio; empty when they have none.
+#[tauri::command]
+pub async fn get_twitch_bio(user_id: String) -> Result<String, String> {
+    TwitchService::get_user_bio(&user_id).await.map_err(|e| e.to_string())
+}
+
+/// Sets the signed-in account's Twitch bio (at most 300 characters); answers
+/// what Twitch stored.
+#[tauri::command]
+pub async fn update_twitch_bio(description: String) -> Result<String, String> {
+    TwitchService::update_user_bio(&description).await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn update_user_chat_color(target_user_id: String, color: String) -> Result<(), String> {
     TwitchService::update_user_chat_color(&target_user_id, &color)

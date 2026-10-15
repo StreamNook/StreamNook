@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback, useSyncExternalStore } from 'react';
-import { MessageCircle, UserPlus, UserMinus, Loader2, ChevronLeft, ChevronUp, Pencil, X, Gift, Share2, Link2, Check, EyeOff, History } from 'lucide-react';
+import { MessageCircle, UserPlus, UserMinus, Loader2, ChevronLeft, ChevronUp, Pencil, X, Share2, Link2, Check, EyeOff, History } from 'lucide-react';
 import { filterChannelKey, isHiddenInScope } from '../utils/chatFilters';
 import { buildShareUrl, buildProfileUrl } from '../utils/shareLink';
 import { providerLabel, type ProviderId } from '../types/providers';
@@ -17,7 +17,10 @@ import { useNameColorAdjust } from '../hooks/useNameColor';
 import { FallbackImage } from './FallbackImage';
 import { SevenTvAvatar } from './SevenTvAvatar';
 import { primeSevenTvPicture, type SevenTvPicture } from '../services/sevenTvPictures';
-import { formatIVRDate, formatSubTenure } from '../utils/ivrFormat';
+import { formatIVRDate } from '../utils/ivrFormat';
+import { SubStandingRow } from './profile/SubStandingRow';
+import { wornSubBadgeArt } from '../utils/wornSubBadge';
+import type { SubStanding } from '../types';
 import { Logger } from '../utils/logger';
 import {
   getProfileFromMemoryCache,
@@ -173,6 +176,8 @@ interface UserProfileComplete {
   badges: BadgeData;
   seventv_cosmetics: SevenTVCosmetics | null;
   ivr_data: IVRData;
+  /** This room's sub standing, with its words (services/sub_standing.rs). */
+  sub_standing?: SubStanding | null;
 }
 
 interface TwitchUserProfile {
@@ -357,11 +362,10 @@ const RelativeSuffix = ({ iso, show }: { iso: string | null | undefined; show: b
 interface IVRData {
   created_at: string | null;
   following_since: string | null;
+  /** False when no source could say (Twitch only shares a channel's followers
+   *  with its moderators), so a missing date is not "not following". */
+  follow_known?: boolean;
   status_hidden: boolean;
-  is_subscribed: boolean;
-  sub_streak: number | null;
-  sub_cumulative: number | null;
-  is_founder: boolean;
   is_mod: boolean;
   mod_since: string | null;
   is_vip: boolean;
@@ -371,10 +375,6 @@ interface IVRData {
   follows_count: number | null;
   banned: boolean;
   chatter_count: number | null;
-  sub_tier: string | null;
-  sub_type: string | null;
-  sub_gifter_login: string | null;
-  sub_gifter_display_name: string | null;
   error: string | null;
 }
 
@@ -809,6 +809,10 @@ const UserProfileCard = ({
   // moderator case is blocked here; nothing the broadcaster could legitimately
   // do is taken away.
   const blockedTarget = !viewerIsBroadcaster && (targetIsModerator || targetIsBroadcaster);
+  // The same badges, as a string so the profile fetch re-runs only when they
+  // change, not whenever the caller hands over a fresh array.
+  const wornBadgeKeys = (messageBadges ?? []).map((b) => String(b.key ?? '')).filter(Boolean).join(' ');
+  const subBadgeArt = wornSubBadgeArt(messageBadges);
 
   // The provider zones need the same protection. Without it, a moderator's own
   // card offers "Ban" pointed at themselves — one click from being banned from a
@@ -1120,6 +1124,12 @@ const UserProfileCard = ({
       channelId,
       channelName,
       onPart,
+      // The badges this card was opened with: a worn sub badge is the live
+      // answer to "subscribed right now", which Rust folds into the standing.
+      wornBadges: wornBadgeKeys ? wornBadgeKeys.split(' ') : [],
+      // Helix shows a channel's followers to its broadcaster and moderators
+      // only; Rust asks it, and says "unknown" for everyone else.
+      viewerModerates: isModerator || viewerIsBroadcaster,
     })
       .then((profile) => {
         if (alive) setProfileData(profile);
@@ -1136,7 +1146,7 @@ const UserProfileCard = ({
     return () => {
       alive = false;
     };
-  }, [userId, username, getChannelContext]);
+  }, [userId, username, getChannelContext, wornBadgeKeys, isModerator, viewerIsBroadcaster]);
 
   // Resolve the BetterTTV Pro loyalty badge in parallel (non-blocking). Pops
   // into the BetterTTV badge group when/if it resolves; silent for non-Pro users.
@@ -2402,38 +2412,18 @@ const UserProfileCard = ({
                 organically without empty cells. */}
             <div className="space-y-2">
               {(() => {
-                // Current-channel context for "Gift a sub" target. Hidden when we're
-                // viewing this user's own channel (you'd be gifting them a sub to
-                // themselves, which is awkward) or when there's no active stream.
-                const { channelName: viewedChannel } = (propChannelId && propChannelName)
-                  ? { channelName: propChannelName }
-                  : { channelName: useAppStore.getState().currentStream?.user_login };
-                const canGiftSub = !!viewedChannel
-                  && !!login
-                  && viewedChannel.toLowerCase() !== login.toLowerCase()
-                  && !ivrData?.is_subscribed;
-                const handleGiftSub = async () => {
-                  try {
-                    const { open } = await import('@tauri-apps/plugin-shell');
-                    // ?giftrecipient= is a best-guess query param. If Twitch ignores
-                    // it the user lands on the subs page and types the name manually,
-                    // which is still a one-click improvement over leaving the app.
-                    await open(`https://www.twitch.tv/subs/${viewedChannel}?giftrecipient=${login}`);
-                  } catch (err) {
-                    Logger.error('Failed to open gift sub URL:', err);
-                  }
-                };
+                // The sub standing in this room, and its gift action, live on one
+                // row below (SubStandingRow), so the stats panel carries no sub row.
+                const subStanding = provider === 'twitch' ? profileData?.sub_standing ?? null : null;
                 // Every row defaults to on, so a user who never opens the
                 // visibility settings sees the card exactly as before.
                 const rows = {
                   joinDate: cardPrefs?.show_join_date !== false && !!twitchProfile,
                   followage: cardPrefs?.show_followage !== false
                     && !!ivrData
-                    && (!!ivrData.following_since || ivrData.status_hidden || !profileLoading),
+                    && (!!ivrData.following_since || ivrData.status_hidden || !!ivrData.follow_known),
                   followsCount: cardPrefs?.show_follows_count !== false && (ivrData?.follows_count ?? 0) > 0,
                   chatterCount: cardPrefs?.show_chatter_count !== false && (ivrData?.chatter_count ?? 0) > 0,
-                  pastSub: cardPrefs?.show_past_subscriber !== false
-                    && !!ivrData && !ivrData.is_subscribed && (ivrData.sub_cumulative ?? 0) > 0,
                   lastLive: cardPrefs?.show_last_live !== false && !!ivrData?.last_broadcast_at,
                 };
                 const hasAnyStat = Object.values(rows).some(Boolean);
@@ -2472,7 +2462,7 @@ const UserProfileCard = ({
                               </span>
                             )}
                           </div>
-                        ) : rows.followage && !profileLoading && (
+                        ) : rows.followage && (
                           <div className="flex items-baseline justify-between gap-3 text-[11px]">
                             <span className="text-textSecondary">Following</span>
                             <span className="text-textSecondary italic">Not following</span>
@@ -2492,14 +2482,6 @@ const UserProfileCard = ({
                             </div>
                           </Tooltip>
                         )}
-                        {rows.pastSub && (
-                          <div className="flex items-baseline justify-between gap-3 text-[11px]">
-                            <span className="text-textSecondary">Past subscriber</span>
-                            <span className="text-textPrimary font-medium tabular-nums">
-                              {ivrData!.sub_cumulative === 1 ? '1mo total' : `${ivrData!.sub_cumulative}mo total`}
-                            </span>
-                          </div>
-                        )}
                         {rows.lastLive && (
                           <Tooltip content={ivrData!.last_broadcast_title ?? formatDate(ivrData!.last_broadcast_at!)} side="top">
                             <div className="flex items-baseline justify-between gap-3 text-[11px] cursor-default">
@@ -2509,6 +2491,14 @@ const UserProfileCard = ({
                           </Tooltip>
                         )}
                       </div>
+                    )}
+
+                    {subStanding && (
+                      <SubStandingRow
+                        standing={subStanding}
+                        badgeArt={subBadgeArt}
+                        showPast={cardPrefs?.show_past_subscriber !== false}
+                      />
                     )}
 
                     {cardPrefs?.show_notes !== false && (
@@ -2531,21 +2521,8 @@ const UserProfileCard = ({
                         />
                       </div>
                     )}
-                    {(ivrData?.is_subscribed || ivrData?.is_mod || ivrData?.is_vip) && (
+                    {(ivrData?.is_mod || ivrData?.is_vip) && (
                       <div className="flex flex-wrap gap-1.5">
-                        {ivrData?.is_subscribed && (
-                          <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-accent/10 border border-accent/20 text-[11px] text-accent">
-                            <span className="font-semibold">
-                              {ivrData.sub_tier === 'Prime' ? 'Prime' : ivrData.sub_tier ? `Tier ${ivrData.sub_tier}` : ''}
-                              {ivrData.sub_tier ? ' ' : ''}Subscriber
-                            </span>
-                            <span className="text-accent/70">{formatSubTenure(ivrData.sub_streak, ivrData.sub_cumulative)}</span>
-                            {ivrData.sub_type === 'gift' && ivrData.sub_gifter_display_name && (
-                              <span className="text-accent/70">gift from {ivrData.sub_gifter_display_name}</span>
-                            )}
-                            {ivrData.is_founder && <span className="px-1 py-px rounded bg-accent/20 text-[9px] font-bold tracking-wider">FOUNDER</span>}
-                          </span>
-                        )}
                         {ivrData?.is_mod && (
                           <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-success/10 border border-success/20 text-[11px] text-success">
                             <span className="font-semibold">Moderator</span>
@@ -2569,23 +2546,6 @@ const UserProfileCard = ({
                           </span>
                         )}
                       </div>
-                    )}
-
-                    {/* Gift-sub action. Text link, not a chip — keeps the
-                        visual weight light and matches the "View Full Changelog"
-                        / "Open Settings →" pattern. Hover state adds underline +
-                        a small arrow nudge so it reads as clickable without
-                        becoming a border-pill. */}
-                    {canGiftSub && (
-                      <button
-                        type="button"
-                        onClick={handleGiftSub}
-                        className="group inline-flex items-center gap-1.5 text-[11px] text-accent hover:text-accent/90 hover:underline underline-offset-[3px] decoration-accent/60 transition-colors"
-                      >
-                        <Gift size={12} />
-                        <span>Gift {displayName} a sub to {viewedChannel}</span>
-                        <span aria-hidden="true" className="transition-transform group-hover:translate-x-0.5">→</span>
-                      </button>
                     )}
                   </>
                 );
