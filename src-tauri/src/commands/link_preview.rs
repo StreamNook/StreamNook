@@ -92,6 +92,25 @@ pub async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
     build_preview(&url).await
 }
 
+/// Whether `build_preview` has a dedicated card for this URL's shape (a Discord
+/// invite, a YouTube channel or video, an X profile or post, an Instagram
+/// profile, a Steam app, Spotify, a Twitch clip or VOD) rather than the generic
+/// OpenGraph scrape. Mirrors the matcher order in `build_preview`.
+pub(crate) fn has_dedicated_card(url: &str) -> bool {
+    let canonical = canonicalize_x(url);
+    let url = canonical.as_str();
+    youtube_id(url).is_some()
+        || is_youtube_channel(url)
+        || tweet_ref(url).is_some()
+        || x_profile_handle(url).is_some()
+        || twitch_clip_id(url).is_some()
+        || twitch_vod_id(url).is_some()
+        || discord_invite_code(url).is_some()
+        || steam_app_id(url).is_some()
+        || spotify_kind(url).is_some()
+        || instagram_handle(url).is_some()
+}
+
 async fn build_preview(url: &str) -> Result<LinkPreview, String> {
     // twitter.com now redirects to x.com — normalize so both get identical
     // handling (and the card opens the x.com variant).
