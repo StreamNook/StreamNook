@@ -79,7 +79,7 @@ fn score(row: &CatalogRow, query: &str) -> u32 {
     let page = page_name(&row.page);
     let detail = normalize(&row.detail);
     let paths = row.paths.join(" ").replace(['.', '_'], " ");
-    let mut total = 0;
+    let mut total: u32 = 0;
     for token in &tokens {
         let best = [
             (has_word_prefix(&title, token), 30),

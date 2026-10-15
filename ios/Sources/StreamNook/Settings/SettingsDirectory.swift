@@ -32,7 +32,7 @@ func openSettingsRow(_ row: CatalogRow, model: AppModel) {
 /// descriptions), and the section rows while nothing is typed.
 struct SettingsDirectory: View {
     let model: AppModel
-    @State private var query = ""
+    @State private var search = SettingsSearch.shared
     @State private var results: [CatalogRow] = []
     @FocusState private var focused: Bool
 
@@ -40,15 +40,15 @@ struct SettingsDirectory: View {
         VStack(spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: Symbol.search).font(.system(size: 15)).foregroundStyle(SN.textMuted)
-                TextField("Search settings", text: $query)
+                TextField("Search settings", text: $search.query)
                     .font(.sn(15))
                     .foregroundStyle(SN.textPrimary)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .submitLabel(.search)
                     .focused($focused)
-                if !query.isEmpty {
-                    Button { query = "" } label: {
+                if !search.query.isEmpty {
+                    Button { search.query = "" } label: {
                         Image(systemName: Symbol.clear).foregroundStyle(SN.textMuted).frame(width: 32, height: 32)
                     }
                     .buttonStyle(.plain)
@@ -60,7 +60,7 @@ struct SettingsDirectory: View {
             .snGlass(Capsule())
             .padding(.horizontal, 16)
 
-            if query.trimmingCharacters(in: .whitespaces).isEmpty {
+            if search.query.trimmingCharacters(in: .whitespaces).isEmpty {
                 VStack(spacing: 0) {
                     ForEach(SettingsSection.allCases) { section in
                         NavigationLink(value: Route.settings(section)) {
@@ -71,7 +71,7 @@ struct SettingsDirectory: View {
                 }
                 .padding(.horizontal, 12)
             } else if results.isEmpty {
-                Text("No setting matches \"\(query)\".")
+                Text("No setting matches \"\(search.query)\".")
                     .font(.sn(14, 500)).foregroundStyle(SN.textSecondary)
                     .frame(maxWidth: .infinity).padding(.vertical, 24)
             } else {
@@ -86,14 +86,21 @@ struct SettingsDirectory: View {
                 .padding(.horizontal, 12)
             }
         }
-        .task(id: query) {
-            let text = query.trimmingCharacters(in: .whitespaces)
+        .task(id: search.query) {
+            let text = search.query.trimmingCharacters(in: .whitespaces)
             guard !text.isEmpty else { results = []; return }
             try? await Task.sleep(for: .milliseconds(120))
             guard !Task.isCancelled else { return }
             results = (try? await model.core.invoke("search_settings", args: ["query": text], as: [CatalogRow].self)) ?? []
         }
     }
+}
+
+/// What the settings search holds, kept while you open a result and come back.
+@Observable @MainActor
+final class SettingsSearch {
+    static let shared = SettingsSearch()
+    var query = ""
 }
 
 /// A catalog row: its title, where it lives, and its one-line description.
