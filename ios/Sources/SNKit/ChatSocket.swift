@@ -31,18 +31,25 @@ public struct ChatRoomModes: Codable, Sendable, Equatable {
     public var promptShort: String?
     public var standing: String?
     public var slowSeconds: Int
+    /// The mode that certainly keeps the viewer from sending ("subs_only", "emote_only",
+    /// "followers_only"); nil when nothing proves it.
+    public var blocked: String?
+    /// What the disabled message box says while `blocked` is set.
+    public var reason: String?
 
     enum CodingKeys: String, CodingKey {
-        case modes, prompt, promptShort = "prompt_short", standing, slowSeconds = "slow_seconds"
+        case modes, prompt, promptShort = "prompt_short", standing, slowSeconds = "slow_seconds", blocked, reason
     }
 
     public init(modes: [ChatRoomMode] = [], prompt: String? = nil, promptShort: String? = nil, standing: String? = nil,
-                slowSeconds: Int = 0) {
+                slowSeconds: Int = 0, blocked: String? = nil, reason: String? = nil) {
         self.modes = modes
         self.prompt = prompt
         self.promptShort = promptShort
         self.standing = standing
         self.slowSeconds = slowSeconds
+        self.blocked = blocked
+        self.reason = reason
     }
 
     public init(from decoder: Decoder) throws {
@@ -52,6 +59,8 @@ public struct ChatRoomModes: Codable, Sendable, Equatable {
         promptShort = try c.decodeIfPresent(String.self, forKey: .promptShort)
         standing = try c.decodeIfPresent(String.self, forKey: .standing)
         slowSeconds = try c.decodeIfPresent(Int.self, forKey: .slowSeconds) ?? 0
+        blocked = try c.decodeIfPresent(String.self, forKey: .blocked)
+        reason = try c.decodeIfPresent(String.self, forKey: .reason)
     }
 }
 

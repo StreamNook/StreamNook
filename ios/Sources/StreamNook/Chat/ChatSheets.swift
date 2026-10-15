@@ -1,12 +1,31 @@
 import SNKit
 import SwiftUI
 
+/// The viewer's relationship to the room's channel, as the core's `channel_relationship`
+/// answers it.
+struct ChannelRelationship: Decodable, Equatable {
+    /// Nil while unknown: the Follow row waits rather than guessing.
+    var following: Bool?
+    var subscribed: Bool
+    var hasSubHistory: Bool
+    var badgeURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case following, subscribed, hasSubHistory = "has_sub_history", badgeURL = "badge_url"
+    }
+}
+
 /// The chat menu behind the composer's round button: the room's modes, then the actions for
-/// this room.
+/// this room. It stays open while following or unfollowing, so the row flips in place.
 struct ChatMenuSheet: View {
     let model: ChatComposerModel
     let session: ChatSession
     @Environment(\.dismiss) private var dismiss
+    @State private var relationship: ChannelRelationship?
+    @State private var followBusy = false
+    @State private var moderates = false
+
+    private var label: String { session.channel }
 
     var body: some View {
         NavigationStack {
@@ -31,11 +50,37 @@ struct ChatMenuSheet: View {
                     }
                 }
                 Section {
-                    Button {
-                        dismiss()
-                        model.commandsOpen = true
-                    } label: {
-                        Label("Chat commands", systemImage: "terminal")
+                    if session.roomID != nil, let following = relationship?.following {
+                        Button {
+                            Task { await toggleFollow(following) }
+                        } label: {
+                            Label(following ? "Unfollow \(label)" : "Follow \(label)",
+                                  systemImage: following ? "heart.slash.fill" : "heart.fill")
+                                .foregroundStyle(following ? Color.red : Color.green)
+                        }
+                        .disabled(followBusy)
+                    }
+                    if session.roomID != nil {
+                        Button {
+                            dismiss()
+                            subscribe()
+                        } label: {
+                            HStack {
+                                Label {
+                                    Text(subscribeTitle)
+                                } icon: {
+                                    if let badge = relationship?.badgeURL {
+                                        EmoteThumb(url: badge, height: 19).accessibilityHidden(true)
+                                    } else {
+                                        Image(systemName: "star.fill").foregroundStyle(Color(ChatTheme.accent))
+                                    }
+                                }
+                                Spacer()
+                                if relationship?.subscribed == true {
+                                    Text("Subscribed").font(.sn(12.5)).foregroundStyle(.tertiary)
+                                }
+                            }
+                        }
                     }
                     Button {
                         dismiss()
@@ -43,11 +88,82 @@ struct ChatMenuSheet: View {
                     } label: {
                         Label("Reload this chat", systemImage: "arrow.clockwise")
                     }
+                    Button {
+                        dismiss()
+                        model.commandsOpen = true
+                    } label: {
+                        Label("Chat commands", systemImage: "terminal")
+                    }
+                    if moderates {
+                        Button {
+                            session.moderatorTools.toggle()
+                        } label: {
+                            HStack {
+                                Label {
+                                    Text("Moderator tools")
+                                } icon: {
+                                    Image(systemName: session.moderatorTools ? "checkmark.shield.fill" : "checkmark.shield")
+                                        .foregroundStyle(session.moderatorTools ? Color(ChatTheme.accent) : .secondary)
+                                }
+                                Spacer()
+                                Text(session.moderatorTools ? "On" : "Off").font(.sn(12.5)).foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                } footer: {
+                    if moderates, session.moderatorTools {
+                        Text("Long-press any message for delete, timeout and ban.")
+                    }
                 }
             }
             .tint(Color(ChatTheme.textPrimary))
-            .navigationTitle(session.channel)
+            .navigationTitle(label)
             .navigationBarTitleDisplayMode(.inline)
+        }
+        // Only while the sheet is open: the follow and subscription lookups and the role.
+        .task { await load() }
+    }
+
+    private var subscribeTitle: String {
+        guard let relationship else { return "Subscribe to \(label)" }
+        if relationship.subscribed { return "Gift Subs" }
+        return relationship.hasSubHistory ? "Resubscribe to \(label)" : "Subscribe to \(label)"
+    }
+
+    private func load() async {
+        let core = session.core
+        if let json = try? await core.invoke("chat_send_budget", args: ["channel": session.channel]),
+           let budget = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
+           let role = budget["role"] as? String {
+            moderates = role == "moderator" || role == "broadcaster"
+        }
+        guard let roomID = session.roomID else { return }
+        relationship = try? await core.invoke("channel_relationship", args: [
+            "channelId": roomID, "channelLogin": session.channel,
+        ], as: ChannelRelationship.self)
+    }
+
+    private func toggleFollow(_ following: Bool) async {
+        guard let roomID = session.roomID else { return }
+        followBusy = true
+        defer { followBusy = false }
+        do {
+            // The desktop's heart-drop takes 600 ms before an unfollow.
+            if following { try? await Task.sleep(for: .milliseconds(600)) }
+            _ = try await session.core.invoke(following ? "unfollow_channel" : "follow_channel", args: ["targetUserId": roomID])
+            relationship?.following = !following
+        } catch {
+            model.show("\(following ? "Unfollow" : "Follow") failed. Try logging out and back in via Settings to re-authenticate.")
+        }
+    }
+
+    private func subscribe() {
+        let core = session.core
+        let login = session.channel
+        Task {
+            _ = try? await core.invoke("open_subscribe_window", args: [
+                "channelLogin": login, "title": "Subscribe to \(login)", "provider": "twitch",
+            ])
         }
     }
 }
@@ -61,7 +177,8 @@ enum ChatReload {
     }
 }
 
-/// Every command the core lists for the room, searchable; a tap puts "/name " in the draft.
+/// Every command the core lists for the room, searchable, one section per category; a tap
+/// puts "/name " in the draft. Locked rows say what they need.
 struct ChatCommandSheet: View {
     let session: ChatSession
     let pick: (String) -> Void

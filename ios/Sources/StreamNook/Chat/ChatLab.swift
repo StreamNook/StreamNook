@@ -183,7 +183,7 @@ enum ChatDrive {
         case "chatclose":
             ChatLab.close()
         default:
-            return false
+            return await ComposerDrive.run(name, value, session: currentSession)
         }
         return true
     }
