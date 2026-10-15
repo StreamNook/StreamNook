@@ -2439,7 +2439,35 @@ export interface HypeTrainData {
   is_golden_kappa?: boolean;
 }
 
-
-
-
-
+/** A chatter's sub in a channel, with its words. Mirrors `SubStanding` in
+ *  src-tauri/src/services/sub_standing.rs. */
+export interface SubStanding {
+  state: 'current' | 'past' | 'never' | 'unknown';
+  founder: boolean;
+  kind: 'paid' | 'gift' | 'prime' | null;
+  tier: number | null;
+  months: number | null;
+  streak_months: number | null;
+  gifter_login: string | null;
+  gifter_display_name: string | null;
+  title: string | null;
+  detail: string | null;
+  gift_label: string | null;
+  gift_url: string | null;
+  /** "month" or "months", beside `months` shown large. */
+  months_unit: string | null;
+  /** "Tier 1" beside the months; null for Prime, which is a fact instead. */
+  tier_label: string | null;
+  /** Each fact with Twitch's own badge art where one exists (founder, Prime
+   *  Gaming, Sub Gifter); a streak has none. */
+  facts: Array<{ kind: 'founder' | 'prime' | 'streak' | 'gift'; text: string; art: string | null }>;
+  /** The channel's sub badge for this tenure and tier. */
+  badge_art: string | null;
+  next_badge: {
+    months: number;
+    months_left: number;
+    progress: number;
+    art: string | null;
+    text: string;
+  } | null;
+}

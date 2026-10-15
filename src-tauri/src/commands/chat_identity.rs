@@ -358,7 +358,7 @@ pub struct BadgeScrapeResult {
     pub badges: Vec<ChatIdentityBadge>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatIdentityBadge {
     pub id: String,
     pub version: String,

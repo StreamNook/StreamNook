@@ -121,12 +121,14 @@ describe('member themes across platforms', () => {
   it('paints what Rust decided, including a refusal', async () => {
     // Rust answers null for an atmosphere the member may not wear; the row must
     // show nothing rather than re-deriving the pick.
+    // A member no earlier test resolved (themes are cached per member).
+    const REFUSED = '1005';
     state.atmosphereId = null;
-    useChatUserStore.getState().addUser({ userId: MEMBER, username: 'm', displayName: 'M', color: '#fff' });
-    ensureAtmosphereResolved(MEMBER);
+    useChatUserStore.getState().addUser({ userId: REFUSED, username: 'm', displayName: 'M', color: '#fff' });
+    ensureAtmosphereResolved(REFUSED);
     await settle();
 
-    expect(state.askedFor).toEqual([MEMBER]);
-    expect(useChatUserStore.getState().users.get(MEMBER)?.atmosphereId ?? null).toBeNull();
+    expect(state.askedFor).toEqual([REFUSED]);
+    expect(useChatUserStore.getState().users.get(REFUSED)?.atmosphereId ?? null).toBeNull();
   });
 });

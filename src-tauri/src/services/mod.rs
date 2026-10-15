@@ -130,6 +130,7 @@ pub mod seventv_eventapi;
 pub mod song_id;
 pub mod stream_server;
 pub mod sub_standing;
+pub mod follow_lookup;
 pub mod streamnook_backend;
 pub mod css_fill;
 pub mod cosmetics_registry;
