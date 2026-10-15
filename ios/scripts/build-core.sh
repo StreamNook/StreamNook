@@ -75,9 +75,37 @@ export CARGO_TARGET_AARCH64_APPLE_IOS_RUSTFLAGS="-C link-arg=-fuse-ld=lld -C lin
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/root/sn-ios-target}"
 # The WSL VM has 16 GB shared with other builds; a full-width release build
 # got rustc OOM-killed and took the VM down with it.
-export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-6}"
+# Four jobs: several lanes share this VM and the PC, and six jobs plus their Swift
+# builds ran the machine out of memory twice (WSL died with E_UNEXPECTED).
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
 
 echo "SDK: $SDKROOT"
+
+# An identical library may already be stored: another checkout built exactly
+# this clean src-tauri tree. Reuse it (link it and regenerate the bindings from
+# it) instead of compiling the same thing again. Dirty trees always build.
+if [[ "$mode" != "check" && -z "$(git status --porcelain -- src-tauri)" ]]; then
+    tree="$(git rev-parse HEAD:src-tauri)"
+    for d in $(ls -t /root/sn-ios-core); do
+        rec="/root/sn-ios-core/$d/built-from"
+        [[ -f "$rec" && -f "/root/sn-ios-core/$d/libstreamnook_lib.a" ]] || continue
+        [[ "$(awk '{print $2}' "$rec")" == "$tree" ]] || continue
+        echo "Reusing /root/sn-ios-core/$d (built from the same src-tauri tree)"
+        bindings="$(mktemp -d)"
+        mkdir -p ios/CoreLib ios/Sources/SNCore ios/Sources/streamnook_libFFI/include
+        ln -sfn "/root/sn-ios-core/$d/libstreamnook_lib.a" ios/CoreLib/libstreamnook_lib.a
+        (
+            cd src-tauri
+            cargo run --quiet --manifest-path ../ios/tools/uniffi-bindgen/Cargo.toml -- \
+                generate ../ios/CoreLib/libstreamnook_lib.a --language swift --out-dir "$bindings"
+        )
+        cp "$bindings/streamnook_lib.swift" ios/Sources/SNCore/streamnook_lib.swift
+        cp "$bindings/streamnook_libFFI.h" ios/Sources/streamnook_libFFI/include/streamnook_libFFI.h
+        rm -rf "$bindings"
+        echo "Library: /root/sn-ios-core/$d/libstreamnook_lib.a (reused)"
+        exit 0
+    done
+fi
 
 # Every checkout builds into the one shared target, and cargo keys the
 # StreamNook unit the same in all of them: after checkout X builds, checkout

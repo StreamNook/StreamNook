@@ -1924,6 +1924,8 @@ pub fn run() {
             update_user_chat_color,
             get_twitch_bio,
             update_twitch_bio,
+            update_twitch_display_name,
+            upload_twitch_profile_image,
             get_user_chat_colors,
             block_user,
             unblock_user,
