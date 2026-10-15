@@ -73,13 +73,12 @@ struct BrowseScreen: View {
         case .categories:
             let shown = browse.categoryResults ?? browse.categories
             if (browse.categoriesLoading || browse.searching) && shown.isEmpty {
-                SkeletonTiles(nameLines: browse.trimmed.isEmpty ? 1 : 2)
+                SkeletonTiles()
             } else if shown.isEmpty {
                 EmptyNote(text: browse.categoryResults != nil ? "No categories found." : "No categories yet, pull to refresh.", hint: nil)
             } else {
                 CategoryGrid(categories: shown, latch: categoryLatch,
                              settleKey: browse.categoryResults != nil ? "q:\(browse.trimmed)" : "top",
-                             nameLines: browse.categoryResults != nil ? 2 : 1,
                              open: { model.nav.push(.category($0)) },
                              more: browse.categoryResults == nil && browse.hasMore ? { await browse.loadMore(model.core) } : nil)
                 if browse.categoryResults == nil && browse.loadingMore {
@@ -196,13 +195,11 @@ final class BrowseModel {
 }
 
 /// Categories as box-art tiles, three across on a phone and more on a wider window, loading the
-/// next page as the end nears. Search results give names two lines (`nameLines`), since a search
-/// brings up families of long names that share a start ("Tom Clancy's Rainbow Six ...").
+/// next page as the end nears.
 struct CategoryGrid: View {
     let categories: [TwitchCategory]
     let latch: SettleLatch
     let settleKey: String
-    var nameLines = 1
     let open: (TwitchCategory) -> Void
     let more: (() async -> Void)?
     @State private var width: CGFloat = 402
@@ -215,7 +212,7 @@ struct CategoryGrid: View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: CategoryTile.gap, alignment: .top), count: count),
                   spacing: CategoryTile.rowGap) {
             ForEach(Array(categories.enumerated()), id: \.element.id) { index, category in
-                Button { open(category) } label: { CategoryTile(category: category, art: art, nameLines: nameLines) }
+                Button { open(category) } label: { CategoryTile(category: category, art: art) }
                     .buttonStyle(CardPress())
                     .settleIn(index: index, active: playing)
                     .onAppear {
@@ -232,14 +229,12 @@ struct CategoryGrid: View {
 }
 
 /// One category: the box art is the tile, with nothing around it and nothing over it, and a chin
-/// under it: the name, then the live viewers the core sums right under it. The chin is as tall as
-/// its longest case (every name line plus viewers), so every chin in a grid is one height and the
-/// rows step evenly, while a short name keeps its viewers close.
+/// under it: the name on one line, then Twitch's live total for the category. Every chin is one
+/// height (a long name ends in an ellipsis, and VoiceOver reads it whole), so no row grows.
 struct CategoryTile: View {
     let category: TwitchCategory
     /// The box art's size in pixels, the size the tile is drawn at.
     let art: (width: Int, height: Int)
-    var nameLines = 1
     @Environment(\.displayScale) private var scale
 
     static let gap: CGFloat = 10
@@ -260,13 +255,13 @@ struct CategoryTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             artwork
-            CategoryChin.height(nameLines: nameLines)
+            CategoryChin.block
                 .overlay(alignment: .topLeading) {
                     VStack(alignment: .leading, spacing: 0) {
                         Text(category.name)
                             .font(CategoryChin.nameFont)
                             .foregroundStyle(SN.textPrimary)
-                            .lineLimit(nameLines)
+                            .lineLimit(1)
                         if let viewers {
                             Text(viewers)
                                 .font(CategoryChin.viewersFont)
@@ -276,6 +271,8 @@ struct CategoryTile: View {
                     }
                 }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([category.name, viewers].compactMap { $0 }.joined(separator: ", "))
     }
 
     private var artwork: some View {
@@ -308,10 +305,11 @@ enum CategoryChin {
     static let nameFont = Font.sn(12.5, 500)
     static let viewersFont = Font.snCaption
 
-    /// An invisible block as tall as the chin's longest case: every name line, then viewers.
-    static func height(nameLines: Int) -> some View {
+    /// An invisible block the chin's height: a name line, then the viewers line, so a tile the core
+    /// sent no viewers for still lines up with its row.
+    static var block: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(verbatim: " ").font(nameFont).lineLimit(nameLines, reservesSpace: true)
+            Text(verbatim: " ").font(nameFont)
             Text(verbatim: " ").font(viewersFont)
         }
         .hidden()

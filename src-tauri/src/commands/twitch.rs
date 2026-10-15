@@ -1540,7 +1540,7 @@ pub async fn focus_window(app: AppHandle) -> Result<(), String> {
 pub async fn get_top_games(
     state: State<'_, AppState>,
     limit: u32,
-) -> Result<Vec<serde_json::Value>, String> {
+) -> Result<Vec<crate::services::twitch_service::CategoryRow>, String> {
     TwitchService::get_top_games(&state, limit)
         .await
         .map_err(|e| e.to_string())
@@ -1551,7 +1551,7 @@ pub async fn get_top_games_paginated(
     state: State<'_, AppState>,
     cursor: Option<String>,
     limit: u32,
-) -> Result<(Vec<serde_json::Value>, Option<String>), String> {
+) -> Result<(Vec<crate::services::twitch_service::CategoryRow>, Option<String>), String> {
     TwitchService::get_top_games_paginated(&state, cursor, limit)
         .await
         .map_err(|e| e.to_string())

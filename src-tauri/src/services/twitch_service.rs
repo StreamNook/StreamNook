@@ -188,34 +188,13 @@ fn gql_nodes(connection: Option<&serde_json::Value>) -> Vec<&serde_json::Value> 
         .unwrap_or_default()
 }
 
-/// A Helix `games` row (`id`, `name`, `box_art_url`, plus the `viewer_count`
-/// the Categories grid sorts by) from a GQL `Game` node. The box art keeps
-/// Helix's `{width}x{height}` template.
-pub(crate) fn category_row_from_gql(node: &serde_json::Value) -> Option<serde_json::Value> {
-    let id = node.get("id").and_then(|v| v.as_str()).filter(|v| !v.is_empty())?;
-    let name = node
-        .get("name")
-        .and_then(|v| v.as_str())
-        .filter(|n| !n.is_empty())
-        .or_else(|| node.get("displayName").and_then(|v| v.as_str()))
-        .unwrap_or_default();
-    let mut row = serde_json::json!({
-        "id": id,
-        "name": name,
-        "box_art_url": node.get("boxArtURL").and_then(|v| v.as_str()).unwrap_or_default(),
-        "igdb_id": "",
-    });
-    if let Some(viewers) = node.get("viewersCount").and_then(|v| v.as_i64()) {
-        row["viewer_count"] = serde_json::json!(viewers);
-    }
-    Some(row)
-}
-
-/// A category as category search answers it, under Helix's `games` field
-/// names so every caller reads it as before. `viewer_count` is the live
-/// viewers across the category (0 when nobody is live); it is absent only
-/// when Twitch's GQL was unreachable and the answer came from Helix's search,
-/// which carries no viewers. The box art keeps the `{width}x{height}` template.
+/// A category as the category directory and category search answer it, under
+/// Helix's `games` field names so every caller reads it as before.
+/// `viewer_count` is Twitch's own live total for the category
+/// (`Game.viewersCount`, 0 when nobody is live), so the directory and search
+/// always show the same number; it is absent only when GQL was unreachable and
+/// the answer came from Helix, which carries no viewers. The box art keeps the
+/// `{width}x{height}` template.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CategoryRow {
     pub id: String,
@@ -253,6 +232,23 @@ impl CategoryRow {
             viewer_count: None,
         })
     }
+}
+
+/// A `games` page from the public GQL: its rows and the next signed-out cursor.
+fn top_games_page(resp: &serde_json::Value) -> (Vec<CategoryRow>, Option<String>) {
+    let games = resp.pointer("/data/games");
+    (gql_nodes(games).into_iter().filter_map(CategoryRow::from_gql).collect(), public_next_cursor(games))
+}
+
+/// A category search from the public GQL: the category named exactly what was
+/// typed (`exact`), then the fuzzy results. Unranked; repeats are left in.
+fn search_page(resp: &serde_json::Value) -> Vec<CategoryRow> {
+    resp.pointer("/data/exact")
+        .filter(|v| !v.is_null())
+        .into_iter()
+        .chain(gql_nodes(resp.pointer("/data/searchCategories")))
+        .filter_map(CategoryRow::from_gql)
+        .collect()
 }
 
 /// Category search order: the category named exactly what was typed first
@@ -2074,126 +2070,63 @@ impl TwitchService {
         Ok(streams)
     }
 
-    pub async fn get_top_games(_state: &AppState, limit: u32) -> Result<Vec<serde_json::Value>> {
+    pub async fn get_top_games(_state: &AppState, limit: u32) -> Result<Vec<CategoryRow>> {
         let (games, _) = Self::get_top_games_paginated(_state, None, limit).await?;
         Ok(games)
     }
 
+    /// The category directory, most-watched first, each with Twitch's own live
+    /// total (the number category search shows too): the public GQL, signed in
+    /// or out. Helix's `games/top` answers when GQL fails on the first page, or
+    /// for a Helix cursor, without viewers.
     pub async fn get_top_games_paginated(
         _state: &AppState,
         cursor: Option<String>,
         limit: u32,
-    ) -> Result<(Vec<serde_json::Value>, Option<String>)> {
-        let token = Self::get_token().await.ok();
-        if token.is_none() || public_cursor(cursor.as_deref()).is_some() {
-            return Self::top_games_public(public_cursor(cursor.as_deref()), limit).await;
+    ) -> Result<(Vec<CategoryRow>, Option<String>)> {
+        let limit = limit.clamp(1, 100);
+        match (cursor.as_deref(), public_cursor(cursor.as_deref())) {
+            (Some(helix), None) => Self::top_games_helix(Some(helix), limit).await,
+            (_, after) => match Self::top_games_public(after, limit).await {
+                Ok(page) => Ok(page),
+                Err(e) if after.is_none() => {
+                    debug!("[TwitchService] top games over GQL failed ({e}), asking Helix");
+                    Self::top_games_helix(None, limit).await
+                }
+                Err(e) => Err(e),
+            },
         }
+    }
+
+    /// A Helix `games/top` page (signed in), in Twitch's order, without viewers.
+    async fn top_games_helix(after: Option<&str>, limit: u32) -> Result<(Vec<CategoryRow>, Option<String>)> {
+        let token = Self::get_token().await?;
         let client = crate::services::http::client().clone();
-
         let mut url = format!("https://api.twitch.tv/helix/games/top?first={}", limit);
-        if let Some(cursor) = cursor {
-            url.push_str(&format!("&after={}", cursor));
+        if let Some(after) = after {
+            url.push_str(&format!("&after={}", urlencoding::encode(after)));
         }
-
-        let mut request = client.get(&url).header("Client-Id", CLIENT_ID);
-
-        if let Some(token) = &token {
-            request = request.header(AUTHORIZATION, format!("Bearer {}", token));
-        }
-
-        let response = request.send().await?;
+        let response = client
+            .get(&url)
+            .header("Client-Id", CLIENT_ID)
+            .header(AUTHORIZATION, format!("Bearer {}", token))
+            .send()
+            .await?;
         if !response.status().is_success() {
-            debug!("[TwitchService] top games: HTTP {}, asking the public GQL", response.status());
-            return Self::top_games_public(None, limit).await;
+            return Err(anyhow::anyhow!("Helix top games: HTTP {}", response.status()));
         }
         let response = response.json::<serde_json::Value>().await?;
-
-        // Get pagination cursor
-        let next_cursor = response
-            .get("pagination")
-            .and_then(|p| p.get("cursor"))
+        let next = response
+            .pointer("/pagination/cursor")
             .and_then(|c| c.as_str())
-            .map(|s| s.to_string());
-
-        let data = response.get("data").and_then(|d| d.as_array());
-
-        match data {
-            Some(arr) => {
-                // Each top game needs a viewer-count total, which comes from a
-                // second Helix call per game (streams?game_id=...). Fire them
-                // concurrently (bounded) instead of one-at-a-time: a page of 40
-                // games was doing 40 sequential round-trips, which is what made
-                // the Categories view take many seconds to load. `buffered` keeps
-                // the original top-games order while capping in-flight requests.
-                use futures_util::StreamExt;
-                const MAX_CONCURRENT: usize = 10;
-
-                let mut games_with_viewers: Vec<serde_json::Value> =
-                    futures_util::stream::iter(arr.iter().cloned().map(|game| {
-                        let client = client.clone();
-                        let token = token.clone();
-                        async move {
-                            let mut game_data = game.clone();
-
-                            if let Some(game_id) = game.get("id").and_then(|id| id.as_str()) {
-                                let streams_url = format!(
-                                    "https://api.twitch.tv/helix/streams?game_id={}&first=100",
-                                    game_id
-                                );
-
-                                let mut streams_request =
-                                    client.get(&streams_url).header("Client-Id", CLIENT_ID);
-
-                                if let Some(token) = &token {
-                                    streams_request = streams_request
-                                        .header(AUTHORIZATION, format!("Bearer {}", token));
-                                }
-
-                                if let Ok(streams_response) = streams_request.send().await {
-                                    if let Ok(streams_json) =
-                                        streams_response.json::<serde_json::Value>().await
-                                    {
-                                        if let Some(streams_data) =
-                                            streams_json.get("data").and_then(|d| d.as_array())
-                                        {
-                                            let total_viewers: i64 = streams_data
-                                                .iter()
-                                                .filter_map(|s| {
-                                                    s.get("viewer_count").and_then(|v| v.as_i64())
-                                                })
-                                                .sum();
-
-                                            if let Some(obj) = game_data.as_object_mut() {
-                                                obj.insert(
-                                                    "viewer_count".to_string(),
-                                                    serde_json::json!(total_viewers),
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            game_data
-                        }
-                    }))
-                    .buffered(MAX_CONCURRENT)
-                    .collect()
-                    .await;
-
-                // Order each page by the viewer totals we just summed, highest
-                // first. Twitch's games/top is only roughly viewer-ordered; this
-                // makes the Categories grid strictly descending within the page.
-                games_with_viewers.sort_by(|a, b| {
-                    let va = a.get("viewer_count").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let vb = b.get("viewer_count").and_then(|v| v.as_i64()).unwrap_or(0);
-                    vb.cmp(&va)
-                });
-
-                Ok((games_with_viewers, next_cursor))
-            }
-            None => Ok((Vec::new(), None)),
-        }
+            .filter(|c| !c.is_empty())
+            .map(String::from);
+        let rows = response
+            .get("data")
+            .and_then(|d| d.as_array())
+            .map(|rows| rows.iter().filter_map(CategoryRow::from_helix).collect())
+            .unwrap_or_default();
+        Ok((rows, next))
     }
 
     /// Live streams in any of several categories, most-watched first, in one
@@ -3917,10 +3850,10 @@ impl TwitchService {
         Ok(resp)
     }
 
-    /// The category directory with no account, most-watched first: the
-    /// signed-out answer for `get_top_games_paginated`. `after` is the GQL
-    /// cursor (without the signed-out prefix).
-    async fn top_games_public(after: Option<&str>, limit: u32) -> Result<(Vec<serde_json::Value>, Option<String>)> {
+    /// The category directory with no account, most-watched first, each with
+    /// its live total: what `get_top_games_paginated` answers, signed in or out.
+    /// `after` is the GQL cursor (without the signed-out prefix).
+    async fn top_games_public(after: Option<&str>, limit: u32) -> Result<(Vec<CategoryRow>, Option<String>)> {
         let body = serde_json::json!({
             "operationName": "StreamNookTopGames",
             "query": "query StreamNookTopGames($first: Int!, $after: Cursor) { \
@@ -3930,9 +3863,7 @@ impl TwitchService {
             "variables": { "first": limit.clamp(1, 100), "after": after },
         });
         let resp = Self::gql_public_read(body).await?;
-        let games = resp.pointer("/data/games");
-        let rows = gql_nodes(games).into_iter().filter_map(category_row_from_gql).collect();
-        Ok((rows, public_next_cursor(games)))
+        Ok(top_games_page(&resp))
     }
 
     /// A category's live streams with no account, most-watched first: the
@@ -4079,12 +4010,7 @@ impl TwitchService {
             "variables": { "query": query, "first": limit },
         });
         let resp = Self::gql_public_read(body).await?;
-        let exact = resp.pointer("/data/exact").filter(|v| !v.is_null());
-        Ok(exact
-            .into_iter()
-            .chain(gql_nodes(resp.pointer("/data/searchCategories")))
-            .filter_map(CategoryRow::from_gql)
-            .collect())
+        Ok(search_page(&resp))
     }
 
     /// A category's id from its exact name, with no account.
@@ -7093,13 +7019,13 @@ mod discovery_tests {
             ],
             "pageInfo": { "hasNextPage": true }
         });
-        let rows: Vec<_> = gql_nodes(Some(&games)).into_iter().filter_map(category_row_from_gql).collect();
+        let (rows, next) = top_games_page(&serde_json::json!({ "data": { "games": games } }));
         assert_eq!(rows.len(), 1, "null and id-less nodes are skipped");
-        assert_eq!(rows[0]["id"], "509658");
-        assert_eq!(rows[0]["name"], "Just Chatting");
-        assert_eq!(rows[0]["viewer_count"], 247184);
-        assert!(rows[0]["box_art_url"].as_str().unwrap().ends_with("509658-{width}x{height}.jpg"));
-        assert_eq!(public_next_cursor(Some(&games)).as_deref(), Some("gql:c3"));
+        assert_eq!(rows[0].id, "509658");
+        assert_eq!(rows[0].name, "Just Chatting");
+        assert_eq!(rows[0].viewer_count, Some(247184));
+        assert!(rows[0].box_art_url.ends_with("509658-{width}x{height}.jpg"));
+        assert_eq!(next.as_deref(), Some("gql:c3"));
     }
 
     #[test]
@@ -7278,7 +7204,27 @@ pub fn rank_search_results(query: &str, rows: &mut [TwitchStream]) {
 
 #[cfg(test)]
 mod category_rank_tests {
-    use super::{rank_category_results, CategoryRow};
+    use super::{rank_category_results, search_page, top_games_page, CategoryRow};
+
+    #[test]
+    fn the_directory_and_search_show_one_viewer_total() {
+        let node = serde_json::json!({ "id": "32982", "name": "Grand Theft Auto V", "displayName": "Grand Theft Auto V",
+            "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/32982_IGDB-{width}x{height}.jpg", "viewersCount": 41803 });
+        let (directory, _) = top_games_page(&serde_json::json!({ "data": { "games": {
+            "edges": [{ "cursor": "c1", "node": node.clone() }], "pageInfo": { "hasNextPage": false } } } }));
+        let searched = search_page(&serde_json::json!({ "data": { "exact": node.clone(),
+            "searchCategories": { "edges": [{ "node": node }] } } }));
+        assert_eq!(directory[0], searched[0], "the same category reads the same in both answers");
+        assert_eq!(directory[0].viewer_count, Some(41803), "Twitch's total, not a sum of some streams");
+    }
+
+    #[test]
+    fn a_category_nobody_streams_reads_zero_and_a_missing_exact_match_is_skipped() {
+        let searched = search_page(&serde_json::json!({ "data": { "exact": null, "searchCategories": { "edges": [
+            { "node": { "id": "1", "name": "Just Cause 3", "boxArtURL": "", "viewersCount": null } }] } } }));
+        assert_eq!(searched.len(), 1);
+        assert_eq!(searched[0].viewer_count, Some(0));
+    }
 
     fn row(id: &str, name: &str, viewers: Option<u64>) -> CategoryRow {
         CategoryRow { id: id.into(), name: name.into(), box_art_url: String::new(), viewer_count: viewers }

@@ -44,7 +44,6 @@ struct SkeletonCards: View {
 /// tiles will, so nothing moves when they arrive.
 struct SkeletonTiles: View {
     var rows = 3
-    var nameLines = 1
     @Environment(\.snStill) private var still
     @State private var dim = false
     @State private var width: CGFloat = 402
@@ -58,7 +57,7 @@ struct SkeletonTiles: View {
                     RoundedRectangle(cornerRadius: SNRadius.tile, style: .continuous)
                         .fill(SN.surface)
                         .aspectRatio(3 / 4, contentMode: .fit)
-                    CategoryChin.height(nameLines: nameLines)
+                    CategoryChin.block
                         .overlay(alignment: .topLeading) {
                             VStack(alignment: .leading, spacing: 7) {
                                 Capsule().fill(SN.surface).frame(height: 10).padding(.trailing, 28)
