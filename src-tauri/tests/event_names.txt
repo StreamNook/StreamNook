@@ -66,6 +66,7 @@ multichat-popout-closed
 new-favorite-drops
 platform-account-changed
 platform-session-expired
+playback-adapt
 plugin://consent-request
 plugin://disabled-after-failures
 plugin://notify
