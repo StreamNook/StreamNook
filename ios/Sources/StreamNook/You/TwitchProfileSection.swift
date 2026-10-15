@@ -243,11 +243,15 @@ struct TwitchProfileSection: View {
                 ChangePill(label: "Change")
             }
             .disabled(uploading != nil)
-            .accessibilityLabel(switch kind {
-            case .picture: "Change your Twitch picture"
-            case .sevenTV: "Change your 7TV picture"
-            case .banner: "Change your banner"
-            })
+            .accessibilityLabel(Self.changeLabel(kind))
+        }
+    }
+
+    private static func changeLabel(_ kind: ImageKind) -> String {
+        switch kind {
+        case .picture: "Change your Twitch picture"
+        case .sevenTV: "Change your 7TV picture"
+        case .banner: "Change your banner"
         }
     }
 
