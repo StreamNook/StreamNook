@@ -706,6 +706,7 @@ pub async fn nudge_chat_channels() -> Result<usize, String> {
 
 #[tauri::command]
 pub async fn send_chat_message(
+    state: State<'_, AppState>,
     message: String,
     reply_parent_msg_id: Option<String>,
     target_channel: Option<String>,
@@ -714,6 +715,32 @@ pub async fn send_chat_message(
     sender_account_id: Option<String>,
     pin_after_send: Option<bool>,
 ) -> Result<SentMessage, String> {
+    // A typed message that cheers is never sent as chat: that would spend
+    // nothing and show as plain text. It comes back held, with the total and
+    // anything in the way, for the page to confirm (bits::send then sends it).
+    // Paced and scripted sends do not come through here and are untouched.
+    if let Some(channel) = target_channel.as_deref() {
+        let main_id = crate::services::account_store::AccountStore::primary().map(|a| a.user_id);
+        let sender_is_main = match (sender_account_id.as_deref(), main_id.as_deref()) {
+            (Some(acc), Some(main)) => acc == main,
+            _ => true,
+        };
+        if let Some(cheer) = crate::services::bits::typed_cheer(
+            &state.twitch_auth,
+            &message,
+            channel,
+            broadcaster_id.as_deref(),
+            sender_is_main,
+        )
+        .await
+        {
+            return Ok(SentMessage {
+                sent: SendResult { message_id: None, is_sent: false, drop_reason: None },
+                pin_error: None,
+                cheer: Some(cheer),
+            });
+        }
+    }
     let sent = ChatService::send_message(
         &message,
         reply_parent_msg_id.as_deref(),
@@ -729,17 +756,20 @@ pub async fn send_chat_message(
     } else {
         None
     };
-    Ok(SentMessage { sent, pin_error })
+    Ok(SentMessage { sent, pin_error, cheer: None })
 }
 
 /// A send's outcome, plus why the pin failed when one was asked for. Without a
-/// pin the wire shape is exactly `SendResult`.
+/// pin or a held cheer the wire shape is exactly `SendResult`.
 #[derive(serde::Serialize)]
 pub struct SentMessage {
     #[serde(flatten)]
     sent: SendResult,
     #[serde(skip_serializing_if = "Option::is_none")]
     pin_error: Option<String>,
+    /// The message cheers, so it was held rather than sent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cheer: Option<crate::services::bits::CheerCheck>,
 }
 
 /// Pins a message this app just sent (`/pin <text>`). A dropped message is not

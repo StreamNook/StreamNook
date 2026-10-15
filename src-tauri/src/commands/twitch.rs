@@ -1147,6 +1147,10 @@ pub fn dismiss_login_overlay(app: &AppHandle, label: &str) {
         }
     }
     crate::services::ui_hang_watchdog::set_active_overlay(None);
+    // Back from Twitch's bits page: a purchase changed the balance.
+    if label.starts_with("bits-") {
+        crate::commands::bits::refresh_balance_after_purchase(app);
+    }
     let _ = app.emit("twitch-overlay-close", serde_json::json!({ "label": label }));
 }
 
@@ -1573,14 +1577,19 @@ pub async fn get_user_by_login(login: String) -> Result<UserInfo, String> {
 pub async fn follow_channel(target_user_id: String) -> Result<(), String> {
     TwitchService::follow_channel(&target_user_id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // A followers-only room you are in now words itself for the new follow.
+    crate::services::irc_service::own_follow_changed(&target_user_id, true).await;
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn unfollow_channel(target_user_id: String) -> Result<(), String> {
     TwitchService::unfollow_channel(&target_user_id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    crate::services::irc_service::own_follow_changed(&target_user_id, false).await;
+    Ok(())
 }
 
 #[tauri::command]

@@ -1231,6 +1231,7 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       color: hl.color,
       sound_id: (hl.sound_id ?? null) as HighlightMatch['sound_id'],
       cooldown_ms: hl.cooldown_ms,
+      hold: hl.hold === true,
     };
   }, [stamped, parsed.metadata]);
 
@@ -2383,12 +2384,27 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     // Format bits count with commas for readability
     const formattedBits = bitsCount.toLocaleString();
 
+    // The row leads with the cheermote actually used (the one carrying the
+    // most bits), so it comes out of the message below; any others stay
+    // inline. No cheermote segment (an odd payload) falls back to Twitch's
+    // own gem for the amount.
+    const leadIdx = contentWithEmotes.reduce(
+      (best, seg, i) =>
+        seg.type === 'cheermote' && (best < 0 || (seg.bits ?? 0) > (contentWithEmotes[best].bits ?? 0)) ? i : best,
+      -1,
+    );
+    const leadCheermote = leadIdx >= 0 ? contentWithEmotes[leadIdx] : null;
+    const bodySegments = (leadIdx >= 0 ? contentWithEmotes.filter((_, i) => i !== leadIdx) : contentWithEmotes).map(
+      (seg, i) => (i === 0 && seg.type === 'text' ? { ...seg, content: seg.content.trimStart() } : seg),
+    );
+    const bodyHasContent = bodySegments.some((seg) => seg.type !== 'text' || seg.content.trim() !== '');
+
     // Defensive: EventSub shows gigantified messages arrive with cheer:null,
     // but `bits` is a plain IRC tag; if both ever co-occur, the giant must
     // not be silently dropped by this early return.
     const giantPluckCheer =
       isGigantifiedEmote && chatDesign?.giant_emotes !== false
-        ? pluckGiantEmote(contentWithEmotes)
+        ? pluckGiantEmote(bodySegments)
         : null;
 
     // Determine bits tier color based on amount (matching Twitch's color scheme)
@@ -2466,15 +2482,29 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
       <div key={messageId} className={`px-3 border-t border-borderSubtle ${eventCardClass('bits-gradient')}`} style={{ ...eventCardStyle, paddingTop: `${eventPadding}px`, paddingBottom: `${eventPadding}px` }}>
         <div className="flex items-center gap-2.5">
           <div className="flex-shrink-0">
-            {/* Twitch's animated bits gem for the tier */}
-            <img
-              src={bitsAnimUrl}
-              alt=""
-              className="w-5 h-5 object-contain"
-              decoding="async"
-              referrerPolicy="no-referrer"
-              onError={(e) => { e.currentTarget.style.display = 'none'; }}
-            />
+            {leadCheermote?.cheermoteUrl ? (
+              // The cheermote they cheered with, at its own tier.
+              <Tooltip content={leadCheermote.content} side="top">
+                <img
+                  src={leadCheermote.cheermoteUrl}
+                  alt={leadCheermote.content}
+                  className="w-7 h-7 object-contain"
+                  decoding="async"
+                  referrerPolicy="no-referrer"
+                  onError={(e) => { e.currentTarget.src = bitsAnimUrl; }}
+                />
+              </Tooltip>
+            ) : (
+              // Twitch's animated bits gem for the tier
+              <img
+                src={bitsAnimUrl}
+                alt=""
+                className="w-7 h-7 object-contain"
+                decoding="async"
+                referrerPolicy="no-referrer"
+                onError={(e) => { e.currentTarget.style.display = 'none'; }}
+              />
+            )}
           </div>
           <div
             className="flex-1 min-w-0 flex flex-col leading-relaxed"
@@ -2488,13 +2518,19 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
               ) : (
                 <>
                   {renderClickableUsername(parsed.username, parsed.displayName || parsed.tags.get('display-name') || parsed.username)}
-                  <span style={{ color: bitsTierColor }} className="font-bold"> cheered {formattedBits} bits</span>
+                  <span className="font-normal text-textSecondary"> cheered </span>
+                  <span
+                    className="inline-flex items-center rounded-full px-1.5 align-[1px] text-[0.86em] font-bold leading-[1.45] tabular-nums"
+                    style={{ color: bitsTierColor, boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${bitsTierColor} 45%, transparent)` }}
+                  >
+                    {formattedBits} {bitsCount === 1 ? 'bit' : 'bits'}
+                  </span>
                 </>
               )}
             </p>
-            {parsed.content && (
-              <p className="text-textSecondary mt-1 leading-relaxed break-words">
-                {giantPluckCheer ? giantPluckCheer.inline : renderContent(contentWithEmotes)}
+            {bodyHasContent && (
+              <p className="text-textSecondary mt-0.5 leading-relaxed break-words">
+                {giantPluckCheer ? giantPluckCheer.inline : renderContent(bodySegments)}
               </p>
             )}
             {giantPluckCheer?.giant && (
@@ -3242,11 +3278,15 @@ const ChatMessage = memo(function ChatMessageInner({ message, onUsernameClick, o
     .padStart(2, '0');
   const showHighlightBg = displayStyle === 'standard';
   const showHighlightBorder = displayStyle !== 'none';
-  // Keep tinted: a mention or reply to you holds its color while on screen.
+  // Keep tinted: a mention or reply to you holds its color while on screen,
+  // and so does a phrase/user/badge match whose rule asks for it. The rule's
+  // own choice wins over the Highlight Appearance display style.
   const mentionHoldBg =
     (isMentioned || isReplyToMe) && chatDesign?.mention_hold === true && borderLeftColor
       ? mentionHoldBackground(borderLeftColor, tintOpacityPct)
-      : undefined;
+      : phraseMatch?.hold && !isMentioned && !isReplyToMe
+        ? mentionHoldBackground(phraseMatch.color, tintOpacityPct)
+        : undefined;
 
   // Compose built-in event tint styles inline. The configurable color drives
   // a gradient (alpha controlled by tintOpacityPct). Phrase/mention/reply

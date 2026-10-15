@@ -707,6 +707,13 @@ impl ChannelPointsWebSocketService {
                         channel_login_str
                     );
 
+                    // The wallet's "+N" for every gain, not only the chest. Rust
+                    // keeps one record per channel; a rise already applied (the
+                    // claim's own answer) is not counted again.
+                    if let Some(cid) = channel_id.as_deref() {
+                        crate::services::channel_state::points_gained(cid, points, reason, Some(balance)).await;
+                    }
+
                     // The watched channel's chest claim also arrives through
                     // claim_channel_points, which emits this same event after its
                     // GQL mutation; whichever lands second is the duplicate.
@@ -765,6 +772,9 @@ impl ChannelPointsWebSocketService {
                         .map(|s| s.to_string());
 
                     debug!("Points spent: -{} - New balance: {}", points, balance);
+                    if let Some(cid) = spent_channel_id.as_deref() {
+                        crate::services::channel_state::points_spent(cid, balance).await;
+                    }
 
                     let _ = app_handle.emit(
                         "channel-points-spent",

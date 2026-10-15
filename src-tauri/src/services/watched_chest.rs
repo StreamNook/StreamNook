@@ -129,6 +129,13 @@ pub async fn claim(
     };
     IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner()).remove(claim_id);
     let result = result?;
+    crate::services::channel_state::points_gained(
+        channel_id,
+        i64::from(result.points_earned),
+        "CLAIM",
+        Some(i64::from(result.new_balance)),
+    )
+    .await;
 
     // Twitch also pushes this claim as a points-earned (reason CLAIM) on the
     // socket and either can land first; whichever is second is dropped. This

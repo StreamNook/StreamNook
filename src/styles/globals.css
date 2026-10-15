@@ -1949,8 +1949,13 @@ html[data-motion="off"] .sn-bulb-rainbow stop {
 .sn-composer-row[data-narrow] .sn-composer-points-count {
   display: none;
 }
-.sn-composer-row[data-narrow] .sn-composer-tool-wrap button {
-  padding: 0.25rem;
+/* The wallet's bits gem on the points icon. With the bits count on the
+   button it is redundant, until a narrow column folds that count away. */
+.sn-wallet-pip-always {
+  display: none;
+}
+.sn-composer-row[data-narrow] .sn-wallet-pip-always {
+  display: block;
 }
 /* The placeholder stays on one line, cut with an ellipsis, at any width. */
 .sn-composer-input::placeholder {
@@ -6915,6 +6920,30 @@ html[data-motion="reduced"] .sn-ffz-anim-leave {
 .sn-timeline--dragging .sn-timeline__tick-label {
   opacity: 1;
 }
+/* "You left here": a hollow ring on the track where the viewer left this
+   broadcast before. Hollow, because a live bar is filled to the edge and a
+   solid accent dot vanished into the fill; a ring is also never mistaken for
+   the solid playhead or a section hairline. Grows with the track, sits under
+   the playhead. */
+.sn-timeline__mark {
+  position: absolute;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  border: 1.5px solid rgba(255, 255, 255, 0.92);
+  background: rgba(0, 0, 0, 0.55);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  transition: width var(--scrub-grow-duration) var(--scrub-grow-ease),
+    height var(--scrub-grow-duration) var(--scrub-grow-ease);
+}
+.sn-timeline:hover .sn-timeline__mark,
+.sn-timeline--dragging .sn-timeline__mark {
+  width: 12px;
+  height: 12px;
+}
 .sn-timeline__tip {
   position: absolute;
   bottom: 100%;
@@ -7283,6 +7312,18 @@ html[data-os="linux"] .sn-chat-overlay-frame {
 
 .sn-rail::-webkit-scrollbar {
   display: none;
+}
+
+/* Streamer About social link pills: the border and wash tint toward the
+   link's brand colour (--sn-brand, set per pill) on hover and focus. */
+.sn-social-pill {
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+.sn-social-pill:hover,
+.sn-social-pill:focus-visible {
+  border-color: color-mix(in srgb, var(--sn-brand) 55%, transparent);
+  background-color: color-mix(in srgb, var(--sn-brand) 10%, transparent);
+  outline: none;
 }
 
 /* Streamer About panels: the description is markdown rendered to sanitized

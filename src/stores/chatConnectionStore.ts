@@ -18,6 +18,8 @@
 // upstream callers using mixed case still resolve correctly via `.toLowerCase()`
 // at the API boundary.
 
+import type { CheerCheck } from '../services/bitsService';
+import { useCheerPromptStore } from './cheerPromptStore';
 import { sameSentContent } from '../utils/sentContent';
 import { isWindowHidden, onWindowVisibility } from '../utils/windowVisibility';
 import { IS_MOBILE } from '../utils/platform';
@@ -3575,6 +3577,8 @@ export interface SendChannelOutcome {
   is_sent: boolean;
   drop_reason: string | null;
   pin_error?: string;
+  /** The message cheers, so Rust held it for the cheer card instead. */
+  cheer?: CheerCheck;
 }
 
 /** Send a message to `channel`. The row shown for it is built by Rust with
@@ -3692,6 +3696,9 @@ export async function sendChannelMessage(
       if (result.drop_reason) {
         injectSystemMessage(key, `Your message was not sent: ${result.drop_reason}`);
       }
+      // Held, not dropped: the chat box showing this channel asks before any
+      // bits are spent.
+      if (result.cheer) useCheerPromptStore.getState().hold(result.cheer);
       return result;
     }
 

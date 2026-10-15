@@ -128,6 +128,7 @@ struct Inner {
 /// sign-out passes through `on_account_changed` / `on_logged_out`.
 fn forget_chat_sender() {
     crate::services::chat_send_limiter::reset_account();
+    crate::services::bits::forget_account();
     let stopped = crate::services::chat_burst::stop_all();
     if stopped > 0 {
         log::info!("[Auth] account changed: stopped {stopped} chat burst run(s)");

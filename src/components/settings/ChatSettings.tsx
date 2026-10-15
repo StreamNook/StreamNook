@@ -2340,8 +2340,8 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
         <SettingsRow
           title="Chat modes"
           onReset={resetFor(['chat_input.show_room_modes', true])}
-          description="Shows when a channel limits who can chat, like emote-only, followers-only or slow mode."
-          help="Chip puts one small chip at the end of the message box that stays while you type; hover it for every mode and whether you can still chat, for example as a moderator. Placeholder names the mode in place of Send a message. During slow mode the send button counts down until you can send again. Shown for Twitch and Kick."
+          description="Tells you when a channel's chat limits stop you from chatting, like followers-only, subscriber-only or slow mode."
+          help="When it limits you names the mode in place of Send a message only while it stops you from chatting, and says what to do, like Follow to chat or You can chat in 4 minutes. A mode that spares you, say as a moderator or a long-time follower, shows nothing. Always keeps one small chip at the end of the message box whenever a mode is on; hover it for every mode. During slow mode the send button counts down until you can send again. Shown for Twitch and Kick."
           control={
             <Toggle
               enabled={settings.chat_input?.show_room_modes ?? true}
@@ -2353,15 +2353,15 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
             <SubControls>
               <SubControl
                 title="Style"
-                onReset={resetFor(['chat_input.room_modes_style', 'chip'])}
+                onReset={resetFor(['chat_input.room_modes_style', 'prompt'])}
                 control={
                   <SegmentedSelect<'chip' | 'prompt'>
-                    value={settings.chat_input?.room_modes_style ?? 'chip'}
+                    value={settings.chat_input?.room_modes_style ?? 'prompt'}
                     onChange={(room_modes_style) => setInput({ room_modes_style })}
                     onPreview={setRoomModesStyleHover}
                     options={[
-                      { value: 'chip', label: 'Chip' },
-                      { value: 'prompt', label: 'Placeholder' },
+                      { value: 'prompt', label: 'When it limits you' },
+                      { value: 'chip', label: 'Always' },
                     ]}
                   />
                 }
@@ -2370,7 +2370,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           )}
           {(settings.chat_input?.show_room_modes ?? true) && (
             <div className="pt-3">
-              <RoomModesPreview style={roomModesStyleHover ?? settings.chat_input?.room_modes_style ?? 'chip'} />
+              <RoomModesPreview style={roomModesStyleHover ?? settings.chat_input?.room_modes_style ?? 'prompt'} />
             </div>
           )}
         </SettingsRow>
@@ -2386,21 +2386,10 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           }
         />
         <SettingsRow
-          title="Hide command button"
-          onReset={resetFor(['chat_input.hide_command_button', false])}
-          description="Removes the slash button from inside the message box. Typing / still opens the quick command list."
-          help="The command button opens a browsable menu of every command you can run here, with what each one does and examples you can click into the box. It also has a larger view for reading comfortably."
-          control={
-            <Toggle
-              enabled={settings.chat_input?.hide_command_button ?? false}
-              onChange={() => setInput({ hide_command_button: !(settings.chat_input?.hide_command_button ?? false) })}
-            />
-          }
-        />
-        <SettingsRow
           title="Hide emote button"
           onReset={resetFor(['chat_input.hide_emote_button', false])}
-          description="Removes the smiley from inside the message box. The emote picker is still reachable from its keyboard shortcut and from tab completion."
+          description="Removes the smiley from inside the message box, and with it the menu of emotes, GIFs and commands. Tab completion, : search and typing / still work."
+          help="The smiley opens one menu for everything that goes into a message: Emotes, GIFs where the channel allows them, and Commands, a browsable list of every command you can run here with examples you can click into the box."
           control={
             <Toggle
               enabled={settings.chat_input?.hide_emote_button ?? false}
@@ -2409,9 +2398,10 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           }
         />
         <SettingsRow
-          title="Points balance"
+          title="Wallet balance"
           onReset={resetFor(['chat_input.hide_points_balance', false], ['chat_input.show_points_balance_inline', false])}
-          description="Always shows your channel points beside the button next to the message box. Hidden removes the button, which still comes back whenever a bonus chest is waiting."
+          description="Always shows your channel points and bits beside the wallet button next to the message box. Hidden removes the button, which still comes back whenever a bonus chest is waiting."
+          help="The wallet holds what you can spend in a channel: its channel points rewards, and bits where the channel takes cheers. Hover the button for your exact balances."
           control={
             <SegmentedSelect<'always' | 'hover' | 'hidden'>
               value={
@@ -2434,7 +2424,26 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
               ]}
             />
           }
-        />
+        >
+          {!settings.chat_input?.hide_points_balance && (
+            <SubControls>
+              <SubControl
+                title="Show gains"
+                onReset={resetFor(['chat_input.wallet_gains', 'all'])}
+                control={
+                  <SegmentedSelect<'all' | 'chest'>
+                    value={settings.chat_input?.wallet_gains === 'chest' ? 'chest' : 'all'}
+                    onChange={(gains) => setInput({ wallet_gains: gains })}
+                    options={[
+                      { value: 'all', label: 'Every gain' },
+                      { value: 'chest', label: 'Bonus chest only' },
+                    ]}
+                  />
+                }
+              />
+            </SubControls>
+          )}
+        </SettingsRow>
 
       </SettingsSection>
 

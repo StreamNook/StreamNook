@@ -27,6 +27,8 @@ import { useBlendedHypeTrains } from './useBlendedHypeTrains';
 import { Logger } from '../../utils/logger';
 import { Tooltip } from '../ui/Tooltip';
 import { isImeComposing } from '../../utils/imeComposing';
+import { CheerBar } from '../chat/CheerBar';
+import { useCheerPromptStore } from '../../stores/cheerPromptStore';
 
 interface BlendedChannel {
   channel: string;
@@ -461,6 +463,14 @@ export function BlendedChatPane({
     });
   }, []);
 
+  // A cheer held for one of this pane's Twitch chats shows its card here.
+  const heldCheer = useCheerPromptStore((s) => s.status?.check.channel);
+  const cheerChannel = heldCheer && selected.some(
+    (c) => provOf(c) === 'twitch' && c.channel.toLowerCase().replace(/^#/, '') === heldCheer,
+  )
+    ? heldCheer
+    : undefined;
+
   const handleSend = useCallback(() => {
     const body = text.trim();
     if (!body) return;
@@ -584,7 +594,10 @@ export function BlendedChatPane({
       </div>
 
       {!readOnly && (
-      <div className="border-t border-white/5 p-2">
+      <div className="relative border-t border-white/5 p-2">
+        {/* This box sends to several chats, so no live check: a cheer Rust
+            held asks here once, and a refused one comes back to the box. */}
+        <CheerBar channelLogin={cheerChannel} channelId={undefined} onSetText={setText} />
         {replyingTo && (
           <div className="mb-2 flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5">
             <svg className="h-3.5 w-3.5 shrink-0 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">

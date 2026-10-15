@@ -183,6 +183,12 @@ pub struct VideoPlayerSettings {
     /// VOD from the top (positions are still recorded for the cards).
     #[serde(default = "default_true")]
     pub resume_vod_playback: bool,
+    /// Keep Continue Watching in step across the viewer's StreamNook installs
+    /// (and their place in Twitch's own apps), so a VOD left on one device
+    /// resumes on another. On by default; only applies while
+    /// `resume_vod_playback` is on.
+    #[serde(default = "default_true")]
+    pub sync_vod_progress: bool,
     /// Ad-free live playback (Android). Routes the playlist through a public
     /// relay and strips ad segments out of what the player is served. On by
     /// default, matching the behavior the phone app shipped with through 7.8.6.
@@ -243,6 +249,7 @@ impl Default for VideoPlayerSettings {
             middle_click_multinook: true,
             wheel_volume_step: 0.05,
             resume_vod_playback: true,
+            sync_vod_progress: true,
         }
     }
 }
@@ -715,14 +722,22 @@ pub struct LiveNotificationSettings {
     /// that names them, whoever did the watching or the claiming.
     #[serde(default = "default_true")]
     pub show_twitch_reward_notifications: bool,
+    /// Someone mentions you, or replies to you, in a Twitch chat you joined,
+    /// while StreamNook is not the window in use (services/mention_notify.rs).
+    #[serde(default = "default_true")]
+    pub show_mention_notifications: bool,
     // Notification method toggles (Dynamic Island vs Toast)
     #[serde(default = "default_true")]
     pub use_dynamic_island: bool,
     #[serde(default = "default_true")]
     pub use_toast: bool,
-    // Native OS notifications (Windows/macOS)
+    /// System notifications: Windows / macOS / Linux desktop notifications
+    /// while StreamNook is not the window in use (services/system_notify.rs).
+    /// The phone keeps it on; the system shade is its delivery surface.
     #[serde(default)]
     pub use_native_notifications: bool,
+    /// Left from an earlier desktop attempt; nothing reads it. System
+    /// notifications always wait until StreamNook is not the window in use.
     #[serde(default = "default_true")]
     pub native_only_when_unfocused: bool,
     // Quick update: clicking update toast immediately starts update
@@ -786,6 +801,7 @@ impl Default for LiveNotificationSettings {
             show_badge_notifications: true,
             show_gift_sub_notifications: true,
             show_twitch_reward_notifications: true,
+            show_mention_notifications: true,
             use_dynamic_island: true,
             use_toast: true,
             use_native_notifications: false,
@@ -1208,9 +1224,15 @@ pub struct ChatInputSettings {
     /// Show the channel's chat modes (emote-only, followers-only, slow mode
     /// and the rest) in the message box while they are on.
     pub show_room_modes: bool,
-    /// How the modes show: `chip` (one chip at the box's edge, the default) or
-    /// `prompt` (named in place of "Send a message").
+    /// How the modes show: `prompt` (the default: named in place of "Send a
+    /// message", and only while a mode holds you back) or `chip` (one chip at
+    /// the box's edge whenever a mode is on).
     pub room_modes_style: String,
+    /// Set once `move_room_modes_to_prompt_once` has run. Field default false
+    /// so a file from before it existed takes the move; a new install starts
+    /// with it set.
+    #[serde(default)]
+    pub room_modes_prompt_adopted: bool,
     /// The composer keys this struct does not name (placeholder, buttons,
     /// spellcheck, tab completion, ...), kept verbatim.
     #[serde(flatten)]
@@ -1219,7 +1241,12 @@ pub struct ChatInputSettings {
 
 impl Default for ChatInputSettings {
     fn default() -> Self {
-        Self { show_room_modes: true, room_modes_style: "chip".into(), extra: HashMap::new() }
+        Self {
+            show_room_modes: true,
+            room_modes_style: "prompt".into(),
+            room_modes_prompt_adopted: true,
+            extra: HashMap::new(),
+        }
     }
 }
 
@@ -1682,6 +1709,19 @@ impl Settings {
     /// every `false` there came from a header click aimed at one streamer, and
     /// it silently kept that platform out of every feed and every suggestion.
     /// The Settings switches stay the global control from here on.
+    /// One-time move of an existing install from the room-mode chip (the old
+    /// default) to the prompt, which says nothing unless a mode holds you back.
+    /// Runs once, so choosing the chip again afterwards sticks.
+    pub fn move_room_modes_to_prompt_once(&mut self) {
+        let input = &mut self.chat_input;
+        if !input.room_modes_prompt_adopted {
+            if input.room_modes_style == "chip" {
+                input.room_modes_style = "prompt".into();
+            }
+            input.room_modes_prompt_adopted = true;
+        }
+    }
+
     pub fn scope_blend_header_marks_once(&mut self) {
         if !self.chat_blend.header_marks_scoped {
             self.chat_blend.platforms.clear();
@@ -2068,6 +2108,29 @@ mod backup_persistence_tests {
     /// other keys must survive a load and save, and a file without the room
     /// modes switch shows them.
     #[test]
+    fn room_modes_move_from_the_chip_to_the_prompt_once() {
+        // An install from before the move, still on the old chip default.
+        let mut value = serde_json::to_value(Settings::default()).unwrap();
+        value["chat_input"] = serde_json::json!({ "show_room_modes": true, "room_modes_style": "chip" });
+        let mut old: Settings = serde_json::from_value(value).unwrap();
+        assert!(!old.chat_input.room_modes_prompt_adopted);
+        old.move_room_modes_to_prompt_once();
+        assert_eq!(old.chat_input.room_modes_style, "prompt");
+        assert!(old.chat_input.room_modes_prompt_adopted);
+
+        // Choosing the chip again afterwards sticks across later loads.
+        old.chat_input.room_modes_style = "chip".into();
+        let mut again: Settings = serde_json::from_value(serde_json::to_value(&old).unwrap()).unwrap();
+        again.move_room_modes_to_prompt_once();
+        assert_eq!(again.chat_input.room_modes_style, "chip");
+
+        // A new install starts on the prompt with nothing to move.
+        let fresh = Settings::default();
+        assert_eq!(fresh.chat_input.room_modes_style, "prompt");
+        assert!(fresh.chat_input.room_modes_prompt_adopted);
+    }
+
+    #[test]
     fn chat_input_is_modelled_and_keeps_its_other_keys() {
         assert!(Settings::default().chat_input.show_room_modes, "room modes show by default");
 
@@ -2076,7 +2139,8 @@ mod backup_persistence_tests {
         let parsed: Settings = serde_json::from_value(value).unwrap();
         assert!(!parsed.extra.contains_key("chat_input"));
         assert!(parsed.chat_input.show_room_modes, "a missing switch takes the default");
-        assert_eq!(parsed.chat_input.room_modes_style, "chip", "a missing style takes the chip");
+        assert_eq!(parsed.chat_input.room_modes_style, "prompt", "a missing style takes the prompt");
+        assert!(!parsed.chat_input.room_modes_prompt_adopted, "a file from before the move still takes it");
         assert_eq!(parsed.chat_input.extra.get("hide_placeholder"), Some(&serde_json::json!(true)));
 
         let mut off = parsed.clone();

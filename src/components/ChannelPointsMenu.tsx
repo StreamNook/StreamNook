@@ -94,9 +94,11 @@ interface ChannelPointsMenuProps {
   // state for exactly as long as the fetch actually takes.
   onBalanceUpdate: () => void | Promise<void>;
   onEmotesChange?: () => void; // Callback to refresh emotes after unlocking
-  /** `popover` (desktop): a panel over the composer. `sheet` (phone): the
-   *  content of a bottom sheet, rewards as a grid of tiles. Same logic. */
-  variant?: 'popover' | 'sheet';
+  /** `popover` (desktop): a panel over the composer. `pane` (desktop): the
+   *  same body inside the channel wallet, which owns the glass, the motion,
+   *  the height and the outside click. `sheet` (phone): the content of a
+   *  bottom sheet, rewards as a grid of tiles. Same logic. */
+  variant?: 'popover' | 'pane' | 'sheet';
   /** The button that toggles the popover: a press on it is its own toggle, not
    *  an outside click. */
   ignoreRef?: React.RefObject<HTMLElement | null>;
@@ -115,6 +117,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
   ignoreRef,
 }) => {
   const isSheet = variant === 'sheet';
+  const isPane = variant === 'pane';
   const [rewards, setRewards] = useState<ChannelReward[]>([]);
   // The balance the backend judged the list against.
   const [snapshotBalance, setSnapshotBalance] = useState<number | null>(null);
@@ -347,9 +350,9 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
   }, []);
 
   // A press outside the popover closes it, as the commands menu beside it
-  // does. A sheet closes on its own backdrop.
+  // does. A sheet closes on its own backdrop, a pane with its wallet.
   useEffect(() => {
-    if (isSheet) return;
+    if (isSheet || isPane) return;
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node;
       if (menuRef.current?.contains(t)) return;
@@ -358,7 +361,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [isSheet, onClose, ignoreRef]);
+  }, [isSheet, isPane, onClose, ignoreRef]);
 
   // Escape backs out of the open view first, then clears a search, then
   // closes the menu.
@@ -670,7 +673,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
     : rewards;
 
   // The popover rises from the points button at the composer's left edge.
-  const popoverMotion = isSheet
+  const popoverMotion = isSheet || isPane
     ? {}
     : {
         initial: { opacity: 0, y: 6, scale: 0.98 },
@@ -733,6 +736,8 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
       className={
         isSheet
           ? 'relative flex flex-col'
+          : isPane
+            ? 'relative flex min-h-0 flex-1 flex-col'
           // glass-flyout: this can open over live video, and its base stays
           // readable at every Glassiness.
           : 'glass-flyout absolute bottom-full left-0 right-0 mb-2 flex flex-col max-h-[400px] overflow-hidden z-50 origin-bottom-left !p-0'
@@ -872,7 +877,7 @@ const ChannelPointsMenu: React.FC<ChannelPointsMenuProps> = ({
 
           <div
             ref={listRef}
-            className={`custom-scrollbar max-h-[320px] overflow-y-auto py-1.5 ${overlayOpen ? 'invisible' : ''}`}
+            className={`custom-scrollbar ${isPane ? 'min-h-0 flex-1' : 'max-h-[320px]'} overflow-y-auto py-1.5 ${overlayOpen ? 'invisible' : ''}`}
             style={{ minHeight: q ? (searchHeight ?? undefined) : undefined }}
           >
             {isLoading ? (

@@ -1019,7 +1019,7 @@ const OverlayRow = ({ message, style, expiring }: { message: OverlayMessage; sty
   if (systemMessage || asCheerEvent || rewardTitle || (msgType && !!CATEGORY_OF[msgType])) {
     const category: EventCategory = asCheerEvent ? 'cheer' : rewardTitle ? 'redemption' : categoryOf(msgType);
     const rawEventText = asCheerEvent
-      ? `cheered ${cheerBits.toLocaleString()} bits`
+      ? `cheered ${cheerBits.toLocaleString()} ${cheerBits === 1 ? 'bit' : 'bits'}`
       : rewardTitle
         ? `redeemed ${rewardTitle}`
         : systemMessage || eventFallback(category, message.display_name || message.username);

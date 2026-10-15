@@ -1,43 +1,30 @@
-// Channel points: the balance, the channel's own points branding, the bonus
-// chest, and the credit feed the composer animates.
+// Channel points and the wallet's bits face for one Twitch channel on the
+// phone: the balance, the channel's own points branding, the bonus chest, and
+// the "+N" the composer animates.
+//
+// Everything is read from Rust's channel_state (the same watch the player and
+// the desktop composer use), so the phone no longer runs its own 60 s poll of
+// the same channel. Rust polls points every minute, applies every gain the
+// points socket reports, and records the last one (`last_gain`), which is the
+// single source for the "+N": watching, the chest, predictions, a rise only
+// the poll saw. Bits come from the same state (`bits`).
 //
 // `get_channel_points_for_channel` runs on the drops token, so this quietly
 // yields nothing until the drops account is connected. That is the right
 // failure mode: the composer just does not show a points button rather than
 // showing a broken one.
 //
-// The response nests under either `data.community.channel` or
-// `data.user.channel` depending on which web client answered, so both are
-// accepted, same rule the desktop composer uses.
-//
-// Two things this has to do that are not obvious.
-//
-// The bonus chest is collected by the FRONTEND, not by Rust. There is no
-// backend poller and no backend auto-claim for the channel you are watching;
-// the drops service says so outright, and the only background sweep lives in
-// the automation plugin, which does not run here. So if this hook does not
-// claim the chest, nothing does, and every chest on the phone expires.
-//
-// Passive per-minute points DO get credited already, by the Rust watch
-// heartbeat, but nothing announces them. There is no event and no push. The
-// only way to see that earning is happening is to ask again and compare, which
-// is what the poll below is for: the difference between two reads is the credit
-// that just landed.
+// The bonus chest is still collected HERE when auto-collect is on. Rust's own
+// collector only takes chests on channels the watch session registered as
+// active, which the phone's player does not do, so without this every chest
+// on the phone would expire. Rust turns a second claim on the same chest away,
+// so this and Rust can never collect one twice.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
+import { refreshChannelState, unwatchChannel, useChannelState, watchChannel } from '../../stores/channelStateStore';
+import type { ChannelBitsFace } from '../../types';
 import { Logger } from '../../utils/logger';
-import { isBackgrounded } from '../backgroundGate';
-
-// Matches the desktop composer's cadence. Fast enough that a chest is collected
-// well inside its lifetime and the balance never looks frozen, slow enough to
-// be nothing on a phone's battery.
-const POLL_MS = 60_000;
-
-// Matches the desktop composer's retry on the same query: three tries, a second
-// apart. One bad read on a phone should not empty the panel for a whole minute.
-const READ_ATTEMPTS = 3;
-const READ_RETRY_MS = 1000;
 
 export interface ChannelPointsState {
   balance: number | null;
@@ -47,6 +34,8 @@ export interface ChannelPointsState {
   iconUrl: string | null;
   /** A chest waiting to be collected, when auto-collect is turned off. */
   availableClaimId: string | null;
+  /** The bits face, when the channel has bits on. */
+  bits: ChannelBitsFace | null;
   /** The most recent credit, for the composer's floating "+N". Carries an id so
    *  two identical amounts in a row still read as two separate credits. */
   gain: { id: number; amount: number } | null;
@@ -56,194 +45,75 @@ export interface ChannelPointsState {
   refresh: () => void;
 }
 
-interface Loaded {
-  /** Which channel this result belongs to; anything else is stale. */
-  login: string;
-  balance: number | null;
-  name: string | null;
-  iconUrl: string | null;
-  claimId: string | null;
-}
-
 export function useChannelPoints(
   channelLogin: string | null | undefined,
   channelId?: string | null,
 ): ChannelPointsState {
-  // Stamped with its channel rather than cleared on switch, so changing streams
-  // cannot briefly show the previous channel's balance and nothing has to call
-  // setState synchronously in the effect to prevent that.
-  const [loaded, setLoaded] = useState<Loaded | null>(null);
-  const [gain, setGain] = useState<{ id: number; amount: number } | null>(null);
-  const [nonce, setNonce] = useState(0);
+  const login = channelLogin ? channelLogin.toLowerCase() : null;
+  const state = useChannelState(login);
+  useEffect(() => {
+    if (!login || !channelId) return;
+    void watchChannel(login, channelId);
+    return () => {
+      void unwatchChannel(login);
+    };
+  }, [login, channelId]);
 
   const autoClaim = useAppStore((s) => s.settings.auto_claim_points_watching ?? true);
+  const chestOnly = useAppStore((s) => s.settings.chat_input?.wallet_gains === 'chest');
+  const points = state?.points?.enabled ? state.points : null;
+  const bits = state?.bits?.enabled ? state.bits : null;
 
-  // Last balance seen for a given channel, so a credit can be spotted as the
-  // difference between two reads. Keyed by channel because switching rooms
-  // changes the balance for reasons that are not earnings.
-  const lastBalance = useRef<{ login: string; balance: number } | null>(null);
-  const gainSeq = useRef(0);
-  const claiming = useRef(false);
-
-  const refresh = useCallback(() => setNonce((n) => n + 1), []);
+  // A new gain from Rust becomes a "+N". The first points answer for a
+  // channel is the baseline, so a gain recorded before it never plays.
+  const lastGain = points?.last_gain ?? null;
+  const [seen, setSeen] = useState<{ login: string | null; seq: number | null }>({ login, seq: null });
+  const [gain, setGain] = useState<{ id: number; amount: number } | null>(null);
+  const seq = lastGain?.seq ?? 0;
+  if (points && (seen.login !== login || seen.seq === null)) {
+    setSeen({ login, seq });
+  } else if (points && seen.seq !== null && seq > seen.seq) {
+    setSeen({ login, seq });
+    if (lastGain && (!chestOnly || lastGain.chest)) setGain({ id: seq, amount: lastGain.amount });
+  }
   const clearGain = useCallback(() => setGain(null), []);
 
-  // Single choke point for every credit, from either source, so a chest can
-  // never be reported twice.
-  //
-  // Float only, no system notification. The old hidden-only notification could
-  // in practice fire ONLY in picture-in-picture (the one state that is
-  // `hidden` while this poll still runs), where it flooded the shade with a
-  // "+N" every poll. Foreground has the float, and a truly backgrounded shell
-  // never reaches this code; honest background points alerts would need the
-  // Rust watch heartbeat to report credits itself.
-  const noteGain = useCallback((amount: number) => {
-    if (amount <= 0) return;
-    gainSeq.current += 1;
-    setGain({ id: gainSeq.current, amount });
-  }, []);
-
-  // Collecting the chest. The command returns the exact credited amount with
-  // multipliers applied, which is better than a balance delta. Guarded against
-  // overlapping runs because the poll and a tap can both reach it.
-  //
-  // Deliberately does NOT record the lifetime points stat. This command emits
-  // `channel-points-earned` on its way out, and the boot listener already counts
-  // that event; doing it here as well would score every chest twice.
+  const claiming = useRef(false);
   const claim = useCallback(
-    async (claimId: string, id: string, login: string): Promise<number> => {
-      if (claiming.current) return 0;
+    async (claimId: string) => {
+      if (claiming.current || !login || !channelId) return;
       claiming.current = true;
       try {
-        const result = await invoke<{ new_balance: number; points_earned: number }>(
-          'claim_channel_points',
-          { channelId: id, channelName: login, claimId },
-        );
-        return result.points_earned > 0 ? result.points_earned : 0;
+        await invoke('claim_channel_points', { channelId, channelName: login, claimId });
       } catch (err) {
         Logger.warn('[MobilePoints] chest claim failed:', err);
-        return 0;
       } finally {
         claiming.current = false;
       }
     },
-    [],
+    [login, channelId],
   );
 
+  // Auto-collect: the chest Rust's poll (or the socket) just reported.
+  const claimId = points?.available_claim_id ?? null;
   useEffect(() => {
-    if (!channelLogin) return;
-    let cancelled = false;
+    if (claimId && autoClaim) void claim(claimId);
+  }, [claimId, autoClaim, claim]);
 
-    const read = async (attempt = 0) => {
-      try {
-        const result = await invoke<unknown>('get_channel_points_for_channel', { channelLogin });
-        if (cancelled) return;
-        const data = (result as { data?: Record<string, { channel?: unknown }> })?.data;
-        const channel = (data?.community?.channel ?? data?.user?.channel) as
-          | {
-              self?: { communityPoints?: { balance?: unknown; availableClaim?: { id?: unknown } | null } };
-              communityPointsSettings?: { name?: unknown; image?: { url?: unknown } };
-            }
-          | undefined;
-
-        const community = channel?.self?.communityPoints;
-        const rawBalance = community?.balance;
-        const balance = typeof rawBalance === 'number' ? rawBalance : null;
-        const settings = channel?.communityPointsSettings;
-        const rawClaim = community?.availableClaim?.id;
-        let claimId = typeof rawClaim === 'string' ? rawClaim : null;
-
-        // A credit since the last look. This is what makes passive earning
-        // visible: the watch heartbeat has been crediting points all along with
-        // nothing to show for it.
-        const prev = lastBalance.current;
-        if (balance !== null && prev && prev.login === channelLogin && balance > prev.balance) {
-          noteGain(balance - prev.balance);
-        }
-        if (balance !== null) lastBalance.current = { login: channelLogin, balance };
-
-        if (claimId && channelId && autoClaim) {
-          const earned = await claim(claimId, channelId, channelLogin);
-          if (cancelled) return;
-          claimId = null;
-          if (earned > 0) {
-            noteGain(earned);
-            // The claim moved the balance past what was just read; keep the
-            // baseline in step or the next poll reports the same points twice.
-            const base = lastBalance.current;
-            if (base && base.login === channelLogin) {
-              lastBalance.current = { login: channelLogin, balance: base.balance + earned };
-            }
-          }
-        }
-
-        setLoaded({
-          login: channelLogin,
-          balance,
-          name: typeof settings?.name === 'string' ? settings.name : null,
-          iconUrl: typeof settings?.image?.url === 'string' ? settings.image.url : null,
-          claimId,
-        });
-      } catch (err) {
-        if (cancelled) return;
-        // Not connected, or the channel has points off. Both are normal.
-        //
-        // Retry before blanking, the way the desktop composer does. A single
-        // failed read on a phone is usually a moment of bad signal, and giving
-        // up on it drops the points button out of the composer until the next
-        // poll a minute later.
-        if (attempt < READ_ATTEMPTS - 1) {
-          await new Promise((resolve) => window.setTimeout(resolve, READ_RETRY_MS));
-          if (cancelled) return;
-          await read(attempt + 1);
-          return;
-        }
-        Logger.debug('[MobilePoints] balance unavailable:', err);
-        setLoaded({ login: channelLogin, balance: null, name: null, iconUrl: null, claimId: null });
-      }
-    };
-
-    void read();
-    // Chests appear mid-stream and passive points land every few minutes, so a
-    // single read at join time goes stale within a minute of arriving.
-    const timer = window.setInterval(() => {
-      // Skipped while backgrounded. The balance is re-read on resume, and the
-      // chest claim this drives needs the app in front to be worth anything.
-      if (isBackgrounded()) return;
-      void read();
-    }, POLL_MS);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [channelLogin, channelId, nonce, autoClaim, claim, noteGain]);
-
-  const fresh = channelLogin && loaded?.login === channelLogin ? loaded : null;
-
+  const refresh = useCallback(() => {
+    if (login) void refreshChannelState(login, 'points');
+  }, [login]);
   const claimChest = useCallback(() => {
-    if (!fresh?.claimId || !channelId || !channelLogin) return;
-    void (async () => {
-      const earned = await claim(fresh.claimId!, channelId, channelLogin);
-      if (earned > 0) {
-        noteGain(earned);
-        // Same baseline bump as the auto path: refresh() re-reads the balance,
-        // and without moving the baseline past the claim first, that read sees
-        // the claimed amount as a fresh delta and floats it a second time.
-        const base = lastBalance.current;
-        if (base && base.login === channelLogin) {
-          lastBalance.current = { login: channelLogin, balance: base.balance + earned };
-        }
-      }
-      refresh();
-    })();
-  }, [fresh?.claimId, channelId, channelLogin, claim, noteGain, refresh]);
+    if (!claimId) return;
+    void claim(claimId).then(refresh);
+  }, [claimId, claim, refresh]);
 
   return {
-    balance: fresh?.balance ?? null,
-    name: fresh?.name ?? null,
-    iconUrl: fresh?.iconUrl ?? null,
-    availableClaimId: fresh?.claimId ?? null,
+    balance: points?.balance ?? null,
+    name: points?.name ?? null,
+    iconUrl: points?.icon_url ?? null,
+    availableClaimId: autoClaim ? null : claimId,
+    bits,
     gain,
     clearGain,
     claimChest,
