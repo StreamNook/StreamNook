@@ -758,6 +758,39 @@ mod tests {
     }
 
     #[test]
+    fn the_shapes_keep_the_keys_the_iphone_decodes() {
+        let sheet = ProfileSheet {
+            user_id: "1".into(),
+            login: "a".into(),
+            display_name: "A".into(),
+            shown_login: None,
+            avatar_url: Some("u".into()),
+            picture: Some(AvatarPick { still: "s".into(), animated: None }),
+            name_color: "#ffffff".into(),
+            paint: None,
+            paint_def: None,
+            groups: vec![BadgeGroup { title: "Twitch".into(), badges: vec![ProfileBadge { id: "b".into(), url: "x".into(), ..Default::default() }] }],
+            streamnook: Some(SnBadge { slug: None, image_url: "streamnook-house:streamnook-default".into(), label: "StreamNook".into() }),
+        };
+        let v = serde_json::to_value(&sheet).unwrap();
+        for key in ["user_id", "display_name", "avatar_url", "picture", "name_color", "groups", "streamnook"] {
+            assert!(v.get(key).is_some(), "{key}");
+        }
+        assert_eq!(v["streamnook"]["image_url"], "streamnook-house:streamnook-default");
+        assert_eq!(v["groups"][0]["badges"][0]["url"], "x");
+        let picker = StreamNookPicker {
+            badges: vec![PickerBadge { slug: "s".into(), name: "S".into(), image_url: None, worn: true }],
+            atmospheres: vec![],
+            theme: "tier".into(),
+            show_chat_toggle: false,
+            chat_atmosphere: true,
+        };
+        let v = serde_json::to_value(&picker).unwrap();
+        assert!(v.get("show_chat_toggle").is_some() && v.get("chat_atmosphere").is_some());
+        assert!(v["badges"][0].get("image_url").is_none());
+    }
+
+    #[test]
     fn the_login_line_shows_only_beyond_letter_case() {
         assert_eq!(shown_login("xqc", "xQc"), None);
         assert_eq!(shown_login("kr_user", "한국어").as_deref(), Some("kr_user"));
