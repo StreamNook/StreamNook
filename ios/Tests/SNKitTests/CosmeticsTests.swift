@@ -162,6 +162,13 @@ import Testing
             _ = try await core.invoke("update_twitch_display_name", args: ["displayName": "SomeoneElse"])
         }
         _ = try await core.invoke("upload_twitch_profile_image", args: ["kind": "banner", "dataBase64": "iVBORw0KGgo="])
+        let pending = try await core.invoke("upload_seventv_profile_picture", args: ["userId": "01FAKE7TV", "dataBase64": "iVBORw0KGgo="],
+                                            as: String.self)
+        #expect(!pending.isEmpty)
+        _ = try await core.invoke("logout_seventv", args: [:])
+        await #expect(throws: CoreFailure.self) {
+            _ = try await core.invoke("upload_seventv_profile_picture", args: ["userId": "01FAKE7TV", "dataBase64": "iVBORw0KGgo="])
+        }
         await #expect(throws: CoreFailure.self) {
             _ = try await core.invoke("upload_twitch_profile_image", args: ["kind": "poster", "dataBase64": "iVBORw0KGgo="])
         }
