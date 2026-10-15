@@ -14,6 +14,7 @@ final class FakeCosmetics: Sendable {
         var sevenTvBadge: String? = "b-sub"
         var twitchBadge = "glhf-pledge"
         var sevenTvSignedIn = true
+        var chatColor = "#8a2be2"
     }
 
     private let state = Mutex(State())
@@ -94,7 +95,7 @@ final class FakeCosmetics: Sendable {
             let twitch = [("glhf-pledge", "GLHF Pledge"), ("premium", "Prime Gaming"), ("twitchcon-2026", "TwitchCon 2026")].map { id, title in
                 #"{"id":"\#(id)","version":"1","title":"\#(title)","image_url":"https://static-cdn.jtvnw.net/badges/v1/\#(id)/3","is_selected":\#(s.twitchBadge == id)}"#
             }.joined(separator: ",")
-            return #"{"seventv_signed_in":\#(s.sevenTvSignedIn),"seventv_user_id":"01FAKE7TV","paints":[\#(paint(Self.paintSunset, id: "p-sunset")),\#(paint(Self.paintAqua, id: "p-aqua"))],"seventv_badges":[\#(badge("b-sub", "7TV Subscriber")),\#(badge("b-early", "Early Supporter"))],"drops_signed_in":true,"twitch_selectable":[\#(twitch)],"twitch_earned":[]}"#
+            return ##"{"seventv_signed_in":\##(s.sevenTvSignedIn),"seventv_user_id":"01FAKE7TV","paints":[\##(paint(Self.paintSunset, id: "p-sunset")),\##(paint(Self.paintAqua, id: "p-aqua"))],"seventv_badges":[\##(badge("b-sub", "7TV Subscriber")),\##(badge("b-early", "Early Supporter"))],"drops_signed_in":true,"twitch_selectable":[\##(twitch)],"twitch_earned":[],"chat_color":"\##(s.chatColor)","named_colors":[{"label":"Blue Violet","value":"blue_violet","hex":"#8a2be2"},{"label":"Coral","value":"coral","hex":"#ff7f50"},{"label":"Dodger Blue","value":"dodger_blue","hex":"#1e90ff"},{"label":"Spring Green","value":"spring_green","hex":"#00ff7f"}]}"##
         case "equip_streamnook_badge":
             let slug = args["slug"] as? String
             if slug == "streamnook-refused" { throw CoreFailure.command(json: #""You do not own that badge.""#) }
@@ -114,6 +115,11 @@ final class FakeCosmetics: Sendable {
         case "set_seventv_badge":
             state.withLock { $0.sevenTvBadge = args["badgeId"] as? String }
             return #"{"success":true,"message":"ok"}"#
+        case "update_user_chat_color":
+            let value = args["color"] as? String ?? ""
+            let hex = ["blue_violet": "#8a2be2", "coral": "#ff7f50", "dodger_blue": "#1e90ff", "spring_green": "#00ff7f"][value] ?? value
+            state.withLock { $0.chatColor = hex }
+            return "null"
         case "update_chat_identity_gql":
             state.withLock { $0.twitchBadge = args["badgeId"] as? String ?? "" }
             return "null"

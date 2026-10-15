@@ -613,11 +613,50 @@ pub struct ExternalPicker {
     pub twitch_selectable: Vec<ChatIdentityBadge>,
     /// Every displayed and earned Twitch badge, for the read-only list.
     pub twitch_earned: Vec<ProfileBadge>,
+    /// The account's Twitch name colour (`#rrggbb`), when Twitch says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_color: Option<String>,
+    /// Twitch's named colours, which every account may pick (any hex needs Prime or Turbo).
+    pub named_colors: Vec<NamedColor>,
+}
+
+/// One of Twitch's named chat colours: what to call it, the value Helix takes, its hex.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct NamedColor {
+    pub label: String,
+    pub value: String,
+    pub hex: String,
+}
+
+/// Twitch's own list, in the order its colour picker shows.
+const NAMED_CHAT_COLORS: &[(&str, &str, &str)] = &[
+    ("Blue", "blue", "#0000ff"),
+    ("Blue Violet", "blue_violet", "#8a2be2"),
+    ("Cadet Blue", "cadet_blue", "#5f9ea0"),
+    ("Chocolate", "chocolate", "#d2691e"),
+    ("Coral", "coral", "#ff7f50"),
+    ("Dodger Blue", "dodger_blue", "#1e90ff"),
+    ("Firebrick", "firebrick", "#b22222"),
+    ("Golden Rod", "golden_rod", "#daa520"),
+    ("Green", "green", "#008000"),
+    ("Hot Pink", "hot_pink", "#ff69b4"),
+    ("Orange Red", "orange_red", "#ff4500"),
+    ("Red", "red", "#ff0000"),
+    ("Sea Green", "sea_green", "#2e8b57"),
+    ("Spring Green", "spring_green", "#00ff7f"),
+    ("Yellow Green", "yellow_green", "#9acd32"),
+];
+
+pub fn named_chat_colors() -> Vec<NamedColor> {
+    NAMED_CHAT_COLORS
+        .iter()
+        .map(|(label, value, hex)| NamedColor { label: label.to_string(), value: value.to_string(), hex: hex.to_string() })
+        .collect()
 }
 
 pub async fn external_picker(user_id: &str, login: &str) -> ExternalPicker {
     let status = crate::commands::seventv_cosmetics::get_seventv_auth_status().await;
-    let (inventory, badges, drops) = tokio::join!(
+    let (inventory, badges, drops, colors) = tokio::join!(
         resolver::inventory(user_id),
         crate::commands::badge_service::get_user_badges_with_earned_unified(
             user_id.to_string(),
@@ -626,6 +665,7 @@ pub async fn external_picker(user_id: &str, login: &str) -> ExternalPicker {
             login.to_string(),
         ),
         drops_signed_in(),
+        crate::services::twitch_service::TwitchService::get_user_chat_colors(vec![user_id.to_string()]),
     );
     let twitch_selectable = if drops && !login.is_empty() {
         selectable_twitch_badges(login).await
@@ -667,6 +707,8 @@ pub async fn external_picker(user_id: &str, login: &str) -> ExternalPicker {
         drops_signed_in: drops,
         twitch_selectable,
         twitch_earned: badges.as_ref().map(twitch_badges).unwrap_or_default(),
+        chat_color: colors.get(user_id).filter(|c| !c.is_empty()).map(|c| c.to_lowercase()),
+        named_colors: named_chat_colors(),
     }
 }
 

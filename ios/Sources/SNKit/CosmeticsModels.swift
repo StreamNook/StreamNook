@@ -401,12 +401,38 @@ public struct ExternalPickerState: Codable, Sendable, Equatable {
     public var dropsSignedIn: Bool
     public var twitchSelectable: [TwitchIdentityBadge]
     public var twitchEarned: [ProfileBadge]
+    /// The account's Twitch name colour, `#rrggbb`.
+    public var chatColor: String?
+    public var namedColors: [NamedChatColor]
 
     enum CodingKeys: String, CodingKey {
         case sevenTvSignedIn = "seventv_signed_in", sevenTvUserID = "seventv_user_id", paints
         case sevenTvBadges = "seventv_badges", dropsSignedIn = "drops_signed_in"
         case twitchSelectable = "twitch_selectable", twitchEarned = "twitch_earned"
+        case chatColor = "chat_color", namedColors = "named_colors"
     }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sevenTvSignedIn = try c.decodeIfPresent(Bool.self, forKey: .sevenTvSignedIn) ?? false
+        sevenTvUserID = try c.decodeIfPresent(String.self, forKey: .sevenTvUserID)
+        paints = try c.decodeIfPresent([PickerPaint].self, forKey: .paints) ?? []
+        sevenTvBadges = try c.decodeIfPresent([PickerSevenTvBadge].self, forKey: .sevenTvBadges) ?? []
+        dropsSignedIn = try c.decodeIfPresent(Bool.self, forKey: .dropsSignedIn) ?? false
+        twitchSelectable = try c.decodeIfPresent([TwitchIdentityBadge].self, forKey: .twitchSelectable) ?? []
+        twitchEarned = try c.decodeIfPresent([ProfileBadge].self, forKey: .twitchEarned) ?? []
+        chatColor = try c.decodeIfPresent(String.self, forKey: .chatColor)
+        namedColors = try c.decodeIfPresent([NamedChatColor].self, forKey: .namedColors) ?? []
+    }
+}
+
+/// One of Twitch's named chat colours (Rust `NamedColor`).
+public struct NamedChatColor: Codable, Sendable, Equatable, Identifiable {
+    public var label: String
+    /// What Helix takes (`blue_violet`).
+    public var value: String
+    public var hex: String
+    public var id: String { value }
 }
 
 // MARK: Sub standing (Rust `sub_standing::SubStanding`)

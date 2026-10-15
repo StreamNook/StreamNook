@@ -184,6 +184,22 @@ final class CosmeticsScreenModel {
         }
     }
 
+    // MARK: Name colour
+
+    /// Sets the account's Twitch name colour to one of Twitch's named colours.
+    func setChatColor(_ color: NamedChatColor) async {
+        guard let user, var state = ext, state.chatColor != color.hex else { return }
+        let before = state
+        state.chatColor = color.hex
+        ext = state
+        do {
+            _ = try await core.invoke("update_user_chat_color", args: ["targetUserId": user.id, "color": color.value])
+        } catch {
+            ext = before
+            app.toasts.show("Could not change your name colour.")
+        }
+    }
+
     // MARK: Twitch
 
     /// Wears a Twitch global badge. There is no taking one off: Twitch only swaps which is worn.
@@ -231,10 +247,12 @@ struct CosmeticsScreen: View {
         ScrollViewReader { reader in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    preview.padding(.bottom, 16)
                     badgeSection.id("badge")
                     atmosphereSection.id("atmosphere")
                     sevenTvSection.id("seventv")
                     twitchSection.id("twitch")
+                    colorSection.id("color")
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
@@ -269,6 +287,50 @@ struct CosmeticsScreen: View {
             .tracking(0.6)
             .foregroundStyle(SN.textMuted)
             .padding(.bottom, 6)
+    }
+
+    // MARK: Preview
+
+    /// Your chat row as everyone will see it, redrawn with every pick.
+    @ViewBuilder
+    private var preview: some View {
+        if let user = model.signIn.user, screen.sn != nil || screen.ext != nil {
+            let sn = screen.sn
+            let ext = screen.ext
+            let badges = [ext?.sevenTvBadges.first(where: \.worn)?.badge.url,
+                          sn?.badges.first(where: \.worn)?.imageURL].compactMap { $0 }
+            let look = (sn?.showChatToggle == true && sn?.chatAtmosphere == true)
+                ? AtmosphereCatalog.shared.look(sn?.theme) : nil
+            CosmeticsPreviewRow(name: user.displayName, paint: ext?.paints.first(where: \.worn)?.paint,
+                                colorHex: ext?.chatColor, badges: badges, look: look)
+                .animation(.easeOut(duration: 0.2), value: sn?.theme)
+        }
+    }
+
+    // MARK: Name colour
+
+    @ViewBuilder
+    private var colorSection: some View {
+        if let ext = screen.ext, !ext.namedColors.isEmpty {
+            Collapsible(title: "Name colour", count: ext.namedColors.count, key: "color", store: store) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 5), spacing: 10) {
+                    ForEach(ext.namedColors) { color in
+                        let on = ext.chatColor?.lowercased() == color.hex.lowercased()
+                        Button { Task { await screen.setChatColor(color) } } label: {
+                            Circle()
+                                .fill(Color(cgColor: FillPainter.color(color.hex) ?? CGColor(gray: 0.5, alpha: 1)))
+                                .frame(width: 36, height: 36)
+                                .overlay { if on { Circle().strokeBorder(SN.accent, lineWidth: 2.5).padding(-4) } }
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                        }
+                        .buttonStyle(BadgePress())
+                        .accessibilityLabel(color.label)
+                        .accessibilityAddTraits(on ? .isSelected : [])
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
     }
 
     // MARK: Badge
