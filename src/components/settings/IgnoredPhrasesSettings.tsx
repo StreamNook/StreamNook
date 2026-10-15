@@ -3,16 +3,23 @@
 // is broadcast, so every window inherits the list. Regex patterns are checked
 // by the same engine that runs them.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { EntryInput } from './entryInput';
 import { invoke } from '@tauri-apps/api/core';
 import { Plus, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
+import { Logger } from '../../utils/logger';
 import type { IgnoredPhrase } from '../../types';
 
-function newId(): string {
-  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
-    ? crypto.randomUUID()
-    : Math.random().toString(36).slice(2);
+/** One edit to the stored ignored-phrase list; Rust makes new entries.
+ *  Answers the list as stored, or null when the edit failed. */
+async function editIgnored(edit: Record<string, unknown>): Promise<IgnoredPhrase[] | null> {
+  try {
+    return await invoke<IgnoredPhrase[]>('edit_settings_list', { path: 'chat_filters.ignored_phrases', edit });
+  } catch (err) {
+    Logger.warn('[IgnoredPhrases] edit failed:', err);
+    return null;
+  }
 }
 
 const Chip = ({
@@ -39,23 +46,16 @@ const Chip = ({
 );
 
 const IgnoredPhrasesSettings = () => {
-  const { settings, updateSettings } = useAppStore();
-  const phrases = settings.chat_filters?.ignored_phrases ?? [];
+  const stored = useAppStore((s) => s.settings.chat_filters?.ignored_phrases);
+  const phrases = useMemo(() => stored ?? [], [stored]);
 
-  const write = (next: IgnoredPhrase[]) => {
-    updateSettings({
-      ...settings,
-      chat_filters: { ...settings.chat_filters, ignored_phrases: next },
-    });
+  const update = (id: string, patch: Partial<IgnoredPhrase>) => void editIgnored({ op: 'update', id, patch });
+  const savePattern = (id: string) => async (pattern: string) => {
+    const list = await editIgnored({ op: 'update', id, patch: { pattern } });
+    return list?.find((p) => p.id === id)?.pattern;
   };
-  const update = (id: string, patch: Partial<IgnoredPhrase>) =>
-    write(phrases.map((p) => (p.id === id ? { ...p, ...patch } : p)));
-  const remove = (id: string) => write(phrases.filter((p) => p.id !== id));
-  const add = () =>
-    write([
-      ...phrases,
-      { id: newId(), pattern: '', enabled: true, case_sensitive: false, whole_word: false, is_regex: false },
-    ]);
+  const remove = (id: string) => void editIgnored({ op: 'remove', id });
+  const add = () => void editIgnored({ op: 'add' });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   useEffect(() => {
@@ -102,10 +102,10 @@ const IgnoredPhrasesSettings = () => {
                 }`}
               />
             </button>
-            <input
+            <EntryInput
               type="text"
               value={p.pattern}
-              onChange={(e) => update(p.id, { pattern: e.target.value })}
+              save={savePattern(p.id)}
               placeholder={p.is_regex ? 'Regular expression' : 'Word or phrase to hide'}
               className="glass-input min-w-0 flex-1 px-2.5 py-1.5 text-sm text-textPrimary"
               spellCheck={false}

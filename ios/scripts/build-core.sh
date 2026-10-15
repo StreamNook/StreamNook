@@ -79,8 +79,34 @@ export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-6}"
 
 echo "SDK: $SDKROOT"
 
+# Every checkout builds into the one shared target, and cargo keys the
+# StreamNook unit the same in all of them: after checkout X builds, checkout
+# Y's build finds X's unit "fresh" (it re-checks X's files), skips the compile
+# and hands Y X's library (or X's type-check result). So the StreamNook unit
+# is forced to recompile whenever the checkout or its src-tauri tree differs
+# from the last build in that profile, or the tree is dirty. Dependencies stay
+# shared and compiled.
+if [[ "$mode" == "check" ]]; then
+    prof="$CARGO_TARGET_DIR/aarch64-apple-ios/debug"
+else
+    prof="$CARGO_TARGET_DIR/aarch64-apple-ios/release"
+fi
+stamp="$prof/.streamnook-built-from"
+if [[ -n "$(git status --porcelain -- src-tauri)" ]]; then
+    want="$repo dirty $(date +%s)"
+else
+    want="$repo $(git rev-parse HEAD:src-tauri)"
+fi
+if [[ "$(cat "$stamp" 2>/dev/null)" != "$want" ]]; then
+    echo "Forcing the StreamNook crate to rebuild for $repo"
+    rm -rf "$prof"/.fingerprint/StreamNook-* "$prof"/deps/libstreamnook_lib* "$prof"/deps/streamnook_lib* \
+        "$prof"/libstreamnook_lib.*
+fi
+rm -f "$stamp"
+
 if [[ "$mode" == "check" ]]; then
     cargo check --manifest-path src-tauri/Cargo.toml --target aarch64-apple-ios --lib
+    mkdir -p "$prof" && echo "$want" > "$stamp"
     exit 0
 fi
 
@@ -91,6 +117,7 @@ trap 'rm -rf "$out"' EXIT
 # plain build would try to link for iOS.
 cargo rustc --manifest-path src-tauri/Cargo.toml --release --target aarch64-apple-ios \
     --lib --crate-type staticlib -- --print native-static-libs 2>&1 | tee "$out/rustc.log"
+echo "$want" > "$stamp"
 
 commit="$(git rev-parse --short HEAD)"
 if [[ -n "$(git status --porcelain -- src-tauri)" ]]; then
@@ -100,6 +127,10 @@ store="/root/sn-ios-core/$commit"
 mkdir -p "$store" ios/CoreLib
 cp "$CARGO_TARGET_DIR/aarch64-apple-ios/release/libstreamnook_lib.a" "$store/"
 grep "native-static-libs" "$out/rustc.log" > "$store/native-static-libs.txt" || true
+# What this library was really built from ("<checkout> <src-tauri tree>" or
+# "<checkout> dirty <time>"). install-main.sh reuses a stored core only when
+# this names the tree it wants; cores stored without it are never reused.
+echo "$want" > "$store/built-from"
 ln -sfn "$store/libstreamnook_lib.a" ios/CoreLib/libstreamnook_lib.a
 echo "Library: $store/libstreamnook_lib.a ($(du -h "$store/libstreamnook_lib.a" | cut -f1))"
 

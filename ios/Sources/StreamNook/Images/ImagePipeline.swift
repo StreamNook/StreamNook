@@ -39,6 +39,9 @@ final class ImagePipeline: @unchecked Sendable {
     private let lock = NSLock()
     private var inFlight: [String: [@Sendable (DecodedImage?) -> Void]] = [:]
     private var failed: Set<String> = []
+    /// The newest decode of each URL, whatever its size, for surfaces that draw one where
+    /// another surface already decoded it.
+    private var newest: [String: String] = [:]
     /// Most frames decoded per animation; longer ones are sampled evenly.
     private let frameCap = 240
 
@@ -71,6 +74,12 @@ final class ImagePipeline: @unchecked Sendable {
         memory.value(Self.key(url, pixelHeight, animated))
     }
 
+    /// The image at whatever size it was last decoded, if it still is.
+    func cachedAnySize(_ url: String) -> DecodedImage? {
+        guard let key = lock.withLock({ newest[url] }) else { return nil }
+        return memory.value(key)
+    }
+
     /// Loads `url` decoded to `pixelHeight` pixels tall (animations keep every frame when
     /// `animated`, else only the first). `done` runs on the main thread, with nil on failure.
     func load(_ url: String, pixelHeight: Int, animated: Bool, done: @escaping @MainActor @Sendable (DecodedImage?) -> Void) {
@@ -101,7 +110,7 @@ final class ImagePipeline: @unchecked Sendable {
             }
             if let image { self.memory.insert(image, for: key, cost: image.cost) }
             let waiters = self.lock.withLock { () -> [@Sendable (DecodedImage?) -> Void] in
-                if image == nil { self.failed.insert(url) }
+                if image == nil { self.failed.insert(url) } else { self.newest[url] = key }
                 return self.inFlight.removeValue(forKey: key) ?? []
             }
             waiters.forEach { $0(image) }
@@ -110,6 +119,7 @@ final class ImagePipeline: @unchecked Sendable {
 
     /// The original file: from disk when cached there, else fetched once and kept.
     private func bytes(_ url: String) async -> Data? {
+        if let bundled = HouseArt.data(url) { return bundled }
         let file = disk.appending(path: ImageCacheKey.fileName(for: url))
         if let data = try? Data(contentsOf: file), !data.isEmpty { return data }
         guard let remote = URL(string: url) else { return nil }
@@ -210,5 +220,20 @@ extension MainActor {
         } else {
             Task { @MainActor in body() }
         }
+    }
+}
+
+/// StreamNook's house badges ship in the app rather than on the CDN; the core names them
+/// `streamnook-house:<slug>` (with `@chat` for the chat-size cut).
+enum HouseArt {
+    static let scheme = "streamnook-house:"
+
+    static func data(_ url: String) -> Data? {
+        guard url.hasPrefix(scheme) else { return nil }
+        let name = String(url.dropFirst(scheme.count))
+        guard let file = Bundle.module.url(forResource: name, withExtension: "webp", subdirectory: "HouseBadges")
+            ?? Bundle.module.url(forResource: "streamnook-default", withExtension: "webp", subdirectory: "HouseBadges")
+        else { return nil }
+        return try? Data(contentsOf: file)
     }
 }

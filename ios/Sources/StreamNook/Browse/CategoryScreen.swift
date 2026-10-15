@@ -21,7 +21,8 @@ struct CategoryScreen: View {
             } else if streams.isEmpty {
                 EmptyNote(text: "No live streams in this category.", hint: nil)
             } else {
-                StreamGrid(model: model, streams: streams, view: .cards, settleKey: "category", latch: latch)
+                StreamGrid(model: model, streams: streams, view: .cards, settleKey: "category", latch: latch,
+                           showsCategory: false)
                 if cursor != nil, streams.count < Self.cap {
                     Text(loadingMore ? "Loading more streams" : " ")
                         .font(.snCaption)

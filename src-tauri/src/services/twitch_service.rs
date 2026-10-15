@@ -46,7 +46,7 @@ const CHATTED_RECENTLY_MS: i64 = 30 * 60 * 1000;
 // A later re-auth added:
 //   moderator:manage:shield_mode: /shield and /shieldoff (Helix
 //     PUT moderation/shield_mode refuses the token without it)
-const SCOPES: &str = "user:read:follows user:read:email chat:read chat:edit channel:read:redemptions channel:manage:redemptions moderator:read:followers openid user:manage:whispers user:read:whispers user:read:emotes channel:read:hype_train moderator:read:blocked_terms moderator:manage:blocked_terms moderator:manage:chat_settings moderator:manage:unban_requests moderator:manage:banned_users moderator:manage:chat_messages moderator:read:warnings moderator:read:moderators moderator:read:vips moderator:read:chatters channel:manage:moderators channel:manage:vips channel:manage:polls channel:manage:predictions moderator:manage:suspicious_users user:manage:chat_color user:manage:blocked_users user:read:blocked_users moderator:manage:announcements moderator:manage:shoutouts channel:edit:commercial channel:manage:raids channel:manage:broadcast moderation:read user:write:chat user:bot clips:edit moderator:manage:automod moderator:read:suspicious_users moderator:manage:shield_mode";
+const SCOPES: &str = "user:read:follows user:read:email chat:read chat:edit channel:read:redemptions channel:manage:redemptions moderator:read:followers openid user:manage:whispers user:read:whispers user:read:emotes channel:read:hype_train moderator:read:blocked_terms moderator:manage:blocked_terms moderator:manage:chat_settings moderator:manage:unban_requests moderator:manage:banned_users moderator:manage:chat_messages moderator:read:warnings moderator:read:moderators moderator:read:vips moderator:read:chatters channel:manage:moderators channel:manage:vips channel:manage:polls channel:manage:predictions moderator:manage:suspicious_users user:manage:chat_color user:manage:blocked_users user:read:blocked_users moderator:manage:announcements moderator:manage:shoutouts channel:edit:commercial channel:manage:raids channel:manage:broadcast moderation:read user:write:chat user:bot clips:edit moderator:manage:automod moderator:read:suspicious_users moderator:manage:shield_mode user:edit";
 const TOKEN_FILE_NAME: &str = ".twitch_token";
 
 /// Normalize a GQL Language enum spelling ("FR", "ZH_HK") to the Helix form
@@ -5350,6 +5350,51 @@ impl TwitchService {
         }
 
         Ok(())
+    }
+
+    /// The longest bio Twitch keeps.
+    pub const BIO_MAX_CHARS: usize = 300;
+
+    /// A user's Twitch bio (Helix `description`); empty when they have none.
+    pub async fn get_user_bio(user_id: &str) -> Result<String> {
+        let token = Self::get_token().await?;
+        let response = crate::services::http::client()
+            .get("https://api.twitch.tv/helix/users")
+            .query(&[("id", user_id)])
+            .header("Client-Id", CLIENT_ID)
+            .header(AUTHORIZATION, format!("Bearer {}", token))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!("Twitch did not answer for that user ({})", response.status()));
+        }
+        let body: serde_json::Value = response.json().await?;
+        Ok(body.pointer("/data/0/description").and_then(|v| v.as_str()).unwrap_or_default().to_string())
+    }
+
+    /// Sets the signed-in account's Twitch bio (Helix Update User, `user:edit`).
+    /// Answers the bio Twitch stored.
+    pub async fn update_user_bio(description: &str) -> Result<String> {
+        let description = description.trim();
+        if description.chars().count() > Self::BIO_MAX_CHARS {
+            return Err(anyhow::anyhow!("A bio can be at most {} characters.", Self::BIO_MAX_CHARS));
+        }
+        let token = Self::get_token().await?;
+        let response = crate::services::http::client()
+            .put("https://api.twitch.tv/helix/users")
+            .query(&[("description", description)])
+            .header("Client-Id", CLIENT_ID)
+            .header(AUTHORIZATION, format!("Bearer {}", token))
+            .send()
+            .await?;
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            error!("[TwitchService] bio update refused: {} {}", status, text);
+            return Err(anyhow::anyhow!("{}", helix_refusal_text(status.as_u16(), &text)));
+        }
+        let body: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+        Ok(body.pointer("/data/0/description").and_then(|v| v.as_str()).unwrap_or(description).to_string())
     }
 
     /// Update User Chat Color

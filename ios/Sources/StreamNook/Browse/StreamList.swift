@@ -10,6 +10,8 @@ struct StreamGrid: View {
     /// Names the list, so a new search or another view mode settles in again.
     let settleKey: String
     let latch: SettleLatch
+    /// Off where the screen already names the category.
+    var showsCategory = true
     @State private var width: CGFloat = 402
 
     private var home: HomeStore { model.home }
@@ -21,7 +23,8 @@ struct StreamGrid: View {
         let playing = latch.playing(settleKey)
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: gap, alignment: .top), count: count), spacing: gap) {
             ForEach(Array(streams.enumerated()), id: \.element.id) { index, stream in
-                StreamCard(stream: stream, variant: view, hypeTrain: home.lists.hypeTrain(for: stream.userID),
+                StreamCard(stream: stream, variant: view, showsCategory: showsCategory,
+                           hypeTrain: home.lists.hypeTrain(for: stream.userID),
                            streak: home.lists.streak(for: stream.userID), group: home.lists.group(for: stream.userID),
                            stamp: home.previewStamp,
                            open: { model.startWatching(stream) },

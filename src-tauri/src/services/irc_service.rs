@@ -1078,6 +1078,11 @@ pub(crate) async fn post_channel_frame(channel: &str, frame: String) {
     send_to_bridge(BridgeFrame::channel(channel, frame), false).await;
 }
 
+/// A non-row frame for every room (a member's look changing everywhere at once).
+pub(crate) async fn post_frame_to_all(frame: String) {
+    send_to_bridge(BridgeFrame::all(frame), false).await;
+}
+
 fn clear_parse_lookups() {
     if let Ok(mut guard) = channel_parse_lookup().write() {
         guard.clear();

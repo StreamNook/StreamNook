@@ -14,7 +14,7 @@ enum ChatModActions {
     }
 
     static func run(_ bucket: FanBucket, message: ChatMessage, seconds: Int?, session: ChatSession,
-                    onProfile: (String) -> Void) async -> Outcome? {
+                    onProfile: (ProfileTarget) -> Void) async -> Outcome? {
         let core = session.core
         let room = session.roomID ?? ""
         let undo: @MainActor () -> Void = {
@@ -25,7 +25,9 @@ enum ChatModActions {
             session.replyTo = message
             return nil
         case .profile:
-            onProfile(message.username)
+            // The fan-out names the chatter by login alone, in Twitch purple, with no badges.
+            onProfile(ProfileTarget(userID: message.userID, login: message.username, displayName: message.username,
+                                    color: "#9147FF", roomID: session.roomID, roomLogin: session.channel))
             return nil
         case .copy:
             UIPasteboard.general.string = message.content

@@ -45,8 +45,8 @@ use commands::{
     emotes::*, eventsub::*, ffz::*, gifs::*, helix::*, home_snapshot::*, hype_train::*, identity::*, justlog::*, layout::*,
     link_preview::*, logs::*, media_glow::*, mod_log_storage::*, modroom::*, overlay_file::*, plugins::*,
     profile_cache::*, provider_browse::*,
-    resub::*, session::*, settings::*, seventv::*, seventv_cosmetics::*,
-    seventv_cosmetics_fetch::*, song_id::*, spellcheck::*, streamnook_api::*, streaming::*, subscriptions::*,
+    resub::*, session::*, settings::*, settings_fields::*, settings_lists::*, settings_extras::*, seventv::*, seventv_cosmetics::*,
+    seventv_cosmetics_fetch::*, sn_cosmetics::*, song_id::*, spellcheck::*, streamnook_api::*, streaming::*, subscriptions::*,
     twitch::*,
     universal_cache::*,
     user_profile::*, vod_progress::*, watch_session::*, watch_streak::*, whisper_storage::*, window_state::*,
@@ -837,6 +837,8 @@ pub fn run() {
 
     // Apply persisted diagnostic logging setting immediately after loading settings
     services::diagnostic_logger::apply_setting(settings.error_reporting_enabled);
+    // The low-latency engine follows the saved switch from the first stream on.
+    services::ll_origin::set_disabled(!settings.video_player.experimental_low_latency);
 
     // Initialize drops service with persisted settings (including priority_games for favorites)
     let drops_service = Arc::new(TokioMutex::new(DropsService::new_with_settings(
@@ -1044,6 +1046,7 @@ pub fn run() {
             #[cfg(mobile)]
             if let Ok(loaded) = load_settings_from_file() {
                 services::diagnostic_logger::apply_setting(loaded.error_reporting_enabled);
+                services::ll_origin::set_disabled(!loaded.video_player.experimental_low_latency);
                 let drops_settings = loaded.drops.clone();
                 if let Ok(mut s) = settings_arc.lock() {
                     *s = loaded;
@@ -1312,6 +1315,16 @@ pub fn run() {
             // being destroyed on close-to-tray. Both shells run it: the phone has
             // the same staleness problem and no devtools to notice it with.
             services::version_report::start(app_handle.clone());
+
+            // StreamNook's member, cosmetics and Atmosphere registries, and every
+            // member's theme: read once here for every window and both phone
+            // shells, kept fresh by the realtime feed. Own accounts first, so
+            // their saved theme paints before anything is read.
+            services::member_theme::register_own(
+                &services::account_store::AccountStore::list().into_iter().map(|a| a.user_id).collect::<Vec<_>>(),
+            );
+            services::cosmetics_registry::start();
+            services::member_theme::start();
 
             // Twitch Recap hours for the signed-in member, published so the profile
             // can count the watching they did before joining. Daily, and a no-op
@@ -1905,6 +1918,8 @@ pub fn run() {
             remove_channel_vip,
             update_suspicious_user_status,
             update_user_chat_color,
+            get_twitch_bio,
+            update_twitch_bio,
             get_user_chat_colors,
             block_user,
             unblock_user,
@@ -1947,6 +1962,16 @@ pub fn run() {
             complete_setup,
             set_chat_user_hidden,
             set_chat_user_override,
+            get_settings_view,
+            set_settings_fields,
+            reset_settings,
+            edit_settings_list,
+            get_community_invite,
+            get_followed_channels_for_alerts,
+            add_custom_sound,
+            delete_custom_sound,
+            get_theme_catalog,
+            get_active_theme,
             get_settings_dir,
             open_settings_folder,
             export_settings,
@@ -2138,6 +2163,25 @@ pub fn run() {
             // IVR account facts
             get_ivr_user_summary,
             get_ivr_subage_summary,
+            get_sub_standing,
+            // StreamNook cosmetics, Atmospheres and the profile surfaces
+            sn_registry_snapshot,
+            sn_refresh_registries,
+            sn_atmospheres,
+            get_profile_prefs,
+            get_accolades,
+            is_stripe_subscriber,
+            get_member_theme,
+            register_own_member_themes,
+            equip_streamnook_badge,
+            set_profile_theme,
+            set_chat_atmosphere,
+            user_profile_sheet,
+            user_profile_sheet_cached,
+            own_identity_header,
+            own_identity_header_cached,
+            cosmetics_picker_state,
+            external_cosmetics_state,
             // Server-controlled client switches
             get_client_config,
             // Drops page model

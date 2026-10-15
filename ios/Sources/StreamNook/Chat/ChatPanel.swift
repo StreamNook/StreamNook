@@ -7,7 +7,7 @@ import UIKit
 struct ChatRoomsPanel: View {
     let rooms: ChatRooms
     var overlay = false
-    var onProfile: (String) -> Void = { _ in }
+    var onProfile: (ProfileTarget) -> Void = { _ in }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -36,7 +36,7 @@ struct ChatPanel: View {
     /// The open rooms this one belongs to (the watch page); nil on the chat stage.
     var rooms: ChatRooms?
     /// Opens a chatter's profile (the profile sheet belongs to the profile screens).
-    var onProfile: (String) -> Void = { _ in }
+    var onProfile: (ProfileTarget) -> Void = { _ in }
 
     @State private var toast: String?
 
@@ -96,7 +96,7 @@ struct ChatPanel: View {
 struct ChatListHost: UIViewRepresentable {
     let session: ChatSession
     var readOnly: Bool
-    var onProfile: (String) -> Void
+    var onProfile: (ProfileTarget) -> Void
     var onToast: (String) -> Void
     var onOutcome: (ChatModActions.Outcome) -> Void
 
@@ -118,10 +118,19 @@ struct ChatListHost: UIViewRepresentable {
             switch action {
             case .name:
                 if let message = session.pipeline.message(layout.id), message.provider == "twitch" {
-                    onProfile(message.username)
+                    onProfile(ProfileTarget(userID: message.userID, login: message.username, displayName: message.displayName,
+                                            color: message.metadata.view?.nameColor ?? message.color,
+                                            badgeKeys: message.badges.map { "\($0.name)/\($0.version)" },
+                                            roomID: session.roomID, roomLogin: session.channel,
+                                            subBadgeArt: message.badges.first { $0.name == "subscriber" || $0.name == "founder" }
+                                                .flatMap { $0.imageURL4x ?? $0.imageURL2x ?? $0.imageURL1x }))
                 }
             case .mention(let login):
-                onProfile(login)
+                // The core resolves the login to an id (Helix, cached); mentions carry no badges.
+                if session.pipeline.recentMessages(1).first?.provider ?? "twitch" == "twitch" {
+                    onProfile(ProfileTarget(userID: "", login: login, displayName: login, roomID: session.roomID,
+                                            roomLogin: session.channel))
+                }
             case .link(let url):
                 UIApplication.shared.open(url)
             case .replyParent(let id):
