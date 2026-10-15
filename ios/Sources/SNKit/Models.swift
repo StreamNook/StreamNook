@@ -100,13 +100,26 @@ public struct StreamStart: Decodable, Sendable, Equatable {
     public var url: String
     public var quality: String
     public var available: [String]
+    /// How the resolver served a live stream: `turbo`, `subscribed`, `proxy` or `auth-only`.
+    public var mode: String?
+    /// Twitch's own ad-free entitlement is serving it, no relay in use.
+    public var entitled: Bool
+    /// The relay's region when one is in use.
+    public var proxyRegion: String?
 
-    enum CodingKeys: String, CodingKey { case url, quality, available }
+    enum CodingKeys: String, CodingKey {
+        case url, quality, available, mode, entitled
+        case proxyRegion = "proxy_region"
+    }
 
-    public init(url: String, quality: String, available: [String] = []) {
+    public init(url: String, quality: String, available: [String] = [], mode: String? = nil, entitled: Bool = false,
+                proxyRegion: String? = nil) {
         self.url = url
         self.quality = quality
         self.available = available
+        self.mode = mode
+        self.entitled = entitled
+        self.proxyRegion = proxyRegion
     }
 
     public init(from decoder: Decoder) throws {
@@ -114,6 +127,9 @@ public struct StreamStart: Decodable, Sendable, Equatable {
         url = try c.decode(String.self, forKey: .url)
         quality = try c.decode(String.self, forKey: .quality)
         available = try c.decodeIfPresent([String].self, forKey: .available) ?? []
+        mode = try c.decodeIfPresent(String.self, forKey: .mode)
+        entitled = try c.decodeIfPresent(Bool.self, forKey: .entitled) ?? false
+        proxyRegion = try c.decodeIfPresent(String.self, forKey: .proxyRegion)
     }
 }
 

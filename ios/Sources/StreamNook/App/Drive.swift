@@ -21,6 +21,9 @@ import SwiftUI
 ///   `controls` shows the player's controls
 /// - `menu:card:INDEX` lists the Browse card's long-press menu in a sheet (a system menu cannot
 ///   be opened from code)
+/// - `try:PATH=JSON` writes one setting for a look (the value it replaced is kept); `restore`
+///   writes every replaced value back exactly as it was (absent stays absent)
+/// - `scroll:SECTION` scrolls the open settings page to a section by title (`_` for spaces)
 /// - `glass:PERCENT`, `motion:full|reduced|off` preview a look without saving it
 /// - `toast:TEXT` an error toast; `undo:TEXT` a toast with an Undo action
 /// - `view:cards`, `view:list` the stream lists' card or row view (saved, like the menu)
@@ -98,6 +101,9 @@ enum Drive {
                 guard await waitForStreams(model), model.streams.indices.contains(index) else { continue }
                 let stream = model.streams[index]
                 model.nav.menuSample = MenuSample(title: stream.userName, items: StreamMenu.items(stream, category: true))
+            case "try": await trySetting(value, model: model)
+            case "restore": await restoreSettings(model: model)
+            case "scroll": SettingsAnchor.shared.target = value.replacingOccurrences(of: "_", with: " ")
             case "glass": model.look.preview(glassiness: (Double(value) ?? 100) / 100)
             case "motion": model.look.preview(motion: MotionMode(setting: value))
             case "toast": model.toasts.show(value.isEmpty ? "Could not load your Kick follows. Try again in a moment." : value)
@@ -140,6 +146,29 @@ enum Drive {
             try? await Task.sleep(for: .milliseconds(400))
         }
         log.notice("drive done")
+    }
+
+    /// Values `try` replaced, by path, as the raw settings file held them (nil = absent).
+    private static var replaced: [(String, Any?)] = []
+
+    private static func trySetting(_ value: String, model: AppModel) async {
+        guard let eq = value.firstIndex(of: "=") else { return }
+        let path = String(value[..<eq])
+        let json = String(value[value.index(after: eq)...])
+        let raw = (try? await model.core.invoke("load_settings", args: [:]))
+            .flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] } ?? [:]
+        replaced.append((path, SettingsPath.value(in: raw, path)))
+        let next = try? JSONSerialization.jsonObject(with: Data(json.utf8), options: [.fragmentsAllowed])
+        await model.settingsStore.set(path, next)
+        log.notice("drive try \(path, privacy: .public) = \(json, privacy: .public)")
+    }
+
+    private static func restoreSettings(model: AppModel) async {
+        for (path, old) in replaced.reversed() {
+            await model.settingsStore.set(path, old)
+            log.notice("drive restore \(path, privacy: .public)")
+        }
+        replaced = []
     }
 
     private static func open(_ value: String, model: AppModel) async {
