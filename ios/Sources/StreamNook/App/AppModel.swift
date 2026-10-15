@@ -23,6 +23,8 @@ final class AppModel {
     let home: HomeStore
     /// Browse's mode and search, kept here so they survive the tab being rebuilt.
     let browseState = BrowseModel()
+    /// Profiles and cosmetics: the Atmosphere catalog, the profile sheet, the Cosmetics screen.
+    let cosmetics = CosmeticsStore()
 
     private(set) var phase = Phase.booting
     private(set) var started = false
@@ -79,6 +81,7 @@ final class AppModel {
         await signIn.boot(core: core)
         host.start(core: core, cookies: signIn.cookies)
         home.start()
+        cosmetics.start(core: core)
         #if DEBUG
         if Drive.skipsSetup { setupClosed = true }
         #endif

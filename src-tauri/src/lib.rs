@@ -46,7 +46,7 @@ use commands::{
     link_preview::*, logs::*, media_glow::*, mod_log_storage::*, modroom::*, overlay_file::*, plugins::*,
     profile_cache::*, provider_browse::*,
     resub::*, session::*, settings::*, seventv::*, seventv_cosmetics::*,
-    seventv_cosmetics_fetch::*, song_id::*, spellcheck::*, streamnook_api::*, streaming::*, subscriptions::*,
+    seventv_cosmetics_fetch::*, sn_cosmetics::*, song_id::*, spellcheck::*, streamnook_api::*, streaming::*, subscriptions::*,
     twitch::*,
     universal_cache::*,
     user_profile::*, vod_progress::*, watch_session::*, watch_streak::*, whisper_storage::*, window_state::*,
@@ -1313,6 +1313,16 @@ pub fn run() {
             // the same staleness problem and no devtools to notice it with.
             services::version_report::start(app_handle.clone());
 
+            // StreamNook's member, cosmetics and Atmosphere registries, and every
+            // member's theme: read once here for every window and both phone
+            // shells, kept fresh by the realtime feed. Own accounts first, so
+            // their saved theme paints before anything is read.
+            services::member_theme::register_own(
+                &services::account_store::AccountStore::list().into_iter().map(|a| a.user_id).collect::<Vec<_>>(),
+            );
+            services::cosmetics_registry::start();
+            services::member_theme::start();
+
             // Twitch Recap hours for the signed-in member, published so the profile
             // can count the watching they did before joining. Daily, and a no-op
             // until a week has passed or an answer is still unpublished.
@@ -1905,6 +1915,8 @@ pub fn run() {
             remove_channel_vip,
             update_suspicious_user_status,
             update_user_chat_color,
+            get_twitch_bio,
+            update_twitch_bio,
             get_user_chat_colors,
             block_user,
             unblock_user,
@@ -2138,6 +2150,25 @@ pub fn run() {
             // IVR account facts
             get_ivr_user_summary,
             get_ivr_subage_summary,
+            get_sub_standing,
+            // StreamNook cosmetics, Atmospheres and the profile surfaces
+            sn_registry_snapshot,
+            sn_refresh_registries,
+            sn_atmospheres,
+            get_profile_prefs,
+            get_accolades,
+            is_stripe_subscriber,
+            get_member_theme,
+            register_own_member_themes,
+            equip_streamnook_badge,
+            set_profile_theme,
+            set_chat_atmosphere,
+            user_profile_sheet,
+            user_profile_sheet_cached,
+            own_identity_header,
+            own_identity_header_cached,
+            cosmetics_picker_state,
+            external_cosmetics_state,
             // Server-controlled client switches
             get_client_config,
             // Drops page model

@@ -145,7 +145,7 @@ public final class FakeCore: CoreBridge {
         let lines = ["hi chat", "that was clean", "LUL", "what game is next", "gg", "first time here",
                      "audio is perfect", "the edge readout is live", "Pog", "nice"]
         let name = names[n % names.count]
-        let message: [String: Any] = [
+        var message: [String: Any] = [
             "id": "fake-\(n)",
             "user_id": "\(1000 + n % names.count)",
             "username": name,
@@ -158,6 +158,20 @@ public final class FakeCore: CoreBridge {
             "channel": channel,
             "tags": [String: String](),
         ]
+        // Two StreamNook members, so a member's Atmosphere and badge show on fake rows.
+        let member: (atmosphere: String, color: String)? = switch name {
+        case "glassowl": ("aurora", "#2dd4bf")
+        case "midnightmod": ("midnight", "#4ade80")
+        default: nil
+        }
+        if let member {
+            message["metadata"] = ["view": [
+                "name_color": member.color,
+                "badges": [["url": "streamnook-house:streamnook-default", "title": "StreamNook", "provider": "streamnook"]],
+                "spans": [["type": "text", "text": lines[n % lines.count]]],
+                "atmosphere": member.atmosphere,
+            ] as [String: Any]]
+        }
         return (try? json(message)) ?? "{}"
     }
 

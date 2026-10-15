@@ -18,6 +18,12 @@ fn main() {
         // without them still compiles (Kick connect just reports "not configured").
         "KICK_APP_CLIENT_ID",
         "KICK_APP_CLIENT_SECRET",
+        // StreamNook's own database address and its publishable (bundle-shipped,
+        // not secret) key: the core reads the member and cosmetics registries
+        // itself (services::streamnook_backend). option_env! there, so a build
+        // without them still compiles and simply reads nothing.
+        "VITE_SUPABASE_URL",
+        "VITE_SUPABASE_ANON_KEY",
     ];
 
     // Try loading from project root .env file

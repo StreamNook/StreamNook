@@ -446,6 +446,14 @@ pub struct RowView {
     /// The quoted parent of a reply, grouped the same way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_spans: Option<Vec<ViewSpan>>,
+    /// The StreamNook Atmosphere the author's rows wear (an id in the catalog
+    /// `sn_atmospheres` serves), when known at parse time. Later answers and
+    /// changes arrive as a `ROW_MEMBER` frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub atmosphere: Option<String>,
+    /// The CS2 Major Cologne look the author's rows wear instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cologne: Option<crate::services::member_theme::Cologne>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -526,7 +534,7 @@ pub struct ViewEmote {
 }
 
 /// A 7TV paint reduced to what a renderer fills a name with.
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct PaintView {
     pub id: String,
     /// "linear" | "radial" | "image" | "solid"
@@ -545,6 +553,64 @@ pub struct PaintView {
     /// Drop shadows, outermost last.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shadows: Vec<PaintShadow>,
+    /// The paint's name, for the surfaces that show it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// Every gradient and image layer, top first as CSS stacks them, for
+    /// renderers that draw the whole paint rather than its first fill.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<PaintLayerView>,
+    /// The first single colour layer, drawn under the layers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_color: Option<String>,
+    /// The lowest layer opacity under 1, applied to the whole name.
+    #[serde(default = "full_opacity", skip_serializing_if = "is_full_opacity")]
+    pub opacity: f32,
+}
+
+impl Default for PaintView {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            kind: String::new(),
+            angle: 0.0,
+            repeating: false,
+            stops: Vec::new(),
+            image_url: None,
+            shadows: Vec::new(),
+            name: String::new(),
+            layers: Vec::new(),
+            base_color: None,
+            opacity: 1.0,
+        }
+    }
+}
+
+fn full_opacity() -> f32 {
+    1.0
+}
+
+fn is_full_opacity(v: &f32) -> bool {
+    *v >= 1.0
+}
+
+/// One gradient or image layer of a paint. Each spans the whole name.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct PaintLayerView {
+    /// "linear" | "radial" | "image"
+    pub kind: String,
+    #[serde(default)]
+    pub angle: f32,
+    #[serde(default)]
+    pub repeating: bool,
+    /// Radial only: true for a circle, else an ellipse.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub circle: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stops: Vec<PaintStop>,
+    /// The animated image whenever the layer animates, never the `_static` still.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]

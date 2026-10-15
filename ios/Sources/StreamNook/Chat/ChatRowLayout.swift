@@ -44,6 +44,19 @@ struct RowDecor {
     /// The live flash: from `alpha` of `color` to clear over two seconds.
     var flash: (color: UIColor, alpha: CGFloat)?
     var alpha: CGFloat = 1
+    /// The author's StreamNook Atmosphere (or Cologne look), drawn behind the row by the cell.
+    var atmosphere: AtmosphereLook?
+    var cologne: CologneLook?
+    /// Frosted blocks behind the text when the Atmosphere asks for them (drawn into the bitmap).
+    var frost: [RowFrost] = []
+}
+
+/// A readability block behind a row's text over a busy Atmosphere: the tint without a per-row
+/// blur, as phones draw it (`atm-frost--flat`).
+struct RowFrost {
+    var rect: CGRect
+    var radius: CGFloat
+    var alpha: CGFloat
 }
 
 /// A laid-out line: CoreText line plus where its baseline sits.
@@ -79,6 +92,8 @@ final class ChatRowLayout: @unchecked Sendable {
     let accessibilityText: String
     let live: Bool
     let mentionsMe: Bool
+    /// How many of a paint's shadows names on this row draw (`cosmetics.paint_shadows`).
+    var paintShadows: PaintShadows = .all
 
     private let lock = NSLock()
     private var _bitmap: CGImage?
@@ -216,6 +231,14 @@ struct ChatRowLayoutBuilder {
 
         top = padding
         if style.showDividers { decor.topHairline = ChatTheme.borderSubtle }
+        // The author's Atmosphere: Cologne first (it takes precedence), then the catalog look.
+        if let cologne = view?.cologne, let look = AtmosphereCatalog.shared.look("cs2-major-cologne") {
+            decor.atmosphere = look
+            decor.cologne = cologne
+        } else if let look = AtmosphereCatalog.shared.look(view?.atmosphere) {
+            decor.atmosphere = look
+        }
+        let frosted = decor.cologne == nil && decor.atmosphere?.chatFrost == true
         if meta.fromBackfill { decor.alpha = CGFloat(style.backfillOpacity) / 100 }
 
         // Tints and the caption over the row.
@@ -267,8 +290,12 @@ struct ChatRowLayoutBuilder {
         }
         if style.showTimestamps, let stamp = style.showTimestampSeconds ? meta.formattedTimestampWithSeconds : meta.formattedTimestamp {
             var block = RowText(builder: self)
-            block.append(stamp, font(10, .regular), ChatTheme.textSecondary.withAlphaComponent(0.5))
+            block.append(stamp, font(10, .regular), ChatTheme.textSecondary.withAlphaComponent(frosted ? 1 : 0.5))
+            let from = (lines.count, attachments.count)
             place(block, maxLines: 1)
+            if frosted, let box = Self.extent(lines[from.0...], attachments[from.1...]) {
+                decor.frost.append(RowFrost(rect: box.insetBy(dx: -4, dy: 0), radius: 2, alpha: 0.8))
+            }
             top += 2
         }
 
@@ -350,7 +377,11 @@ struct ChatRowLayoutBuilder {
             default: break
             }
         }
+        let blockStart = (lines.count, attachments.count)
         place(block)
+        if frosted, let box = Self.extent(lines[blockStart.0...], attachments[blockStart.1...]) {
+            decor.frost.append(RowFrost(rect: box.insetBy(dx: -6, dy: -2), radius: 6, alpha: 1))
+        }
 
         if let giant {
             let h = (8 * fontSize * CGFloat(style.emoteScale)).rounded()
@@ -369,10 +400,28 @@ struct ChatRowLayoutBuilder {
         }
         top += padding
         let accessibility = "\(message.shownName): \(spans.map(\.text).joined())"
-        return ChatRowLayout(id: row.id, revision: row.revision, width: width, height: ceil(top), lines: lines,
-                             attachments: attachments, shapes: shapes, taps: taps, decor: decor,
-                             accessibilityText: accessibility, live: row.live,
-                             mentionsMe: meta.isMentioned)
+        let built = ChatRowLayout(id: row.id, revision: row.revision, width: width, height: ceil(top), lines: lines,
+                                  attachments: attachments, shapes: shapes, taps: taps, decor: decor,
+                                  accessibilityText: accessibility, live: row.live,
+                                  mentionsMe: meta.isMentioned)
+        built.paintShadows = PaintShadows(rawValue: style.paintShadows) ?? .all
+        return built
+    }
+
+    /// The box the given lines and images cover, for a frost block hugging them.
+    static func extent(_ lines: ArraySlice<PlacedLine>, _ attachments: ArraySlice<RowAttachment>) -> CGRect? {
+        var box: CGRect?
+        for placed in lines {
+            var ascent: CGFloat = 0
+            var descent: CGFloat = 0
+            let width = CGFloat(CTLineGetTypographicBounds(placed.line, &ascent, &descent, nil))
+            let rect = CGRect(x: placed.origin.x, y: placed.origin.y - ascent, width: width, height: ascent + descent)
+            box = box.map { $0.union(rect) } ?? rect
+        }
+        for attachment in attachments {
+            box = box.map { $0.union(attachment.rect) } ?? attachment.rect
+        }
+        return box
     }
 
     // MARK: Event cards

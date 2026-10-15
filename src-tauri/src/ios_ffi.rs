@@ -162,6 +162,9 @@ pub fn lifecycle(state: String) {
             info!("[iOS] back in the foreground");
             crate::services::window_visibility::set_native_shell_shown(true);
             sn_tauri_headless::async_runtime::spawn(foregrounded());
+            // A grant (or revocation) may have landed while suspended, with the
+            // realtime socket down: re-read the StreamNook registries.
+            sn_tauri_headless::async_runtime::spawn(crate::services::cosmetics_registry::refresh());
         }
         "memory_warning" => {
             info!("[iOS] memory warning; dropping the in-memory caches");
