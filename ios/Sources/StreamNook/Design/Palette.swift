@@ -125,6 +125,46 @@ struct Palette: Equatable, Sendable {
     var lightContent: Bool { background.luminance < 0.5 }
 }
 
+extension Palette {
+    /// A palette the core resolved (`get_active_theme`, `get_theme_catalog`): CSS colours by the
+    /// desktop's token names, highlights nested. A token missing or unreadable keeps the default.
+    init(tokens: [String: Any]) {
+        let base = Palette.frostedGlass
+        let highlight = tokens["highlight"] as? [String: Any] ?? [:]
+        func read(_ key: String, _ fallback: RGBA) -> RGBA { (tokens[key] as? String).flatMap(RGBA.init(css:)) ?? fallback }
+        func hl(_ key: String, _ fallback: RGBA) -> RGBA { (highlight[key] as? String).flatMap(RGBA.init(css:)) ?? fallback }
+        self.init(
+            background: read("background", base.background),
+            backgroundSecondary: read("backgroundSecondary", base.backgroundSecondary),
+            backgroundTertiary: read("backgroundTertiary", base.backgroundTertiary),
+            surface: read("surface", base.surface),
+            surfaceHover: read("surfaceHover", base.surfaceHover),
+            surfaceActive: read("surfaceActive", base.surfaceActive),
+            textPrimary: read("textPrimary", base.textPrimary),
+            textSecondary: read("textSecondary", base.textSecondary),
+            textMuted: read("textMuted", base.textMuted),
+            accent: read("accent", base.accent),
+            accentHover: read("accentHover", base.accentHover),
+            accentMuted: read("accentMuted", base.accentMuted),
+            border: read("border", base.border),
+            borderLight: read("borderLight", base.borderLight),
+            borderSubtle: read("borderSubtle", base.borderSubtle),
+            success: read("success", base.success),
+            warning: read("warning", base.warning),
+            error: read("error", base.error),
+            info: read("info", base.info),
+            highlightPink: hl("pink", base.highlightPink),
+            highlightPurple: hl("purple", base.highlightPurple),
+            highlightBlue: hl("blue", base.highlightBlue),
+            highlightCyan: hl("cyan", base.highlightCyan),
+            highlightGreen: hl("green", base.highlightGreen),
+            highlightYellow: hl("yellow", base.highlightYellow),
+            highlightOrange: hl("orange", base.highlightOrange),
+            highlightRed: hl("red", base.highlightRed)
+        )
+    }
+}
+
 /// Colours that are the same in every theme.
 enum FixedColor {
     /// The LIVE red, `--color-live`.
@@ -139,4 +179,6 @@ enum FixedColor {
     static let goldenTrainEnd = RGBA(hex: 0xFFA500)
     /// The dark veil card chips lay over a thumbnail, `rgb(16 16 22)`.
     static let chipVeil = RGBA(hex: 0x101016)
+    /// The slate the settings controls are tinted with, `rgb(151 177 185)`.
+    static let slate = RGBA(hex: 0x97B1B9)
 }

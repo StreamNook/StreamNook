@@ -2524,18 +2524,13 @@ const VideoPlayer = () => {
   useEffect(() => {
     if (prevLowLatencyRef.current === playerSettings.experimental_low_latency) return;
     prevLowLatencyRef.current = playerSettings.experimental_low_latency;
-    // Apply the new mode to the backend origin kill switch FIRST, then restart so the
-    // origin probe at stream start honors it (the parts path is gated by this).
-    invoke('set_experimental_low_latency', {
-      enabled: playerSettings.experimental_low_latency ?? true,
-    })
-      .catch(() => {})
-      .finally(() => {
-        if (currentStream && currentMediaType === 'live') {
-          Logger.debug('[HLS] Low Latency toggled — restarting stream to apply');
-          restartStream();
-        }
-      });
+    // Rust applied the new mode to the origin kill switch when the setting was
+    // saved (the store only updates after that write), so the restarted stream's
+    // origin probe already honors it.
+    if (currentStream && currentMediaType === 'live') {
+      Logger.debug('[HLS] Low Latency toggled — restarting stream to apply');
+      restartStream();
+    }
   }, [playerSettings.experimental_low_latency]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Expose an imperative control adapter to the keybinding engine. Methods read

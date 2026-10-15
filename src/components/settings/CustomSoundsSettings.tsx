@@ -1,34 +1,23 @@
 // Custom sounds: pick an audio file and it becomes a choice in every sound
 // picker (highlights, mentions, notifications) under the id `file:<id>`. Rust
-// copies the file into the app's own sounds folder, so moving or deleting the
-// original never breaks it; playback goes through the asset protocol and
-// nothing is uploaded anywhere. Sounds added before imports existed keep
-// pointing at the user's own file.
+// copies the file into the app's own sounds folder and adds the entry in one
+// step, so moving or deleting the original never breaks it; playback goes
+// through the asset protocol and nothing is uploaded anywhere. Sounds added
+// before imports existed keep pointing at the user's own file.
 
+import { EntryInput } from './entryInput';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { FolderOpen, Play, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { playSound } from '../../utils/notificationSound';
+import { Logger } from '../../utils/logger';
 import { SettingsSection } from './_primitives';
 import { Tooltip } from '../ui/Tooltip';
 import type { CustomSound } from '../../types';
 
-interface ImportedSound {
-  id: string;
-  name: string;
-  path: string;
-}
-
 const CustomSoundsSettings = () => {
-  const { settings, updateSettings } = useAppStore();
-  const sounds = settings.chat_highlights?.custom_sounds ?? [];
-
-  const write = (next: CustomSound[]) =>
-    updateSettings({
-      ...settings,
-      chat_highlights: { ...settings.chat_highlights, phrases: settings.chat_highlights?.phrases ?? [], custom_sounds: next },
-    });
+  const sounds = useAppStore((s) => s.settings.chat_highlights?.custom_sounds) ?? [];
 
   const add = async () => {
     try {
@@ -39,8 +28,7 @@ const CustomSoundsSettings = () => {
       });
       const path = typeof picked === 'string' ? picked : null;
       if (!path) return;
-      const imported = await invoke<ImportedSound>('import_custom_sound', { path });
-      write([...sounds, { id: `file:${imported.id}`, name: imported.name, path: imported.path }]);
+      await invoke<CustomSound>('add_custom_sound', { path });
     } catch (err) {
       // A cancelled dialog resolves to null above; anything here is a refusal
       // from the import (type, size) or a dialog that could not open.
@@ -49,8 +37,22 @@ const CustomSoundsSettings = () => {
   };
 
   const remove = (sound: CustomSound) => {
-    write(sounds.filter((x) => x.id !== sound.id));
-    void invoke('remove_custom_sound', { path: sound.path }).catch(() => {});
+    void invoke('delete_custom_sound', { id: sound.id }).catch((err) =>
+      Logger.warn('[CustomSounds] remove failed:', err),
+    );
+  };
+
+  const rename = async (id: string, name: string): Promise<string | undefined> => {
+    try {
+      const stored = await invoke<CustomSound[]>('edit_settings_list', {
+        path: 'chat_highlights.custom_sounds',
+        edit: { op: 'update', id, patch: { name } },
+      });
+      return stored.find((s) => s.id === id)?.name;
+    } catch (err) {
+      Logger.warn('[CustomSounds] rename failed:', err);
+      return undefined;
+    }
   };
 
   return (
@@ -64,10 +66,10 @@ const CustomSoundsSettings = () => {
         {sounds.map((s) => (
           <div key={s.id} className="glass-tile flex items-center gap-2 px-3 py-2">
             <div className="min-w-0 flex-1">
-              <input
+              <EntryInput
                 type="text"
                 value={s.name}
-                onChange={(e) => write(sounds.map((x) => (x.id === s.id ? { ...x, name: e.target.value } : x)))}
+                save={(name) => rename(s.id, name)}
                 className="w-full bg-transparent text-sm font-medium text-textPrimary outline-none"
                 spellCheck={false}
                 aria-label="Sound name"

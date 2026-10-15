@@ -31,6 +31,8 @@ final class Watch {
     private(set) var stream: TwitchStream?
     private(set) var status = "Idle"
     private(set) var quality: String?
+    /// The playing stream's start answer: how it is served (Settings > Ad-free reads it).
+    private(set) var lastStart: StreamStart?
     private(set) var error: String?
     /// How far the player sits behind the relay's live edge, in milliseconds.
     private(set) var behindMS: Int?
@@ -191,6 +193,7 @@ final class Watch {
     }
 
     private func apply(_ start: StreamStart) {
+        lastStart = start
         quality = start.quality
         startURL = start.url
         available = start.available
@@ -264,6 +267,7 @@ final class Watch {
 
     func close(core: CoreBridge) {
         guard let login = stream?.userLogin else { return }
+        lastStart = nil
         tasks.forEach { $0.cancel() }
         tasks = []
         observers.forEach(NotificationCenter.default.removeObserver)
@@ -299,7 +303,6 @@ final class Watch {
 
     private func play(_ stream: TwitchStream, core: CoreBridge) async {
         do {
-            _ = try? await core.invoke("set_experimental_low_latency", args: ["enabled": true])
             let start = try await core.invoke(
                 "start_stream", args: ["url": "https://twitch.tv/\(stream.userLogin)", "quality": askedQuality],
                 as: StreamStart.self
