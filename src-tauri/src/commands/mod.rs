@@ -63,6 +63,7 @@ pub mod resub;
 pub mod screen_capture;
 pub mod session;
 pub mod slash_commands;
+pub mod slash_backend;
 pub mod settings;
 pub mod seventv;
 pub mod song_id;

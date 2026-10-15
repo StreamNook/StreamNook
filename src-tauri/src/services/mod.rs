@@ -152,6 +152,8 @@ pub mod channel_state;
 pub mod collaboration;
 pub mod shared_chat;
 pub mod slash_commands;
+pub mod slash_dispatch;
+pub mod nuke;
 pub mod hls_kind;
 pub mod home_snapshot;
 pub mod unified_discover;

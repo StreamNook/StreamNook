@@ -286,6 +286,27 @@ pub struct BurstStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub delay_ms: u32,
+    /// The line the page shows for this state ([`BurstStatus::label`]).
+    pub label: String,
+}
+
+impl BurstStatus {
+    /// "Pyramid 5/9", "Spam done, 20/20", or why a run ended itself: the
+    /// progress line, and on a phone (which has no progress bar) the chat
+    /// line saying how the run ended.
+    pub fn label(&self) -> String {
+        let noun = match self.kind {
+            BurstKind::Spam => "Spam",
+            BurstKind::Pyramid => "Pyramid",
+        };
+        let count = format!("{}/{}", self.sent, self.total);
+        match self.state {
+            "running" => format!("{noun} {count}"),
+            "done" => format!("{noun} done, {count}"),
+            "stopped" => format!("{noun} stopped at {count}"),
+            _ => self.reason.clone().unwrap_or_else(|| format!("{noun} stopped at {count}")),
+        }
+    }
 }
 
 /// A run in progress. Shared between the runner, the stop command and the IRC
@@ -320,7 +341,7 @@ impl Job {
     }
 
     pub fn status(&self, state: &'static str, reason: Option<String>) -> BurstStatus {
-        BurstStatus {
+        let mut status = BurstStatus {
             channel: self.channel.clone(),
             kind: self.kind,
             sent: self.sent.load(Ordering::SeqCst),
@@ -328,7 +349,10 @@ impl Job {
             state,
             reason,
             delay_ms: self.delay_ms,
-        }
+            label: String::new(),
+        };
+        status.label = status.label();
+        status
     }
 
     pub fn cancel(&self) {
@@ -546,6 +570,25 @@ pub fn stopped_message(job: &Job) -> String {
 mod tests {
     use super::*;
     use std::sync::Mutex as StdMutex;
+
+    #[test]
+    fn labels_read_like_the_progress_line() {
+        let status = |state: &'static str, sent: usize, reason: Option<&str>| BurstStatus {
+            channel: "chan".into(),
+            kind: BurstKind::Pyramid,
+            sent,
+            total: 9,
+            state,
+            reason: reason.map(str::to_string),
+            delay_ms: 1000,
+            label: String::new(),
+        };
+        assert_eq!(status("running", 5, None).label(), "Pyramid 5/9");
+        assert_eq!(status("done", 9, None).label(), "Pyramid done, 9/9");
+        assert_eq!(status("stopped", 5, None).label(), "Pyramid stopped at 5/9");
+        assert_eq!(status("failed", 5, Some("Stopped: rate limited")).label(), "Stopped: rate limited");
+        assert_eq!(status("failed", 5, None).label(), "Pyramid stopped at 5/9");
+    }
 
     fn start(kind: BurstKind, raw: &str) -> (u32, String, Option<u32>) {
         match parse_args(kind, raw).expect("parses") {

@@ -694,8 +694,7 @@ const MobileChatInputImpl: React.FC<Props> = ({
       <MobileCommandSheet
         open={commandsOpen}
         onClose={() => setCommandsOpen(false)}
-        isModerator={isModerator}
-        isBroadcaster={!!channelId && channelId === currentUser?.user_id}
+        channel={channel ?? ''}
         onPick={(cmd) => {
           setText(`/${cmd.name} `);
           inputRef.current?.focus();
