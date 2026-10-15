@@ -367,6 +367,40 @@ pub async fn send(
     .ok_or_else(|| "Conversation vanished while sending".to_string())
 }
 
+/// Send a whisper typed into a Windows notification and tell every window, as
+/// the Whispers panel's own send would. A notification can start the app, so
+/// this waits a little for the Twitch sign-in to load.
+pub async fn reply_from_notification(
+    app: &AppHandle,
+    user_id: &str,
+    login: &str,
+    name: &str,
+    avatar: Option<String>,
+    text: String,
+) -> Result<(), String> {
+    let mut me = None;
+    for _ in 0..20 {
+        if let Ok(user) = TwitchService::get_user_info().await {
+            me = Some(user);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    let me = me.ok_or_else(|| "You are not signed in to Twitch.".to_string())?;
+    let key = WhisperStorageService::update_conversations(app, &me.id, |convs| (find_key(convs, user_id, login), false))?
+        .unwrap_or_else(|| user_id.to_string());
+    let target = SendTarget {
+        key,
+        user_id: user_id.to_string(),
+        user_login: login.to_string(),
+        user_name: name.to_string(),
+        profile_image_url: avatar,
+    };
+    let update = send(app, &me.id, target, text).await?;
+    let _ = app.emit(UPDATED_EVENT, &update);
+    Ok(())
+}
+
 // ---- Imports --------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
