@@ -59,7 +59,8 @@ struct ThemePanel: View {
     }
 
     private func header(_ current: String) -> some View {
-        let name = (catalog?.themes + catalog?.custom)?.first { $0.id == current }?.name ?? "Frosted Glass"
+        let cards = (catalog?.themes ?? []) + (catalog?.custom ?? [])
+        let name = cards.first { $0.id == current }?.name ?? "Frosted Glass"
         return HStack(spacing: 8) {
             Image(systemName: "paintpalette").font(.system(size: 18)).foregroundStyle(SN.accent)
             SettingTitle(title: "Theme", paths: ["theme"], helpOpen: .constant(false), font: .sn(16, 600)) {
@@ -93,6 +94,7 @@ struct ThemePanel: View {
                 }
             }
         }
+        .id(name)
     }
 
     static func symbol(_ category: String) -> String {
@@ -130,11 +132,6 @@ struct ThemePanel: View {
             }
         )
     }
-}
-
-private func + (lhs: [ThemePanel.Card]?, rhs: [ThemePanel.Card]?) -> [ThemePanel.Card]? {
-    guard lhs != nil || rhs != nil else { return nil }
-    return (lhs ?? []) + (rhs ?? [])
 }
 
 /// A theme drawn in its own colours: five swatches, its name and description, a check when picked.
