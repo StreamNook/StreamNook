@@ -1461,7 +1461,7 @@
     "chat_burst.delay_ms"
    ],
    "nested": false,
-   "detail": "One line every \\(Self.delay(ms)). Add --delay <ms> to a command to change it for one run.",
+   "detail": "One line every <delay>. Add --delay <ms> to a command to change it for one run.",
    "aliases": [
     "spam",
     "pyramid"
@@ -1652,52 +1652,6 @@
     "mute words",
     "blacklist"
    ]
-  },
-  {
-   "page": "chat",
-   "section": "Event Highlights",
-   "title": "Style",
-   "paths": [
-    "\\(base).style"
-   ],
-   "nested": true,
-   "detail": "",
-   "aliases": [
-    "look"
-   ]
-  },
-  {
-   "page": "chat",
-   "section": "Event Highlights",
-   "title": "Ring fill",
-   "paths": [
-    "\\(base).fill"
-   ],
-   "nested": true,
-   "detail": "",
-   "aliases": []
-  },
-  {
-   "page": "chat",
-   "section": "Event Highlights",
-   "title": "Glint",
-   "paths": [
-    "\\(base).animation"
-   ],
-   "nested": true,
-   "detail": "",
-   "aliases": []
-  },
-  {
-   "page": "chat",
-   "section": "Event Highlights",
-   "title": "Loop",
-   "paths": [
-    "\\(base).animate_repeat"
-   ],
-   "nested": true,
-   "detail": "",
-   "aliases": []
   },
   {
    "page": "cache",
