@@ -391,7 +391,9 @@ async fn a_provider_room_runs_only_commands_that_need_no_twitch_api() {
     let o = run_in(&fake, "kick:somechan", "/echo hi").await;
     assert_eq!(o.notices, vec!["hi"]);
     assert!(!run_in(&fake, "kick:somechan", "/ban bob").await.handled);
-    assert!(!run_in(&fake, "kick:somechan", "/lurk").await.handled);
+    // /me is Twitch's: another platform gets the words.
+    assert_eq!(run_in(&fake, "kick:somechan", "/lurk").await.send.as_deref(), Some("is now lurking"));
+    assert!(!run_in(&fake, "kick:somechan", "/me waves").await.handled);
 }
 
 // ───────────────────────────── scripts and confirmations ─────────────────────────────
