@@ -80,7 +80,6 @@ pub mod eventsub_moderation;
 pub mod eventsub_service;
 pub mod ffz_room_badges;
 pub mod file_log;
-pub mod follow_lookup;
 pub mod app_exit;
 pub mod http;
 pub mod hype_train_watch;
