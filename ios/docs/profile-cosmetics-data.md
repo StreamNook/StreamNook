@@ -10,11 +10,11 @@ and decoded by `ios/Sources/SNKit/CosmeticsModels.swift`. FakeCore answers every
 
 | Command | Args | Answer (SNKit type) | Notes |
 | --- | --- | --- | --- |
-| `user_profile_sheet` | `userId, login, displayName, color?, channelId?, channelLogin?` | `ProfileSheetData` | groups in order Twitch, 7TV, Chat clients (images only); `streamnook` only for members; `picture` is the 7TV avatar pick for a 56 pt box |
+| `user_profile_sheet` | `userId, login, displayName, color?, channelId?, channelLogin?` | `ProfileSheetData` | groups in order Twitch, 7TV, Chat clients (images only); `streamnook` only for members; `picture` is the 7TV avatar pick for a 56 pt box; `atmosphere` (with its `look`) or `cologne` is what the member wears on their profile, wear-gated, shown even when kept out of chat |
 | `user_profile_sheet_cached` | `userId, channelId?` | `ProfileSheetData?` | the last answer for that person and room, no network |
 | `get_sub_standing` | `login, channel, wornBadges` | `SubStanding?` | every word is Rust's |
 | `get_user_message_history_limited` | `userId, limit` | `[ProfileHistoryRow]` | then `watch_user_history { userKey }` / `user-history-message` / `unwatch_user_history` |
-| `own_identity_header` | `userId, login, displayName` | `OwnIdentityData` | worn badges (max 8), paint, 7TV picture, StreamNook badge; saved to disk |
+| `own_identity_header` | `userId, login, displayName` | `OwnIdentityData` | worn badges (max 8), paint, 7TV picture, StreamNook badge, worn `atmosphere` / `cologne`, Twitch `banner_url` (nil when none); saved to disk |
 | `own_identity_header_cached` | `userId` | `OwnIdentityData?` | first-frame paint |
 | `cosmetics_picker_state` | `userId` | `StreamNookPickerState` | owned badges with `worn`; atmospheres with `allowed`/`worn` (Default `tier` first); `show_chat_toggle` |
 | `external_cosmetics_state` | `userId, login` | `ExternalPickerState` | 7TV paints/badges with `worn`, `seventv_user_id`, Twitch selectable/earned badges, `chat_color`, `named_colors` |
@@ -25,7 +25,9 @@ and decoded by `ios/Sources/SNKit/CosmeticsModels.swift`. FakeCore answers every
 | `set_seventv_paint` / `set_seventv_badge` | `userId` (7TV id), `paintId?` / `badgeId?` | `{success}` | `SESSION_EXPIRED` in the error = signed out |
 | `update_chat_identity_gql` | `badgeId, badgeVersion` | | `NEEDS_DROPS_AUTH` in the error |
 | `update_user_chat_color` | `targetUserId, color` | | a `named_colors[].value`, or hex for Prime/Turbo |
-| `get_twitch_bio` / `update_twitch_bio` | `userId` / `description` | `String` | 300 characters max, checked in Rust; answers what Twitch stored |
+| `get_twitch_bio` / `update_twitch_bio` | `userId` / `description` | `String` | 300 characters max, checked in Rust; the write goes through the twitch.tv web session (no extra scope); answers what Twitch stored |
+| `update_twitch_display_name` | `displayName` | `{display_name, description}` | only the capitalization may change (checked in Rust, then by Twitch); error text is user-facing |
+| `upload_twitch_profile_image` | `kind` (`picture` or `banner`), `dataBase64` | | PNG, JPG or GIF up to 10 MB, read from the bytes; Twitch shows it a few seconds later, so re-read the header after a short wait |
 | `get_seventv_auth_status`, `get_seventv_login_url`, `store_seventv_token` (`accessToken`, `userId: ""`, `twitchId: ""`), `logout_seventv` | | | the core reads the 7TV account from the token |
 
 ## Events
