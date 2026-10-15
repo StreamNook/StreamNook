@@ -2,9 +2,10 @@ import SNKit
 import SwiftUI
 
 /// The open rooms over the chat, shown from two rooms up so single-room chat keeps every point
-/// of height. A 45 point bar: the rooms in one glazed capsule that scrolls inside its fixed rim,
-/// the room on screen a darker pill. It reads only the tabs, never the rows, so arriving
-/// messages never rebuild it.
+/// of height. A 45 point bar: the rooms in one glazed capsule, the room on screen a darker pill.
+/// The capsule hugs its rooms; when they outgrow the bar it fills the bar (the same inset at both
+/// ends) and the widest names truncate first, so the row compresses in place and never scrolls,
+/// clips or wraps. It reads only the tabs, never the rows, so arriving messages never rebuild it.
 struct ChatTabStrip: View {
     let rooms: ChatRooms
 
@@ -12,12 +13,14 @@ struct ChatTabStrip: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            // The capsule hugs its rooms; once they outgrow the bar they scroll inside its rim.
-            ViewThatFits(in: .horizontal) {
-                pills
-                ScrollView(.horizontal, showsIndicators: false) { pills }
+            TabRow(spacing: 4) {
+                ForEach(rooms.tabs) { tab in
+                    TabPill(tab: tab, active: tab.channel == rooms.state.activeChannel,
+                            mark: rooms.state.mixedPlatforms && tab.provider != "twitch",
+                            select: { rooms.select(tab.channel) }, close: { rooms.close(tab.channel) })
+                }
             }
-            .clipShape(Capsule())
+            .padding(4)
             .snGlass(Capsule())
             Spacer(minLength: 0)
         }
@@ -27,21 +30,55 @@ struct ChatTabStrip: View {
             SN.borderSubtle.frame(height: 1).accessibilityHidden(true)
         }
     }
+}
 
-    private var pills: some View {
-        HStack(spacing: 4) {
-            ForEach(rooms.tabs) { tab in
-                TabPill(tab: tab, active: tab.channel == rooms.state.activeChannel,
-                        mark: rooms.state.mixedPlatforms && tab.provider != "twitch",
-                        select: { rooms.select(tab.channel) }, close: { rooms.close(tab.channel) })
-            }
+/// Tabs side by side at their natural widths while they fit. Past the width it is offered, the
+/// widest tabs give up width first (each down to a shared cap), so short names keep their room and
+/// every tab stays inside the row.
+struct TabRow: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let widths = Self.widths(subviews, available: proposal.width, spacing: spacing)
+        let height = subviews.map { $0.sizeThatFits(.unspecified).height }.max() ?? 0
+        return CGSize(width: widths.reduce(0, +) + spacing * CGFloat(max(0, subviews.count - 1)), height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let widths = Self.widths(subviews, available: bounds.width, spacing: spacing)
+        var x = bounds.minX
+        for (subview, width) in zip(subviews, widths) {
+            subview.place(at: CGPoint(x: x, y: bounds.midY), anchor: .leading,
+                          proposal: ProposedViewSize(width: width, height: bounds.height))
+            x += width + spacing
         }
-        .padding(4)
+    }
+
+    /// Natural widths, or, when they overflow, each capped at the level where they just fit.
+    static func widths(_ subviews: Subviews, available: CGFloat?, spacing: CGFloat) -> [CGFloat] {
+        let natural = subviews.map { $0.sizeThatFits(.unspecified).width }
+        guard let available else { return natural }
+        let room = available - spacing * CGFloat(max(0, subviews.count - 1))
+        return capped(natural, toFit: room)
+    }
+
+    /// The widths after capping the widest at one shared level so the total fits `room`.
+    static func capped(_ natural: [CGFloat], toFit room: CGFloat) -> [CGFloat] {
+        guard natural.reduce(0, +) > room, !natural.isEmpty else { return natural }
+        let sorted = natural.sorted()
+        var used: CGFloat = 0
+        for (i, width) in sorted.enumerated() {
+            let left = CGFloat(sorted.count - i)
+            let cap = (room - used) / left
+            if width >= cap { return natural.map { min($0, max(0, cap)) } }
+            used += width
+        }
+        return natural
     }
 }
 
 /// One room: its face, a broadcast mark on the stream's own tab, its name, and a close button on
-/// every room but the stream's.
+/// every room but the stream's. Offered less than its natural width, only the name gives way.
 private struct TabPill: View {
     let tab: ChatTabInfo
     let active: Bool
@@ -63,15 +100,16 @@ private struct TabPill: View {
                     if mark {
                         PlatformMark(platform: tab.provider == "kick" ? .kick : .twitch, size: 11)
                     }
+                    // At most 96 pt, so the content stays within the 136 pt a tab may take.
                     Text(tab.label)
                         .font(.sn(13, active ? 600 : 400))
                         .foregroundStyle(active ? SN.textPrimary : SN.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .frame(maxWidth: 96, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .layoutPriority(-1)
                 }
-                // The pill hugs its name; a long name truncates within the 136 pt the content may take.
-                .fixedSize(horizontal: true, vertical: false)
                 .padding(.trailing, 4)
                 .contentShape(Rectangle())
             }
