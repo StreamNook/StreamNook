@@ -493,6 +493,40 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
     [messages, getMessageId],
   );
 
+  // Slash command page actions (utils/slashUi.ts). /usercard and /user open the
+  // profile sheet; /clearmessages hides what this room shows right now (visual
+  // only: new rows still arrive, and another room is untouched).
+  const [hiddenRows, setHiddenRows] = useState<{ channel: string; ids: ReadonlySet<string> } | null>(null);
+  useEffect(() => {
+    const openCard = (e: Event) => {
+      const d = (e as CustomEvent<{ userId?: string; username?: string; displayName?: string }>).detail;
+      if (!isTwitchRoom || !d?.userId || !d.username) return;
+      setSheetUser({ userId: d.userId, username: d.username, displayName: d.displayName ?? d.username, color: '' });
+    };
+    const clearRows = () => {
+      if (!activeChannel) return;
+      const ids = new Set<string>();
+      for (const message of messages) {
+        const id = getMessageId(message);
+        if (id) ids.add(id);
+      }
+      setHiddenRows({ channel: activeChannel, ids });
+    };
+    window.addEventListener('streamnook-open-user-card', openCard);
+    window.addEventListener('streamnook-clear-local-chat', clearRows);
+    return () => {
+      window.removeEventListener('streamnook-open-user-card', openCard);
+      window.removeEventListener('streamnook-clear-local-chat', clearRows);
+    };
+  }, [isTwitchRoom, activeChannel, messages, getMessageId]);
+  const shownMessages = useMemo(() => {
+    if (!hiddenRows || hiddenRows.channel !== activeChannel) return messages;
+    return messages.filter((m) => {
+      const id = getMessageId(m);
+      return !id || !hiddenRows.ids.has(id);
+    });
+  }, [hiddenRows, activeChannel, messages, getMessageId]);
+
   // Suppress the synthesized contextmenu entirely: the fan-out owns the hold now,
   // and letting both fire would open a menu behind the fan.
   const onListContextMenu = useCallback((e: React.MouseEvent) => {
@@ -645,7 +679,7 @@ export const MobileChatPane: React.FC<{ readOnly?: boolean }> = ({ readOnly = fa
         data-tap-reply={isPaused && !readOnly ? 'true' : undefined}
       >
         <ChatMessageList
-          messages={messages}
+          messages={shownMessages}
           renderToken={renderToken}
           isPaused={isPaused}
           onPauseIntent={() => pause(true)}

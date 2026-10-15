@@ -126,11 +126,11 @@ pub fn parse_nuke_args(args: &str) -> Result<ParsedNuke, String> {
     }
     let window_tok = tokens[tokens.len() - 1];
     let (past, future) = parse_window(window_tok).ok_or_else(|| {
-        format!("last argument must be a window like \"5m\" or \"5m:1m\" — got \"{window_tok}\"")
+        format!("last argument must be a window like \"5m\" or \"5m:1m\", not \"{window_tok}\"")
     })?;
     let action_tok = tokens[tokens.len() - 2];
     let action = parse_action_token(action_tok).ok_or_else(|| {
-        format!("second-to-last argument must be \"delete\", \"ban\", or a duration like \"10m\" — got \"{action_tok}\"")
+        format!("second-to-last argument must be \"delete\", \"ban\", or a duration like \"10m\", not \"{action_tok}\"")
     })?;
     let source = tokens[..tokens.len() - 2].join(" ").trim().to_string();
     if source.is_empty() {
@@ -508,11 +508,11 @@ mod tests {
         );
         assert_eq!(
             parse_nuke_args("spam ban soon").unwrap_err(),
-            "last argument must be a window like \"5m\" or \"5m:1m\" — got \"soon\""
+            "last argument must be a window like \"5m\" or \"5m:1m\", not \"soon\""
         );
         assert_eq!(
             parse_nuke_args("spam kick 5m").unwrap_err(),
-            "second-to-last argument must be \"delete\", \"ban\", or a duration like \"10m\" — got \"kick\""
+            "second-to-last argument must be \"delete\", \"ban\", or a duration like \"10m\", not \"kick\""
         );
         assert!(parse_nuke_args("/(unclosed/ ban 5m").unwrap_err().starts_with("invalid regex: "));
     }

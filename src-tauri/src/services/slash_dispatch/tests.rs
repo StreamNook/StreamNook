@@ -839,7 +839,7 @@ async fn nuke_sweeps_the_window_and_undo_lifts_the_bans() {
     assert_eq!(fake.calls("ban_user"), vec![json!({ "broadcasterId": "42", "targetUserId": "a", "duration": null, "reason": "/nuke" })]);
     let o = run_in(&fake, "nukeroom", "/undo").await;
     assert_eq!(fake.calls("unban_user"), vec![json!({ "broadcasterId": "42", "targetUserId": "a" })]);
-    assert_eq!(o.notices, vec!["/undo reversed nuke on \"buy followers\" — unbanned 1/1 user(s)."]);
+    assert_eq!(o.notices, vec!["/undo reversed nuke on \"buy followers\": unbanned 1/1 user(s)."]);
     let o = run_in(&fake, "nukeroom", "/undo").await;
     assert_eq!(o.notices, vec!["/undo: no nuke to undo on this channel."]);
     let o = run_in(&fake, "nukeroom", "/nuke spam").await;

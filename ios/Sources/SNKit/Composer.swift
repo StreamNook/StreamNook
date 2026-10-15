@@ -156,12 +156,21 @@ public struct SlashOutcome: Decodable, Sendable, Equatable {
     public struct UIAction: Decodable, Sendable, Equatable {
         public var kind: String
         public var login: String?
+        public var userID: String?
+        public var displayName: String?
         public var url: String?
         public var text: String?
 
-        public init(kind: String, login: String? = nil, url: String? = nil, text: String? = nil) {
+        enum CodingKeys: String, CodingKey {
+            case kind, login, url, text, userID = "user_id", displayName = "display_name"
+        }
+
+        public init(kind: String, login: String? = nil, userID: String? = nil, displayName: String? = nil,
+                    url: String? = nil, text: String? = nil) {
             self.kind = kind
             self.login = login
+            self.userID = userID
+            self.displayName = displayName
             self.url = url
             self.text = text
         }
@@ -172,6 +181,10 @@ public struct SlashOutcome: Decodable, Sendable, Equatable {
     /// Text to send as an ordinary chat message in the room (custom command expansions,
     /// /say, /shrug...).
     public var send: String?
+    /// `/reply`: the message id `send` replies to.
+    public var replyTo: String?
+    /// `/pin <message>`: pin `send` once it is sent.
+    public var pinAfterSend: Bool
     public var clearDraft: Bool
     public var toasts: [Toast]
     /// Lines printed in the room's chat that only the viewer sees.
@@ -179,13 +192,16 @@ public struct SlashOutcome: Decodable, Sendable, Equatable {
     public var ui: UIAction?
 
     enum CodingKeys: String, CodingKey {
-        case handled, send, toasts, notices, ui, clearDraft = "clear_draft"
+        case handled, send, toasts, notices, ui, clearDraft = "clear_draft", replyTo = "reply_to",
+             pinAfterSend = "pin_after_send"
     }
 
-    public init(handled: Bool, send: String? = nil, clearDraft: Bool = true, toasts: [Toast] = [],
-                notices: [String] = [], ui: UIAction? = nil) {
+    public init(handled: Bool, send: String? = nil, replyTo: String? = nil, pinAfterSend: Bool = false,
+                clearDraft: Bool = true, toasts: [Toast] = [], notices: [String] = [], ui: UIAction? = nil) {
         self.handled = handled
         self.send = send
+        self.replyTo = replyTo
+        self.pinAfterSend = pinAfterSend
         self.clearDraft = clearDraft
         self.toasts = toasts
         self.notices = notices
@@ -196,6 +212,8 @@ public struct SlashOutcome: Decodable, Sendable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         handled = try c.decodeIfPresent(Bool.self, forKey: .handled) ?? false
         send = try c.decodeIfPresent(String.self, forKey: .send)
+        replyTo = try c.decodeIfPresent(String.self, forKey: .replyTo)
+        pinAfterSend = try c.decodeIfPresent(Bool.self, forKey: .pinAfterSend) ?? false
         clearDraft = try c.decodeIfPresent(Bool.self, forKey: .clearDraft) ?? handled
         toasts = try c.decodeIfPresent([Toast].self, forKey: .toasts) ?? []
         notices = try c.decodeIfPresent([String].self, forKey: .notices) ?? []

@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Observation
 import SNKit
@@ -145,14 +146,20 @@ final class ChatComposerModel {
         case .slash(let text):
             await runSlash(text)
         case .chat(let text):
-            await sendChat(text, reply: session.replyTo, clearsReply: true)
+            // Plain text can still be one of your own commands (those that need no slash).
+            if session.roomID != nil {
+                await runSlash(text)
+            } else {
+                await sendChat(text, reply: session.replyTo, clearsReply: true)
+            }
         }
     }
 
     /// Sends chat text to the room. Returns whether Twitch took it. A drop or an error keeps the
     /// draft, so nothing typed is lost: a drop prints why in the chat, an error shows a toast.
     @discardableResult
-    private func sendChat(_ text: String, reply: ChatMessage?, clearsReply: Bool) async -> Bool {
+    private func sendChat(_ text: String, reply: ChatMessage?, replyID: String? = nil, pin: Bool = false,
+                          clearsReply: Bool) async -> Bool {
         sending = true
         defer { sending = false }
         var message = text
@@ -161,12 +168,12 @@ final class ChatComposerModel {
         do {
             let json = try await session.core.invoke("send_chat_message", args: [
                 "message": message,
-                "replyParentMsgId": reply?.id,
+                "replyParentMsgId": replyID ?? reply?.id,
                 "targetChannel": session.channel,
                 "broadcasterId": session.roomID,
                 "senderId": nil,
                 "senderAccountId": nil,
-                "pinAfterSend": nil,
+                "pinAfterSend": pin ? true : nil,
             ])
             let result = (try? JSONDecoder().decode(SendResult.self, from: Data(json.utf8))) ?? SendResult(isSent: true)
             if let line = result.dropLine {
@@ -188,8 +195,9 @@ final class ChatComposerModel {
         }
     }
 
-    /// A slash command goes to the core's dispatcher with the room it was typed in. Whatever it
-    /// does not run goes to chat as typed (Twitch still runs /me).
+    /// A command goes to the core's dispatcher with the room it was typed in (a slash command, or
+    /// plain text that may be one of your own). Whatever it does not run goes to chat as typed
+    /// (Twitch still runs /me).
     private func runSlash(_ text: String) async {
         guard let roomID = session.roomID else {
             show(SlashOutcome.noRoomToast)
@@ -207,22 +215,27 @@ final class ChatComposerModel {
             chatLog.notice("slash dispatch failed: \(String(describing: error), privacy: .public)")
         }
         sending = false
+        // The core's order: toasts, then the page action, then notices (so a clear prints into
+        // the emptied chat), then the text it hands back to send.
         if let last = outcome.toasts.last { show(last.text) }
+        if let ui = outcome.ui { perform(ui, typed: text) }
         outcome.notices.forEach(notice)
-        if let ui = outcome.ui { perform(ui) }
         guard outcome.handled else {
             await sendChat(text, reply: session.replyTo, clearsReply: true)
             return
         }
         if let line = outcome.send {
-            // The reply stays drafted: a command's own text is never a reply.
-            await sendChat(line, reply: nil, clearsReply: false)
+            // The drafted reply stays: a command's own text replies only when it says so (/reply).
+            let parent = outcome.replyTo.flatMap { session.pipeline.message($0) }
+            await sendChat(line, reply: parent, replyID: outcome.replyTo, pin: outcome.pinAfterSend, clearsReply: false)
         }
         if outcome.clearDraft { draft = "" }
     }
 
-    /// Page actions a command asks for.
-    private func perform(_ action: SlashOutcome.UIAction) {
+    @ObservationIgnored private let speech = AVSpeechSynthesizer()
+
+    /// Page actions a command asks for. Those with no iPhone surface say so.
+    private func perform(_ action: SlashOutcome.UIAction, typed: String) {
         switch action.kind {
         case "open_user_card":
             if let login = action.login { onProfile(login) }
@@ -232,7 +245,13 @@ final class ChatComposerModel {
             UIPasteboard.general.string = action.text
         case "reload_chat":
             ChatReload.reload(session)
+        case "refresh_emotes":
+            picker.reload(debounce: false)
+        case "speak":
+            if let text = action.text, !text.isEmpty { speech.speak(AVSpeechUtterance(string: text)) }
         default:
+            let command = typed.split(separator: " ").first.map(String.init) ?? typed
+            show("\(command) is not on iPhone yet")
             chatLog.notice("slash ui \(action.kind, privacy: .public) has no iPhone surface")
         }
     }

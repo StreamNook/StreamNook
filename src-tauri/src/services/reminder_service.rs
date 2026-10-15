@@ -468,7 +468,7 @@ fn cut(text: &str, keep: usize, over: usize) -> String {
 /// The numbered list `/remind list` prints.
 pub fn format_reminder_list(reminders: &[Value]) -> Vec<String> {
     if reminders.is_empty() {
-        return vec!["No reminders yet. Example: /remind every 20m Plug the Discord — /remind help for all options.".to_string()];
+        return vec!["No reminders yet. Example: /remind every 20m Plug the Discord. /remind help lists every option.".to_string()];
     }
     let mut lines = vec![format!("Your reminders ({}):", reminders.len())];
     for (i, r) in reminders.iter().enumerate() {
@@ -487,12 +487,12 @@ pub fn format_reminder_list(reminders: &[Value]) -> Vec<String> {
 pub fn remind_help_lines() -> Vec<String> {
     [
         "Reminders auto-post a message into chat to nudge the streamer. Make one:",
-        "/remind every 20m <message> — repeat every 20 minutes (also 30s, 90s, 1h30m)",
-        "/remind in 30s <message> — once, 30 seconds from now",
-        "/remind at 21:00 <message> — once a day at a set time (24h)",
-        "/remind uptime 2h <message> — once when the stream has been live 2h",
-        "/remind on <word> <message> — when that word shows up in chat",
-        "/remind now <message> — post it right now (not saved)",
+        "/remind every 20m <message>: repeat every 20 minutes (also 30s, 90s, 1h30m)",
+        "/remind in 30s <message>: once, 30 seconds from now",
+        "/remind at 21:00 <message>: once a day at a set time (24h)",
+        "/remind uptime 2h <message>: once when the stream has been live 2h",
+        "/remind on <word> <message>: when that word shows up in chat",
+        "/remind now <message>: post it right now (not saved)",
         "Times take s/m/h: 45s, 90s, 5m, 1h30m. Add x3 anywhere to post it 3 times.",
         "Manage: /remind list · /remind remove <#> · /remind enable <#> · /remind disable <#> · /remind clear",
     ]
@@ -988,7 +988,7 @@ mod tests {
     fn remind_lists_number_the_reminders() {
         assert_eq!(
             format_reminder_list(&[]),
-            vec!["No reminders yet. Example: /remind every 20m Plug the Discord — /remind help for all options."]
+            vec!["No reminders yet. Example: /remind every 20m Plug the Discord. /remind help lists every option."]
         );
         let long = "x".repeat(70);
         let list = format_reminder_list(&[

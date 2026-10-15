@@ -1579,7 +1579,7 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
                 }
             }
             o.say(format!(
-                "/undo reversed nuke on \"{}\" — unbanned {unbanned}/{} user(s).",
+                "/undo reversed nuke on \"{}\": unbanned {unbanned}/{} user(s).",
                 plan.source,
                 plan.affected.len()
             ));
@@ -1591,7 +1591,7 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             }
             let target = c.arg(0);
             if !target.chars().all(|ch| ch.is_ascii_digit()) {
-                o.err("User ID must be numeric — did you mean /ban?");
+                o.err("User ID must be numeric. Did you mean /ban?");
                 return Ok(Flow::Done);
             }
             let reason = c.from(1);
