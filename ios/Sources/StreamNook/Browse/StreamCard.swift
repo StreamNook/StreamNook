@@ -2,14 +2,15 @@ import SNKit
 import SwiftUI
 
 /// A live stream in a list, in StreamNook's card language: a media card holding the preview with
-/// its chips (LIVE, the hype train, viewers, the watch streak), then the title, the channel and
-/// the category. The row variant puts a smaller preview beside the text. Long press opens the
-/// card's menu.
+/// its chips (LIVE, DROPS, the hype train, viewers, the watch streak), then the title, the channel
+/// and who it streams with, and the category. The row variant puts a smaller preview beside the
+/// text. Long press opens the card's menu.
 struct StreamCard: View {
     let stream: TwitchStream
     var variant = StreamView.cards
     var hypeTrain: HypeTrain?
     var streak: Int?
+    var group: ChannelGroup?
     var stamp = 0
     let open: () -> Void
     var openCategory: (() -> Void)?
@@ -40,6 +41,7 @@ struct StreamCard: View {
                             LiveDot()
                             Text("LIVE")
                         }
+                        if stream.dropsEarnable == true { DropsChip() }
                         if let hypeTrain { HypeChip(train: hypeTrain) }
                     }
                     .padding(6)
@@ -73,6 +75,7 @@ struct StreamCard: View {
                         .overlay(Circle().stroke(SN.borderSubtle, lineWidth: 1))
                     }
                     Text(stream.userName).lineLimit(1)
+                    if let group { TogetherTag(group: group) }
                     if stream.isPartner { PartnerMark(size: 12) }
                 }
                 .font(.snCardLine)
@@ -95,6 +98,15 @@ struct StreamCard: View {
             Preview(url: TwitchImage.preview(stream.thumbnailURL, stamp: stamp))
                 .frame(width: 156)
                 .overlay(alignment: .topLeading) { PingDot().padding(6) }
+                .overlay(alignment: .topTrailing) {
+                    if stream.dropsEarnable == true {
+                        Chip(kind: .drops, compact: true) {
+                            Image(systemName: Symbol.drops).font(.system(size: 8, weight: .bold))
+                        }
+                        .padding(4)
+                        .accessibilityLabel("Drops enabled")
+                    }
+                }
                 .overlay(alignment: .bottomLeading) {
                     if let hypeTrain {
                         Chip(kind: hypeTrain.isGolden ? .golden : .hype, compact: true) {
@@ -111,6 +123,7 @@ struct StreamCard: View {
                     .lineLimit(2)
                 HStack(spacing: 4) {
                     Text(stream.userName).lineLimit(1)
+                    if let group { TogetherTag(group: group, compact: true) }
                     if stream.isPartner { PartnerMark(size: 10) }
                 }
                 .font(.sn(12))
@@ -185,6 +198,8 @@ struct Chip<Content: View>: View {
 
     let kind: Kind
     var compact = false
+    /// Seconds between shine sweeps across the chip; none when nil.
+    var shine: Double?
     @ViewBuilder let content: Content
 
     var body: some View {
@@ -198,6 +213,7 @@ struct Chip<Content: View>: View {
             .snChipVeil(shape, density: kind == .neutral ? 0.34 : kind == .streak ? 0.82 : 0.22)
             .background { tint.map { shape.fill($0) } }
             .overlay { tint.map { shape.stroke($0.opacity(0.9), lineWidth: 0.5) } }
+            .overlay { if let shine { ShineSweep(period: shine).clipShape(shape) } }
     }
 
     private var tint: LinearGradient? {
@@ -218,11 +234,110 @@ private struct HypeChip: View {
     let train: HypeTrain
 
     var body: some View {
-        Chip(kind: train.isGolden ? .golden : .hype) {
+        Chip(kind: train.isGolden ? .golden : .hype, shine: 2.5) {
             Image(systemName: Symbol.hypeTrain).font(.system(size: 9, weight: .bold))
             Text("LVL \(train.level)")
         }
         .accessibilityLabel("Hype train level \(train.level)")
+    }
+}
+
+/// Watching this channel earns drops right now.
+private struct DropsChip: View {
+    var body: some View {
+        Chip(kind: .drops, shine: 3) {
+            Image(systemName: Symbol.drops).font(.system(size: 9, weight: .bold))
+            Text("DROPS")
+        }
+        .accessibilityLabel("Drops enabled")
+    }
+}
+
+/// A band of light crossing a chip once every `period` seconds, still when movement is dropped
+/// or the player covers the list.
+private struct ShineSweep: View {
+    let period: Double
+    @Environment(\.snStill) private var still
+    @Environment(\.shellCovered) private var covered
+
+    /// How long one crossing takes; the rest of the period the chip rests.
+    private static let crossing = 0.9
+
+    var body: some View {
+        if !still && !covered {
+            GeometryReader { geo in
+                let width = geo.size.width
+                let rest = max(period - Self.crossing, 0)
+                LinearGradient(colors: [.clear, .white.opacity(0.32), .clear], startPoint: .leading, endPoint: .trailing)
+                    .frame(width: width * 0.6)
+                    .keyframeAnimator(initialValue: -0.6, repeating: true) { band, x in
+                        band.offset(x: x * width)
+                    } keyframes: { _ in
+                        KeyframeTrack {
+                            LinearKeyframe(-0.6, duration: rest)
+                            CubicKeyframe(1.0, duration: Self.crossing)
+                        }
+                    }
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+    }
+}
+
+/// Who a channel is live with, beside its name: up to three faces of the others (then "+N"),
+/// then "Together" for Shared Viewership or a chat mark and "Shared chat" for Shared Chat. The
+/// compact form keeps the faces only. The card stays the tap target.
+struct TogetherTag: View {
+    let group: ChannelGroup
+    var compact = false
+
+    private static let faces = 3
+
+    var body: some View {
+        let others = group.others
+        let extra = others.count - Self.faces
+        HStack(spacing: 6) {
+            if !group.together {
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(SN.textSecondary)
+                    .padding(.leading, 4)
+            }
+            HStack(spacing: -4) {
+                ForEach(others.prefix(Self.faces), id: \.userID) { member in
+                    AsyncImage(url: member.avatarURL.flatMap(URL.init(string:))) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        SN.surface
+                    }
+                    .frame(width: 18, height: 18)
+                    .clipShape(Circle())
+                }
+                if extra > 0 {
+                    Text("+\(extra)")
+                        .font(.sn(9, 600))
+                        .monospacedDigit()
+                        .foregroundStyle(SN.textPrimary)
+                        .padding(.horizontal, 4)
+                        .frame(minWidth: 18, minHeight: 18)
+                        .background(Capsule().fill(.white.opacity(0.15)))
+                }
+            }
+            if !compact {
+                Text(group.together ? "Together" : "Shared chat")
+                    .font(.sn(11, 600))
+                    .foregroundStyle(SN.textPrimary)
+            }
+        }
+        .padding(.leading, 2)
+        .padding(.trailing, compact ? 2 : 8)
+        .frame(height: 22)
+        .background(Capsule().fill(.white.opacity(0.12)))
+        .padding(.vertical, -3)
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(group.label)
     }
 }
 

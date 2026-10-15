@@ -38,6 +38,7 @@ struct CategoryScreen: View {
         .toolbar(.hidden, for: .tabBar)
         .refreshable { await load() }
         .task { if !loaded { await load() } }
+        .reportsChannels(streams, to: model.core)
     }
 
     private func load() async {

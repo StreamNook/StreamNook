@@ -55,6 +55,15 @@ final class HomeStore {
         log.notice("browse listed \(self.recommended.count) streams")
     }
 
+    /// The app came back to the front. The core reloads the followed list when nobody has asked
+    /// for it for a minute (then hype trains and Shared Viewership), and says whether it did, so
+    /// the previews are renewed with it. The lists land as `home-snapshot` pushes.
+    func resumed() async {
+        guard (try? await core.invoke("note_app_resumed", args: [:], as: Bool.self)) == true else { return }
+        previewStamp += 1
+        log.notice("resume refreshed the followed list")
+    }
+
     /// Forgets the account's lists, for a sign-out.
     func signedOut() {
         lists.followedLive = []

@@ -22,7 +22,8 @@ struct StreamGrid: View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: gap, alignment: .top), count: count), spacing: gap) {
             ForEach(Array(streams.enumerated()), id: \.element.id) { index, stream in
                 StreamCard(stream: stream, variant: view, hypeTrain: home.lists.hypeTrain(for: stream.userID),
-                           streak: home.lists.streak(for: stream.userID), stamp: home.previewStamp,
+                           streak: home.lists.streak(for: stream.userID), group: home.lists.group(for: stream.userID),
+                           stamp: home.previewStamp,
                            open: { model.startWatching(stream) },
                            openCategory: category(of: stream).map { category in { model.nav.push(.category(category)) } })
                     .settleIn(index: index, active: playing)
@@ -60,4 +61,21 @@ struct StreamViewMenu: View {
 extension StreamView {
     /// The stored choice for every stream list.
     static let key = "sn-stream-view"
+}
+
+extension View {
+    /// Hands the core the Twitch ids of the rows a screen shows beyond the followed and
+    /// recommended lists (search results, a category), so hype trains and Shared Viewership cover
+    /// them: 2 s after the set last changed, never an empty set, and a refetch of the same
+    /// channels sends nothing. Leaving the screen drops a send still waiting.
+    func reportsChannels(_ streams: [TwitchStream], to core: CoreBridge) -> some View {
+        let ids = HomeLists.channelIDs(of: streams)
+        return task(id: ids) {
+            guard !ids.isEmpty else { return }
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            _ = try? await core.invoke("set_home_extra_channels", args: ["channelIds": ids])
+            log.notice("reported \(ids.count) channels on screen")
+        }
+    }
 }

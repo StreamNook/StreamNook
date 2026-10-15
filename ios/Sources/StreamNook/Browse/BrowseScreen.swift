@@ -41,6 +41,7 @@ struct BrowseScreen: View {
         }
         .refreshable { await refresh() }
         .task { if !home.recommendedLoaded { await home.loadRecommended() } }
+        .reportsChannels(browse.streamResults ?? home.recommended, to: model.core)
         // The core answers these signed out too (the public GQL), so Browse never waits on a sign-in.
         .task(id: "\(browse.mode)|\(browse.query)|\(model.signedIn)") { await browse.search(model.core) }
         .task(id: "\(browse.mode)|\(model.signedIn)") {
@@ -174,17 +175,20 @@ final class BrowseModel {
     }
 }
 
-/// Categories as box-art tiles, three across, loading the next page as the end nears.
+/// Categories as box-art tiles, three across on a phone and more on a wider window, loading the
+/// next page as the end nears.
 struct CategoryGrid: View {
     let categories: [TwitchCategory]
     let latch: SettleLatch
     let settleKey: String
     let open: (TwitchCategory) -> Void
     let more: (() async -> Void)?
+    @State private var width: CGFloat = 402
 
     var body: some View {
         let playing = latch.playing(settleKey)
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: 3), spacing: 12) {
+        let count = WindowShape(width: width, height: 874).categoryColumns
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: count), spacing: 12) {
             ForEach(Array(categories.enumerated()), id: \.element.id) { index, category in
                 Button { open(category) } label: {
                     VStack(alignment: .leading, spacing: 6) {
@@ -208,11 +212,12 @@ struct CategoryGrid: View {
                 .buttonStyle(CardPress())
                 .settleIn(index: index, active: playing)
                 .onAppear {
-                    if let more, index >= categories.count - 9 { Task { await more() } }
+                    if let more, index >= categories.count - 3 * count { Task { await more() } }
                 }
             }
         }
         .padding(.horizontal, 16)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .padding(.bottom, 24)
         .settles(latch, key: settleKey, ready: !categories.isEmpty)
     }

@@ -18,6 +18,8 @@ public struct TwitchStream: Codable, Sendable, Hashable, Identifiable {
     public var startedAt: String?
     /// Search answers offline channels too; a missing value counts as live.
     public var isLive: Bool?
+    /// Watching here earns drops right now; the core stamps it on every Twitch row it serves.
+    public var dropsEarnable: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -33,12 +35,13 @@ public struct TwitchStream: Codable, Sendable, Hashable, Identifiable {
         case profileImageURL = "profile_image_url"
         case startedAt = "started_at"
         case isLive = "is_live"
+        case dropsEarnable = "drops_earnable"
     }
 
     public init(id: String, userLogin: String, userName: String, title: String, viewerCount: Int,
                 gameName: String, thumbnailURL: String = "", userID: String? = nil, gameID: String? = nil,
                 broadcasterType: String? = nil, profileImageURL: String? = nil, startedAt: String? = nil,
-                isLive: Bool? = nil) {
+                isLive: Bool? = nil, dropsEarnable: Bool? = nil) {
         self.id = id
         self.userLogin = userLogin
         self.userName = userName
@@ -52,9 +55,12 @@ public struct TwitchStream: Codable, Sendable, Hashable, Identifiable {
         self.profileImageURL = profileImageURL
         self.startedAt = startedAt
         self.isLive = isLive
+        self.dropsEarnable = dropsEarnable
     }
 
     public var isPartner: Bool { broadcasterType == "partner" }
+    /// Search lists offline channels as well; only an explicit `false` is offline.
+    public var isOffline: Bool { isLive == false }
 }
 
 /// A category as `get_top_games_paginated` returns it (the TypeScript `TwitchCategory`).

@@ -102,6 +102,11 @@ public struct WindowShape: Sendable, Equatable {
     /// Where the default two-pane split falls: the player gets 62 percent.
     public var splitX: Double { (width * 0.62).rounded() }
 
+    /// Category tiles across: 3 on a phone, 4 from 640 points wide, 5 from 768, 6 from 1024.
+    public var categoryColumns: Int {
+        width >= 1024 ? 6 : width >= 768 ? 5 : width >= 640 ? 4 : 3
+    }
+
     /// Columns for a stream list.
     public func columns(_ variant: Variant) -> Int {
         switch sizeClass {
@@ -134,26 +139,86 @@ public struct HypeTrain: Decodable, Sendable, Equatable {
     }
 }
 
+/// Channels live together on Twitch: a Shared Viewership group (Stream Together, with a combined
+/// viewer count) or a Shared Chat session. The channel itself is first, then the rest by their own
+/// viewers; `label` is the core's plain-language summary for VoiceOver.
+public struct ChannelGroup: Decodable, Sendable, Equatable {
+    public struct Member: Decodable, Sendable, Equatable {
+        public var userID: String
+        public var login: String
+        public var displayName: String
+        public var avatarURL: String?
+        public var isSelf: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case userID = "user_id"
+            case login
+            case displayName = "display_name"
+            case avatarURL = "avatar_url"
+            case isSelf = "is_self"
+        }
+
+        public init(userID: String, login: String, displayName: String, avatarURL: String? = nil, isSelf: Bool = false) {
+            self.userID = userID
+            self.login = login
+            self.displayName = displayName
+            self.avatarURL = avatarURL
+            self.isSelf = isSelf
+        }
+    }
+
+    /// Unique viewers across the group; only a Shared Viewership group has one.
+    public var sharedViewers: Int?
+    public var members: [Member]
+    public var label: String
+
+    enum CodingKeys: String, CodingKey {
+        case sharedViewers = "shared_viewers"
+        case members
+        case label
+    }
+
+    public init(sharedViewers: Int? = nil, members: [Member], label: String) {
+        self.sharedViewers = sharedViewers
+        self.members = members
+        self.label = label
+    }
+
+    /// Streaming together, rather than only sharing chat.
+    public var together: Bool { sharedViewers != nil }
+    /// Everyone in the group but the channel the card is for.
+    public var others: [Member] { members.filter { !$0.isSelf } }
+}
+
 /// The sections of the core's home snapshot the tab screens read. Missing sections decode empty.
 public struct HomeLists: Decodable, Sendable, Equatable {
     public var followedLive: [TwitchStream]
     public var recommended: [TwitchStream]
     public var hypeTrains: [HypeTrain]
     public var watchStreaks: [String: Int]
+    /// Shared Viewership groups by Twitch channel id, only for channels in one.
+    public var collaborations: [String: ChannelGroup]
+    /// Shared Chat sessions by Twitch channel id, for channels in one and in no group.
+    public var sharedChats: [String: ChannelGroup]
 
     enum CodingKeys: String, CodingKey {
         case followedLive = "followed_live"
         case recommended
         case hypeTrains = "hype_trains"
         case watchStreaks = "watch_streaks"
+        case collaborations
+        case sharedChats = "shared_chats"
     }
 
     public init(followedLive: [TwitchStream] = [], recommended: [TwitchStream] = [],
-                hypeTrains: [HypeTrain] = [], watchStreaks: [String: Int] = [:]) {
+                hypeTrains: [HypeTrain] = [], watchStreaks: [String: Int] = [:],
+                collaborations: [String: ChannelGroup] = [:], sharedChats: [String: ChannelGroup] = [:]) {
         self.followedLive = followedLive
         self.recommended = recommended
         self.hypeTrains = hypeTrains
         self.watchStreaks = watchStreaks
+        self.collaborations = collaborations
+        self.sharedChats = sharedChats
     }
 
     public init(from decoder: Decoder) throws {
@@ -162,6 +227,21 @@ public struct HomeLists: Decodable, Sendable, Equatable {
         recommended = try c.decodeIfPresent([TwitchStream].self, forKey: .recommended) ?? []
         hypeTrains = try c.decodeIfPresent([HypeTrain].self, forKey: .hypeTrains) ?? []
         watchStreaks = try c.decodeIfPresent([String: Int].self, forKey: .watchStreaks) ?? [:]
+        collaborations = try c.decodeIfPresent([String: ChannelGroup].self, forKey: .collaborations) ?? [:]
+        sharedChats = try c.decodeIfPresent([String: ChannelGroup].self, forKey: .sharedChats) ?? [:]
+    }
+
+    /// The Twitch ids of a list's rows, unique and sorted, so the same channels make the same set
+    /// however the list was fetched.
+    public static func channelIDs(of streams: [TwitchStream]) -> [String] {
+        Set(streams.compactMap(\.userID).filter { !$0.isEmpty }).sorted()
+    }
+
+    /// What a card credits beside the name, by its Twitch id: the Shared Viewership group, else
+    /// the Shared Chat session (the core never reports both for one channel).
+    public func group(for channelID: String?) -> ChannelGroup? {
+        guard let channelID else { return nil }
+        return collaborations[channelID] ?? sharedChats[channelID]
     }
 
     /// The active train on a channel, by its Twitch id.

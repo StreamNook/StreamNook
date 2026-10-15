@@ -228,7 +228,10 @@ final class AppModel {
     func lifecycle(_ state: String) {
         guard started else { return }
         core.lifecycle(state)
-        if state == "foreground" { Task { await signIn.refresh() } }
+        if state == "foreground" {
+            Task { await signIn.refresh() }
+            Task { await home.resumed() }
+        }
     }
 
     private func listenForEvents() {

@@ -89,6 +89,39 @@ import Testing
         #expect(lists.hypeTrain(for: nil) == nil)
         #expect(lists.streak(for: "77") == 3)
         #expect(lists.streak(for: "78") == nil)
+        #expect(lists.recommended.first?.dropsEarnable == nil)
+    }
+
+    @Test func groupsAndDropsDecodeFromTheSnapshot() throws {
+        func m(_ id: String, _ name: String, _ me: Bool) -> String {
+            #"{"user_id":"\#(id)","login":"\#(name.lowercased())","display_name":"\#(name)","avatar_url":null,"viewer_count":5,"is_leader":false,"is_self":\#(me)}"#
+        }
+        let json = """
+        {"followed_live":[{"id":"1","user_id":"77","user_name":"A","user_login":"a","title":"t","viewer_count":3,"game_name":"g","thumbnail_url":"u","drops_earnable":true}],
+         "collaborations":{"77":{"shared_viewers":1500,"members":[\(m("77", "A", true)),\(m("78", "B", false))],"label":"1,500 watching together with B"}},
+         "shared_chats":{"90":{"members":[\(m("90", "C", true)),\(m("91", "D", false)),\(m("92", "E", false))],"label":"Sharing chat with D and E"}}}
+        """
+        let lists = try JSONDecoder().decode(HomeLists.self, from: Data(json.utf8))
+        #expect(lists.followedLive.first?.dropsEarnable == true)
+        let together = try #require(lists.group(for: "77"))
+        #expect(together.together && together.others.map(\.displayName) == ["B"])
+        #expect(together.label == "1,500 watching together with B")
+        let chat = try #require(lists.group(for: "90"))
+        #expect(!chat.together && chat.others.count == 2)
+        #expect(lists.group(for: "1") == nil && lists.group(for: nil) == nil)
+    }
+
+    @Test func channelIDsAreUniqueAndSorted() {
+        let row = { (id: String?) in TwitchStream(id: "s", userLogin: "x", userName: "x", title: "", viewerCount: 0, gameName: "", userID: id) }
+        #expect(HomeLists.channelIDs(of: [row("9"), row("10"), row("9"), row(nil), row("")]) == ["10", "9"])
+        #expect(HomeLists.channelIDs(of: []).isEmpty)
+    }
+
+    @Test func categoryTilesWidenWithTheWindow() {
+        #expect(WindowShape(width: 402, height: 874).categoryColumns == 3)
+        #expect(WindowShape(width: 640, height: 874).categoryColumns == 4)
+        #expect(WindowShape(width: 800, height: 600).categoryColumns == 5)
+        #expect(WindowShape(width: 1200, height: 800).categoryColumns == 6)
     }
 
     @Test func imageTemplatesFillTheirSize() {
