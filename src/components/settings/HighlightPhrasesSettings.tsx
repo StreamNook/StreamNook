@@ -96,7 +96,7 @@ const HighlightPhrasesSettings = () => {
   return (
     <SettingsSection
       label="Highlight Phrases"
-      description="Flash chat messages that match specific words, names, or patterns. Mentions of your own name and replies to you are always highlighted; these are extra."
+      description="Highlight chat messages that match specific words, names, or patterns, with a flash or, with Keep tinted, a color that stays. Mentions of your own name and replies to you are always highlighted; these are extra."
       bare
     >
       <div className="space-y-3">
@@ -209,6 +209,15 @@ const HighlightPhrasesSettings = () => {
                     className="accent-accent"
                   />
                   Regular expression
+                </label>
+                <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={phrase.hold === true}
+                    onChange={(e) => updatePhrase(phrase.id, { hold: e.target.checked })}
+                    className="accent-accent"
+                  />
+                  Keep tinted
                 </label>
               </div>
 

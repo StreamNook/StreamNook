@@ -54,6 +54,8 @@ struct HighlightPhrase {
     sound_id: Option<String>,
     #[serde(default)]
     cooldown_seconds: Option<f64>,
+    #[serde(default)]
+    hold: bool,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -70,6 +72,8 @@ struct HighlightUser {
     sound_id: Option<String>,
     #[serde(default)]
     cooldown_seconds: Option<f64>,
+    #[serde(default)]
+    hold: bool,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -86,6 +90,8 @@ struct HighlightBadge {
     sound_id: Option<String>,
     #[serde(default)]
     cooldown_seconds: Option<f64>,
+    #[serde(default)]
+    hold: bool,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -273,6 +279,7 @@ struct RuleMeta {
     color: String,
     sound_id: Option<String>,
     cooldown_ms: u64,
+    hold: bool,
 }
 
 struct BadgeRule {
@@ -422,6 +429,7 @@ impl CompiledRules {
                         color: p.color.clone(),
                         sound_id: normalize_sound(&p.sound_id),
                         cooldown_ms: cooldown_ms(p.cooldown_seconds),
+                        hold: p.hold,
                     });
                 }
                 Err(e) => errors.push(RuleError {
@@ -462,6 +470,7 @@ impl CompiledRules {
                 color: u.color.clone(),
                 sound_id: normalize_sound(&u.sound_id),
                 cooldown_ms: cooldown_ms(u.cooldown_seconds),
+                hold: u.hold,
             });
         }
 
@@ -486,6 +495,7 @@ impl CompiledRules {
                     color: b.color.clone(),
                     sound_id: normalize_sound(&b.sound_id),
                     cooldown_ms: cooldown_ms(b.cooldown_seconds),
+                    hold: b.hold,
                 },
                 key,
                 wildcard,
@@ -1376,6 +1386,7 @@ fn stamp(kind: &str, m: &RuleMeta) -> HighlightStamp {
         color: m.color.clone(),
         sound_id: m.sound_id.clone(),
         cooldown_ms: m.cooldown_ms,
+        hold: m.hold,
     }
 }
 
@@ -2052,6 +2063,31 @@ mod tests {
         assert_eq!(hl.rule_id, "a");
         assert_eq!(hl.kind, "phrase");
         assert_eq!(hl.cooldown_ms, 3000);
+        assert!(!hl.hold);
+    }
+
+    #[test]
+    fn keep_tinted_rides_the_stamp_for_every_rule_kind() {
+        let rules = rules_from(
+            r##"{
+                "phrases":[{"id":"p","pattern":"hello","enabled":true,"color":"#1","hold":true}],
+                "users":[{"id":"u","username":"alice","enabled":true,"color":"#2","hold":true}],
+                "badges":[{"id":"b","badge_key":"subscriber/*","enabled":true,"color":"#3","hold":true}]
+            }"##,
+            "{}",
+            "{}",
+        );
+        let mut m = msg("bob", "hello there");
+        eval_with(&rules, &mut m);
+        assert!(m.metadata.highlight.as_ref().unwrap().hold);
+        let mut m = msg("alice", "hi");
+        eval_with(&rules, &mut m);
+        assert!(m.metadata.highlight.as_ref().unwrap().hold);
+        let mut m = msg("carol", "hi");
+        eval_with(&rules, &mut m);
+        let hl = m.metadata.highlight.as_ref().unwrap();
+        assert_eq!(hl.rule_id, "b");
+        assert!(hl.hold);
     }
 
     #[test]

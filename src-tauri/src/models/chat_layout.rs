@@ -311,6 +311,10 @@ pub struct HighlightStamp {
     pub sound_id: Option<String>,
     #[serde(default)]
     pub cooldown_ms: u64,
+    /// Keep tinted: the row holds the rule's color while on screen instead
+    /// of only flashing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hold: bool,
 }
 
 /// A built-in event highlight, stamped by the Rust rule engine.

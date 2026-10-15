@@ -1,5 +1,6 @@
 // The steady tint a mention or reply to you keeps when Keep tinted is on
-// (chat_design.mention_hold). Chat rows and the settings preview both draw it
+// (chat_design.mention_hold), and that a phrase, user or badge highlight keeps
+// when its own rule has Keep tinted on. Chat rows and the settings preview both draw it
 // from here, at the Highlight Appearance opacity phrase and event highlights
 // use, so every highlighted row reads at one strength.
 
