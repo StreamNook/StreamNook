@@ -114,6 +114,14 @@ pub fn restart(app: &crate::rt::AppHandle, reason: &str) -> ! {
     app.restart()
 }
 
+/// `AppHandle::request_restart`, recorded first. Goes through the exit
+/// events, so stores flush and the single-instance lock is released before
+/// the new process starts.
+pub fn request_restart(app: &crate::rt::AppHandle, reason: &str) {
+    record(&format!("{reason}; restarting"));
+    app.request_restart();
+}
+
 /// `std::process::exit`, recorded first. Skips `RunEvent::Exit`, so callers
 /// flush their own stores.
 pub fn process_exit(code: i32, reason: &str) -> ! {
