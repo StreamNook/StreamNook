@@ -36,6 +36,7 @@ pub mod chat_rules;
 pub mod chat_row_view;
 pub mod command_catalog;
 pub mod chat_send_limiter;
+pub mod recent_emotes;
 pub mod room_modes;
 pub mod chatter_name;
 pub mod chat_burst;

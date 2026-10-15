@@ -341,6 +341,7 @@ pub async fn emote_picker(
         _ => None,
     };
     let favorites = favorite_id_list();
+    let recent = crate::services::recent_emotes::ids();
     let ffz_subwoofer = crate::commands::ffz::cached_is_subwoofer().await;
 
     // The joined chat's set first (it takes live 7TV changes), else the one
@@ -361,6 +362,7 @@ pub async fn emote_picker(
         room,
         channel_id: channel_id.as_deref(),
         favorites: &favorites,
+        recent: &recent,
         ffz_subwoofer,
         owner_names: &names,
         personal: personal.as_ref(),

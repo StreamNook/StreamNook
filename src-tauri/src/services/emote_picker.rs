@@ -15,6 +15,8 @@
 //!   first, then narrower, then by name. 7TV leads with the viewer's own
 //!   "Personal" emotes in a Twitch room.
 //! - Kick: one section per set label, in arrival order.
+//! - Favorites leads with "Recently used": the emotes the viewer sent last that
+//!   this room has, newest first (`recent_emotes`).
 //!
 //! Search is a case-insensitive substring match on names inside the tab.
 //! Cells carry whether they are a favorite, locked (an FFZ subscriber effect
@@ -147,6 +149,8 @@ pub struct Context<'a> {
     pub channel_id: Option<&'a str>,
     /// Favorite emote ids in the order they were saved.
     pub favorites: &'a [String],
+    /// Emote ids the viewer used most recently, newest first.
+    pub recent: &'a [String],
     pub ffz_subwoofer: bool,
     /// Twitch user id -> display name for subscription emote owners.
     pub owner_names: &'a HashMap<String, String>,
@@ -184,28 +188,32 @@ fn tab_emotes<'a>(set: &'a EmoteSet, tab: Tab, ctx: &Context<'a>) -> Vec<&'a Emo
             out.extend(set.seven_tv.iter().filter(|e| !mine.contains(e.id.as_str())));
             out
         }
-        Tab::Favorites => {
-            // Every emote this room can use, by id, first one wins.
-            let mut by_id: HashMap<&str, &Emote> = HashMap::new();
-            let all = personal_list(ctx.personal)
-                .into_iter()
-                .chain(set.twitch.iter())
-                .chain(set.seven_tv.iter())
-                .chain(set.bttv.iter())
-                .chain(set.ffz.iter())
-                .chain(set.kick.iter());
-            for e in all {
-                by_id.entry(e.id.as_str()).or_insert(e);
-            }
-            let mut seen = HashSet::new();
-            ctx.favorites
-                .iter()
-                .filter(|id| seen.insert(id.as_str()))
-                .filter_map(|id| by_id.get(id.as_str()).copied())
-                .collect()
-        }
+        Tab::Favorites => in_room(set, ctx, ctx.favorites),
     }
 }
+
+/// The emotes with these ids that this room can use, in the order given, once each.
+fn in_room<'a>(set: &'a EmoteSet, ctx: &Context<'a>, ids: &[String]) -> Vec<&'a Emote> {
+    let mut by_id: HashMap<&str, &Emote> = HashMap::new();
+    let all = personal_list(ctx.personal)
+        .into_iter()
+        .chain(set.twitch.iter())
+        .chain(set.seven_tv.iter())
+        .chain(set.bttv.iter())
+        .chain(set.ffz.iter())
+        .chain(set.kick.iter());
+    for e in all {
+        by_id.entry(e.id.as_str()).or_insert(e);
+    }
+    let mut seen = HashSet::new();
+    ids.iter()
+        .filter(|id| seen.insert(id.as_str()))
+        .filter_map(|id| by_id.get(id.as_str()).copied())
+        .collect()
+}
+
+/// How many recently used emotes the Favorites tab leads with: two rows.
+const RECENT_SHOWN: usize = 14;
 
 fn cell(
     e: &Emote,
@@ -405,6 +413,20 @@ pub fn build(set: Option<&EmoteSet>, ctx: &Context<'_>, tab: Option<Tab>, query:
             out.extend(width_sections(rest));
             out
         }
+        Tab::Favorites => {
+            let mut out = Vec::new();
+            let recent: Vec<PickerEmote> = in_room(set, ctx, ctx.recent)
+                .into_iter()
+                .filter(|e| matches(&e.name, &needle))
+                .take(RECENT_SHOWN)
+                .map(|e| cell(e, ctx, &favorites, &replaced, &personal_ids))
+                .collect();
+            if !recent.is_empty() {
+                out.push(PickerSection { key: "recent".into(), title: "Recently used".into(), columns: 7, emotes: recent });
+            }
+            out.extend(width_sections(picked));
+            out
+        }
         _ => width_sections(picked),
     };
 
@@ -467,6 +489,7 @@ mod tests {
             room: Room::Twitch,
             channel_id: Some("100"),
             favorites,
+            recent: &[],
             ffz_subwoofer: false,
             owner_names: names,
             personal: None,
@@ -642,5 +665,22 @@ mod tests {
             twitch("4", "d", "follower", Some("7")),
         ];
         assert_eq!(subscription_owners(&set), vec!["3".to_string(), "9".to_string()]);
+    }
+
+    #[test]
+    fn favorites_lead_with_what_was_used_lately() {
+        let mut set = EmoteSet::new();
+        set.twitch = vec![twitch("t1", "Kappa", "globals", None)];
+        set.bttv = vec![emote(EmoteProvider::BTTV, "b1", "catJAM")];
+        let names = HashMap::new();
+        let favorites = vec!["t1".to_string()];
+        let recent = vec!["b1".to_string(), "gone".to_string(), "t1".to_string()];
+        let mut c = ctx(&names, &favorites);
+        c.recent = &recent;
+        let a = build(Some(&set), &c, Some(Tab::Favorites), "");
+        assert_eq!(titles(&a), vec!["Recently used", "Standard"]);
+        let used: Vec<_> = a.sections[0].emotes.iter().map(|e| e.emote.name.as_str()).collect();
+        assert_eq!(used, vec!["catJAM", "Kappa"]);
+        assert_eq!(a.tabs[0], PickerTab { id: "favorites", count: 1 }, "the count is the favorites");
     }
 }
