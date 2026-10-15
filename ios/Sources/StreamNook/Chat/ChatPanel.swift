@@ -43,6 +43,17 @@ struct ChatPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             ChatListHost(session: session, readOnly: overlay, onProfile: onProfile, onToast: show, onOutcome: show)
+                // Rows fade out under a pinned banner rather than showing a cut sliver above it.
+                .mask {
+                    if let rooms, !overlay, !rooms.activePins.isEmpty {
+                        VStack(spacing: 0) {
+                            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 30)
+                            Color.black
+                        }
+                    } else {
+                        Color.black
+                    }
+                }
                 .overlay(alignment: .top) {
                     VStack(spacing: 4) {
                         if let rooms, !overlay, !rooms.activePins.isEmpty {

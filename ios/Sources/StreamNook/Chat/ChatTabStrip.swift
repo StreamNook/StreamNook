@@ -21,7 +21,7 @@ struct ChatTabStrip: View {
             .snGlass(Capsule())
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 10)
         .frame(height: Self.height)
         .overlay(alignment: .bottom) {
             SN.borderSubtle.frame(height: 1).accessibilityHidden(true)
@@ -56,7 +56,7 @@ private struct TabPill: View {
                     TabFace(url: tab.avatar, label: tab.label)
                     if tab.pinnedToStream {
                         Image(systemName: "dot.radiowaves.left.and.right")
-                            .font(.system(size: 11, weight: .bold))
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(SN.accent)
                             .accessibilityHidden(true)
                     }
@@ -68,16 +68,18 @@ private struct TabPill: View {
                         .foregroundStyle(active ? SN.textPrimary : SN.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                        .frame(maxWidth: 96, alignment: .leading)
                 }
+                // The pill hugs its name; a long name truncates within the 136 pt the content may take.
+                .fixedSize(horizontal: true, vertical: false)
                 .padding(.trailing, 4)
-                .frame(maxWidth: 136, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(tab.label)
             .accessibilityAddTraits(active ? .isSelected : [])
             if tab.pinnedToStream {
-                Color.clear.frame(width: 6, height: 1)
+                Color.clear.frame(width: 2, height: 1)
             } else {
                 Button(action: close) {
                     Image(systemName: "xmark")

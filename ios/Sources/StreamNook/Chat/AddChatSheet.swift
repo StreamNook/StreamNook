@@ -21,10 +21,12 @@ struct AddChatSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             SheetTitle(text: "Add a chat")
-            HStack(spacing: 8) {
+            // The magnifier and the text sit on the rows' face and name columns.
+            HStack(spacing: 12) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 16))
                     .foregroundStyle(SN.textMuted)
+                    .frame(width: 36)
                     .accessibilityHidden(true)
                 TextField("Search channels", text: $query)
                     .font(.sn(15))
@@ -33,11 +35,12 @@ struct AddChatSheet: View {
                     .autocorrectionDisabled()
                     .submitLabel(.search)
             }
-            .padding(.horizontal, 12)
+            .padding(.leading, 4)
+            .padding(.trailing, 12)
             .padding(.vertical, 10)
             .snGlass(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .padding(.horizontal, 16)
-            .padding(.bottom, 8)
+            .padding(.bottom, 19)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -47,7 +50,7 @@ struct AddChatSheet: View {
                             .tracking(0.6)
                             .foregroundStyle(SN.textMuted)
                             .padding(.horizontal, 4)
-                            .padding(.bottom, 6)
+                            .padding(.bottom, 2)
                             .accessibilityAddTraits(.isHeader)
                     }
                     if searching && list.isEmpty {
@@ -68,11 +71,24 @@ struct AddChatSheet: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.bottom, 16)
+                .padding(.vertical, 16)
             }
+            // Rows fade out at both edges instead of being cut.
+            .mask {
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 16)
+                    Color.black
+                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 16)
+                }
+            }
+            .padding(.top, -16)
         }
         .presentationDetents([.fraction(0.7)])
         .presentationDragIndicator(.visible)
+        // Nothing is see-through at 0 percent glassiness.
+        .presentationBackground {
+            if !Look.shared.frosted { SN.backgroundTertiary }
+        }
         .onAppear {
             if !rooms.addQuery.isEmpty {
                 query = rooms.addQuery
@@ -122,31 +138,35 @@ private struct RoomRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            face
-                .overlay(alignment: .bottomTrailing) {
-                    if row.isLive {
-                        Circle().fill(SN.live)
-                            .frame(width: 12, height: 12)
-                            .overlay { Circle().stroke(SN.background, lineWidth: 2) }
-                            .offset(x: 2, y: 2)
-                            .accessibilityHidden(true)
+            // An open room dims its face and name; the "Open" that says why stays readable.
+            Group {
+                face
+                    .overlay(alignment: .bottomTrailing) {
+                        if row.isLive {
+                            Circle().fill(SN.live)
+                                .frame(width: 12, height: 12)
+                                .overlay { Circle().stroke(SN.background, lineWidth: 2) }
+                                .offset(x: 2, y: 2)
+                                .accessibilityHidden(true)
+                        }
                     }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(row.userName.isEmpty ? row.userLogin : row.userName)
+                        .font(.sn(15))
+                        .foregroundStyle(SN.textPrimary)
+                        .lineLimit(1)
+                    Text(row.subline)
+                        .font(.sn(12.5))
+                        .foregroundStyle(SN.textMuted)
+                        .lineLimit(1)
                 }
-            VStack(alignment: .leading, spacing: 1) {
-                Text(row.userName.isEmpty ? row.userLogin : row.userName)
-                    .font(.sn(15))
-                    .foregroundStyle(SN.textPrimary)
-                    .lineLimit(1)
-                Text(row.subline)
-                    .font(.sn(12.5))
-                    .foregroundStyle(SN.textMuted)
-                    .lineLimit(1)
             }
+            .opacity(open ? 0.45 : 1)
             Spacer(minLength: 0)
             if open {
                 Text("Open")
                     .font(.sn(12))
-                    .foregroundStyle(SN.textMuted)
+                    .foregroundStyle(SN.textSecondary)
             } else if row.isLive, row.viewerCount > 0 {
                 HStack(spacing: 4) {
                     Image(systemName: "person.2.fill").font(.system(size: 13)).accessibilityHidden(true)
@@ -159,7 +179,6 @@ private struct RoomRow: View {
         .padding(.horizontal, 4)
         .padding(.vertical, 8)
         .contentShape(Rectangle())
-        .opacity(open ? 0.45 : 1)
         .accessibilityElement(children: .combine)
     }
 

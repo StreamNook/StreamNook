@@ -505,7 +505,7 @@ Scope note: the phone renders chat rows with the SHARED desktop row components (
 - [x] A 12 px caret that rotates 180 degrees over 180 ms `cubic-bezier(0.2,0.8,0.2,1)` when expanded (m:watch/PinnedBanner.tsx:L84-L90) (iPhone: `chevron.down` rotation)
 - [x] An unpainted pinned name gets a text shadow `0 1px 2px rgba(0,0,0,0.8)`; a painted one brings its own (m:watch/PinnedBanner.tsx:L37-L38) (iPhone: shadow on plain names)
 - [x] Tapping the header toggles expanded; the body unrolls by height and opacity over 200 ms `cubic-bezier(0.16,1,0.3,1)` (m:watch/PinnedBanner.tsx:L47-L50, m:watch/PinnedBanner.tsx:L93-L104) (iPhone: animated height)
-- [~] Expanded, the header shows the first pin's author with every badge on one line (badges that do not fit hide whole) and drops the preview (m:watch/PinnedBanner.tsx:L53-L78) (iPhone: same) (iPhone now: badges not seen on the pins seen)
+- [x] Expanded, the header shows the first pin's author with every badge on one line (badges that do not fit hide whole) and drops the preview (m:watch/PinnedBanner.tsx:L53-L78) (iPhone: same) (iPhone now: the pin author's badge art from Rust `sender_view`)
 - [x] Below, the first pin's full text at 13 px relaxed leading (m:watch/PinnedBanner.tsx:L106-L110) (iPhone: same)
 - [~] Then a hairline and each further pin as "<badges> <name>: <text>" (m:watch/PinnedBanner.tsx:L111-L131) (iPhone: same) (iPhone now: built; only single pins seen)
 - [x] The banner starts collapsed every time; desktop's `pinned_start_collapsed` and `pinned_collapsed_style` are not read (m:screens/WatchScreen.tsx:L167) (iPhone: start collapsed)

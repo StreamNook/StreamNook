@@ -2,21 +2,19 @@ import SNKit
 import SwiftUI
 
 /// The chat menu behind the composer's round button: the room's modes, then the actions for
-/// this room.
+/// this room. Sized to sit whole in the composer's half-height sheet.
 struct ChatMenuSheet: View {
     let model: ChatComposerModel
     let session: ChatSession
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
+        VStack(spacing: 0) {
+            SheetTitle(text: session.channel)
             List {
                 if let modes = session.modes, !modes.modes.isEmpty {
                     Section {
-                        HStack(spacing: 12) {
-                            Image(systemName: "lock.fill")
-                                .font(.system(size: 17))
-                                .foregroundStyle(.secondary)
+                        Label {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("This chat is in")
                                     .font(.sn(13.5))
@@ -24,10 +22,17 @@ struct ChatMenuSheet: View {
                                 Text(modes.modes.map(\.label).joined(separator: " · "))
                                     .font(.sn(14))
                             }
+                        } icon: {
+                            Image(systemName: "lock.fill")
+                                .foregroundStyle(.secondary)
                         }
                         .accessibilityElement(children: .combine)
                     } footer: {
-                        if let standing = modes.standing { Text(standing) }
+                        if let standing = modes.standing {
+                            Text(standing)
+                                .font(.sn(12.5))
+                                .foregroundStyle(SN.textSecondary)
+                        }
                     }
                 }
                 Section {
@@ -36,7 +41,7 @@ struct ChatMenuSheet: View {
                             dismiss()
                             rooms.addOpen = true
                         } label: {
-                            Label("Add a chat", systemImage: "bubble.left.and.bubble.right")
+                            Label("Add a chat", systemImage: "plus.bubble")
                         }
                     }
                     Button {
@@ -66,7 +71,7 @@ struct ChatMenuSheet: View {
                                 Spacer()
                                 Text(session.moderatorTools ? "On" : "Off")
                                     .font(.sn(12.5))
-                                    .foregroundStyle(SN.textMuted)
+                                    .foregroundStyle(SN.textSecondary)
                             }
                         }
                     }
@@ -76,18 +81,23 @@ struct ChatMenuSheet: View {
                             session.rooms?.close(tab.channel)
                         } label: {
                             Label("Close this chat", systemImage: "xmark")
+                                .foregroundStyle(SN.error)
                         }
                     }
                 } footer: {
                     if session.isModerator, session.moderatorTools {
                         Text("Long-press any message for delete, timeout and ban.")
+                            .font(.sn(12.5))
+                            .foregroundStyle(SN.textSecondary)
                     }
                 }
             }
+            .listSectionSpacing(16)
+            .contentMargins(.top, 4, for: .scrollContent)
+            .scrollContentBackground(.hidden)
             .tint(Color(ChatTheme.textPrimary))
-            .navigationTitle(session.channel)
-            .navigationBarTitleDisplayMode(.inline)
         }
+        .presentationDragIndicator(.visible)
     }
 }
 

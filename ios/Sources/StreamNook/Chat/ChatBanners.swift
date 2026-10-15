@@ -3,13 +3,15 @@ import SwiftUI
 
 /// The surface of a banner over (or under) moving chat: the popover tint at 90 percent, solid
 /// at 0 percent glassiness, with no blur, since a blur over repainting chat costs every frame.
+/// Paragraphs (an unrolled pin) sit on a near-solid tint so chat never reads through them.
 private struct StaticPopover: ViewModifier {
     var radius: CGFloat = 12
+    var tint = 0.9
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         content.background {
-            shape.fill(SN.backgroundTertiary.opacity(0.9 + (1 - Look.shared.glassiness) * 0.1))
+            shape.fill(SN.backgroundTertiary.opacity(tint + (1 - Look.shared.glassiness) * (1 - tint)))
                 .overlay { shape.stroke(SN.borderSubtle, lineWidth: 1) }
         }
     }
@@ -41,7 +43,7 @@ struct PinnedBanner: View {
                 }
             }
             .clipped()
-            .modifier(StaticPopover())
+            .modifier(StaticPopover(tint: expanded ? 0.97 : 0.9))
         }
     }
 
@@ -51,14 +53,14 @@ struct PinnedBanner: View {
                 .font(.system(size: 12))
                 .foregroundStyle(SN.accent)
                 .accessibilityHidden(true)
+            // The name hugs its preview; a long one gives way once the preview is down to 120 pt.
             PinnedSender(pin: first, allBadges: expanded)
-                .frame(maxWidth: expanded ? nil : 160, alignment: .leading)
-                .layoutPriority(expanded ? 1 : 0)
+                .layoutPriority(1)
             Text(expanded ? "" : first.text)
                 .font(.sn(12))
                 .foregroundStyle(SN.textPrimary.opacity(0.85))
                 .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(minWidth: expanded ? 0 : 120, maxWidth: .infinity, alignment: .leading)
             if pins.count > 1 {
                 Text("+\(pins.count - 1)")
                     .font(.sn(11, 600))
@@ -105,24 +107,26 @@ struct PinnedBanner: View {
 }
 
 /// A pin's sender as their chat rows draw them: their badges (only the role badge when the
-/// banner is collapsed) and their name in their paint or readable colour.
+/// banner is collapsed) and their name in their paint or readable color. A badge takes room only
+/// once its art has loaded, so the name never jumps over an empty slot.
 private struct PinnedSender: View {
     let pin: PinnedChat
     let allBadges: Bool
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 0) {
             ForEach(Array(badges.enumerated()), id: \.offset) { _, badge in
-                AsyncImage(url: URL(string: badge.url)) { image in
-                    image.resizable().scaledToFit()
-                } placeholder: {
-                    Color.clear
+                AsyncImage(url: URL(string: badge.url)) { phase in
+                    if let image = phase.image {
+                        image.resizable().scaledToFit()
+                            .frame(width: 14, height: 14)
+                            .padding(.trailing, 4)
+                    }
                 }
-                .frame(width: 14, height: 14)
                 .accessibilityHidden(true)
             }
             PaintedName(name: pin.shownName, color: pin.senderView?.nameColor ?? pin.senderColor,
-                        paint: pin.senderView?.paint, size: allBadges ? 13 : 12)
+                        paint: pin.senderView?.paint, size: 13)
         }
     }
 
@@ -133,7 +137,7 @@ private struct PinnedSender: View {
     }
 }
 
-/// A chatter's name in bold: their 7TV paint as a gradient when they wear one, else their colour
+/// A chatter's name in bold: their 7TV paint as a gradient when they wear one, else their color
 /// with a dark shadow to lift it off the banner.
 struct PaintedName: View {
     let name: String
