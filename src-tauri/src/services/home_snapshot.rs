@@ -1180,9 +1180,16 @@ fn stamp_drops_with(campaigns: &[DropCampaign], streams: &mut [TwitchStream]) ->
 }
 
 /// Stamps whether each Twitch row earns drops, from the campaigns the snapshot
-/// holds, for the lists served outside it (a category, a search).
+/// holds, for the lists served outside it (a category, a search). Such a list
+/// asked for before the first drops pass (30 s after boot) brings that pass
+/// forward, waiting for it as long as a list waits for its groups; the held
+/// lists are re-stamped when it lands, a served one is not.
 pub async fn stamp_drops(streams: &mut [TwitchStream]) {
     let Some(inner) = SERVICE.get() else { return };
+    let never = inner.snap.read().await.drops_at.is_none();
+    if never && signed_in().await && tokio::time::timeout(COLLAB_WAIT, refresh_drops(inner)).await.is_err() {
+        debug!("[HomeSnapshot] drops: no campaigns in {COLLAB_WAIT:?}, serving the list unstamped");
+    }
     stamp_drops_with(&inner.snap.read().await.drops_campaigns, streams);
 }
 
