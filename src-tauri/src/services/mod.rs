@@ -95,6 +95,7 @@ pub mod favorite_live_service;
 #[cfg(desktop)]
 pub mod chat_dock_live;
 pub mod live_announce;
+pub mod live_bookmark;
 pub mod live_notification_service;
 pub mod offline_room;
 pub mod onsite_notifications;
@@ -137,6 +138,9 @@ pub mod youtube_dash;
 pub mod youtube_potoken;
 pub mod youtube_sabr;
 pub mod twitch_auth_service;
+pub mod twitch_web_gql;
+pub mod twitch_integrity;
+pub mod bits;
 pub mod twitch_resolver;
 pub mod twitch_limits;
 pub mod token_vault;
@@ -152,6 +156,7 @@ pub mod channel_rewards;
 pub mod channel_state;
 pub mod collaboration;
 pub mod shared_chat;
+pub mod share_link;
 pub mod slash_commands;
 pub mod hls_kind;
 pub mod home_snapshot;
@@ -160,6 +165,7 @@ pub mod unified_following;
 pub mod muted_segments;
 pub mod vod_chapters;
 pub mod vod_progress_service;
+pub mod vod_sync;
 pub mod vod_storyboard;
 pub mod watch_heartbeat_service;
 pub mod whisper_history_service;
@@ -168,3 +174,12 @@ pub mod whisper_inbox;
 pub mod whisper_service;
 pub mod whisper_storage_service;
 pub mod window_visibility;
+// The operating system's own notifications (desktop).
+#[cfg(desktop)]
+pub mod system_notify;
+// Windows: the NSIS install, its updates, and the move from the portable exe.
+#[cfg(windows)]
+pub mod installer_update;
+// A notification when someone mentions you in a Twitch chat (desktop).
+#[cfg(desktop)]
+pub mod mention_notify;
