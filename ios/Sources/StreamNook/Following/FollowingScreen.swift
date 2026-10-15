@@ -22,7 +22,7 @@ struct FollowingScreen: View {
         .toolbarTitleDisplayMode(.inlineLarge)
         .toolbar {
             if model.signedIn {
-                ToolbarItem(placement: .topBarTrailing) { StreamViewMenu(view: $view) }
+                ToolbarItem(placement: .topBarTrailing) { StreamViewButtons(view: $view) }
             }
         }
     }
@@ -42,5 +42,8 @@ struct FollowingScreen: View {
         .task(id: model.signedIn) {
             if model.signedIn && !home.followedLoaded { await home.loadFollowing() }
         }
+        // Every visit asks for a fresh hype-train pass (the core floors it at 15 s); the first
+        // load above already brings one.
+        .onAppear { if home.followedLoaded { Task { await home.refreshHypeTrains() } } }
     }
 }

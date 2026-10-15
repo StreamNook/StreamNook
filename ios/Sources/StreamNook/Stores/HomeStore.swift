@@ -55,6 +55,15 @@ final class HomeStore {
         log.notice("browse listed \(self.recommended.count) streams")
     }
 
+    func refreshHypeTrains() async {
+        _ = try? await core.invoke("refresh_home_section", args: ["section": "hype_trains"])
+    }
+
+    /// New preview frames on the next paint, for a pulled list the core does not hold.
+    func renewPreviews() {
+        previewStamp += 1
+    }
+
     /// The app came back to the front. The core reloads the followed list when nobody has asked
     /// for it for a minute (then hype trains and Shared Viewership), and says whether it did, so
     /// the previews are renewed with it. The lists land as `home-snapshot` pushes.

@@ -45,6 +45,7 @@ struct MainShell: View {
         .statusBarHidden(immersive)
         .persistentSystemOverlays(immersive ? .hidden : .automatic)
         .onChange(of: nav.shellCovered, initial: true) { _, covered in Orientation.allowLandscape(covered) }
+        .onChange(of: nav.tab) { old, _ in if old == .browse { model.browseState.leftTab() } }
         #if DEBUG
         .sheet(item: $nav.menuSample) { sample in
             MenuSampleSheet(sample: sample)

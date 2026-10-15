@@ -34,9 +34,10 @@ struct BrowseScreen: View {
                     prompt: browse.mode == .live ? "Search channels" : "Search categories")
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
+        .submitLabel(.search)
         .toolbar {
             if browse.mode == .live {
-                ToolbarItem(placement: .topBarTrailing) { StreamViewMenu(view: $view) }
+                ToolbarItem(placement: .topBarTrailing) { StreamViewButtons(view: $view) }
             }
         }
         .refreshable { await refresh() }
@@ -80,12 +81,20 @@ struct BrowseScreen: View {
                              settleKey: browse.categoryResults != nil ? "q:\(browse.trimmed)" : "top",
                              open: { model.nav.push(.category($0)) },
                              more: browse.categoryResults == nil && browse.hasMore ? { await browse.loadMore(model.core) } : nil)
+                if browse.categoryResults == nil && browse.loadingMore {
+                    Text("Loading more categories")
+                        .font(.snCaption)
+                        .foregroundStyle(SN.textMuted)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                }
             }
         }
     }
 
     private func refresh() async {
         if !browse.trimmed.isEmpty {
+            home.renewPreviews()
             await browse.search(model.core, immediate: true)
         } else if browse.mode == .live {
             await home.loadRecommended(pulled: true)
@@ -109,9 +118,19 @@ final class BrowseModel {
     private(set) var categoriesLoading = false
     private(set) var hasMore = true
     private var cursor: String?
-    private var loadingMore = false
+    private(set) var loadingMore = false
 
     var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
+
+    /// Leaving the Browse tab drops the search and the mode, as on Android, where the tab's
+    /// screen unmounts; the loaded categories stay for the session.
+    func leftTab() {
+        mode = .live
+        query = ""
+        streamResults = nil
+        categoryResults = nil
+        searching = false
+    }
 
     /// Searches 350 ms after the last keystroke, in the mode showing; a cancelled search writes
     /// nothing, and a failed one shows no results.
