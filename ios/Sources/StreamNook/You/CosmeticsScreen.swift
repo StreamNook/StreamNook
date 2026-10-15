@@ -81,6 +81,7 @@ struct CosmeticsScreen: View {
                         PaintedText(text: user.displayName, font: .sn(19, 700), paint: screen.ext?.paints.first(where: \.worn)?.paint,
                                     fallback: nameColor(screen.ext?.chatColor), shadows: .all)
                             .lineLimit(1)
+                            .fixedSize()
                             .layoutPriority(1)
                         ForEach(wornBadgeURLs, id: \.self) { url in
                             CosmeticImage(url, animate: true).frame(width: 18, height: 18)

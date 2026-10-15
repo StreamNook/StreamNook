@@ -81,9 +81,7 @@ struct OwnIdentityCard: View {
             if !badges.isEmpty || wearing != nil {
                 HStack(spacing: 6) {
                     ForEach(badges.prefix(6)) { badge in
-                        CosmeticImage(badge.url, fallbacks: badge.fallbacks, animate: true)
-                            .frame(width: 18, height: 18)
-                            .accessibilityLabel(badge.label)
+                        WornBadge(badge: badge)
                     }
                     if !badges.isEmpty && wearing != nil {
                         Rectangle().fill(SN.borderLight).frame(width: 1, height: 14).padding(.horizontal, 3)
@@ -133,6 +131,20 @@ struct OwnIdentityCard: View {
             ], as: OwnIdentityData.self)
         } catch {
             log.debug("own identity unavailable: \(String(describing: error), privacy: .public)")
+        }
+    }
+}
+
+/// A badge you wear, 18 points; one whose every URL fails takes itself out rather than leave a gap.
+private struct WornBadge: View {
+    let badge: ProfileBadge
+    @State private var failed = false
+
+    var body: some View {
+        if !failed {
+            CosmeticImage(badge.url, fallbacks: badge.fallbacks, animate: true, onFailure: { failed = true })
+                .frame(width: 18, height: 18)
+                .accessibilityLabel(badge.label)
         }
     }
 }

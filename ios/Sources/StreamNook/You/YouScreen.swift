@@ -18,9 +18,12 @@ struct YouScreen: View {
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
 
-                label("Accounts")
-                AccountsCard(model: model, picks: picks)
-                    .padding(.horizontal, 16)
+                // Signed out, the card above already offers the sign-in; the accounts wait for it.
+                if user != nil {
+                    label("Accounts")
+                    AccountsCard(model: model, picks: picks)
+                        .padding(.horizontal, 16)
+                }
 
                 label("Open the app on")
                 GlazeSegments(MobileTab.allCases.map { Segment(value: $0, label: $0.title) },
@@ -92,7 +95,7 @@ private struct SignedOutIdentityCard: View {
             AtmosphereBand(look: nil).frame(height: OwnIdentityCard.band)
             Circle().fill(SN.surface)
                 .frame(width: OwnIdentityCard.avatar, height: OwnIdentityCard.avatar)
-                .overlay { Image(systemName: Symbol.you).font(.system(size: 30)).foregroundStyle(SN.textMuted) }
+                .overlay { Image(systemName: "person.fill").font(.system(size: 30)).foregroundStyle(SN.textMuted) }
                 .padding(4)
                 .background { Circle().fill(SN.background).overlay { Circle().fill(SN.floor) } }
                 .padding(.leading, 12)

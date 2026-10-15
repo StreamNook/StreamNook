@@ -5,15 +5,18 @@ import SwiftUI
 // profile sheet): the Atmosphere as a band across the top, the avatar cut into the card's edge
 // under it, and the name below the art, never on it.
 
-/// A member's Atmosphere as a band: the same wash their chat rows wear, drifting when motion is
-/// on. Without one, a quiet wash of `tint` so the card keeps its shape.
+/// A member's Atmosphere as a band: its swatch, the full-strength art the picker shows. (The chat
+/// row's wash is built to sit dim behind text, so as a banner it reads near black.) Without one, a
+/// quiet wash of `tint` so the card keeps its shape.
 struct AtmosphereBand: View {
     let look: AtmosphereLook?
     var tint: Color = SN.accent
 
     var body: some View {
         ZStack {
-            if let look {
+            if let look, !look.swatch.isEmpty {
+                FillView(fill: look.swatch)
+            } else if let look {
                 WashView(look: look)
             } else {
                 ZStack {
