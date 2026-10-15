@@ -121,11 +121,13 @@ import Testing
         var buffer = ChatRoomBuffer(cap: 100)
         _ = buffer.apply([.row(at("a", 100, user: "7")), .row(at("d", 400))])
         _ = buffer.apply([.clearChat(channel: nil, targetUserID: "7", targetUser: "u7", duration: 60)])
-        #expect(buffer.insertInTimeOrder([at("c", 300), at("b", 200), at("a", 100)]))
+        let added = buffer.insertInTimeOrder([at("c", 300), at("b", 200), at("a", 100)])
+        #expect(added)
         #expect(buffer.rows.map(\.id) == ["a", "b", "c", "d"])
         #expect(buffer.row("a")?.moderation == .timedOut(seconds: 60))
         #expect(buffer.row("c")?.live == false)
-        #expect(!buffer.insertInTimeOrder([at("b", 200)]))
+        let again = buffer.insertInTimeOrder([at("b", 200)])
+        #expect(!again)
     }
 }
 
