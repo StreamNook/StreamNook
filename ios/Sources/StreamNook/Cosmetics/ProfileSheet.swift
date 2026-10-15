@@ -240,7 +240,7 @@ struct ProfileSheet: View {
                     VStack(alignment: .leading, spacing: 6) {
                         ForEach(history) { row in
                             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                                Text(row.date.map { $0.formatted(.dateTime.hour().minute()) } ?? "")
+                                Text(row.date.map { $0.formatted(.dateTime.hour(.defaultDigits(amPM: .omitted)).minute()) } ?? "")
                                     .font(.sn(12).monospacedDigit())
                                     .foregroundStyle(SN.textMuted)
                                     .frame(width: 42, alignment: .leading)
