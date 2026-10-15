@@ -1,5 +1,5 @@
 use crate::services::emote_match::{self, Collector, Context, Order, Profile, Seed, Slot, Spec};
-use crate::services::emote_picker;
+use crate::services::emote_picker as picker;
 use crate::services::emote_prefetch_service::emote_cache_key;
 use crate::services::emote_service::{seventv_globals_snapshot, Emote, EmoteService, EmoteSet};
 use crate::services::providers::{kick_emotes, youtube, youtube_emotes};
@@ -327,8 +327,8 @@ pub async fn emote_picker(
     query: Option<String>,
     tier: Option<String>,
     state: State<'_, EmoteServiceState>,
-) -> Result<emote_picker::PickerAnswer, String> {
-    use emote_picker::{Room, Tab};
+) -> Result<picker::PickerAnswer, String> {
+    use picker::{Room, Tab};
     let room = Room::parse(provider.as_deref());
     let channel_id = channel_id.filter(|id| !id.is_empty());
     let tab = tab.as_deref().and_then(Tab::parse);
@@ -348,17 +348,17 @@ pub async fn emote_picker(
     // the page fetched for the channel.
     let joined = room == Room::Twitch && irc_service::with_channel_emotes(&channel, |_| ()).await.is_some();
     let owners = if joined {
-        irc_service::with_channel_emotes(&channel, emote_picker::subscription_owners).await
+        irc_service::with_channel_emotes(&channel, picker::subscription_owners).await
     } else {
         match channel_id.as_deref() {
-            Some(id) => state.0.read().await.with_cached_set(id, emote_picker::subscription_owners).await,
+            Some(id) => state.0.read().await.with_cached_set(id, picker::subscription_owners).await,
             None => None,
         }
     }
     .unwrap_or_default();
     let names = if owners.is_empty() { HashMap::new() } else { resolve_owner_names(owners).await };
 
-    let ctx = emote_picker::Context {
+    let ctx = picker::Context {
         room,
         channel_id: channel_id.as_deref(),
         favorites: &favorites,
@@ -367,7 +367,7 @@ pub async fn emote_picker(
         owner_names: &names,
         personal: personal.as_ref(),
     };
-    let run = |set: &EmoteSet| emote_picker::build(Some(set), &ctx, tab, &query);
+    let run = |set: &EmoteSet| picker::build(Some(set), &ctx, tab, &query);
     let found = if joined {
         irc_service::with_channel_emotes(&channel, run).await
     } else {
@@ -376,7 +376,7 @@ pub async fn emote_picker(
             None => None,
         }
     };
-    let mut answer = found.unwrap_or_else(|| emote_picker::build(None, &ctx, tab, &query));
+    let mut answer = found.unwrap_or_else(|| picker::build(None, &ctx, tab, &query));
     stamp_local_paths(answer.sections.iter_mut().flat_map(|s| s.emotes.iter_mut().map(|c| &mut c.emote)), tier);
     Ok(answer)
 }
