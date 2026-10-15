@@ -301,6 +301,7 @@ struct CategoryTile: View {
 }
 
 /// The category chin's type and its fixed height, shared by the tile and its skeleton.
+@MainActor
 enum CategoryChin {
     static let nameFont = Font.sn(12.5, 500)
     static let viewersFont = Font.snCaption
