@@ -19,6 +19,13 @@ enum CoreHost {
         if environment["SN_FAKE"] == "1" || steps.contains("fake") || steps.contains("fake:signedin") {
             return FakeCore(fixtures: FakeFixtures(signedIn: steps.contains("fake:signedin")))
         }
+        // `proxy:http://HOST:PORT` sends the core's upstream traffic through a proxy, so a
+        // shaping proxy on the desk can play a cellular link for the playback tests. Set before
+        // the core builds its first HTTP client, which is when it reads the variable.
+        if let proxy = steps.first(where: { $0.hasPrefix("proxy:") })?.dropFirst("proxy:".count) {
+            setenv("HTTPS_PROXY", String(proxy), 1)
+            setenv("NO_PROXY", "127.0.0.1,localhost", 1)
+        }
         #endif
         #if canImport(SNCore)
         return RustCore()

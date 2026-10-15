@@ -2531,8 +2531,9 @@ fn absolute_uri_attr(line: &str, base: &str, query: &str) -> String {
 
 /// The playlist for AVPlayer: `render_locked` with absolute URIs against `base`
 /// (`http://127.0.0.1:<port>/`), Apple's part target, a hold-back of
-/// `hold_parts` targets, and a preload hint.
-fn render_apple(edge: &LiveEdge, base: &str, target: f64, hold_parts: u64) -> String {
+/// `hold_parts` targets plus `extra_hold` seconds (the cushion `link_adapt`
+/// keeps after stalls on a poor link), and a preload hint.
+fn render_apple(edge: &LiveEdge, base: &str, target: f64, hold_parts: u64, extra_hold: f64) -> String {
     let plain = render_locked(edge);
     let mut s = String::with_capacity(plain.len() * 2);
     for line in plain.lines() {
@@ -2541,7 +2542,7 @@ fn render_apple(edge: &LiveEdge, base: &str, target: f64, hold_parts: u64) -> St
         } else if line.starts_with("#EXT-X-SERVER-CONTROL:") {
             s.push_str(&format!(
                 "#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK={:.3}",
-                target * hold_parts as f64
+                target * hold_parts as f64 + extra_hold
             ));
         } else if line.starts_with("#EXT-X-PART:") {
             s.push_str(&absolute_uri_attr(line, base, "?apple=1"));
@@ -2638,7 +2639,13 @@ impl LlOrigin {
             }
         };
         let view = runs.and_then(|_| apple_view(edge, Some(target)));
-        Some(render_apple(view.as_ref().unwrap_or(edge), base, target, hold_parts))
+        Some(render_apple(
+            view.as_ref().unwrap_or(edge),
+            base,
+            target,
+            hold_parts,
+            crate::services::link_adapt::extra_cushion(),
+        ))
     }
 
     /// A part for AVPlayer: held while it is still to come (a preload hint).
@@ -3715,7 +3722,7 @@ seg/50.ts\n\
         let edge = apple_fixture();
         assert_eq!(render_locked(&edge), expected);
         // Rendering the Apple variant first leaves the hls.js one untouched.
-        let _ = render_apple(&edge, "http://127.0.0.1:9/", 0.334, APPLE_HOLD_BACK_PARTS);
+        let _ = render_apple(&edge, "http://127.0.0.1:9/", 0.334, APPLE_HOLD_BACK_PARTS, 0.0);
         assert_eq!(render_locked(&edge), expected);
         assert!(!expected.contains("PRELOAD-HINT"));
         assert!(!expected.contains("apple=1"));
@@ -3723,7 +3730,7 @@ seg/50.ts\n\
 
     #[test]
     fn the_apple_playlist_is_absolute_and_hints_the_next_part() {
-        let pl = render_apple(&apple_fixture(), "http://127.0.0.1:9/", 0.334, APPLE_HOLD_BACK_PARTS);
+        let pl = render_apple(&apple_fixture(), "http://127.0.0.1:9/", 0.334, APPLE_HOLD_BACK_PARTS, 0.0);
         let expected = "#EXTM3U\n\
 #EXT-X-VERSION:9\n\
 #EXT-X-TARGETDURATION:2\n\
@@ -3838,7 +3845,7 @@ http://127.0.0.1:9/seg/50.ts\n\
         let before = render_locked(&edge);
         assert_eq!(before.matches("#EXT-X-PART:").count(), 24, "every fragment for hls.js");
         let view = apple_view(&edge, Some(0.333)).unwrap();
-        let pl = render_apple(&view, "http://127.0.0.1:9/", 0.333, APPLE_HOLD_BACK_PARTS);
+        let pl = render_apple(&view, "http://127.0.0.1:9/", 0.333, APPLE_HOLD_BACK_PARTS, 0.0);
         assert_eq!(render_locked(&edge), before);
         assert_eq!(pl.matches("#EXT-X-PART:").count(), 8);
         assert!(pl.contains("#EXT-X-PART-INF:PART-TARGET=0.333\n"));
