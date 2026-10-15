@@ -51,6 +51,11 @@ Grouping rules:
 - No dead bands: a row of chrome that holds one small control (a segment
   with two choices, a lone toggle) should share a row with something else
   where it can.
+- The bottom safe area is not a margin. A bar at the screen's foot (the
+  chat composer, a toolbar) reaches into the home-indicator inset and keeps
+  only the strip the indicator needs: its field ends about 20 points above
+  the screen edge. Stopping at the safe-area line and then padding again
+  left a 44 point black band under the composer.
 
 ## Type
 

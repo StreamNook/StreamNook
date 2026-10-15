@@ -272,10 +272,12 @@ struct QualitySheet: View {
     }
 }
 
-/// The scrim under the controls: dark at the top and the bottom, clear through the middle.
+/// The scrim under the controls: dark at the top and the bottom, clear through the middle. The top
+/// reaches past the header's category line, so the three lines stay readable over bright video.
 private struct Scrim: View {
     var body: some View {
-        LinearGradient(stops: [.init(color: .black.opacity(0.6), location: 0), .init(color: .clear, location: 0.38),
+        LinearGradient(stops: [.init(color: .black.opacity(0.66), location: 0), .init(color: .black.opacity(0.3), location: 0.26),
+                               .init(color: .clear, location: 0.44),
                                .init(color: .clear, location: 0.62), .init(color: .black.opacity(0.55), location: 1)],
                        startPoint: .top, endPoint: .bottom)
             .allowsHitTesting(false)
