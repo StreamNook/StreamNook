@@ -14,7 +14,7 @@ and decoded by `ios/Sources/SNKit/CosmeticsModels.swift`. FakeCore answers every
 | `user_profile_sheet_cached` | `userId, channelId?` | `ProfileSheetData?` | the last answer for that person and room, no network |
 | `get_sub_standing` | `login, channel, wornBadges` | `SubStanding?` | every word is Rust's |
 | `get_user_message_history_limited` | `userId, limit` | `[ProfileHistoryRow]` | then `watch_user_history { userKey }` / `user-history-message` / `unwatch_user_history` |
-| `own_identity_header` | `userId, login, displayName` | `OwnIdentityData` | worn badges (max 8), paint, 7TV picture, StreamNook badge, worn `atmosphere` / `cologne`; saved to disk |
+| `own_identity_header` | `userId, login, displayName` | `OwnIdentityData` | worn badges (max 8), paint, 7TV picture, StreamNook badge, worn `atmosphere` / `cologne`, Twitch `banner_url` (nil when none); saved to disk |
 | `own_identity_header_cached` | `userId` | `OwnIdentityData?` | first-frame paint |
 | `cosmetics_picker_state` | `userId` | `StreamNookPickerState` | owned badges with `worn`; atmospheres with `allowed`/`worn` (Default `tier` first); `show_chat_toggle` |
 | `external_cosmetics_state` | `userId, login` | `ExternalPickerState` | 7TV paints/badges with `worn`, `seventv_user_id`, Twitch selectable/earned badges, `chat_color`, `named_colors` |

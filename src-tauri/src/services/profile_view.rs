@@ -210,6 +210,21 @@ async fn worn_look(member_id: &str) -> (Option<registry::Atmosphere>, Option<mem
     }
 }
 
+/// A Twitch account's profile banner, read anonymously (public data); None
+/// when it has none or Twitch does not answer.
+async fn twitch_banner(user_id: &str) -> Option<String> {
+    let body = serde_json::json!({
+        "query": "query ProfileBanner($id: ID!) { user(id: $id) { bannerImageURL } }",
+        "variables": { "id": user_id },
+    });
+    let json = crate::services::twitch_web_gql::post(None, body, "ProfileBanner").await.ok()?;
+    banner_from_answer(&json)
+}
+
+fn banner_from_answer(json: &Value) -> Option<String> {
+    json.pointer("/data/user/bannerImageURL").and_then(Value::as_str).filter(|u| !u.is_empty()).map(String::from)
+}
+
 /// `@login` when it says something the display name does not (they differ
 /// beyond letter case).
 fn shown_login(login: &str, display_name: &str) -> Option<String> {
@@ -358,6 +373,9 @@ pub struct OwnIdentity {
     /// The 7TV picture drawn over the platform one, when the viewer shows 7TV pictures.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub picture: Option<AvatarPick>,
+    /// The Twitch profile banner; None when the account has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub banner_url: Option<String>,
     /// What is WORN, in order (Twitch, 7TV, the other chat apps), images only,
     /// deduped, at most eight.
     pub badges: Vec<ProfileBadge>,
@@ -410,7 +428,7 @@ pub fn cached_own_identity(user_id: &str) -> Option<OwnIdentity> {
 /// The viewer's own identity header, built fresh (and saved for the next cold
 /// launch).
 pub async fn own_identity(user_id: &str, login: &str, display_name: &str) -> OwnIdentity {
-    let (badges, inventory, resolved, pictures, (atmosphere, cologne)) = tokio::join!(
+    let (badges, inventory, resolved, pictures, (atmosphere, cologne), banner_url) = tokio::join!(
         crate::commands::badge_service::get_user_badges_with_earned_unified(
             user_id.to_string(),
             login.to_string(),
@@ -421,6 +439,7 @@ pub async fn own_identity(user_id: &str, login: &str, display_name: &str) -> Own
         crate::commands::identity::get_streamnook_identity_resolved(user_id.to_string()),
         resolver::profile_pictures(vec![user_id.to_string()]),
         worn_look(user_id),
+        twitch_banner(user_id),
     );
     let badges = badges.ok();
     // Twitch: what the account displays, minus the badges of one channel.
@@ -480,6 +499,7 @@ pub async fn own_identity(user_id: &str, login: &str, display_name: &str) -> Own
         paint,
         paint_def,
         picture: pictures.get(user_id).cloned().flatten().and_then(|p| pick_avatar(&p, 56.0, 3.0, true)),
+        banner_url,
         badges: worn,
         streamnook: registry::member_badge(user_id, false),
         atmosphere,
@@ -826,6 +846,15 @@ mod tests {
         assert_eq!(big.animated.as_deref(), Some("a4"));
         let small = pick_avatar(&picture, 18.0, 3.0, false).unwrap();
         assert_eq!(small.still, "s2");
+    }
+
+    #[test]
+    fn the_banner_reads_from_twitchs_answer() {
+        let set = serde_json::json!({"data": {"user": {"bannerImageURL": "https://static-cdn.jtvnw.net/b-profile_banner-480.png"}}});
+        assert_eq!(banner_from_answer(&set).as_deref(), Some("https://static-cdn.jtvnw.net/b-profile_banner-480.png"));
+        let none = serde_json::json!({"data": {"user": {"bannerImageURL": null}}});
+        assert_eq!(banner_from_answer(&none), None);
+        assert_eq!(banner_from_answer(&serde_json::json!({"data": {"user": null}})), None);
     }
 
     #[test]

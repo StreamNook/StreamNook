@@ -168,7 +168,7 @@ final class FakeCosmetics: Sendable {
             } ?? #"{"image_url":"\#(Self.house)streamnook-default","label":"StreamNook"}"#
             let worn = s.theme == "aurora" ? #"{"id":"aurora","name":"Aurora","look":\#(Self.auroraLook)}"#
                 : s.theme == "midnight" ? #"{"id":"midnight","name":"Midnight","look":\#(Self.midnightLook)}"# : "null"
-            return #"{"user_id":"\#(userID)","login":"nookviewer","display_name":"\#(s.displayName)","atmosphere":\#(worn),"paint":\#(paint),"badges":[{"id":"glhf-pledge","url":"https://static-cdn.jtvnw.net/badges/v1/3158e758-3cb4-43c5-94b3-7639810451c5/3","title":"GLHF Pledge"},{"id":"b-sub","url":"https://cdn.7tv.app/badge/01F37R3RFR0000K96678WEQT01/4x.webp","title":"7TV Subscriber"}],"streamnook":\#(member)}"#
+            return #"{"user_id":"\#(userID)","login":"nookviewer","display_name":"\#(s.displayName)","banner_url":"https://static-cdn.jtvnw.net/jtv_user_pictures/c51fdef0-593a-4cae-a308-2e8e7ce39e51-profile_banner-480.png","atmosphere":\#(worn),"paint":\#(paint),"badges":[{"id":"glhf-pledge","url":"https://static-cdn.jtvnw.net/badges/v1/3158e758-3cb4-43c5-94b3-7639810451c5/3","title":"GLHF Pledge"},{"id":"b-sub","url":"https://cdn.7tv.app/badge/01F37R3RFR0000K96678WEQT01/4x.webp","title":"7TV Subscriber"}],"streamnook":\#(member)}"#
         case "user_profile_sheet", "user_profile_sheet_cached":
             let id = args["userId"] as? String ?? "1"
             let login = args["login"] as? String ?? "chatter"
