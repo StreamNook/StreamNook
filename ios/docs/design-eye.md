@@ -209,6 +209,30 @@ gray, canceled, behavior, license.
 - No frost inside frost; menus over video stay opaque enough to read.
 - Media cards have no outline or top light: a grid of lit rectangles is
   noise.
+- A surface pinned over scrolling content (the Edit profile preview) is
+  solid at any Glassiness: content passes behind it, never through it.
+
+## Identity
+
+Every surface that shows a person (your You card, the Edit profile
+preview, a chatter's profile sheet) has one shape, built from
+`You/IdentityViews.swift`:
+
+- Their Atmosphere is the band across the top, drawn from its swatch (the
+  chat-row wash is built to sit dim behind text and reads near black as a
+  banner). No Atmosphere: a quiet tint of their name color.
+- Their picture is cut into the band's lower edge (`CutoutAvatar`), its
+  center on the edge. The StreamNook member badge sits on a disc at its
+  lower right.
+- Their name, in their 7TV paint, sits below the art, never on it, then a
+  single line of what they have on ("Aurora · Sunset paint").
+- One person, one picture, never two blended: the picture other viewers
+  see in chat (7TV's when they have one, else the platform's). When it is
+  the 7TV one, 7TV's mark sits on the avatar's lower left. Where both
+  pictures matter (the account rows, Edit profile), each gets its own row
+  and preview with its platform's mark.
+- Nothing that can be changed sits in the header itself; the header shows,
+  Edit profile changes.
 
 ## Before you show it: the polish pass
 
