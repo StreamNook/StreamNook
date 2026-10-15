@@ -25,6 +25,7 @@ channel-state
 chat-burst-progress
 chat-dock
 chat-dock-live
+chat-gap
 chat-identity-badges-found
 chat-identity-update-result
 chat-mention-ping

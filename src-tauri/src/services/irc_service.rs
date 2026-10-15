@@ -1823,6 +1823,7 @@ impl IrcService {
                     // (irc_session's contract), so this loss is a real one.
                     EVER_ESTABLISHED.store(true, std::sync::atomic::Ordering::Relaxed);
                     send_to_bridge("IRC_RECONNECTING".to_string(), false).await;
+                    crate::services::chat_outage::lost();
                     if session_lived_ms < SESSION_FLAP_THRESHOLD_MS {
                         consecutive_failures = consecutive_failures.saturating_add(1);
                         let d = reconnect_delay(consecutive_failures, false);
@@ -2124,6 +2125,7 @@ impl IrcService {
 
         // Send connection success notification
         send_to_bridge("IRC_CONNECTED".to_string(), false).await;
+        crate::services::chat_outage::restored().await;
 
         // Flush queued messages (dropped if no receiver is attached yet; the
         // WS handshake also drains this queue when a client connects).
@@ -3388,6 +3390,13 @@ impl IrcService {
     /// Whether `window` itself holds a Twitch channel.
     pub async fn held_by_window(window: &str) -> bool {
         held_by(&*get_channel_consumers().lock().await, window)
+    }
+
+    /// Every Twitch channel the connection is in, sorted.
+    pub async fn current_channel_list() -> Vec<String> {
+        let mut list: Vec<String> = get_current_channels().lock().await.iter().cloned().collect();
+        list.sort();
+        list
     }
 
     /// The Twitch channels `window` holds, sorted.

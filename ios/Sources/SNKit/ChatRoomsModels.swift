@@ -269,6 +269,21 @@ public struct ResubNotice: Codable, Sendable, Equatable {
     }
 }
 
+/// The rooms an outage left a gap in and the window to read back (Rust `chat_outage::Gap`).
+public struct ChatGap: Codable, Sendable, Equatable {
+    public var channels: [String]
+    public var afterMs: Int64
+    public var beforeMs: Int64
+
+    enum CodingKeys: String, CodingKey { case channels, afterMs = "after_ms", beforeMs = "before_ms" }
+
+    public init(channels: [String], afterMs: Int64, beforeMs: Int64) {
+        self.channels = channels
+        self.afterMs = afterMs
+        self.beforeMs = beforeMs
+    }
+}
+
 extension ChatSocketFrame {
     /// The room a frame belongs to, as a tab key (lowercased, no `#`); nil for frames every room
     /// shares (status words, heartbeats).

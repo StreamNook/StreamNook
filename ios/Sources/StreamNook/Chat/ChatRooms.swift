@@ -82,6 +82,13 @@ final class ChatRooms {
         let tabsEvents = core.events.stream("chat-tabs")
         let rebuilt = core.events.stream("chat-rebuilt")
         let channelState = core.events.stream("channel-state")
+        let gaps = core.events.stream("chat-gap")
+        Task { [weak self] in
+            for await event in gaps {
+                guard let gap = try? JSONDecoder().decode(ChatGap.self, from: Data(event.payloadJSON.utf8)) else { continue }
+                self?.backfill(gap)
+            }
+        }
         Task { [weak self] in
             for await event in tabsEvents {
                 guard let data = event.payloadJSON.data(using: .utf8),
@@ -336,6 +343,14 @@ final class ChatRooms {
         self.port = port
         read(port: port)
         for session in sessions.values { session.backfillGap() }
+    }
+
+    /// The connection is back after an outage: each room reads the rows it missed.
+    private func backfill(_ gap: ChatGap) {
+        chatLog.notice("chat back after an outage; backfilling \(gap.channels.count) room(s)")
+        for session in sessions.values where gap.channels.contains(session.channel) {
+            session.backfillGap(afterMs: gap.afterMs, beforeMs: gap.beforeMs)
+        }
     }
 
     // MARK: Pins and streaks

@@ -121,7 +121,8 @@ struct ChatLabView: View {
 ///
 /// The watch page's rooms:
 ///
-/// - `chatadd:LOGIN` opens LOGIN's chat beside the stream (found through the core's search)
+/// - `chatadd:LOGIN` opens LOGIN's chat beside the stream (found through the core's search);
+///   `chatadd:INDEX` the Browse list's stream at INDEX
 /// - `chattab:INDEX` puts the tab at INDEX on screen; `chattabclose:INDEX` closes it
 /// - `addchat[:QUERY]` opens the "Add a chat" sheet, searching QUERY; `addchat:close` closes it
 /// - `chatpins[:close]` unrolls (or rolls up) the pinned banner
@@ -195,7 +196,13 @@ enum ChatDrive {
         case "chatclose":
             ChatLab.close()
         case "chatadd":
-            await add(login: value, rooms: model.chat)
+            // A number picks the Browse list's stream at that index.
+            if let i = Int(value) {
+                guard model.streams.indices.contains(i) else { return true }
+                await add(login: model.streams[i].userLogin, rooms: model.chat)
+            } else {
+                await add(login: value, rooms: model.chat)
+            }
         case "chattab":
             let tabs = model.chat.tabs
             if let i = Int(value), tabs.indices.contains(i) { model.chat.select(tabs[i].channel) }
@@ -243,15 +250,16 @@ enum ChatDrive {
 
     /// The first Browse channel whose chat has pinned messages, opened beside the stream.
     private static func findPins(_ model: AppModel) async {
-        for stream in model.streams.prefix(30) {
-            guard let id = stream.userID, !id.isEmpty,
-                  let json = try? await model.core.invoke("get_pinned_chat_messages", args: ["channelId": id]),
+        for stream in model.streams.prefix(15) {
+            guard let id = stream.userID, !id.isEmpty else { continue }
+            log.notice("drive findpins probing \(stream.userLogin, privacy: .public)")
+            guard let json = try? await model.core.invoke("get_pinned_chat_messages", args: ["channelId": id]),
                   let pins = try? JSONDecoder().decode([PinnedChat].self, from: Data(json.utf8)), !pins.isEmpty else { continue }
             log.notice("drive findpins \(stream.userLogin, privacy: .public) has \(pins.count) pin(s)")
             await add(login: stream.userLogin, rooms: model.chat)
             return
         }
-        log.error("drive findpins: none of \(model.streams.prefix(30).count) channels has a pin")
+        log.error("drive findpins: none of \(model.streams.prefix(15).count) channels has a pin")
     }
 
     /// The first followed live channel with a watch streak to share, opened to watch.

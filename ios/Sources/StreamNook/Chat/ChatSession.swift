@@ -174,13 +174,16 @@ final class ChatSession {
         rooms?.noteModeratorTools(on, for: channel)
     }
 
-    /// After the connection was rebuilt: the rows missed meanwhile, in time order.
-    func backfillGap() {
+    /// After the connection was down or rebuilt: the rows missed meanwhile (within the window the
+    /// core names, else the recent history), in time order among the rows held.
+    func backfillGap(afterMs: Int64? = nil, beforeMs: Int64? = nil) {
         let core = core
         let channel = channel
         let pipeline = pipeline
         Task {
-            guard let json = try? await core.invoke("load_channel_history", args: ["channel": channel]),
+            guard let json = try? await core.invoke("load_channel_history", args: [
+                "channel": channel, "afterMs": afterMs, "beforeMs": beforeMs,
+            ]),
                   let rows = try? JSONDecoder().decode([ChatMessage].self, from: Data(json.utf8)) else { return }
             pipeline.backfill(rows)
         }

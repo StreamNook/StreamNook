@@ -153,6 +153,8 @@ pub mod channel_state;
 pub mod chat_tabs;
 // Rebuilds a dead Twitch chat connection with its rooms (the phones' reload and watchdog).
 pub mod chat_recovery;
+// A native shell's outage row and gap backfill for Twitch chat.
+pub mod chat_outage;
 pub mod collaboration;
 pub mod shared_chat;
 pub mod slash_commands;
