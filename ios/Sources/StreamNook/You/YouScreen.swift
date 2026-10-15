@@ -133,9 +133,9 @@ struct Avatar: View {
     }
 }
 
-/// One row per account: Twitch (the account the whole app runs on), 7TV (what lets you wear a paint
-/// and a 7TV badge), and Kick. Each row is the platform's mark, its name, one line of state, and its
-/// own sign in or out.
+/// One row per account: Twitch (the account the whole app runs on) and 7TV (what lets you wear a
+/// paint and a 7TV badge). Each row is the platform's mark, its name, one line of state, and its own
+/// sign in or out.
 struct AccountsCard: View {
     let model: AppModel
     let picks: CosmeticsScreenModel?
@@ -180,10 +180,7 @@ struct AccountsCard: View {
                     }
                 }
             }
-            divider
-            row(picture: AnyView(BrandTile(platform: .kick)), title: "Kick", detail: "Not signed in") {
-                BrandPill(label: "Sign in", fill: SN.kick, text: Color(red: 0.04, green: 0.1, blue: 0.01), enabled: false) {}
-            }
+            // Kick gets its row when Kick comes to the iPhone; a sign-in that leads nowhere is not shown.
         }
         .snPanel()
     }
