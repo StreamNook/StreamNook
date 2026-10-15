@@ -74,45 +74,48 @@ struct PlayerChrome: View {
         let live = watch.live
         let title = live?.title ?? stream.title
         let category = live?.gameName ?? stream.gameName
-        return VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                ChannelAvatar(url: stream.profileImageURL.flatMap(URL.init(string:)), name: stream.userName)
-                HStack(spacing: 4) {
-                    Text(stream.userName)
-                        .font(.sn(13.5, 600))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    if stream.isPartner { PartnerMark(size: 12) }
-                }
-                Spacer(minLength: 8)
+        // The avatar anchors a column: the name, the title and the category all start at the
+        // name's edge, so the three read as one block about one stream. The live red is the
+        // avatar's ring alone; the counts stay white so they never out-pull the name.
+        return HStack(alignment: .top, spacing: 10) {
+            ChannelAvatar(url: stream.profileImageURL.flatMap(URL.init(string:)), name: stream.userName)
+            VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
-                    let viewers = live?.viewerCount ?? stream.viewerCount
-                    HStack(spacing: 3) {
-                        Image(systemName: Symbol.viewers).font(.system(size: 11, weight: .semibold))
-                        Text(viewers.formatted()).font(.sn(12, 500).monospacedDigit())
+                    HStack(spacing: 4) {
+                        Text(stream.userName)
+                            .font(.sn(14, 600))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                        if stream.isPartner { PartnerMark(size: 12) }
                     }
-                    .foregroundStyle(SN.live)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("\(viewers.formatted()) viewers")
-                    TimelineView(.periodic(from: .now, by: 30)) { context in
-                        Text(PlayerText.uptime(startedAt: live?.startedAt ?? stream.startedAt, now: context.date))
-                            .font(.sn(12).monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.7))
+                    Spacer(minLength: 8)
+                    HStack(spacing: 10) {
+                        let viewers = live?.viewerCount ?? stream.viewerCount
+                        HStack(spacing: 4) {
+                            Image(systemName: Symbol.viewers).font(.system(size: 10, weight: .medium))
+                            Text(viewers.formatted()).monospacedDigit()
+                        }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("\(viewers.formatted()) viewers")
+                        TimelineView(.periodic(from: .now, by: 30)) { context in
+                            Text(PlayerText.uptime(startedAt: live?.startedAt ?? stream.startedAt, now: context.date))
+                                .monospacedDigit()
+                        }
                     }
+                    .font(.sn(12, 500))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .fixedSize()
                 }
-                .fixedSize()
-            }
-            Text(title)
-                .font(.sn(12.5))
-                .foregroundStyle(.white.opacity(0.85))
-                .lineLimit(1)
-                .padding(.top, 4)
-            if !category.isEmpty {
-                Text(category)
-                    .font(.sn(11.5))
-                    .foregroundStyle(.white.opacity(0.6))
+                Text(title)
+                    .font(.sn(13))
+                    .foregroundStyle(.white.opacity(0.85))
                     .lineLimit(1)
-                    .padding(.top, 1)
+                if !category.isEmpty {
+                    Text(category)
+                        .font(.sn(12))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .lineLimit(1)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -126,9 +129,12 @@ struct PlayerChrome: View {
             onTouch()
         } label: {
             Image(systemName: watch.paused ? Symbol.play : Symbol.pause)
-                .font(.system(size: 30))
+                .font(.system(size: 28))
                 .foregroundStyle(.white)
                 .contentTransition(.symbolEffect(.replace))
+                // The triangle's weight sits at its flat left side; centred by its box it looks
+                // pushed left, so it moves right (see design-eye.md, optical nudges).
+                .offset(x: watch.paused ? Optical.playNudge(28) : 0)
                 .frame(width: 64, height: 64)
                 .background(Circle().fill(Color.black.opacity(0.45)))
                 .contentShape(Circle())
@@ -137,38 +143,44 @@ struct PlayerChrome: View {
         .accessibilityLabel(watch.paused ? "Play" : "Pause")
     }
 
+    /// The bar's symbols: one size and one weight, outlines throughout, so no button out-pulls
+    /// another.
+    private static let barIcon: CGFloat = 20
+
     private var bottomBar: some View {
         HStack(spacing: 0) {
-            Text("LIVE")
-                .font(.sn(11, 600))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(SN.live.opacity(0.9)))
-                .accessibilityLabel("Live")
+            // A status, not a control: a dot and the word, no filled badge.
+            HStack(spacing: 5) {
+                LiveDot(size: 7)
+                Text("LIVE").font(.sn(12, 700)).tracking(0.4).foregroundStyle(.white)
+            }
+            .padding(.leading, 4)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Live")
             Spacer(minLength: 8)
             IconButton(symbol: watch.muted ? Symbol.unmute : Symbol.mute, label: watch.muted ? "Unmute" : "Mute",
-                       size: 21, tint: .white) {
+                       size: Self.barIcon, weight: .medium, tint: .white) {
                 watch.toggleMute()
                 onTouch()
             }
             if let stream {
                 ShareLink(item: URL(string: "https://www.twitch.tv/\(stream.userLogin)")!) {
                     Image(systemName: Symbol.share)
-                        .font(.system(size: 21))
+                        .font(.system(size: Self.barIcon, weight: .medium))
                         .foregroundStyle(.white)
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .accessibilityLabel("Share stream")
             }
-            IconButton(symbol: Symbol.minimize, label: "Minimize player", size: 21, tint: .white, action: onMinimize)
+            IconButton(symbol: Symbol.minimize, label: "Minimize player", size: Self.barIcon, weight: .medium, tint: .white,
+                       action: onMinimize)
             Button {
                 onTouch()
                 Task { await model.restartStream() }
             } label: {
                 Image(systemName: Symbol.refresh)
-                    .font(.system(size: 21))
+                    .font(.system(size: Self.barIcon, weight: .medium))
                     .foregroundStyle(.white)
                     .symbolEffect(.rotate, options: .repeat(.continuous), isActive: watch.restarting)
                     .frame(width: 44, height: 44)
@@ -176,11 +188,13 @@ struct PlayerChrome: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Restart stream")
-            IconButton(symbol: Symbol.quality, label: "Quality", size: 21, tint: .white) { qualityShown = true }
+            IconButton(symbol: Symbol.quality, label: "Quality", size: Self.barIcon, weight: .medium, tint: .white) {
+                qualityShown = true
+            }
             if landscape {
                 let on = model.nav.landscapeChat
                 IconButton(symbol: on ? Symbol.chatShown : Symbol.chatShow, label: on ? "Hide chat" : "Show chat",
-                           size: 21, tint: .white) {
+                           size: Self.barIcon, weight: .medium, tint: .white) {
                     onTouch()
                     withAnimation(SNMotion.run(.easeOut(duration: 0.18))) { model.nav.landscapeChat.toggle() }
                 }
@@ -196,8 +210,8 @@ struct PlayerChrome: View {
     #endif
 }
 
-/// The quality sheet: the qualities the stream offers in the core's order, "best" as "Auto"
-/// (capped to the screen), the pick ticked. Picking closes the sheet, then switches.
+/// The quality sheet: "best" as "Auto" (capped to the screen) first, then the qualities the
+/// stream offers in the core's order, the pick ticked. Picking closes the sheet, then switches.
 struct QualitySheet: View {
     let model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -217,7 +231,7 @@ struct QualitySheet: View {
             } else {
                 let ticked = PlayerText.tickedQuality(picked: watch.pickedQuality, saved: watch.savedQuality)
                 VStack(spacing: 0) {
-                    ForEach(watch.available, id: \.self) { name in
+                    ForEach(PlayerText.qualityRows(watch.available), id: \.self) { name in
                         Button {
                             dismiss()
                             Task { await model.changeQuality(name) }
@@ -229,14 +243,16 @@ struct QualitySheet: View {
                                         .foregroundStyle(SN.textPrimary)
                                     if name == "best" {
                                         Text("Matches your screen")
-                                            .font(.sn(11))
+                                            .font(.sn(12))
                                             .foregroundStyle(SN.textMuted)
                                     }
                                 }
                                 Spacer()
                                 if name == ticked {
+                                    // The tick matches the label's size and sits one weight above
+                                    // it, never heavier than the words it marks.
                                     Image(systemName: Symbol.check)
-                                        .font(.system(size: 18, weight: .semibold))
+                                        .font(.system(size: 15, weight: .semibold))
                                         .foregroundStyle(SN.accent)
                                 }
                             }
@@ -256,17 +272,20 @@ struct QualitySheet: View {
     }
 }
 
-/// The scrim under the controls: dark at the top and the bottom, clear through the middle.
+/// The scrim under the controls: dark at the top and the bottom, clear through the middle. The top
+/// reaches past the header's category line, so the three lines stay readable over bright video.
 private struct Scrim: View {
     var body: some View {
-        LinearGradient(stops: [.init(color: .black.opacity(0.6), location: 0), .init(color: .clear, location: 0.38),
+        LinearGradient(stops: [.init(color: .black.opacity(0.66), location: 0), .init(color: .black.opacity(0.3), location: 0.26),
+                               .init(color: .clear, location: 0.44),
                                .init(color: .clear, location: 0.62), .init(color: .black.opacity(0.55), location: 1)],
                        startPoint: .top, endPoint: .bottom)
             .allowsHitTesting(false)
     }
 }
 
-/// The channel's face in the player: 28 points with a live-red ring, or its first letter.
+/// The channel's face in the player: 32 points (as tall as the name and title lines beside it)
+/// with a live-red ring, or its first letter.
 private struct ChannelAvatar: View {
     let url: URL?
     let name: String
@@ -283,7 +302,7 @@ private struct ChannelAvatar: View {
                 letter
             }
         }
-        .frame(width: 28, height: 28)
+        .frame(width: 32, height: 32)
         .clipShape(Circle())
         .overlay(Circle().stroke(SN.live.opacity(0.8), lineWidth: 2))
         .accessibilityHidden(true)
