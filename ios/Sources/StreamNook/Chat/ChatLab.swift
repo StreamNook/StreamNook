@@ -118,18 +118,29 @@ struct ChatLabView: View {
 /// - `chatreply` drafts a reply to the newest row
 /// - `chatmod[:off]` turns the room's moderator tools on (or off) for the fan
 /// - `chatclose` closes the stage
+///
+/// The watch page's rooms:
+///
+/// - `chatadd:LOGIN` opens LOGIN's chat beside the stream (found through the core's search)
+/// - `chattab:INDEX` puts the tab at INDEX on screen; `chattabclose:INDEX` closes it
+/// - `addchat[:QUERY]` opens the "Add a chat" sheet, searching QUERY; `addchat:close` closes it
+/// - `chatreload` reloads the room on screen (the core rebuilds the connection)
+/// - `chatrooms` logs the tabs, the room on screen, its pins and streaks
+/// - `findpins` opens, beside the stream, the first Browse channel with pinned messages
+/// - `findstreak` opens the first followed live channel with a watch streak to share
 @MainActor
 enum ChatDrive {
     private static weak var model: AppModel?
     /// The chat stage when it is open, otherwise the watch layer's room.
-    static var currentSession: ChatSession? { ChatLab.session ?? model?.watch.chat }
+    static var currentSession: ChatSession? { ChatLab.session ?? model?.chat.activeSession }
     static var currentList: ChatListView? { currentSession.flatMap { ChatRegistry.shared.list(for: $0) } }
 
     static func run(_ name: String, _ value: String, model: AppModel) async -> Bool {
         self.model = model
-        // Steps that write (send, fan actions that can delete, time out or ban, moderator tools)
-        // only ever run against a fake core, never a signed-in account.
-        if ["chatsend", "chatfan", "chatfanend", "chatmod"].contains(name), !(currentSession?.core is FakeCore) {
+        // Steps that write (send, moderator tools) only ever run against a fake core, never a
+        // signed-in account. The fan steps only open and point it; nothing is ever released on a
+        // bucket, so they run anywhere.
+        if ["chatsend", "chatmod"].contains(name), !(currentSession?.core is FakeCore) {
             log.error("drive: \(name, privacy: .public) refused on a real core")
             return true
         }
@@ -182,10 +193,75 @@ enum ChatDrive {
             currentSession?.moderatorTools = value != "off"
         case "chatclose":
             ChatLab.close()
+        case "chatadd":
+            await add(login: value, rooms: model.chat)
+        case "chattab":
+            let tabs = model.chat.tabs
+            if let i = Int(value), tabs.indices.contains(i) { model.chat.select(tabs[i].channel) }
+        case "chattabclose":
+            let tabs = model.chat.tabs
+            if let i = Int(value), tabs.indices.contains(i) { model.chat.close(tabs[i].channel) }
+        case "addchat":
+            if value == "close" {
+                model.chat.addOpen = false
+            } else {
+                model.chat.addQuery = value
+                model.chat.addOpen = true
+            }
+        case "chatreload":
+            if let session = model.chat.activeSession { ChatReload.reload(session) }
+        case "chatrooms":
+            let rooms = model.chat
+            let tabs = rooms.tabs.map {
+                "\($0.channel)\($0.pinnedToStream ? "*" : "")=\(rooms.sessions[$0.channel]?.rowCount ?? -1)"
+            }.joined(separator: ",")
+            let streaks = rooms.activeStreaks
+            log.notice("drive rooms tabs \(tabs, privacy: .public) active \(rooms.state.activeChannel ?? "-", privacy: .public) rev \(rooms.state.revision) pins \(rooms.activePins.count) watch \(streaks.watch?.title ?? "-", privacy: .public) resub \(streaks.resub?.title ?? "-", privacy: .public) mod \(rooms.activeSession?.isModerator ?? false) rows \(rooms.activeSession?.rowCount ?? 0)")
+        case "findpins":
+            await findPins(model)
+        case "findstreak":
+            await findStreak(model)
         default:
             return false
         }
         return true
+    }
+
+    /// Opens LOGIN's room beside the stream, as picking it in the sheet would.
+    private static func add(login: String, rooms: ChatRooms) async {
+        let found = (try? await rooms.core.invoke("search_chat_rooms", args: ["query": login], as: [ChatRoomRow].self)) ?? []
+        guard let row = found.first(where: { $0.provider == "twitch" && $0.userLogin == login.lowercased() }) else {
+            log.error("drive chatadd: \(login, privacy: .public) not found in \(found.count) results")
+            return
+        }
+        log.notice("drive chatadd \(row.userLogin, privacy: .public) live \(row.isLive)")
+        rooms.add(row)
+    }
+
+    /// The first Browse channel whose chat has pinned messages, opened beside the stream.
+    private static func findPins(_ model: AppModel) async {
+        for stream in model.streams.prefix(30) {
+            guard let id = stream.userID, !id.isEmpty,
+                  let json = try? await model.core.invoke("get_pinned_chat_messages", args: ["channelId": id]),
+                  let pins = try? JSONDecoder().decode([PinnedChat].self, from: Data(json.utf8)), !pins.isEmpty else { continue }
+            log.notice("drive findpins \(stream.userLogin, privacy: .public) has \(pins.count) pin(s)")
+            await add(login: stream.userLogin, rooms: model.chat)
+            return
+        }
+        log.error("drive findpins: none of \(model.streams.prefix(30).count) channels has a pin")
+    }
+
+    /// The first followed live channel with a watch streak to share, opened to watch.
+    private static func findStreak(_ model: AppModel) async {
+        for stream in model.home.lists.followedLive {
+            guard let id = stream.userID, !id.isEmpty,
+                  let milestone = try? await model.core.invoke("get_watch_streak", args: ["channelId": id],
+                                                              as: WatchStreakMilestone?.self) else { continue }
+            log.notice("drive findstreak \(stream.userLogin, privacy: .public): \(milestone.title, privacy: .public)")
+            model.startWatching(stream)
+            return
+        }
+        log.error("drive findstreak: no followed live channel has a streak to share")
     }
 
     private static var composer: ChatComposerModel? {

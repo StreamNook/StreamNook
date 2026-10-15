@@ -113,6 +113,20 @@ import Testing
         #expect(change.appended.isEmpty)
         #expect(buffer.rows.count == 1)
     }
+
+    @Test func anOutageBackfillFillsTheGapInTimeOrderAndKeepsMarks() {
+        func at(_ id: String, _ ms: Int, user: String = "1") -> ChatMessage {
+            ChatMessage(id: id, userID: user, username: "u", content: "x", tags: ["tmi-sent-ts": "\(ms)"])
+        }
+        var buffer = ChatRoomBuffer(cap: 100)
+        _ = buffer.apply([.row(at("a", 100, user: "7")), .row(at("d", 400))])
+        _ = buffer.apply([.clearChat(channel: nil, targetUserID: "7", targetUser: "u7", duration: 60)])
+        #expect(buffer.insertInTimeOrder([at("c", 300), at("b", 200), at("a", 100)]))
+        #expect(buffer.rows.map(\.id) == ["a", "b", "c", "d"])
+        #expect(buffer.row("a")?.moderation == .timedOut(seconds: 60))
+        #expect(buffer.row("c")?.live == false)
+        #expect(!buffer.insertInTimeOrder([at("b", 200)]))
+    }
 }
 
 @Suite struct ImageCachingTests {

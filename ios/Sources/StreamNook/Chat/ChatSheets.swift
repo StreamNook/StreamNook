@@ -31,17 +31,56 @@ struct ChatMenuSheet: View {
                     }
                 }
                 Section {
-                    Button {
-                        dismiss()
-                        model.commandsOpen = true
-                    } label: {
-                        Label("Chat commands", systemImage: "terminal")
+                    if let rooms = session.rooms {
+                        Button {
+                            dismiss()
+                            rooms.addOpen = true
+                        } label: {
+                            Label("Add a chat", systemImage: "bubble.left.and.bubble.right")
+                        }
                     }
                     Button {
                         dismiss()
                         ChatReload.reload(session)
                     } label: {
                         Label("Reload this chat", systemImage: "arrow.clockwise")
+                    }
+                    Button {
+                        dismiss()
+                        model.commandsOpen = true
+                    } label: {
+                        Label("Chat commands", systemImage: "terminal")
+                    }
+                    // Only where the actions would succeed: Helix refuses them without mod powers here.
+                    if session.isModerator {
+                        Button {
+                            session.setModeratorTools(!session.moderatorTools)
+                        } label: {
+                            HStack {
+                                Label {
+                                    Text("Moderator tools")
+                                } icon: {
+                                    Image(systemName: session.moderatorTools ? "checkmark.shield.fill" : "checkmark.shield")
+                                        .foregroundStyle(session.moderatorTools ? SN.accent : SN.textSecondary)
+                                }
+                                Spacer()
+                                Text(session.moderatorTools ? "On" : "Off")
+                                    .font(.sn(12.5))
+                                    .foregroundStyle(SN.textMuted)
+                            }
+                        }
+                    }
+                    if let tab = session.rooms?.tabs.first(where: { $0.login == session.channel }), !tab.pinnedToStream {
+                        Button(role: .destructive) {
+                            dismiss()
+                            session.rooms?.close(tab.channel)
+                        } label: {
+                            Label("Close this chat", systemImage: "xmark")
+                        }
+                    }
+                } footer: {
+                    if session.isModerator, session.moderatorTools {
+                        Text("Long-press any message for delete, timeout and ban.")
                     }
                 }
             }
@@ -52,10 +91,16 @@ struct ChatMenuSheet: View {
     }
 }
 
-/// Drops and retakes the room's connection.
+/// "Reload this chat": an open room rebuilds the whole Twitch connection with every room (a
+/// reload is reached for because messages stopped, and a re-join has no connection to ride);
+/// the chat stage drops and retakes its own.
 @MainActor
 enum ChatReload {
     static func reload(_ session: ChatSession) {
+        if let rooms = session.rooms {
+            rooms.reload(session)
+            return
+        }
         session.stop()
         session.restart()
     }

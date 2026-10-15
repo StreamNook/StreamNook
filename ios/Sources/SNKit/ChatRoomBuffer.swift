@@ -170,6 +170,33 @@ public struct ChatRoomBuffer: Sendable {
         return excess
     }
 
+    /// Rows missed while the connection was down (an outage backfill), placed in time order among
+    /// the rows held. Rows already held stay as they are, moderation marks included. A row with
+    /// no send time keeps the place of the row before it. Answers whether anything was added.
+    public mutating func insertInTimeOrder(_ messages: [ChatMessage]) -> Bool {
+        var seen = Set<String>()
+        let fresh = messages.filter { index[$0.id] == nil && seen.insert($0.id).inserted }
+        guard !fresh.isEmpty else { return false }
+        var last: Int64 = 0
+        var keyed: [(at: Int64, order: Int, row: ChatRowModel)] = []
+        for (i, row) in (rows + fresh.map { ChatRowModel(message: $0, live: false) }).enumerated() {
+            let at = Self.sentAt(row.message) ?? last
+            last = at
+            keyed.append((at, i, row))
+        }
+        keyed.sort { $0.at == $1.at ? $0.order < $1.order : $0.at < $1.at }
+        rows = keyed.map(\.row)
+        base = 0
+        index = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($1.id, $0) })
+        _ = trim()
+        return true
+    }
+
+    /// When Twitch says the message was sent, in milliseconds.
+    static func sentAt(_ message: ChatMessage) -> Int64? {
+        message.tags["tmi-sent-ts"].flatMap { Int64($0) }
+    }
+
     /// Rows older than these were dropped; the room starts empty again.
     public mutating func removeAll() {
         rows.removeAll()

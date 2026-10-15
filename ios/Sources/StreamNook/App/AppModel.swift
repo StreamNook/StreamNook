@@ -23,6 +23,8 @@ final class AppModel {
     let home: HomeStore
     /// Browse's mode and search, kept here so they survive the tab being rebuilt.
     let browseState = BrowseModel()
+    /// The open chat rooms: the watched stream's and those opened beside it.
+    let chat: ChatRooms
 
     private(set) var phase = Phase.booting
     private(set) var started = false
@@ -37,6 +39,7 @@ final class AppModel {
 
     init() {
         home = HomeStore(core: core)
+        chat = ChatRooms(core: core)
         let watch = watch
         watch.nowPlaying.onPlay = { watch.player.play() }
         watch.nowPlaying.onPause = { watch.player.pause() }
@@ -46,6 +49,9 @@ final class AppModel {
             withAnimation(SNMotion.run(SNMotion.settleBack)) { self.nav.playerMode = .full }
         }
         watch.pip.onClose = { [weak self] in self?.stopWatching() }
+        chat.toasts = toasts
+        let home = home
+        chat.followedLive = { home.lists.followedLive }
     }
 
     var signedIn: Bool { signIn.signedIn }
@@ -79,6 +85,7 @@ final class AppModel {
         await signIn.boot(core: core)
         host.start(core: core, cookies: signIn.cookies)
         home.start()
+        chat.start()
         #if DEBUG
         if Drive.skipsSetup { setupClosed = true }
         #endif
@@ -148,6 +155,8 @@ final class AppModel {
     func startWatching(_ stream: TwitchStream) {
         nav.open(stream)
         watch.open(stream, core: core)
+        // Chat needs the account; signing in later points the stream tab then (see `ChatArea`).
+        if signedIn { chat.syncStream(stream) }
     }
 
     /// Switches the playing stream's quality (the relay restarts on its port) and saves the pick
@@ -213,6 +222,8 @@ final class AppModel {
     func stopWatching() {
         watch.close(core: core)
         nav.close()
+        // The stream's room closes; rooms opened beside it stay.
+        chat.syncStream(nil)
     }
 
     func signOut() async {
@@ -228,6 +239,7 @@ final class AppModel {
     func lifecycle(_ state: String) {
         guard started else { return }
         core.lifecycle(state)
+        if state == "background" { chat.backgrounded(inPiP: watch.pip.active) }
         if state == "foreground" {
             Task { await signIn.refresh() }
             Task { await home.resumed() }
@@ -247,8 +259,8 @@ final class AppModel {
                 case "app-foregrounded":
                     let payload = Self.object(event.payloadJSON)
                     log.notice("foregrounded: chat port \(payload["chat_port"] as? Int ?? 0) alive \(payload["chat_alive"] as? Bool ?? false) relay rebound \(payload["relay_rebound"] as? Bool ?? false)")
+                    self.chat.foregrounded(port: payload["chat_port"] as? Int)
                     if let port = payload["chat_port"] as? Int {
-                        self.watch.foregrounded(chatPort: port)
                         #if DEBUG
                         ChatLab.session?.reconnect(port: port)
                         #endif
