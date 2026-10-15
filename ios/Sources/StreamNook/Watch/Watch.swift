@@ -40,11 +40,29 @@ final class Watch {
     private(set) var chat: ChatSession?
     /// The route the player is on now (after any fallback).
     private(set) var playing: PlayRoute?
+    /// Every quality the stream offers, in the core's order (`best` first); empty until it resolves.
+    private(set) var available: [String] = []
+    /// The quality picked in the sheet this session; nil until one is picked.
+    private(set) var pickedQuality: String?
+    /// The player is not playing (paused here, from the lock screen, or by a call). The centre
+    /// button follows the player, never only its own taps.
+    private(set) var paused = false
+    private(set) var muted = false
+    /// A restart is cycling the relay and the player; its icon spins until the stream plays again.
+    private(set) var restarting = false
+    /// The watched channel's numbers as they move (viewers, title, category, start).
+    private(set) var live: ChannelViewers?
 
-    /// Set by drive steps before a stream opens.
+    /// The lock screen card and its remote commands.
+    let nowPlaying = NowPlaying()
+    let pip = PictureInPicture()
+
+    /// Set by drive steps before a stream opens; wins over every saved choice.
     var route = PlayRoute.auto
-    /// The quality asked of `start_stream`: `best`, a variant name, or `audio_only`.
-    var requestedQuality = "best"
+    /// A drive step's quality for `start_stream`: `best`, a variant name, or `audio_only`.
+    var requestedQuality: String?
+    /// The quality saved in settings (the intent last picked, not what was served).
+    var savedQuality: String?
     var offsetFromLive: Double?
     var preservesOffset = false
     /// The distance behind the edge a gentle catch-up rate holds, in milliseconds.
@@ -62,6 +80,41 @@ final class Watch {
     /// The relay URL `start_stream` answered, kept for a fallback to the whole-segment route.
     private var startURL: String?
     private var fellBack = false
+    private var watchers: [NSKeyValueObservation] = []
+    private var sessionObservers: [NSObjectProtocol] = []
+
+    init() {
+        // KVO reports on whichever thread changed the value, so these are not main-actor code.
+        watchers = [
+            player.observe(\.timeControlStatus, options: [.initial, .new]) { @Sendable [weak self] player, _ in
+                let paused = player.timeControlStatus == .paused
+                Task { @MainActor in self?.playerPaused(paused) }
+            },
+            player.observe(\.isMuted, options: [.initial, .new]) { @Sendable [weak self] player, _ in
+                let muted = player.isMuted
+                Task { @MainActor in self?.muted = muted }
+            },
+        ]
+        // A call or an alarm pauses the player; it plays on afterwards only when the system says
+        // to resume.
+        sessionObservers = [
+            NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil,
+                                                   queue: .main) { [weak self] note in
+                let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt)
+                    .flatMap(AVAudioSession.InterruptionType.init(rawValue:))
+                let options = (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt)
+                    .map(AVAudioSession.InterruptionOptions.init(rawValue:)) ?? []
+                MainActor.assumeIsolated {
+                    guard let self, self.stream != nil, type == .ended, options.contains(.shouldResume) else { return }
+                    self.player.play()
+                }
+            },
+        ]
+    }
+
+    /// The quality `start_stream` is asked for: a drive step's, else this session's pick, else
+    /// the saved one, else `best` (capped to the screen by the core).
+    private var askedQuality: String { requestedQuality ?? pickedQuality ?? savedQuality ?? "best" }
 
     func open(_ stream: TwitchStream, core: CoreBridge) {
         guard self.stream?.id != stream.id else { return }
@@ -70,7 +123,122 @@ final class Watch {
         opened = .now
         status = "Resolving"
         chat = ChatSession(channel: stream.userLogin, core: core, source: .core)
+        showCard()
         tasks.append(Task { await self.play(stream, core: core) })
+        tasks.append(Task { await self.follow(stream, core: core) })
+    }
+
+    // MARK: Controls
+
+    func togglePlay() {
+        if paused { player.play() } else { player.pause() }
+    }
+
+    func toggleMute() {
+        player.isMuted.toggle()
+    }
+
+    /// The core switched the quality: the player reloads on the answer's URL, on the route it
+    /// would pick for a fresh start, through the loading mark.
+    func switched(to start: StreamStart, picked: String, core: CoreBridge) async {
+        pickedQuality = picked
+        savedQuality = picked
+        apply(start)
+        let chosen = await Self.route(for: start, asked: route, core: core)
+        reloading()
+        load(start.url, route: chosen)
+    }
+
+    /// Cycles the relay and the player for the same stream, quality and chat. Nil when the stream
+    /// came back; the error otherwise (the caller decides between offline and a fresh start).
+    func restart(core: CoreBridge) async -> Error? {
+        guard let stream, !restarting else { return nil }
+        restarting = true
+        player.pause()
+        _ = try? await core.invoke("stop_stream", "{}")
+        try? await Task.sleep(for: .milliseconds(300))
+        do {
+            let start = try await core.invoke(
+                "start_stream", args: ["url": "https://twitch.tv/\(stream.userLogin)", "quality": askedQuality],
+                as: StreamStart.self
+            )
+            guard self.stream?.id == stream.id else { return nil }
+            apply(start)
+            let chosen = await Self.route(for: start, asked: route, core: core)
+            log.notice("restart \(stream.userLogin, privacy: .public) -> \(start.url, privacy: .public) (\(start.quality, privacy: .public))")
+            reloading()
+            load(start.url, route: chosen)
+            // The spin stops at the first frame; this only keeps it from spinning forever.
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(15))
+                self?.restarting = false
+            }
+            return nil
+        } catch {
+            restarting = false
+            return error
+        }
+    }
+
+    /// The channel is offline: the player stops and says so.
+    func showOffline() {
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        pip.eligible = false
+        error = "This channel is offline right now."
+        status = "Offline"
+        nowPlaying.clear()
+    }
+
+    private func apply(_ start: StreamStart) {
+        quality = start.quality
+        startURL = start.url
+        available = start.available
+        fellBack = false
+    }
+
+    /// The next item plays through the loading mark again, as a first start does.
+    private func reloading() {
+        firstPlayMS = nil
+        opened = .now
+        status = "Buffering"
+    }
+
+    private func playerPaused(_ paused: Bool) {
+        self.paused = paused
+        if stream != nil { nowPlaying.playing(!paused) }
+    }
+
+    /// Publishes the lock screen card with what is known of the stream now.
+    private func showCard() {
+        guard let stream else { return }
+        nowPlaying.show(title: live?.title ?? stream.title, channel: stream.userName,
+                        avatar: stream.profileImageURL.flatMap(URL.init(string:)))
+    }
+
+    /// Keeps the header's numbers moving: the core polls the channel and pushes `channel-state`.
+    /// A push never blanks a field it did not carry.
+    private func follow(_ stream: TwitchStream, core: CoreBridge) async {
+        guard let id = stream.userID, !id.isEmpty else { return }
+        let pushes = core.events.stream("channel-state")
+        if let first = try? await core.invoke("watch_channel_state", args: ["login": stream.userLogin, "channelId": id],
+                                              as: ChannelViewers.self) {
+            take(first)
+        }
+        for await event in pushes {
+            guard !Task.isCancelled else { return }
+            guard let update = ChannelViewers.parse(event.payloadJSON),
+                  update.login.lowercased() == stream.userLogin.lowercased() else { continue }
+            take(update)
+        }
+    }
+
+    private func take(_ update: ChannelViewers) {
+        let old = live
+        live = ChannelViewers(login: update.login, viewerCount: update.viewerCount ?? old?.viewerCount,
+                              startedAt: update.startedAt ?? old?.startedAt, title: update.title ?? old?.title,
+                              gameName: update.gameName ?? old?.gameName)
+        if live?.title != old?.title { showCard() }
     }
 
     /// Back from the background: the core's chat bridge may listen on a new port.
@@ -95,7 +263,7 @@ final class Watch {
     }
 
     func close(core: CoreBridge) {
-        guard stream != nil else { return }
+        guard let login = stream?.userLogin else { return }
         tasks.forEach { $0.cancel() }
         tasks = []
         observers.forEach(NotificationCenter.default.removeObserver)
@@ -113,10 +281,16 @@ final class Watch {
         startURL = nil
         playing = nil
         fellBack = false
+        available = []
+        restarting = false
+        live = nil
+        pip.eligible = false
+        nowPlaying.clear()
         chat?.stop()
         chat = nil
         Task.detached {
             _ = try? await core.invoke("stop_stream", "{}")
+            _ = try? await core.invoke("unwatch_channel_state", args: ["login": login])
         }
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
@@ -127,12 +301,11 @@ final class Watch {
         do {
             _ = try? await core.invoke("set_experimental_low_latency", args: ["enabled": true])
             let start = try await core.invoke(
-                "start_stream", args: ["url": "https://twitch.tv/\(stream.userLogin)", "quality": requestedQuality],
+                "start_stream", args: ["url": "https://twitch.tv/\(stream.userLogin)", "quality": askedQuality],
                 as: StreamStart.self
             )
             guard !Task.isCancelled else { return }
-            quality = start.quality
-            startURL = start.url
+            apply(start)
             let chosen = await Self.route(for: start, asked: route, core: core)
             log.notice("start_stream \(stream.userLogin, privacy: .public) -> \(start.url, privacy: .public) (\(start.quality, privacy: .public)) route \(chosen.rawValue, privacy: .public)")
             let session = AVAudioSession.sharedInstance()
@@ -160,6 +333,7 @@ final class Watch {
         error = nil
         player.replaceCurrentItem(with: item)
         player.play()
+        pip.eligible = true
         if firstPlayMS == nil { status = "Buffering" }
     }
 
@@ -239,6 +413,7 @@ final class Watch {
             if firstPlayMS == nil, player.timeControlStatus == .playing, let opened {
                 firstPlayMS = Int((ContinuousClock.now - opened) / .milliseconds(1))
                 status = "Playing"
+                restarting = false
                 log.notice("first play \(self.firstPlayMS ?? 0) ms")
             }
             if firstPlayMS != nil {

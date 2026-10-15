@@ -27,6 +27,9 @@ import SwiftUI
 /// - `fakelogin`, `fakelogout` sign FakeCore's account in or out the way the core announces it;
 ///   `signinstate` logs who the app thinks is signed in
 /// - `quality:NAME` the quality the next stream asks for (`audio_only`, a variant, `best`)
+/// - `qsheet` opens the quality sheet; `pickq:NAME` switches the playing stream's quality;
+///   `restart` restarts it; `toggle` plays or pauses; `mute` mutes or unmutes; `state` logs
+///   the player's state (paused, muted, quality, the offered qualities, viewers, PiP)
 /// - `edge` shows how far behind the live edge the player sits
 /// - `route:NAME`, `offset:SECONDS`, `preserve`, `catchup:MS`, `hold:PARTS`: the player's
 ///   low-latency knobs for the next stream (see `Watch`)
@@ -78,6 +81,12 @@ enum Drive {
             case "back", "close": model.stopWatching()
             case "rotate": Orientation.turn(landscape: value == "landscape")
             case "controls": model.nav.controlsPing += 1
+            case "qsheet": model.nav.qualityPing += 1
+            case "pickq": await model.changeQuality(value.isEmpty ? "best" : value)
+            case "restart": await model.restartStream()
+            case "toggle": model.watch.togglePlay()
+            case "mute": model.watch.toggleMute()
+            case "state": log.notice("drive state paused \(model.watch.paused) muted \(model.watch.muted) quality \(model.watch.quality ?? "-", privacy: .public) available \(model.watch.available.joined(separator: ","), privacy: .public) viewers \(model.watch.live?.viewerCount ?? -1) pip \(model.watch.pip.active)")
             case "chat": model.nav.landscapeChat = value != "off"
             case "menu":
                 let parts = value.split(separator: ":")

@@ -88,10 +88,27 @@ public struct Page<Item: Decodable & Sendable>: Decodable, Sendable {
     }
 }
 
-/// What `start_stream` answers: the URL the player loads and the quality it serves.
+/// What `start_stream` and `change_stream_quality` answer: the URL the player loads, the quality
+/// it serves, and every quality the stream offers in the core's order (`best` first).
 public struct StreamStart: Decodable, Sendable, Equatable {
     public var url: String
     public var quality: String
+    public var available: [String]
+
+    enum CodingKeys: String, CodingKey { case url, quality, available }
+
+    public init(url: String, quality: String, available: [String] = []) {
+        self.url = url
+        self.quality = quality
+        self.available = available
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        url = try c.decode(String.self, forKey: .url)
+        quality = try c.decode(String.self, forKey: .quality)
+        available = try c.decodeIfPresent([String].self, forKey: .available) ?? []
+    }
 }
 
 /// How far the player sits behind the relay's live edge (`get_relay_live_distance`), the

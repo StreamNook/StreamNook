@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import os
 import SNKit
+import SwiftUI
 
 let log = Logger(subsystem: "app.streamnook", category: "spike")
 
@@ -36,6 +37,15 @@ final class AppModel {
 
     init() {
         home = HomeStore(core: core)
+        let watch = watch
+        watch.nowPlaying.onPlay = { watch.player.play() }
+        watch.nowPlaying.onPause = { watch.player.pause() }
+        watch.nowPlaying.onStop = { [weak self] in self?.stopWatching() }
+        watch.pip.onRestore = { [weak self] in
+            guard let self else { return }
+            withAnimation(SNMotion.run(SNMotion.settleBack)) { self.nav.playerMode = .full }
+        }
+        watch.pip.onClose = { [weak self] in self?.stopWatching() }
     }
 
     var signedIn: Bool { signIn.signedIn }
@@ -65,6 +75,7 @@ final class AppModel {
             return
         }
         let settings = await loadSettings()
+        capVideoHeight()
         await signIn.boot(core: core)
         host.start(core: core, cookies: signIn.cookies)
         home.start()
@@ -76,12 +87,18 @@ final class AppModel {
         phase = needsSetup && !setupClosed ? .setup : .main
     }
 
-    /// Reads the settings and applies the look. A failed read keeps the look it has.
+    /// Reads the settings, applies the look and hands the player its saved choices. A failed read
+    /// keeps what it has.
     @discardableResult
     func loadSettings() async -> SettingsLook? {
         do {
-            let settings = try await core.invoke("load_settings", args: [:], as: SettingsLook.self)
+            let json = try await core.invoke("load_settings", args: [:])
+            let settings = try JSONDecoder().decode(SettingsLook.self, from: Data(json.utf8))
             look.apply(settings)
+            if let prefs = try? JSONDecoder().decode(PlayerPrefs.self, from: Data(json.utf8)) {
+                watch.savedQuality = prefs.quality
+                watch.pip.floats = prefs.floatsVideo
+            }
             return settings
         } catch {
             log.error("load_settings failed: \(String(describing: error), privacy: .public)")
@@ -131,6 +148,65 @@ final class AppModel {
     func startWatching(_ stream: TwitchStream) {
         nav.open(stream)
         watch.open(stream, core: core)
+    }
+
+    /// Switches the playing stream's quality (the relay restarts on its port) and saves the pick
+    /// as the intent. A failure leaves playback as it was.
+    func changeQuality(_ quality: String) async {
+        guard let stream = watch.stream else { return }
+        do {
+            let start = try await core.invoke(
+                "change_stream_quality", args: ["url": "https://twitch.tv/\(stream.userLogin)", "quality": quality],
+                as: StreamStart.self
+            )
+            guard watch.stream?.id == stream.id else { return }
+            log.notice("quality \(quality, privacy: .public) -> \(start.quality, privacy: .public)")
+            await watch.switched(to: start, picked: quality, core: core)
+            await patchSettings(["quality": quality])
+            toasts.show(quality == start.quality ? "Quality changed to \(start.quality)"
+                                                 : "Quality \"\(quality)\" unavailable, switched to \"\(start.quality)\"",
+                        quality == start.quality ? .success : .info)
+        } catch {
+            log.error("change_stream_quality failed: \(String(describing: error), privacy: .public)")
+            toasts.show("Failed to change quality: \(error)")
+        }
+    }
+
+    /// The manual unstick: the relay and player cycle for the same stream. If it cannot come back,
+    /// an offline channel shows as offline; otherwise the stream starts afresh.
+    func restartStream() async {
+        guard let stream = watch.stream else { return }
+        guard let failure = await watch.restart(core: core) else {
+            toasts.show("Stream restarted with new settings", .success)
+            return
+        }
+        log.error("restart failed: \(String(describing: failure), privacy: .public)")
+        do {
+            let online = try await core.invoke("check_stream_online", args: ["userLogin": stream.userLogin],
+                                               as: TwitchStream?.self)
+            if online == nil {
+                watch.showOffline()
+                return
+            }
+        } catch {
+            log.error("check_stream_online failed: \(String(describing: error), privacy: .public)")
+        }
+        toasts.show("Failed to restart stream")
+        watch.close(core: core)
+        watch.open(stream, core: core)
+    }
+
+    /// Tells the core the tallest rendition this display can show, so "Auto" never pulls a source
+    /// taller than the screen (an explicit tier ignores the cap).
+    private func capVideoHeight() {
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let pixels = scene.map { Int(min($0.screen.nativeBounds.width, $0.screen.nativeBounds.height)) } ?? 0
+        let height = ScreenCap.height(shortEdgePixels: pixels)
+        guard height > 0 else { return }
+        Task {
+            _ = try? await core.invoke("set_max_video_height", args: ["height": height])
+            log.notice("video height cap \(height) (screen short edge \(pixels) px)")
+        }
     }
 
     /// Closes the watch layer: the player lets go of its item before the core stops the relay.

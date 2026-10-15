@@ -81,6 +81,8 @@ final class Navigator {
     var menuSample: MenuSample?
     /// Bumped to show the player's controls, as a tap does.
     var controlsPing = 0
+    /// Bumped to open the quality sheet, as the gear does.
+    var qualityPing = 0
     /// The first-run wizard page to show.
     var setupPage: SetupWizard.Page?
 

@@ -39,6 +39,11 @@ enum Symbol {
     static let tv = "tv.fill"
     static let speaker = "hifispeaker.fill"
     static let airplay = "airplayvideo"
+    static let play = "play.fill"
+    static let pause = "pause.fill"
+    static let mute = "speaker.wave.2.fill"
+    static let unmute = "speaker.slash.fill"
+    static let quality = "gearshape"
 
     // The You tab and settings rows.
     static let cosmetics = "paintbrush.pointed.fill"

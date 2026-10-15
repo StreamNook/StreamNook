@@ -40,7 +40,7 @@ struct WatchLayer: View {
                     .frame(width: layer.width, height: layer.height)
                     .offset(x: layer.minX, y: layer.minY)
 
-                PlayerView(player: watch.player)
+                PlayerView(player: watch.player, pip: watch.pip)
                     .frame(width: band.width, height: band.height)
                     .contentShape(Rectangle())
                     .onTapGesture { mini ? expand() : toggleControls() }
