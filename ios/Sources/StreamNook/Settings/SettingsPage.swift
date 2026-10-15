@@ -32,7 +32,9 @@ struct SettingsPage: View {
             .scrollIndicators(.hidden)
             .onChange(of: SettingsAnchor.shared.target) { _, target in
                 guard let target else { return }
-                withAnimation { reader.scrollTo(target, anchor: .top) }
+                // "NAME@end" brings a section's last rows into view.
+                let end = target.hasSuffix("@end")
+                withAnimation { reader.scrollTo(end ? String(target.dropLast(4)) : target, anchor: end ? .bottom : .top) }
             }
         }
         .background(SN.background)

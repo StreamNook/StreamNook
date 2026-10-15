@@ -25,7 +25,8 @@ import SwiftUI
 ///   writes every replaced value back exactly as it was (absent stays absent); `ladd:PATH=TEXT`
 ///   and `lremove:PATH=TEXT` add or remove one entry of a settings list; `reset:PATH` is the reset
 ///   arrow
-/// - `scroll:SECTION` scrolls the open settings page to a section by title (`_` for spaces)
+/// - `scroll:SECTION` scrolls the open settings page to a section by title (`_` for spaces);
+///   `scroll:SECTION@end` shows the section's last rows
 /// - `glass:PERCENT`, `motion:full|reduced|off` preview a look without saving it
 /// - `toast:TEXT` an error toast; `undo:TEXT` a toast with an Undo action
 /// - `view:cards`, `view:list` the stream lists' card or row view (saved, like the menu)
