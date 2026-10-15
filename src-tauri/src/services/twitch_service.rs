@@ -251,17 +251,44 @@ fn search_page(resp: &serde_json::Value) -> Vec<CategoryRow> {
         .collect()
 }
 
+/// A category name as search compares it: trimmed, lowercase, with Latin
+/// accents folded, so "pokemon" typed on any keyboard matches "Pokémon".
+fn fold_category_name(s: &str) -> String {
+    s.trim()
+        .chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' => 'a',
+            'ç' | 'ć' | 'č' => 'c',
+            'ď' | 'đ' => 'd',
+            'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ė' | 'ę' | 'ě' => 'e',
+            'ğ' => 'g',
+            'ì' | 'í' | 'î' | 'ï' | 'ī' | 'į' | 'ı' => 'i',
+            'ł' => 'l',
+            'ñ' | 'ń' | 'ň' => 'n',
+            'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ő' => 'o',
+            'ř' => 'r',
+            'ś' | 'š' | 'ş' => 's',
+            'ť' => 't',
+            'ù' | 'ú' | 'û' | 'ü' | 'ū' | 'ů' | 'ű' => 'u',
+            'ý' | 'ÿ' => 'y',
+            'ź' | 'ż' | 'ž' => 'z',
+            c => c,
+        })
+        .collect()
+}
+
 /// Category search order: the category named exactly what was typed first
-/// (case-insensitive), then names that start with it, then the rest; within
+/// (ignoring case and accents), then names that start with it, then the rest; within
 /// each, the most live viewers first, and Twitch's own order on a tie. Repeats
 /// of an id keep their first place (the exact lookup and the search can both
 /// return the same category). Cut to `limit`.
 pub fn rank_category_results(query: &str, rows: Vec<CategoryRow>, limit: usize) -> Vec<CategoryRow> {
-    let q = query.trim().to_lowercase();
+    let q = fold_category_name(query);
     let mut seen = std::collections::HashSet::new();
     let mut rows: Vec<CategoryRow> = rows.into_iter().filter(|r| seen.insert(r.id.clone())).collect();
     let tier = |r: &CategoryRow| -> u8 {
-        let name = r.name.trim().to_lowercase();
+        let name = fold_category_name(&r.name);
         if name == q {
             0
         } else if name.starts_with(&q) {
@@ -7253,6 +7280,21 @@ mod category_rank_tests {
         assert_eq!(
             names(&rank_category_results("rainbow six", rows, 40)),
             ["Rainbow Six Siege", "Rainbow Six Mobile", "Tom Clancy's Rainbow Six Extraction", "Tom Clancy's Rainbow Six"]
+        );
+    }
+
+    #[test]
+    fn accents_do_not_hide_the_names_that_match() {
+        let rows = vec![
+            row("1", "Pokemon Auto Chess", Some(25)),
+            row("2", "Pokémon Community Game", Some(2700)),
+            row("3", "Pocket Monster", Some(0)),
+            row("4", "Pokémon", Some(527)),
+            row("5", "Pokémon FireRed/LeafGreen", Some(2000)),
+        ];
+        assert_eq!(
+            names(&rank_category_results("pokemon", rows, 40)),
+            ["Pokémon", "Pokémon Community Game", "Pokémon FireRed/LeafGreen", "Pokemon Auto Chess", "Pocket Monster"]
         );
     }
 
