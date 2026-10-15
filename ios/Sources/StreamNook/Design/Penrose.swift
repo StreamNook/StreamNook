@@ -15,6 +15,8 @@ struct PenroseMark: View {
     /// its upright left side (their mean sits a tenth of the width left of the box's middle), so a
     /// mark centered by its box looks pushed left. It moves right by most of that.
     var centered = true
+    /// The logo at rest, as StreamNook's brand mark beside words (never as a loader).
+    var still = false
 
     private static let box = CGRect(x: 14.68, y: 12, width: 128.64, height: 146)
     private static let loop = 1.5
@@ -23,15 +25,15 @@ struct PenroseMark: View {
 
     var body: some View {
         let accent = Look.shared.palette.accent
-        TimelineView(.animation) { timeline in
-            let raw = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: Self.loop) / Self.loop
+        TimelineView(.animation(paused: still)) { timeline in
+            let raw = still ? 0 : timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: Self.loop) / Self.loop
             Canvas { context, size in
                 Self.draw(&context, size: size, raw: raw, accent: accent)
             }
         }
         .frame(width: width, height: width * Self.box.height / Self.box.width)
         .offset(x: centered ? width * Self.opticalShift : 0)
-        .accessibilityLabel("Loading")
+        .accessibilityLabel(still ? "StreamNook" : "Loading")
     }
 
     private enum Flow { case a, b, c }
