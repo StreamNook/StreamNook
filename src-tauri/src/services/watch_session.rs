@@ -26,6 +26,10 @@
 //! (`set_grid_focus`), else at the watched Twitch channel.
 //! - `watch-session://stream-update` fresh title / category / viewers
 //! - `watch-session://resolving`     an offline confirmation started / ended
+//! - `watch-session://reconnecting`  a dropped streamer is being waited out:
+//!                                   `{ login, waiting }`
+//! - `watch-session://reload`        the same stream came back under a fresh
+//!                                   manifest; reload it in place: `{ login }`
 
 use crate::commands::eventsub::EventSubServiceState;
 use crate::models::settings::{AppState, AutoSwitchMode};
@@ -46,6 +50,8 @@ pub const OFFLINE_EVENT: &str = "watch-session://offline";
 pub const WENT_LIVE_EVENT: &str = "watch-session://went-live";
 pub const STREAM_UPDATE_EVENT: &str = "watch-session://stream-update";
 pub const RESOLVING_EVENT: &str = "watch-session://resolving";
+pub const RECONNECTING_EVENT: &str = "watch-session://reconnecting";
+pub const RELOAD_EVENT: &str = "watch-session://reload";
 /// An offline room's "N waiting": `{ login, count }`, about once a minute.
 pub const WAITING_EVENT: &str = "watch-session://waiting";
 const WAITING_POLL: Duration = Duration::from_secs(60);
@@ -65,6 +71,12 @@ const SWITCH_CANDIDATES: u32 = 10;
 const PROVIDER_POLL: Duration = Duration::from_secs(60);
 /// Two misses in a row, so one flaky answer cannot eject the viewer.
 const PROVIDER_OFFLINE_STRIKES: u32 = 2;
+/// How long a YouTube broadcast that is held open (the streamer dropped) is
+/// waited out before the viewer is told it did not come back, and how often it
+/// is re-read meanwhile. youtube.com waits as long as the broadcast stays open;
+/// this only bounds a broadcast YouTube never closes.
+const RECONNECT_WAIT: Duration = Duration::from_secs(10 * 60);
+const RECONNECT_POLL: Duration = Duration::from_secs(10);
 
 /// What the view is watching, as it knows it at start.
 #[derive(Debug, Clone, Deserialize)]
@@ -318,6 +330,9 @@ pub async fn start(app: AppHandle, target: WatchTarget) {
     } else if !target.offline {
         // Offline rooms are Twitch-only.
         tasks.push(tauri::async_runtime::spawn(poll_provider_live(app.clone(), seq)));
+        if target.provider == "youtube" {
+            tasks.push(tauri::async_runtime::spawn(watch_youtube_broadcast(app.clone(), seq)));
+        }
     }
     publish_presence(&app, &target).await;
 
@@ -760,11 +775,15 @@ async fn poll_provider_live(app: AppHandle, seq: u64) {
                 _ => {
                     strikes += 1;
                     if strikes >= PROVIDER_OFFLINE_STRIKES {
+                        // A trigger, not a verdict: the view asks
+                        // `resolve_offline`, which waits out a dropped streamer.
+                        // A stream that really ended stops the session, and this
+                        // task with it.
+                        strikes = 0;
                         let _ = app.emit(
                             OFFLINE_EVENT,
                             json!({ "provider": target.provider, "login": target.login }),
                         );
-                        return;
                     }
                 }
             },
@@ -785,6 +804,9 @@ pub enum OfflineDecision {
     Nothing { why: String },
     /// Helix kept reporting the stream live: a blip.
     StillLive,
+    /// The stream is live and serving: reload it in place (the player was
+    /// stuck on a manifest the streamer reconnected out of).
+    Resume,
     /// Stop the video, keep the chat (the user prefers offline chat).
     OfflineChat,
     /// Tell the user why nothing can be done; keep what is on screen.
@@ -815,39 +837,59 @@ fn pick_target(mut streams: Vec<TwitchStream>, ended_login: &str, sort_by_viewer
     streams.into_iter().next()
 }
 
-/// Confirm the watched Twitch stream is really offline, then decide what the
-/// view does next. Safe to call from every trigger (EventSub, player errors,
-/// a stale chat): concurrent calls resolve once.
-pub async fn resolve_offline(app: AppHandle) -> OfflineDecision {
+/// What made the view ask whether the stream ended.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OfflineTrigger {
+    /// Something said the stream ended (EventSub, a live poll, a chat
+    /// watchdog, a failed restart).
+    #[default]
+    Signal,
+    /// The player stalled. A stream still live after it is reloaded in place:
+    /// leaving the player on the manifest it stalled on would freeze it.
+    Player,
+}
+
+/// Confirm the watched stream is really offline, then decide what the view
+/// does next. Safe to call from every trigger (EventSub, player errors, a
+/// stale chat, a live poll): concurrent calls resolve once.
+pub async fn resolve_offline(app: AppHandle, trigger: OfflineTrigger) -> OfflineDecision {
     let state = app.state::<AppState>();
     let auto = state.settings.lock().map(|s| s.auto_switch.clone()).ok();
     let Some(auto) = auto else {
         return OfflineDecision::Nothing { why: "settings unavailable".into() };
     };
     let started = with_session(|s| {
-        let session = s.as_mut().filter(|s| s.target.provider == "twitch")?;
+        let session = s.as_mut()?;
         if session.target.offline {
             return Some(Err("an offline room has no stream to end"));
         }
         if session.resolving {
             return Some(Err("already resolving"));
         }
-        if session.last_raid_ms > 0 && now_ms() - session.last_raid_ms < RAID_COOLDOWN_MS {
+        let twitch = session.target.provider == "twitch";
+        if twitch && session.last_raid_ms > 0 && now_ms() - session.last_raid_ms < RAID_COOLDOWN_MS {
             return Some(Err("a raid redirect just happened"));
         }
-        if !auto.enabled {
+        // Auto-switch decides what follows an ENDED Twitch stream. A stalled
+        // player still needs to learn the stream is live, so it is checked.
+        if twitch && !auto.enabled && trigger != OfflineTrigger::Player {
             return Some(Err("auto-switch is off"));
         }
         session.resolving = true;
         Some(Ok((session.seq, session.target.clone())))
     });
     let (seq, target) = match started {
-        None => return OfflineDecision::Nothing { why: "no Twitch session".into() },
+        None => return OfflineDecision::Nothing { why: "no session".into() },
         Some(Err(why)) => return OfflineDecision::Nothing { why: why.into() },
         Some(Ok(started)) => started,
     };
     let _ = app.emit(RESOLVING_EVENT, true);
-    let decision = decide_offline(&state, &target, &auto, seq).await;
+    let decision = if target.provider == "twitch" {
+        decide_offline(&state, &target, &auto, seq, trigger).await
+    } else {
+        decide_provider_offline(&app, &target, seq).await
+    };
     with_session(|s| {
         if let Some(session) = s.as_mut().filter(|s| s.seq == seq) {
             session.resolving = false;
@@ -865,6 +907,7 @@ async fn decide_offline(
     target: &WatchTarget,
     auto: &crate::models::settings::AutoSwitchSettings,
     seq: u64,
+    trigger: OfflineTrigger,
 ) -> OfflineDecision {
     let login = target.login.as_str();
     let mut consecutive_offline = 0;
@@ -888,7 +931,17 @@ async fn decide_offline(
         }
     }
     if consecutive_offline < VERIFY_CONSECUTIVE_OFFLINE {
-        return OfflineDecision::StillLive;
+        return match trigger {
+            OfflineTrigger::Player => OfflineDecision::Resume,
+            OfflineTrigger::Signal => OfflineDecision::StillLive,
+        };
+    }
+    // Watched to its end: the live bookmark files nothing for it. Only this
+    // confirmed answer counts; a bare `stream.offline` also fires on a
+    // reconnect the stream comes back from.
+    crate::services::live_bookmark::note_ended(login);
+    if !auto.enabled {
+        return OfflineDecision::Nothing { why: "auto-switch is off".into() };
     }
     if auto.stay_in_offline_chat {
         return OfflineDecision::OfflineChat;
@@ -955,6 +1008,160 @@ async fn decide_offline(
     };
     let message = format!("{login} went offline. Switching to {}...", candidates.user_name);
     OfflineDecision::SwitchTo { notice: notice(show, message, false), stream: candidates }
+}
+
+// ---- Other platforms: a dropped streamer is waited out ---------------------------
+
+fn display_name(target: &WatchTarget) -> &str {
+    if target.user_name.is_empty() { &target.login } else { &target.user_name }
+}
+
+/// A provider stream that ended: the view leaves it and says why.
+fn provider_ended(target: &WatchTarget, message: String) -> OfflineDecision {
+    log::info!("[WatchSession] {} {}: {}", target.provider, target.login, message);
+    OfflineDecision::Stop { notice: Some(Notice { message, error: false }) }
+}
+
+/// The video a YouTube watch plays: recorded by the resolve, or the login
+/// itself when the stream was opened by its video id.
+fn youtube_video_of(login: &str) -> Option<String> {
+    use crate::services::providers::youtube_media;
+    youtube_media::served_broadcast(login).map(|(video, _)| video).or_else(|| {
+        let is_video_id = login.len() == 11
+            && login.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        is_video_id.then(|| login.to_string())
+    })
+}
+
+/// Confirm a Kick / YouTube / TikTok stream really ended. A brief drop on the
+/// streamer's side must keep the viewer on the stream, the way the platform's
+/// own player does, and only an ending leaves it.
+async fn decide_provider_offline(app: &AppHandle, target: &WatchTarget, seq: u64) -> OfflineDecision {
+    if target.provider == "youtube" {
+        if let Some(video_id) = youtube_video_of(&target.login) {
+            return wait_out_youtube(app, target, &video_id, seq).await;
+        }
+    }
+    let mut consecutive_offline = 0;
+    for attempt in 0..VERIFY_ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(VERIFY_INTERVAL).await;
+        }
+        if current(seq).is_none() {
+            return OfflineDecision::Nothing { why: "a newer stream started".into() };
+        }
+        let rows = crate::commands::provider_browse::provider_live_check(
+            target.provider.clone(),
+            vec![target.login.clone()],
+        )
+        .await;
+        match rows {
+            Ok(rows) if rows.first().is_some_and(|r| r.is_live) => return OfflineDecision::Resume,
+            Ok(_) => {
+                consecutive_offline += 1;
+                if consecutive_offline >= VERIFY_CONSECUTIVE_OFFLINE {
+                    return provider_ended(target, format!("{} went offline", display_name(target)));
+                }
+            }
+            // A failed check is not evidence the stream ended.
+            Err(e) => log::debug!("[WatchSession] {} live check failed: {e}", target.provider),
+        }
+    }
+    OfflineDecision::Resume
+}
+
+/// Wait out a YouTube broadcast the player lost. YouTube holds the broadcast
+/// open while the streamer reconnects and serves it again on the SAME video id
+/// under a new `broadcastId`; resume once its manifest grows again, leave only
+/// once the broadcast is over.
+async fn wait_out_youtube(app: &AppHandle, target: &WatchTarget, video_id: &str, seq: u64) -> OfflineDecision {
+    use crate::services::providers::youtube_media::{self, Broadcast};
+    let deadline = std::time::Instant::now() + RECONNECT_WAIT;
+    let mut waiting = false;
+    let decision = loop {
+        if current(seq).is_none() {
+            break OfflineDecision::Nothing { why: "a newer stream started".into() };
+        }
+        match youtube_media::broadcast_state(video_id).await {
+            Some(Broadcast::Ended) => {
+                break provider_ended(target, format!("{} went offline", display_name(target)));
+            }
+            Some(Broadcast::Live { manifest, .. }) if youtube_media::manifest_growing(&manifest).await => {
+                youtube_media::forget_master(video_id);
+                log::info!("[WatchSession] youtube {} is serving again; resuming", target.login);
+                break OfflineDecision::Resume;
+            }
+            // Held open, not growing yet, or no client answered: wait.
+            _ => {}
+        }
+        if std::time::Instant::now() >= deadline {
+            break provider_ended(target, format!("{}'s stream did not come back", display_name(target)));
+        }
+        if !waiting {
+            waiting = true;
+            log::info!("[WatchSession] youtube {} dropped; waiting for it to reconnect", target.login);
+            let _ = app.emit(RECONNECTING_EVENT, json!({ "login": target.login, "waiting": true }));
+        }
+        tokio::time::sleep(RECONNECT_POLL).await;
+    };
+    if waiting {
+        let _ = app.emit(RECONNECTING_EVENT, json!({ "login": target.login, "waiting": false }));
+    }
+    decision
+}
+
+fn is_resolving(seq: u64) -> bool {
+    with_session(|s| s.as_ref().is_some_and(|s| s.seq == seq && s.resolving))
+}
+
+/// What youtube.com does while a broadcast plays: re-read it every
+/// `pollDelayMs` and reload when its `broadcastId` moves on, which is how a
+/// streamer's reconnect shows up (same video id, new manifest). Without this
+/// the player sits on the old manifest until it stalls.
+async fn watch_youtube_broadcast(app: AppHandle, seq: u64) {
+    use crate::services::providers::youtube_media::{self, Broadcast};
+    let mut pause = Duration::from_secs(30);
+    // The broadcast seen first, for a stream whose resolve recorded none.
+    let mut seen: Option<(String, String)> = None;
+    loop {
+        tokio::time::sleep(pause).await;
+        let Some(target) = current(seq) else { return };
+        // The offline check owns the stream while it runs.
+        if is_resolving(seq) {
+            continue;
+        }
+        let Some((video_id, served)) = youtube_media::served_broadcast(&target.login) else { continue };
+        let Some(Broadcast::Live { broadcast_id, poll, .. }) = youtube_media::broadcast_state(&video_id).await else {
+            continue;
+        };
+        pause = poll;
+        if broadcast_id.is_empty() || current(seq).is_none() || is_resolving(seq) {
+            continue;
+        }
+        let playing = if !served.is_empty() {
+            served
+        } else {
+            match &seen {
+                Some((video, id)) if *video == video_id => id.clone(),
+                _ => {
+                    seen = Some((video_id, broadcast_id));
+                    continue;
+                }
+            }
+        };
+        if playing == broadcast_id {
+            continue;
+        }
+        log::info!(
+            "[WatchSession] youtube {} reconnected (broadcast {} -> {}); reloading",
+            target.login,
+            playing,
+            broadcast_id
+        );
+        youtube_media::forget_master(&video_id);
+        seen = Some((video_id, broadcast_id));
+        let _ = app.emit(RELOAD_EVENT, json!({ "provider": target.provider, "login": target.login }));
+    }
 }
 
 #[cfg(test)]
@@ -1075,5 +1282,13 @@ mod tests {
             json!({ "action": "stop", "notice": { "message": "m", "error": false } })
         );
         assert_eq!(serde_json::to_value(OfflineDecision::StillLive).unwrap(), json!({ "action": "still_live" }));
+        assert_eq!(serde_json::to_value(OfflineDecision::Resume).unwrap(), json!({ "action": "resume" }));
+    }
+
+    #[test]
+    fn a_trigger_reads_as_the_view_sends_it() {
+        assert_eq!(serde_json::from_value::<OfflineTrigger>(json!("player")).unwrap(), OfflineTrigger::Player);
+        assert_eq!(serde_json::from_value::<OfflineTrigger>(json!("signal")).unwrap(), OfflineTrigger::Signal);
+        assert_eq!(OfflineTrigger::default(), OfflineTrigger::Signal);
     }
 }

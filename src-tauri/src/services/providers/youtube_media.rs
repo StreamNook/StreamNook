@@ -896,6 +896,197 @@ fn store_master(video_id: &str, qualities: &[PlaybackQuality]) {
     }
 }
 
+/// Drop a video's cached master, so the next resolve fetches a fresh one: the
+/// cached one may belong to a broadcast the streamer has since reconnected out of.
+pub fn forget_master(video_id: &str) {
+    if let Ok(mut map) = MASTERS.lock() {
+        map.remove(video_id);
+    }
+}
+
+// ---- A dropped streamer vs an ended broadcast ---------------------------------
+//
+// A live video's manifest is addressed `id/<video id>.<broadcastId>`. When the
+// streamer's connection drops and they reconnect, YouTube keeps the SAME video id
+// and bumps `broadcastId` (the `liveStreamabilityRenderer` field), so the
+// manifest a player already holds never grows again. youtube.com polls the
+// player endpoint every `pollDelayMs` and reloads on a new `broadcastId`; these
+// helpers let the watch session do the same, and tell a drop from an ending.
+
+/// What the last resolve served, per channel identifier (lowercased): the video
+/// id it led to and that video's `broadcastId`.
+static SERVED: Lazy<std::sync::Mutex<std::collections::HashMap<String, (String, String)>>> =
+    Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+fn broadcast_id_of(player: &Value) -> Option<String> {
+    player
+        .pointer("/playabilityStatus/liveStreamability/liveStreamabilityRenderer/broadcastId")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+}
+
+/// Record which video `channel` led to, keeping a known `broadcastId` when it
+/// is still the same video. The 1440p/2160p path never reads a player response
+/// of its own, so it only gets this much.
+fn note_video(channel: &str, video_id: &str) {
+    if let Ok(mut map) = SERVED.lock() {
+        let key = channel.to_lowercase();
+        if map.get(&key).is_some_and(|(v, _)| v == video_id) {
+            return;
+        }
+        map.insert(key, (video_id.to_string(), String::new()));
+    }
+}
+
+fn remember_served(channel: &str, video_id: &str, player: &Value) {
+    let broadcast = broadcast_id_of(player).unwrap_or_default();
+    if let Ok(mut map) = SERVED.lock() {
+        map.insert(channel.to_lowercase(), (video_id.to_string(), broadcast));
+    }
+}
+
+/// The video a watched channel identifier resolved to, and the `broadcastId`
+/// its manifest belongs to (empty when YouTube named none).
+pub fn served_broadcast(channel: &str) -> Option<(String, String)> {
+    SERVED.lock().ok()?.get(&channel.to_lowercase()).cloned()
+}
+
+/// Where a broadcast stands, according to the player endpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Broadcast {
+    /// Live, with a manifest: `broadcast_id` is the one it serves now.
+    Live { broadcast_id: String, manifest: String, poll: Duration },
+    /// Still the live broadcast, with nothing to play: the streamer dropped
+    /// and YouTube is holding the broadcast open for them.
+    Interrupted,
+    /// Over: an archive, a post-live DVR, or a recording YouTube does not keep.
+    Ended,
+    /// This client was refused; another client may answer.
+    Refused,
+}
+
+/// How often youtube.com re-reads a live broadcast, within sane bounds.
+fn poll_delay_of(player: &Value) -> Duration {
+    let ms = player
+        .pointer("/playabilityStatus/liveStreamability/liveStreamabilityRenderer/pollDelayMs")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(30_000);
+    Duration::from_millis(ms.clamp(15_000, 60_000))
+}
+
+/// Read a player response for a video that was live when we started it.
+///
+/// Only `isLive` means live now (`isLiveContent` is true of archives and
+/// waiting rooms alike). Ending is read only from what an ended broadcast
+/// carries: `isPostLiveDvr`, a "recording is not available" refusal, or an
+/// `OK` answer that is no longer live. Anything a single client may be refused
+/// for (bot checks, embed refusals) says nothing about the broadcast.
+fn read_broadcast(player: &Value) -> Broadcast {
+    let status = player
+        .pointer("/playabilityStatus/status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let details = player.get("videoDetails");
+    let flag = |key: &str| {
+        details
+            .and_then(|d| d.get(key))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    };
+    let reason = playability_error(player).unwrap_or_default().to_lowercase();
+    if flag("isPostLiveDvr") || reason.contains("recording is not available") {
+        return Broadcast::Ended;
+    }
+    if flag("isLive") && status == "OK" {
+        return match player
+            .pointer("/streamingData/hlsManifestUrl")
+            .and_then(|v| v.as_str())
+        {
+            Some(manifest) => Broadcast::Live {
+                broadcast_id: broadcast_id_of(player).unwrap_or_default(),
+                manifest: manifest.to_string(),
+                poll: poll_delay_of(player),
+            },
+            None => Broadcast::Interrupted,
+        };
+    }
+    // The offline slate, shown on the video we were watching: held open.
+    if status == "LIVE_STREAM_OFFLINE" || flag("isLive") {
+        return Broadcast::Interrupted;
+    }
+    if status == "OK" && details.is_some() && !flag("isUpcoming") {
+        return Broadcast::Ended;
+    }
+    Broadcast::Refused
+}
+
+/// Ask each client in turn where `video_id`'s broadcast stands; `None` when no
+/// client gave an answer about the broadcast itself.
+pub async fn broadcast_state(video_id: &str) -> Option<Broadcast> {
+    for client in CLIENTS {
+        match player_response(video_id, client).await {
+            Ok(player) => match read_broadcast(&player) {
+                Broadcast::Refused => continue,
+                state => return Some(state),
+            },
+            Err(e) => log::debug!("[YouTube] {} broadcast check for '{}' failed: {}", client.name, video_id, e),
+        }
+    }
+    None
+}
+
+/// The end of a media playlist's window (media sequence plus segment count),
+/// and whether it is closed. `None` when the text is not a media playlist.
+fn playlist_window(text: &str) -> Option<(u64, bool, u64)> {
+    if !text.trim_start().starts_with("#EXTM3U") {
+        return None;
+    }
+    let mut sequence = 0u64;
+    let mut segments = 0u64;
+    let mut target = 2u64;
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(n) = line.strip_prefix("#EXT-X-MEDIA-SEQUENCE:") {
+            sequence = n.trim().parse().unwrap_or(0);
+        } else if let Some(n) = line.strip_prefix("#EXT-X-TARGETDURATION:") {
+            target = n.trim().parse().unwrap_or(2);
+        } else if line.starts_with("#EXTINF") {
+            segments += 1;
+        }
+    }
+    Some((sequence + segments, text.contains("#EXT-X-ENDLIST"), target))
+}
+
+/// Whether a live manifest is producing new segments: the lowest rendition's
+/// playlist, read twice a segment or so apart.
+pub async fn manifest_growing(manifest: &str) -> bool {
+    async fn fetch(url: &str) -> Option<String> {
+        let resp = HTTP.get(url).send().await.ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        resp.text().await.ok()
+    }
+    let Some(master) = fetch(manifest).await else { return false };
+    let base = manifest.rsplit_once('/').map(|(b, _)| b).unwrap_or("");
+    let variants = hls_master::parse(&master, base);
+    let Some(variant) = variants.iter().min_by_key(|q| q.bandwidth.unwrap_or(u64::MAX)) else {
+        return false;
+    };
+    let Some((first, closed, target)) = fetch(&variant.url).await.as_deref().and_then(playlist_window) else {
+        return false;
+    };
+    if closed {
+        return false;
+    }
+    tokio::time::sleep(Duration::from_secs(target.clamp(1, 6) + 1)).await;
+    match fetch(&variant.url).await.as_deref().and_then(playlist_window) {
+        Some((second, closed, _)) => !closed && second > first,
+        None => false,
+    }
+}
+
 /// Log which client won and what it actually offered, plus anything YouTube
 /// advertises that we cannot select.
 ///
@@ -1015,6 +1206,7 @@ async fn hls_playback(
         .ok_or_else(|| anyhow!("no usable quality for this stream"))?;
     report_ladder(channel, video_id, client_name, player, &qualities);
     store_master(video_id, &qualities);
+    remember_served(channel, video_id, player);
     let url = qualities[idx].url.clone();
     Ok(ResolvedPlayback {
         kind: PlaybackKind::Hls,
@@ -1120,6 +1312,7 @@ impl StreamSource for YouTubeSource {
         quality: &str,
     ) -> Result<ResolvedPlayback> {
         let video_id = live_video_id(channel).await?;
+        note_video(channel, &video_id);
 
         // A quality change re-enters here (change_stream_quality just calls
         // start_stream again), so without this every switch paid for another
@@ -1644,10 +1837,14 @@ fn category_from_game_card(card: &Value) -> Option<ProviderCategory> {
 
 fn row_from_meta(channel: &str, meta: &youtube::YouTubeChannelMeta) -> ProviderStream {
     let login = channel.to_string();
+    // The broadcast's own video id, when the channel is live on one. A row opened
+    // by @handle or UC id otherwise has no way to name the video it is playing,
+    // and `watch?v=@handle` is not a YouTube link at all.
+    let live_video = meta.video_id.clone().filter(|_| meta.is_live);
     ProviderStream {
         provider: "youtube".to_string(),
         key: make_key("youtube", &login),
-        id: String::new(),
+        id: live_video.clone().unwrap_or_default(),
         user_id: meta.user_id.clone().unwrap_or_default(),
         user_login: login.clone(),
         user_name: meta.username.clone().unwrap_or_else(|| login.clone()),
@@ -1675,7 +1872,10 @@ fn row_from_meta(channel: &str, meta: &youtube::YouTubeChannelMeta) -> ProviderS
         started_at: meta.start_time.clone().unwrap_or_default(),
         profile_image_url: meta.profile_pic.clone(),
         is_live: meta.is_live,
-        watch_url: format!("https://www.youtube.com/watch?v={}", login),
+        watch_url: match &live_video {
+            Some(video) => format!("https://www.youtube.com/watch?v={}", video),
+            None => crate::services::providers::watch_urls::watch_url("youtube", &login),
+        },
         tags: None,
     }
 }
@@ -2429,6 +2629,86 @@ mod tests {
         assert!(row_from_meta("ludwig", &meta).thumbnail_url.is_empty());
     }
 
+    /// A channel opened by @handle names its broadcast's video in the row, so a
+    /// share or an "open on YouTube" link points at the stream itself.
+    #[test]
+    fn a_live_row_links_to_its_video_not_its_handle() {
+        let meta = youtube::YouTubeChannelMeta {
+            is_live: true,
+            video_id: Some("m4Nrq3auEUI".into()),
+            ..Default::default()
+        };
+        let r = row_from_meta("@shachitoo", &meta);
+        assert_eq!(r.watch_url, "https://www.youtube.com/watch?v=m4Nrq3auEUI");
+        assert_eq!(r.id, "m4Nrq3auEUI");
+        let offline = youtube::YouTubeChannelMeta { is_live: false, ..meta };
+        assert_eq!(row_from_meta("@shachitoo", &offline).watch_url, "https://www.youtube.com/@shachitoo/live");
+    }
+
+    /// Shapes measured on the player endpoint (ANDROID client): a running
+    /// broadcast, and one that ended without keeping its recording.
+    #[test]
+    fn a_broadcast_is_read_as_live_held_or_over() {
+        let live = json!({
+            "playabilityStatus": { "status": "OK", "liveStreamability": { "liveStreamabilityRenderer": {
+                "videoId": "m4Nrq3auEUI", "broadcastId": "1", "pollDelayMs": "30000" } } },
+            "streamingData": { "hlsManifestUrl": "https://manifest.googlevideo.com/x" },
+            "videoDetails": { "isLive": true, "isLiveContent": true, "lengthSeconds": "0" }
+        });
+        assert_eq!(
+            read_broadcast(&live),
+            Broadcast::Live {
+                broadcast_id: "1".into(),
+                manifest: "https://manifest.googlevideo.com/x".into(),
+                poll: Duration::from_secs(30),
+            }
+        );
+        let ended = json!({
+            "playabilityStatus": { "status": "UNPLAYABLE", "reason": "This live stream recording is not available." },
+            "videoDetails": { "isLiveContent": true, "isPostLiveDvr": true, "lengthSeconds": "121601512" }
+        });
+        assert_eq!(read_broadcast(&ended), Broadcast::Ended);
+        let archive = json!({
+            "playabilityStatus": { "status": "OK" },
+            "videoDetails": { "isLiveContent": true, "lengthSeconds": "5400" }
+        });
+        assert_eq!(read_broadcast(&archive), Broadcast::Ended);
+        let held = json!({
+            "playabilityStatus": { "status": "LIVE_STREAM_OFFLINE", "liveStreamability": {} },
+            "videoDetails": { "isLiveContent": true }
+        });
+        assert_eq!(read_broadcast(&held), Broadcast::Interrupted);
+        let no_manifest = json!({
+            "playabilityStatus": { "status": "OK" },
+            "videoDetails": { "isLive": true }
+        });
+        assert_eq!(read_broadcast(&no_manifest), Broadcast::Interrupted);
+        // A bot check is about the client, never the broadcast.
+        let refused = json!({
+            "playabilityStatus": { "status": "LOGIN_REQUIRED", "reason": "Sign in to confirm you're not a bot" }
+        });
+        assert_eq!(read_broadcast(&refused), Broadcast::Refused);
+    }
+
+    #[test]
+    fn a_media_playlist_window_ends_at_its_last_segment() {
+        let text = "#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:1
+#EXT-X-MEDIA-SEQUENCE:1415
+                    #EXTINF:1.0,
+https://a/sq/1415
+#EXTINF:1.0,
+https://a/sq/1416
+#EXTINF:1.0,
+https://a/sq/1417
+";
+        assert_eq!(playlist_window(text), Some((1418, false, 1)));
+        assert_eq!(playlist_window(&format!("{text}#EXT-X-ENDLIST
+")), Some((1418, true, 1)));
+        assert_eq!(playlist_window("<html>"), None);
+    }
+
     /// An ENDED broadcast keeps "LIVE" in its title and differs only by badge
     /// style, so title text must never be the liveness signal. Captured from the
     /// same channel's feed, where a two-day-old VOD still reads "LIVE | ...".
@@ -2938,6 +3218,31 @@ mod high_rendition_tests {
         assert!(r.iter().all(|x| !x.video_url.is_empty() && !x.audio_url.is_empty()));
         // Sorted tallest first, which is the order the quality menu wants.
         assert!(r.windows(2).all(|w| w[0].height >= w[1].height));
+    }
+
+    /// What the watch session reads when a YouTube player stalls: a running
+    /// broadcast is `Live` with a growing manifest (so it is reloaded in place),
+    /// and an ended one is `Ended` (so the viewer leaves it).
+    ///
+    /// ```text
+    ///   STREAMNOOK_YT_LIVE_ID=<live video id> STREAMNOOK_YT_ENDED_ID=<ended broadcast id>     ///   cargo test --no-default-features a_live_broadcast_is_serving -- --ignored --nocapture
+    /// ```
+    #[tokio::test]
+    #[ignore = "needs the network and a live broadcast"]
+    async fn a_live_broadcast_is_serving() {
+        let id = std::env::var("STREAMNOOK_YT_LIVE_ID").expect("STREAMNOOK_YT_LIVE_ID");
+        let state = broadcast_state(&id).await;
+        println!("{id}: {state:?}");
+        let Some(Broadcast::Live { manifest, broadcast_id, .. }) = state else {
+            panic!("expected a live broadcast, got {state:?}");
+        };
+        assert!(!broadcast_id.is_empty(), "a live broadcast names its broadcastId");
+        assert!(manifest_growing(&manifest).await, "a live manifest grows");
+        if let Ok(ended) = std::env::var("STREAMNOOK_YT_ENDED_ID") {
+            let state = broadcast_state(&ended).await;
+            println!("{ended}: {state:?}");
+            assert_eq!(state, Some(Broadcast::Ended));
+        }
     }
 }
 

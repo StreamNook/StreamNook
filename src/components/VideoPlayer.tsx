@@ -16,7 +16,7 @@ import { useContentZoom } from '../utils/contentZoom';
 import { canGridProvider, gridRefusal } from '../types/providers';
 import { platformTerms } from '../utils/platformTerms';
 import { useContextMenuStore } from '../stores/contextMenuStore';
-import { buildShareUrl } from '../utils/shareLink';
+import { shareLinkFor } from '../utils/shareLink';
 import { playerOverlayButtonOn } from '../utils/playerOverlayButtons';
 import { usemultiNookStore } from '../stores/multiNookStore';
 import { useChannelSocial } from '../hooks/useChannelSocial';
@@ -202,7 +202,7 @@ const VideoPlayer = () => {
   // is mounted for the whole session, and a bare `useAppStore()` re-rendered it
   // on every unrelated store tick (toasts, mod logs, drops polling).
   const { getAvailableQualities, changeStreamQuality, handleStreamOffline, reloadStreamAndChat, restartStream, exitStream, toggleHome, setHomeActiveTab, setHomeSelectedCategory, createClip, openStreamerMedia, leaveOfflineRoomVod } = useAppStore.getState();
-  const { streamUrl, settings, activeQuality, adSource, isAutoSwitching, currentStream, isRestartingStream, isHomeActive, streamOriginCategory, isAuthenticated, currentMediaType, isCreatingClip, originalMediaUrl, vodPlayback, liveRewind, liveRewindAvailable, liveRewindAnchor } = useAppStore(
+  const { streamUrl, settings, activeQuality, adSource, isAutoSwitching, currentStream, isRestartingStream, isHomeActive, streamOriginCategory, isAuthenticated, currentMediaType, isCreatingClip, originalMediaUrl, vodPlayback, liveRewind, liveRewindAvailable, liveRewindAnchor, liveLeftOffSecs } = useAppStore(
     useShallow((s) => ({
       streamUrl: s.streamUrl,
       settings: s.settings,
@@ -221,6 +221,7 @@ const VideoPlayer = () => {
       liveRewind: s.liveRewind,
       liveRewindAvailable: s.liveRewindAvailable,
       liveRewindAnchor: s.liveRewindAnchor,
+      liveLeftOffSecs: s.liveLeftOffSecs,
     })),
   );
   // Which platform is playing. Twitch runs the full path below; the ad-source
@@ -618,13 +619,13 @@ const VideoPlayer = () => {
   const overlayButtonOn = (id: string) =>
     playerOverlayButtonOn(settings.player_overlay_buttons, id);
 
-  // Share the currently-playing channel. Copies the streamnook.app/w/<channel>
-  // link, then flips the button to a check for a beat as confirmation.
+  // Share the currently-playing stream. Copies its streamnook.app share link,
+  // then flips the button to a check for a beat as confirmation.
   const [shareCopied, setShareCopied] = useState(false);
   const handleSharePlayer = async () => {
     if (!currentStream?.user_login) return;
     try {
-      await navigator.clipboard.writeText(buildShareUrl(currentStream.user_login));
+      await navigator.clipboard.writeText(await shareLinkFor(currentStream));
       setShareCopied(true);
       window.setTimeout(() => setShareCopied(false), 1400);
     } catch (err) {
@@ -1885,7 +1886,7 @@ const VideoPlayer = () => {
               manifestErrorCountRef.current = 0;
 
               // Trigger auto-switch
-              handleStreamOfflineRef.current();
+              handleStreamOfflineRef.current('player');
               return;
             }
           }
@@ -1937,7 +1938,7 @@ const VideoPlayer = () => {
             fatalErrorCountRef.current = 0;
 
             // Trigger auto-switch
-            handleStreamOfflineRef.current();
+            handleStreamOfflineRef.current('player');
             return;
           }
 
@@ -1969,7 +1970,7 @@ const VideoPlayer = () => {
                   Logger.debug(`[HLS] Has played: ${hasPlayedSuccessfully}, Time since start: ${timeSinceStart}ms`);
                   manifestErrorCountRef.current = 0;
                   fatalErrorCountRef.current = 0;
-                  handleStreamOfflineRef.current();
+                  handleStreamOfflineRef.current('player');
                   return;
                 }
               }
@@ -2795,20 +2796,13 @@ const VideoPlayer = () => {
   // that, so restart the stream, which cold-starts at the edge. The threshold is 5
   // because a healthy promotion playlist legitimately declares ~2-4s the player
   // cannot fetch yet; only a gap beyond that means the pipeline is actually stuck.
-  // May this playback write a watch position? ONLY a VOD the viewer chose to
-  // open. Of `vodPlayback`'s writers (grep `vodPlayback:` in AppStore), one
-  // is a live session that must leave no trace, or Home's Continue Watching
-  // row fills up with every stream you ever watched:
-  //   - a live rewind (`rewound_from_live`), which the `seeking` handler in
-  //     this file triggers by itself for any backward scrub over 3 s, so a
-  //     casual "rewind ten seconds" would file a card;
-  // The offline room's latest broadcast counts: the room never auto-plays, so
-  // a VOD playing in it is one the viewer started (playOfflineRoomVod).
-  // Anything new that sets `vodPlayback` must be audited against this.
-  const isDeliberateVod =
-    (currentMediaType === 'video' || currentMediaType === 'offline_chat') &&
-    !!vodPlayback &&
-    !vodPlayback.rewound_from_live;
+  // Every VOD playback reports its playhead, and Rust decides what a report
+  // may write from the `play_id` it stamped on the start: only a VOD the
+  // viewer opened files a Continue Watching entry. A live rewind (which the
+  // `seeking` handler in this file starts by itself for any backward scrub
+  // over 3 s) only updates the live session's bookmark, in memory. The page
+  // must not grow its own "is this deliberate?" test again: a wrong answer
+  // here is what once filed a card for every stream watched.
   // A real VOD timeline: Plyr's full VOD bar, where muted marks are useful.
   // A rewind is excluded because it always plays a RECORDING VOD, for which
   // Twitch reports no mute info at all (probed 2026-09-12).
@@ -2890,12 +2884,13 @@ const VideoPlayer = () => {
     };
   }, [chaptersOpen]);
   // VOD position checkpoints to Rust, the owner of the resume store. Null
-  // (live, clips, rewinds, offline auto-play, idle) attaches nothing.
+  // (live, clips, idle) attaches nothing.
   useVodProgressReporter(
     videoRef,
-    isDeliberateVod
+    vodPlayback
       ? {
           videoId: vodPlayback.video_id,
+          playId: vodPlayback.play_id,
           channelLogin: vodPlayback.channel_login ?? currentStream?.user_login,
           channelName: currentStream?.user_name,
           title: vodPlayback.title ?? currentStream?.title,
@@ -3194,6 +3189,7 @@ const VideoPlayer = () => {
         {streamUrl === 'offline' && currentMediaType === 'offline_chat' && <OfflineRoomScreen />}
       </AnimatePresence>
       <OfflineRoomLivePill />
+      <StreamReconnectingPill />
 
       {/* Transient stream note — top-left. Replaces the per-stream toasts: how
           this stream is ad-free (your entitlement vs the proxy) plus any quality
@@ -3437,6 +3433,7 @@ const VideoPlayer = () => {
           rewound={!!liveRewind}
           liveSeekWindowSecs={LIVE_DVR_MAX_BEHIND_SECS}
           visible={showOverlay}
+          leftOffSecs={liveLeftOffSecs}
           onSeekLive={(t) => {
             const v = videoRef.current;
             if (v) v.currentTime = t;
@@ -3593,7 +3590,7 @@ const VideoPlayer = () => {
             </Tooltip>
           )}
 
-          {/* Share button. Copies the streamnook.app/w/<channel> link; the icon
+          {/* Share button. Copies the stream's streamnook.app link; the icon
               pops to a check on copy, and the tooltip confirms. */}
           {overlayButtonOn('share') && currentStream && (
             <Tooltip content={shareCopied ? 'Link copied!' : `Share ${currentStream.user_name}`} side="bottom">
@@ -3742,5 +3739,33 @@ const VideoPlayer = () => {
     </div>
   );
 };
+
+/** The streamer dropped and Rust is waiting it out on the same stream: say so
+ *  over the last frame, the way the platform's own player keeps you there. */
+function StreamReconnectingPill() {
+  const name = useAppStore((s) => {
+    const watching = s.currentStream;
+    if (!watching || !s.streamReconnecting || watching.user_login !== s.streamReconnecting) return null;
+    return watching.user_name || watching.user_login;
+  });
+  return (
+    <AnimatePresence>
+      {name && (
+        <motion.div
+          role="status"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.2 }}
+          className="glass-flyout pointer-events-none absolute left-1/2 top-3 z-50 flex -translate-x-1/2 items-center gap-2 text-xs font-medium text-textPrimary"
+          style={{ borderRadius: 999, padding: '6px 12px' }}
+        >
+          <Loader2 aria-hidden className="h-3 w-3 shrink-0 animate-spin text-textSecondary" />
+          Waiting for {name} to reconnect
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
 
 export default VideoPlayer;
