@@ -127,11 +127,11 @@ final class ChatComposerModel {
         return modes
     }
 
-    /// The placeholder: why the viewer is blocked, else the room mode that may hold them back,
-    /// else "Send a message" (nothing at all when the viewer hides it).
+    /// The placeholder: why the viewer cannot send when a mode stops them, else "Send a message"
+    /// (nothing at all when the viewer hides it). A mode that only may hold them back is said
+    /// once, by its icon in the field; the chat menu names it in full.
     var placeholder: String {
         if let blockedReason { return blockedReason }
-        if let prompt = shownModes?.prompt { return prompt }
         return session.style.hidePlaceholder ? "" : "Send a message"
     }
 

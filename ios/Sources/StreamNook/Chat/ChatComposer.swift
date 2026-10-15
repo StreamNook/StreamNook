@@ -55,7 +55,8 @@ private struct ComposerBar: View {
             }
             inputRow(slowWait: model.slowWait)
         }
-        .padding(.bottom, 10)
+        // The home indicator's inset plus 8.
+        .padding(.bottom, 8)
         .onChange(of: model.focusRequest.0) { _, _ in focused = model.focusRequest.1 }
         .overlay(alignment: .top) { above }
         .sheet(isPresented: $model.menuOpen) {
@@ -192,8 +193,8 @@ private struct ComposerBar: View {
                         model.commandsOpen = true
                     } label: {
                         Image(systemName: "slash.circle")
-                            .font(.system(size: 17))
-                            .foregroundStyle(Color(ChatTheme.textSecondary))
+                            .font(ComposerSymbol.font)
+                            .foregroundStyle(Color(ChatTheme.textMuted))
                             .frame(width: 32, height: 36)
                     }
                     .accessibilityLabel("Chat commands")
@@ -226,7 +227,8 @@ private struct ComposerBar: View {
                             .contentTransition(.symbolEffect(.replace))
                     }
                 }
-                .frame(width: 40, height: 40)
+                // A circle reads smaller than the 40 pt field beside it; 44 matches it.
+                .frame(width: 44, height: 44)
             }
             .glassEffect(.regular.interactive(), in: .circle)
             .disabled(model.sending || (model.canSend && slowWait > 0))
@@ -278,6 +280,12 @@ private struct ComposerBar: View {
     }
 }
 
+/// The symbols at the field's end (room modes, commands) share one size and weight, muted, so
+/// the emoji at its start is the only colour in the field.
+enum ComposerSymbol {
+    static let font = Font.system(size: 17, weight: .medium)
+}
+
 /// The room's modes inside the field: the first mode's symbol, and "+N" when more are on.
 private struct RoomModeIndicator: View {
     let modes: ChatRoomModes
@@ -287,7 +295,7 @@ private struct RoomModeIndicator: View {
         Button(action: open) {
             HStack(spacing: 4) {
                 Image(systemName: Self.symbol(modes.modes[0].kind))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(ComposerSymbol.font)
                 if modes.modes.count > 1 {
                     Text("+\(modes.modes.count - 1)")
                         .font(.system(size: 10, weight: .semibold).monospacedDigit())
