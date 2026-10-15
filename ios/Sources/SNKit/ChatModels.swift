@@ -318,9 +318,13 @@ public struct ChatRowView: Codable, Sendable, Equatable {
     public var paint: ChatPaint?
     public var spans: [ChatSpan]
     public var parentSpans: [ChatSpan]?
+    /// The StreamNook Atmosphere behind the author's rows (an id in the core's catalog).
+    public var atmosphere: String?
+    /// The CS2 Major Cologne look behind them instead.
+    public var cologne: CologneLook?
 
     enum CodingKeys: String, CodingKey {
-        case nameColor = "name_color", badges, paint, spans, parentSpans = "parent_spans"
+        case nameColor = "name_color", badges, paint, spans, parentSpans = "parent_spans", atmosphere, cologne
     }
 
     public init(nameColor: String, badges: [ChatViewBadge] = [], paint: ChatPaint? = nil, spans: [ChatSpan] = [],
@@ -339,6 +343,8 @@ public struct ChatRowView: Codable, Sendable, Equatable {
         paint = try c.decodeIfPresent(ChatPaint.self, forKey: .paint)
         spans = try c.decodeIfPresent([ChatSpan].self, forKey: .spans) ?? []
         parentSpans = try c.decodeIfPresent([ChatSpan].self, forKey: .parentSpans)
+        atmosphere = try c.decodeIfPresent(String.self, forKey: .atmosphere)
+        cologne = try c.decodeIfPresent(CologneLook.self, forKey: .cologne)
     }
 }
 
@@ -512,6 +518,39 @@ public struct ChatPaint: Codable, Sendable, Equatable, Hashable {
         }
     }
 
+    /// One gradient or image layer of the whole paint (Rust `PaintLayerView`).
+    public struct Layer: Codable, Sendable, Equatable, Hashable {
+        /// "linear" | "radial" | "image"
+        public var kind: String
+        public var angle: Double
+        public var repeating: Bool
+        public var circle: Bool
+        public var stops: [Stop]
+        public var imageURL: String?
+
+        enum CodingKeys: String, CodingKey { case kind, angle, repeating, circle, stops, imageURL = "image_url" }
+
+        public init(kind: String, angle: Double = 0, repeating: Bool = false, circle: Bool = false, stops: [Stop] = [],
+                    imageURL: String? = nil) {
+            self.kind = kind
+            self.angle = angle
+            self.repeating = repeating
+            self.circle = circle
+            self.stops = stops
+            self.imageURL = imageURL
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? "linear"
+            angle = try c.decodeIfPresent(Double.self, forKey: .angle) ?? 0
+            repeating = try c.decodeIfPresent(Bool.self, forKey: .repeating) ?? false
+            circle = try c.decodeIfPresent(Bool.self, forKey: .circle) ?? false
+            stops = try c.decodeIfPresent([Stop].self, forKey: .stops) ?? []
+            imageURL = try c.decodeIfPresent(String.self, forKey: .imageURL)
+        }
+    }
+
     public var id: String
     /// "linear" | "radial" | "image" | "solid"
     public var kind: String
@@ -520,9 +559,34 @@ public struct ChatPaint: Codable, Sendable, Equatable, Hashable {
     public var stops: [Stop]
     public var imageURL: String?
     public var shadows: [Shadow]
+    /// The paint's name.
+    public var name: String
+    /// Every gradient and image layer, top first; empty from an older core.
+    public var layers: [Layer]
+    /// The first single colour, under the layers.
+    public var baseColor: String?
+    /// Applied to the whole name.
+    public var opacity: Double
 
     enum CodingKeys: String, CodingKey {
-        case id, kind, angle, repeating, stops, imageURL = "image_url", shadows
+        case id, kind, angle, repeating, stops, imageURL = "image_url", shadows, name, layers, baseColor = "base_color"
+        case opacity
+    }
+
+    public init(id: String, kind: String, angle: Double = 0, repeating: Bool = false, stops: [Stop] = [],
+                imageURL: String? = nil, shadows: [Shadow] = [], name: String = "", layers: [Layer] = [],
+                baseColor: String? = nil, opacity: Double = 1) {
+        self.id = id
+        self.kind = kind
+        self.angle = angle
+        self.repeating = repeating
+        self.stops = stops
+        self.imageURL = imageURL
+        self.shadows = shadows
+        self.name = name
+        self.layers = layers
+        self.baseColor = baseColor
+        self.opacity = opacity
     }
 
     public init(from decoder: Decoder) throws {
@@ -534,6 +598,10 @@ public struct ChatPaint: Codable, Sendable, Equatable, Hashable {
         stops = try c.decodeIfPresent([Stop].self, forKey: .stops) ?? []
         imageURL = try c.decodeIfPresent(String.self, forKey: .imageURL)
         shadows = try c.decodeIfPresent([Shadow].self, forKey: .shadows) ?? []
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        layers = try c.decodeIfPresent([Layer].self, forKey: .layers) ?? []
+        baseColor = try c.decodeIfPresent(String.self, forKey: .baseColor)
+        opacity = try c.decodeIfPresent(Double.self, forKey: .opacity) ?? 1
     }
 }
 

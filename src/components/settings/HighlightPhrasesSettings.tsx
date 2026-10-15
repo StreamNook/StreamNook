@@ -1,47 +1,31 @@
 import { useEffect, useMemo, useState } from 'react';
+import { EntryInput } from './entryInput';
 import { invoke } from '@tauri-apps/api/core';
 import { Dropdown } from '../ui/Dropdown';
 import { ChevronDown, ChevronUp, Plus, Trash2, Volume2 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { SOUND_LABELS, playSound, type SoundId } from '../../utils/notificationSound';
+import { Logger } from '../../utils/logger';
 import { SettingsSection } from './_primitives';
 import type { HighlightPhrase } from '../../types';
 
-const DEFAULT_PHRASE_COLOR = '#fbbf24';
 const DEFAULT_COOLDOWN_SECONDS = 3;
 const SOUND_OPTIONS: SoundId[] = ['boop', 'tick', 'soft', 'whisper', 'gentle'];
 
-function makeDefaultPhrase(): HighlightPhrase {
-  return {
-    id: typeof crypto !== 'undefined' && 'randomUUID' in crypto
-      ? crypto.randomUUID()
-      : Math.random().toString(36).slice(2),
-    pattern: '',
-    enabled: true,
-    case_sensitive: false,
-    whole_word: true,
-    is_regex: false,
-    color: DEFAULT_PHRASE_COLOR,
-    sound_id: null,
-    cooldown_seconds: DEFAULT_COOLDOWN_SECONDS,
-  };
+/** One edit to the stored phrase list; Rust makes new entries and clamps the
+ *  cooldown. Answers the list as stored, or null when the edit failed. */
+async function editPhrases(edit: Record<string, unknown>): Promise<HighlightPhrase[] | null> {
+  try {
+    return await invoke<HighlightPhrase[]>('edit_settings_list', { path: 'chat_highlights.phrases', edit });
+  } catch (err) {
+    Logger.warn('[HighlightPhrases] edit failed:', err);
+    return null;
+  }
 }
 
 const HighlightPhrasesSettings = () => {
-  const { settings, updateSettings } = useAppStore();
-  const phrases = useMemo(
-    () => settings.chat_highlights?.phrases ?? [],
-    [settings.chat_highlights],
-  );
-
-  // Merge, never replace: the same object carries users, badges, built_in
-  // and appearance, which this panel must not wipe.
-  const writePhrases = (next: HighlightPhrase[]) => {
-    updateSettings({
-      ...settings,
-      chat_highlights: { ...settings.chat_highlights, phrases: next },
-    });
-  };
+  const highlights = useAppStore((s) => s.settings.chat_highlights);
+  const phrases = useMemo(() => highlights?.phrases ?? [], [highlights]);
 
   // Regex phrases are validated by Rust, the dialect that actually runs them
   // (no lookaround, no backreferences). Errors keyed by phrase id.
@@ -72,11 +56,28 @@ const HighlightPhrasesSettings = () => {
   }, [phrases]);
 
   const updatePhrase = (id: string, patch: Partial<HighlightPhrase>) => {
-    writePhrases(phrases.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+    void editPhrases({ op: 'update', id, patch });
+  };
+
+  // A typed field: the text as stored comes back for the field to show.
+  const saveField = (id: string, field: 'pattern' | 'color') => async (text: string) => {
+    const stored = await editPhrases({ op: 'update', id, patch: { [field]: text } });
+    return stored?.find((p) => p.id === id)?.[field];
+  };
+
+  const saveCooldown = (id: string) => async (text: string) => {
+    const raw = parseInt(text, 10);
+    const stored = await editPhrases({
+      op: 'update',
+      id,
+      patch: { cooldown_seconds: Number.isFinite(raw) ? raw : DEFAULT_COOLDOWN_SECONDS },
+    });
+    const seconds = stored?.find((p) => p.id === id)?.cooldown_seconds;
+    return seconds === undefined ? undefined : String(seconds);
   };
 
   const removePhrase = (id: string) => {
-    writePhrases(phrases.filter((p) => p.id !== id));
+    void editPhrases({ op: 'remove', id });
   };
 
   const movePhrase = (id: string, direction: -1 | 1) => {
@@ -84,13 +85,11 @@ const HighlightPhrasesSettings = () => {
     if (idx === -1) return;
     const target = idx + direction;
     if (target < 0 || target >= phrases.length) return;
-    const next = phrases.slice();
-    [next[idx], next[target]] = [next[target], next[idx]];
-    writePhrases(next);
+    void editPhrases({ op: 'move', id, to: target });
   };
 
   const addPhrase = () => {
-    writePhrases([...phrases, makeDefaultPhrase()]);
+    void editPhrases({ op: 'add' });
   };
 
   return (
@@ -137,19 +136,19 @@ const HighlightPhrasesSettings = () => {
                   />
                 </button>
 
-                <input
+                <EntryInput
                   type="text"
                   value={phrase.pattern}
-                  onChange={(e) => updatePhrase(phrase.id, { pattern: e.target.value })}
+                  save={saveField(phrase.id, 'pattern')}
                   placeholder={phrase.is_regex ? 'Regular expression' : 'Word or phrase'}
                   className="flex-1 glass-input text-textPrimary text-sm px-2.5 py-1.5"
                   spellCheck={false}
                 />
 
-                <input
+                <EntryInput
                   type="color"
                   value={phrase.color}
-                  onChange={(e) => updatePhrase(phrase.id, { color: e.target.value })}
+                  save={saveField(phrase.id, 'color')}
                   className="w-8 h-8 rounded cursor-pointer bg-transparent border border-borderSubtle"
                   aria-label="Highlight color"
                 />
@@ -226,7 +225,7 @@ const HighlightPhrasesSettings = () => {
                     options={[
                       { value: '', label: 'None' },
                       ...SOUND_OPTIONS.map((id) => ({ value: id, label: SOUND_LABELS[id] })),
-                      ...(settings.chat_highlights?.custom_sounds ?? []).map((s) => ({ value: s.id, label: s.name || 'Custom sound' })),
+                      ...(highlights?.custom_sounds ?? []).map((s) => ({ value: s.id, label: s.name || 'Custom sound' })),
                     ]}
                   />
                 </label>
@@ -245,17 +244,13 @@ const HighlightPhrasesSettings = () => {
 
                     <label className="inline-flex items-center gap-2 ml-auto">
                       <span>Cooldown</span>
-                      <input
+                      <EntryInput
                         type="number"
                         min={0}
                         max={60}
                         step={1}
-                        value={phrase.cooldown_seconds ?? DEFAULT_COOLDOWN_SECONDS}
-                        onChange={(e) => {
-                          const raw = parseInt(e.target.value, 10);
-                          const clamped = Number.isFinite(raw) ? Math.max(0, Math.min(60, raw)) : DEFAULT_COOLDOWN_SECONDS;
-                          updatePhrase(phrase.id, { cooldown_seconds: clamped });
-                        }}
+                        value={String(phrase.cooldown_seconds ?? DEFAULT_COOLDOWN_SECONDS)}
+                        save={saveCooldown(phrase.id)}
                         className="glass-input text-textPrimary text-xs px-2 py-1 w-16 text-right"
                       />
                       <span>s</span>

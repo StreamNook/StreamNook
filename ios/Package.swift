@@ -44,8 +44,9 @@ let package = Package(
         .target(
             name: "StreamNook",
             dependencies: ["SNKit"] + (hasCore ? ["SNCore"] : []),
-            // Satoshi, the interface font, converted from the desktop's woff2 to TrueType.
-            resources: [.copy("Fonts")],
+            // Satoshi, the interface font, converted from the desktop's woff2 to TrueType, and
+            // StreamNook's house badges (the apps ship them; the CDN does not have them).
+            resources: [.copy("Fonts"), .copy("HouseBadges")],
             linkerSettings: hasCore ? [
                 .unsafeFlags(["-L\(coreLib)"]),
                 .linkedLibrary("streamnook_lib"),

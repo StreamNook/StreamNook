@@ -2,12 +2,15 @@ import SNKit
 import SwiftUI
 
 /// A live stream in a list, in StreamNook's card language: a media card holding the preview with
-/// its chips (LIVE, DROPS, the hype train, viewers, the watch streak), then the title, the channel
-/// and who it streams with, and the category. The row variant puts a smaller preview beside the
-/// text. Long press opens the card's menu.
+/// its chips (DROPS and the hype train on top, the viewers and the watch streak below), then the
+/// title, the channel and who it streams with, and the category. Every stream in these lists is
+/// live, so live is said once, by the red dot in the viewers chip. The row variant puts a smaller
+/// preview beside the text. Long press opens the card's menu.
 struct StreamCard: View {
     let stream: TwitchStream
     var variant = StreamView.cards
+    /// Off where the screen already names the category (a category's own list).
+    var showsCategory = true
     var hypeTrain: HypeTrain?
     var streak: Int?
     var group: ChannelGroup?
@@ -37,10 +40,6 @@ struct StreamCard: View {
             Preview(url: TwitchImage.preview(stream.thumbnailURL, stamp: stamp))
                 .overlay(alignment: .topLeading) {
                     HStack(spacing: 4) {
-                        Chip(kind: .live) {
-                            LiveDot()
-                            Text("LIVE")
-                        }
                         if stream.dropsEarnable == true { DropsChip() }
                         if let hypeTrain { HypeChip(train: hypeTrain) }
                     }
@@ -48,22 +47,24 @@ struct StreamCard: View {
                 }
                 .overlay(alignment: .bottomLeading) {
                     Chip(kind: .neutral) {
-                        Image(systemName: Symbol.viewers).font(.system(size: 10, weight: .bold)).opacity(0.8)
+                        LiveDot()
                         Text(stream.viewerCount.formatted()).monospacedDigit()
                     }
                     .padding(6)
-                    .accessibilityLabel("\(stream.viewerCount.formatted()) viewers")
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Live, \(stream.viewerCount.formatted()) viewers")
                 }
                 .overlay(alignment: .bottomTrailing) {
                     if let streak { StreakChip(days: streak).padding(6) }
                 }
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(stream.title)
                     .font(.snCardTitle)
                     .foregroundStyle(SN.textPrimary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 4) {
+                    .padding(.bottom, 1)
+                HStack(spacing: 5) {
                     if let avatar = stream.profileImageURL.flatMap(URL.init(string:)) {
                         AsyncImage(url: avatar) { image in
                             image.resizable().scaledToFill()
@@ -80,11 +81,13 @@ struct StreamCard: View {
                 }
                 .font(.snCardLine)
                 .foregroundStyle(SN.textSecondary)
-                Text(stream.gameName.isEmpty ? " " : stream.gameName)
-                    .font(.snCardLine)
-                    .foregroundStyle(SN.textMuted)
-                    .lineLimit(1)
-                    .frame(minHeight: 16)
+                if showsCategory {
+                    Text(stream.gameName.isEmpty ? " " : stream.gameName)
+                        .font(.snCardMeta)
+                        .foregroundStyle(SN.textMuted)
+                        .lineLimit(1)
+                        .frame(minHeight: 16)
+                }
             }
             .padding(.horizontal, 2)
             .padding(.bottom, 2)
@@ -121,22 +124,33 @@ struct StreamCard: View {
                     .font(.snCardTitle)
                     .foregroundStyle(SN.textPrimary)
                     .lineLimit(2)
+                    .padding(.bottom, 1)
                 HStack(spacing: 4) {
                     Text(stream.userName).lineLimit(1)
                     if let group { TogetherTag(group: group, compact: true) }
-                    if stream.isPartner { PartnerMark(size: 10) }
+                    if stream.isPartner { PartnerMark(size: 11) }
                 }
-                .font(.sn(12))
+                .font(.snCardLine)
                 .foregroundStyle(SN.textSecondary)
-                if !stream.gameName.isEmpty {
-                    Text(stream.gameName).font(.sn(12)).foregroundStyle(SN.textMuted).lineLimit(1)
+                if showsCategory && !stream.gameName.isEmpty {
+                    Text(stream.gameName).font(.snCardMeta).foregroundStyle(SN.textMuted).lineLimit(1)
                 }
-                HStack(spacing: 6) {
+                // The streak rides the viewers line as words: as a dark chip it was the heaviest
+                // thing in the text column.
+                HStack(spacing: 8) {
                     Text("\(stream.viewerCount.formatted()) viewers")
-                        .font(.sn(11.5))
                         .foregroundStyle(SN.textMuted)
-                    if let streak { StreakChip(days: streak) }
+                    if let streak {
+                        HStack(spacing: 2) {
+                            Image(systemName: Symbol.streak).font(.system(size: 10.5, weight: .semibold))
+                            Text("\(streak)").monospacedDigit()
+                        }
+                        .foregroundStyle(FixedColor.streak.color)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Watch streak \(streak)")
+                    }
                 }
+                .font(.snCardMeta)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }

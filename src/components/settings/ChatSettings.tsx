@@ -8,7 +8,6 @@ import { useAppStore } from '../../stores/AppStore';
 // settings stop offering knobs that quietly do nothing.
 import { IS_MOBILE } from '../../utils/platform';
 import PanelChannelList from '../plugins/PanelChannelList';
-import { trustableHost } from '../../services/linkPreviewService';
 import { Tooltip } from '../ui/Tooltip';
 import { Dropdown } from '../ui/Dropdown';
 import HighlightPhrasesSettings from './HighlightPhrasesSettings';
@@ -221,26 +220,36 @@ const EmoteHoverDemo = ({ hoverSize, emoteScale }: { hoverSize: number; emoteSca
   );
 };
 
+/** One edit to a settings list Rust owns (see `edit_settings_list`). A refused
+ *  edit, such as a site that is not an address, is shown as a toast; answers
+ *  whether the edit went through. */
+async function editSettingsList(path: string, edit: Record<string, unknown>): Promise<boolean> {
+  try {
+    await invoke('edit_settings_list', { path, edit });
+    return true;
+  } catch (err) {
+    useAppStore.getState().addToast(typeof err === 'string' ? err : 'Could not save that change.', 'error');
+    return false;
+  }
+}
+
 // Manage the user's own trusted-source list: an add input plus removable chips.
 // The built-in allowlist isn't listed (it'd be noise); a short note names the
-// kinds of sites that are trusted out of the box. Hosts are normalized through
-// `trustableHost` so a pasted URL becomes a clean registrable host.
-const TrustedSourcesEditor = ({
-  domains,
-  onChange,
-}: {
-  domains: string[];
-  onChange: (next: string[]) => void;
-}) => {
+// kinds of sites that are trusted out of the box. Rust stores what is typed as
+// its host, so a pasted URL becomes a clean registrable host, and refuses text
+// that is not a site.
+const TrustedSourcesEditor = ({ domains }: { domains: string[] }) => {
   const [input, setInput] = useState('');
-  const pending = trustableHost(input.trim());
+  const pending = input.trim();
 
-  const add = () => {
+  const add = async () => {
     if (!pending) return;
-    if (!domains.includes(pending)) onChange([...domains, pending]);
-    setInput('');
+    if (await editSettingsList('chat_design.link_preview_trusted_domains', { op: 'add', item: pending })) {
+      setInput('');
+    }
   };
-  const remove = (host: string) => onChange(domains.filter((d) => d !== host));
+  const remove = (host: string) =>
+    void editSettingsList('chat_design.link_preview_trusted_domains', { op: 'remove', value: host });
 
   return (
     <div className="space-y-3">
@@ -253,14 +262,14 @@ const TrustedSourcesEditor = ({
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault();
-              add();
+              void add();
             }
           }}
           placeholder="example.com"
           className="glass-input min-w-0 flex-1 rounded-lg px-3 py-2 text-sm text-textPrimary placeholder:text-textMuted"
         />
         <button
-          onClick={add}
+          onClick={() => void add()}
           disabled={!pending}
           className="flex-shrink-0 rounded-lg bg-accent/15 px-3.5 py-2 text-sm font-medium text-accent transition-colors hover:bg-accent/25 disabled:cursor-not-allowed disabled:opacity-40"
         >
@@ -378,9 +387,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
     updateSettings({ ...settings, chat_events: { ...settings.chat_events, ...patch } });
   const hiddenEvents = chatEvents.hidden_provider_events ?? [];
   const toggleHiddenEvent = (key: string) =>
-    setEvents({
-      hidden_provider_events: hiddenEvents.includes(key) ? hiddenEvents.filter((k) => k !== key) : [...hiddenEvents, key],
-    });
+    void editSettingsList('chat_events.hidden_provider_events', { op: 'toggle', value: key });
   // The option under the pointer in a visual setting, shown in its preview
   // before it is picked; null falls back to the saved value.
   const [deletedHover, setDeletedHover] = useState<DeletedMessageStyle | null>(null);
@@ -403,15 +410,16 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
   const [commandDraft, setCommandDraft] = useState('');
   const [commandMode, setCommandMode] = useState<'prefix' | 'exact'>('prefix');
   const commandFilters: CommandFilter[] = settings.chat_filters?.command_filters ?? [];
-  const setCommandFilters = (next: CommandFilter[], hide?: boolean) =>
-    updateSettings({
-      ...settings,
-      chat_filters: {
-        ...settings.chat_filters,
-        command_filters: next,
-        ...(hide === undefined ? {} : { hide_commands: hide }),
-      },
-    });
+  const setHideCommands = (hide: boolean) =>
+    updateSettings({ ...settings, chat_filters: { ...settings.chat_filters, hide_commands: hide } });
+  // Rust trims and caps the pattern; an empty one is not added.
+  const addCommandFilter = () => {
+    if (!commandDraft.trim()) return;
+    void editSettingsList('chat_filters.command_filters', { op: 'add', item: { value: commandDraft, mode: commandMode } });
+    setCommandDraft('');
+  };
+  const removeCommandFilter = (index: number) =>
+    void editSettingsList('chat_filters.command_filters', { op: 'remove', index });
 
   const stored = settings.chat_design;
   const cd = {
@@ -487,11 +495,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
   };
   const badgeProviderHidden = (id: string) => cd.hidden_badge_providers.includes(id);
   const toggleBadgeProvider = (id: string) =>
-    setDesign({
-      hidden_badge_providers: badgeProviderHidden(id)
-        ? cd.hidden_badge_providers.filter((k) => k !== id)
-        : [...cd.hidden_badge_providers, id],
-    });
+    void editSettingsList('chat_design.hidden_badge_providers', { op: 'toggle', value: id });
 
   const setDesign = (patch: Partial<typeof cd>) => {
     updateSettings({
@@ -1929,10 +1933,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                 title="Trusted sites"
                 stacked
                 control={
-                  <TrustedSourcesEditor
-                    domains={cd.link_preview_trusted_domains}
-                    onChange={(next) => setDesign({ link_preview_trusted_domains: next })}
-                  />
+                  <TrustedSourcesEditor domains={cd.link_preview_trusted_domains} />
                 }
               />
             </SubControls>
@@ -2758,7 +2759,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
           control={
             <Toggle
               enabled={settings.chat_filters?.hide_commands ?? false}
-              onChange={() => setCommandFilters(commandFilters, !(settings.chat_filters?.hide_commands ?? false))}
+              onChange={() => setHideCommands(!(settings.chat_filters?.hide_commands ?? false))}
             />
           }
         >
@@ -2777,7 +2778,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                         <button
                           key={`${f.mode}:${f.value}:${i}`}
                           type="button"
-                          onClick={() => setCommandFilters(commandFilters.filter((_, j) => j !== i))}
+                          onClick={() => removeCommandFilter(i)}
                           title="Remove"
                           className="glass-button-static px-2.5 py-1 rounded-full text-[12px] text-textPrimary flex items-center gap-1.5"
                         >
@@ -2796,10 +2797,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                         maxLength={40}
                         className="glass-input flex-1 min-w-0 px-3 py-2 text-[13px] font-mono text-textPrimary placeholder:text-textMuted"
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter' && commandDraft.trim()) {
-                            setCommandFilters([...commandFilters, { value: commandDraft.trim(), mode: commandMode }]);
-                            setCommandDraft('');
-                          }
+                          if (e.key === 'Enter') addCommandFilter();
                         }}
                       />
                       <SegmentedSelect<'prefix' | 'exact'>
@@ -2813,10 +2811,7 @@ const ChatSettings = ({ hidePlacement = false }: { hidePlacement?: boolean } = {
                       <button
                         type="button"
                         disabled={!commandDraft.trim()}
-                        onClick={() => {
-                          setCommandFilters([...commandFilters, { value: commandDraft.trim(), mode: commandMode }]);
-                          setCommandDraft('');
-                        }}
+                        onClick={addCommandFilter}
                         className="glass-button px-3 py-2 text-[13px] font-medium text-textPrimary disabled:opacity-50"
                       >
                         Add

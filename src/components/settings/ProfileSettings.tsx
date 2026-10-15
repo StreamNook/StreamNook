@@ -449,7 +449,7 @@ const ProfileSettings = () => {
     if (!currentUser?.user_id) return;
     if (!bypassTier && !tierMet(tier)) return; // locked until the required tier is met
     setProfileThemeState(id);
-    void setProfileTheme(currentUser.user_id, id);
+    void setProfileTheme(currentUser.user_id, id).catch((e) => Logger.warn('[ProfileSettings] theme write failed:', e));
     // Keep the cached profile snapshot's theme in sync so the profile CARD (ours
     // and anyone else's) reflects the change on the next open, instead of serving
     // the old atmosphere until the lazy stale-rewrite. Without this the stale

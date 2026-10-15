@@ -102,9 +102,13 @@ pub mod membership_gifts;
 pub mod membership_status;
 pub mod provider_categories;
 pub mod provider_live_service;
+pub mod link_adapt;
 pub mod ll_origin;
+pub mod theme_palette;
 #[cfg(test)]
 mod ll_soak;
+#[cfg(test)]
+mod link_soak;
 pub mod log_service;
 pub mod resource_log;
 pub mod runtime_watchdog;
@@ -129,6 +133,13 @@ pub mod seventv_cosmetics_resolver;
 pub mod seventv_eventapi;
 pub mod song_id;
 pub mod stream_server;
+pub mod sub_standing;
+pub mod follow_lookup;
+pub mod streamnook_backend;
+pub mod css_fill;
+pub mod cosmetics_registry;
+pub mod member_theme;
+pub mod profile_view;
 pub mod flv_fmp4;
 pub mod tiktok_relay;
 pub mod ts_fmp4;
