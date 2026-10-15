@@ -221,6 +221,9 @@ pub struct UserCommand {
     pub enabled: bool,
     #[serde(default)]
     pub require_slash: Option<bool>,
+    /// A plain-text trigger that also fires as the message's last word.
+    #[serde(default)]
+    pub also_match_suffix: Option<bool>,
 }
 
 /// One row of the command list as a composer shows it.

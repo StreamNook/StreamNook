@@ -116,15 +116,10 @@ import {
   COMMAND_DEFINITIONS,
   CommandDefinition,
   buildUserCommandDefinitions,
-  matchPlainTextUserCommand,
-  expandUserCommand,
-  findUserCommand,
-  customCommandWins,
   rankCommandMatches,
   resolveCommandAlias,
 } from '../utils/chatCommands';
-import { buildTemplateContext, handleSlashCommand } from '../utils/commandHandler';
-import { PLATFORM_NEUTRAL, runExtendedCommand } from '../utils/extendedCommands';
+import { applySlashOutcome, handleSlashCommand, runSlashCommand } from '../utils/commandHandler';
 import ChatBurstStatus from './chat/ChatBurstStatus';
 import { getRemindFlowSuggestions, tokenizeRemindOverlay } from '../utils/reminderEngine';
 
@@ -1990,22 +1985,14 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     let cancelled = false;
     const timer = setTimeout(async () => {
       try {
-        const mod = await import('../utils/nukeEngine');
-        const parsed = mod.parseNukeArgs(args);
-        // A half-typed command is the normal case while typing, so an unparseable
-        // one just shows nothing rather than an error.
-        if ('error' in parsed) {
-          if (!cancelled) setNukePreview(null);
-          return;
-        }
-        const { matchedMessages, affected } = mod.previewNuke(channel, parsed);
-        if (!cancelled) {
-          setNukePreview({
-            messages: matchedMessages,
-            users: affected.length,
-            action: mod.describeAction(parsed.action),
-          });
-        }
+        // Rust counts from the same code the command acts with. A half-typed
+        // command is the normal case while typing, so one that does not parse
+        // yet answers null and shows nothing.
+        const preview = await invoke<{ messages: number; users: number; action: string } | null>('nuke_preview', {
+          channel,
+          args,
+        });
+        if (!cancelled) setNukePreview(preview);
       } catch {
         if (!cancelled) setNukePreview(null);
       }
@@ -3336,29 +3323,18 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
     const cmd = (parts[0] || '').toLowerCase();
     const args = parts.slice(1);
 
-    // User-defined text macros are platform-neutral, so they keep working here
-    // exactly as they do on Twitch (same lookup, precedence and expansion as
-    // commandHandler).
-    const userCommand = customCommandWins(cmd)
-      ? findUserCommand(cmd, useAppStore.getState().settings.chat_commands?.user_commands, true)
-      : undefined;
-    if (userCommand) {
-      const ctx = buildTemplateContext(
-        args,
-        channelOverride?.user_id || '',
-        channelOverride?.user_login || '',
-      );
-      const expansion = expandUserCommand(userCommand.expansion, ctx);
-      if (expansion.missing_args.length > 0) {
-        notice(
-          `/${cmd} expects argument${expansion.missing_args.length > 1 ? 's' : ''} ${expansion.missing_args
-            .map((i) => `{${i}}`)
-            .join(', ')}`,
-        );
+    // Your own commands and the commands that need no Twitch API (text tools,
+    // timers, settings) run in Rust for any platform's chat, the same as on
+    // Twitch. Rust answers "not mine" for the rest.
+    if (providerKey) {
+      const outcome = await runSlashCommand(raw, '', providerKey, depth).catch((err) => {
+        Logger.error('[Provider] run_slash_command failed:', err);
+        return null;
+      });
+      if (outcome?.handled) {
+        await applySlashOutcome(outcome, providerKey, '', (msg) => void sendMessage(msg));
         return;
       }
-      if (expansion.text) await sendMessage(expansion.text);
-      return;
     }
 
     // Resolve a target by name out of the visible buffer: provider chat has no
@@ -3461,26 +3437,6 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
         await runModeration('unban', null);
         return;
       default:
-        // Commands that need no Twitch API (text tools, timers, settings)
-        // work in any chat.
-        if (PLATFORM_NEUTRAL.has(canonical)) {
-          await runExtendedCommand({
-            command: canonical,
-            typed: cmd,
-            args,
-            rest: raw.slice(1).trim().slice(cmd.length).trim(),
-            broadcasterId: '',
-            broadcasterLogin: providerKey ?? '',
-            send: (msg) => void sendMessage(msg),
-            depth,
-            dispatch: async (line) => {
-              if (line.startsWith('/')) await handleProviderSlashCommand(line, depth + 1);
-              else await sendMessage(line);
-              return true;
-            },
-          });
-          return;
-        }
         notice(`/${cmd} isn't available on ${PROVIDERS[provider].label}.`);
     }
   };
@@ -3592,43 +3548,28 @@ const ChatWidget = ({ channelOverride, hypeTrainOverride, filterId: filterIdProp
       }
 
       try {
-        // Plain-text user commands (require_slash: false). Run BEFORE the
-        // slash-command intercept so a non-slash trigger expansion can still
-        // start with "/" — the expansion result is re-evaluated as a new
-        // message body, including being able to fire a built-in slash command.
+        // Plain-text user commands (require_slash: false) run in Rust like the
+        // slash ones; an expansion that starts with "/" runs as that command.
+        // Only asked when one is saved, so ordinary chat makes no extra call.
         if (!messageToSend.startsWith('/')) {
-          const plainMatch = matchPlainTextUserCommand(
-            messageToSend,
-            useAppStore.getState().settings.chat_commands?.user_commands,
-          );
-          if (plainMatch) {
-            const ctx = buildTemplateContext(
-              plainMatch.args,
-              currentStream?.user_id || '',
-              currentStream?.user_login || '',
-            );
-            const expansion = expandUserCommand(plainMatch.command.expansion, ctx);
-            if (expansion.missing_args.length > 0) {
-              useAppStore.getState().addToast(
-                `Trigger "${plainMatch.command.trigger}" expects argument${expansion.missing_args.length > 1 ? 's' : ''} ${expansion.missing_args.map((i) => `{${i}}`).join(', ')}`,
-                'error',
-              );
+          const own = useAppStore.getState().settings.chat_commands?.user_commands;
+          const room = isTwitch ? currentStream?.user_login || '' : providerKey ?? '';
+          if (room && own?.some((c) => c.enabled && c.require_slash === false)) {
+            const user = currentUser;
+            const send =
+              isTwitch && user
+                ? (msg: string) =>
+                    void sendMessage(msg, {
+                      username: user.login || user.username,
+                      displayName: user.display_name || user.username,
+                      userId: user.user_id,
+                      color: undefined,
+                      badges: '',
+                    })
+                : (msg: string) => void sendMessage(msg);
+            if (await handleSlashCommand(messageToSend, isTwitch ? currentStream?.user_id || '' : '', room, send)) {
               return;
             }
-            if (!expansion.text) {
-              useAppStore.getState().addToast(`Trigger "${plainMatch.command.trigger}" expanded to an empty message`, 'error');
-              return;
-            }
-            // Re-enter with the expanded text. Replace input and recurse via
-            // setMessageInput so the existing flow handles the slash-command
-            // detection, optimistic send, etc.
-            setMessageInput(expansion.text);
-            // Defer one tick so the input state lands before the next send.
-            setTimeout(() => {
-              const form = inputRef.current?.form;
-              form?.requestSubmit();
-            }, 0);
-            return;
           }
         }
 

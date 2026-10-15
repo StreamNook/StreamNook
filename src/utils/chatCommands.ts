@@ -1,3 +1,8 @@
+// The command table the desktop chat box's slash autocomplete and command menu
+// read on every keystroke. Rust runs every command (services/slash_dispatch.rs)
+// from its own copy of this table (services/command_catalog.rs), which serves
+// the phone's command sheet; a Rust test fails when the two drift apart.
+
 import type { UserSlashCommand } from '../types';
 
 export interface CommandDefinition {
@@ -208,12 +213,6 @@ export function resolveCommandAlias(name: string): string {
   return COMMAND_ALIASES.get(n) ?? n;
 }
 
-/** The definition for a command name or alias. */
-export function findCommandDefinition(name: string): CommandDefinition | undefined {
-  const n = resolveCommandAlias(name);
-  return COMMAND_DEFINITIONS.find((c) => c.name.toLowerCase() === n);
-}
-
 // /fakemsg only works in development builds, so a release build never lists it.
 const DEV_BUILD = !!import.meta.env?.DEV;
 for (let i = COMMAND_DEFINITIONS.length - 1; i >= 0; i--) {
@@ -276,118 +275,6 @@ export function rankCommandMatches(commands: CommandDefinition[], typed: string)
     .map((x) => x.c);
 }
 
-// Template grammar (full reference is in the help block of the settings UI):
-//
-//   {N}             1-indexed positional arg (e.g. {1}, {2})
-//   {N+}            rest of the args starting at position N joined with space
-//   {*}             alias for {1+}
-//   {{              literal "{"
-//   }}              literal "}"
-//   {user.name}     invoker's display name (alias: {user})
-//   {user.id}       invoker's Twitch user ID
-//   {channel.name}  current channel's display name (alias: {channel})
-//   {channel.id}    current channel's broadcaster ID
-//   {stream.title}  current stream title (empty when offline)
-//   {stream.game}   current stream category / game name (empty when offline)
-//   {stream.uptime} formatted uptime, e.g. "2h 14m" (empty when offline)
-//
-// Implementation strategy: walk the template once with a single regex that
-// captures every kind of placeholder, including literal-brace escapes. This
-// avoids the chained-.replace() ambiguity where an inserted value could
-// itself look like a placeholder and get expanded again.
-
-const PLACEHOLDER_RE = /\{\{|\}\}|\{(\d+)\+\}|\{(\d+)\}|\{\*\}|\{([a-zA-Z][a-zA-Z0-9_.]*)\}/g;
-
-export interface TemplateContext {
-  user_name: string;
-  user_id: string;
-  channel_name: string;
-  channel_id: string;
-  stream_title: string;
-  stream_game: string;
-  stream_uptime: string;
-  args: string[];
-}
-
-export interface TemplateExpansion {
-  text: string;
-  missing_args: number[]; // 1-indexed positions that the template needs but the user didn't provide
-}
-
-function dottedFieldValue(key: string, ctx: TemplateContext): string | null {
-  switch (key.toLowerCase()) {
-    case 'user':
-    case 'user.name':
-      return ctx.user_name;
-    case 'user.id':
-      return ctx.user_id;
-    case 'channel':
-    case 'channel.name':
-      return ctx.channel_name;
-    case 'channel.id':
-      return ctx.channel_id;
-    case 'stream.title':
-      return ctx.stream_title;
-    case 'stream.game':
-      return ctx.stream_game;
-    case 'stream.uptime':
-      return ctx.stream_uptime;
-    default:
-      return null; // Unknown placeholder — left as literal in the output
-  }
-}
-
-export function expandUserCommand(template: string, ctx: TemplateContext): TemplateExpansion {
-  const missing: number[] = [];
-
-  const text = template.replace(PLACEHOLDER_RE, (match, positionalRest: string | undefined, positional: string | undefined, dotted: string | undefined) => {
-    // Literal brace escapes
-    if (match === '{{') return '{';
-    if (match === '}}') return '}';
-
-    // {N+} — rest of args starting at position N
-    if (positionalRest !== undefined) {
-      const start = parseInt(positionalRest, 10);
-      if (start < 1 || start > ctx.args.length) {
-        // Treat as missing if N is past the supplied args
-        missing.push(start);
-        return '';
-      }
-      return ctx.args.slice(start - 1).join(' ');
-    }
-
-    // {N} — single positional arg
-    if (positional !== undefined) {
-      const i = parseInt(positional, 10);
-      const value = ctx.args[i - 1];
-      if (value === undefined || value === '') {
-        missing.push(i);
-        return '';
-      }
-      return value;
-    }
-
-    // {*} — all args (alias for {1+})
-    if (match === '{*}') {
-      return ctx.args.join(' ');
-    }
-
-    // {field} or {field.subfield}
-    if (dotted !== undefined) {
-      const value = dottedFieldValue(dotted, ctx);
-      if (value === null) return match; // Leave unknown placeholder literal
-      return value;
-    }
-
-    return match;
-  });
-
-  // Collapse consecutive whitespace caused by missing args ("hi  there" -> "hi there")
-  const collapsed = text.replace(/[ \t]{2,}/g, ' ').trim();
-
-  return { text: collapsed, missing_args: Array.from(new Set(missing)).sort() };
-}
-
 // Format a started_at ISO timestamp into "Hh Mm" / "Mm" — for {stream.uptime}.
 export function formatStreamUptime(startedAt: string | null | undefined): string {
   if (!startedAt) return '';
@@ -446,57 +333,4 @@ export function buildUserCommandDefinitions(commands: UserSlashCommand[] | undef
         usage,
       };
     });
-}
-
-// Lookup an enabled user command by trigger (case-insensitive). Honors the
-// require_slash flag — pass `requireSlash: true` when the caller is in the
-// slash-command branch, `false` when it's a plain-text scan.
-export function findUserCommand(
-  trigger: string,
-  commands: UserSlashCommand[] | undefined,
-  requireSlash: boolean = true,
-): UserSlashCommand | undefined {
-  if (!commands) return undefined;
-  const target = trigger.toLowerCase();
-  return commands.find((c) => {
-    if (!c.enabled) return false;
-    if (c.trigger.toLowerCase() !== target) return false;
-    const cmdRequiresSlash = c.require_slash !== false;
-    return cmdRequiresSlash === requireSlash;
-  });
-}
-
-// Scan a plain-text (non-slash) message for any enabled user command whose
-// trigger matches at the start (and optionally end) of the message. Returns
-// the matched command + the args extracted from the surrounding text, or null.
-export interface PlainTextMatch {
-  command: UserSlashCommand;
-  args: string[];
-}
-
-export function matchPlainTextUserCommand(
-  message: string,
-  commands: UserSlashCommand[] | undefined,
-): PlainTextMatch | null {
-  if (!commands || commands.length === 0) return null;
-  const trimmed = message.trim();
-  if (!trimmed) return null;
-  const lowered = trimmed.toLowerCase();
-  const words = trimmed.split(/\s+/);
-  const firstWord = words[0]?.toLowerCase() ?? '';
-  const lastWord = words[words.length - 1]?.toLowerCase() ?? '';
-
-  for (const cmd of commands) {
-    if (!cmd.enabled) continue;
-    if (cmd.require_slash !== false) continue; // slash commands handled elsewhere
-    const t = cmd.trigger.toLowerCase();
-    if (!t) continue;
-    if (firstWord === t) {
-      return { command: cmd, args: words.slice(1) };
-    }
-    if (cmd.also_match_suffix && lastWord === t && lowered !== t /* avoid double-fire when trigger is the only word */) {
-      return { command: cmd, args: words.slice(0, -1) };
-    }
-  }
-  return null;
 }
