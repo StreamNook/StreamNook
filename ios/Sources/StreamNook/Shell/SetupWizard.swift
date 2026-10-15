@@ -91,31 +91,34 @@ struct SetupWizard: View {
                      text: "Sign in to track Twitch Drops, watch your inventory, and auto-claim rewards.") {
                 Image(systemName: Symbol.gift).font(.system(size: 48)).foregroundStyle(SN.accent)
             } extra: {
-                Button {} label: {
-                    Text("Sign in for Drops").font(.snRowStrong).frame(maxWidth: 320).frame(height: 48)
-                }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.capsule)
-                .disabled(true)
+                Button("Sign in for Drops") {}
+                    .buttonStyle(.snSecondary)
+                    .frame(maxWidth: 320)
+                    .disabled(true)
             }
         case .notifications:
             PageBody(title: "Stay in the loop",
                      text: "Get a notification when a followed streamer goes live, a whisper lands, or a drop is claimed. You can fine-tune each type in Settings.") {
                 Image(systemName: "bell.badge.fill").font(.system(size: 48)).foregroundStyle(SN.accent)
             } extra: {
-                VStack(spacing: 10) {
-                    Button { Task { await askNotifications() } } label: {
-                        Text(notifications == .authorized ? "Notifications enabled" : "Enable notifications")
-                            .font(.snRowStrong).frame(maxWidth: 320).frame(height: 48)
+                // Once answered this is a fact, said as a mark and words rather than a button that
+                // no longer does anything.
+                switch notifications {
+                case .authorized, .provisional, .ephemeral:
+                    HStack(spacing: 8) {
+                        Image(systemName: Symbol.checkCircle).font(.system(size: 16)).foregroundStyle(SN.success)
+                        Text("Notifications are on").font(.sn(15, 500)).foregroundStyle(SN.textSecondary)
                     }
-                    .buttonStyle(.glass)
-                    .buttonBorderShape(.capsule)
-                    .disabled(notifications == .authorized || notifications == .denied)
-                    if notifications == .denied {
-                        Text("Notifications are turned off for StreamNook. You can turn them back on in Settings whenever you like.")
-                            .font(.snRowDetail).foregroundStyle(SN.textMuted).multilineTextAlignment(.center)
-                            .frame(maxWidth: 320)
-                    }
+                    .frame(height: SNButtonStyle.height)
+                    .accessibilityElement(children: .combine)
+                case .denied:
+                    Text("Notifications are turned off for StreamNook. You can turn them back on in Settings whenever you like.")
+                        .font(.snRowDetail).foregroundStyle(SN.textMuted).multilineTextAlignment(.center)
+                        .frame(maxWidth: 320)
+                default:
+                    Button("Enable notifications") { Task { await askNotifications() } }
+                        .buttonStyle(.snSecondary)
+                        .frame(maxWidth: 320)
                 }
             }
         case .done:
@@ -183,30 +186,20 @@ struct SetupWizard: View {
                         Text("Sign in with Twitch")
                     }
                 }
-                .font(.sn(16, 600))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .frame(height: 52)
-                .background(Capsule().fill(SN.twitch))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.snBrand(SN.twitch))
             .disabled(model.signIn.busy || !model.started)
         } else {
-            Button {
+            // The way on is the one filled button on the page; a page's own action above it is
+            // glass. Both are the same height, so the step dots never jump between pages.
+            Button(page == .welcome ? "Get started" : page == .done ? "Start watching" : "Continue") {
                 if page == .done {
                     Task { await model.finishSetup() }
                 } else {
                     turn(back: false)
                 }
-            } label: {
-                Text(page == .welcome ? "Get started" : page == .done ? "Start watching" : "Continue")
-                    .font(.sn(16, 600))
-                    .foregroundStyle(SN.textPrimary)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 52)
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.capsule)
+            .buttonStyle(.snPrimary)
         }
     }
 
@@ -274,20 +267,25 @@ private struct PageBody<Art: View, Extra: View>: View {
     }
 
     var body: some View {
-        VStack(spacing: 18) {
+        // The title and its line are one thought, so they sit close; the picture and the page's
+        // action stand further off.
+        VStack(spacing: 0) {
             art.frame(height: 84)
+                .padding(.bottom, 24)
             Text(title)
                 .font(.sn(titleSize, 600))
                 .foregroundStyle(SN.textPrimary)
                 .multilineTextAlignment(.center)
                 .lineSpacing(-2)
+                .padding(.bottom, 10)
             Text(text)
                 .font(.sn(15))
                 .foregroundStyle(SN.textSecondary)
                 .multilineTextAlignment(.center)
+                .lineSpacing(2)
                 .frame(maxWidth: 320)
                 .fixedSize(horizontal: false, vertical: true)
-            extra.padding(.top, 8)
+            extra.padding(.top, 28)
         }
         .padding(.horizontal, 28)
     }

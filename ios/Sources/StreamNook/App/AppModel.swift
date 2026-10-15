@@ -21,6 +21,8 @@ final class AppModel {
     let host = HostRequests()
     let look = Look.shared
     let home: HomeStore
+    /// What the settings pages read and write, one field at a time.
+    let settingsStore: SettingsStore
     /// Browse's mode and search, kept here so they survive the tab being rebuilt.
     let browseState = BrowseModel()
 
@@ -37,6 +39,7 @@ final class AppModel {
 
     init() {
         home = HomeStore(core: core)
+        settingsStore = SettingsStore(core: core)
         let watch = watch
         watch.nowPlaying.onPlay = { watch.player.play() }
         watch.nowPlaying.onPause = { watch.player.pause() }
@@ -95,6 +98,7 @@ final class AppModel {
             let json = try await core.invoke("load_settings", args: [:])
             let settings = try JSONDecoder().decode(SettingsLook.self, from: Data(json.utf8))
             look.apply(settings)
+            await loadTheme()
             if let prefs = try? JSONDecoder().decode(PlayerPrefs.self, from: Data(json.utf8)) {
                 watch.savedQuality = prefs.quality
                 watch.pip.floats = prefs.floatsVideo
@@ -103,6 +107,19 @@ final class AppModel {
         } catch {
             log.error("load_settings failed: \(String(describing: error), privacy: .public)")
             return nil
+        }
+    }
+
+    /// Paints the theme the core resolves from the saved choice (custom themes and the OLED
+    /// accent included). A failed read keeps the palette in force.
+    func loadTheme() async {
+        do {
+            let json = try await core.invoke("get_active_theme", args: [:])
+            guard let theme = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
+                  let tokens = theme["palette"] as? [String: Any] else { return }
+            look.apply(palette: Palette(tokens: tokens), themeID: theme["id"] as? String ?? "winters-glass")
+        } catch {
+            log.error("get_active_theme failed: \(String(describing: error), privacy: .public)")
         }
     }
 
@@ -244,6 +261,7 @@ final class AppModel {
                 switch event.name {
                 case "streamnook-settings-updated":
                     await self.loadSettings()
+                    if self.settingsStore.loaded { await self.settingsStore.refresh() }
                 case "app-foregrounded":
                     let payload = Self.object(event.payloadJSON)
                     log.notice("foregrounded: chat port \(payload["chat_port"] as? Int ?? 0) alive \(payload["chat_alive"] as? Bool ?? false) relay rebound \(payload["relay_rebound"] as? Bool ?? false)")

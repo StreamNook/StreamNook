@@ -104,6 +104,7 @@ pub mod provider_categories;
 pub mod provider_live_service;
 pub mod link_adapt;
 pub mod ll_origin;
+pub mod theme_palette;
 #[cfg(test)]
 mod ll_soak;
 #[cfg(test)]
