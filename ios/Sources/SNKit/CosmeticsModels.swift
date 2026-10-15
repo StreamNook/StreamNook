@@ -316,6 +316,8 @@ public struct OwnIdentityData: Codable, Sendable, Equatable {
     public var shownLogin: String?
     public var paint: ChatPaint?
     public var picture: AvatarPick?
+    /// The Twitch profile banner; nil when the account has none.
+    public var bannerURL: String?
     public var badges: [ProfileBadge]
     public var streamnook: SNMemberBadge?
     /// The Atmosphere worn on the profile (wear-gated; shown even when kept out of chat).
@@ -325,7 +327,7 @@ public struct OwnIdentityData: Codable, Sendable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case userID = "user_id", login, displayName = "display_name", shownLogin = "shown_login", paint, picture, badges
-        case streamnook, atmosphere, cologne
+        case bannerURL = "banner_url", streamnook, atmosphere, cologne
     }
 
     public init(from decoder: Decoder) throws {
@@ -336,6 +338,7 @@ public struct OwnIdentityData: Codable, Sendable, Equatable {
         shownLogin = try c.decodeIfPresent(String.self, forKey: .shownLogin)
         paint = try c.decodeIfPresent(ChatPaint.self, forKey: .paint)
         picture = try c.decodeIfPresent(AvatarPick.self, forKey: .picture)
+        bannerURL = try c.decodeIfPresent(String.self, forKey: .bannerURL)
         badges = try c.decodeIfPresent([ProfileBadge].self, forKey: .badges) ?? []
         streamnook = try c.decodeIfPresent(SNMemberBadge.self, forKey: .streamnook)
         atmosphere = try c.decodeIfPresent(Atmosphere.self, forKey: .atmosphere)

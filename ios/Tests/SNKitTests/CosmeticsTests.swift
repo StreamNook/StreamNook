@@ -145,7 +145,7 @@ import Testing
                                           as: ProfileSheetData.self)
         #expect(sheet.atmosphere?.id == "aurora" && sheet.atmosphere?.look.chatFrost == false && sheet.cologne == nil)
         var me = try await core.invoke("own_identity_header", args: ["userId": "424242"], as: OwnIdentityData.self)
-        #expect(me.atmosphere?.name == "Aurora")
+        #expect(me.atmosphere?.name == "Aurora" && me.bannerURL?.hasPrefix("https://") == true)
         _ = try await core.invoke("set_profile_theme", args: ["userId": "424242", "theme": "tier"])
         me = try await core.invoke("own_identity_header", args: ["userId": "424242"], as: OwnIdentityData.self)
         #expect(me.atmosphere == nil)
