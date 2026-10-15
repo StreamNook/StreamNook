@@ -7,7 +7,7 @@ import { usemultiNookStore } from '../stores/multiNookStore';
 import { LayoutGrid, Heart, UserPlus, UserMinus, Loader2, Scissors, Copy, ClipboardPaste, Type, User, MessageSquarePlus, Share2, Check, SpellCheck, BookPlus, EyeOff, Eye } from 'lucide-react';
 import { Logger } from '../utils/logger';
 import { invoke } from '@tauri-apps/api/core';
-import { buildShareUrl } from '../utils/shareLink';
+import { shareLinkFor } from '../utils/shareLink';
 import { replaceInputRange } from '../utils/chatInputWord';
 import { addToCustomDictionary } from '../utils/spellcheck';
 import { Tooltip } from './ui/Tooltip';
@@ -355,12 +355,12 @@ export const StreamContextMenu: React.FC = () => {
     };
 
     // Copy the shareable web link. It resolves on streamnook.app, which opens the
-    // app when installed and falls back to Twitch otherwise. Shows an inline check
+    // app when installed and falls back to the platform's own page otherwise. Shows an inline check
     // confirmation, then dismisses so the menu isn't left hanging.
     const handleShare = async (e: React.MouseEvent) => {
         e.stopPropagation();
         try {
-            await navigator.clipboard.writeText(buildShareUrl(stream.user_login));
+            await navigator.clipboard.writeText(await shareLinkFor(stream));
             setCopied(true);
             window.setTimeout(() => { setCopied(false); closeMenu(); }, 1100);
         } catch (err) {
@@ -464,7 +464,7 @@ export const StreamContextMenu: React.FC = () => {
                     <span>Pop out chat</span>
                 </button>
 
-                {/* Share. Copies a streamnook.app/w/<channel> link. The icon and
+                {/* Share. Copies the stream's streamnook.app link. The icon and
                     label swap to a check + confirmation on copy, with a little pop. */}
                 <button
                     onClick={handleShare}

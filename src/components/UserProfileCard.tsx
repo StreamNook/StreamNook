@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback, useSyncExternalStore
 import { ExternalAnchor } from './ui/ExternalAnchor';
 import { MessageCircle, UserPlus, UserMinus, Loader2, ChevronLeft, ChevronUp, Pencil, X, Share2, Link2, Check, EyeOff, History } from 'lucide-react';
 import { filterChannelKey, isHiddenInScope } from '../utils/chatFilters';
-import { buildShareUrl, buildProfileUrl } from '../utils/shareLink';
+import { shareLinkFor, buildProfileUrl } from '../utils/shareLink';
 import { providerLabel, type ProviderId } from '../types/providers';
 import { motion, AnimatePresence, useScroll, useTransform, useReducedMotion, useMotionValue, animate } from 'framer-motion';
 import { setUserNickname, setUserColor } from '../utils/userChatOverrides';
@@ -1714,7 +1714,7 @@ const UserProfileCard = ({
       <button
         onClick={async () => {
           try {
-            await navigator.clipboard.writeText(buildShareUrl(login));
+            await navigator.clipboard.writeText(await shareLinkFor({ user_login: login }));
             setShareCopied(true);
             window.setTimeout(() => setShareCopied(false), 1400);
           } catch (err) {
@@ -1936,7 +1936,7 @@ const UserProfileCard = ({
               <button
                 onClick={async () => {
                   try {
-                    await navigator.clipboard.writeText(buildShareUrl(login));
+                    await navigator.clipboard.writeText(await shareLinkFor({ user_login: login }));
                     setShareCopied(true);
                     window.setTimeout(() => setShareCopied(false), 1400);
                   } catch (err) {

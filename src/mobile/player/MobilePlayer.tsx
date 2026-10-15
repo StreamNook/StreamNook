@@ -5,7 +5,7 @@ import { ArrowClockwise, Bell, BellSlash, ChatTeardropText, Columns, Gear, Pause
 import { setPipMuted, shareText } from '../nativeBridge';
 import { toggleChannelMuted } from '../notifyChannels';
 import { useVisibleInterval } from '../../utils/useVisibleInterval';
-import { buildShareUrl } from '../../utils/shareLink';
+import { shareLinkFor } from '../../utils/shareLink';
 import { buildProviderUrl, isTwitchStream, streamProvider } from '../../utils/streamProvider';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../stores/AppStore';
@@ -498,19 +498,16 @@ export const MobilePlayer: React.FC<{
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  // Our own share link, not a raw twitch.tv URL: the landing
-                  // page hands off to StreamNook when it is installed and
-                  // falls back to Twitch when it is not. buildShareUrl also
-                  // carries the day tag that keeps Discord from serving a
-                  // stale preview card. Same helper the desktop share uses.
-                  shareText(
-                    `${currentStream.user_name} is live: ${
-                      streamIsTwitch
-                        ? buildShareUrl(currentStream.user_login)
-                        : buildProviderUrl(streamProvider(currentStream), currentStream.user_login)
-                    }`,
-                    currentStream.title || currentStream.user_name,
-                  );
+                  // Our own share link on every platform, not a raw platform
+                  // URL: the landing page hands off to StreamNook when it is
+                  // installed and falls back to the platform's page when it is
+                  // not. Same Rust-built link the desktop share copies.
+                  const stream = currentStream;
+                  void shareLinkFor(stream)
+                    .catch(() => buildProviderUrl(streamProvider(stream), stream.user_login))
+                    .then((link) =>
+                      shareText(`${stream.user_name} is live: ${link}`, stream.title || stream.user_name),
+                    );
                 }}
                 className="sn-touch flex items-center justify-center text-white"
                 aria-label="Share stream"

@@ -55,7 +55,13 @@
     "deep-link": {
       "desktop": {
         "schemes": ["streamnook"]
-      }
+      },
+      "mobile": [
+        {
+          "scheme": ["streamnook"],
+          "appLink": false
+        }
+      ]
     }
   }
 }

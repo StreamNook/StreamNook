@@ -292,27 +292,36 @@ export function useMobileBoot(): void {
       }
 
       // Open a channel handed over from outside the app: a tapped notification,
-      // or a streamnook:// link the app was cold-started with.
+      // or a streamnook:// link.
       //
-      // The cold-start drain covers a pre-existing gap as well as the new one.
-      // `take_pending_watch_link` has only ever been consumed by App.tsx, the
-      // DESKTOP shell, so deep links have not opened anything on the phone.
+      // A deep link carries a startStream key (bare Twitch login or
+      // `provider:channel`); its YouTube video id is case-sensitive, so the
+      // key is passed on as given and startStream folds Twitch case itself.
+      // Rust stashes every phone link before it emits `streamnook:watch`, so
+      // the event and the mount both drain `take_pending_watch_link`: whichever
+      // takes it opens it, once. The listener goes up before the mount drain so
+      // a link landing in between is not missed.
       const openChannel = (login: string) => {
-        const clean = login.trim().toLowerCase();
+        const clean = login.trim();
         if (!clean) return;
         void useAppStore.getState().startStream(clean);
       };
-      (window as Window & { __SN_OPEN_CHANNEL__?: (login: string) => void }).__SN_OPEN_CHANNEL__ =
-        openChannel;
-      const tapped = consumePendingChannel();
-      if (tapped) {
-        openChannel(tapped);
-      } else {
-        void invoke<string | null>('take_pending_watch_link')
+      const drainWatchLink = () =>
+        invoke<string | null>('take_pending_watch_link')
           .then((link) => {
             if (link) openChannel(link);
           })
           .catch(() => {});
+      (window as Window & { __SN_OPEN_CHANNEL__?: (login: string) => void }).__SN_OPEN_CHANNEL__ =
+        openChannel;
+      await addListener<string>('streamnook:watch', () => {
+        void drainWatchLink();
+      });
+      const tapped = consumePendingChannel();
+      if (tapped) {
+        openChannel(tapped);
+      } else {
+        void drainWatchLink();
       }
 
       // No `streamer-went-live` listener here anymore, on purpose. The
