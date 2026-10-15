@@ -10,6 +10,9 @@ final class CosmeticsScreenModel {
     private(set) var ext: ExternalPickerState?
     var signingIn = false
     var showSevenTvSignIn = false
+    /// The account's Twitch bio; nil until read.
+    private(set) var bio: String?
+    var editingBio = false
     @ObservationIgnored private var afterSignIn: ((String) async -> Void)?
     @ObservationIgnored let app: AppModel
 
@@ -28,8 +31,22 @@ final class CosmeticsScreenModel {
         async let extRead: ExternalPickerState? = try? core.invoke("external_cosmetics_state",
                                                                     args: ["userId": user.id, "login": user.login],
                                                                     as: ExternalPickerState.self)
+        async let bioRead: String? = try? core.invoke("get_twitch_bio", args: ["userId": user.id], as: String.self)
         if let value = await snRead { sn = value }
         if let value = await extRead { ext = value }
+        if let value = await bioRead { bio = value }
+    }
+
+    /// Saves the Twitch bio; answers whether Twitch took it.
+    func saveBio(_ text: String) async -> Bool {
+        do {
+            bio = try await core.invoke("update_twitch_bio", args: ["description": text], as: String.self)
+            return true
+        } catch {
+            let reason = (error as? CoreFailure)?.description ?? ""
+            app.toasts.show(reason.isEmpty ? "Could not save your bio." : reason)
+            return false
+        }
     }
 
     // MARK: StreamNook
@@ -253,6 +270,7 @@ struct CosmeticsScreen: View {
                     sevenTvSection.id("seventv")
                     twitchSection.id("twitch")
                     colorSection.id("color")
+                    bioSection.id("bio")
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
@@ -330,6 +348,32 @@ struct CosmeticsScreen: View {
                 }
                 .padding(.vertical, 4)
             }
+        }
+    }
+
+    // MARK: Bio
+
+    @ViewBuilder
+    private var bioSection: some View {
+        if let bio = screen.bio {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Bio").font(.sn(12, 600)).textCase(.uppercase).tracking(0.6).foregroundStyle(SN.textMuted)
+                Spacer()
+                Button("Edit") { screen.editingBio = true }
+                    .font(.sn(12.5))
+                    .foregroundStyle(SN.accent)
+            }
+            .padding(.top, 20)
+            .padding(.bottom, 6)
+            Text(bio.isEmpty ? "No bio yet. It shows on your Twitch channel and profile cards." : bio)
+                .font(.sn(13.5))
+                .foregroundStyle(bio.isEmpty ? SN.textSecondary : SN.textPrimary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .snPanel()
+                .sheet(isPresented: $screen.editingBio) {
+                    BioEditor(initial: bio) { text in await screen.saveBio(text) }
+                }
         }
     }
 
@@ -606,5 +650,54 @@ private struct WornRing: View {
 private struct WornCheck: View {
     var body: some View {
         Image(systemName: "checkmark").font(.system(size: 13, weight: .bold)).foregroundStyle(SN.accent)
+    }
+}
+
+/// Writes your Twitch bio: Twitch keeps 300 characters, so the count shows as you type and Save
+/// stays off past it.
+private struct BioEditor: View {
+    let initial: String
+    let save: (String) async -> Bool
+    @State private var text = ""
+    @State private var saving = false
+    @Environment(\.dismiss) private var dismiss
+    private let limit = 300
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .trailing, spacing: 8) {
+                TextEditor(text: $text)
+                    .font(.sn(15))
+                    .scrollContentBackground(.hidden)
+                    .padding(10)
+                    .frame(minHeight: 140)
+                    .snPanel()
+                Text("\(text.count)/\(limit)")
+                    .font(.sn(12).monospacedDigit())
+                    .foregroundStyle(text.count > limit ? SN.error : SN.textMuted)
+            }
+            .padding(16)
+            .frame(maxHeight: .infinity, alignment: .top)
+            .background(SN.background)
+            .navigationTitle("Bio")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(saving ? "Saving" : "Save") {
+                        saving = true
+                        Task {
+                            if await save(text) { dismiss() }
+                            saving = false
+                        }
+                    }
+                    .disabled(saving || text.count > limit || text == initial)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .onAppear { text = initial }
     }
 }

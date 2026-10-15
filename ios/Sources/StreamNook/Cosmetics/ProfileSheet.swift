@@ -13,6 +13,8 @@ final class ProfileSheetModel {
     /// nil until the store answers, so "nothing yet" is never shown over a list on its way.
     private(set) var history: [ProfileHistoryRow]?
     var picked: ProfileBadge?
+    /// Badges whose every image failed; a group left with none is not shown.
+    var failed: Set<String> = []
     @ObservationIgnored private let core: CoreBridge
     @ObservationIgnored private var tasks: [Task<Void, Never>] = []
 
@@ -126,7 +128,9 @@ struct ProfileSheet: View {
                 pickedPanel(picked).padding(.top, 12)
             }
             ForEach(sheet?.groups ?? []) { group in
-                badgeGroup(group).padding(.top, 12)
+                if group.badges.contains(where: { !model.failed.contains("\(group.title)/\($0.id)") }) {
+                    badgeGroup(group).padding(.top, 12)
+                }
             }
             if let member = sheet?.streamnook {
                 VStack(alignment: .leading, spacing: 6) {
@@ -207,7 +211,9 @@ struct ProfileSheet: View {
             groupTitle(group.title)
             FlowLayout(spacing: 8) {
                 ForEach(group.badges) { badge in
-                    ProfileBadgeButton(badge: badge) { model.picked = badge }
+                    ProfileBadgeButton(badge: badge, onFailure: { model.failed.insert("\(group.title)/\(badge.id)") }) {
+                        model.picked = badge
+                    }
                 }
             }
         }
@@ -249,7 +255,9 @@ struct ProfileSheet: View {
                                 Text(row.date.map { $0.formatted(.dateTime.hour().minute()) } ?? "")
                                     .font(.sn(11.5).monospacedDigit())
                                     .foregroundStyle(SN.textMuted)
-                                    .frame(width: 44, alignment: .leading)
+                                    .lineLimit(1)
+                                    .fixedSize()
+                                    .frame(minWidth: 52, alignment: .leading)
                                 Text(row.content)
                                     .font(.sn(13))
                                     .foregroundStyle(SN.textPrimary)
@@ -267,13 +275,17 @@ struct ProfileSheet: View {
 /// VoiceOver. A badge whose every URL fails takes itself out.
 private struct ProfileBadgeButton: View {
     let badge: ProfileBadge
+    var onFailure: () -> Void = {}
     let action: () -> Void
     @State private var failed = false
 
     var body: some View {
         if !failed {
             Button(action: action) {
-                CosmeticImage(badge.url, fallbacks: badge.fallbacks, animate: true, onFailure: { failed = true })
+                CosmeticImage(badge.url, fallbacks: badge.fallbacks, animate: true, onFailure: {
+                    failed = true
+                    onFailure()
+                })
                     .frame(width: 28, height: 28)
                     .frame(width: 32, height: 32)
                     .contentShape(Rectangle())

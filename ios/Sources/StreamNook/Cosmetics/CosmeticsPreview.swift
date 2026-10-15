@@ -21,9 +21,11 @@ struct CosmeticsPreviewRow: View {
             ForEach(Array(badges.enumerated()), id: \.offset) { _, url in
                 CosmeticImage(url, animate: true).frame(width: 18, height: 18)
             }
-            PaintedText(text: name, font: .sn(14, 700), paint: paint, fallback: nameColor, shadows: .all)
-                .padding(.leading, badges.isEmpty ? 0 : 2)
-            Text(": that play was clean").font(.sn(14, 300)).foregroundStyle(SN.textPrimary).lineLimit(1)
+            HStack(spacing: 0) {
+                PaintedText(text: name, font: .sn(14, 700), paint: paint, fallback: nameColor, shadows: .all)
+                Text(": that play was clean").font(.sn(14, 300)).foregroundStyle(SN.textPrimary).lineLimit(1)
+            }
+            .padding(.leading, badges.isEmpty ? 0 : 2)
         }
         .padding(.horizontal, look?.chatFrost == true ? 6 : 0)
         .padding(.vertical, look?.chatFrost == true ? 2 : 0)

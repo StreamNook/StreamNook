@@ -293,6 +293,8 @@ allow = [
   "remove_channel_vip",
   "update_suspicious_user_status",
   "update_user_chat_color",
+  "get_twitch_bio",
+  "update_twitch_bio",
   "get_user_chat_colors",
   "block_user",
   "unblock_user",

@@ -15,6 +15,7 @@ final class FakeCosmetics: Sendable {
         var twitchBadge = "glhf-pledge"
         var sevenTvSignedIn = true
         var chatColor = "#8a2be2"
+        var bio = "Variety streamer, mostly late-night co-op."
     }
 
     private let state = Mutex(State())
@@ -115,6 +116,13 @@ final class FakeCosmetics: Sendable {
         case "set_seventv_badge":
             state.withLock { $0.sevenTvBadge = args["badgeId"] as? String }
             return #"{"success":true,"message":"ok"}"#
+        case "get_twitch_bio":
+            return String(decoding: try JSONEncoder().encode(state.withLock { $0.bio }), as: UTF8.self)
+        case "update_twitch_bio":
+            let text = (args["description"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if text.count > 300 { throw CoreFailure.command(json: #""A bio can be at most 300 characters.""#) }
+            state.withLock { $0.bio = text }
+            return String(decoding: try JSONEncoder().encode(text), as: UTF8.self)
         case "update_user_chat_color":
             let value = args["color"] as? String ?? ""
             let hex = ["blue_violet": "#8a2be2", "coral": "#ff7f50", "dodger_blue": "#1e90ff", "spring_green": "#00ff7f"][value] ?? value
