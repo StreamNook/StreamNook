@@ -104,6 +104,8 @@ pub mod provider_categories;
 pub mod provider_live_service;
 pub mod ll_origin;
 pub mod theme_palette;
+pub mod settings_backups;
+pub mod settings_catalog;
 #[cfg(test)]
 mod ll_soak;
 pub mod log_service;

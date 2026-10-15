@@ -1,0 +1,2120 @@
+{
+ "rows": [
+  {
+   "page": "player",
+   "section": "Auto-Switch",
+   "title": "Stream switching",
+   "paths": [
+    "auto_switch.enabled"
+   ],
+   "nested": false,
+   "detail": "When the channel you are watching goes offline, StreamNook picks a new live stream and starts it for you.",
+   "aliases": [
+    "auto switch",
+    "autoswitch",
+    "next stream",
+    "offline"
+   ]
+  },
+  {
+   "page": "player",
+   "section": "Auto-Switch",
+   "title": "Destination",
+   "paths": [
+    "auto_switch.mode"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "player",
+   "section": "Auto-Switch",
+   "title": "Notice",
+   "paths": [
+    "auto_switch.show_notification"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "player",
+   "section": "Auto-Switch",
+   "title": "Follow raids",
+   "paths": [
+    "auto_switch.auto_redirect_on_raid"
+   ],
+   "nested": false,
+   "detail": "When the streamer raids another channel, StreamNook jumps there with them (you need to be signed in).",
+   "aliases": [
+    "raid",
+    "redirect"
+   ]
+  },
+  {
+   "page": "player",
+   "section": "Offline Chat",
+   "title": "Stay in chat",
+   "paths": [
+    "auto_switch.stay_in_offline_chat"
+   ],
+   "nested": false,
+   "detail": "When the stream you are watching ends, you stay in the channel's chat instead of being switched away.",
+   "aliases": []
+  },
+  {
+   "page": "player",
+   "section": "Streaming",
+   "title": "AV1 & h265",
+   "paths": [
+    "streamlink.enhanced_codecs"
+   ],
+   "nested": false,
+   "detail": "Asks Twitch for AV1 and h265 (HEVC) versions of the stream alongside h264, which some channels offer at better quality for the same bandwidth.",
+   "aliases": [
+    "codec",
+    "hevc",
+    "av1",
+    "h264",
+    "decode"
+   ]
+  },
+  {
+   "page": "player",
+   "section": "Streaming",
+   "title": "Start timeout",
+   "paths": [
+    "streamlink.stream_timeout"
+   ],
+   "nested": false,
+   "detail": "How long StreamNook keeps trying to open a stream before giving up, which helps when a channel has only just gone live.",
+   "aliases": [
+    "timeout",
+    "slow start"
+   ]
+  },
+  {
+   "page": "player",
+   "section": "Streaming",
+   "title": "Retry delay",
+   "paths": [
+    "streamlink.retry_streams"
+   ],
+   "nested": false,
+   "detail": "How long to wait between attempts while a stream is not available yet (0 means a single attempt).",
+   "aliases": []
+  },
+  {
+   "page": "player",
+   "section": "Playback",
+   "title": "Autoplay",
+   "paths": [
+    "video_player.autoplay"
+   ],
+   "nested": false,
+   "detail": "A stream starts playing as soon as it opens, with no need to press play.",
+   "aliases": []
+  },
+  {
+   "page": "player",
+   "section": "Playback",
+   "title": "Background play",
+   "paths": [
+    "video_player.background_mode"
+   ],
+   "nested": false,
+   "detail": "",
+   "aliases": [
+    "picture in picture",
+    "pip",
+    "audio only",
+    "background audio",
+    "lock screen"
+   ]
+  },
+  {
+   "page": "player",
+   "section": "Playback",
+   "title": "Start quality",
+   "paths": [
+    "quality"
+   ],
+   "nested": false,
+   "detail": "Every stream opens at this quality, and you can change it anytime from the player controls.",
+   "aliases": [
+    "quality",
+    "resolution",
+    "1080p",
+    "source",
+    "data"
+   ]
+  },
+  {
+   "page": "player",
+   "section": "Playback",
+   "title": "Start muted",
+   "paths": [
+    "video_player.muted"
+   ],
+   "nested": false,
+   "detail": "Every stream opens silent until you unmute it.",
+   "aliases": [
+    "mute",
+    "sound"
+   ]
+  },
+  {
+   "page": "player",
+   "section": "Playback",
+   "title": "Start volume",
+   "paths": [
+    "video_player.volume"
+   ],
+   "nested": false,
+   "detail": "The volume every stream opens at before you adjust it.",
+   "aliases": [
+    "volume",
+    "loudness"
+   ]
+  },
+  {
+   "page": "player",
+   "section": "Latency & Buffering",
+   "title": "Low latency",
+   "paths": [
+    "video_player.experimental_low_latency"
+   ],
+   "nested": false,
+   "detail": "Rides as close to live as the Twitch site on channels that support it. On by default.",
+   "aliases": [
+    "latency",
+    "delay",
+    "live edge"
+   ]
+  },
+  {
+   "page": "player",
+   "section": "Latency & Buffering",
+   "title": "Buffer",
+   "paths": [
+    "video_player.max_buffer_length"
+   ],
+   "nested": false,
+   "detail": "How much video the player keeps loaded ahead of playback; more is steadier on a shaky connection but adds delay.",
+   "aliases": [
+    "buffering",
+    "stutter",
+    "lag"
+   ]
+  },
+  {
+   "page": "player",
+   "section": "Song Identification",
+   "title": "Listen time",
+   "paths": [
+    "video_player.song_id.capture_seconds"
+   ],
+   "nested": false,
+   "detail": "How many seconds of audio to fingerprint; longer matches more reliably over talking or noise, but the result takes a little longer to appear.",
+   "aliases": []
+  },
+  {
+   "page": "player",
+   "section": "Song Identification",
+   "title": "Retries",
+   "paths": [
+    "video_player.song_id.retries"
+   ],
+   "nested": false,
+   "detail": "If the first listen matches nothing, StreamNook listens again this many times.",
+   "aliases": []
+  },
+  {
+   "page": "player",
+   "section": "Song Identification",
+   "title": "Target latency",
+   "paths": [
+    "video_player.ll_target_latency"
+   ],
+   "nested": false,
+   "detail": "How close to live the player stays: how far behind the live edge it rides; lower is closer to live. Auto picks a gap that suits each channel (reopen the stream to apply).",
+   "aliases": [
+    "delay",
+    "behind live",
+    "latency"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Landscape Chat",
+   "title": "Layout",
+   "paths": [
+    "fullscreen_chat.phone_layout"
+   ],
+   "nested": false,
+   "detail": "Turn the phone sideways and tap the chat button on the player. Chat floats over the video, or takes a column beside it.",
+   "aliases": [
+    "landscape",
+    "fullscreen chat",
+    "sideways"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Landscape Chat",
+   "title": "Background",
+   "paths": [
+    "fullscreen_chat.opacity"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Landscape Chat",
+   "title": "Width",
+   "paths": [
+    "fullscreen_chat.width"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Landscape Chat",
+   "title": "Side",
+   "paths": [
+    "fullscreen_chat.side"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Combined Chat",
+   "title": "Merged feed",
+   "paths": [
+    "chat_blend.enabled"
+   ],
+   "nested": false,
+   "detail": "When a streamer you are watching also streams elsewhere, their other chats join this one in a single feed, each message marked with where it came from.",
+   "aliases": [
+    "combined chat",
+    "multi platform",
+    "kick chat",
+    "youtube chat"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Combined Chat",
+   "title": "Suggestions",
+   "paths": [
+    "chat_blend.suggest_links"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Combined Chat",
+   "title": "Platform marks",
+   "paths": [
+    "chat_blend.show_platform_badge"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Combined Chat",
+   "title": "Platforms",
+   "paths": [
+    "chat_blend.platforms"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "YouTube Chat",
+   "title": "Feed",
+   "paths": [
+    "youtube_chat_view"
+   ],
+   "nested": false,
+   "detail": "Live chat shows everything, while Top chat is YouTube's own filtered view that keeps a very fast chat readable.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "YouTube Chat",
+   "title": "Currency",
+   "paths": [
+    "chat_events.superchat_currency"
+   ],
+   "nested": false,
+   "detail": "Show Super Chat amounts converted to one currency. Rates refresh daily; until they load the amount shows as sent.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Polls & Predictions",
+   "title": "Polls",
+   "paths": [
+    "show_polls"
+   ],
+   "nested": false,
+   "detail": "A live poll card with the running vote tally.",
+   "aliases": [
+    "poll"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Polls & Predictions",
+   "title": "Collapsed",
+   "paths": [
+    "chat_design.polls_start_collapsed"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Polls & Predictions",
+   "title": "Predictions",
+   "paths": [
+    "show_predictions"
+   ],
+   "nested": false,
+   "detail": "A live prediction card with the outcomes and how points are stacking up.",
+   "aliases": [
+    "prediction",
+    "bet"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Polls & Predictions",
+   "title": "Top card",
+   "paths": [
+    "chat_overlay_order"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Chat Events",
+   "title": "Redemptions",
+   "paths": [
+    "show_channel_point_redemptions"
+   ],
+   "nested": false,
+   "detail": "A chat row when someone redeems a channel point reward that does not post its own message, like a no-input reward.",
+   "aliases": [
+    "channel points",
+    "rewards"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Chat Events",
+   "title": "Gift sub batches",
+   "paths": [
+    "collapse_gift_subs"
+   ],
+   "nested": false,
+   "detail": "One 'gifting N subs' row with the recipients attached when someone gifts a batch, instead of a row per gift.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Chat Events",
+   "title": "Clip chat replay",
+   "paths": [
+    "clip_chat_replay"
+   ],
+   "nested": false,
+   "detail": "Shows the chat that was live while a clip was recorded, beside the clip.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Chat Events",
+   "title": "Style",
+   "paths": [
+    "chat_events.event_style"
+   ],
+   "nested": false,
+   "detail": "Subs, gifts, bits and milestones as tinted cards, as a plain row with a ring, or as a plain row.",
+   "aliases": [
+    "look"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Chat Events",
+   "title": "Outline color",
+   "paths": [
+    "chat_events.event_outline_color"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Chat Events",
+   "title": "Glint",
+   "paths": [
+    "chat_events.event_animation"
+   ],
+   "nested": false,
+   "detail": "A short highlight when an event row lands: a sheen across it, a pulse, or a spark that runs around the edge.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Chat Events",
+   "title": "Loop",
+   "paths": [
+    "chat_events.event_animate_repeat"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Chat Events",
+   "title": "Cheers",
+   "paths": [
+    "chat_events.cheer_display"
+   ],
+   "nested": false,
+   "detail": "Bits cheers as their own card with the cheer gem, or as an ordinary message with the cheermotes inline.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Chat Events",
+   "title": "Platforms",
+   "paths": [
+    "chat_events.hidden_provider_events"
+   ],
+   "nested": false,
+   "detail": "Turn event kinds off per platform. Lit means shown.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Pinned Messages",
+   "title": "Collapsed",
+   "paths": [
+    "chat_design.pinned_start_collapsed"
+   ],
+   "nested": false,
+   "detail": "Shows the pinned message as a compact one-line bar when you enter a channel.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Pinned Messages",
+   "title": "Style",
+   "paths": [
+    "chat_design.pinned_collapsed_style"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": [
+    "look"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Message Layout",
+   "title": "Dividers",
+   "paths": [
+    "chat_design.show_dividers"
+   ],
+   "nested": false,
+   "detail": "A thin line between messages so a fast chat is easier to scan.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Message Layout",
+   "title": "Striped rows",
+   "paths": [
+    "chat_design.alternating_backgrounds"
+   ],
+   "nested": false,
+   "detail": "Gives every other message a slightly different background, in your theme's colors, so rows are easier to follow.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Message Layout",
+   "title": "Spacing",
+   "paths": [
+    "chat_design.message_spacing"
+   ],
+   "nested": false,
+   "detail": "Blank space between messages; more room means fewer messages on screen.",
+   "aliases": [
+    "padding",
+    "compact",
+    "density"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Message Layout",
+   "title": "Text size",
+   "paths": [
+    "chat_design.font_size"
+   ],
+   "nested": false,
+   "detail": "Size of message text, with room to go large when MultiChat fills a whole monitor.",
+   "aliases": [
+    "font size",
+    "bigger text",
+    "zoom"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Message Layout",
+   "title": "Text weight",
+   "paths": [
+    "chat_design.font_weight"
+   ],
+   "nested": false,
+   "detail": "How heavy the message text is, from light to bold.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Message Layout",
+   "title": "Message animation",
+   "paths": [
+    "chat_design.message_entrance"
+   ],
+   "nested": false,
+   "detail": "How a new message arrives: a short fade or slide as each one lands. History loaded on join never animates, and it is skipped when motion is reduced.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Message Layout",
+   "title": "History opacity",
+   "paths": [
+    "chat_design.backfill_opacity"
+   ],
+   "nested": false,
+   "detail": "Dim the scrollback that loads when you join a chat, so live messages stand out.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Message Layout",
+   "title": "Timestamps",
+   "paths": [
+    "chat_design.show_timestamps"
+   ],
+   "nested": false,
+   "detail": "Shows the time each message was sent, next to the name.",
+   "aliases": [
+    "time",
+    "clock"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Message Layout",
+   "title": "Clock",
+   "paths": [
+    "chat_design.timestamp_format"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Message Layout",
+   "title": "Seconds",
+   "paths": [
+    "chat_design.show_timestamp_seconds"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Names & Badges",
+   "title": "Name style",
+   "paths": [
+    "chat_design.username_style"
+   ],
+   "nested": false,
+   "detail": "How names stand out from the message: plain, or with a bar, chip, brackets, or dot.",
+   "aliases": [
+    "username",
+    "separator",
+    "colon"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Names & Badges",
+   "title": "Separator",
+   "paths": [
+    "chat_design.username_separator"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Names & Badges",
+   "title": "Prefix color",
+   "paths": [
+    "chat_design.username_accent_source"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Names & Badges",
+   "title": "Readable colors",
+   "paths": [
+    "chat_design.name_color_adjustment"
+   ],
+   "nested": false,
+   "detail": "Nudges a chatter's color lighter on a dark theme, or darker on a light one, until it stands out from the background. The hue stays theirs. Off shows colors exactly as they set them.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Names & Badges",
+   "title": "Badges",
+   "paths": [
+    "chat_design.show_badges"
+   ],
+   "nested": false,
+   "detail": "The platform's own badges next to names: moderator, subscriber, VIP and the rest. Custom mod & VIP badges are a channel's own art from FrankerFaceZ.",
+   "aliases": [
+    "moderator badge",
+    "subscriber badge",
+    "vip"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Names & Badges",
+   "title": "Custom mod & VIP badges",
+   "paths": [
+    "chat_design.ffz_custom_role_badges"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Names & Badges",
+   "title": "Badge size",
+   "paths": [
+    "chat_design.badge_scale"
+   ],
+   "nested": false,
+   "detail": "How big badges draw, relative to the text.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Names & Badges",
+   "title": "Add-on badges",
+   "paths": [
+    "chat_design.show_third_party_badges"
+   ],
+   "nested": false,
+   "detail": "Badges from 7TV, FFZ, Chatterino, Homies and the other badge services, plus StreamNook membership badges.",
+   "aliases": [
+    "third party badges",
+    "7tv badges",
+    "ffz badges",
+    "chatterino badges"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Names & Badges",
+   "title": "Services",
+   "paths": [
+    "chat_design.hidden_badge_providers"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Names & Badges",
+   "title": "Profile pictures",
+   "paths": [
+    "cosmetics.profile_picture_source"
+   ],
+   "nested": false,
+   "detail": "7TV shows the picture someone set on 7TV when they have one; Twitch always shows the platform's own, across the app.",
+   "aliases": [
+    "avatar",
+    "pfp"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Names & Badges",
+   "title": "Animation",
+   "paths": [
+    "cosmetics.profile_picture_animation"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": [
+    "gif emotes",
+    "animated emotes",
+    "freeze emotes"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Names & Badges",
+   "title": "Pictures in chat",
+   "paths": [
+    "chat_design.show_avatars"
+   ],
+   "nested": false,
+   "detail": "On platforms that send one (YouTube, TikTok), the chatter's picture leads their message.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Names & Badges",
+   "title": "@ prefix",
+   "paths": [
+    "chat_design.show_at_sign"
+   ],
+   "nested": false,
+   "detail": "Writes every name as @name.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Names & Badges",
+   "title": "Paint shadows",
+   "paths": [
+    "cosmetics.paint_shadows"
+   ],
+   "nested": false,
+   "detail": "Some paints stack several drop shadows for readability; keep them all, just one, or none if names look too noisy.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Mentions & Replies",
+   "title": "Mention sound",
+   "paths": [
+    "chat_design.mention_sound"
+   ],
+   "nested": false,
+   "detail": "Plays when someone @s you in any chat you have open.",
+   "aliases": [
+    "ping",
+    "notification sound",
+    "alert sound"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Mentions & Replies",
+   "title": "Volume",
+   "paths": [
+    "chat_design.mention_sound_volume"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Mentions & Replies",
+   "title": "Replies to you",
+   "paths": [
+    "chat_design.mention_sound_replies"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Mentions & Replies",
+   "title": "@name style",
+   "paths": [],
+   "nested": false,
+   "detail": "How an @mention reads in chat. Hover an option to see it in the preview.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Mentions & Replies",
+   "title": "Weight",
+   "paths": [
+    "chat_design.mention_weight"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Mentions & Replies",
+   "title": "Italic",
+   "paths": [
+    "chat_design.mention_italic"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Mentions & Replies",
+   "title": "Shape",
+   "paths": [
+    "chat_design.mention_style"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Mentions & Replies",
+   "title": "Highlight",
+   "paths": [
+    "chat_design.mention_color"
+   ],
+   "nested": false,
+   "detail": "The color that marks a message mentioning or replying to you.",
+   "aliases": [
+    "mention color",
+    "highlight color"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Mentions & Replies",
+   "title": "Flash",
+   "paths": [
+    "chat_design.mention_animation"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Mentions & Replies",
+   "title": "Vibration",
+   "paths": [],
+   "nested": false,
+   "detail": "A short buzz when a message says your name, on top of the highlight.",
+   "aliases": [
+    "haptic",
+    "buzz",
+    "vibrate"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Mentions & Replies",
+   "title": "7TV paint",
+   "paths": [
+    "chat_design.paint_mentions_in_body"
+   ],
+   "nested": false,
+   "detail": "Draws a mentioned name in that person's 7TV paint instead of a flat color.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Mentions & Replies",
+   "title": "Thread color",
+   "paths": [
+    "chat_design.reply_color"
+   ],
+   "nested": false,
+   "detail": "The color that marks replies in a thread.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Mentions & Replies",
+   "title": "Context",
+   "paths": [
+    "chat_design.reply_style"
+   ],
+   "nested": false,
+   "detail": "How a reply shows the message it answers: a context line above it, an @name at the start, or nothing.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Emotes",
+   "title": "Emoji style",
+   "paths": [
+    "chat_design.emoji_style"
+   ],
+   "nested": false,
+   "detail": "Which set draws the emoji in messages. System uses your device's own.",
+   "aliases": [
+    "emoji",
+    "apple emoji",
+    "twemoji"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Emotes",
+   "title": "Personal emotes",
+   "paths": [
+    "chat_design.show_personal_emotes"
+   ],
+   "nested": false,
+   "detail": "Emotes from a chatter's own 7TV personal set. Off shows the text they typed instead.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Emotes",
+   "title": "Animation",
+   "paths": [
+    "chat_design.animate_emotes"
+   ],
+   "nested": false,
+   "detail": "Play animated emotes, or show only their first frame. Never is the lightest on the GPU in a fast chat.",
+   "aliases": [
+    "gif emotes",
+    "animated emotes",
+    "freeze emotes"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Emotes",
+   "title": "GIFs",
+   "paths": [
+    "chat_design.show_chat_gifs"
+   ],
+   "nested": false,
+   "detail": "Twitch lets Tier 2 and Tier 3 subscribers post GIFs. Off swaps each one for a small chip you can click to reveal.",
+   "aliases": [
+    "gif"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Emotes",
+   "title": "Size",
+   "paths": [
+    "chat_design.gif_scale"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Emotes",
+   "title": "Size",
+   "paths": [
+    "chat_design.emote_scale"
+   ],
+   "nested": false,
+   "detail": "Scales emotes in chat relative to the text, with 1.00x being the default size.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Emotes",
+   "title": "Spacing",
+   "paths": [
+    "chat_design.emote_margin"
+   ],
+   "nested": false,
+   "detail": "Space on each side of an emote; go negative to let neighboring emotes overlap.",
+   "aliases": [
+    "padding",
+    "compact",
+    "density"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Emotes",
+   "title": "7TV notices",
+   "paths": [
+    "chat_design.seventv_emote_notices"
+   ],
+   "nested": false,
+   "detail": "Shows a chat notice when a mod adds, removes, or renames a 7TV emote in the channel.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Emote Effects",
+   "title": "FFZ effects",
+   "paths": [
+    "chat_design.ffz_emote_effects"
+   ],
+   "nested": false,
+   "detail": "Applies FrankerFaceZ modifiers (wide, flips, rainbow, shake) to the emote before them, the way FFZ does.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Emote Effects",
+   "title": "BetterTTV modifiers",
+   "paths": [
+    "chat_design.bttv_emote_modifiers"
+   ],
+   "nested": false,
+   "detail": "Applies BetterTTV modifiers (w! wide, h! and v! flips, c! cursed, p! party, s! shake) to the emote after them, the way BetterTTV does.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Emote Effects",
+   "title": "Giant emotes",
+   "paths": [
+    "chat_design.giant_emotes"
+   ],
+   "nested": false,
+   "detail": "Draws the last emote of a \"Gigantify an Emote\" power-up message at 4x below the message, like Twitch does.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Emote Effects",
+   "title": "Position",
+   "paths": [
+    "chat_design.giant_emote_align"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Chat Input",
+   "title": "Duplicate sends",
+   "paths": [
+    "chat_input.bypass_duplicate"
+   ],
+   "nested": false,
+   "detail": "Lets you send the same message twice in a row by adding an invisible character, so Twitch does not reject the second send.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Chat Input",
+   "title": "Spellcheck",
+   "paths": [
+    "chat_input.spellcheck_enabled"
+   ],
+   "nested": false,
+   "detail": "Underlines misspelled words as you type and offers corrections when you right-click one. Emotes, chatters, commands and links are left alone.",
+   "aliases": [
+    "spelling",
+    "autocorrect",
+    "dictionary"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Chat Input",
+   "title": "Chat modes",
+   "paths": [
+    "chat_input.show_room_modes"
+   ],
+   "nested": false,
+   "detail": "Shows when a channel limits who can chat, like emote-only, followers-only or slow mode. The message box names the mode and keeps a small icon for it while you type.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Chat Input",
+   "title": "Hide placeholder",
+   "paths": [
+    "chat_input.hide_placeholder"
+   ],
+   "nested": false,
+   "detail": "Leaves the message box empty instead of prompting you to send a message. Notices you can act on, like read-only or subscriber-only mode, still show.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Chat Input",
+   "title": "Hide command button",
+   "paths": [
+    "chat_input.hide_command_button"
+   ],
+   "nested": false,
+   "detail": "Removes the slash button from inside the message box. Typing / still opens the quick command list.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Chat Input",
+   "title": "Hide emote button",
+   "paths": [
+    "chat_input.hide_emote_button"
+   ],
+   "nested": false,
+   "detail": "Removes the smiley from inside the message box. The emote picker is still reachable from its keyboard shortcut and from tab completion.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Tab Completion",
+   "title": "Emotes",
+   "paths": [
+    "chat_input.emote_tab_complete_enabled"
+   ],
+   "nested": false,
+   "detail": "Suggest matching emotes as you type.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Tab Completion",
+   "title": "Matching",
+   "paths": [
+    "chat_input.emote_tab_complete_match_mode"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Tab Completion",
+   "title": "Chatter names",
+   "paths": [
+    "chat_input.emote_tab_complete_include_chatters"
+   ],
+   "nested": false,
+   "detail": "Also suggest display names of users currently in chat.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Channel Points",
+   "title": "Bonus chests",
+   "paths": [
+    "auto_claim_points_watching"
+   ],
+   "nested": false,
+   "detail": "Collects the bonus chest on the stream you are watching the moment it appears.",
+   "aliases": [
+    "channel points",
+    "auto claim",
+    "chest"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Chat Behavior",
+   "title": "Deleted messages",
+   "paths": [
+    "chat_design.deleted_message_style"
+   ],
+   "nested": false,
+   "detail": "How a message looks once a moderator deletes it or times out or bans its sender.",
+   "aliases": [
+    "timeout",
+    "ban",
+    "moderation",
+    "strikethrough"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Chat Behavior",
+   "title": "Hide shared chat",
+   "paths": [
+    "chat_design.hide_shared_chat"
+   ],
+   "nested": false,
+   "detail": "Hides messages that came from the other channel in a Twitch Shared Chat, so you only see this channel's own chatters.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Chat Behavior",
+   "title": "Smooth resume",
+   "paths": [
+    "chat_render.smooth_scroll_on_resume"
+   ],
+   "nested": false,
+   "detail": "Animates the scroll back to the bottom when you click Resume; auto-scroll for new messages stays instant.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Chat Behavior",
+   "title": "Scrollback",
+   "paths": [
+    "chat_render.message_buffer_cap"
+   ],
+   "nested": false,
+   "detail": "How many messages each chat keeps to scroll back through. Phones stop at 300: more than that costs memory and smoothness with nothing extra to see.",
+   "aliases": [
+    "history",
+    "buffer",
+    "message limit"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Docked Chats",
+   "title": "Menu style",
+   "paths": [
+    "chat_design.chat_dock_switcher"
+   ],
+   "nested": false,
+   "detail": "A list that opens from the chat name, or a row of tabs under the chat header so each chat is one click away.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Repeated Messages",
+   "title": "Mode",
+   "paths": [
+    "message_repeat.mode"
+   ],
+   "nested": false,
+   "detail": "",
+   "aliases": [
+    "repeated",
+    "spam",
+    "duplicate messages",
+    "copypasta"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Repeated Messages",
+   "title": "Match",
+   "paths": [
+    "message_repeat.match"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Repeated Messages",
+   "title": "Minimum",
+   "paths": [
+    "message_repeat.threshold"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Repeated Messages",
+   "title": "Window",
+   "paths": [
+    "message_repeat.window_seconds"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Repeated Messages",
+   "title": "Counter color",
+   "paths": [
+    "message_repeat.color"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Repeated Messages",
+   "title": "Mod & VIP exemption",
+   "paths": [
+    "message_repeat.exempt_privileged"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Repeated Messages",
+   "title": "Moderated channels",
+   "paths": [
+    "message_repeat.keep_all_when_moderator"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Highlight Appearance",
+   "title": "Style",
+   "paths": [
+    "chat_highlights.appearance.display_style"
+   ],
+   "nested": false,
+   "detail": "",
+   "aliases": [
+    "look"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Highlight Appearance",
+   "title": "Opacity",
+   "paths": [
+    "chat_highlights.appearance.opacity"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Highlight Appearance",
+   "title": "Scrollbar marks",
+   "paths": [
+    "chat_design.scrollbar_marks"
+   ],
+   "nested": false,
+   "detail": "Small ticks on the chat scrollbar show where mentions, subs, announcements and pinned messages are, so you can find what you missed while reading back.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Highlight Appearance",
+   "title": "Kinds",
+   "paths": [
+    "chat_design.scrollbar_mark_kinds"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Spam & Pyramid",
+   "title": "Vary repeats",
+   "paths": [
+    "chat_burst.vary_repeats"
+   ],
+   "nested": false,
+   "detail": "Adds invisible characters to a line that repeats the one before it, so Twitch doesn't drop it as a duplicate.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Spam & Pyramid",
+   "title": "Speed",
+   "paths": [
+    "chat_burst.delay_ms"
+   ],
+   "nested": false,
+   "detail": "One line every \\(Self.delay(ms)). Add --delay <ms> to a command to change it for one run.",
+   "aliases": [
+    "spam",
+    "pyramid"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Spam & Pyramid",
+   "title": "Color",
+   "paths": [
+    "chat_design.mention_text_color"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Spam & Pyramid",
+   "title": "Points balance",
+   "paths": [
+    "chat_input.hide_points_balance",
+    "chat_input.show_points_balance_inline"
+   ],
+   "nested": false,
+   "detail": "Always shows your channel points beside the button next to the message box. Hidden removes the button, which still comes back whenever a bonus chest is waiting.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Spam & Pyramid",
+   "title": "Wording",
+   "paths": [
+    "chat_events.event_templates"
+   ],
+   "nested": false,
+   "detail": "Your own sentence for each kind of event. Tokens in braces fill in from the event; if one is missing, the platform's wording is used.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Links",
+   "title": "Style",
+   "paths": [
+    "chat_design.link_previews",
+    "chat_design.link_preview_keep_link"
+   ],
+   "nested": false,
+   "detail": "Off keeps links as plain text, Card + Link adds a preview card under the link, and Clean shows only the card.",
+   "aliases": [
+    "look"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Links",
+   "title": "Trusted sites",
+   "paths": [
+    "chat_design.link_preview_trusted_domains"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Links",
+   "title": "Short links",
+   "paths": [
+    "chat_design.shorten_links"
+   ],
+   "nested": false,
+   "detail": "Shows each link as a compact label, the site plus a short path, instead of the full raw URL.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Links",
+   "title": "Color",
+   "paths": [
+    "chat_design.link_color"
+   ],
+   "nested": false,
+   "detail": "The color of links in chat. Leave it on the default to follow the theme.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Links",
+   "title": "Underline",
+   "paths": [
+    "chat_design.link_underline"
+   ],
+   "nested": false,
+   "detail": "Off leaves links colored but not underlined.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Chat Input",
+   "title": "Dictionary",
+   "paths": [
+    "chat_input.spellcheck_custom_words"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Hidden Messages",
+   "title": "Known bots",
+   "paths": [
+    "chat_filters.hide_bots"
+   ],
+   "nested": false,
+   "detail": "Hides StreamElements, Nightbot, Moobot and the other well-known chat bots, in every channel.",
+   "aliases": [
+    "nightbot",
+    "streamelements",
+    "moobot",
+    "hide bots"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Hidden Messages",
+   "title": "Everywhere",
+   "paths": [
+    "chat_filters.hidden_users"
+   ],
+   "nested": false,
+   "detail": "Messages from these names never appear, on any platform. Add someone here, or from their user card in chat.",
+   "aliases": [
+    "hide user",
+    "block user",
+    "ignore user"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Hidden Messages",
+   "title": "Per channel",
+   "paths": [
+    "chat_filters.per_channel"
+   ],
+   "nested": false,
+   "detail": "Added from user cards while watching. Removing a name shows their messages again in that channel.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Hidden Messages",
+   "title": "Bot commands",
+   "paths": [
+    "chat_filters.hide_commands"
+   ],
+   "nested": false,
+   "detail": "Hides messages that are bot commands, so a chat full of !drops and !uptime reads as a chat.",
+   "aliases": [
+    "hide commands",
+    "!commands"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Hidden Messages",
+   "title": "Patterns",
+   "paths": [
+    "chat_filters.command_filters"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Hidden Messages",
+   "title": "Ignored phrases",
+   "paths": [
+    "chat_filters.ignored_phrases"
+   ],
+   "nested": false,
+   "detail": "Never see messages that contain these words, in any chat. The sender is not told. Plain words work; turn on regex or whole-word per phrase when you need precision.",
+   "aliases": [
+    "filter words",
+    "block words",
+    "mute words",
+    "blacklist"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Event Highlights",
+   "title": "Style",
+   "paths": [
+    "\\(base).style"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": [
+    "look"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Event Highlights",
+   "title": "Ring fill",
+   "paths": [
+    "\\(base).fill"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Event Highlights",
+   "title": "Glint",
+   "paths": [
+    "\\(base).animation"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Event Highlights",
+   "title": "Loop",
+   "paths": [
+    "\\(base).animate_repeat"
+   ],
+   "nested": true,
+   "detail": "",
+   "aliases": []
+  },
+  {
+   "page": "cache",
+   "section": "Cache",
+   "title": "Disk cache",
+   "paths": [
+    "cache.enabled"
+   ],
+   "nested": false,
+   "detail": "Loads emotes and badges from disk: a copy is stored on this PC after the first download so later channel loads are near instant. Off means every launch fetches them again.",
+   "aliases": [
+    "storage",
+    "emote cache"
+   ]
+  },
+  {
+   "page": "cache",
+   "section": "Cache",
+   "title": "Refresh after",
+   "paths": [
+    "cache.expiry_days"
+   ],
+   "nested": false,
+   "detail": "Anything older than this is fetched again the next time it is needed, so new emotes and badge art show up on their own.",
+   "aliases": []
+  },
+  {
+   "page": "cache",
+   "section": "Cache",
+   "title": "Storage",
+   "paths": [],
+   "nested": false,
+   "detail": "View cache info shows a count of what is on disk, Open folder reveals the files, and Clear cache deletes every stored emote and badge so they download fresh.",
+   "aliases": [
+    "clear cache",
+    "free space"
+   ]
+  },
+  {
+   "page": "cache",
+   "section": "Emote Prefetch",
+   "title": "Followed channels",
+   "paths": [],
+   "nested": false,
+   "detail": "Scan your follows to see how many emotes are missing and how much space they need, then download them in the background while you do something else.",
+   "aliases": []
+  },
+  {
+   "page": "support",
+   "section": "Diagnostics",
+   "title": "Detailed log",
+   "paths": [
+    "error_reporting_enabled"
+   ],
+   "nested": false,
+   "detail": "Records connection, playback, and chat activity to streamnook.log on this device so a problem can be traced after the fact.",
+   "aliases": [
+    "logs",
+    "debug",
+    "diagnostics"
+   ]
+  },
+  {
+   "page": "support",
+   "section": "Diagnostics",
+   "title": "Log export",
+   "paths": [],
+   "nested": false,
+   "detail": "Saves your logs as one zip in Downloads, or sends it straight to an app, so you can attach it to a bug report.",
+   "aliases": [
+    "share logs",
+    "bug report"
+   ]
+  },
+  {
+   "page": "support",
+   "section": "Account Data",
+   "title": "Channels and emotes",
+   "paths": [],
+   "nested": false,
+   "detail": "Counts which channels you watch and which emotes you use, which is what fills in your profile stats and unlocks accolades.",
+   "aliases": []
+  },
+  {
+   "page": "support",
+   "section": "Account Data",
+   "title": "Version and platform",
+   "paths": [],
+   "nested": false,
+   "detail": "Records which build you are on, your operating system, and whether your updater is working.",
+   "aliases": []
+  },
+  {
+   "page": "support",
+   "section": "Account Data",
+   "title": "Linked accounts",
+   "paths": [],
+   "nested": false,
+   "detail": "Records which other platforms you have connected, so they survive a reinstall.",
+   "aliases": []
+  },
+  {
+   "page": "adFree",
+   "section": "Ad-free",
+   "title": "Ad-free playback",
+   "paths": [
+    "video_player.ad_bypass_enabled"
+   ],
+   "nested": false,
+   "detail": "Routes the playlist through a public relay and removes ad segments before the player sees them.",
+   "aliases": [
+    "ads",
+    "adblock",
+    "ad block",
+    "commercials",
+    "proxy"
+   ]
+  },
+  {
+   "page": "adFree",
+   "section": "Relays",
+   "title": "Relays",
+   "paths": [
+    "video_player.ad_bypass_proxies"
+   ],
+   "nested": false,
+   "detail": "Your own relay addresses, one per line.",
+   "aliases": [
+    "proxy",
+    "proxies",
+    "ttv lol"
+   ]
+  },
+  {
+   "page": "theme",
+   "section": "Theme",
+   "title": "Theme",
+   "paths": [
+    "theme"
+   ],
+   "nested": false,
+   "detail": "The color theme for the whole app.",
+   "aliases": [
+    "color",
+    "dark mode",
+    "appearance",
+    "dracula",
+    "oled",
+    "skin"
+   ]
+  },
+  {
+   "page": "theme",
+   "section": "Theme",
+   "title": "Glassiness",
+   "paths": [
+    "glass_transparency"
+   ],
+   "nested": false,
+   "detail": "How see-through and frosted every surface is, for every theme.",
+   "aliases": [
+    "transparency",
+    "blur",
+    "frosted",
+    "solid",
+    "opaque"
+   ]
+  },
+  {
+   "page": "theme",
+   "section": "Theme",
+   "title": "Font",
+   "paths": [
+    "font",
+    "font_custom"
+   ],
+   "nested": false,
+   "detail": "The interface font.",
+   "aliases": [
+    "typeface",
+    "text font",
+    "satoshi"
+   ]
+  },
+  {
+   "page": "theme",
+   "section": "Theme",
+   "title": "OLED accent",
+   "paths": [
+    "oled_accent"
+   ],
+   "nested": false,
+   "detail": "The glow color on pure black.",
+   "aliases": []
+  },
+  {
+   "page": "notifications",
+   "section": "Notifications",
+   "title": "Notifications",
+   "paths": [
+    "live_notifications.enabled"
+   ],
+   "nested": false,
+   "detail": "StreamNook can alert you about the categories below.",
+   "aliases": [
+    "alerts",
+    "push",
+    "notify"
+   ]
+  },
+  {
+   "page": "notifications",
+   "section": "Notify me about",
+   "title": "Live channels",
+   "paths": [
+    "live_notifications.show_live_notifications"
+   ],
+   "nested": false,
+   "detail": "Alert when a channel you follow starts streaming",
+   "aliases": []
+  },
+  {
+   "page": "notifications",
+   "section": "Notify me about",
+   "title": "Drops",
+   "paths": [
+    "live_notifications.show_drops_notifications"
+   ],
+   "nested": false,
+   "detail": "Campaign progress and claimable rewards",
+   "aliases": []
+  },
+  {
+   "page": "notifications",
+   "section": "Notify me about",
+   "title": "New badges",
+   "paths": [
+    "live_notifications.show_badge_notifications"
+   ],
+   "nested": false,
+   "detail": "When a new global badge becomes available",
+   "aliases": []
+  },
+  {
+   "page": "notifications",
+   "section": "Notify me about",
+   "title": "Which channels",
+   "paths": [
+    "live_notifications.muted_live_channels"
+   ],
+   "nested": false,
+   "detail": "Everything you follow, or all but the channels you muted",
+   "aliases": [
+    "mute alerts",
+    "mute channel",
+    "silence"
+   ]
+  },
+  {
+   "page": "notifications",
+   "section": "Background checking",
+   "title": "Instant alerts",
+   "paths": [
+    "live_notifications.push_notifications"
+   ],
+   "nested": false,
+   "detail": "Pushed the moment a channel goes live.",
+   "aliases": []
+  },
+  {
+   "page": "notifications",
+   "section": "Background checking",
+   "title": "How often to check",
+   "paths": [
+    "live_notifications.background_interval_minutes"
+   ],
+   "nested": false,
+   "detail": "Checking less often uses less battery.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Event Highlights",
+   "title": "First-time chatters",
+   "paths": [
+    "chat_highlights.built_in.first_time_chatter"
+   ],
+   "nested": false,
+   "detail": "Highlight a user's first ever message in this channel.",
+   "aliases": [
+    "first message",
+    "new chatter"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Event Highlights",
+   "title": "Returning chatters",
+   "paths": [
+    "chat_highlights.built_in.returning_chatter"
+   ],
+   "nested": false,
+   "detail": "Highlight users coming back after a long absence.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Event Highlights",
+   "title": "Your own messages",
+   "paths": [
+    "chat_highlights.built_in.self_message"
+   ],
+   "nested": false,
+   "detail": "Tint your own outgoing messages so they are easy to spot in fast chats.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Event Highlights",
+   "title": "Raid announcements",
+   "paths": [
+    "chat_highlights.built_in.raider"
+   ],
+   "nested": false,
+   "detail": "Highlight the raid notice row when a raid lands.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Custom Sounds",
+   "title": "Custom sounds",
+   "paths": [
+    "chat_highlights.custom_sounds"
+   ],
+   "nested": false,
+   "detail": "Your own audio files, up to 2 MB each.",
+   "aliases": [
+    "sound file",
+    "audio",
+    "mp3"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Highlight Phrases",
+   "title": "Highlight phrases",
+   "paths": [
+    "chat_highlights.phrases"
+   ],
+   "nested": false,
+   "detail": "Flash chat messages that match specific words, names, or patterns.",
+   "aliases": [
+    "keywords",
+    "highlight words",
+    "alerts"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Username Highlights",
+   "title": "Username highlights",
+   "paths": [
+    "chat_highlights.users"
+   ],
+   "nested": false,
+   "detail": "Always highlight messages from specific users by login.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Badge Highlights",
+   "title": "Badge highlights",
+   "paths": [
+    "chat_highlights.badges"
+   ],
+   "nested": false,
+   "detail": "Highlight every message from users carrying a specific Twitch badge.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Custom Commands",
+   "title": "Custom commands",
+   "paths": [
+    "chat_commands.user_commands"
+   ],
+   "nested": false,
+   "detail": "Define your own slash commands.",
+   "aliases": [
+    "slash commands",
+    "macros",
+    "shortcuts"
+   ]
+  },
+  {
+   "page": "chat",
+   "section": "Reminders",
+   "title": "Reminders",
+   "paths": [],
+   "nested": false,
+   "detail": "Post a message into a chat on a timer or a keyword.",
+   "aliases": []
+  },
+  {
+   "page": "chat",
+   "section": "Nicknames",
+   "title": "Nicknames",
+   "paths": [
+    "chat_customization.user_overrides"
+   ],
+   "nested": false,
+   "detail": "Nicknames you've set for individual chatters.",
+   "aliases": [
+    "rename user",
+    "nickname",
+    "alias"
+   ]
+  }
+ ]
+}

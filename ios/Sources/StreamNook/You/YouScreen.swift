@@ -34,15 +34,7 @@ struct YouScreen: View {
                 .padding(.bottom, 16)
 
                 label("Settings")
-                VStack(spacing: 0) {
-                    ForEach(SettingsSection.allCases) { section in
-                        NavigationLink(value: Route.settings(section)) {
-                            RowLabel(symbol: section.symbol, title: section.title, detail: section.detail)
-                        }
-                        .buttonStyle(RowPress())
-                    }
-                }
-                .padding(.horizontal, 12)
+                SettingsDirectory(model: model)
             }
             .padding(.bottom, 24)
         }

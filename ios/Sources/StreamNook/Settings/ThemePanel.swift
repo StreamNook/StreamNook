@@ -1,7 +1,7 @@
 import SNKit
 import SwiftUI
 
-/// Settings > Theme: the colour theme, how glassy every surface is, and the interface font. The
+/// Settings > Theme: the color theme, how glassy every surface is, and the interface font. The
 /// gallery, the OLED accent and every palette come from the core; picking repaints the app.
 struct ThemePanel: View {
     @Environment(SettingsStore.self) private var store
@@ -134,7 +134,7 @@ struct ThemePanel: View {
     }
 }
 
-/// A theme drawn in its own colours: five swatches, its name and description, a check when picked.
+/// A theme drawn in its own colors: five swatches, its name and description, a check when picked.
 private struct ThemeCard: View {
     let card: ThemePanel.Card
     let picked: Bool
@@ -283,7 +283,7 @@ private struct FontCard: View {
     }
 }
 
-/// The OLED theme's accent: eight swatches and a custom colour, saved a moment after the last
+/// The OLED theme's accent: eight swatches and a custom color, saved a moment after the last
 /// change.
 private struct OledAccentCard: View {
     @Environment(SettingsStore.self) private var store

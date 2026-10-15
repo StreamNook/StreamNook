@@ -72,7 +72,7 @@ struct EntryToggle: View {
     }
 }
 
-/// A colour over one field of a list entry.
+/// A color over one field of a list entry.
 struct EntryColor: View {
     @Environment(SettingsStore.self) private var store
     let listPath: String
@@ -484,7 +484,7 @@ enum RuleErrors {
     }
 }
 
-/// One highlight or ignored phrase: switch, pattern, options, and (for highlights) colour,
+/// One highlight or ignored phrase: switch, pattern, options, and (for highlights) color,
 /// order, sound and cooldown.
 struct PhraseCard: View {
     @Environment(SettingsStore.self) private var store
