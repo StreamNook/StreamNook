@@ -146,9 +146,10 @@ final class CosmeticImageView: UIView {
         CATransaction.commit()
     }
 
+    @MainActor
     private final class LinkTarget: NSObject {
         weak var view: CosmeticImageView?
         init(_ view: CosmeticImageView) { self.view = view }
-        @objc func tick() { MainActor.assumeIsolated { view?.tick() } }
+        @objc func tick() { view?.tick() }
     }
 }

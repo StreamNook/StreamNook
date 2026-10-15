@@ -291,7 +291,7 @@ struct CosmeticsScreen: View {
                         Button { Task { await screen.equipBadge(badge) } } label: {
                             BadgeTile(url: badge.imageURL, name: badge.name, worn: badge.worn)
                         }
-                        .buttonStyle(PressScale())
+                        .buttonStyle(BadgePress())
                     }
                 }
                 .padding(.bottom, 16)
@@ -310,7 +310,7 @@ struct CosmeticsScreen: View {
                     Button { Task { await screen.equipTheme(atmosphere) } } label: {
                         AtmosphereTile(atmosphere: atmosphere)
                     }
-                    .buttonStyle(PressScale())
+                    .buttonStyle(BadgePress())
                     .disabled(!atmosphere.allowed)
                 }
             }
@@ -368,7 +368,7 @@ struct CosmeticsScreen: View {
                                 .snPanel()
                                 .overlay { if paint.worn { WornRing() } }
                             }
-                            .buttonStyle(PressScale())
+                            .buttonStyle(BadgePress())
                         }
                     }
                 }
@@ -381,7 +381,7 @@ struct CosmeticsScreen: View {
                                 BadgeTile(url: entry.badge.url, fallbacks: entry.badge.fallbacks,
                                           name: entry.badge.name ?? entry.badge.title, worn: entry.worn)
                             }
-                            .buttonStyle(PressScale())
+                            .buttonStyle(BadgePress())
                         }
                     }
                 }
@@ -401,7 +401,7 @@ struct CosmeticsScreen: View {
                             Button { Task { await screen.equipTwitchBadge(badge) } } label: {
                                 BadgeTile(url: badge.imageURL, name: badge.title, worn: badge.isSelected)
                             }
-                            .buttonStyle(PressScale())
+                            .buttonStyle(BadgePress())
                         }
                     }
                 }

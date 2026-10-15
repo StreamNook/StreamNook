@@ -41,7 +41,7 @@ struct SubStandingTile: View {
                             .frame(width: 36, height: 36)
                             .contentShape(Circle())
                     }
-                    .buttonStyle(PressScale())
+                    .buttonStyle(BadgePress())
                     .padding(.vertical, -6)
                     .padding(.trailing, -6)
                     .accessibilityLabel(label)
@@ -164,7 +164,7 @@ struct SubStandingTile: View {
             .padding(.vertical, 10)
             .snPanel()
         }
-        .buttonStyle(PressScale())
+        .buttonStyle(BadgePress())
     }
 
     private func open(_ url: String) {

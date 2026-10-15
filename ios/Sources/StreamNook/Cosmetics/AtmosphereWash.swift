@@ -9,7 +9,6 @@ import UIKit
 /// the 1 pt rim, and the 1 pt edge down the left. The CS2 Major Cologne look draws its glass
 /// texture drifting diagonally under a readability veil, with the coin watermark when worn.
 /// Every bitmap is made once per look and size and shared by the rows that need it.
-@MainActor
 final class AtmosphereWashLayer: CALayer {
     private var key = ""
     private let base = CALayer()
@@ -43,6 +42,7 @@ final class AtmosphereWashLayer: CALayer {
     required init?(coder: NSCoder) { fatalError() }
 
     /// Shows `look` over `size`; `animate` false stills the curtains and the drift.
+    @MainActor
     func show(_ look: AtmosphereLook, cologne: CologneLook?, size: CGSize, scale: CGFloat, animate: Bool) {
         let next = "\(look.hashValue)|\(cologne?.coin == true)|\(Int(size.width))x\(Int(size.height))|\(animate)"
         guard next != key else { return }
@@ -65,6 +65,7 @@ final class AtmosphereWashLayer: CALayer {
         CATransaction.commit()
     }
 
+    @MainActor
     private func showAtmosphere(_ look: AtmosphereLook, bounds: CGRect, scale: CGFloat, animate: Bool) {
         base.frame = bounds
         base.opacity = 0.85
@@ -125,6 +126,7 @@ final class AtmosphereWashLayer: CALayer {
         return group
     }
 
+    @MainActor
     private func showCologne(_ look: AtmosphereLook, coin wantsCoin: Bool, bounds: CGRect, scale: CGFloat, animate: Bool) {
         let tile: CGFloat = 230
         base.frame = bounds
@@ -220,8 +222,8 @@ enum WashBitmaps {
     /// An atmosphere image defocused by `blur` pixels, every frame of it, once per URL and size.
     @MainActor
     static func blurred(_ url: String, blur: CGFloat, pixelHeight: Int, done: @escaping @MainActor (DecodedImage?) -> Void) {
-        let key = "\(url)|\(Int(blur))|\(pixelHeight)" as NSString
-        if let hit = blurredCache.object(forKey: key) {
+        let key = "\(url)|\(Int(blur))|\(pixelHeight)"
+        if let hit = blurredCache.object(forKey: key as NSString) {
             done(hit)
             return
         }
@@ -239,7 +241,7 @@ enum WashBitmaps {
                 }
                 let result = DecodedImage(frames: frames, durations: decoded.timeline.durations)
                 await MainActor.run {
-                    blurredCache.setObject(result, forKey: key)
+                    blurredCache.setObject(result, forKey: key as NSString)
                     done(result)
                 }
             }

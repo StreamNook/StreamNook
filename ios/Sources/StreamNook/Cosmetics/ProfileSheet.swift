@@ -278,14 +278,14 @@ private struct ProfileBadgeButton: View {
                     .frame(width: 32, height: 32)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(PressScale())
+            .buttonStyle(BadgePress())
             .accessibilityLabel(badge.label)
         }
     }
 }
 
 /// Scales to 90% while pressed.
-struct PressScale: ButtonStyle {
+struct BadgePress: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.9 : 1)
