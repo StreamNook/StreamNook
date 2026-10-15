@@ -2259,6 +2259,9 @@ pub fn run() {
             set_home_mounted,
             refresh_home_section,
             set_home_extra_channels,
+            // The phones' resume refresh (desktop windows reload on mount).
+            #[cfg(mobile)]
+            note_app_resumed,
             set_home_sidebar,
             load_more_home_recommended,
             // Per-channel chat state + user history watches (Rust-owned polls)

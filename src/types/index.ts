@@ -1501,6 +1501,8 @@ export interface Collaboration {
   /** Unique viewers across every member. */
   shared_viewers: number;
   members: Collaborator[];
+  /** The group in plain words, built by Rust: "1,500 watching together with A and B". */
+  label: string;
 }
 
 /** Twitch's Shared Chat outside a Shared Viewership group (Rust
@@ -1508,6 +1510,8 @@ export interface Collaboration {
  *  their own viewers; `is_leader` marks the session's host. At least two. */
 export interface SharedChat {
   members: Collaborator[];
+  /** The session in plain words, built by Rust: "Sharing chat with A and B". */
+  label: string;
 }
 
 /** Per-channel chat state owned by Rust (src-tauri/src/services/channel_state.rs). */
@@ -1675,6 +1679,8 @@ export interface TwitchStream {
   provider?: ProviderId;
   /** Canonical platform watch URL, set by provider rows; drives `start_stream`. */
   watch_url?: string;
+  /** Watching here earns drops right now; stamped by Rust on the Twitch lists it serves. */
+  drops_earnable?: boolean;
 }
 
 /** Platform-neutral alias for new code; identical to `TwitchStream`. */

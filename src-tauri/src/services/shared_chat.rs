@@ -17,7 +17,7 @@ use log::debug;
 use serde::Serialize;
 use tokio::sync::Mutex;
 
-use crate::services::collaboration::Collaborator;
+use crate::services::collaboration::{others_phrase, Collaborator};
 use crate::services::twitch_service::TwitchService;
 
 /// Helix requests in flight at once.
@@ -37,6 +37,9 @@ const KEEP: Duration = Duration::from_secs(600);
 #[derive(Serialize, Clone, PartialEq, Debug)]
 pub struct SharedChat {
     pub members: Vec<Collaborator>,
+    /// The session in plain words, for screen readers: "Sharing chat with A
+    /// and B".
+    pub label: String,
 }
 
 type Cache = HashMap<String, (Instant, Option<SharedChat>)>;
@@ -168,7 +171,8 @@ fn build(
         return None;
     }
     members.sort_by(|a, b| b.is_self.cmp(&a.is_self).then(b.viewer_count.cmp(&a.viewer_count)));
-    Some(SharedChat { members })
+    let label = format!("Sharing chat with {}", others_phrase(&members));
+    Some(SharedChat { members, label })
 }
 
 #[cfg(test)]
@@ -202,6 +206,7 @@ mod tests {
         assert!(g.members[0].is_self);
         assert!(g.members[2].is_leader);
         assert_eq!(g.members[1].display_name, "BIG");
+        assert_eq!(g.label, "Sharing chat with BIG and HOST");
     }
 
     #[test]

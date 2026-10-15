@@ -7,7 +7,6 @@ import { useMobileNavStore } from '../navStore';
 import { useHypeTrains } from '../useHypeTrains';
 import { SettleIn, useSettleIn } from '../ui/SettleIn';
 import { MobileStreamCard } from '../ui/MobileStreamCard';
-import { useDropsGameNames } from '../dropsCampaigns';
 import { readStreamView, writeStreamView, type StreamViewMode } from './FollowingScreen';
 import { PullToRefresh } from '../ui/PullToRefresh';
 import { SkeletonCards } from '../ui/SkeletonCards';
@@ -67,7 +66,6 @@ export const BrowseScreen: React.FC = () => {
   const loadRecommendedStreams = useAppStore((s) => s.loadRecommendedStreams);
   const startStream = useAppStore((s) => s.startStream);
   const openBrowseCategory = useMobileNavStore((s) => s.openBrowseCategory);
-  const dropsGameNames = useDropsGameNames();
 
   const [mode, setMode] = useState<BrowseMode>('live');
   const [platform, setPlatform] = useState<BrowsePlatform>(readPlatform);
@@ -404,7 +402,6 @@ export const BrowseScreen: React.FC = () => {
                   <SettleIn key={streamKey(s)} index={i} settled={streamsSettled}>
                     <MobileStreamCard
                       stream={s}
-                      dropsGameNames={dropsGameNames}
                       hypeTrain={isTwitchStream(s) ? (activeHypeTrainChannels.get(s.user_id) ?? undefined) : undefined}
                       watchStreak={isTwitchStream(s) ? watchStreaks[s.user_id] : undefined}
                       onPress={(stream) => void startStream(stream.user_login, stream)}

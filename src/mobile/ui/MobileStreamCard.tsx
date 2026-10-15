@@ -8,8 +8,6 @@ import React from 'react';
 import { Flame } from 'lucide-react';
 import { Package, UsersThree } from 'phosphor-react';
 import StreamTitleWithEmojis from '../../components/StreamTitleWithEmojis';
-import { campaignEarnableOn } from '../dropsEligibility';
-import type { DropsByGame } from '../dropsCampaigns';
 import type { TwitchStream } from '../../types';
 import { previewStamp } from '../followRefresh';
 import { ProviderMark } from '../../components/ProviderLogo';
@@ -61,7 +59,6 @@ const StreakBadge: React.FC<{ streak: number }> = ({ streak }) => (
 
 export const MobileStreamCard: React.FC<{
   stream: TwitchStream;
-  dropsGameNames?: DropsByGame;
   hypeTrain?: HypeTrainBadgeInfo;
   watchStreak?: number;
   onPress: (stream: TwitchStream) => void;
@@ -70,7 +67,7 @@ export const MobileStreamCard: React.FC<{
   showPlatform?: boolean;
   /** 'card' = big thumbnail stack; 'row' = compact list row (thumb left). */
   variant?: 'card' | 'row';
-}> = ({ stream, dropsGameNames, hypeTrain, watchStreak, onPress, variant = 'card', showPlatform = true }) => {
+}> = ({ stream, hypeTrain, watchStreak, onPress, variant = 'card', showPlatform = true }) => {
   // The icon means "you can earn drops HERE", not "this game has drops".
   //
   // It used to mean the latter, which put a gift on every channel in a
@@ -83,14 +80,9 @@ export const MobileStreamCard: React.FC<{
   // Twitch's Shared Viewership or Shared Chat, from the Rust home snapshot.
   // Read here rather than passed in, so every screen's cards carry it.
   const collab = useAppStore((s) => groupFor(s.collaborations, s.sharedChats, stream));
-  // Drops are Twitch campaigns matched by category name; a Kick stream in the
-  // same category earns nothing.
-  const hasDrops = isTwitch && !!(
-    stream.game_name &&
-    (dropsGameNames?.get(stream.game_name.toLowerCase()) ?? []).some((c) =>
-      campaignEarnableOn(c, stream.user_login),
-    )
-  );
+  // Rust stamps it on every Twitch row it serves; a Kick stream in the same
+  // category earns nothing.
+  const hasDrops = isTwitch && !!stream.drops_earnable;
 
   if (variant === 'row') {
     return (

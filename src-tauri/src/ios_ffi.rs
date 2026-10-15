@@ -151,6 +151,7 @@ pub fn lifecycle(state: String) {
     match state.as_str() {
         "background" => {
             info!("[iOS] moved to the background; flushing stores");
+            crate::services::window_visibility::set_native_shell_shown(false);
             crate::flush_debounced_stores();
         }
         "terminating" => {
@@ -159,6 +160,7 @@ pub fn lifecycle(state: String) {
         }
         "foreground" => {
             info!("[iOS] back in the foreground");
+            crate::services::window_visibility::set_native_shell_shown(true);
             sn_tauri_headless::async_runtime::spawn(foregrounded());
         }
         "memory_warning" => {

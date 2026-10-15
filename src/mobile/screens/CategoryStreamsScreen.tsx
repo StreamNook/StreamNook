@@ -8,7 +8,6 @@ import { useMobileNavStore } from '../navStore';
 import { DrillInScreen } from '../ui/DrillInScreen';
 import { useHypeTrains } from '../useHypeTrains';
 import { MobileStreamCard } from '../ui/MobileStreamCard';
-import { useDropsGameNames } from '../dropsCampaigns';
 import { AdaptiveGrid } from '../ui/AdaptiveGrid';
 import { SettleIn, useSettleIn } from '../ui/SettleIn';
 import { PullToRefresh } from '../ui/PullToRefresh';
@@ -54,7 +53,6 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
   const startStream = useAppStore((s) => s.startStream);
   const activeHypeTrainChannels = useAppStore((s) => s.activeHypeTrainChannels);
   const watchStreaks = useAppStore((s) => s.watchStreaks);
-  const dropsGameNames = useDropsGameNames();
 
   const [streams, setStreams] = useState<TwitchStream[]>([]);
   const [loading, setLoading] = useState(true);
@@ -185,7 +183,6 @@ const CategoryStreamsList: React.FC<{ category: Category }> = ({ category }) => 
                 <SettleIn key={s.id} index={i} settled={settled}>
                   <MobileStreamCard
                     stream={s}
-                    dropsGameNames={dropsGameNames}
                     // Neither of these was passed, so a card here was missing
                     // identity the same card carries on Following and Browse.
                     hypeTrain={activeHypeTrainChannels.get(s.user_id) ?? undefined}

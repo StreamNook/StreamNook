@@ -77,6 +77,14 @@ pub async fn set_home_extra_channels(channel_ids: Vec<String>) -> Result<(), Str
     Ok(())
 }
 
+/// The phone app came back to the front: reloads the followed list when it is
+/// a minute old, then hype trains and collaborations. Answers whether a reload
+/// started. Allowed only by mobile-commands.toml.
+#[tauri::command]
+pub async fn note_app_resumed() -> Result<bool, String> {
+    Ok(home_snapshot::note_app_resumed().await)
+}
+
 /// Append the next recommended page. The result arrives as a `home-snapshot`
 /// `recommended` update carrying the whole list and the new cursor.
 #[tauri::command]

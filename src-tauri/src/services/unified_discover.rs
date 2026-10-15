@@ -369,6 +369,7 @@ mod tests {
             is_live: Some(true),
             tags: None,
             language: None,
+            drops_earnable: false,
         }
     }
 

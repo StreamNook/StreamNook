@@ -25,4 +25,5 @@ allow = [
   "open_drops_sheet",
   "sheet_redirected",
   "sheet_closed",
+  "note_app_resumed",
 ]

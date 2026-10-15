@@ -14,13 +14,10 @@
 //
 // Throttled rather than unconditional because resume fires constantly on a
 // phone: every app switch, every return from PiP, every notification glance.
+// Rust owns the throttle (`note_app_resumed`), sharing one freshness stamp with
+// the first load and the pull, so the iPhone app follows the same rule.
 import { invoke } from '@tauri-apps/api/core';
-import { useAppStore } from '../stores/AppStore';
 import { Logger } from '../utils/logger';
-
-const STALE_AFTER_MS = 60_000;
-
-let lastLoadedAt = 0;
 
 // The preview-image generation. Twitch serves a live preview at ONE fixed URL
 // per channel and size and swaps the frame behind it every few minutes, so a
@@ -40,33 +37,17 @@ export function bumpPreviewStamp(): void {
   previewGeneration = Date.now();
 }
 
-/** Record that the list was just fetched, so a resume moments later is a no-op.
- *  Called by every path that loads it, not just this module's. */
-export function markFollowingFresh(): void {
-  lastLoadedAt = Date.now();
-  bumpPreviewStamp();
-}
-
 /**
  * Reload the followed list if it has gone stale. Safe to call on every resume.
  *
- * Hype-train statuses ride along because they are what the row badges render
- * from, and a refreshed list with stale badges is its own kind of wrong.
+ * Rust reloads it when nobody asked for it for a minute, then hype trains and
+ * collaborations, since a refreshed list with stale badges is its own kind of
+ * wrong; the lists land as `home-snapshot` events the store applies. Signed
+ * out, Rust does nothing.
  */
-export async function refreshFollowingIfStale(maxAgeMs = STALE_AFTER_MS): Promise<void> {
-  const store = useAppStore.getState();
-  if (!store.isAuthenticated) return;
-  if (Date.now() - lastLoadedAt < maxAgeMs) return;
-  // Stamp up front: a slow request should not let a second resume start another.
-  markFollowingFresh();
+export async function refreshFollowingIfStale(): Promise<void> {
   try {
-    await store.loadFollowedStreams();
-    // Hype-train statuses and collaborations are sections of the Rust-owned
-    // Home snapshot now (services::home_snapshot); the results land as
-    // `home-snapshot` events the store applies. Floored at 15 s per section on
-    // the Rust side.
-    await invoke('refresh_home_section', { section: 'hype_trains' });
-    await invoke('refresh_home_section', { section: 'collaborations' });
+    if (await invoke<boolean>('note_app_resumed')) bumpPreviewStamp();
   } catch (err) {
     Logger.warn('[Following] resume refresh failed:', err);
   }

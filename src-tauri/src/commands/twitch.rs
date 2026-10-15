@@ -1564,9 +1564,11 @@ pub async fn get_streams_by_game(
     cursor: Option<String>,
     limit: u32,
 ) -> Result<(Vec<TwitchStream>, Option<String>), String> {
-    TwitchService::get_streams_by_game(&state, &game_id, cursor, limit)
+    let (mut streams, cursor) = TwitchService::get_streams_by_game(&state, &game_id, cursor, limit)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    crate::services::home_snapshot::stamp_drops(&mut streams).await;
+    Ok((streams, cursor))
 }
 
 #[tauri::command]
@@ -1574,9 +1576,11 @@ pub async fn search_channels(
     state: State<'_, AppState>,
     query: String,
 ) -> Result<Vec<TwitchStream>, String> {
-    TwitchService::search_channels(&state, &query)
+    let mut streams = TwitchService::search_channels(&state, &query)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    crate::services::home_snapshot::stamp_drops(&mut streams).await;
+    Ok(streams)
 }
 
 /// Live streams in a category filtered by freeform tags (server-side via GQL).

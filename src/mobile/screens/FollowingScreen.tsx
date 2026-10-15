@@ -4,9 +4,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { SettleIn, useSettleIn } from '../ui/SettleIn';
 import { ListBullets, SquaresFour } from 'phosphor-react';
 import { useAppStore } from '../../stores/AppStore';
-import { markFollowingFresh } from '../followRefresh';
+import { bumpPreviewStamp } from '../followRefresh';
 import { MobileStreamCard } from '../ui/MobileStreamCard';
-import { useDropsGameNames } from '../dropsCampaigns';
 import { PullToRefresh } from '../ui/PullToRefresh';
 import { SkeletonCards } from '../ui/SkeletonCards';
 import { AdaptiveGrid } from '../ui/AdaptiveGrid';
@@ -77,7 +76,6 @@ export const FollowingScreen: React.FC = () => {
   const [firstLoad, setFirstLoad] = useState(followedStreams.length === 0);
   // View choice persists: if a user can choose it, it survives restart.
   const [view, setView] = useState<StreamViewMode>(readStreamView);
-  const dropsGameNames = useDropsGameNames();
 
   // Keyed on the view, so switching between cards and list re-settles. Every
   // row changes shape and size in that swap, which is a big enough visual
@@ -94,7 +92,7 @@ export const FollowingScreen: React.FC = () => {
     const boot = async () => {
       if (useAppStore.getState().followedStreams.length === 0) {
         await loadFollowedStreams().catch(() => {});
-        markFollowingFresh();
+        bumpPreviewStamp();
         setFirstLoad(false);
       }
       // Hype train badges are a section of the Rust-owned Home snapshot; the
@@ -113,9 +111,10 @@ export const FollowingScreen: React.FC = () => {
   const refresh = async () => {
     void useFollowsStore.getState().refreshLive();
     await loadFollowedStreams();
-    // Shares the throttle with the resume path, so pulling to refresh and then
-    // switching away and back does not fetch the same thing twice.
-    markFollowingFresh();
+    // The load stamps Rust's freshness, which the resume path shares, so
+    // pulling to refresh and then switching away and back does not fetch the
+    // same thing twice.
+    bumpPreviewStamp();
     await invoke('refresh_home_section', { section: 'hype_trains' }).catch(() => {});
   };
 
@@ -197,7 +196,6 @@ export const FollowingScreen: React.FC = () => {
               <SettleIn key={streamKey(s)} index={i} settled={settled}>
                 <MobileStreamCard
                   stream={s}
-                  dropsGameNames={dropsGameNames}
                   hypeTrain={isTwitchStream(s) ? (activeHypeTrainChannels.get(s.user_id) ?? undefined) : undefined}
                   watchStreak={isTwitchStream(s) ? watchStreaks[s.user_id] : undefined}
                   onPress={onPress}

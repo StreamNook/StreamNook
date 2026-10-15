@@ -79,6 +79,7 @@ pub(crate) fn live_row_from_gql(user: &serde_json::Value) -> Option<TwitchStream
         is_live: Some(true),
         tags: None,
         language: None,
+        drops_earnable: false,
     })
 }
 
@@ -140,6 +141,7 @@ pub(crate) fn stream_row_from_gql_node(
         is_live: Some(true),
         tags: if tags.is_empty() { None } else { Some(tags) },
         language: node.get("language").and_then(|v| v.as_str()).map(normalize_gql_language),
+        drops_earnable: false,
     })
 }
 
@@ -247,6 +249,7 @@ pub(crate) fn channel_row_from_gql(user: &serde_json::Value) -> Option<TwitchStr
         is_live: Some(stream.is_some()),
         tags: None,
         language: None,
+        drops_earnable: false,
     })
 }
 
@@ -2322,6 +2325,7 @@ impl TwitchService {
                             is_live: channel.get("is_live").and_then(|v| v.as_bool()),
                             tags: None,
                             language: None,
+                            drops_earnable: false,
                         });
                     }
                 }
@@ -2350,6 +2354,7 @@ impl TwitchService {
                             is_live: Some(false),
                             tags: None,
                             language: None,
+                            drops_earnable: false,
                         };
                         user_ids.push(synthesize.user_id.clone());
                         streams.insert(0, synthesize);
@@ -2842,6 +2847,7 @@ impl TwitchService {
                             is_live: Some(false),
                             tags: None,
                             language: None,
+                            drops_earnable: false,
                         });
                     }
                 }
@@ -3147,6 +3153,7 @@ impl TwitchService {
                 is_live: if probe_failed { None } else { Some(false) },
                 tags: None,
                 language: None,
+                drops_earnable: false,
             },
         }
     }
@@ -3695,6 +3702,7 @@ impl TwitchService {
                         .get("language")
                         .and_then(|v| v.as_str())
                         .map(normalize_gql_language),
+                    drops_earnable: false,
                 });
             }
         }
@@ -7175,6 +7183,7 @@ mod search_rank_tests {
             is_live: Some(live),
             tags: None,
             language: None,
+            drops_earnable: false,
         }
     }
 
