@@ -102,9 +102,12 @@ pub mod membership_gifts;
 pub mod membership_status;
 pub mod provider_categories;
 pub mod provider_live_service;
+pub mod link_adapt;
 pub mod ll_origin;
 #[cfg(test)]
 mod ll_soak;
+#[cfg(test)]
+mod link_soak;
 pub mod log_service;
 pub mod resource_log;
 pub mod runtime_watchdog;

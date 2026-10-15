@@ -1757,7 +1757,12 @@ async fn stream_response(
     // A trickling transfer never trips the silence timeout, so it also gets a
     // wall-clock deadline: the segment's own duration plus grace. The deadline
     // spans resumes too — total wall time is what starves the player.
-    let deadline_secs = origin.expected_segment_secs() + SEGMENT_DEADLINE_GRACE;
+    // On a phone that has been stalling, the player keeps more distance from
+    // the edge (`link_adapt`), so a late tail can still arrive in time: the
+    // deadline and the silence limit widen with that cushion. Zero otherwise.
+    let cushion = crate::services::link_adapt::extra_cushion();
+    let deadline_secs = origin.expected_segment_secs() + SEGMENT_DEADLINE_GRACE + cushion;
+    let midstream_timeout = MIDSTREAM_CHUNK_TIMEOUT + Duration::from_secs_f64(cushion / 2.0);
     let mut received: u64 = 0;
     let mut resp = first;
     let mut resumes_left: u8 = if resume.is_some() { RESUME_ATTEMPTS } else { 0 };
@@ -1779,9 +1784,10 @@ async fn stream_response(
                 let remaining = (deadline_secs - t0.elapsed().as_secs_f64()).max(0.0);
                 if remaining <= 0.0 {
                     warn!("[LLOrigin] sn {sn} exceeded its delivery deadline; abandoning the tail");
+                    crate::services::link_adapt::note_tail_loss();
                     break;
                 }
-                MIDSTREAM_CHUNK_TIMEOUT.min(Duration::from_secs_f64(remaining))
+                midstream_timeout.min(Duration::from_secs_f64(remaining))
             }
         };
         // What went wrong this iteration, if anything; None = keep reading.
@@ -1879,8 +1885,17 @@ async fn stream_response(
         if resumes_left > 0 {
             resumes_left -= 1;
             if let Some((client, url)) = resume {
+                // A pickup's timeout covers its whole body. On a phone the tail
+                // may take longer than 1.5 s to arrive, so it gets whatever is
+                // left of the delivery deadline.
+                let budget = match first_chunk_at {
+                    Some(t0) if crate::services::link_adapt::enabled() => {
+                        (deadline_secs - t0.elapsed().as_secs_f64()).max(1.5)
+                    }
+                    _ => 1.5,
+                };
                 if let Some((r2, to_skip)) =
-                    range_resume(client, url, received, sn, &why, Duration::from_millis(1500)).await
+                    range_resume(client, url, received, sn, &why, Duration::from_secs_f64(budget)).await
                 {
                     resp = r2;
                     skip = to_skip;
@@ -1893,6 +1908,7 @@ async fn stream_response(
         warn!(
             "[LLOrigin] in-progress {why} for sn {sn} after {received} bytes / {parts} parts; abandoning the tail"
         );
+        crate::services::link_adapt::note_tail_loss();
         crate::services::ll_diagnostics::event(&format!(
             "\"ev\":\"o_abandon\",\"sn\":{sn},\"why\":\"{}\",\"received\":{received},\"parts\":{parts},\"pending\":{}",
             why.replace('"', "'"),
