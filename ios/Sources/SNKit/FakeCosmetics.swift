@@ -16,6 +16,8 @@ final class FakeCosmetics: Sendable {
         var sevenTvSignedIn = true
         var chatColor = "#8a2be2"
         var bio = "Variety streamer, mostly late-night co-op."
+        var displayName = "NookViewer"
+        var uploads: [String] = []
     }
 
     private let state = Mutex(State())
@@ -123,6 +125,25 @@ final class FakeCosmetics: Sendable {
             if text.count > 300 { throw CoreFailure.command(json: #""A bio can be at most 300 characters.""#) }
             state.withLock { $0.bio = text }
             return String(decoding: try JSONEncoder().encode(text), as: UTF8.self)
+        case "update_twitch_display_name":
+            let name = (args["displayName"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, name.lowercased() == "nookviewer" else {
+                throw CoreFailure.command(json: #""Only the capitalization of your name can change.""#)
+            }
+            let bio = state.withLock { s -> String in
+                s.displayName = name
+                return s.bio
+            }
+            let answer = ["display_name": name, "description": bio]
+            return String(decoding: try JSONEncoder().encode(answer), as: UTF8.self)
+        case "upload_twitch_profile_image":
+            let kind = args["kind"] as? String ?? ""
+            guard kind == "picture" || kind == "banner" else { throw CoreFailure.command(json: #""Unknown image kind.""#) }
+            guard let data = Data(base64Encoded: args["dataBase64"] as? String ?? ""), !data.isEmpty else {
+                throw CoreFailure.command(json: #""That image could not be read.""#)
+            }
+            state.withLock { $0.uploads.append(kind) }
+            return "null"
         case "update_user_chat_color":
             let value = args["color"] as? String ?? ""
             let hex = ["blue_violet": "#8a2be2", "coral": "#ff7f50", "dodger_blue": "#1e90ff", "spring_green": "#00ff7f"][value] ?? value
@@ -145,12 +166,14 @@ final class FakeCosmetics: Sendable {
                     : "\(Self.house)\(slug)"
                 return #"{"slug":"\#(slug)","image_url":"\#(url)","label":"StreamNook Möbius"}"#
             } ?? #"{"image_url":"\#(Self.house)streamnook-default","label":"StreamNook"}"#
-            return #"{"user_id":"\#(userID)","login":"nookviewer","display_name":"NookViewer","paint":\#(paint),"badges":[{"id":"glhf-pledge","url":"https://static-cdn.jtvnw.net/badges/v1/3158e758-3cb4-43c5-94b3-7639810451c5/3","title":"GLHF Pledge"},{"id":"b-sub","url":"https://cdn.7tv.app/badge/01F37R3RFR0000K96678WEQT01/4x.webp","title":"7TV Subscriber"}],"streamnook":\#(member)}"#
+            let worn = s.theme == "aurora" ? #"{"id":"aurora","name":"Aurora","look":\#(Self.auroraLook)}"#
+                : s.theme == "midnight" ? #"{"id":"midnight","name":"Midnight","look":\#(Self.midnightLook)}"# : "null"
+            return #"{"user_id":"\#(userID)","login":"nookviewer","display_name":"\#(s.displayName)","atmosphere":\#(worn),"paint":\#(paint),"badges":[{"id":"glhf-pledge","url":"https://static-cdn.jtvnw.net/badges/v1/3158e758-3cb4-43c5-94b3-7639810451c5/3","title":"GLHF Pledge"},{"id":"b-sub","url":"https://cdn.7tv.app/badge/01F37R3RFR0000K96678WEQT01/4x.webp","title":"7TV Subscriber"}],"streamnook":\#(member)}"#
         case "user_profile_sheet", "user_profile_sheet_cached":
             let id = args["userId"] as? String ?? "1"
             let login = args["login"] as? String ?? "chatter"
             let name = args["displayName"] as? String ?? login
-            return ##"{"user_id":"\##(id)","login":"\##(login)","display_name":"\##(name)","avatar_url":"https://static-cdn.jtvnw.net/user-default-pictures-uv/ebe4cd89-b4f4-4cd9-adac-2f30151b4209-profile_image-300x300.png","name_color":"#ff7a18","paint":\##(Self.paintSunset),"groups":[{"title":"Twitch","badges":[{"id":"premium","url":"https://static-cdn.jtvnw.net/badges/v1/bbbe0db0-a598-423e-86d0-f9fb98ca1933/3","title":"Prime Gaming","description":"Prime Gaming member"}]},{"title":"7TV","badges":[{"id":"b-sub","url":"https://cdn.7tv.app/badge/01F37R3RFR0000K96678WEQT01/4x.webp","title":"7TV Subscriber","name":"7TV Subscriber"}]}],"streamnook":{"slug":"streamnook-mobius","image_url":"https://cdn.streamnook.app/badges/streamnook-mobius.webp?v=2","label":"StreamNook Möbius"}}"##
+            return ##"{"user_id":"\##(id)","login":"\##(login)","display_name":"\##(name)","atmosphere":{"id":"aurora","name":"Aurora","look":\##(Self.auroraLook)},"avatar_url":"https://static-cdn.jtvnw.net/user-default-pictures-uv/ebe4cd89-b4f4-4cd9-adac-2f30151b4209-profile_image-300x300.png","name_color":"#ff7a18","paint":\##(Self.paintSunset),"groups":[{"title":"Twitch","badges":[{"id":"premium","url":"https://static-cdn.jtvnw.net/badges/v1/bbbe0db0-a598-423e-86d0-f9fb98ca1933/3","title":"Prime Gaming","description":"Prime Gaming member"}]},{"title":"7TV","badges":[{"id":"b-sub","url":"https://cdn.7tv.app/badge/01F37R3RFR0000K96678WEQT01/4x.webp","title":"7TV Subscriber","name":"7TV Subscriber"}]}],"streamnook":{"slug":"streamnook-mobius","image_url":"https://cdn.streamnook.app/badges/streamnook-mobius.webp?v=2","label":"StreamNook Möbius"}}"##
         case "get_sub_standing":
             return #"{"state":"current","founder":false,"kind":"paid","tier":1,"months":14,"streak_months":6,"title":"Subscribed to NookCaster","detail":"Tier 1 · 14 months","gift_label":"Gift a sub","gift_url":"https://www.twitch.tv/subs/nookcaster?giftrecipient=chatter","months_unit":"months","tier_label":"Tier 1","facts":[{"kind":"streak","text":"6-month streak","art":null}],"badge_art":null,"next_badge":{"months":18,"months_left":4,"progress":0.66,"art":null,"text":"4 months to the 18-month badge"}}"#
         case "get_user_message_history_limited":
