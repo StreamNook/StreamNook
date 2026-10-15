@@ -89,7 +89,7 @@ struct ChatSettingsPanel: View {
     }
 
     private var youtube: some View {
-        SettingsBlock(title: "YouTube Chat", logo: "youtube", detail: "Settings that only apply to YouTube chat: which of its two feeds you read, and how Super Chat amounts show.") {
+        SettingsBlock(title: "YouTube Chat", logo: "youtube", shownTitle: "Chat", detail: "Settings that only apply to YouTube chat: which of its two feeds you read, and how Super Chat amounts show.") {
             ChoiceRow(title: "Feed", path: "youtube_chat_view", choices: [Choice("Live chat", "live"), Choice("Top chat", "top")],
                       fallback: "live",
                       detail: "Live chat shows everything, while Top chat is YouTube's own filtered view that keeps a very fast chat readable.",
@@ -334,7 +334,7 @@ struct ChatSettingsPanel: View {
                     .labelsHidden()
                     .tint(SN.accent)
             }
-            ToggleRow(title: "7TV paint", path: "chat_design.paint_mentions_in_body", fallback: true,
+            ToggleRow(title: "Paint", path: "chat_design.paint_mentions_in_body", fallback: true,
                       detail: "Draws a mentioned name in that person's 7TV paint instead of a flat color.",
                       help: "Off shows mentions in the chatter's plain name color.", logo: "7tv")
             ColorRow(title: "Thread color", path: "chat_design.reply_color", unset: "#ff6b6b",
@@ -373,7 +373,7 @@ struct ChatSettingsPanel: View {
             SliderRow(title: { "Spacing: \($0.fixed(3))rem" }, path: "chat_design.emote_margin", range: -0.5...0.5, step: 0.025,
                       fallback: 0.125, detail: "Space on each side of an emote; go negative to let neighboring emotes overlap.",
                       integer: false, accessibility: "Emote spacing")
-            ToggleRow(title: "7TV notices", path: "chat_design.seventv_emote_notices", fallback: true,
+            ToggleRow(title: "Notices", path: "chat_design.seventv_emote_notices", fallback: true,
                       detail: "Shows a chat notice when a mod adds, removes, or renames a 7TV emote in the channel.",
                       help: "The new emote is usable right away either way.", logo: "7tv")
         }
@@ -381,10 +381,10 @@ struct ChatSettingsPanel: View {
 
     private var emoteEffects: some View {
         SettingsBlock(title: "Emote Effects", detail: "Emotes that change the emote beside them, and Twitch's giant power-up emotes.") {
-            ToggleRow(title: "FFZ effects", path: "chat_design.ffz_emote_effects", fallback: true,
+            ToggleRow(title: "Effects", path: "chat_design.ffz_emote_effects", fallback: true,
                       detail: "Applies FrankerFaceZ modifiers (wide, flips, rainbow, shake) to the emote before them, the way FFZ does.",
                       help: "Off shows modifier emotes as plain overlay emotes.", logo: "ffz")
-            ToggleRow(title: "BetterTTV modifiers", path: "chat_design.bttv_emote_modifiers", fallback: true,
+            ToggleRow(title: "Modifiers", path: "chat_design.bttv_emote_modifiers", fallback: true,
                       detail: "Applies BetterTTV modifiers (w! wide, h! and v! flips, c! cursed, p! party, s! shake) to the emote after them, the way BetterTTV does.",
                       help: "Off shows the modifiers as plain emotes.", logo: "bttv")
             ToggleRow(title: "Giant emotes", path: "chat_design.giant_emotes", fallback: true,

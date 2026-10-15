@@ -9,6 +9,8 @@ struct CatalogRow: Decodable, Identifiable, Hashable {
     let title: String
     let paths: [String]
     let detail: String
+    /// The brand whose logo leads the title ("Paint" with 7TV's mark).
+    let logo: String?
 
     var id: String { "\(page)|\(section)|\(title)|\(paths.joined(separator: ","))" }
     var settingsSection: SettingsSection? { SettingsSection(rawValue: page) }
@@ -113,7 +115,10 @@ struct CatalogRowLabel: View {
             Image(systemName: row.settingsSection?.symbol ?? Symbol.disclosure)
                 .font(.system(size: 17)).foregroundStyle(SN.textSecondary).frame(width: 24)
             VStack(alignment: .leading, spacing: 2) {
-                Text(row.title).font(.snRowTitle).foregroundStyle(SN.textPrimary).lineLimit(1)
+                HStack(spacing: 5) {
+                    if let logo = row.logo { ProviderLogo(id: logo, size: 14) }
+                    Text(row.title).font(.snRowTitle).foregroundStyle(SN.textPrimary).lineLimit(1)
+                }
                 Text(row.place).font(.sn(12.5, 500)).foregroundStyle(SN.accent).lineLimit(1)
                 if !row.detail.isEmpty {
                     Text(row.detail).font(.snRowDetail).foregroundStyle(SN.textMuted).lineLimit(1)
@@ -149,7 +154,10 @@ struct ChangedPanel: View {
                         HStack(spacing: 4) {
                             Button { openSettingsRow(row, model: model) } label: {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(row.title).font(.sn(13, 500)).foregroundStyle(SN.textPrimary)
+                                    HStack(spacing: 5) {
+                                        if let logo = row.logo { ProviderLogo(id: logo, size: 13) }
+                                        Text(row.title).font(.sn(13, 500)).foregroundStyle(SN.textPrimary)
+                                    }
                                     Text(row.section).font(.sn(12)).foregroundStyle(SN.textSecondary)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)

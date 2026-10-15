@@ -12,6 +12,9 @@ import SwiftUI
 struct SettingsBlock<Content: View>: View {
     let title: String
     var logo: String?
+    /// The words shown when the logo already names the brand ("Chat" beside YouTube's mark);
+    /// `title` stays the section's name for scrolling and search.
+    var shownTitle: String?
     var detail: String?
     var bare = false
     @ViewBuilder let content: Content
@@ -21,7 +24,7 @@ struct SettingsBlock<Content: View>: View {
             // On the page's one left edge with the panels below (design-eye).
             HStack(spacing: 6) {
                 if let logo { ProviderLogo(id: logo, size: 13) }
-                Text(title).snSectionStyle()
+                Text(shownTitle ?? title).snSectionStyle()
             }
             if let detail {
                 Text(detail)

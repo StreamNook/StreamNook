@@ -7,7 +7,9 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const invoke = vi.fn();
+// Resolves by default: code that runs on a timer (the log forwarder) calls
+// invoke too, and a bare mock answering undefined made its `.catch` throw.
+const invoke = vi.fn(() => Promise.resolve(undefined as unknown));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 const addToast = vi.fn();
 vi.mock('../stores/AppStore', () => ({
@@ -20,6 +22,7 @@ import { COMMAND_DEFINITIONS, RESERVED_TRIGGERS } from './chatCommands';
 describe('/spam and /pyramid dispatch', () => {
   beforeEach(() => {
     invoke.mockReset();
+    invoke.mockResolvedValue(undefined);
     addToast.mockReset();
   });
 

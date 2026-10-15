@@ -21,6 +21,9 @@ pub struct CatalogRow {
     pub detail: String,
     #[serde(default)]
     pub aliases: Vec<String>,
+    /// The brand whose logo stands in for its name in the title (`7tv`, `ffz`, `bttv`).
+    #[serde(default)]
+    pub logo: Option<String>,
 }
 
 #[derive(Deserialize)]
