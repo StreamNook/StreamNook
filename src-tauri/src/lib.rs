@@ -45,7 +45,7 @@ use commands::{
     emotes::*, eventsub::*, ffz::*, gifs::*, helix::*, home_snapshot::*, hype_train::*, identity::*, justlog::*, layout::*,
     link_preview::*, logs::*, media_glow::*, mod_log_storage::*, modroom::*, overlay_file::*, plugins::*,
     profile_cache::*, provider_browse::*,
-    resub::*, session::*, settings::*, seventv::*, seventv_cosmetics::*,
+    resub::*, session::*, settings::*, settings_fields::*, settings_lists::*, settings_extras::*, seventv::*, seventv_cosmetics::*,
     seventv_cosmetics_fetch::*, song_id::*, spellcheck::*, streamnook_api::*, streaming::*, subscriptions::*,
     twitch::*,
     universal_cache::*,
@@ -837,6 +837,8 @@ pub fn run() {
 
     // Apply persisted diagnostic logging setting immediately after loading settings
     services::diagnostic_logger::apply_setting(settings.error_reporting_enabled);
+    // The low-latency engine follows the saved switch from the first stream on.
+    services::ll_origin::set_disabled(!settings.video_player.experimental_low_latency);
 
     // Initialize drops service with persisted settings (including priority_games for favorites)
     let drops_service = Arc::new(TokioMutex::new(DropsService::new_with_settings(
@@ -1044,6 +1046,7 @@ pub fn run() {
             #[cfg(mobile)]
             if let Ok(loaded) = load_settings_from_file() {
                 services::diagnostic_logger::apply_setting(loaded.error_reporting_enabled);
+                services::ll_origin::set_disabled(!loaded.video_player.experimental_low_latency);
                 let drops_settings = loaded.drops.clone();
                 if let Ok(mut s) = settings_arc.lock() {
                     *s = loaded;
@@ -1947,6 +1950,16 @@ pub fn run() {
             complete_setup,
             set_chat_user_hidden,
             set_chat_user_override,
+            get_settings_view,
+            set_settings_fields,
+            reset_settings,
+            edit_settings_list,
+            get_community_invite,
+            get_followed_channels_for_alerts,
+            add_custom_sound,
+            delete_custom_sound,
+            get_theme_catalog,
+            get_active_theme,
             get_settings_dir,
             open_settings_folder,
             export_settings,

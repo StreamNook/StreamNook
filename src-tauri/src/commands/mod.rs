@@ -64,6 +64,9 @@ pub mod screen_capture;
 pub mod session;
 pub mod slash_commands;
 pub mod settings;
+pub mod settings_fields;
+pub mod settings_lists;
+pub mod settings_extras;
 pub mod seventv;
 pub mod song_id;
 // Cosmetics (7TV paints/badges apply + auth status) are kept on mobile; only the
