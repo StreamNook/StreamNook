@@ -75,10 +75,10 @@ struct SignedOutLanding: View {
                 .padding(.bottom, 8)
             Text(shownReason ?? "Watch Twitch with your emotes, badges, and cosmetics everywhere.")
                 .font(.snBody)
-                .foregroundStyle(SN.textMuted)
+                .foregroundStyle(SN.textSecondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 280)
-                .padding(.bottom, 40)
+                .padding(.bottom, 32)
             SignInButton(model: model, again: shownReason != nil)
         }
         .padding(.horizontal, 32)
@@ -86,11 +86,13 @@ struct SignedOutLanding: View {
     }
 }
 
-/// "Sign in with Twitch": a glass button, full width up to 320 points, that opens Twitch's own
-/// sign-in pages in a sheet.
+/// "Sign in with Twitch": Twitch's purple with its glyph, full width up to 320 points, the same
+/// button everywhere the app asks for the sign-in. It opens Twitch's own sign-in pages in a sheet.
 struct SignInButton: View {
     let model: AppModel
     var again = false
+    /// Inside a panel it spans the panel; on its own it stops at 320 points.
+    var maxWidth: CGFloat = 320
 
     private var busy: Bool { model.signIn.busy }
 
@@ -98,16 +100,18 @@ struct SignInButton: View {
         Button {
             Task { await model.signIn.begin(core: model.core) }
         } label: {
-            Text(busy ? "Signing in…" : again ? "Sign in again" : "Sign in with Twitch")
-                .font(.snRowStrong)
-                .foregroundStyle(SN.textPrimary)
-                .frame(maxWidth: 320)
-                .frame(height: 48)
+            HStack(spacing: 10) {
+                if busy {
+                    ProgressView().tint(.white)
+                } else {
+                    PlatformMark(platform: .twitch, size: 18, color: .white)
+                }
+                Text(busy ? "Waiting for sign-in" : again ? "Sign in again" : "Sign in with Twitch")
+            }
         }
-        .buttonStyle(.glass)
-        .buttonBorderShape(.capsule)
+        .buttonStyle(.snBrand(SN.twitch))
+        .frame(maxWidth: maxWidth)
         .disabled(busy || !model.started)
-        .opacity(busy ? 0.6 : 1)
     }
 }
 
@@ -120,7 +124,7 @@ struct SignInNote: View {
         VStack(spacing: 16) {
             Text(text)
                 .font(.snBody)
-                .foregroundStyle(SN.textMuted)
+                .foregroundStyle(SN.textSecondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 300)
             SignInButton(model: model)

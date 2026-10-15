@@ -97,9 +97,9 @@ private struct ConnectDropsCard: View {
     let connect: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: Symbol.gift).font(.system(size: 17)).foregroundStyle(SN.accent)
+                Image(systemName: Symbol.gift).font(.system(size: 15, weight: .semibold)).foregroundStyle(SN.accent)
                 Text("Twitch Drops").font(.snRowStrong).foregroundStyle(SN.textPrimary)
             }
             Text("Connect drops to track campaign progress and earn while you watch.")
@@ -107,19 +107,16 @@ private struct ConnectDropsCard: View {
                 .foregroundStyle(SN.textSecondary)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 6)
+                .padding(.bottom, 16)
             Button(action: connect) {
                 HStack(spacing: 6) {
-                    Text(connecting ? "Connecting…" : "Connect drops").font(.sn(14, 600))
-                    Image(systemName: Symbol.openOutside).font(.system(size: 14))
+                    Text(connecting ? "Connecting…" : "Connect drops")
+                    Image(systemName: Symbol.openOutside).font(.system(size: 14, weight: .semibold))
                 }
-                .foregroundStyle(SN.textPrimary)
-                .frame(maxWidth: .infinity)
-                .frame(height: 44)
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.capsule)
+            .buttonStyle(.snPrimary)
             .disabled(connecting)
-            .opacity(connecting ? 0.6 : 1)
         }
         .padding(16)
         .snPanel()
@@ -132,9 +129,9 @@ private struct SignedOutRewards: View {
     let model: AppModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: Symbol.gift).font(.system(size: 17)).foregroundStyle(SN.accent)
+                Image(systemName: Symbol.gift).font(.system(size: 15, weight: .semibold)).foregroundStyle(SN.accent)
                 Text("Drops and badges").font(.snRowStrong).foregroundStyle(SN.textPrimary)
             }
             Text("Sign in with Twitch to follow your drop campaigns and see which badges you can still earn.")
@@ -142,8 +139,9 @@ private struct SignedOutRewards: View {
                 .foregroundStyle(SN.textSecondary)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
-            SignInButton(model: model)
-                .frame(maxWidth: .infinity)
+                .padding(.top, 6)
+                .padding(.bottom, 16)
+            SignInButton(model: model, maxWidth: .infinity)
         }
         .padding(16)
         .snPanel()

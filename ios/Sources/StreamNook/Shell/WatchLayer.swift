@@ -107,6 +107,9 @@ struct WatchLayer: View {
             guard controlsShown else { return }
             try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled else { return }
+            #if DEBUG
+            if Drive.pinsControls { return }
+            #endif
             withAnimation(SNMotion.run(.easeOut(duration: 0.2))) { controlsShown = false }
         }
     }
