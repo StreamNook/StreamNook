@@ -274,7 +274,7 @@ private struct FontCard: View {
                             .buttonStyle(.plain).frame(minHeight: 32)
                     }
                 }
-                Text("Any free font from fonts.google.com works, just type its exact name. Fonts installed on this PC work too, with no download.")
+                Text("Any free font from fonts.google.com works, just type its exact name.")
                     .font(.sn(12)).foregroundStyle(SN.textMuted).fixedSize(horizontal: false, vertical: true)
             }
         }

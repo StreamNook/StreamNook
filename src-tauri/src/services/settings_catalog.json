@@ -1817,7 +1817,7 @@
    ],
    "nested": false,
    "logo": null,
-   "detail": "Loads emotes and badges from disk: a copy is stored on this PC after the first download so later channel loads are near instant. Off means every launch fetches them again.",
+   "detail": "Loads emotes and badges from disk: a copy is stored on this iPhone after the first download so later channel loads are near instant. Off means every launch fetches them again.",
    "aliases": [
     "storage",
     "emote cache"
@@ -1881,7 +1881,7 @@
    "paths": [],
    "nested": false,
    "logo": null,
-   "detail": "Saves your logs as one zip in Downloads, or sends it straight to an app, so you can attach it to a bug report.",
+   "detail": "Shares your logs as one zip, so you can save it to Files or send it straight to an app for a bug report.",
    "aliases": [
     "share logs",
     "bug report"

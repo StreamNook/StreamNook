@@ -250,7 +250,7 @@ struct LinkSettings: View {
         SettingsBlock(title: "Links", detail: "How links in chat look, and which sites expand into a preview card on their own.") {
             WideRow(title: "Style",
                     detail: "Off keeps links as plain text, Card + Link adds a preview card under the link, and Clean shows only the card.",
-                    help: "In Clean, hover the card to see where it goes. StreamNook fetches the page from your PC to build the card, so the site sees a visit from you. Trusted sites expand on their own; every other link shows a Load preview button, and the shield on that button trusts the site from chat. Popular sites are trusted out of the box.",
+                    help: "In Clean, hover the card to see where it goes. StreamNook fetches the page from your iPhone to build the card, so the site sees a visit from you. Trusted sites expand on their own; every other link shows a Load preview button, and the shield on that button trusts the site from chat. Popular sites are trusted out of the box.",
                     paths: ["chat_design.link_previews", "chat_design.link_preview_keep_link"]) {
                 SettingSegments(choices: [Choice("Off", "off"), Choice("Card + Link", "with_link"), Choice("Clean", "clean")],
                                 selected: style, accessibility: "Link style") { value in

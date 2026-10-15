@@ -150,7 +150,7 @@ struct NotificationsPanel: View {
                     Divider().overlay(SN.borderSubtle)
                     VStack(alignment: .leading, spacing: 8) {
                         Text("How often to check").font(.sn(14)).foregroundStyle(SN.textPrimary)
-                        Text("Checking less often uses less battery. Android may still wait longer than this.")
+                        Text("Checking less often uses less battery. Your iPhone may still wait longer than this.")
                             .font(.sn(12)).foregroundStyle(SN.textMuted)
                         SettingSegmentsBound(path: "live_notifications.background_interval_minutes",
                                              choices: [Choice("15 min", "15"), Choice("30 min", "30"), Choice("60 min", "60")],
@@ -183,14 +183,14 @@ struct NotificationsPanel: View {
         switch status {
         case .authorized, .provisional, .ephemeral:
             card(symbol: "bell", tint: SN.accent, title: "System notifications",
-                 body: "StreamNook can post to your notification shade.", allow: false, settingsLabel: "Sounds and categories in Android")
+                 body: "StreamNook can send notifications to this iPhone.", allow: false, settingsLabel: "Sounds and banners in iPhone Settings")
         case .notDetermined:
             card(symbol: "exclamationmark.triangle.fill", tint: SN.warning, title: "Notifications are not allowed yet",
-                 body: "Allow notifications so alerts reach you when StreamNook is closed.", allow: true, settingsLabel: "Open system settings")
+                 body: "Allow notifications so alerts reach you when StreamNook is closed.", allow: true, settingsLabel: "Open iPhone Settings")
         case .denied:
             card(symbol: "exclamationmark.triangle.fill", tint: SN.warning, title: "Notifications are not allowed yet",
-                 body: "Android will not ask again, so this has to be turned on in system settings.", allow: false,
-                 settingsLabel: "Open system settings")
+                 body: "Your iPhone will not ask again, so turn notifications on for StreamNook in Settings.", allow: false,
+                 settingsLabel: "Open iPhone Settings")
         default:
             EmptyView()
         }
@@ -347,7 +347,7 @@ struct CachePanel: View {
     var body: some View {
         SettingsBlock(title: "Cache", detail: "Keeps emotes, badges, and channel details on disk so chat loads without fetching them again. Come here to check how much is stored or start fresh.") {
             ToggleRow(title: "Disk cache", path: "cache.enabled", fallback: true,
-                      detail: "Loads emotes and badges from disk: a copy is stored on this PC after the first download so later channel loads are near instant. Off means every launch fetches them again.",
+                      detail: "Loads emotes and badges from disk: a copy is stored on this iPhone after the first download so later channel loads are near instant. Off means every launch fetches them again.",
                       help: "Uses a little disk space in the app data folder and nothing else. Turning it off does not delete what is already stored; use Clear cache below for that.")
             SliderRow(title: { "Refresh after: \(Int($0)) days" }, path: "cache.expiry_days", range: 1...30, step: 1, fallback: 7,
                       detail: "Anything older than this is fetched again the next time it is needed, so new emotes and badge art show up on their own.",
@@ -531,7 +531,7 @@ struct SupportPanel: View {
                           detail: "Records connection, playback, and chat activity to streamnook.log on this device so a problem can be traced after the fact.",
                           help: "Leave it on if you might report a bug; with it off the log holds almost nothing worth sending. The file stays on your device until you choose to share it.")
                 WideRow(title: "Log export",
-                        detail: "Saves your logs as one zip in Downloads, or sends it straight to an app, so you can attach it to a bug report.") {
+                        detail: "Shares your logs as one zip, so you can save it to Files or send it straight to an app for a bug report.") {
                     SettingButton(title: "Share", symbol: "square.and.arrow.up") { Task { await export() } }
                         .padding(.top, 10)
                 }

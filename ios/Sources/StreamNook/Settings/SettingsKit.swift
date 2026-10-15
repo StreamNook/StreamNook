@@ -46,6 +46,7 @@ struct SettingsBlock<Content: View>: View {
                         }
                     }
                     .padding(.horizontal, 16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .snPanel()
                 }
             }
