@@ -172,7 +172,13 @@ pub fn ad_state() -> AdDetectionState {
     AD_STATE.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+/// Whether the solo relay has served a stabilized whole-segment playlist for
+/// the current upstream: the condition for splicing a rendition switch into
+/// it (`adapt_upstream`).
+static SOLO_STABILIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn reset_ad_state() {
+    SOLO_STABILIZED.store(false, std::sync::atomic::Ordering::Relaxed);
     *AD_STATE.lock().unwrap_or_else(|e| e.into_inner()) = AdDetectionState::default();
     // Tear down the LL-HLS origin (background reader + live edge) for the old stream.
     crate::services::ll_origin::stop();
@@ -595,6 +601,49 @@ pub async fn swap_upstream(playlist_url: String) -> Result<()> {
         channel
     );
     Ok(())
+}
+
+/// Tell the player what `link_adapt` decided (`playback-adapt`).
+pub fn emit_playback_adapt(event: &crate::services::link_adapt::AdaptEvent) {
+    if let Some(app) = APP_HANDLE.get() {
+        let _ = app.emit("playback-adapt", event);
+    }
+}
+
+/// Move the live solo stream to another rendition of the same broadcast.
+///
+/// On the whole-segment path the switch is spliced into the playlist the
+/// player is already polling (`hls_projection::begin_switch`): no reload, the
+/// segments after the last one it fetched simply come from the new rendition.
+/// That needs a stabilized
+/// playlist, the parts origin off, and the same decoder (`same_decoder`).
+/// Otherwise the relay restarts on the new rendition and the returned URL is
+/// the one the player reloads on.
+pub async fn adapt_upstream(playlist_url: &str, same_decoder: bool) -> Result<Option<String>> {
+    if !solo_session_active() {
+        anyhow::bail!("no live solo relay session");
+    }
+    let splice = same_decoder
+        && SOLO_STABILIZED.load(std::sync::atomic::Ordering::Relaxed)
+        && !crate::services::ll_origin::is_active();
+    if splice {
+        crate::services::hls_projection::begin_switch(SOLO_STREAM_ID);
+        *PROXY_URL.lock().await = Some(playlist_url.to_string());
+        // Record the new rendition's segments now rather than at the player's
+        // next poll, so a fetch in between already gets them. Skipped during
+        // an ad break: the next poll records them through the ad filter.
+        if !ad_state().ads_present {
+            if let Ok(res) = HTTP_CLIENT.get(playlist_url).send().await {
+                if let Ok(text) = res.text().await {
+                    let base = crate::services::hls_projection::base_url_of(playlist_url);
+                    let _ = crate::services::hls_projection::stabilize(SOLO_STREAM_ID, &text, &base);
+                }
+            }
+        }
+        return Ok(None);
+    }
+    let port = StreamServer::start_proxy_server(playlist_url.to_string()).await?;
+    Ok(Some(crate::commands::streaming::local_player_url(port)))
 }
 
 impl StreamServer {
@@ -1146,6 +1195,7 @@ impl StreamServer {
                     ));
                 }
                 bytes = if stabilize_ok {
+                    SOLO_STABILIZED.store(true, std::sync::atomic::Ordering::Relaxed);
                     let base = crate::services::hls_projection::base_url_of(&manifest_url);
                     crate::services::hls_projection::stabilize(SOLO_STREAM_ID, &work, &base)
                         .into_bytes()
@@ -1267,6 +1317,7 @@ impl StreamServer {
         *CURRENT_PORT.lock().await = None;
         reset_ad_state();
         set_solo_session(None);
+        crate::services::link_adapt::end();
         Ok(())
     }
 

@@ -48,6 +48,11 @@ const RETAIN: u64 = 120;
 struct SessionProj {
     map: BTreeMap<u64, String>,
     last_media_seq: Option<u64>,
+    /// The newest sequence number the player has fetched (through a redirect).
+    requested: Option<u64>,
+    /// The first sequence number of the rendition switched to last
+    /// (`begin_switch`); recorded segments below it keep their rendition.
+    switch_floor: Option<u64>,
 }
 
 static PROJECTIONS: Lazy<Mutex<HashMap<String, SessionProj>>> =
@@ -58,6 +63,24 @@ static PROJECTIONS: Lazy<Mutex<HashMap<String, SessionProj>>> =
 /// window. Safe to call when no state exists.
 pub fn reset(sid: &str) {
     PROJECTIONS.lock().unwrap().remove(sid);
+}
+
+/// The relay is about to poll a different rendition of the same broadcast
+/// (`link_adapt`). Every segment the player has already fetched keeps its
+/// rendition; every later one, listed or not, resolves to the new rendition
+/// from the next playlist recorded on. Nothing the player can see changes:
+/// the synthetic paths, sequence numbers and discontinuity counts stay the
+/// same, so hls.js accepts every refresh. That holds because Twitch's
+/// renditions are cut from one timeline (the same sequence numbers, programme
+/// dates and presentation timestamps), and hls.js builds a new init segment
+/// when the resolution changes inside one discontinuity run. Starting at the
+/// player's position rather than after the newest listed segment matters on a
+/// slow link: a player that has fallen behind would otherwise still owe
+/// several segments of the rendition it could not carry.
+pub fn begin_switch(sid: &str) {
+    let mut projections = PROJECTIONS.lock().unwrap();
+    let proj = projections.entry(sid.to_string()).or_default();
+    proj.switch_floor = Some(proj.requested.map_or(0, |r| r + 1));
 }
 
 /// Resolve a (possibly relative) segment URI against the upstream manifest base.
@@ -108,6 +131,8 @@ pub fn stabilize(sid: &str, playlist: &str, base_url: &str) -> String {
             // a synthetic path could resolve to dead content. Clear and reseed.
             if proj.last_media_seq.is_some_and(|prev| sn < prev) {
                 proj.map.clear();
+                proj.requested = None;
+                proj.switch_floor = None;
             }
             proj.last_media_seq = Some(sn);
             out.push_str(line);
@@ -120,7 +145,12 @@ pub fn stabilize(sid: &str, playlist: &str, base_url: &str) -> String {
             // The segment URI for the preceding #EXTINF: record the real URL,
             // emit the stable synthetic path in its place.
             expect_uri = false;
-            proj.map.insert(sn, resolve_segment_url(trimmed, base_url));
+            // Below a rendition switch, a segment the player already has keeps
+            // the URL it was fetched from.
+            let fetched = proj.switch_floor.is_some_and(|f| sn < f) && proj.map.contains_key(&sn);
+            if !fetched {
+                proj.map.insert(sn, resolve_segment_url(trimmed, base_url));
+            }
             max_sn = Some(sn);
             out.push_str(&format!("{VSEG_PREFIX}{sid}/{sn}.ts\n"));
             sn += 1;
@@ -158,11 +188,11 @@ pub fn parse_vseg_path(request_path: &str) -> Option<(String, u64)> {
 /// The freshest real CDN URL recorded for `(sid, sn)`, for a 302 redirect.
 /// `None` if the session/sn is unknown (the request 404s, and hls.js retries).
 pub fn redirect_target(sid: &str, sn: u64) -> Option<String> {
-    PROJECTIONS
-        .lock()
-        .unwrap()
-        .get(sid)
-        .and_then(|p| p.map.get(&sn).cloned())
+    let mut projections = PROJECTIONS.lock().unwrap();
+    let proj = projections.get_mut(sid)?;
+    let url = proj.map.get(&sn).cloned()?;
+    proj.requested = Some(proj.requested.map_or(sn, |r| r.max(sn)));
+    Some(url)
 }
 
 #[cfg(test)]
@@ -387,5 +417,62 @@ mod tests {
         // Both checks hold after stabilization: url-path AND cc agree for sn 11/12.
         assert_refresh_consistent(&s_n, &s_n1, "cc-preserve");
         clear("cc");
+    }
+    // ── Rendition switches (link_adapt) ──
+
+    fn window(first: u64, n: u64, tag: &str) -> String {
+        let mut pl = format!("#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:{first}\n");
+        for sn in first..first + n {
+            pl.push_str(&format!("#EXTINF:2.000,live\nhttps://cdn/{tag}/{sn}.ts?s={first}\n"));
+        }
+        pl
+    }
+
+    #[test]
+    fn a_switch_starts_right_after_what_the_player_fetched() {
+        clear("sw");
+        let a = stabilize("sw", &window(100, 6, "hi"), "https://cdn/");
+        // The player has fetched up to 102; 103..105 are listed but not fetched.
+        assert!(redirect_target("sw", 101).is_some());
+        assert!(redirect_target("sw", 102).is_some());
+        begin_switch("sw");
+        let b = stabilize("sw", &window(101, 6, "lo"), "https://cdn/");
+        // The player sees nothing change: same paths, no discontinuity.
+        assert_refresh_consistent(&a, &b, "switch");
+        assert!(!b.contains("DISCONTINUITY"));
+        assert_eq!(redirect_target("sw", 102).as_deref(), Some("https://cdn/hi/102.ts?s=100"));
+        assert_eq!(redirect_target("sw", 103).as_deref(), Some("https://cdn/lo/103.ts?s=101"));
+        assert_eq!(redirect_target("sw", 106).as_deref(), Some("https://cdn/lo/106.ts?s=101"));
+        // Later polls keep the fetched ones as they were.
+        let c = stabilize("sw", &window(102, 6, "lo"), "https://cdn/");
+        assert_refresh_consistent(&b, &c, "slide");
+        assert_eq!(redirect_target("sw", 102).as_deref(), Some("https://cdn/hi/102.ts?s=100"));
+        clear("sw");
+    }
+
+    #[test]
+    fn a_switch_before_any_fetch_moves_everything() {
+        clear("sw0");
+        stabilize("sw0", &window(10, 3, "hi"), "https://cdn/");
+        begin_switch("sw0");
+        stabilize("sw0", &window(10, 3, "lo"), "https://cdn/");
+        assert_eq!(redirect_target("sw0", 10).as_deref(), Some("https://cdn/lo/10.ts?s=10"));
+        clear("sw0");
+    }
+
+    #[test]
+    fn switching_back_keeps_each_fetched_segment_on_its_own_rendition() {
+        clear("sw2");
+        stabilize("sw2", &window(1, 4, "a"), "https://cdn/");
+        redirect_target("sw2", 2);
+        begin_switch("sw2");
+        stabilize("sw2", &window(1, 4, "b"), "https://cdn/");
+        redirect_target("sw2", 3);
+        begin_switch("sw2");
+        stabilize("sw2", &window(2, 4, "c"), "https://cdn/");
+        assert_eq!(redirect_target("sw2", 2).as_deref(), Some("https://cdn/a/2.ts?s=1"));
+        assert_eq!(redirect_target("sw2", 3).as_deref(), Some("https://cdn/b/3.ts?s=1"));
+        assert_eq!(redirect_target("sw2", 4).as_deref(), Some("https://cdn/c/4.ts?s=2"));
+        clear("sw2");
     }
 }
