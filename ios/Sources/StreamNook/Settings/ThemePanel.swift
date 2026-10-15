@@ -144,14 +144,14 @@ private struct ThemeCard: View {
         let p = card.palette
         Button(action: pick) {
             VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 4) {
+                HStack(spacing: 3) {
                     ForEach([p.accent, p.highlightPink, p.highlightPurple, p.highlightBlue, p.highlightGreen].indices, id: \.self) { i in
                         Circle().fill([p.accent, p.highlightPink, p.highlightPurple, p.highlightBlue, p.highlightGreen][i].color)
-                            .frame(width: 12, height: 12)
+                            .frame(width: 10, height: 10)
                     }
                 }
                 Text(card.name).font(.sn(13, 600)).foregroundStyle(p.textPrimary.color).lineLimit(1).minimumScaleFactor(0.8)
-                Text(card.description).font(.sn(11)).foregroundStyle(p.textSecondary.color).lineLimit(2)
+                Text(card.description).font(.sn(11)).foregroundStyle(p.textSecondary.color).lineLimit(3)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(10)
@@ -192,7 +192,7 @@ private struct GlassinessCard: View {
                 Image(systemName: "drop").font(.system(size: 16)).foregroundStyle(SN.textSecondary)
                 SettingTitle(title: "Glassiness", paths: ["glass_transparency"], helpOpen: .constant(false), font: .sn(14, 600))
                 Spacer()
-                Text("\(Int(live ?? stored))%").font(.system(size: 13, design: .monospaced)).foregroundStyle(SN.textSecondary)
+                Text("\(Int(live ?? stored))%").font(.sn(13, 500).monospacedDigit()).foregroundStyle(SN.textSecondary)
             }
             Slider(value: Binding(get: { live ?? stored }, set: { value in
                 live = value
@@ -212,7 +212,7 @@ private struct GlassinessCard: View {
                 Spacer()
                 Text("Frosted glass")
             }
-            .font(.sn(10)).foregroundStyle(SN.textMuted)
+            .font(.sn(12)).foregroundStyle(SN.textMuted)
             Text("How see-through and frosted every surface is, for every theme. 100% is the signature glass; 0% removes all transparency and blur for a completely flat, solid look.")
                 .font(.sn(12)).foregroundStyle(SN.textMuted).fixedSize(horizontal: false, vertical: true)
         }

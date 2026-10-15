@@ -259,12 +259,7 @@ struct ChatSettingsPanel: View {
                       help: "A channel that uploads its own moderator and VIP badges to FrankerFaceZ shows them in its chat instead of the standard ones. Who is a moderator or VIP still comes from Twitch. Turn it off to see the standard badges everywhere.") {
                 NestedToggle(title: "Custom mod & VIP badges", path: "chat_design.ffz_custom_role_badges", fallback: true, logo: "ffz")
             }
-            SettingRow(title: "Badge size", detail: "How big badges draw, relative to the text.", paths: ["chat_design.badge_scale"]) {
-                BadgeScaleSlider()
-                    .frame(width: 180)
-                    .disabled(!store.bool("chat_design.show_badges", true) && !store.bool("chat_design.show_third_party_badges", true))
-                    .opacity(!store.bool("chat_design.show_badges", true) && !store.bool("chat_design.show_third_party_badges", true) ? 0.4 : 1)
-            }
+            BadgeScaleRow(enabled: store.bool("chat_design.show_badges", true) || store.bool("chat_design.show_third_party_badges", true))
             ToggleRow(title: "Add-on badges", path: "chat_design.show_third_party_badges", fallback: true,
                       detail: "Badges from 7TV, FFZ, Chatterino, Homies and the other badge services, plus StreamNook membership badges.",
                       help: "Services turns individual badge services off. Lit means shown.") {
@@ -538,13 +533,25 @@ struct ChatSettingsPanel: View {
     }
 }
 
-/// Badge size: an inline slider with its "1.00x" readout.
-private struct BadgeScaleSlider: View {
+/// Badge size: the "1.00x" readout on the title line, the slider full width below; dimmed while
+/// neither kind of badge shows.
+private struct BadgeScaleRow: View {
+    @Environment(SettingsStore.self) private var store
+    let enabled: Bool
     @State private var live: Double?
 
     var body: some View {
-        SettingSlider(path: "chat_design.badge_scale", range: 0.5...2.5, step: 0.05, fallback: 1, accessibility: "Badge size",
-                      readout: { "\($0.fixed(2))x" }, integer: false, live: $live)
+        let value = live ?? min(max(store.double("chat_design.badge_scale", 1), 0.5), 2.5)
+        SettingRow(title: "Badge size", detail: "How big badges draw, relative to the text.", paths: ["chat_design.badge_scale"],
+                   trailing: { SliderReadout(text: "\(value.fixed(2))x") },
+                   below: {
+                       SettingSlider(path: "chat_design.badge_scale", range: 0.5...2.5, step: 0.05, fallback: 1,
+                                     accessibility: "Badge size", integer: false, live: $live)
+                           .padding(.top, 10)
+                           .disabled(!enabled)
+                           .opacity(enabled ? 1 : 0.4)
+                   },
+                   nested: { EmptyView() })
     }
 }
 
@@ -713,8 +720,8 @@ private struct RemindersNote: View {
     var body: some View {
         SettingsBlock(title: "Reminders", detail: "Post a message into a streamer's chat on your behalf to nudge them about something: on a repeating timer, after a delay, at a set time, once the stream hits an uptime, or when a keyword shows up in chat. You can also fire one off instantly with /remind now <message>.", bare: true) {
             Text("Reminders are set up and posted from StreamNook on your computer.")
-                .font(.sn(12))
-                .foregroundStyle(SN.textMuted)
+                .font(.sn(13)).foregroundStyle(SN.textSecondary).multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity).padding(16).snPanel()
         }
     }
 }

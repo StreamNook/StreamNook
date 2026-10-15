@@ -814,16 +814,23 @@ struct CustomCommandsSettings: View {
     var body: some View {
         let commands = store.list(path)
         let triggers = commands.map { ($0["trigger"] as? String ?? "").lowercased() }
-        SettingsBlock(title: "Custom Commands", bare: true) {
-            HStack(alignment: .top) {
-                Text("Define your own commands. A trigger of `lurk` with expansion `I'm lurking, BRB` means typing `/lurk` sends that message instead.")
-                    .font(.sn(12)).foregroundStyle(SN.textSecondary)
-                Spacer(minLength: 8)
-                Button(reference ? "Hide reference" : "Show reference", systemImage: "book") {
-                    withAnimation(SNMotion.run(.easeOut(duration: 0.2))) { reference.toggle() }
+        SettingsBlock(title: "Custom Commands", accessory: AnyView(
+            Button {
+                withAnimation(SNMotion.run(.easeOut(duration: 0.2))) { reference.toggle() }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "book").font(.system(size: 11))
+                    Text(reference ? "Hide reference" : "Show reference")
                 }
-                .font(.sn(12, 600)).foregroundStyle(SN.accent).buttonStyle(.plain)
+                .font(.sn(12, 500)).foregroundStyle(SN.textSecondary)
+                .frame(minHeight: 32)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+        ), bare: true) {
+            Text("Define your own commands. A trigger of `lurk` with expansion `I'm lurking, BRB` means typing `/lurk` sends that message instead.")
+                .font(.sn(12)).foregroundStyle(SN.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
             if reference { CommandReference() }
             if commands.isEmpty {
                 EmptyListCard(text: "No custom commands yet.", button: "Add your first command") { Task { _ = await store.add(path) } }
@@ -955,7 +962,8 @@ struct NicknamesSettings: View {
         SettingsBlock(title: "Nicknames", detail: "Nicknames you've set for individual chatters. Only visible to you. Set or clear a nickname from the user's profile card in chat.", bare: true) {
             if overrides.isEmpty {
                 Text("No overrides yet. Click any user's name in chat to open their profile card, then set a nickname.")
-                    .font(.sn(12)).foregroundStyle(SN.textMuted)
+                    .font(.sn(13)).foregroundStyle(SN.textSecondary).multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity).padding(16).snPanel()
             } else {
                 ForEach(overrides, id: \.id) { item in
                     let name = item.entry["username"] as? String ?? item.id

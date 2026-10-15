@@ -111,23 +111,28 @@ struct CatalogRowLabel: View {
     var trailing: AnyView?
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .settingTitle, spacing: 12) {
             Image(systemName: row.settingsSection?.symbol ?? Symbol.disclosure)
                 .font(.system(size: 17)).foregroundStyle(SN.textSecondary).frame(width: 24)
+                .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
                     if let logo = row.logo { ProviderLogo(id: logo, size: 14) }
                     Text(row.title).font(.snRowTitle).foregroundStyle(SN.textPrimary).lineLimit(1)
                 }
-                Text(row.place).font(.sn(12.5, 500)).foregroundStyle(SN.accent).lineLimit(1)
+                .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
+                Text(row.place).font(.sn(12.5, 500)).foregroundStyle(SN.textSecondary).lineLimit(1)
                 if !row.detail.isEmpty {
                     Text(row.detail).font(.snRowDetail).foregroundStyle(SN.textMuted).lineLimit(1)
                 }
             }
             Spacer(minLength: 8)
-            if let trailing { trailing } else {
-                Image(systemName: Symbol.disclosure).font(.system(size: 13, weight: .semibold)).foregroundStyle(SN.textMuted)
+            Group {
+                if let trailing { trailing } else {
+                    Image(systemName: Symbol.disclosure).font(.system(size: 13, weight: .semibold)).foregroundStyle(SN.textMuted)
+                }
             }
+            .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -152,13 +157,14 @@ struct ChangedPanel: View {
                 ForEach(SettingsSection.allCases.filter { page in rows.contains { $0.page == page.rawValue } }) { page in
                     SettingsBlock(title: page.title) {
                         ForEach(rows.filter { $0.page == page.rawValue }) { row in
-                            HStack(spacing: 4) {
+                            HStack(alignment: .settingTitle, spacing: 4) {
                                 Button { openSettingsRow(row, model: model) } label: {
                                     VStack(alignment: .leading, spacing: 2) {
                                         HStack(spacing: 5) {
                                             if let logo = row.logo { ProviderLogo(id: logo, size: 13) }
                                             Text(row.title).font(.sn(13, 500)).foregroundStyle(SN.textPrimary)
                                         }
+                                        .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
                                         Text(row.section).font(.sn(12)).foregroundStyle(SN.textSecondary)
                                     }
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -174,6 +180,8 @@ struct ChangedPanel: View {
                                             await load()
                                         }
                                     }
+                                    .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
+                                    .padding(.trailing, -16)
                                 }
                             }
                         }

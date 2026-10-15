@@ -165,10 +165,16 @@ struct NestedSlider: View {
     var integer = true
     @State private var live: Double?
 
+    @Environment(SettingsStore.self) private var store
+
     var body: some View {
-        NestedLine(title: title, paths: [path], stacked: true) {
+        let stored = min(max(store.double(path, fallback), range.lowerBound), range.upperBound)
+        VStack(alignment: .leading, spacing: 8) {
+            NestedLine(title: title, paths: [path]) {
+                SliderReadout(text: readout(live ?? stored))
+            }
             SettingSlider(path: path, range: range, step: step, fallback: fallback, accessibility: title,
-                          readout: readout, integer: integer, live: $live)
+                          integer: integer, live: $live)
         }
     }
 }

@@ -101,27 +101,24 @@ private struct TargetLatencyRow: View {
     var body: some View {
         let path = "video_player.ll_target_latency"
         let stored = store.value(path).flatMap(SettingsPath.double)
-        WideRow(title: "Target latency",
+        SettingRow(title: "Target latency",
                    detail: "How close to live the player stays: how far behind the live edge it rides; lower is closer to live. Auto picks a gap that suits each channel (reopen the stream to apply).",
                    help: "Auto rides 1.5s behind on channels the low-latency engine serves, 3.0s on other low-latency broadcasts and 5.0s on normal-latency ones. Set your own number to override all three; the lowest gaps need a solid connection to stay smooth.",
-                   paths: [path]) {
-            HStack(spacing: 10) {
-                Slider(value: Binding(get: { live ?? stored ?? 1.5 }, set: { live = ($0 * 10).rounded() / 10 }),
-                       in: 1...10, step: 0.1) { editing in
-                    guard !editing, let value = live else { return }
-                    Task {
-                        await store.set(path, value)
-                        live = nil
-                    }
-                }
-                .tint(SN.accent)
-                .accessibilityLabel("Target latency")
-                Text(live.map { "\($0.fixed(1))s" } ?? stored.map { "\($0.fixed(1))s" } ?? "Auto")
-                    .font(.sn(12, 500).monospacedDigit())
-                    .foregroundStyle(SN.textPrimary)
-                    .frame(minWidth: 40, alignment: .trailing)
-            }
-            .padding(.top, 10)
-        }
+                   paths: [path],
+                   trailing: { SliderReadout(text: live.map { "\($0.fixed(1))s" } ?? stored.map { "\($0.fixed(1))s" } ?? "Auto") },
+                   below: {
+                       Slider(value: Binding(get: { live ?? stored ?? 1.5 }, set: { live = ($0 * 10).rounded() / 10 }),
+                              in: 1...10, step: 0.1) { editing in
+                           guard !editing, let value = live else { return }
+                           Task {
+                               await store.set(path, value)
+                               live = nil
+                           }
+                       }
+                       .tint(SN.accent)
+                       .accessibilityLabel("Target latency")
+                       .padding(.top, 10)
+                   },
+                   nested: { EmptyView() })
     }
 }

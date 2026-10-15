@@ -16,15 +16,21 @@ struct SettingsBlock<Content: View>: View {
     /// `title` stays the section's name for scrolling and search.
     var shownTitle: String?
     var detail: String?
+    /// A small action on the heading line (a "Show reference" link).
+    var accessory: AnyView?
     var bare = false
     @ViewBuilder let content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // On the page's one left edge with the panels below (design-eye).
-            HStack(spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 if let logo { ProviderLogo(id: logo, size: 13) }
                 Text(shownTitle ?? title).snSectionStyle()
+                if let accessory {
+                    Spacer(minLength: 8)
+                    accessory
+                }
             }
             if let detail {
                 Text(detail)
@@ -50,7 +56,7 @@ struct SettingsBlock<Content: View>: View {
                     .snPanel()
                 }
             }
-            .padding(.top, 10)
+            .padding(.top, 16)
         }
         .accessibilityElement(children: .contain)
         .id(title)
@@ -86,6 +92,7 @@ struct SettingTitle: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.vertical, -8)
+                .padding(.leading, -6)
                 .accessibilityLabel("More about this setting")
                 .accessibilityValue(helpOpen ? "Shown" : "Hidden")
             }
@@ -104,6 +111,7 @@ struct SettingTitle: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.vertical, -10)
+                .padding(.leading, -8)
                 .accessibilityLabel("Reset to default")
                 .transition(.opacity)
             }
@@ -309,7 +317,7 @@ struct SettingSegments: View {
     @Environment(\.snStill) private var still
 
     var body: some View {
-        HStack(spacing: 0) {
+        SegmentRow {
             ForEach(choices) { choice in
                 let on = choice.value == selected
                 Button {
@@ -319,7 +327,7 @@ struct SettingSegments: View {
                     Text(choice.label)
                         .font(.sn(13, 500))
                         .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+                        .minimumScaleFactor(0.85)
                         .foregroundStyle(on ? SN.textPrimary : SN.textMuted)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 6)
@@ -351,6 +359,30 @@ struct SettingSegments: View {
         .animation(still ? nil : SNMotion.run(.spring(response: 0.28, dampingFraction: 0.72)), value: selected)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibility)
+    }
+}
+
+/// Lays segments out in one row: each gets the width its label needs plus an equal share of
+/// what is left, so a long label never shrinks while short neighbors have room to spare.
+struct SegmentRow: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let need = sizes.reduce(0) { $0 + $1.width }
+        return CGSize(width: proposal.width ?? need, height: sizes.map(\.height).max() ?? 0)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard !subviews.isEmpty else { return }
+        let ideal = subviews.map { $0.sizeThatFits(.unspecified).width }
+        let need = ideal.reduce(0, +)
+        let widths: [CGFloat] = need <= bounds.width
+            ? ideal.map { $0 + (bounds.width - need) / CGFloat(ideal.count) }
+            : ideal.map { $0 * bounds.width / need }
+        var x = bounds.minX
+        for (index, view) in subviews.enumerated() {
+            view.place(at: CGPoint(x: x, y: bounds.minY), proposal: ProposedViewSize(width: widths[index], height: bounds.height))
+            x += widths[index]
+        }
     }
 }
 
@@ -404,12 +436,12 @@ struct SettingMenu: View {
             }
         } label: {
             HStack(spacing: 6) {
-                Text(picked?.label ?? raw ?? "").font(.sn(14, 500)).foregroundStyle(SN.textPrimary).lineLimit(1)
+                Text(picked?.label ?? raw ?? "").font(.sn(13, 500)).foregroundStyle(SN.textPrimary).lineLimit(1)
                 if fullWidth { Spacer(minLength: 4) }
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 11, weight: .semibold)).foregroundStyle(SN.textMuted)
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.vertical, 7)
             .frame(maxWidth: fullWidth ? .infinity : nil)
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous).fill(SN.surface)
@@ -462,6 +494,15 @@ struct SettingSlider: View {
     }
 }
 
+/// A slider's value beside its title: quiet, tabular digits.
+struct SliderReadout: View {
+    let text: String
+
+    var body: some View {
+        Text(text).font(.sn(12).monospacedDigit()).foregroundStyle(SN.textMuted)
+    }
+}
+
 /// A color swatch bound to a `#rrggbb` setting; an empty setting shows `unset`.
 struct SettingColor: View {
     @Environment(SettingsStore.self) private var store
@@ -480,7 +521,7 @@ struct SettingColor: View {
             }
         ), supportsOpacity: false)
         .labelsHidden()
-        .frame(width: 40, height: 28)
+        .frame(width: 40, height: 28, alignment: .trailing)
         .accessibilityLabel(label)
     }
 
