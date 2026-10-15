@@ -136,7 +136,7 @@ final class FakeCosmetics: Sendable {
             let id = args["userId"] as? String ?? "1"
             let login = args["login"] as? String ?? "chatter"
             let name = args["displayName"] as? String ?? login
-            return ##"{"user_id":"\##(id)","login":"\##(login)","display_name":"\##(name)","name_color":"#ff7a18","paint":\##(Self.paintSunset),"groups":[{"title":"Twitch","badges":[{"id":"premium","url":"https://static-cdn.jtvnw.net/badges/v1/bbbe0db0-a598-423e-86d0-f9fb98ca1933/3","title":"Prime Gaming","description":"Prime Gaming member"}]},{"title":"7TV","badges":[{"id":"b-sub","url":"https://cdn.7tv.app/badge/01F37R3RFR0000K96678WEQT01/4x.webp","title":"7TV Subscriber","name":"7TV Subscriber"}]}],"streamnook":{"slug":"streamnook-mobius","image_url":"https://cdn.streamnook.app/badges/streamnook-mobius.webp?v=2","label":"StreamNook Möbius"}}"##
+            return ##"{"user_id":"\##(id)","login":"\##(login)","display_name":"\##(name)","avatar_url":"https://static-cdn.jtvnw.net/user-default-pictures-uv/ebe4cd89-b4f4-4cd9-adac-2f30151b4209-profile_image-300x300.png","name_color":"#ff7a18","paint":\##(Self.paintSunset),"groups":[{"title":"Twitch","badges":[{"id":"premium","url":"https://static-cdn.jtvnw.net/badges/v1/bbbe0db0-a598-423e-86d0-f9fb98ca1933/3","title":"Prime Gaming","description":"Prime Gaming member"}]},{"title":"7TV","badges":[{"id":"b-sub","url":"https://cdn.7tv.app/badge/01F37R3RFR0000K96678WEQT01/4x.webp","title":"7TV Subscriber","name":"7TV Subscriber"}]}],"streamnook":{"slug":"streamnook-mobius","image_url":"https://cdn.streamnook.app/badges/streamnook-mobius.webp?v=2","label":"StreamNook Möbius"}}"##
         case "get_sub_standing":
             return #"{"state":"current","founder":false,"kind":"paid","tier":1,"months":14,"streak_months":6,"title":"Subscribed to NookCaster","detail":"Tier 1 · 14 months","gift_label":"Gift a sub","gift_url":"https://www.twitch.tv/subs/nookcaster?giftrecipient=chatter","months_unit":"months","tier_label":"Tier 1","facts":[{"kind":"streak","text":"6-month streak","art":null}],"badge_art":null,"next_badge":{"months":18,"months_left":4,"progress":0.66,"art":null,"text":"4 months to the 18-month badge"}}"#
         case "get_user_message_history_limited":
@@ -144,6 +144,9 @@ final class FakeCosmetics: Sendable {
             return #"[{"id":"h1","content":"that clip was insane","timestamp":"\#(now - 600_000)"},{"id":"h2","content":"KEKW","timestamp":"\#(now - 120_000)"}]"#
         case "watch_user_history", "unwatch_user_history", "register_own_member_themes", "sn_refresh_registries":
             return "null"
+        case "get_user_by_login":
+            let login = (args["login"] as? String ?? "chatter").lowercased()
+            return ##"{"id":"777\##(login.count)","login":"\##(login)","display_name":"\##(login.capitalized)","profile_image_url":"https://static-cdn.jtvnw.net/user-default-pictures-uv/ebe4cd89-b4f4-4cd9-adac-2f30151b4209-profile_image-300x300.png"}"##
         case "get_seventv_login_url":
             return #""https://api.7tv.app/v4/auth/login?platform=twitch""#
         default:

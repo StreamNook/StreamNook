@@ -54,6 +54,7 @@ hype-train://update
 main-closed
 main-hiding-to-tray
 mass-unban-progress
+member-theme-changed
 membership-gift-received
 membership-status-changed
 multi-nook://meta
@@ -86,6 +87,7 @@ reminders://fire
 seventv-connected
 seventv-connected-account
 seventv-profile-pictures
+sn-registry-changed
 streamer-mode-changed
 streamer-went-live
 streamnook-settings-updated
