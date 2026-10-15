@@ -477,7 +477,7 @@ pub async fn slash_run_program(app: AppHandle, command_line: String) -> Result<S
             let _ = tx.send(ok);
         });
     if !rx.await.unwrap_or(false) {
-        return Err("Cancelled".into());
+        return Err("Canceled".into());
     }
     let child = std::process::Command::new(program)
         .args(args)

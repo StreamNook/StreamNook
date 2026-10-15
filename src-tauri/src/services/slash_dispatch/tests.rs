@@ -261,7 +261,7 @@ async fn deletepoll_archives_the_running_poll() {
     let fake = Fake::new();
     let o = run(&fake, "/deletepoll").await;
     assert_eq!(fake.calls("end_poll"), vec![json!({ "broadcasterId": "42", "pollId": "poll-9", "status": "ARCHIVED" })]);
-    assert_eq!(toast(&o, ToastKind::Success), vec!["Poll cancelled"]);
+    assert_eq!(toast(&o, ToastKind::Success), vec!["Poll canceled"]);
 }
 
 #[tokio::test]
@@ -458,7 +458,7 @@ async fn timer_stop_cancels_what_waits_in_the_room() {
     run_in(&fake, "stoproom", "/timer 1h hello").await;
     run_in(&fake, "stoproom", "/timer 2h again").await;
     let o = run_in(&fake, "stoproom", "/timer stop").await;
-    assert_eq!(o.notices, vec!["Cancelled 2 timers."]);
+    assert_eq!(o.notices, vec!["Canceled 2 timers."]);
     let o = run_in(&fake, "stoproom", "/timer stop").await;
     assert_eq!(o.notices, vec!["No timers are waiting here."]);
     let o = run_in(&fake, "stoproom", "/timer 25h x").await;
@@ -973,12 +973,12 @@ fn chatter_counts_read_either_answer() {
 }
 
 #[test]
-fn colours_are_names_or_hex() {
+fn colors_are_names_or_hex() {
     assert!(is_color("orange"));
     assert!(is_color("#ff8800"));
     assert!(is_color("ff8800"));
     assert!(is_color("rgb(1, 2, 3)"));
-    assert!(!is_color("notacolour"));
+    assert!(!is_color("notacolor"));
 }
 
 #[test]

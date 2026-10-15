@@ -181,22 +181,13 @@ struct ChatEmotePicker: View {
         case "emoji":
             Text("😀").font(.system(size: 15))
         default:
-            Text(Self.shortTitle(id))
-                .font(.system(size: 12, weight: active ? .heavy : .medium))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+            // The provider's own logo, in its brand color while selected.
+            ProviderLogo(provider: id, size: 15, tinted: active)
+                .opacity(active ? 1 : 0.75)
         }
     }
 
-    static func shortTitle(_ id: String) -> String {
-        switch id {
-        case "bttv": return "BTTV"
-        case "ffz": return "FFZ"
-        default: return PickerTabs.title(id)
-        }
-    }
-
-    /// The active tab wears its own brand colour; Favorites and Emoji keep the accent.
+    /// The active tab wears its own brand color; Favorites and Emoji keep the accent.
     static func color(_ id: String) -> Color {
         switch id {
         case "twitch": return Color(red: 0.57, green: 0.28, blue: 1)
@@ -231,7 +222,7 @@ struct ChatEmotePicker: View {
                                 }
                                 .padding(.horizontal, 4)
                             } header: {
-                                header(section.title, count: section.emotes.count)
+                                header(section.title, count: section.emotes.count, key: section.key)
                             }
                         }
                     }
@@ -281,8 +272,24 @@ struct ChatEmotePicker: View {
         }
     }
 
-    private func header(_ title: String, count: Int?) -> some View {
-        HStack(spacing: 4) {
+    /// What leads a section header: the provider's logo on a provider tab, a clock on Recently
+    /// used, a star on the rest of Favorites.
+    @ViewBuilder private func headerMark(_ key: String) -> some View {
+        switch picker.tab {
+        case "favorites":
+            Image(systemName: key == "recent" ? "clock.fill" : "star.fill")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(key == "recent" ? Color(ChatTheme.textSecondary) : .yellow)
+        case "emoji":
+            EmptyView()
+        default:
+            ProviderLogo(provider: picker.tab, size: 11, tinted: true)
+        }
+    }
+
+    private func header(_ title: String, count: Int?, key: String = "") -> some View {
+        HStack(spacing: 5) {
+            headerMark(key)
             Text(title.uppercased()).foregroundStyle(Color(ChatTheme.textPrimary))
             if let count { Text("(\(count))").opacity(0.5) }
             Spacer()
@@ -371,9 +378,15 @@ private struct EmoteCard: View {
                 Text(cell.name)
                     .font(.sn(16, 700))
                     .foregroundStyle(Color(ChatTheme.textPrimary))
-                Text(Self.source(cell))
-                    .font(.sn(12))
-                    .foregroundStyle(Color(ChatTheme.textSecondary))
+                // Where it comes from: the provider's logo, then who made it.
+                HStack(spacing: 6) {
+                    ProviderLogo(provider: cell.provider, size: 12, tinted: true)
+                    if let owner = cell.ownerName, !owner.isEmpty {
+                        Text("by \(owner)")
+                            .font(.sn(12))
+                            .foregroundStyle(Color(ChatTheme.textSecondary))
+                    }
+                }
                 ForEach(cell.detailLines.filter { !$0.hasPrefix("by ") }, id: \.self) { line in
                     Text(line.uppercased())
                         .font(.system(size: 9.5, weight: .bold))
@@ -386,13 +399,6 @@ private struct EmoteCard: View {
         .padding(18)
         .frame(minWidth: 200)
         .background(Color(ChatTheme.background))
-    }
-
-    /// "7TV · by someone", or the provider alone.
-    static func source(_ cell: PickerCell) -> String {
-        let provider = PickerTabs.title(cell.provider)
-        guard let owner = cell.ownerName, !owner.isEmpty else { return provider }
-        return "\(provider) · by \(owner)"
     }
 
     static func tint(_ line: String) -> Color {

@@ -1303,7 +1303,7 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
         }
         "unraid" => {
             b.invoke("cancel_raid", json!({ "broadcasterId": id })).await?;
-            o.ok("Raid cancelled");
+            o.ok("Raid canceled");
         }
         "marker" => {
             b.invoke("create_stream_marker", json!({ "userId": id, "description": opt(&c.from(0)) })).await?;
@@ -1619,7 +1619,7 @@ async fn core(c: &Call<'_>, o: &mut Outcome) -> Result<Flow, String> {
             let end = c.command == "endpoll";
             let status = if end { "TERMINATED" } else { "ARCHIVED" };
             match b.invoke("end_poll", json!({ "broadcasterId": id, "pollId": poll_id, "status": status })).await {
-                Ok(_) => o.ok(if end { "Poll ended" } else { "Poll cancelled" }),
+                Ok(_) => o.ok(if end { "Poll ended" } else { "Poll canceled" }),
                 Err(e) => o.err(e),
             }
         }
@@ -1903,7 +1903,7 @@ fn as_lines(v: Value) -> Vec<String> {
     }
 }
 
-/// The CSS colour names a browser accepts.
+/// The CSS color names a browser accepts.
 const CSS_COLORS: &[&str] = &[
     "aliceblue", "antiquewhite", "aqua", "aquamarine", "azure", "beige", "bisque", "black", "blanchedalmond", "blue",
     "blueviolet", "brown", "burlywood", "cadetblue", "chartreuse", "chocolate", "coral", "cornflowerblue", "cornsilk",
@@ -1925,7 +1925,7 @@ const CSS_COLORS: &[&str] = &[
     "violet", "wheat", "white", "whitesmoke", "yellow", "yellowgreen",
 ];
 
-/// Whether `/setcolor` can use `value` as a name colour.
+/// Whether `/setcolor` can use `value` as a name color.
 pub fn is_color(value: &str) -> bool {
     let v = value.trim().to_ascii_lowercase();
     let hex = v.strip_prefix('#').unwrap_or(&v);
@@ -2140,7 +2140,7 @@ async fn extended(c: &Call<'_>, o: &mut Outcome) -> Result<bool, String> {
             };
             let off = is_off_word(&value);
             if !off && !is_color(&value) {
-                o.err(format!("\"{value}\" is not a colour. Use a name like orange or a hex like #ff8800"));
+                o.err(format!("\"{value}\" is not a color. Use a name like orange or a hex like #ff8800"));
                 return Ok(true);
             }
             let color = if off {
@@ -2156,7 +2156,7 @@ async fn extended(c: &Call<'_>, o: &mut Outcome) -> Result<bool, String> {
             )
             .await?;
             o.say(match color {
-                None => format!("{}'s name colour is back to their own.", user.display_name),
+                None => format!("{}'s name color is back to their own.", user.display_name),
                 Some(col) => format!("{}'s name now shows in {col} for you.", user.display_name),
             });
         }
@@ -2598,7 +2598,7 @@ fn timer(c: &Call<'_>, o: &mut Outcome) {
         for (_, task) in stopped {
             task.abort();
         }
-        o.say(if n > 0 { format!("Cancelled {n} timer{}.", if n == 1 { "" } else { "s" }) } else { "No timers are waiting here.".to_string() });
+        o.say(if n > 0 { format!("Canceled {n} timer{}.", if n == 1 { "" } else { "s" }) } else { "No timers are waiting here.".to_string() });
         return;
     }
     let ms = parse_delay(c.arg(0));

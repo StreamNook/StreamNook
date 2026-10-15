@@ -156,7 +156,7 @@ private struct ComposerBar: View {
 
     private func prompt(slowWait: Int) -> Text {
         if model.fieldDisabled {
-            // Why the viewer cannot type, in the warning colour.
+            // Why the viewer cannot type, in the warning color.
             return Text(model.placeholder).foregroundStyle(Color.orange).fontWeight(.medium)
         }
         if slowWait > 0 {
@@ -281,7 +281,7 @@ private struct ComposerBar: View {
 }
 
 /// The symbols at the field's end (room modes, commands) share one size and weight, muted, so
-/// the emoji at its start is the only colour in the field.
+/// the emoji at its start is the only color in the field.
 enum ComposerSymbol {
     static let font = Font.system(size: 17, weight: .medium)
 }
@@ -370,10 +370,17 @@ private struct SuggestionStrip: View {
                     .font(.sn(12, 600))
                     .foregroundStyle(Color(ChatTheme.textPrimary))
                     .lineLimit(1)
-                Text((current?.provider ?? "").uppercased())
-                    .font(.sn(9))
-                    .tracking(0.8)
-                    .foregroundStyle(Color(ChatTheme.textMuted))
+                // Where it comes from: the provider's logo, or a person for a chatter.
+                if let current {
+                    if current.isChatter {
+                        Image(systemName: "person.fill")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(Color(ChatTheme.textMuted))
+                            .accessibilityLabel("Chatter")
+                    } else {
+                        ProviderLogo(provider: current.provider, size: 10, tinted: true)
+                    }
+                }
                 Spacer()
                 Text("Swipe, tap to use")
                     .font(.sn(10))

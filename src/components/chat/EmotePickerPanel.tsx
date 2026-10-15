@@ -672,10 +672,10 @@ export function EmotePickerPanel({
 
   if (!mounted) return null;
 
-  // Each source's tab wears ITS OWN brand colour when active, rather than one
+  // Each source's tab wears ITS OWN brand color when active, rather than one
   // green for all of them. Green happens to read as Kick, which made the YouTube
   // tab look like the wrong platform. Sources with no brand of their own (the
-  // favourites star, emoji) keep the accent green.
+  // favorites star, emoji) keep the accent green.
   const TAB_ACCENT: Record<string, string> = {
     twitch: PROVIDERS.twitch.color,
     kick: PROVIDERS.kick.color,
@@ -688,7 +688,7 @@ export function EmotePickerPanel({
   };
   const tabClass = (active: boolean) =>
     `flex-1 py-1.5 text-xs transition-all flex items-center justify-center gap-1 ${active ? 'glass-button-active font-extrabold' : 'glass-button text-textSecondary hover:text-white'}`;
-  /** Inline colour for an active tab; undefined leaves the class-driven default. */
+  /** Inline color for an active tab; undefined leaves the class-driven default. */
   const tabStyle = (active: boolean, key?: string): React.CSSProperties => ({
     borderRadius: '8px',
     ...(active && key && TAB_ACCENT[key] ? { color: TAB_ACCENT[key] } : {}),
