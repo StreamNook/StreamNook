@@ -278,10 +278,14 @@ public struct ProfileSheetData: Codable, Sendable, Equatable {
     public var paint: ChatPaint?
     public var groups: [ProfileBadgeGroup]
     public var streamnook: SNMemberBadge?
+    /// The Atmosphere worn on the profile (wear-gated; shown even when kept out of chat).
+    public var atmosphere: Atmosphere?
+    /// The Cologne event look instead of an Atmosphere.
+    public var cologne: CologneLook?
 
     enum CodingKeys: String, CodingKey {
         case userID = "user_id", login, displayName = "display_name", shownLogin = "shown_login"
-        case avatarURL = "avatar_url", picture, nameColor = "name_color", paint, groups, streamnook
+        case avatarURL = "avatar_url", picture, nameColor = "name_color", paint, groups, streamnook, atmosphere, cologne
     }
 
     public init(from decoder: Decoder) throws {
@@ -296,6 +300,8 @@ public struct ProfileSheetData: Codable, Sendable, Equatable {
         paint = try c.decodeIfPresent(ChatPaint.self, forKey: .paint)
         groups = try c.decodeIfPresent([ProfileBadgeGroup].self, forKey: .groups) ?? []
         streamnook = try c.decodeIfPresent(SNMemberBadge.self, forKey: .streamnook)
+        atmosphere = try c.decodeIfPresent(Atmosphere.self, forKey: .atmosphere)
+        cologne = try c.decodeIfPresent(CologneLook.self, forKey: .cologne)
     }
 
     /// No badge in any group and not a member.
@@ -312,10 +318,14 @@ public struct OwnIdentityData: Codable, Sendable, Equatable {
     public var picture: AvatarPick?
     public var badges: [ProfileBadge]
     public var streamnook: SNMemberBadge?
+    /// The Atmosphere worn on the profile (wear-gated; shown even when kept out of chat).
+    public var atmosphere: Atmosphere?
+    /// The Cologne event look instead of an Atmosphere.
+    public var cologne: CologneLook?
 
     enum CodingKeys: String, CodingKey {
         case userID = "user_id", login, displayName = "display_name", shownLogin = "shown_login", paint, picture, badges
-        case streamnook
+        case streamnook, atmosphere, cologne
     }
 
     public init(from decoder: Decoder) throws {
@@ -328,6 +338,8 @@ public struct OwnIdentityData: Codable, Sendable, Equatable {
         picture = try c.decodeIfPresent(AvatarPick.self, forKey: .picture)
         badges = try c.decodeIfPresent([ProfileBadge].self, forKey: .badges) ?? []
         streamnook = try c.decodeIfPresent(SNMemberBadge.self, forKey: .streamnook)
+        atmosphere = try c.decodeIfPresent(Atmosphere.self, forKey: .atmosphere)
+        cologne = try c.decodeIfPresent(CologneLook.self, forKey: .cologne)
     }
 }
 
