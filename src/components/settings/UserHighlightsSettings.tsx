@@ -1,39 +1,36 @@
+import { EntryInput } from './entryInput';
+import { invoke } from '@tauri-apps/api/core';
 import { Plus, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
+import { Logger } from '../../utils/logger';
 import { SettingsSection } from './_primitives';
 import type { HighlightUser } from '../../types';
 
-function newRuleId(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    return crypto.randomUUID();
+/** One edit to the stored user highlights; Rust makes new entries and stores
+ *  logins trimmed and lowercased. Answers the list as stored, or null when
+ *  the edit failed. */
+async function editUsers(edit: Record<string, unknown>): Promise<HighlightUser[] | null> {
+  try {
+    return await invoke<HighlightUser[]>('edit_settings_list', { path: 'chat_highlights.users', edit });
+  } catch (err) {
+    Logger.warn('[UserHighlights] edit failed:', err);
+    return null;
   }
-  return `u-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 const UserHighlightsSettings = () => {
-  const { settings, updateSettings } = useAppStore();
-  const users: HighlightUser[] = settings.chat_highlights?.users ?? [];
+  const users: HighlightUser[] = useAppStore((s) => s.settings.chat_highlights?.users) ?? [];
 
-  const writeUsers = (next: HighlightUser[]) =>
-    updateSettings({
-      ...settings,
-      chat_highlights: {
-        phrases: settings.chat_highlights?.phrases ?? [],
-        ...settings.chat_highlights,
-        users: next,
-      },
-    });
+  const addUser = () => void editUsers({ op: 'add' });
 
-  const addUser = () =>
-    writeUsers([
-      ...users,
-      { id: newRuleId(), enabled: true, username: '', color: '#22d3ee' },
-    ]);
+  const patchUser = (id: string, patch: Partial<HighlightUser>) => void editUsers({ op: 'update', id, patch });
 
-  const patchUser = (id: string, patch: Partial<HighlightUser>) =>
-    writeUsers(users.map((u) => (u.id === id ? { ...u, ...patch } : u)));
+  const saveField = (id: string, field: 'username' | 'color') => async (text: string) => {
+    const stored = await editUsers({ op: 'update', id, patch: { [field]: text } });
+    return stored?.find((u) => u.id === id)?.[field];
+  };
 
-  const removeUser = (id: string) => writeUsers(users.filter((u) => u.id !== id));
+  const removeUser = (id: string) => void editUsers({ op: 'remove', id });
 
   return (
     <SettingsSection
@@ -72,19 +69,19 @@ const UserHighlightsSettings = () => {
                 />
               </button>
 
-              <input
+              <EntryInput
                 type="text"
                 value={u.username}
-                onChange={(e) => patchUser(u.id, { username: e.target.value.toLowerCase().trim() })}
+                save={saveField(u.id, 'username')}
                 placeholder="twitch_login"
                 className="flex-1 glass-input text-textPrimary text-sm px-2.5 py-1.5"
                 spellCheck={false}
               />
 
-              <input
+              <EntryInput
                 type="color"
                 value={u.color}
-                onChange={(e) => patchUser(u.id, { color: e.target.value })}
+                save={saveField(u.id, 'color')}
                 className="w-8 h-8 rounded cursor-pointer bg-transparent border border-borderSubtle"
                 aria-label="Highlight color"
               />

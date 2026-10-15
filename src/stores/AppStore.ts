@@ -1745,15 +1745,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     // this. Must run before chat renders, or the first frame picks the default.
     setInlineEmoteScale(settings.chat_design?.emote_scale ?? 1);
 
-    // Sync the low-latency engine switch to the backend runtime kill switch. On by
-    // default (the parts origin, level with twitch.tv). Must run before a stream
-    // resolves so the origin probe honors it at the next start.
-    invoke('set_experimental_low_latency', {
-      enabled: settings.video_player?.experimental_low_latency ?? true,
-    }).catch((e) => {
-      Logger.warn('[Playback] Failed to sync experimental low latency:', e);
-    });
-
     // Connect to Discord if enabled. Fire-and-forget: boot waits on
     // loadSettings, and a Discord whose pipe never answers must not hold the
     // boot overlay up.

@@ -26,6 +26,12 @@ final class Look {
         themeID = settings.theme ?? "winters-glass"
     }
 
+    /// Takes the palette of the theme the core resolved.
+    func apply(palette: Palette, themeID: String) {
+        if palette != self.palette { self.palette = palette }
+        self.themeID = themeID
+    }
+
     /// Glass shows as Liquid Glass: blur is on and glassiness above zero.
     var frosted: Bool { glassBlur && glassiness > 0 }
     /// How much of the opaque floor shows under a glass surface.

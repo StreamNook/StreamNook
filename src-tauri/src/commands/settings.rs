@@ -141,15 +141,31 @@ pub async fn patch_settings(
     if patch.is_empty() {
         return Ok(());
     }
-    let keys: Vec<String> = patch.keys().cloned().collect();
-    let (settings, favorites_changed, role_art_changed) = {
+    commit_settings_patch(&app, &state, source, |_| Ok(patch))
+}
+
+/// Apply a top-level patch built from the canonical settings (under its lock,
+/// so the build reads what Rust holds right now), then run every save's side
+/// effects, write it and tell every window which keys changed.
+pub(crate) fn commit_settings_patch(
+    app: &AppHandle,
+    state: &AppState,
+    source: Option<String>,
+    build: impl FnOnce(&Settings) -> Result<serde_json::Map<String, serde_json::Value>, String>,
+) -> Result<(), String> {
+    let (settings, keys, favorites_changed, role_art_changed) = {
         let mut state_settings = state.settings.lock().map_err(|e| e.to_string())?;
+        let patch = build(&state_settings)?;
+        if patch.is_empty() {
+            return Ok(());
+        }
+        let keys: Vec<String> = patch.keys().cloned().collect();
         let next = apply_settings_patch(&state_settings, patch)?;
         let favorites_changed = state_settings.favorite_streamers != next.favorite_streamers;
         let role_art_changed = state_settings.chat_design.ffz_custom_role_badges
             != next.chat_design.ffz_custom_role_badges;
         *state_settings = next.clone();
-        (next, favorites_changed, role_art_changed)
+        (next, keys, favorites_changed, role_art_changed)
     };
     after_settings_change(&settings, favorites_changed);
     state.layout_service.set_gif_scale(settings.chat_design.gif_scale);
@@ -232,12 +248,12 @@ pub async fn complete_setup(app: AppHandle, state: State<'_, AppState>) -> Resul
 
 /// What a fresh install starts with: the values the settings page's reset
 /// arrows compare against and restore. `Settings::default()` carries the
-/// first-run look and, on a phone build, the phone's own values. Groups the
-/// frontend owns are absent here, so resetting one of their keys removes it
-/// and the page's own fallback applies, exactly as on a fresh install.
+/// first-run look and, on a phone build, the phone's own values; the groups
+/// the frontend owns carry the defaults `frontend_owned_defaults` declares.
 #[tauri::command]
 pub fn get_default_settings() -> Settings {
-    Settings::default()
+    serde_json::from_value(crate::commands::settings_fields::default_settings_value())
+        .unwrap_or_default()
 }
 
 /// Hide (or unhide) one chatter's messages, everywhere (`channel_key` None) or
@@ -480,6 +496,8 @@ fn after_settings_change(settings: &Settings, favorites_changed: bool) {
     // Detailed logging, from whichever window saved it. Applied only when the
     // saved value changes, so a save of anything else never resets the level.
     crate::services::diagnostic_logger::apply_setting(settings.error_reporting_enabled);
+    // The low-latency engine's switch, so no shell has to call it after a save.
+    crate::services::ll_origin::set_disabled(!settings.video_player.experimental_low_latency);
     // Recompile chat rules if their groups changed (hash-gated, cheap).
     crate::services::chat_rules::ChatRules::refresh(settings);
     crate::services::streamer_mode::StreamerMode::refresh(settings);

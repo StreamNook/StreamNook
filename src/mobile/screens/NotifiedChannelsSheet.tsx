@@ -5,10 +5,9 @@
 // instead of returning here. Sheets already register with the nav store's
 // stack and pop correctly on Android back.
 //
-// Fed by get_all_followed_channels, which has been registered and ungated the
-// whole time with nothing in the frontend calling it. Note that it returns
-// every channel you follow, live or not, which is exactly what this needs and
-// is a different endpoint from the followed-STREAMS one the alerts run on.
+// Fed by get_followed_channels_for_alerts: Rust pages through every channel
+// you follow, live or not (a different endpoint from the followed-STREAMS one
+// the alerts run on), stops at a fixed number of pages and sorts by name.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Bell, BellSlash, MagnifyingGlass } from 'phosphor-react';
@@ -20,11 +19,11 @@ import type { TwitchStream } from '../../types';
 import { SevenTvAvatar } from '../../components/SevenTvAvatar';
 import { sevenTvIdForStream } from '../../services/sevenTvPictures';
 
-const PAGE = 100;
-// Enough for anyone's follow list without letting a pathological account spin
-// through requests forever. Whatever is dropped is stated in the UI rather than
-// silently truncated.
-const MAX_PAGES = 20;
+interface AlertChannels {
+  channels: TwitchStream[];
+  /** Rust stopped at its page cap; whatever was dropped is stated in the UI. */
+  truncated: boolean;
+}
 
 export const NotifiedChannelsSheet: React.FC<{ open: boolean; onClose: () => void }> = ({
   open,
@@ -45,28 +44,11 @@ export const NotifiedChannelsSheet: React.FC<{ open: boolean; onClose: () => voi
 
     const load = async () => {
       setLoading(true);
-      const all: TwitchStream[] = [];
-      let cursor: string | undefined;
-      let pages = 0;
       try {
-        for (;;) {
-          const [batch, next] = await invoke<[TwitchStream[], string | null]>(
-            'get_all_followed_channels',
-            { limit: PAGE, cursor: cursor ?? null },
-          );
-          if (cancelled) return;
-          all.push(...batch);
-          pages += 1;
-          if (!next || batch.length === 0) break;
-          if (pages >= MAX_PAGES) {
-            if (!cancelled) setTruncated(true);
-            break;
-          }
-          cursor = next;
-        }
+        const result = await invoke<AlertChannels>('get_followed_channels_for_alerts');
         if (!cancelled) {
-          all.sort((a, b) => a.user_name.localeCompare(b.user_name));
-          setChannels(all);
+          setChannels(result.channels);
+          setTruncated(result.truncated);
         }
       } catch (err) {
         Logger.warn('[NotifiedChannels] follow list failed:', err);
@@ -162,7 +144,7 @@ export const NotifiedChannelsSheet: React.FC<{ open: boolean; onClose: () => voi
 
         {truncated && (
           <p className="text-[12px] text-textMuted leading-snug">
-            Showing the first {MAX_PAGES * PAGE} channels you follow. Search covers only these.
+            Showing the first {channels.length} channels you follow. Search covers only these.
           </p>
         )}
       </div>

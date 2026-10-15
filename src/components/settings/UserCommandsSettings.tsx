@@ -1,30 +1,23 @@
 import { useMemo, useState } from 'react';
+import { EntryInput, EntryTextarea } from './entryInput';
+import { invoke } from '@tauri-apps/api/core';
 import { ChevronDown, ChevronUp, Plus, Trash2, AlertTriangle, BookOpen } from 'lucide-react';
 import { useAppStore } from '../../stores/AppStore';
 import { RESERVED_TRIGGERS, customCommandWins } from '../../utils/chatCommands';
+import { Logger } from '../../utils/logger';
 import { SettingsSection } from './_primitives';
 import type { UserSlashCommand } from '../../types';
 
-function makeDefaultCommand(): UserSlashCommand {
-  return {
-    id:
-      typeof crypto !== 'undefined' && 'randomUUID' in crypto
-        ? crypto.randomUUID()
-        : Math.random().toString(36).slice(2),
-    trigger: '',
-    expansion: '',
-    description: '',
-    enabled: true,
-    require_slash: true,
-    also_match_suffix: false,
-  };
-}
-
-// Strip leading slash + non-alphanumeric to keep triggers tidy. Twitch
-// commands are all ascii lowercase alnum + a few specials; we restrict to
-// alnum to avoid surprises with whitespace, /, !, etc.
-function sanitizeTrigger(raw: string): string {
-  return raw.replace(/^\//, '').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+/** One edit to the stored custom commands; Rust makes new entries and strips
+ *  a trigger to letters, digits and underscores, lowercased, with no leading
+ *  slash. Answers the list as stored, or null when the edit failed. */
+async function editCommands(edit: Record<string, unknown>): Promise<UserSlashCommand[] | null> {
+  try {
+    return await invoke<UserSlashCommand[]>('edit_settings_list', { path: 'chat_commands.user_commands', edit });
+  } catch (err) {
+    Logger.warn('[UserCommands] edit failed:', err);
+    return null;
+  }
 }
 
 // Inline code chip used throughout the docs panel for placeholder names
@@ -34,26 +27,22 @@ const Tag: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 );
 
 const UserCommandsSettings = () => {
-  const { settings, updateSettings } = useAppStore();
   const [showDocs, setShowDocs] = useState<boolean>(false);
-  const commands = useMemo(
-    () => settings.chat_commands?.user_commands ?? [],
-    [settings.chat_commands],
-  );
-
-  const writeCommands = (next: UserSlashCommand[]) => {
-    updateSettings({
-      ...settings,
-      chat_commands: { user_commands: next },
-    });
-  };
+  const stored = useAppStore((s) => s.settings.chat_commands?.user_commands);
+  const commands = useMemo(() => stored ?? [], [stored]);
 
   const updateCommand = (id: string, patch: Partial<UserSlashCommand>) => {
-    writeCommands(commands.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+    void editCommands({ op: 'update', id, patch });
+  };
+
+  // A typed field: the text as stored comes back for the field to show.
+  const saveField = (id: string, field: 'trigger' | 'expansion' | 'description') => async (text: string) => {
+    const list = await editCommands({ op: 'update', id, patch: { [field]: text } });
+    return list?.find((c) => c.id === id)?.[field];
   };
 
   const removeCommand = (id: string) => {
-    writeCommands(commands.filter((c) => c.id !== id));
+    void editCommands({ op: 'remove', id });
   };
 
   const moveCommand = (id: string, direction: -1 | 1) => {
@@ -61,13 +50,11 @@ const UserCommandsSettings = () => {
     if (idx === -1) return;
     const target = idx + direction;
     if (target < 0 || target >= commands.length) return;
-    const next = commands.slice();
-    [next[idx], next[target]] = [next[target], next[idx]];
-    writeCommands(next);
+    void editCommands({ op: 'move', id, to: target });
   };
 
   const addCommand = () => {
-    writeCommands([...commands, makeDefaultCommand()]);
+    void editCommands({ op: 'add' });
   };
 
   // Detect duplicates among user triggers (only the first instance fires).
@@ -251,10 +238,10 @@ const UserCommandsSettings = () => {
 
                 <div className="flex items-center bg-background/40 rounded border border-borderSubtle pl-2 flex-1">
                   <span className="text-textSecondary text-sm select-none">/</span>
-                  <input
+                  <EntryInput
                     type="text"
                     value={command.trigger}
-                    onChange={(e) => updateCommand(command.id, { trigger: sanitizeTrigger(e.target.value) })}
+                    save={saveField(command.id, 'trigger')}
                     placeholder="lurk"
                     aria-label="Trigger"
                     maxLength={32}
@@ -292,9 +279,9 @@ const UserCommandsSettings = () => {
 
               <label className="block">
                 <span className="mb-1 block text-[11px] text-textMuted">Message it sends</span>
-                <textarea
+                <EntryTextarea
                   value={command.expansion}
-                  onChange={(e) => updateCommand(command.id, { expansion: e.target.value })}
+                  save={saveField(command.id, 'expansion')}
                   placeholder="What this command sends to chat. Supports {1}, {2}, {*}, {user}, {channel}."
                   rows={2}
                   className="w-full glass-input text-textPrimary text-sm px-2.5 py-1.5 resize-y"
@@ -304,10 +291,10 @@ const UserCommandsSettings = () => {
 
               <label className="block">
                 <span className="mb-1 block text-[11px] text-textMuted">Description (optional)</span>
-                <input
+                <EntryInput
                   type="text"
                   value={command.description ?? ''}
-                  onChange={(e) => updateCommand(command.id, { description: e.target.value })}
+                  save={saveField(command.id, 'description')}
                   placeholder="Shown next to the command in the picker"
                   maxLength={120}
                   className="w-full glass-input text-textPrimary text-xs px-2.5 py-1.5"
