@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 use crate::rt::AppHandle;
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 
 pub const UPDATE_EVENT: &str = "hype-train://update";
 
@@ -110,7 +110,7 @@ fn still_watched(app: &AppHandle, key: &str) -> bool {
         let Some(entry) = w.get_mut(key) else { return false };
         entry
             .owners
-            .retain(|owner, _| owner == INTERNAL_OWNER || app.get_webview_window(owner).is_some());
+            .retain(|owner, _| owner == INTERNAL_OWNER || crate::services::window_visibility::window_open(app, owner));
         if entry.owners.is_empty() {
             w.remove(key);
             return false;

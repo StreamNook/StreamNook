@@ -55,6 +55,22 @@ pub fn ui_exists(app: &AppHandle) -> bool {
     }
 }
 
+/// The window labelled `label` is still open, for state a command keeps per
+/// calling window. The iPhone shell has no webview windows: every command it
+/// calls gets a placeholder window labelled `main`, which stands for the shell
+/// and lasts as long as the core does.
+pub fn window_open(app: &AppHandle, label: &str) -> bool {
+    #[cfg(target_os = "ios")]
+    {
+        let _ = app;
+        label == "main"
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        app.get_webview_window(label).is_some()
+    }
+}
+
 /// The iPhone app moved to the front (`true`) or the background (`false`).
 /// Its shell has no window for the poller below to read, so it says so itself.
 #[cfg(target_os = "ios")]
