@@ -201,6 +201,30 @@ fn worn_paint(cosmetics_id: &str, inventory: Option<&UserCosmetics>) -> (Option<
     (def, view)
 }
 
+/// The look a member wears on their profile: an Atmosphere (wear-gated) or the
+/// Cologne look. Non-members wear neither.
+async fn worn_look(member_id: &str) -> (Option<registry::Atmosphere>, Option<member_theme::Cologne>) {
+    match member_theme::resolve(member_id).await {
+        Some(theme) => (theme.atmosphere_id.as_deref().and_then(registry::atmosphere), theme.cologne),
+        None => (None, None),
+    }
+}
+
+/// A Twitch account's profile banner, read anonymously (public data); None
+/// when it has none or Twitch does not answer.
+async fn twitch_banner(user_id: &str) -> Option<String> {
+    let body = serde_json::json!({
+        "query": "query ProfileBanner($id: ID!) { user(id: $id) { bannerImageURL } }",
+        "variables": { "id": user_id },
+    });
+    let json = crate::services::twitch_web_gql::post(None, body, "ProfileBanner").await.ok()?;
+    banner_from_answer(&json)
+}
+
+fn banner_from_answer(json: &Value) -> Option<String> {
+    json.pointer("/data/user/bannerImageURL").and_then(Value::as_str).filter(|u| !u.is_empty()).map(String::from)
+}
+
 /// `@login` when it says something the display name does not (they differ
 /// beyond letter case).
 fn shown_login(login: &str, display_name: &str) -> Option<String> {
@@ -234,6 +258,13 @@ pub struct ProfileSheet {
     /// Present only for a StreamNook member.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub streamnook: Option<SnBadge>,
+    /// The Atmosphere they wear on their profile, after the wear gate. It shows
+    /// here whether or not they keep it out of chat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub atmosphere: Option<registry::Atmosphere>,
+    /// The Cologne event look instead of an Atmosphere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cologne: Option<member_theme::Cologne>,
 }
 
 static SHEETS: Mutex<Option<LruCache<String, ProfileSheet>>> = Mutex::new(None);
@@ -262,7 +293,7 @@ pub async fn profile_sheet(
 ) -> ProfileSheet {
     let channel_id = channel_id.filter(|c| !c.is_empty()).unwrap_or(user_id).to_string();
     let channel_login = channel_login.filter(|c| !c.is_empty()).unwrap_or(login).to_string();
-    let (badges, inventory, helix, pictures) = tokio::join!(
+    let (badges, inventory, helix, pictures, (atmosphere, cologne)) = tokio::join!(
         crate::commands::badge_service::get_user_badges_with_earned_unified(
             user_id.to_string(),
             login.to_string(),
@@ -280,6 +311,7 @@ pub async fn profile_sheet(
         },
         crate::services::twitch_service::TwitchService::get_user_by_id(user_id),
         resolver::profile_pictures(vec![user_id.to_string()]),
+        worn_look(user_id),
     );
     let badges = badges.map_err(|e| log::debug!("[ProfileView] badges unavailable: {e}")).ok();
     let mut groups = Vec::new();
@@ -314,6 +346,8 @@ pub async fn profile_sheet(
         paint_def,
         groups,
         streamnook: registry::member_badge(user_id, false),
+        atmosphere,
+        cologne,
     };
     if let Ok(mut guard) = SHEETS.lock() {
         guard
@@ -339,12 +373,22 @@ pub struct OwnIdentity {
     /// The 7TV picture drawn over the platform one, when the viewer shows 7TV pictures.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub picture: Option<AvatarPick>,
+    /// The Twitch profile banner; None when the account has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub banner_url: Option<String>,
     /// What is WORN, in order (Twitch, 7TV, the other chat apps), images only,
     /// deduped, at most eight.
     pub badges: Vec<ProfileBadge>,
     /// Present only for a StreamNook member; drawn after the others.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub streamnook: Option<SnBadge>,
+    /// The Atmosphere they wear on their profile, after the wear gate. It shows
+    /// here whether or not they keep it out of chat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub atmosphere: Option<registry::Atmosphere>,
+    /// The Cologne event look instead of an Atmosphere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cologne: Option<member_theme::Cologne>,
 }
 
 /// Twitch badge sets that belong to one channel rather than to the person.
@@ -384,7 +428,7 @@ pub fn cached_own_identity(user_id: &str) -> Option<OwnIdentity> {
 /// The viewer's own identity header, built fresh (and saved for the next cold
 /// launch).
 pub async fn own_identity(user_id: &str, login: &str, display_name: &str) -> OwnIdentity {
-    let (badges, inventory, resolved, pictures) = tokio::join!(
+    let (badges, inventory, resolved, pictures, (atmosphere, cologne), banner_url) = tokio::join!(
         crate::commands::badge_service::get_user_badges_with_earned_unified(
             user_id.to_string(),
             login.to_string(),
@@ -394,6 +438,8 @@ pub async fn own_identity(user_id: &str, login: &str, display_name: &str) -> Own
         resolver::inventory(user_id),
         crate::commands::identity::get_streamnook_identity_resolved(user_id.to_string()),
         resolver::profile_pictures(vec![user_id.to_string()]),
+        worn_look(user_id),
+        twitch_banner(user_id),
     );
     let badges = badges.ok();
     // Twitch: what the account displays, minus the badges of one channel.
@@ -453,8 +499,11 @@ pub async fn own_identity(user_id: &str, login: &str, display_name: &str) -> Own
         paint,
         paint_def,
         picture: pictures.get(user_id).cloned().flatten().and_then(|p| pick_avatar(&p, 56.0, 3.0, true)),
+        banner_url,
         badges: worn,
         streamnook: registry::member_badge(user_id, false),
+        atmosphere,
+        cologne,
     };
     if let (Some(path), Ok(body)) = (own_path(), serde_json::to_vec(&header)) {
         let _ = std::fs::write(path, body);
@@ -800,6 +849,15 @@ mod tests {
     }
 
     #[test]
+    fn the_banner_reads_from_twitchs_answer() {
+        let set = serde_json::json!({"data": {"user": {"bannerImageURL": "https://static-cdn.jtvnw.net/b-profile_banner-480.png"}}});
+        assert_eq!(banner_from_answer(&set).as_deref(), Some("https://static-cdn.jtvnw.net/b-profile_banner-480.png"));
+        let none = serde_json::json!({"data": {"user": {"bannerImageURL": null}}});
+        assert_eq!(banner_from_answer(&none), None);
+        assert_eq!(banner_from_answer(&serde_json::json!({"data": {"user": null}})), None);
+    }
+
+    #[test]
     fn the_shapes_keep_the_keys_the_iphone_decodes() {
         let sheet = ProfileSheet {
             user_id: "1".into(),
@@ -813,8 +871,13 @@ mod tests {
             paint_def: None,
             groups: vec![BadgeGroup { title: "Twitch".into(), badges: vec![ProfileBadge { id: "b".into(), url: "x".into(), ..Default::default() }] }],
             streamnook: Some(SnBadge { slug: None, image_url: "streamnook-house:streamnook-default".into(), label: "StreamNook".into() }),
+            atmosphere: Some(registry::Atmosphere { id: "aurora".into(), name: "Aurora".into(), ..Default::default() }),
+            cologne: None,
         };
         let v = serde_json::to_value(&sheet).unwrap();
+        assert_eq!(v["atmosphere"]["id"], "aurora");
+        assert!(v["atmosphere"].get("look").is_some(), "the look rides with the Atmosphere");
+        assert!(v.get("cologne").is_none());
         for key in ["user_id", "display_name", "avatar_url", "picture", "name_color", "groups", "streamnook"] {
             assert!(v.get(key).is_some(), "{key}");
         }

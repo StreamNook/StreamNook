@@ -153,6 +153,8 @@ pub mod twitch_limits;
 pub mod token_vault;
 pub mod twitch_service;
 pub mod twitch_signin;
+pub mod twitch_profile_edit;
+pub mod twitch_web_gql;
 pub mod universal_cache_service;
 pub mod update_watch;
 pub mod user_message_history_service;
