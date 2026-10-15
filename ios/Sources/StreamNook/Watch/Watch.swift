@@ -84,6 +84,10 @@ final class Watch {
     private var fellBack = false
     private var watchers: [NSKeyValueObservation] = []
     private var sessionObservers: [NSObjectProtocol] = []
+    /// What the core's link governor hears from this player (stalls, and downloads on the
+    /// whole-segment route); it answers with `playback-adapt`.
+    private var link = LinkReporter()
+    private let linkEpoch = ContinuousClock.now
 
     init() {
         // KVO reports on whichever thread changed the value, so these are not main-actor code.
@@ -128,6 +132,7 @@ final class Watch {
         showCard()
         tasks.append(Task { await self.play(stream, core: core) })
         tasks.append(Task { await self.follow(stream, core: core) })
+        tasks.append(Task { await self.followLink(core: core) })
     }
 
     // MARK: Controls
@@ -244,6 +249,28 @@ final class Watch {
         if live?.title != old?.title { showCard() }
     }
 
+    /// The core's link governor moved the stream on a poor link. A whole-segment switch is
+    /// spliced into the playlist the player already polls, so only a URL (the relay restarted on
+    /// another rendition, the low-latency route) needs a reload, on the route a fresh start would
+    /// take.
+    private func followLink(core: CoreBridge) async {
+        for await event in core.events.stream("playback-adapt") {
+            guard !Task.isCancelled else { return }
+            guard let adapt = PlaybackAdapt.parse(event.payloadJSON), stream != nil else { continue }
+            log.notice("link: \(adapt.quality, privacy: .public) (\(adapt.reason, privacy: .public)), cushion \(adapt.extraCushion)")
+            guard let url = adapt.url else { continue }
+            startURL = url
+            let lowLatency = (try? await core.invoke("get_stream_low_latency", args: [:], as: Bool.self)) ?? false
+            let chosen: PlayRoute = route == .auto ? (lowLatency ? .ll : .plain) : (playing ?? .plain)
+            reloading()
+            load(url, route: chosen)
+        }
+    }
+
+    private func report(_ report: LinkReport, core: CoreBridge) {
+        Task.detached { _ = try? await core.invoke("report_playback_health", args: report.args) }
+    }
+
     /// Back from the background: the core's chat bridge may listen on a new port.
     func foregrounded(chatPort: Int) {
         chat?.reconnect(port: chatPort)
@@ -260,6 +287,7 @@ final class Watch {
 
     func pause() {
         logSummary()
+        link.reset()
         player.pause()
         status = "Paused"
         log.notice("drive pause")
@@ -332,6 +360,7 @@ final class Watch {
         }
         item.automaticallyPreservesTimeOffsetFromLive = preservesOffset
         observe(item)
+        link.reset()
         playing = route
         error = nil
         player.replaceCurrentItem(with: item)
@@ -425,6 +454,10 @@ final class Watch {
                     waiting = nowWaiting
                     log.notice("player \(nowWaiting ? "waiting" : "resumed", privacy: .public) \(self.player.reasonForWaitingToPlay?.rawValue ?? "", privacy: .public)")
                 }
+                let now = Double((ContinuousClock.now - linkEpoch) / .milliseconds(1)) / 1000
+                if let stall = link.waiting(nowWaiting, at: now) {
+                    report(stall, core: core)
+                }
             }
             if let failure = player.currentItem?.error, error == nil {
                 let ns = failure as NSError
@@ -450,6 +483,14 @@ final class Watch {
     }
 
     private func sample(_ item: AVPlayerItem, core: CoreBridge) async {
+        // On the whole-segment route AVPlayer downloads Twitch's segments itself (the relay
+        // redirects it to the CDN), so its access log measures the link. On the low-latency route
+        // it reads parts over loopback and the core measures the link instead.
+        if playing == .plain || playing == .promote, let events = item.accessLog()?.events, let last = events.last,
+           let transfer = link.accessLog(event: events.count - 1, bytes: last.numberOfBytesTransferred,
+                                         transferDuration: last.transferDuration) {
+            report(transfer, core: core)
+        }
         let pdt = item.currentDate().map { $0.timeIntervalSince1970 * 1000 }
         guard let distance = try? await core.invoke(
             "get_relay_live_distance", args: ["playerPdtMs": pdt, "targetMs": catchUpTargetMS],

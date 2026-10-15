@@ -214,7 +214,17 @@ export const MobilePlayer: React.FC<{
     return () => clearTimeout(t);
   }, [restartPhase]);
 
-  const logoWanted = state === 'loading' || state === 'idle';
+  // A stall that lasts reads as a frozen frame unless something says it is
+  // loading. Brief rebuffers stay quiet; one past a second shows the mark.
+  const [stallShown, setStallShown] = useState(false);
+  if (state !== 'stalled' && stallShown) setStallShown(false);
+  useEffect(() => {
+    if (state !== 'stalled') return;
+    const t = setTimeout(() => setStallShown(true), 1000);
+    return () => clearTimeout(t);
+  }, [state]);
+
+  const logoWanted = state === 'loading' || state === 'idle' || stallShown;
   const [logoMounted, setLogoMounted] = useState(true);
   // Render-time adjustment (same pattern as the drill-in screens' `last`
   // retention): re-mount instantly when loading returns, no effect round trip.

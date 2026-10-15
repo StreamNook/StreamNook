@@ -35,6 +35,7 @@ import { startLatencyGovernor } from '../../utils/liveLatencyGovernor';
 import { behindLiveFromEdge, edgeTargetForGap, resolveLiveEdgeGap } from '../../utils/latency';
 import { Logger } from '../../utils/logger';
 import { recoverFromSequenceMismatch } from '../../utils/hlsSequenceMismatch';
+import { createStallReporter, linkCushion, refreshLinkCushion, reportSegment } from './linkAdapt';
 
 // The earning gate.
 //
@@ -146,7 +147,9 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
     let detachVideo: (() => void) | null = null;
     let gateTimer: number | null = null;
     let stopLoadTimer: number | null = null;
+    let cushionTimer: number | null = null;
     let loadStopped = false;
+    const stalls = createStallReporter();
 
     const destroy = () => {
       if (gateTimer !== null) {
@@ -157,6 +160,11 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         window.clearTimeout(stopLoadTimer);
         stopLoadTimer = null;
       }
+      if (cushionTimer !== null) {
+        window.clearInterval(cushionTimer);
+        cushionTimer = null;
+      }
+      stalls.cancel();
       loadStopped = false;
       if (stopGovernor) {
         stopGovernor();
@@ -200,6 +208,9 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
       } catch {
         /* command unavailable or the stream went away */
       }
+      // Extra distance from the edge the core keeps after stalls on a poor
+      // link (Rust link_adapt); zero on a good one.
+      await refreshLinkCushion();
       // A newer stream (or teardown) owns the element now; building here would
       // leave a zombie player attached to it.
       if (cancelled || seq !== seqRef.current) return;
@@ -226,8 +237,11 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         nudgeOffset: 0.2,
         nudgeMaxRetry: 3,
         maxFragLookUpTolerance: 0.5,
-        liveSyncDuration: llTargetRaw,
+        liveSyncDuration: llTargetRaw + linkCushion(),
         liveMaxLatencyDuration: 60,
+        // The core owns the stall reaction (link_adapt's cushion), so hls.js's
+        // own one-second-per-stall ramp stays off, as on the desktop.
+        liveSyncOnStallIncrease: 0,
         // hls.js's own catch-up stays off on both paths: its rate steps are
         // quantized coarsely enough to be audible. The governor below does it
         // smoothly instead.
@@ -250,6 +264,22 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         abrBandWidthUpFactor: 0.7,
       });
       hlsRef.current = hls;
+
+      // The core judges the link by the segments this player downloads itself.
+      // Parts come from the relay over loopback, so they say nothing about it.
+      if (!isLowLatencyChannel) {
+        hls.on(Hls.Events.FRAG_LOADED, (_event, data) => {
+          if (seq !== seqRef.current || data.part) return;
+          const { loaded, loading } = data.frag.stats;
+          reportSegment(loaded, loading.end - loading.start);
+        });
+      }
+      // Where the cushion lives in hls.js (its start and resync position, and
+      // the whole-segment governor's target), kept in step with the core.
+      cushionTimer = window.setInterval(() => {
+        if (seq !== seqRef.current) return;
+        hls.config.liveSyncDuration = llTargetRaw + linkCushion();
+      }, 2000);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         if (seq !== seqRef.current) return;
@@ -362,6 +392,7 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         // Belt and braces: if anything resumed playback without a `play` event
         // reaching us, do not leave the loader stopped under a running element.
         resumeLoad('playing');
+        stalls.end();
         setState('playing');
         reportPlaying();
       };
@@ -370,10 +401,13 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
         // Spinner only. The earning gate is deliberately untouched here; see
         // the note above the gate helpers.
         Logger.debug('[MobilePlayer] buffer stall (earning gate unchanged)');
+        // A seek or the first load is not the link's doing.
+        if (!video.paused && !video.seeking && video.currentTime > 0) stalls.begin();
         setState('stalled');
       };
       const onPauseOrEnd = () => {
         if (seq !== seqRef.current) return;
+        stalls.cancel();
         // A pause that arrives while the page is already hidden cannot be
         // deferred: Android pauses the WebView along with the activity, so the
         // timer would never fire. In picture-in-picture the native layer
@@ -450,7 +484,8 @@ export function useMobileHlsEngine(videoRef: React.RefObject<HTMLVideoElement | 
             // Read live rather than captured, so moving the gap slider applies
             // without rebuilding the player.
             // Both in seconds behind the broadcaster as heard, like the desktop.
-            latencyTarget: () => resolveLiveEdgeGap(settingsRef.current?.ll_target_latency, 'll'),
+            // Plus the core's extra cushion after stalls on a poor link.
+            latencyTarget: () => resolveLiveEdgeGap(settingsRef.current?.ll_target_latency, 'll') + linkCushion(),
             getLatency: () =>
               typeof hls.latency === 'number' && hls.latency > 0 ? behindLiveFromEdge(hls.latency) : null,
             gain: 0.12,
