@@ -614,7 +614,8 @@ pub fn emit_playback_adapt(event: &crate::services::link_adapt::AdaptEvent) {
 ///
 /// On the whole-segment path the switch is spliced into the playlist the
 /// player is already polling (`hls_projection::begin_switch`): no reload, the
-/// player meets a discontinuity and carries on. That needs a stabilized
+/// segments after the last one it fetched simply come from the new rendition.
+/// That needs a stabilized
 /// playlist, the parts origin off, and the same decoder (`same_decoder`).
 /// Otherwise the relay restarts on the new rendition and the returned URL is
 /// the one the player reloads on.
@@ -625,8 +626,20 @@ pub async fn adapt_upstream(playlist_url: &str, same_decoder: bool) -> Result<Op
     let splice = same_decoder
         && SOLO_STABILIZED.load(std::sync::atomic::Ordering::Relaxed)
         && !crate::services::ll_origin::is_active();
-    if splice && crate::services::hls_projection::begin_switch(SOLO_STREAM_ID) {
+    if splice {
+        crate::services::hls_projection::begin_switch(SOLO_STREAM_ID);
         *PROXY_URL.lock().await = Some(playlist_url.to_string());
+        // Record the new rendition's segments now rather than at the player's
+        // next poll, so a fetch in between already gets them. Skipped during
+        // an ad break: the next poll records them through the ad filter.
+        if !ad_state().ads_present {
+            if let Ok(res) = HTTP_CLIENT.get(playlist_url).send().await {
+                if let Ok(text) = res.text().await {
+                    let base = crate::services::hls_projection::base_url_of(playlist_url);
+                    let _ = crate::services::hls_projection::stabilize(SOLO_STREAM_ID, &text, &base);
+                }
+            }
+        }
         return Ok(None);
     }
     let port = StreamServer::start_proxy_server(playlist_url.to_string()).await?;

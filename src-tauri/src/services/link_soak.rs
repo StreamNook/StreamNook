@@ -224,6 +224,7 @@ async fn link_soak() {
     let mut playlist_at = Instant::now() - Duration::from_secs(10);
     let mut listing: Vec<Seg> = Vec::new();
     let mut transfers: Vec<f64> = Vec::new();
+    let mut resyncs = 0u32;
 
     while Instant::now() < deadline {
         player.advance(adapt);
@@ -311,6 +312,28 @@ async fn link_soak() {
                 }
             }
         }
+        // hls.js: a player that fell out of the live window resyncs to the
+        // edge minus its cushion, skipping what it missed.
+        if fetch.is_none() {
+            if let (Some(n), Some(first)) = (next_sn, listing.first()) {
+                if n < first.sn {
+                    let mut acc = 0.0;
+                    let mut start = listing.last().unwrap().sn;
+                    for s in listing.iter().rev() {
+                        acc += s.dur;
+                        start = s.sn;
+                        if acc >= base_cushion + extra {
+                            break;
+                        }
+                    }
+                    println!("[link-soak] fell out of the window at {n}; resync to {start}");
+                    resyncs += 1;
+                    next_sn = Some(start);
+                    player.buffered = 0.0;
+                    player.playhead_pdt = listing.iter().find(|s| s.sn == start).and_then(|s| s.pdt);
+                }
+            }
+        }
         if fetch.is_none() {
             if let Some(seg) = next_sn.and_then(|n| listing.iter().find(|s| s.sn == n).cloned()) {
                 let url = if seg.uri.starts_with("http") { seg.uri.clone() } else { format!("{local}{}", seg.uri) };
@@ -349,6 +372,7 @@ async fn link_soak() {
     if !transfers.is_empty() {
         println!("segment transfer p50 {:.2} Mbit/s", pct(&mut transfers, 0.5));
     }
+    println!("resyncs (fell out of the live window): {resyncs}");
     println!("rungs: {timeline:?}");
     println!("extra cushion at the end: {:.1}s", crate::services::link_adapt::extra_cushion());
     crate::services::link_adapt::end();
