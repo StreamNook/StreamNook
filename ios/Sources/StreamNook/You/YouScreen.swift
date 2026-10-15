@@ -167,7 +167,7 @@ struct AccountsCard: View {
                 divider
                 row(picture: AnyView(BrandTile(platform: .sevenTV)), title: "7TV",
                     detail: sevenTvSignedIn ? (sevenTvArmed ? "Your paint and badge stay on 7TV" : "Connected")
-                                            : "Wear your paints and badges") {
+                                            : "Paints and badges") {
                     if sevenTvSignedIn {
                         ArmedPill(label: "Disconnect", armed: $sevenTvArmed) {
                             Task {

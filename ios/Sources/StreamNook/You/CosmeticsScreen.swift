@@ -100,6 +100,9 @@ struct CosmeticsScreen: View {
             .padding(.bottom, 10)
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .snPanel(radius: 18)
+            // Pinned over moving content, so it is solid at any Glassiness: choices pass behind it,
+            // never through it.
+            .background { RoundedRectangle(cornerRadius: 18, style: .continuous).fill(SN.background) }
             .shadow(color: .black.opacity(0.55), radius: 12, y: 8)
             .padding(.horizontal, 16)
             .padding(.top, 4)
@@ -137,7 +140,8 @@ struct CosmeticsScreen: View {
                 HStack(alignment: .top, spacing: 10) {
                     ForEach(state.atmospheres) { atmosphere in
                         Button { Task { await screen.equipTheme(atmosphere) } } label: {
-                            AtmosphereTile(atmosphere: atmosphere)
+                            AtmosphereTile(atmosphere: atmosphere,
+                                           chosen: atmosphere.worn || (atmosphere.id == "tier" && !state.atmospheres.contains(where: \.worn)))
                         }
                         .buttonStyle(BadgePress())
                         .disabled(!atmosphere.allowed)
@@ -173,7 +177,7 @@ struct CosmeticsScreen: View {
             if badges.isEmpty {
                 note("No badges yet. Earned and event badges land here.")
             } else {
-                tileGrid(badges, key: "snBadges") { badge in
+                tileGrid(badges, key: "snBadges", worn: \.worn) { badge in
                     Button { Task { await screen.equipBadge(badge) } } label: {
                         BadgeTile(url: badge.imageURL, worn: badge.worn)
                     }
@@ -198,7 +202,7 @@ struct CosmeticsScreen: View {
             if !ext.paints.isEmpty {
                 let all = store.openSections.contains("paints")
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                    ForEach(all ? ext.paints : Array(ext.paints.prefix(Self.shortList))) { paint in
+                    ForEach(all ? ext.paints : Self.short(ext.paints, worn: \.worn)) { paint in
                         Button { Task { await screen.equipPaint(paint) } } label: {
                             PaintTile(paint: paint)
                         }
@@ -210,7 +214,7 @@ struct CosmeticsScreen: View {
             }
             if !ext.sevenTvBadges.isEmpty {
                 header("Badge", platform: .sevenTV, detail: ext.sevenTvBadges.first(where: \.worn)?.badge.title)
-                tileGrid(ext.sevenTvBadges, key: "seventvBadges") { entry in
+                tileGrid(ext.sevenTvBadges, key: "seventvBadges", worn: \.worn) { entry in
                     Button { Task { await screen.equipSevenTvBadge(entry) } } label: {
                         BadgeTile(url: entry.badge.url, fallbacks: entry.badge.fallbacks, worn: entry.worn)
                     }
@@ -258,7 +262,7 @@ struct CosmeticsScreen: View {
         if let ext = screen.ext {
             if !ext.twitchSelectable.isEmpty {
                 header("Badge", platform: .twitch, detail: ext.twitchSelectable.first(where: \.isSelected)?.title)
-                tileGrid(ext.twitchSelectable, key: "twitch") { badge in
+                tileGrid(ext.twitchSelectable, key: "twitch", worn: \.isSelected) { badge in
                     Button { Task { await screen.equipTwitchBadge(badge) } } label: {
                         BadgeTile(url: badge.imageURL, worn: badge.isSelected)
                     }
@@ -357,15 +361,25 @@ struct CosmeticsScreen: View {
 
     /// Badge tiles five across, the first eight and then "Show all".
     @ViewBuilder
-    private func tileGrid<Item: Identifiable, Tile: View>(_ items: [Item], key: String,
+    private func tileGrid<Item: Identifiable, Tile: View>(_ items: [Item], key: String, worn: @escaping (Item) -> Bool,
                                                          @ViewBuilder tile: @escaping (Item) -> Tile) -> some View {
         let all = store.openSections.contains(key)
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 5), spacing: 10) {
-            ForEach(all || items.count <= Self.shortList + 2 ? items : Array(items.prefix(Self.shortList))) { item in
+            ForEach(all || items.count <= Self.shortList + 2 ? items : Self.short(items, worn: worn)) { item in
                 tile(item)
             }
         }
         if items.count > Self.shortList + 2 { showAll(count: items.count, key: key) }
+    }
+
+    /// The first eight, with the one you wear swapped into the last place when it sits further down,
+    /// so what you have on is always in view.
+    private static func short<Item>(_ items: [Item], worn: (Item) -> Bool) -> [Item] {
+        var shown = Array(items.prefix(shortList))
+        if !shown.contains(where: worn), let wearing = items.first(where: worn), !shown.isEmpty {
+            shown[shown.count - 1] = wearing
+        }
+        return shown
     }
 
     @ViewBuilder
@@ -414,6 +428,8 @@ private struct BadgeTile: View {
 /// and check, or the lock beside the name.
 private struct AtmosphereTile: View {
     let atmosphere: PickerAtmosphere
+    /// Worn, or None while nothing is.
+    let chosen: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -426,21 +442,21 @@ private struct AtmosphereTile: View {
             }
             .frame(width: 116, height: 66)
             .clipShape(RoundedRectangle(cornerRadius: SNRadius.thumb, style: .continuous))
-            .wornMarks(atmosphere.worn, radius: SNRadius.thumb)
+            .wornMarks(chosen, radius: SNRadius.thumb)
             HStack(spacing: 4) {
                 if !atmosphere.allowed {
                     Image(systemName: "lock.fill").font(.system(size: 10, weight: .semibold)).foregroundStyle(SN.textMuted)
                 }
                 Text(atmosphere.id == "tier" ? "None" : atmosphere.name)
-                    .font(.sn(12.5, atmosphere.worn ? 600 : 500))
-                    .foregroundStyle(atmosphere.worn ? SN.textPrimary : SN.textSecondary)
+                    .font(.sn(12.5, chosen ? 600 : 500))
+                    .foregroundStyle(chosen ? SN.textPrimary : SN.textSecondary)
                     .lineLimit(1)
             }
             .frame(width: 116, alignment: .leading)
         }
         .opacity(atmosphere.allowed ? 1 : 0.45)
         .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(atmosphere.worn ? .isSelected : [])
+        .accessibilityAddTraits(chosen ? .isSelected : [])
     }
 }
 
