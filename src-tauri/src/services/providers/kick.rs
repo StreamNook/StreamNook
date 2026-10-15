@@ -6,8 +6,9 @@
 //! Anonymous: no Kick login is needed to read. Sending (official OAuth API) is
 //! a later step; `send_capability` reports read-only for now.
 //!
-//! Flow: resolve the chatroom id from `kick.com/api/v2/channels/{slug}`, connect
-//! to Pusher, subscribe to `chatrooms.{id}.v2`, and decode the (double-encoded)
+//! Flow: resolve the chatroom id from `kick.com/api/v2/channels/{slug}`, ask
+//! Kick's realtime negotiation for the current Pusher app, connect, subscribe to
+//! `chatrooms.{id}.v2`, and decode the (double-encoded)
 //! `App\Events\ChatMessageEvent` payload.
 
 use super::kick_emotes;
@@ -31,9 +32,15 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-// Kick's public Pusher app. The key occasionally rotates; if messages stop,
-// re-read it from the website's websocket URL in DevTools.
-const PUSHER_URL: &str = "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0-rc2&flash=false";
+// Kick hands out its realtime app through a negotiation endpoint (the website
+// offers Pusher and Centrifugo; a Pusher-only offer still gets a Pusher app).
+// The key rotates, and a retired key is refused outright with close 4001 "App
+// key ... not in this cluster", so the key is asked for, not baked in. The
+// fallback is only for when the endpoint itself cannot be reached.
+const REALTIME_NEGOTIATE_URL: &str = "https://web.kick.com/api/v1/realtime/connection";
+const PUSHER_FALLBACK_KEY: &str = "34bf7a0ff419a2a775b9";
+const PUSHER_FALLBACK_CLUSTER: &str = "us2";
+const PUSHER_APP_TTL: Duration = Duration::from_secs(30 * 60);
 // Pusher's idle activity timeout is ~120s; ping before then.
 const READ_TIMEOUT_SECS: u64 = 100;
 const RECONNECT_DELAY_SECS: u64 = 3;
@@ -1035,6 +1042,66 @@ fn kick_resolve_script(slug: &str, label: &str) -> String {
     )
 }
 
+/// The negotiated Pusher app (key, cluster), shared by every chat socket.
+static PUSHER_APP: OnceLock<std::sync::Mutex<Option<(String, String, Instant)>>> = OnceLock::new();
+
+fn pusher_app_cache() -> &'static std::sync::Mutex<Option<(String, String, Instant)>> {
+    PUSHER_APP.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Ask Kick which Pusher app to use. Cached for `PUSHER_APP_TTL`; a socket that
+/// Pusher refuses for an app-level reason clears it so the next attempt asks again.
+async fn pusher_app() -> (String, String) {
+    if let Some((k, c, at)) = pusher_app_cache().lock().unwrap().clone() {
+        if at.elapsed() < PUSHER_APP_TTL {
+            return (k, c);
+        }
+    }
+    let body = json!({
+        "client": { "id": uuid::Uuid::new_v4().to_string(), "type": "web" },
+        "capabilities": { "accepted_providers": [{ "provider": "pusher" }] }
+    });
+    let negotiated = async {
+        let v: Value = HTTP_RESOLVE
+            .post(REALTIME_NEGOTIATE_URL)
+            .json(&body)
+            .send()
+            .await
+            .ok()?
+            .json()
+            .await
+            .ok()?;
+        v.pointer("/data/connections")?.as_array()?.iter().find_map(|c| {
+            if c.get("provider")?.as_str()? != "pusher" {
+                return None;
+            }
+            let creds = c.get("credentials")?;
+            Some((
+                creds.get("app_key")?.as_str()?.to_string(),
+                creds.get("cluster")?.as_str()?.to_string(),
+            ))
+        })
+    }
+    .await;
+    match negotiated {
+        Some((k, c)) => {
+            *pusher_app_cache().lock().unwrap() = Some((k.clone(), c.clone(), Instant::now()));
+            (k, c)
+        }
+        None => {
+            log::warn!("[Kick] realtime negotiation offered no Pusher app, using the fallback");
+            (PUSHER_FALLBACK_KEY.to_string(), PUSHER_FALLBACK_CLUSTER.to_string())
+        }
+    }
+}
+
+fn pusher_url(key: &str, cluster: &str) -> String {
+    format!(
+        "wss://ws-{}.pusher.com/app/{}?protocol=7&client=js&version=8.4.0-rc2&flash=false",
+        cluster, key
+    )
+}
+
 /// Connect + stream forever, reconnecting on drop, until the task is aborted.
 async fn run_connection(slug: String, chatroom_id: u64) {
     let channel_key = key::make_key("kick", &slug);
@@ -1051,7 +1118,8 @@ async fn run_connection(slug: String, chatroom_id: u64) {
 }
 
 async fn connect_and_stream(chatroom_id: u64, channel_id: Option<u64>, channel_key: &str) -> Result<()> {
-    let (ws, _) = connect_async(PUSHER_URL).await?;
+    let (app_key, cluster) = pusher_app().await;
+    let (ws, _) = connect_async(pusher_url(&app_key, &cluster)).await?;
     let (mut write, mut read) = ws.split();
 
     let subscribe = json!({
@@ -1090,6 +1158,16 @@ async fn connect_and_stream(chatroom_id: u64, channel_id: Option<u64>, channel_k
                     "pusher:ping" => {
                         let pong = json!({ "event": "pusher:pong", "data": {} });
                         let _ = write.send(Message::text(pong.to_string())).await;
+                    }
+                    "pusher:error" => {
+                        log::warn!("[Kick] pusher error: {}", frame.get("data").unwrap_or(&Value::Null));
+                    }
+                    "pusher:subscription_error" => {
+                        log::warn!(
+                            "[Kick] subscription refused on {}: {}",
+                            frame.get("channel").and_then(|c| c.as_str()).unwrap_or("?"),
+                            frame.get("data").unwrap_or(&Value::Null)
+                        );
                     }
                     "App\\Events\\ChatMessageEvent" => {
                         if let Some(msg) = parse_chat_message(&frame, channel_key) {
@@ -1181,7 +1259,19 @@ async fn connect_and_stream(chatroom_id: u64, channel_id: Option<u64>, channel_k
             Ok(Some(Ok(Message::Ping(p)))) => {
                 let _ = write.send(Message::Pong(p)).await;
             }
-            Ok(Some(Ok(Message::Close(_)))) => return Ok(()),
+            Ok(Some(Ok(Message::Close(frame)))) => {
+                // Pusher's 4000-4099 closes are app-level refusals (retired key,
+                // wrong cluster, app disabled): reconnecting with the same app
+                // can never work, so forget it and negotiate again.
+                if let Some(f) = frame {
+                    let code = u16::from(f.code);
+                    if (4000..4100).contains(&code) {
+                        *pusher_app_cache().lock().unwrap() = None;
+                        return Err(anyhow!("pusher refused app {}: {} {}", app_key, code, f.reason));
+                    }
+                }
+                return Ok(());
+            }
             Ok(Some(Err(e))) => return Err(e.into()),
             Ok(Some(Ok(_))) => {}
         }
