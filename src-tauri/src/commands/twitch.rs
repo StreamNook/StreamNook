@@ -2449,11 +2449,41 @@ pub async fn get_twitch_bio(user_id: String) -> Result<String, String> {
     TwitchService::get_user_bio(&user_id).await.map_err(|e| e.to_string())
 }
 
-/// Sets the signed-in account's Twitch bio (at most 300 characters); answers
-/// what Twitch stored.
+/// Sets the signed-in account's Twitch bio (at most 300 characters) through
+/// the twitch.tv web session; answers what Twitch stored.
 #[tauri::command]
-pub async fn update_twitch_bio(description: String) -> Result<String, String> {
-    TwitchService::update_user_bio(&description).await.map_err(|e| e.to_string())
+pub async fn update_twitch_bio(
+    state: tauri::State<'_, crate::models::settings::AppState>,
+    description: String,
+) -> Result<String, String> {
+    let me = TwitchService::get_user_info().await.map_err(|e| e.to_string())?;
+    crate::services::twitch_profile_edit::update_bio(&state.twitch_auth, &me.id, &description)
+        .await
+        .map(|stored| stored.description)
+}
+
+/// Changes the capitalization of the signed-in account's Twitch display name
+/// through the twitch.tv web session; answers what Twitch stored.
+#[tauri::command]
+pub async fn update_twitch_display_name(
+    state: tauri::State<'_, crate::models::settings::AppState>,
+    display_name: String,
+) -> Result<crate::services::twitch_profile_edit::ProfileEditResult, String> {
+    let me = TwitchService::get_user_info().await.map_err(|e| e.to_string())?;
+    crate::services::twitch_profile_edit::update_display_name(&state.twitch_auth, &me.id, &me.login, &display_name).await
+}
+
+/// Uploads a new Twitch profile picture or banner (`kind` `picture` or
+/// `banner`, the file as base64; PNG, JPG or GIF up to 10 MB) through the
+/// twitch.tv web session. Twitch shows it a few seconds later.
+#[tauri::command]
+pub async fn upload_twitch_profile_image(
+    state: tauri::State<'_, crate::models::settings::AppState>,
+    kind: crate::services::twitch_profile_edit::ProfileImageKind,
+    data_base64: String,
+) -> Result<(), String> {
+    let me = TwitchService::get_user_info().await.map_err(|e| e.to_string())?;
+    crate::services::twitch_profile_edit::upload_image(&state.twitch_auth, &me.id, kind, &data_base64).await
 }
 
 #[tauri::command]

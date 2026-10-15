@@ -138,4 +138,32 @@ import Testing
         sn = try await core.invoke("cosmetics_picker_state", args: [:], as: StreamNookPickerState.self)
         #expect(sn.theme == "tier" && !sn.showChatToggle)
     }
+
+    @Test func profileAnswersCarryTheWornAtmosphere() async throws {
+        let core = try core()
+        let sheet = try await core.invoke("user_profile_sheet", args: ["userId": "9", "login": "x", "displayName": "X"],
+                                          as: ProfileSheetData.self)
+        #expect(sheet.atmosphere?.id == "aurora" && sheet.atmosphere?.look.chatFrost == false && sheet.cologne == nil)
+        var me = try await core.invoke("own_identity_header", args: ["userId": "424242"], as: OwnIdentityData.self)
+        #expect(me.atmosphere?.name == "Aurora" && me.bannerURL?.hasPrefix("https://") == true)
+        _ = try await core.invoke("set_profile_theme", args: ["userId": "424242", "theme": "tier"])
+        me = try await core.invoke("own_identity_header", args: ["userId": "424242"], as: OwnIdentityData.self)
+        #expect(me.atmosphere == nil)
+    }
+
+    @Test func twitchProfileWritesFollowTheCoresRules() async throws {
+        let core = try core()
+        struct Stored: Decodable { var display_name: String }
+        let stored = try await core.invoke("update_twitch_display_name", args: ["displayName": "NOOKViewer"], as: Stored.self)
+        #expect(stored.display_name == "NOOKViewer")
+        let me = try await core.invoke("own_identity_header", args: ["userId": "424242"], as: OwnIdentityData.self)
+        #expect(me.displayName == "NOOKViewer")
+        await #expect(throws: CoreFailure.self) {
+            _ = try await core.invoke("update_twitch_display_name", args: ["displayName": "SomeoneElse"])
+        }
+        _ = try await core.invoke("upload_twitch_profile_image", args: ["kind": "banner", "dataBase64": "iVBORw0KGgo="])
+        await #expect(throws: CoreFailure.self) {
+            _ = try await core.invoke("upload_twitch_profile_image", args: ["kind": "poster", "dataBase64": "iVBORw0KGgo="])
+        }
+    }
 }
