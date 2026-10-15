@@ -517,46 +517,6 @@ struct SettingChips: View {
     }
 }
 
-/// Wraps its children onto as many lines as they need.
-struct FlowLayout: Layout {
-    var spacing: CGFloat = 6
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let rows = arrange(width: proposal.width ?? .infinity, subviews)
-        let height = rows.last.map { $0.y + $0.height } ?? 0
-        let width = rows.map(\.width).max() ?? 0
-        return CGSize(width: proposal.width ?? width, height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        for row in arrange(width: bounds.width, subviews) {
-            for (index, x) in row.items {
-                subviews[index].place(at: CGPoint(x: bounds.minX + x, y: bounds.minY + row.y), proposal: .unspecified)
-            }
-        }
-    }
-
-    private struct Row { var items: [(Int, CGFloat)] = []; var y: CGFloat = 0; var width: CGFloat = 0; var height: CGFloat = 0 }
-
-    private func arrange(width: CGFloat, _ subviews: Subviews) -> [Row] {
-        var rows: [Row] = [Row()]
-        for (index, view) in subviews.enumerated() {
-            let size = view.sizeThatFits(.unspecified)
-            if rows[rows.count - 1].width > 0, rows[rows.count - 1].width + spacing + size.width > width {
-                let y = rows[rows.count - 1].y + rows[rows.count - 1].height + spacing
-                rows.append(Row(y: y))
-            }
-            var row = rows[rows.count - 1]
-            let x = row.width > 0 ? row.width + spacing : 0
-            row.items.append((index, x))
-            row.width = x + size.width
-            row.height = max(row.height, size.height)
-            rows[rows.count - 1] = row
-        }
-        return rows
-    }
-}
-
 /// A plain paragraph at the top of a panel.
 struct PanelIntro: View {
     let text: String
