@@ -213,7 +213,7 @@ final class CosmeticsScreenModel {
             _ = try await core.invoke("update_user_chat_color", args: ["targetUserId": user.id, "color": color.value])
         } catch {
             ext = before
-            app.toasts.show("Could not change your name colour.")
+            app.toasts.show("Could not change your name color.")
         }
     }
 
@@ -330,7 +330,7 @@ struct CosmeticsScreen: View {
     @ViewBuilder
     private var colorSection: some View {
         if let ext = screen.ext, !ext.namedColors.isEmpty {
-            Collapsible(title: "Name colour", count: ext.namedColors.count, key: "color", store: store) {
+            Collapsible(title: "Name color", count: ext.namedColors.count, key: "color", store: store) {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 5), spacing: 10) {
                     ForEach(ext.namedColors) { color in
                         let on = ext.chatColor?.lowercased() == color.hex.lowercased()
