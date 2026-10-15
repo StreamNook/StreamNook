@@ -45,8 +45,8 @@ Term used in this area:
 
 ### 1.4 Cosmetics row
 
-- [ ] Row: paintbrush icon 20 px in accent, title "Cosmetics" 15 px medium, subtitle "Your badges, atmosphere, and 7TV paint" 12.5 px muted truncated, muted chevron 16 px; padding 12 px, 8 px radius, pressed `bg-surface-active`; outer inset 12 px left/right, 8 px below (m:screens/YouScreen.tsx:L101-L115) (iPhone: `NavigationLink` row with SF Symbol `paintbrush.pointed.fill` tinted accent, subtitle as secondary text)
-- [ ] Tapping opens the Cosmetics screen layer (`setCosmeticsOpen(true)`); the screen itself is profile-cosmetics.md (m:screens/YouScreen.tsx:L103) (iPhone: NavigationStack push of the Cosmetics view)
+- [~] Row: paintbrush icon 20 px in accent, title "Cosmetics" 15 px medium, subtitle "Your badges, atmosphere, and 7TV paint" 12.5 px muted truncated, muted chevron 16 px; padding 12 px, 8 px radius, pressed `bg-surface-active`; outer inset 12 px left/right, 8 px below (m:screens/YouScreen.tsx:L101-L115) (iPhone: `NavigationLink` row with SF Symbol `paintbrush.pointed.fill` tinted accent, subtitle as secondary text) (iPhone now: row seen; the icon is not in the accent color (design lane))
+- [x] Tapping opens the Cosmetics screen layer (`setCosmeticsOpen(true)`); the screen itself is profile-cosmetics.md (m:screens/YouScreen.tsx:L103) (iPhone: NavigationStack push of the Cosmetics view)
 
 ### 1.5 Section headers
 
