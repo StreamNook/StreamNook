@@ -488,6 +488,7 @@ allow = [
   "whisper_refresh",
   "get_ivr_user_summary",
   "get_ivr_subage_summary",
+  "get_sub_standing",
   "get_client_config",
   "get_drops_overview",
   "seventv_user_cosmetics",

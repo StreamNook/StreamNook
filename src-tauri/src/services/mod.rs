@@ -129,6 +129,7 @@ pub mod seventv_cosmetics_resolver;
 pub mod seventv_eventapi;
 pub mod song_id;
 pub mod stream_server;
+pub mod sub_standing;
 pub mod flv_fmp4;
 pub mod tiktok_relay;
 pub mod ts_fmp4;

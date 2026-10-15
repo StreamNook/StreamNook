@@ -2138,6 +2138,7 @@ pub fn run() {
             // IVR account facts
             get_ivr_user_summary,
             get_ivr_subage_summary,
+            get_sub_standing,
             // Server-controlled client switches
             get_client_config,
             // Drops page model
