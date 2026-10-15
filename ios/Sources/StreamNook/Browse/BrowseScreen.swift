@@ -26,6 +26,7 @@ struct BrowseScreen: View {
             }
         }
         .scrollIndicators(.hidden)
+        .scrollEdgeEffectStyle(.soft, for: .bottom)
         .scrollDismissesKeyboard(.immediately)
         .background(SN.background)
         .navigationTitle("Browse")
@@ -262,10 +263,12 @@ struct CategoryTile: View {
                             .font(CategoryChin.nameFont)
                             .foregroundStyle(SN.textPrimary)
                             .lineLimit(1)
+                            .allowsTightening(true)
                         if let viewers {
                             Text(viewers)
                                 .font(CategoryChin.viewersFont)
-                                .foregroundStyle(SN.textSecondary)
+                                // Nobody live is the least useful fact, so it is a step quieter (still AA).
+                                .foregroundStyle(category.viewerCount == 0 ? SN.textSecondary.opacity(0.7) : SN.textSecondary)
                                 .lineLimit(1)
                         }
                     }
@@ -280,8 +283,19 @@ struct CategoryTile: View {
         return Color.clear
             .aspectRatio(3 / 4, contentMode: .fit)
             .background {
-                AsyncImage(url: TwitchImage.boxArt(category.boxArtURL, width: art.width, height: art.height)) { phase in
-                    if let image = phase.image { image.resizable().scaledToFill() } else { SN.surface }
+                if let url = TwitchImage.boxArt(category.boxArtURL, width: art.width, height: art.height),
+                   !url.absoluteString.contains("404_boxart") {
+                    AsyncImage(url: url) { phase in
+                        if let image = phase.image { image.resizable().scaledToFill() } else { SN.surface }
+                    }
+                } else {
+                    // A category with no art of its own: our quiet placeholder, not Twitch's gray box.
+                    ZStack {
+                        SN.surface
+                        Image(systemName: "gamecontroller")
+                            .font(.system(size: 26, weight: .regular))
+                            .foregroundStyle(SN.textMuted)
+                    }
                 }
             }
             .clipShape(shape)
