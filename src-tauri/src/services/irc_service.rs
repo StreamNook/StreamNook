@@ -3390,6 +3390,15 @@ impl IrcService {
         held_by(&*get_channel_consumers().lock().await, window)
     }
 
+    /// The Twitch channels `window` holds, sorted.
+    pub async fn channels_held_by(window: &str) -> Vec<String> {
+        let claims = get_channel_consumers().lock().await;
+        let mut held: Vec<String> =
+            claims.iter().filter(|(_, holders)| holders.contains(window)).map(|(ch, _)| ch.clone()).collect();
+        held.sort();
+        held
+    }
+
     /// PART any joined channel that no window claims, except `keep`. Joined-
     /// but-unclaimed channels come from the ensure-only paths: the stream
     /// warm-up JOINs before any chat UI mounts, and if no UI ever claims on

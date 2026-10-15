@@ -458,6 +458,71 @@ pub fn cosmetics_frame(channel: &str, provider: &str, user_id: &str, worn: &Worn
     .to_string()
 }
 
+// ---- Pinned messages ---------------------------------------------------------
+
+/// The Twitch sets a compact byline may show, best first: broadcaster, staff,
+/// moderator, VIP (the role half of `twitch_badge_rank`).
+fn role_rank(set: &str) -> Option<u8> {
+    let rank = crate::models::chat_layout::twitch_badge_rank(set);
+    (rank <= 3).then_some(rank)
+}
+
+/// Stamps `sender_view` on each pin from Twitch's pinned-chat read, the way a
+/// row's author is drawn: the readable name colour, the sender's Twitch badge
+/// art for this channel (in chat order), the one role badge a collapsed
+/// banner shows, and their 7TV paint when it is already known.
+pub fn stamp_pins(pins: &mut [Value], channel_id: &str) {
+    let prefs = prefs();
+    for pin in pins.iter_mut() {
+        let color = pin.get("sender_color").and_then(Value::as_str);
+        let name_color = shown_color(color, &prefs);
+        let sets: Vec<(String, String)> = pin
+            .get("sender_badges")
+            .and_then(Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter_map(|b| {
+                        let set = b.get("set_id").and_then(Value::as_str)?;
+                        let version = b.get("version").and_then(Value::as_str).unwrap_or("1");
+                        Some((set.to_string(), version.to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut badges = Vec::new();
+        let mut role: Option<(u8, ViewBadge)> = None;
+        if prefs.show_badges {
+            for (set, version) in &sets {
+                let Some((url, title)) = twitch_badge_art(Some(channel_id), set, version) else { continue };
+                let badge = ViewBadge { url, title, provider: "twitch".to_string() };
+                if let Some(rank) = role_rank(set) {
+                    if role.as_ref().is_none_or(|(best, _)| rank < *best) {
+                        role = Some((rank, badge.clone()));
+                    }
+                }
+                badges.push(badge);
+            }
+        }
+        let paint = pin
+            .get("sender_id")
+            .and_then(Value::as_str)
+            .and_then(|id| crate::services::seventv_cosmetics_resolver::cosmetics_id("twitch", id))
+            .and_then(|id| crate::services::seventv_cosmetics_resolver::peek(&id))
+            .and_then(|user| worn_view(&user.paints, &user.badges).paint);
+        if let Some(obj) = pin.as_object_mut() {
+            obj.insert(
+                "sender_view".to_string(),
+                serde_json::json!({
+                    "name_color": name_color,
+                    "badges": badges,
+                    "role_badge": role.map(|(_, b)| b),
+                    "paint": paint,
+                }),
+            );
+        }
+    }
+}
+
 // ---- The body ----------------------------------------------------------------
 
 const MOD_HIDDEN: u32 = 1;
@@ -979,5 +1044,27 @@ mod tests {
         assert_eq!(twitch_badge_art(Some("42"), "subscriber", "12").unwrap().0, "https://c/sub12/2");
         assert_eq!(twitch_badge_art(Some("42"), "moderator", "1").unwrap().0, "https://g/mod/2");
         assert!(twitch_badge_art(Some("7"), "subscriber", "12").is_none());
+    }
+
+    #[test]
+    fn a_pin_carries_its_badge_art_and_one_role_badge() {
+        // The same art as the test above: the index is shared by every test.
+        note_twitch_badges(None, [("moderator", "1", "https://g/mod/2", "Moderator")]);
+        note_twitch_badges(Some("42"), [("subscriber", "12", "https://c/sub12/2", "1-Year Subscriber")]);
+        let mut pins = vec![serde_json::json!({
+            "sender_id": "",
+            "sender_color": "#000080",
+            "sender_badges": [
+                { "set_id": "moderator", "version": "1" },
+                { "set_id": "subscriber", "version": "12" },
+                { "set_id": "unknown", "version": "1" },
+            ],
+        })];
+        stamp_pins(&mut pins, "42");
+        let view = &pins[0]["sender_view"];
+        let urls: Vec<&str> = view["badges"].as_array().unwrap().iter().map(|b| b["url"].as_str().unwrap()).collect();
+        assert_eq!(urls, ["https://g/mod/2", "https://c/sub12/2"]);
+        assert_eq!(view["role_badge"]["url"], "https://g/mod/2");
+        assert_ne!(view["name_color"], "#000080", "navy is lifted to read on a dark theme");
     }
 }

@@ -1,5 +1,13 @@
 // Open chat tabs for the mobile pane.
 //
+// The tab rules live in Rust (`services/chat_tabs.rs`), shared with the iPhone
+// app: the stream tab is first and not closable, a room already open is never
+// opened twice, closing the room on screen falls back to the first one left,
+// and the stream tab follows the player unless you sit on another room. This
+// store mirrors Rust's list (from each command's answer and the `chat-tabs`
+// event, newest revision wins) and applies the connections each change asks
+// for.
+//
 // Every tab holds its own reference on the shared IRC connection via
 // chatConnectionStore's `acquireChannel`/`releaseChannel`, which is
 // reference-counted and supports N concurrent channels off one socket. That is
@@ -12,9 +20,9 @@
 // which is exactly the behaviour multi-chat must not have.
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { acquireChannel, releaseChannel } from '../../stores/chatConnectionStore';
 import type { ProviderId } from '../../types/providers';
-import { normalizeChannel, sliceLookupKey } from '../../utils/providerKey';
 import { Logger } from '../../utils/logger';
 
 export interface ChatTab {
@@ -39,9 +47,34 @@ export interface ChatTab {
   pinnedToStream: boolean;
 }
 
+/** A tab as Rust sends it. */
+interface RustTab {
+  channel: string;
+  provider: ProviderId;
+  login: string;
+  channel_id: string | null;
+  label: string;
+  avatar: string | null;
+  pinned_to_stream: boolean;
+}
+
+interface RustView {
+  tabs: RustTab[];
+  active_channel: string | null;
+  mixed_platforms: boolean;
+  revision: number;
+}
+
+interface RustChange extends RustView {
+  acquire: RustTab[];
+  release: RustTab[];
+}
+
 interface ChatTabsState {
   tabs: ChatTab[];
   activeChannel: string | null;
+  /** Rust's revision of the list shown, so an older answer never wins. */
+  revision: number;
   /** Bumped per channel to force a chat reload. */
   reloadNonce: Record<string, number>;
 
@@ -61,177 +94,144 @@ interface ChatTabsState {
     provider?: ProviderId,
   ) => void;
   removeTab: (channel: string) => void;
-  /** Fill in a tab's label or avatar after it opened (e.g. from a pasted link). */
-  patchTab: (channel: string, patch: Partial<Pick<ChatTab, 'label' | 'avatar'>>) => void;
   setActive: (channel: string) => void;
   reload: (channel: string) => void;
 }
 
-/** One place that turns (name, id, provider) into a tab's identity. */
-function tabIdentity(channel: string, channelId: string | null, provider: ProviderId) {
-  const login = normalizeChannel(provider, channel.trim());
+function fromRust(t: RustTab): ChatTab {
   return {
-    key: sliceLookupKey(provider, login),
-    login,
-    channelId: provider === 'twitch' ? channelId : null,
+    channel: t.channel,
+    provider: t.provider,
+    login: t.login,
+    channelId: t.channel_id,
+    label: t.label,
+    avatar: t.avatar,
+    pinnedToStream: t.pinned_to_stream,
   };
 }
 
-export const useChatTabsStore = create<ChatTabsState>((set, get) => ({
-  tabs: [],
-  activeChannel: null,
-  reloadNonce: {},
+function room(channel: string, channelId: string | null, label: string, avatar?: string | null, provider?: ProviderId) {
+  return { provider: provider ?? 'twitch', channel, channel_id: channelId, label, avatar: avatar ?? null };
+}
 
-  syncStreamTab: (channel, channelId, label, avatar, provider = 'twitch') => {
-    const { tabs, activeChannel } = get();
-    const existingStreamTab = tabs.find((t) => t.pinnedToStream);
+let listening = false;
 
-    if (!channel) {
-      // Stream closed. Drop the pinned tab but keep any manually added chats,
-      // so moderating several rooms survives closing the player.
-      if (existingStreamTab) {
-        void releaseChannel(existingStreamTab.login, existingStreamTab.provider).catch(() => {});
-        const rest = tabs.filter((t) => !t.pinnedToStream);
-        set({
-          tabs: rest,
-          activeChannel:
-            activeChannel === existingStreamTab.channel ? (rest[0]?.channel ?? null) : activeChannel,
-        });
-      }
-      return;
+export const useChatTabsStore = create<ChatTabsState>((set, get) => {
+  /** Shows Rust's list unless a newer one is already on screen. */
+  const mirror = (view: RustView | null | undefined) => {
+    if (!view || view.revision < get().revision) return;
+    set({ tabs: view.tabs.map(fromRust), activeChannel: view.active_channel, revision: view.revision });
+  };
+
+  /** Mirrors the change, then leaves and joins the rooms it names. */
+  const apply = (change: RustChange | null | undefined) => {
+    if (!change) return;
+    mirror(change);
+    for (const t of change.release ?? []) {
+      void releaseChannel(t.login, t.provider).catch(() => {});
     }
-
-    const { key, login, channelId: id } = tabIdentity(channel, channelId, provider);
-    if (existingStreamTab?.channel === key) return;
-
-    // If this channel is already open as a manually added tab, promote it
-    // rather than opening a duplicate.
-    const alreadyOpen = tabs.find((t) => t.channel === key);
-
-    if (existingStreamTab) void releaseChannel(existingStreamTab.login, existingStreamTab.provider).catch(() => {});
-    if (!alreadyOpen) {
-      void acquireChannel(login, id, provider).catch((err) =>
+    for (const t of change.acquire ?? []) {
+      void acquireChannel(t.login, t.channel_id, t.provider).catch((err) =>
         Logger.warn('[ChatTabs] acquire failed:', err),
       );
     }
+  };
 
-    const next: ChatTab[] = [
-      { channel: key, provider, login, channelId: id, label, avatar, pinnedToStream: true },
-      ...tabs.filter((t) => !t.pinnedToStream && t.channel !== key),
-    ];
-    set({
-      tabs: next,
-      // Follow the stream on switch unless the user is sitting on another room.
-      activeChannel:
-        activeChannel && activeChannel !== existingStreamTab?.channel && activeChannel !== key
-          ? activeChannel
-          : key,
-    });
-  },
-
-  addTab: (channel, channelId, label, avatar, provider = 'twitch') => {
-    const { key, login, channelId: id } = tabIdentity(channel, channelId, provider);
-    const { tabs } = get();
-    if (tabs.some((t) => t.channel === key)) {
-      set({ activeChannel: key });
-      return;
-    }
-    void acquireChannel(login, id, provider).catch((err) =>
-      Logger.warn('[ChatTabs] acquire failed:', err),
+  // Rust patches a tab on its own (a Kick room's real name and picture), so
+  // follow its event too. Started on the first change, so tests and boot order
+  // need nothing set up.
+  const follow = () => {
+    if (listening) return;
+    listening = true;
+    void Promise.resolve(listen<RustView>('chat-tabs', (e) => mirror(e.payload))).catch((err) =>
+      Logger.debug('[ChatTabs] no tab events:', err),
     );
-    set({
-      tabs: [...tabs, { channel: key, provider, login, channelId: id, label, avatar, pinnedToStream: false }],
-      activeChannel: key,
-    });
-    // A room opened from a pasted link (or a search row without a picture)
-    // knows only its slug. Ask the platform for the real name and avatar so the
-    // tab reads like every other one instead of a lowercase slug and a letter.
-    if (provider !== 'twitch' && (!avatar || label === login)) {
-      void invoke<{ user_name?: string; profile_image_url?: string }>('provider_channel_meta', {
-        provider,
-        channel: login,
-      })
-        .then((meta) => {
-          get().patchTab(key, {
-            ...(meta?.user_name ? { label: meta.user_name } : {}),
-            ...(meta?.profile_image_url ? { avatar: meta.profile_image_url } : {}),
-          });
-        })
-        .catch((err) => Logger.debug('[ChatTabs] channel meta unavailable:', err));
-    }
-  },
+  };
 
-  patchTab: (channel, patch) => {
-    const key = channel.toLowerCase();
-    if (!get().tabs.some((t) => t.channel === key)) return;
-    set((s) => ({ tabs: s.tabs.map((t) => (t.channel === key ? { ...t, ...patch } : t)) }));
-  },
+  const change = (command: string, args: Record<string, unknown>) => {
+    follow();
+    void invoke<RustChange>(command, args)
+      .then(apply)
+      .catch((err) => Logger.warn(`[ChatTabs] ${command} failed:`, err));
+  };
 
-  removeTab: (channel) => {
-    const key = channel.toLowerCase();
-    const { tabs, activeChannel } = get();
-    const tab = tabs.find((t) => t.channel === key);
-    if (!tab || tab.pinnedToStream) return;
-    void releaseChannel(tab.login, tab.provider).catch(() => {});
-    const rest = tabs.filter((t) => t.channel !== key);
-    set({
-      tabs: rest,
-      activeChannel: activeChannel === key ? (rest[0]?.channel ?? null) : activeChannel,
-    });
-  },
+  return {
+    tabs: [],
+    activeChannel: null,
+    revision: 0,
+    reloadNonce: {},
 
-  setActive: (channel) => set({ activeChannel: channel.toLowerCase() }),
+    syncStreamTab: (channel, channelId, label, avatar, provider) =>
+      change('chat_tabs_sync_stream', {
+        room: channel ? room(channel, channelId, label, avatar, provider) : null,
+      }),
 
-  reload: (channel) => {
-    const key = channel.toLowerCase();
-    const tab = get().tabs.find((t) => t.channel === key);
-    if (!tab) return;
-    // Non-Twitch rooms are not on the Twitch IRC service, so the full cycle
-    // below does nothing for them. Rebuild the room's own adapter instead.
-    //
-    // At the ADAPTER, not the page store: the store is reference-counted, and
-    // the player holds its own reference on the watched room, so a release and
-    // re-acquire there only moved a counter and never reconnected anything.
-    // The adapter counts one claim per window, so dropping and retaking it
-    // closes the room's socket and opens a fresh one. The page's slice stays
-    // attached to the shared bridge throughout and simply resumes.
-    if (tab.provider !== 'twitch') {
+    addTab: (channel, channelId, label, avatar, provider) =>
+      change('chat_tabs_add', { room: room(channel, channelId, label, avatar, provider) }),
+
+    removeTab: (channel) => change('chat_tabs_remove', { channel }),
+
+    setActive: (channel) => {
+      follow();
+      // Shown at once; Rust's answer confirms it (or puts back a room that is gone).
+      const key = channel.toLowerCase();
+      if (get().tabs.some((t) => t.channel === key)) set({ activeChannel: key });
+      void invoke<RustView>('chat_tabs_set_active', { channel })
+        .then(mirror)
+        .catch((err) => Logger.warn('[ChatTabs] chat_tabs_set_active failed:', err));
+    },
+
+    reload: (channel) => {
+      const key = channel.toLowerCase();
+      const tab = get().tabs.find((t) => t.channel === key);
+      if (!tab) return;
+      // Non-Twitch rooms are not on the Twitch IRC service, so the full cycle
+      // below does nothing for them. Rebuild the room's own adapter instead.
+      //
+      // At the ADAPTER, not the page store: the store is reference-counted, and
+      // the player holds its own reference on the watched room, so a release and
+      // re-acquire there only moved a counter and never reconnected anything.
+      // The adapter counts one claim per window, so dropping and retaking it
+      // closes the room's socket and opens a fresh one. The page's slice stays
+      // attached to the shared bridge throughout and simply resumes.
+      if (tab.provider !== 'twitch') {
+        void (async () => {
+          try {
+            await invoke('provider_chat_disconnect', { provider: tab.provider, channel: tab.login }).catch(
+              () => {},
+            );
+            await invoke('provider_chat_connect', { provider: tab.provider, channel: tab.login });
+          } catch (err) {
+            Logger.warn('[ChatTabs] reload failed:', err);
+          }
+          set((s) => ({ reloadNonce: { ...s.reloadNonce, [key]: (s.reloadNonce[key] ?? 0) + 1 } }));
+        })();
+        return;
+      }
+      // Rebuild the whole chat service rather than just this room.
+      //
+      // Dropping and retaking the reference is only a PART and a re-JOIN, which
+      // is the right shape when the connection is healthy and the wrong one
+      // whenever someone actually reaches for this control. People reload because
+      // messages stopped, and messages stop because the upstream connection died,
+      // in which case there is nothing left to re-JOIN onto and the reload
+      // appears to do nothing at all. See chatRecovery for why only a full stop
+      // clears that state.
+      //
+      // Forced, because a deliberate tap must always act even if something else
+      // rebuilt the connection moments ago. hardCycleChat bumps the nonce for
+      // every room it touches, so this one gets refreshed along the way.
+      //
+      // Imported here rather than at the top because chatRecovery reads this
+      // store, and a static import both ways is a cycle.
       void (async () => {
         try {
-          await invoke('provider_chat_disconnect', { provider: tab.provider, channel: tab.login }).catch(
-            () => {},
-          );
-          await invoke('provider_chat_connect', { provider: tab.provider, channel: tab.login });
+          const { hardCycleChat } = await import('./chatRecovery');
+          await hardCycleChat(`manual reload of ${key}`, true);
         } catch (err) {
           Logger.warn('[ChatTabs] reload failed:', err);
         }
-        set((s) => ({ reloadNonce: { ...s.reloadNonce, [key]: (s.reloadNonce[key] ?? 0) + 1 } }));
       })();
-      return;
-    }
-    // Rebuild the whole chat service rather than just this room.
-    //
-    // Dropping and retaking the reference is only a PART and a re-JOIN, which
-    // is the right shape when the connection is healthy and the wrong one
-    // whenever someone actually reaches for this control. People reload because
-    // messages stopped, and messages stop because the upstream connection died,
-    // in which case there is nothing left to re-JOIN onto and the reload
-    // appears to do nothing at all. See chatRecovery for why only a full stop
-    // clears that state.
-    //
-    // Forced, because a deliberate tap must always act even if something else
-    // rebuilt the connection moments ago. hardCycleChat bumps the nonce for
-    // every room it touches, so this one gets refreshed along the way.
-    //
-    // Imported here rather than at the top because chatRecovery reads this
-    // store, and a static import both ways is a cycle.
-    void (async () => {
-      try {
-        const { hardCycleChat } = await import('./chatRecovery');
-        await hardCycleChat(`manual reload of ${key}`, true);
-      } catch (err) {
-        Logger.warn('[ChatTabs] reload failed:', err);
-      }
-    })();
-  },
-}));
+    },
+  };
+});

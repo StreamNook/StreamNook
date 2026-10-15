@@ -2262,6 +2262,23 @@ pub fn run() {
             // The phones' resume refresh (desktop windows reload on mount).
             #[cfg(mobile)]
             note_app_resumed,
+            // The phone chat pane's tabs and its Add a chat sheet.
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_get,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_sync_stream,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_add,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_remove,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_tabs_set_active,
+            #[cfg(mobile)]
+            commands::chat_tabs::chat_room_from_link,
+            #[cfg(mobile)]
+            commands::chat_tabs::search_chat_rooms,
+            #[cfg(mobile)]
+            commands::chat_tabs::rebuild_chat,
             set_home_sidebar,
             load_more_home_recommended,
             // Per-channel chat state + user history watches (Rust-owned polls)
