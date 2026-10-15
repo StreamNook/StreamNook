@@ -228,23 +228,33 @@ struct CosmeticsScreen: View {
     private var store: CosmeticsStore { model.cosmetics }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                badgeSection
-                atmosphereSection
-                sevenTvSection
-                twitchSection
+        ScrollViewReader { reader in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    badgeSection.id("badge")
+                    atmosphereSection.id("atmosphere")
+                    sevenTvSection.id("seventv")
+                    twitchSection.id("twitch")
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 16)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-            .padding(.bottom, 16)
+            .onChange(of: store.scrollTarget) { _, target in
+                guard let target else { return }
+                withAnimation { reader.scrollTo(target, anchor: .top) }
+                store.scrollTarget = nil
+            }
         }
         .scrollIndicators(.hidden)
         .background(SN.background)
         .navigationTitle("Cosmetics")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
-        .task { await screen.load() }
+        .task {
+            store.activeScreen = screen
+            await screen.load()
+        }
         .sheet(isPresented: $screen.showSevenTvSignIn) {
             SevenTvSignInSheet(core: model.core) { stored in
                 Task { await screen.sevenTvSignInFinished(stored) }

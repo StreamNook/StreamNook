@@ -32,6 +32,10 @@ final class CosmeticsStore {
     var openSections: Set<String> = []
     /// The profile sheet on screen, nil when none.
     var profile: ProfileTarget?
+    /// A section of the Cosmetics screen to scroll to (drive steps).
+    var scrollTarget: String?
+    /// The Cosmetics screen while it is open (drive steps reach its taps through it).
+    @ObservationIgnored weak var activeScreen: CosmeticsScreenModel?
     /// Bumped when the registries change, so open surfaces re-read.
     private(set) var registryVersion = 0
     @ObservationIgnored private var core: CoreBridge?
