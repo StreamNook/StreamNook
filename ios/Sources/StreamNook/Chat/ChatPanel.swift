@@ -77,7 +77,7 @@ struct ChatPanel: View {
                 if let rooms {
                     StreakBanners(rooms: rooms, session: session)
                 }
-                ChatComposer(session: session)
+                ChatComposer(session: session, onProfile: onProfile)
             }
         }
         .onAppear { session.start() }

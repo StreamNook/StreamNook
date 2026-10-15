@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import type { IvrSubageSummary } from '../types';
 import { useAppStore } from '../stores/AppStore';
 import { Logger } from '../utils/logger';
 import { streamProvider, followIdentifier } from '../utils/streamProvider';
@@ -159,29 +158,10 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
       setCheckingFollowStatus(false);
       return;
     }
-    if (!userId) {
-      setIsFollowing(null);
-      setCheckingFollowStatus(false);
-      return;
-    }
-
-    const checkFollowStatus = async () => {
-      try {
-        setCheckingFollowStatus(true);
-        const result = await invoke<boolean>('check_following_status', { targetUserId: userId });
-        setIsFollowing(result);
-      } catch (err) {
-        Logger.error('[useChannelSocial] Failed to check follow status:', err);
-        setIsFollowing(false);
-      } finally {
-        setCheckingFollowStatus(false);
-      }
-    };
-
-    checkFollowStatus();
+    // Twitch: Rust answers the follow together with the subscription (below).
     // `providerFollows` is a dep so the state re-derives when the list changes
     // (an import, or a follow made from another surface).
-  }, [enabled, userId, isTwitch, provider, providerChannel, providerFollows]);
+  }, [enabled, isTwitch, provider, providerChannel, providerFollows]);
 
   // Check subscription status when the channel changes
   useEffect(() => {
@@ -248,6 +228,8 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
       };
     }
     if (!userId || !userLogin || !currentUser?.login) {
+      setIsFollowing(null);
+      setCheckingFollowStatus(false);
       setIsSubscribed(false);
       setHasSubHistory(false);
       setCumulativeMonths(0);
@@ -255,67 +237,40 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
       return;
     }
 
-    const channelId = userId;
-    const channelLogin = userLogin;
-    const loginOfUser = currentUser.login;
-
-    const checkSubscriptionStatus = async () => {
-      try {
-        const subage = await invoke<IvrSubageSummary | null>('get_ivr_subage_summary', {
-          login: loginOfUser,
-          channel: channelLogin,
-        }).catch(() => null);
-
-        // An active sub has a type ("paid", "gift", "prime", ...).
-        const isSub = subage?.active_sub_type != null;
-        const cumMonths = subage?.cumulative_months ?? 0;
-
-        setIsSubscribed(isSub);
-        setHasSubHistory(cumMonths > 0 && !isSub);
-        setCumulativeMonths(cumMonths);
-
-        // Determine which badge version to show
-        let badgeMonths = cumMonths;
-        if (!isSub && cumMonths > 0) {
-          // Lapsed subscriber: show badge for the NEXT month they'd reach
-          badgeMonths = cumMonths + 1;
-        }
-
-        const getBadgeVersion = (months: number): string => {
-          if (months >= 72) return '72';
-          if (months >= 60) return '60';
-          if (months >= 48) return '48';
-          if (months >= 36) return '36';
-          if (months >= 24) return '24';
-          if (months >= 18) return '18';
-          if (months >= 12) return '12';
-          if (months >= 9) return '9';
-          if (months >= 6) return '6';
-          if (months >= 3) return '3';
-          if (months >= 2) return '2';
-          return '0';
-        };
-
-        const badgeVersion = getBadgeVersion(badgeMonths);
-
-        const { initializeBadgeCache, parseBadges } = await import('../services/twitchBadges');
-        await initializeBadgeCache(channelId);
-        const badges = parseBadges(`subscriber/${badgeVersion}`, channelId);
-
-        if (badges.length > 0 && badges[0].info?.image_url_2x) {
-          setSubscriberBadgeUrl(badges[0].info.image_url_2x);
-        } else {
-          setSubscriberBadgeUrl(null);
-        }
-      } catch (err) {
-        Logger.error('[useChannelSocial] Failed to check subscription status:', err);
+    // Twitch: whether you follow (null while unknown, never guessed), whether
+    // you subscribe or used to, and the badge your next month wears, all from
+    // Rust (services/channel_relationship.rs).
+    let cancelled = false;
+    setCheckingFollowStatus(true);
+    void invoke<{
+      following: boolean | null;
+      subscribed: boolean;
+      has_sub_history: boolean;
+      cumulative_months: number;
+      badge_url: string | null;
+    }>('channel_relationship', { channelId: userId, channelLogin: userLogin })
+      .then((rel) => {
+        if (cancelled) return;
+        setIsFollowing(rel.following);
+        setIsSubscribed(rel.subscribed);
+        setHasSubHistory(rel.has_sub_history);
+        setCumulativeMonths(rel.cumulative_months);
+        setSubscriberBadgeUrl(rel.badge_url);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        Logger.error('[useChannelSocial] Failed to read the channel relationship:', err);
+        setIsFollowing(null);
         setIsSubscribed(false);
         setHasSubHistory(false);
         setSubscriberBadgeUrl(null);
-      }
+      })
+      .finally(() => {
+        if (!cancelled) setCheckingFollowStatus(false);
+      });
+    return () => {
+      cancelled = true;
     };
-
-    checkSubscriptionStatus();
   }, [enabled, userId, userLogin, currentUser?.login, provider, providerChannel, providerFollows]);
 
   // Handle follow/unfollow action
@@ -347,16 +302,9 @@ export function useChannelSocial({ provider: providerProp, userId, userLogin, us
         else await store.follow(provider, providerChannel, userName ?? undefined);
       }
       const nowFollowing = !isFollowing;
+      // A followers-only room you are in rewords itself from Rust once the
+      // follow lands (follow_channel / unfollow_channel).
       setIsFollowing(nowFollowing);
-      // Announce it, so anything else keyed on follow state updates without
-      // making its own request. The mobile composer blocks on "Follow to send a
-      // message" in followers-only rooms and listens for this, so following
-      // unlocks it immediately instead of at the next remount.
-      window.dispatchEvent(
-        new CustomEvent('sn:follow-changed', {
-          detail: { userId, following: nowFollowing },
-        }),
-      );
       Logger.debug(`[useChannelSocial] Successfully ${action}ed ${userLogin}`);
     } catch (err) {
       Logger.error(`[useChannelSocial] ${action} error:`, err);

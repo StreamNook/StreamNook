@@ -63,6 +63,10 @@ public struct ChatStyle: Sendable, Equatable {
     public var hidePlaceholder = false
     public var hideCommandButton = false
     public var hideEmoteButton = false
+    /// The room-mode prompt and icons in the composer (chat_input.show_room_modes).
+    public var showRoomModes = true
+    /// The suggestion strip over the composer (chat_input.emote_tab_complete_enabled).
+    public var suggestionsEnabled = true
 
     public init() {}
 
@@ -87,6 +91,8 @@ public struct ChatStyle: Sendable, Equatable {
             hidePlaceholder = i["hide_placeholder"] as? Bool ?? hidePlaceholder
             hideCommandButton = i["hide_command_button"] as? Bool ?? hideCommandButton
             hideEmoteButton = i["hide_emote_button"] as? Bool ?? hideEmoteButton
+            showRoomModes = i["show_room_modes"] as? Bool ?? showRoomModes
+            suggestionsEnabled = i["emote_tab_complete_enabled"] as? Bool ?? suggestionsEnabled
         }
         if let c = root["cosmetics"] as? [String: Any], let shadows = c["paint_shadows"] as? String {
             paintShadows = shadows

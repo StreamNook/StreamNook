@@ -92,6 +92,16 @@ public final class FakeCore: CoreBridge {
             return try Self.json(hits)
         case "match_emote_tokens":
             return try Self.json(Self.emoteMatches(chatFixture?.emotesJSON, args: args))
+        case "emote_picker":
+            return try Self.json(Self.emotePicker(chatFixture?.emotesJSON, args: args))
+        case "run_slash_command":
+            return try Self.json(Self.slashOutcome(args["text"] as? String ?? ""))
+        case "channel_relationship":
+            // Never a real account: a fixed "not following, never subscribed" answer.
+            return try Self.json(["following": false, "subscribed": false, "has_sub_history": false,
+                                  "cumulative_months": 0, "badge_url": NSNull()] as [String: Any])
+        case "asset_cache_set_burst":
+            return "null"
         case "send_chat_message":
             let text = args["message"] as? String ?? ""
             state.withLock { $0.sent.append(text) }
@@ -198,6 +208,63 @@ public final class FakeCore: CoreBridge {
         }
         let limit = args["limit"] as? Int ?? (search ? 60 : 50)
         return ["rows": Array(rows.prefix(limit)), "total": rows.count, "ready": true]
+    }
+
+    /// A stand-in for the core's picker over the fixture's set: the room's tabs with counts, and
+    /// the selected tab as one section ("Global Emotes" for Twitch, "Standard" for the rest).
+    static func emotePicker(_ emotesJSON: Data?, args: [String: Any]) -> [String: Any] {
+        let set = emotesJSON.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: [[String: Any]]] } ?? [:]
+        let ids = ["twitch", "bttv", "7tv", "ffz"]
+        // The fake has no favorites: that tab answers with nothing in it.
+        if args["tab"] as? String == "favorites" {
+            var tabs: [[String: Any]] = [["id": "favorites", "count": 0]]
+            tabs += ids.map { ["id": $0, "count": set[$0]?.count ?? 0] }
+            return ["ready": emotesJSON != nil, "tab": "favorites", "tabs": tabs, "sections": [Any]()]
+        }
+        let tab = (args["tab"] as? String).flatMap { ids.contains($0) ? $0 : nil } ?? "twitch"
+        let query = (args["query"] as? String ?? "").lowercased()
+        let rows = (set[tab] ?? []).filter { emote in
+            query.isEmpty || ((emote["name"] as? String)?.lowercased().contains(query) ?? false)
+        }.map { emote -> [String: Any] in
+            var cell = emote
+            cell["provider"] = tab
+            cell["favorite"] = false
+            cell["locked"] = false
+            return cell
+        }
+        let section: [String: Any] = [
+            "key": tab == "twitch" ? "globals" : "standard",
+            "title": tab == "twitch" ? "Global Emotes" : "Standard",
+            "columns": 7, "emotes": rows,
+        ]
+        var tabs: [[String: Any]] = [["id": "favorites", "count": 0]]
+        tabs += ids.map { ["id": $0, "count": set[$0]?.count ?? 0] }
+        return ["ready": emotesJSON != nil, "tab": tab, "tabs": tabs, "sections": rows.isEmpty ? [] : [section]]
+    }
+
+    /// A stand-in for the core's slash dispatcher that never writes anywhere: a command names
+    /// what it would do in a toast or a notice; `/me` and unknown commands go to chat as typed.
+    static func slashOutcome(_ text: String) -> [String: Any] {
+        let words = text.dropFirst().split(separator: " ").map(String.init)
+        let command = words.first?.lowercased() ?? ""
+        switch command {
+        case "ban":
+            guard words.count > 1 else {
+                return ["handled": true, "clear_draft": true, "toasts": [["text": "Usage: /ban <username> [reason]", "kind": "info"]],
+                        "notices": ["Usage: /ban <username> [reason]"]]
+            }
+            return ["handled": true, "clear_draft": true, "toasts": [["text": "Banned \(words[1])", "kind": "success"]], "notices": []]
+        case "uptime":
+            return ["handled": true, "clear_draft": true, "toasts": [], "notices": ["Live for 1 hour 2 minutes"]]
+        case "shrug":
+            return ["handled": true, "clear_draft": true, "send": (words.dropFirst().joined(separator: " ") + " ¯\\_(ツ)_/¯")
+                        .trimmingCharacters(in: .whitespaces), "toasts": [], "notices": []]
+        case "usercard", "user":
+            return ["handled": true, "clear_draft": true, "toasts": [], "notices": [],
+                    "ui": ["kind": "open_user_card", "login": words.count > 1 ? words[1] : ""]]
+        default:
+            return ["handled": false, "clear_draft": false, "toasts": [], "notices": []]
+        }
     }
 
     // MARK: Canned data

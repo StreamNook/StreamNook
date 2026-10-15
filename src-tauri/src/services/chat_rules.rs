@@ -1091,6 +1091,8 @@ impl ChatRules {
                     ev.highlight.is_some(),
                     ev.mentioned,
                 );
+                // A running `/nuke` window sees every recorded message here.
+                crate::services::nuke::observe(&facts.channel_key, msg, facts.ts_ms);
             }
             ev
         };

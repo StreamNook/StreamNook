@@ -28,6 +28,7 @@ use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::{OnceLock, RwLock};
 
 use crate::models::settings::Settings;
 use crate::services::emote_service::{Emote, EmoteProvider, EmoteSet};
@@ -115,6 +116,17 @@ impl Order {
 // "Contains" instead of "starts with", from chat_input.emote_tab_complete_match_mode.
 static CONTAINS_MODE: AtomicBool = AtomicBool::new(false);
 
+// Chatter names after the emotes in the Tab cycle and the phone strip, from
+// chat_input.emote_tab_complete_include_chatters (on unless turned off).
+static INCLUDE_CHATTERS: AtomicBool = AtomicBool::new(true);
+
+/// The viewer's nicknames for chatters (user id -> nickname), from
+/// chat_customization.user_overrides, so a nickname finds its chatter too.
+fn nicknames() -> &'static RwLock<HashMap<String, String>> {
+    static NICKS: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
+    NICKS.get_or_init(Default::default)
+}
+
 /// Pick up the match mode from saved settings. Runs on boot and every save.
 pub fn refresh_settings(settings: &Settings) {
     let includes = settings
@@ -124,6 +136,103 @@ pub fn refresh_settings(settings: &Settings) {
         .and_then(|v| v.as_str())
         == Some("includes");
     CONTAINS_MODE.store(includes, AtomicOrdering::Relaxed);
+    let chatters = settings
+        .chat_input
+        .extra
+        .get("emote_tab_complete_include_chatters")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    INCLUDE_CHATTERS.store(chatters, AtomicOrdering::Relaxed);
+    let nicks: HashMap<String, String> = settings
+        .extra
+        .get("chat_customization")
+        .and_then(|g| g.get("user_overrides"))
+        .and_then(|o| o.as_object())
+        .map(|o| {
+            o.iter()
+                .filter_map(|(id, v)| {
+                    let nick = v.get("nickname")?.as_str()?.trim();
+                    (!nick.is_empty()).then(|| (id.clone(), nick.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Ok(mut guard) = nicknames().write() {
+        *guard = nicks;
+    }
+}
+
+/// The most chatter rows one answer adds.
+pub const MAX_CHATTERS: usize = 5;
+/// The Tab cycle's and the phone strip's row cap, chatters included.
+pub const CYCLE_CAP: usize = 50;
+
+/// What a chatter row inserts: the display name when it differs from the
+/// login only by case, else the login (a localized display name mentions
+/// nobody), with `@` when the word had one.
+fn chatter_insert(login: &str, display: &str, at: bool) -> String {
+    let name = if !display.is_empty() && display.eq_ignore_ascii_case(login) { display } else { login };
+    format!("{}{name}", if at { "@" } else { "" })
+}
+
+/// Chatter rows for the cycle `word` after `emotes`: recent chatters of
+/// `channel` (newest first) whose login, display name or nickname starts with
+/// the word (contains it, in "includes" mode), minus a leading `@`. None for a
+/// `:` word, once `emotes` fills the cap, or while the setting is off. A name
+/// an emote row already shows is skipped.
+pub fn chatter_rows(
+    word: &str,
+    emotes: &[Row],
+    contains: bool,
+    chatters: &[(String, String, String)],
+) -> Vec<Row> {
+    if !INCLUDE_CHATTERS.load(AtomicOrdering::Relaxed) || word.starts_with(':') || emotes.len() >= CYCLE_CAP {
+        return Vec::new();
+    }
+    let at = word.starts_with('@');
+    let needle = word.trim_start_matches('@').to_lowercase();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    let nicks = nicknames().read().map(|g| g.clone()).unwrap_or_default();
+    let hit = |s: &str| {
+        let s = s.to_lowercase();
+        if contains { s.contains(&needle) } else { s.starts_with(&needle) }
+    };
+    let mut taken: HashSet<String> = emotes.iter().map(|r| r.name.to_lowercase()).collect();
+    let room = (CYCLE_CAP - emotes.len()).min(MAX_CHATTERS);
+    let mut out = Vec::new();
+    for (login, user_id, display) in chatters {
+        if out.len() >= room {
+            break;
+        }
+        let shown = if display.is_empty() { login.as_str() } else { display.as_str() };
+        let nick = nicks.get(user_id).map(String::as_str);
+        if !(hit(login) || hit(shown) || nick.is_some_and(hit)) {
+            continue;
+        }
+        if !taken.insert(shown.to_lowercase()) {
+            continue;
+        }
+        out.push(Row {
+            slot: Slot::Twitch,
+            id: user_id.clone(),
+            name: format!("{}{shown}", if at { "@" } else { "" }),
+            insert_text: Some(chatter_insert(login, shown, at)),
+            url: String::new(),
+            local_path: None,
+            provider: "user",
+            source_label: "Chatter",
+            source_detail: "Chatter",
+            match_at: None,
+            match_len: None,
+            group: None,
+            is_zero_width: None,
+            modifier_flags: None,
+            login: Some(login.clone()),
+        });
+    }
+    out
 }
 
 pub fn contains_mode() -> bool {
@@ -234,6 +343,9 @@ pub struct Row {
     pub is_zero_width: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modifier_flags: Option<u32>,
+    /// A chatter row's login (provider `user`); absent on emote rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login: Option<String>,
 }
 
 pub struct Collector<'a> {
@@ -517,6 +629,7 @@ impl<'a> Collector<'a> {
                     match_len: h.at.and(match_len),
                     is_zero_width: h.seed.is_zero_width,
                     modifier_flags: h.seed.modifier_flags,
+                    login: None,
                 }
             })
             .collect();
@@ -1172,5 +1285,67 @@ mod tests {
     fn alpha_is_case_insensitive_with_lowercase_first() {
         assert_eq!(alpha("apple", "Banana"), Ordering::Less);
         assert_eq!(alpha("kappa", "Kappa"), Ordering::Less);
+    }
+
+    fn chatter(login: &str, id: &str, display: &str) -> (String, String, String) {
+        (login.to_string(), id.to_string(), display.to_string())
+    }
+
+    #[test]
+    fn chatters_follow_the_emotes_newest_first_and_capped() {
+        let recent = vec![
+            chatter("lulu", "1", "Lulu"),
+            chatter("luke", "2", "Luke"),
+            chatter("bob", "3", "Bob"),
+            chatter("lunar", "4", "ルナ"),
+        ];
+        let rows = chatter_rows("lu", &[], false, &recent);
+        let names: Vec<_> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["Lulu", "Luke", "ルナ"]);
+        assert!(rows.iter().all(|r| r.provider == "user"));
+        // A localized display name inserts the login, which Twitch resolves.
+        assert_eq!(rows[2].insert_text.as_deref(), Some("lunar"));
+        assert_eq!(rows[0].insert_text.as_deref(), Some("Lulu"));
+        assert_eq!(rows[2].login.as_deref(), Some("lunar"));
+    }
+
+    #[test]
+    fn an_at_word_completes_to_a_mention_and_a_colon_word_to_none() {
+        let recent = vec![chatter("lulu", "1", "Lulu")];
+        let rows = chatter_rows("@lu", &[], false, &recent);
+        assert_eq!(rows[0].name, "@Lulu");
+        assert_eq!(rows[0].insert_text.as_deref(), Some("@Lulu"));
+        assert!(chatter_rows(":lu", &[], false, &recent).is_empty());
+        assert!(chatter_rows("@", &[], false, &recent).is_empty());
+    }
+
+    #[test]
+    fn chatters_skip_emote_names_and_respect_the_cap() {
+        let recent = vec![chatter("lulw", "1", "LULW"), chatter("lulu", "2", "lulu")];
+        let emote = Row {
+            slot: Slot::Bttv,
+            id: "e".into(),
+            name: "LULW".into(),
+            insert_text: None,
+            url: String::new(),
+            local_path: None,
+            provider: "bttv",
+            source_label: "",
+            source_detail: "",
+            match_at: None,
+            match_len: None,
+            group: None,
+            is_zero_width: None,
+            modifier_flags: None,
+            login: None,
+        };
+        let rows = chatter_rows("lul", std::slice::from_ref(&emote), false, &recent);
+        assert_eq!(rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), vec!["lulu"]);
+        let full = vec![emote; CYCLE_CAP];
+        assert!(chatter_rows("lul", &full, false, &recent).is_empty());
+        // Includes mode finds a name in the middle.
+        let mid = chatter_rows("ulu", &[], true, &recent);
+        assert_eq!(mid.len(), 1);
+        assert!(chatter_rows("ulu", &[], false, &recent).is_empty());
     }
 }

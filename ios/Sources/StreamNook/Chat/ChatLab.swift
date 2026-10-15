@@ -232,7 +232,7 @@ enum ChatDrive {
         case "findstreak":
             await findStreak(model)
         default:
-            return false
+            return await ComposerDrive.run(name, value, session: currentSession)
         }
         return true
     }

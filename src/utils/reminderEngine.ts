@@ -1,228 +1,34 @@
-// Reminder posting.
-//
-// A reminder is a message StreamNook posts into a streamer's chat on your
-// behalf, triggered by one of five "avenues": a repeating interval, a one-time
-// delay after you join, a clock time, a stream-uptime threshold, or a keyword
-// appearing in chat. WHEN one fires is Rust's (services/reminder_service.rs),
-// which announces `reminders://fire`; the headless <ReminderEngine /> hands that
-// to fireReminderFromRust, which expands the message and posts it, because the
-// sent row belongs to this window's chat store. Reminders themselves are
-// persisted in settings.reminders. The /remind parser lives here too.
+// The /remind typing aid in the desktop chat box: the next-word suggestions
+// and the chip overlay over the field. Page UI only, synchronous on every
+// keystroke. Parsing, saving, listing and posting reminders are Rust's
+// (services/reminder_service.rs, through run_slash_command).
 
-import { invoke } from '@tauri-apps/api/core';
-import { useAppStore } from '../stores/AppStore';
-import {
-  useChatConnectionStore,
-  sendChannelMessage,
-  injectSystemMessage,
-  type SendUserInfo,
-} from '../stores/chatConnectionStore';
-import { expandUserCommand, formatStreamUptime, type TemplateContext, type CommandDefinition } from './chatCommands';
-import { Logger } from './logger';
+import type { CommandDefinition } from './chatCommands';
 import type { Reminder } from '../types';
 
-// Invisible Plane-14 tag character. Twitch's duplicate-message detector ignores
-// it but the IRC pipeline accepts it, so appending a varying number of copies
-// makes each repeat unique while staying visually identical. Same trick as the
-// chat box's bypass-duplicate option.
-const DUPLICATE_BYPASS_CHAR = '\u{E0000}';
-// How many back-to-back copies a single reminder may post. The invisible-char
-// bypass keeps Twitch from rejecting the repeats. Spacing is not decided here:
-// every copy waits for a slot from Rust's chat send limiter, which paces by the
-// sender's role in the channel (one per second for viewers, faster for mods,
-// VIPs and the broadcaster) and slow mode.
+// How many back-to-back copies one reminder may post (Rust clamps to this too).
 const MAX_REPEAT = 10;
-
-/** Make copy `copyIndex` of a repeated send unique. Copy 0 is the plain text
- *  (so a single send looks exactly like a normal message); later copies carry
- *  an invisible suffix of increasing length. */
-export function withDuplicateBypass(text: string, copyIndex: number): string {
-  if (copyIndex <= 0) return text;
-  return `${text} ${DUPLICATE_BYPASS_CHAR.repeat(copyIndex)}`;
-}
-
-export function clampRepeat(n: number | undefined): number {
-  const v = Math.floor(Number(n));
-  if (!Number.isFinite(v) || v < 1) return 1;
-  return Math.min(v, MAX_REPEAT);
-}
-
-function makeId(): string {
-  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
-    ? crypto.randomUUID()
-    : `rmd-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-// ── Target resolution + sending ─────────────────────────────────────────────
-
-interface ReminderTarget {
-  key: string; // channel login, lowercased — the chatConnectionStore key
-  channelId: string | null;
-  isCurrent: boolean; // whether this target is the channel you're actively watching
-}
-
-/** Post the reminder Rust says is due now, into the channel Rust resolved.
- *  A reminder deleted or disabled since is ignored. */
-export async function fireReminderFromRust(id: string, channel: string, isCurrent: boolean): Promise<void> {
-  const app = useAppStore.getState();
-  const reminder = app.settings.reminders?.reminders?.find((r) => r.id === id);
-  if (!reminder || !reminder.enabled) return;
-  await fireReminder(reminder, {
-    key: channel,
-    channelId: isCurrent ? app.currentStream?.user_id ?? null : reminder.channel_id ?? null,
-    isCurrent,
-  });
-}
-
-function isConnected(key: string): boolean {
-  return !!useChatConnectionStore.getState().channels.get(key)?.isConnected;
-}
-
-function buildContext(target: ReminderTarget): TemplateContext {
-  const app = useAppStore.getState();
-  const user = app.currentUser;
-  // Stream placeholders only resolve for the channel you're actively watching;
-  // a pinned, non-watched channel has no live data, so they come back empty.
-  const stream = target.isCurrent ? app.currentStream : null;
-  return {
-    user_name: user?.display_name || user?.username || user?.login || '',
-    user_id: user?.user_id || '',
-    channel_name: stream?.user_name || stream?.user_login || target.key,
-    channel_id: stream?.user_id || target.channelId || '',
-    stream_title: stream?.title || '',
-    stream_game: stream?.game_name || '',
-    stream_uptime: formatStreamUptime(stream?.started_at),
-    args: [],
-  };
-}
-
-/** Post a reminder's message to its target channel, repeated `repeat_count`
- *  times with the invisible-character bypass so the copies aren't rejected. */
-async function fireReminder(reminder: Reminder, target: ReminderTarget): Promise<void> {
-  const app = useAppStore.getState();
-  const user = app.currentUser;
-  if (!user?.user_id) return;
-  if (!isConnected(target.key)) return;
-
-  const expanded = expandUserCommand(reminder.message, buildContext(target));
-  const text = expanded.text.trim();
-  if (!text) return;
-
-  const userInfo: SendUserInfo = {
-    username: user.login || user.username,
-    displayName: user.display_name || user.username,
-    userId: user.user_id,
-    badges: '',
-  };
-
-  const copies = clampRepeat(reminder.repeat_count);
-  for (let j = 0; j < copies; j++) {
-    const copy = withDuplicateBypass(text, j);
-    try {
-      // Waits until Twitch's limits allow this copy; a refusal (sub-only,
-      // emote-only, a full budget) stops the rest of the run.
-      await invoke('chat_send_acquire', { channel: target.key, text: copy });
-    } catch (refusal) {
-      injectSystemMessage(target.key, `Reminder stopped: ${String(refusal)}`);
-      return;
-    }
-    try {
-      await sendChannelMessage(target.key, copy, userInfo);
-    } catch (err) {
-      Logger.error('[Reminders] failed to send reminder:', err);
-    }
-  }
-}
-
-/** Fire a reminder's text immediately into the channel you're watching, without
- *  saving it. Backs `/remind now <message>`. */
-export async function fireReminderNow(message: string, repeat: number): Promise<boolean> {
-  const app = useAppStore.getState();
-  const login = app.currentStream?.user_login?.toLowerCase();
-  if (!login) return false;
-  await fireReminder(
-    {
-      id: 'now',
-      enabled: true,
-      message,
-      trigger: 'interval',
-      repeat_count: clampRepeat(repeat),
-      channel_scope: 'current',
-    },
-    { key: login, channelId: app.currentStream?.user_id ?? null, isCurrent: true },
-  );
-  return true;
-}
-
-// ── /remind quick-create parser ──────────────────────────────────────────────
-
-export type RemindManageOp = 'remove' | 'enable' | 'disable' | 'toggle';
-
-export interface RemindParseResult {
-  list?: boolean;
-  help?: boolean;
-  clear?: boolean;
-  manage?: { op: RemindManageOp; index: number };
-  sendNow?: { message: string; repeat: number };
-  reminder?: Reminder;
-  summary?: string;
-  error?: string;
-}
-
-/** Parse a duration into SECONDS. Accepts "30s", "20m", "2h", combos like
- *  "1m30s" / "1h30m", or a bare number (interpreted as minutes for back-compat
- *  with the original minutes-only grammar). */
-function parseDurationSeconds(raw: string): number | null {
-  const s = raw.trim().toLowerCase();
-  if (!s) return null;
-  if (/^\d+$/.test(s)) return parseInt(s, 10) * 60; // bare number = minutes
-  const m = s.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/);
-  if (m && (m[1] || m[2] || m[3])) {
-    return (m[1] ? parseInt(m[1], 10) * 3600 : 0) + (m[2] ? parseInt(m[2], 10) * 60 : 0) + (m[3] ? parseInt(m[3], 10) : 0);
-  }
-  return null;
-}
 
 // Duration accessors with back-compat: prefer the seconds field, fall back to
 // the legacy *_minutes value.
-export function getIntervalSeconds(r: Reminder): number {
+function getIntervalSeconds(r: Reminder): number {
   return r.interval_seconds ?? (r.interval_minutes != null ? r.interval_minutes * 60 : 0);
 }
-export function getDelaySeconds(r: Reminder): number {
+function getDelaySeconds(r: Reminder): number {
   return r.delay_seconds ?? (r.delay_minutes != null ? r.delay_minutes * 60 : 0);
 }
-export function getUptimeSeconds(r: Reminder): number {
+function getUptimeSeconds(r: Reminder): number {
   return r.uptime_seconds ?? (r.uptime_minutes != null ? r.uptime_minutes * 60 : 0);
 }
 
 /** Human-friendly duration, e.g. 30 -> "30s", 90 -> "1m30s", 1200 -> "20m". */
-export function formatDuration(totalSeconds: number): string {
+function formatDuration(totalSeconds: number): string {
   const total = Math.max(0, Math.round(totalSeconds));
   if (total < 60) return `${total}s`;
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
   const sec = total % 60;
   return [h ? `${h}h` : '', m ? `${m}m` : '', sec ? `${sec}s` : ''].join('') || '0s';
-}
-
-/** Parse "HH:MM" (24h) into a normalized "HH:MM" string, or null. */
-function parseClock(raw: string): string | null {
-  const m = raw.trim().match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return null;
-  const h = parseInt(m[1], 10);
-  const min = parseInt(m[2], 10);
-  if (h > 23 || min > 59) return null;
-  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
-}
-
-const USAGE =
-  'Usage: /remind every 20m <message> · in 30s · at 21:00 · uptime 2h · on <word> · now. Times accept s/m/h (30s, 90s, 1h30m). Add x3 to repeat. /remind list to manage, /remind help for everything.';
-
-function parseIndex(raw: string | undefined): number | null {
-  if (!raw) return null;
-  const n = parseInt(raw, 10);
-  if (!Number.isFinite(n) || n < 1) return null;
-  return n;
 }
 
 /** Short phrase for a reminder's trigger, e.g. "every 20m", "in 30s". */
@@ -241,34 +47,6 @@ function reminderTriggerPhrase(r: Reminder): string {
     default:
       return '';
   }
-}
-
-function describeReminder(reminder: Reminder): string {
-  const repeat = clampRepeat(reminder.repeat_count);
-  const times = repeat > 1 ? ` ×${repeat}` : '';
-  const where =
-    reminder.channel_scope === 'specific' && reminder.channel_login ? ` in #${reminder.channel_login}` : '';
-  return `Reminder set: ${reminderTriggerPhrase(reminder)}${times}${where}`;
-}
-
-/** Lines for `/remind list` — a numbered roster the user manages by index. */
-export function formatReminderList(reminders: Reminder[]): string[] {
-  if (reminders.length === 0) {
-    return ['No reminders yet. Example: /remind every 20m Plug the Discord — /remind help for all options.'];
-  }
-  const lines = reminders.map((r, i) => {
-    const repeat = clampRepeat(r.repeat_count);
-    const times = repeat > 1 ? ` ×${repeat}` : '';
-    const where = r.channel_scope === 'specific' && r.channel_login ? `#${r.channel_login}` : 'current channel';
-    const state = r.enabled ? 'on' : 'off';
-    const msg = r.message.length > 60 ? `${r.message.slice(0, 57)}…` : r.message;
-    return `#${i + 1} [${state}] ${reminderTriggerPhrase(r)}${times} · ${where} · "${msg}"`;
-  });
-  return [
-    `Your reminders (${reminders.length}):`,
-    ...lines,
-    'Manage: /remind remove <#> · /remind disable <#> · /remind enable <#> · /remind clear',
-  ];
 }
 
 // ── Guided autocomplete for the /remind flow ─────────────────────────────────
@@ -520,125 +298,4 @@ export function getRemindFlowSuggestions(value: string, reminders: Reminder[]): 
 
   // list / help / clear take no further arguments — nothing to suggest.
   return null;
-}
-
-/** Lines for `/remind help` — the full command reference. */
-export function remindHelpLines(): string[] {
-  return [
-    'Reminders auto-post a message into chat to nudge the streamer. Make one:',
-    '/remind every 20m <message> — repeat every 20 minutes (also 30s, 90s, 1h30m)',
-    '/remind in 30s <message> — once, 30 seconds from now',
-    '/remind at 21:00 <message> — once a day at a set time (24h)',
-    '/remind uptime 2h <message> — once when the stream has been live 2h',
-    '/remind on <word> <message> — when that word shows up in chat',
-    '/remind now <message> — post it right now (not saved)',
-    'Times take s/m/h: 45s, 90s, 5m, 1h30m. Add x3 anywhere to post it 3 times.',
-    'Manage: /remind list · /remind remove <#> · /remind enable <#> · /remind disable <#> · /remind clear',
-  ];
-}
-
-/** Parse the arguments of a `/remind ...` command into an action. */
-export function parseRemindCommand(
-  args: string[],
-  broadcasterLogin: string,
-  broadcasterId: string,
-): RemindParseResult {
-  const tokens = args.filter((t) => t.length > 0);
-  if (tokens.length === 0) return { list: true };
-
-  // Pull an optional repeat token (x3 / x:3 / repeat:3) from anywhere in the line.
-  let repeat = 1;
-  const rest: string[] = [];
-  for (const t of tokens) {
-    const rm = t.match(/^x:?(\d+)$/i) || t.match(/^repeat:(\d+)$/i);
-    if (rm) {
-      repeat = clampRepeat(parseInt(rm[1], 10));
-      continue;
-    }
-    rest.push(t);
-  }
-  if (rest.length === 0) return { error: USAGE };
-
-  const base = (): Omit<Reminder, 'trigger'> => ({
-    id: makeId(),
-    enabled: true,
-    message: '',
-    repeat_count: repeat,
-    // Typed in a streamer's chat, so pin it to that channel by default.
-    channel_scope: broadcasterLogin ? 'specific' : 'current',
-    channel_login: broadcasterLogin || undefined,
-    channel_id: broadcasterId || undefined,
-  });
-
-  const mode = rest[0].toLowerCase();
-
-  // Management subcommands (checked before the create verbs).
-  if (mode === 'help' || mode === '?') return { help: true };
-  if (mode === 'list' || mode === 'ls' || mode === 'all') return { list: true };
-  if (mode === 'clear' || mode === 'clearall' || mode === 'removeall') return { clear: true };
-  if (mode === 'remove' || mode === 'delete' || mode === 'rm' || mode === 'del') {
-    const index = parseIndex(rest[1]);
-    if (index === null) return { error: 'Which one? Run /remind list for the numbers, then e.g. /remind remove 2' };
-    return { manage: { op: 'remove', index } };
-  }
-  if (mode === 'enable' || mode === 'disable' || mode === 'toggle') {
-    const index = parseIndex(rest[1]);
-    if (index === null) return { error: `Which one? Run /remind list, then e.g. /remind ${mode} 2` };
-    return { manage: { op: mode, index } };
-  }
-
-  // /remind now <message> — fire immediately, don't save.
-  if (mode === 'now') {
-    const message = rest.slice(1).join(' ').trim();
-    if (!message) return { error: 'Usage: /remind now <message>' };
-    return { sendNow: { message, repeat } };
-  }
-
-  const finish = (reminder: Reminder, message: string): RemindParseResult => {
-    if (!message.trim()) return { error: 'Add the message to post, e.g. /remind every 20m Plug the Discord' };
-    reminder.message = message.trim();
-    return { reminder, summary: describeReminder(reminder) };
-  };
-
-  switch (mode) {
-    case 'every': {
-      const secs = parseDurationSeconds(rest[1] || '');
-      if (secs === null || secs < 1) return { error: 'How often? e.g. /remind every 20m or every 30s <message>' };
-      return finish({ ...base(), trigger: 'interval', interval_seconds: secs }, rest.slice(2).join(' '));
-    }
-    case 'in': {
-      const secs = parseDurationSeconds(rest[1] || '');
-      if (secs === null || secs < 1) return { error: 'How long from now? e.g. /remind in 30s or in 5m <message>' };
-      return finish({ ...base(), trigger: 'delay', delay_seconds: secs }, rest.slice(2).join(' '));
-    }
-    case 'at': {
-      const clock = parseClock(rest[1] || '');
-      if (!clock) return { error: 'What time? Use 24-hour HH:MM, e.g. /remind at 21:00 <message>' };
-      return finish({ ...base(), trigger: 'clock', clock_time: clock }, rest.slice(2).join(' '));
-    }
-    case 'uptime': {
-      const secs = parseDurationSeconds(rest[1] || '');
-      if (secs === null || secs < 1) return { error: 'At what uptime? e.g. /remind uptime 2h or 90s <message>' };
-      return finish({ ...base(), trigger: 'uptime', uptime_seconds: secs }, rest.slice(2).join(' '));
-    }
-    case 'on': {
-      const keyword = rest[1] || '';
-      if (!keyword) return { error: 'On what word? e.g. /remind on giveaway <message>' };
-      return finish(
-        { ...base(), trigger: 'keyword', keyword, keyword_match: 'contains', keyword_from: 'anyone', keyword_cooldown_minutes: 5 },
-        rest.slice(2).join(' '),
-      );
-    }
-    default: {
-      // Shorthands with no leading verb: "/remind 20m <message>" and
-      // "/remind 21:00 <message>".
-      const clock = parseClock(mode);
-      if (clock) return finish({ ...base(), trigger: 'clock', clock_time: clock }, rest.slice(1).join(' '));
-      const secs = parseDurationSeconds(mode);
-      if (secs !== null && secs >= 1) {
-        return finish({ ...base(), trigger: 'interval', interval_seconds: secs }, rest.slice(1).join(' '));
-      }
-      return { error: USAGE };
-    }
-  }
 }

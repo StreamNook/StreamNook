@@ -1,3 +1,8 @@
+// The command table the desktop chat box's slash autocomplete and command menu
+// read on every keystroke. Rust runs every command (services/slash_dispatch.rs)
+// from its own copy of this table (services/command_catalog.rs), which serves
+// the phone's command sheet; a Rust test fails when the two drift apart.
+
 import type { UserSlashCommand } from '../types';
 
 export interface CommandDefinition {
@@ -99,7 +104,7 @@ export const COMMAND_DEFINITIONS: CommandDefinition[] = [
   { name: 'spam', usage: '/spam <count> <message>', description: 'Send a message several times in a row (up to 1000). /spam stop ends it early.', category: 'Everyone' , examples: ['/spam 5 Kappa', '/spam 20 GG --delay 200', '/spam stop'], details: 'Lines go out 1 second apart, or the speed set in Settings, Chat, Spam & Pyramid; add --delay <ms> at the end to change it for one run. Faster than Twitch allows for your role gets lines dropped and can silence you for an hour, and moderators may time you out for spam. One run per channel.' },
   { name: 'pyramid', usage: '/pyramid <height> <word>', description: 'Stack a word or emote 1, 2, 3... up to the height and back down (height up to 100). /pyramid stop ends it early.', category: 'Everyone' , examples: ['/pyramid 5 Kappa', '/pyramid 10 PogChamp --delay 300', '/pyramid stop'], details: 'Height N sends 2N-1 lines: /pyramid 5 Kappa sends 9, up to five and back down. Paced like /spam: the speed set in Settings, Chat, Spam & Pyramid, or --delay <ms> at the end. The widest row must fit the 500-character limit for one message. Going faster than Twitch allows for your role gets lines dropped and can silence you for an hour, and moderators may time you out for spam.' },
   // Listed so they autocomplete and show in the menu (they always worked).
-  { name: 'me', usage: '/me <message>', description: 'Send your message as an action, in your name colour', category: 'Everyone' , examples: ['/me waves'] },
+  { name: 'me', usage: '/me <message>', description: 'Send your message as an action, in your name color', category: 'Everyone' , examples: ['/me waves'] },
   { name: 'help', usage: '/help [command]', description: 'Show how a command works, or list them all', category: 'Everyone' , local: true, examples: ['/help', '/help timeout'] },
   { name: 'untimeout', usage: '/untimeout <username>', description: 'End a timeout early', category: 'Moderator' , examples: ['/untimeout someuser'] },
   { name: 'warn', usage: '/warn <username> <reason>', description: 'Send a warning they must acknowledge before chatting again', category: 'Moderator' , examples: ['/warn someuser keep it friendly'], details: 'They see your reason and have to accept it before they can type again. Nothing else happens to them.' },
@@ -136,7 +141,7 @@ export const COMMAND_DEFINITIONS: CommandDefinition[] = [
 
   // Your view
   { name: 'unignore', usage: '/unignore <user>', description: 'Show someone you hid with /ignore again', category: 'Everyone' , local: true, examples: ['/unignore someuser'] },
-  { name: 'setcolor', usage: '/setcolor <user> <color|off>', description: "Show someone's name in a colour you pick (only you see it)", category: 'Everyone' , local: true, examples: ['/setcolor someuser orange', '/setcolor someuser #ff8800', '/setcolor someuser off'] },
+  { name: 'setcolor', usage: '/setcolor <user> <color|off>', description: "Show someone's name in a color you pick (only you see it)", category: 'Everyone' , local: true, examples: ['/setcolor someuser orange', '/setcolor someuser #ff8800', '/setcolor someuser off'] },
   { name: 'setname', usage: '/setname <user> <nickname|off>', description: 'Give someone a nickname only you see', category: 'Everyone' , local: true, examples: ['/setname someuser Bob', '/setname someuser off'] },
   { name: 'localmod', usage: '/localmod', description: 'Show only moderators and the broadcaster in this chat (only for you)', category: 'Everyone' , local: true, desktopOnly: true, details: 'Turn it off with /localmodoff. It lasts until you close StreamNook.' },
   { name: 'localmodoff', usage: '/localmodoff', description: 'Turn off the moderator-only view', category: 'Everyone' , local: true, desktopOnly: true },
@@ -169,7 +174,7 @@ export const COMMAND_DEFINITIONS: CommandDefinition[] = [
   { name: 'foreach', usage: '/foreach <a,b,c> <command with $>', description: 'Run one command for each item in a list', category: 'Everyone' , local: true, examples: ['/foreach alice,bob /shoutout $'], details: 'Up to 20 items. Messages are paced to stay inside Twitch’s limits.' },
   { name: 'chain', usage: '/chain <command> | <command>', description: 'Run several commands one after another', category: 'Everyone' , local: true, examples: ['/chain /slow 10 | /announce Slow mode for a bit'] },
   { name: 'barrelroll', usage: '/barrelroll', description: 'Do a barrel roll', category: 'Everyone' , local: true },
-  { name: 'party', usage: '/party', description: 'Flash party colours over the app for a few seconds', category: 'Everyone' , local: true },
+  { name: 'party', usage: '/party', description: 'Flash party colors over the app for a few seconds', category: 'Everyone' , local: true },
   { name: 'raw', usage: '/raw <IRC line>', description: 'Send a raw IRC line on your chat connection', category: 'Everyone' , local: true, examples: ['/raw PRIVMSG #someone :hello'], details: 'For people who know Twitch IRC. Twitch ignores most raw commands since 2023. JOIN and PART are refused: use /join and /part.' },
   { name: 'fakemsg', usage: '/fakemsg <IRC line>', description: 'Show a made-up chat message only you see (development builds)', category: 'Everyone' , local: true, devOnly: true },
   { name: 'debug-env', usage: '/debug-env', description: 'Show the app version, system and data folders', category: 'Everyone' , local: true },
@@ -206,12 +211,6 @@ export const COMMAND_ALIASES: ReadonlyMap<string, string> = new Map(
 export function resolveCommandAlias(name: string): string {
   const n = name.toLowerCase();
   return COMMAND_ALIASES.get(n) ?? n;
-}
-
-/** The definition for a command name or alias. */
-export function findCommandDefinition(name: string): CommandDefinition | undefined {
-  const n = resolveCommandAlias(name);
-  return COMMAND_DEFINITIONS.find((c) => c.name.toLowerCase() === n);
 }
 
 // /fakemsg only works in development builds, so a release build never lists it.
@@ -276,118 +275,6 @@ export function rankCommandMatches(commands: CommandDefinition[], typed: string)
     .map((x) => x.c);
 }
 
-// Template grammar (full reference is in the help block of the settings UI):
-//
-//   {N}             1-indexed positional arg (e.g. {1}, {2})
-//   {N+}            rest of the args starting at position N joined with space
-//   {*}             alias for {1+}
-//   {{              literal "{"
-//   }}              literal "}"
-//   {user.name}     invoker's display name (alias: {user})
-//   {user.id}       invoker's Twitch user ID
-//   {channel.name}  current channel's display name (alias: {channel})
-//   {channel.id}    current channel's broadcaster ID
-//   {stream.title}  current stream title (empty when offline)
-//   {stream.game}   current stream category / game name (empty when offline)
-//   {stream.uptime} formatted uptime, e.g. "2h 14m" (empty when offline)
-//
-// Implementation strategy: walk the template once with a single regex that
-// captures every kind of placeholder, including literal-brace escapes. This
-// avoids the chained-.replace() ambiguity where an inserted value could
-// itself look like a placeholder and get expanded again.
-
-const PLACEHOLDER_RE = /\{\{|\}\}|\{(\d+)\+\}|\{(\d+)\}|\{\*\}|\{([a-zA-Z][a-zA-Z0-9_.]*)\}/g;
-
-export interface TemplateContext {
-  user_name: string;
-  user_id: string;
-  channel_name: string;
-  channel_id: string;
-  stream_title: string;
-  stream_game: string;
-  stream_uptime: string;
-  args: string[];
-}
-
-export interface TemplateExpansion {
-  text: string;
-  missing_args: number[]; // 1-indexed positions that the template needs but the user didn't provide
-}
-
-function dottedFieldValue(key: string, ctx: TemplateContext): string | null {
-  switch (key.toLowerCase()) {
-    case 'user':
-    case 'user.name':
-      return ctx.user_name;
-    case 'user.id':
-      return ctx.user_id;
-    case 'channel':
-    case 'channel.name':
-      return ctx.channel_name;
-    case 'channel.id':
-      return ctx.channel_id;
-    case 'stream.title':
-      return ctx.stream_title;
-    case 'stream.game':
-      return ctx.stream_game;
-    case 'stream.uptime':
-      return ctx.stream_uptime;
-    default:
-      return null; // Unknown placeholder — left as literal in the output
-  }
-}
-
-export function expandUserCommand(template: string, ctx: TemplateContext): TemplateExpansion {
-  const missing: number[] = [];
-
-  const text = template.replace(PLACEHOLDER_RE, (match, positionalRest: string | undefined, positional: string | undefined, dotted: string | undefined) => {
-    // Literal brace escapes
-    if (match === '{{') return '{';
-    if (match === '}}') return '}';
-
-    // {N+} — rest of args starting at position N
-    if (positionalRest !== undefined) {
-      const start = parseInt(positionalRest, 10);
-      if (start < 1 || start > ctx.args.length) {
-        // Treat as missing if N is past the supplied args
-        missing.push(start);
-        return '';
-      }
-      return ctx.args.slice(start - 1).join(' ');
-    }
-
-    // {N} — single positional arg
-    if (positional !== undefined) {
-      const i = parseInt(positional, 10);
-      const value = ctx.args[i - 1];
-      if (value === undefined || value === '') {
-        missing.push(i);
-        return '';
-      }
-      return value;
-    }
-
-    // {*} — all args (alias for {1+})
-    if (match === '{*}') {
-      return ctx.args.join(' ');
-    }
-
-    // {field} or {field.subfield}
-    if (dotted !== undefined) {
-      const value = dottedFieldValue(dotted, ctx);
-      if (value === null) return match; // Leave unknown placeholder literal
-      return value;
-    }
-
-    return match;
-  });
-
-  // Collapse consecutive whitespace caused by missing args ("hi  there" -> "hi there")
-  const collapsed = text.replace(/[ \t]{2,}/g, ' ').trim();
-
-  return { text: collapsed, missing_args: Array.from(new Set(missing)).sort() };
-}
-
 // Format a started_at ISO timestamp into "Hh Mm" / "Mm" — for {stream.uptime}.
 export function formatStreamUptime(startedAt: string | null | undefined): string {
   if (!startedAt) return '';
@@ -446,57 +333,4 @@ export function buildUserCommandDefinitions(commands: UserSlashCommand[] | undef
         usage,
       };
     });
-}
-
-// Lookup an enabled user command by trigger (case-insensitive). Honors the
-// require_slash flag — pass `requireSlash: true` when the caller is in the
-// slash-command branch, `false` when it's a plain-text scan.
-export function findUserCommand(
-  trigger: string,
-  commands: UserSlashCommand[] | undefined,
-  requireSlash: boolean = true,
-): UserSlashCommand | undefined {
-  if (!commands) return undefined;
-  const target = trigger.toLowerCase();
-  return commands.find((c) => {
-    if (!c.enabled) return false;
-    if (c.trigger.toLowerCase() !== target) return false;
-    const cmdRequiresSlash = c.require_slash !== false;
-    return cmdRequiresSlash === requireSlash;
-  });
-}
-
-// Scan a plain-text (non-slash) message for any enabled user command whose
-// trigger matches at the start (and optionally end) of the message. Returns
-// the matched command + the args extracted from the surrounding text, or null.
-export interface PlainTextMatch {
-  command: UserSlashCommand;
-  args: string[];
-}
-
-export function matchPlainTextUserCommand(
-  message: string,
-  commands: UserSlashCommand[] | undefined,
-): PlainTextMatch | null {
-  if (!commands || commands.length === 0) return null;
-  const trimmed = message.trim();
-  if (!trimmed) return null;
-  const lowered = trimmed.toLowerCase();
-  const words = trimmed.split(/\s+/);
-  const firstWord = words[0]?.toLowerCase() ?? '';
-  const lastWord = words[words.length - 1]?.toLowerCase() ?? '';
-
-  for (const cmd of commands) {
-    if (!cmd.enabled) continue;
-    if (cmd.require_slash !== false) continue; // slash commands handled elsewhere
-    const t = cmd.trigger.toLowerCase();
-    if (!t) continue;
-    if (firstWord === t) {
-      return { command: cmd, args: words.slice(1) };
-    }
-    if (cmd.also_match_suffix && lastWord === t && lowered !== t /* avoid double-fire when trigger is the only word */) {
-      return { command: cmd, args: words.slice(0, -1) };
-    }
-  }
-  return null;
 }
