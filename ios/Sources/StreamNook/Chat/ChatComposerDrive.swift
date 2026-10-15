@@ -30,7 +30,7 @@ enum ComposerDrive {
         case "chatslow":
             composer?.debugSlow()
         case "chatfail":
-            composer?.debugFailure(value.isEmpty ? "msg_duplicate" : value)
+            composer?.debugFailure(value.isEmpty ? "same as your last message" : value)
         case "chatnotice":
             composer?.notice(value.isEmpty ? "Your message was not sent: your message was blocked by AutoMod" : value)
         case "chatpickerlog":

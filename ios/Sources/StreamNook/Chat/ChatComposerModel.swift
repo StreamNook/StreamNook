@@ -43,7 +43,7 @@ final class ChatComposerModel {
     /// The picker keeps its tab, search and answer between opens.
     let picker: EmotePickerModel
     /// Opens a chatter's profile (`/usercard`), set by the screen around the composer.
-    @ObservationIgnored var onProfile: (String) -> Void = { _ in }
+    @ObservationIgnored var onProfile: (ProfileTarget) -> Void = { _ in }
     private var lastSent: String?
     private var suggestSeq = 0
     /// Asks the field to take or give up focus (drive steps, inserts).
@@ -107,8 +107,9 @@ final class ChatComposerModel {
         }
     }
 
-    /// Twitch's message limit; a counter shows from 400 characters, red past the limit.
+    /// Twitch's message limit; a counter shows from `counterFrom` characters, red past the limit.
     static let messageLimit = 500
+    static let counterFrom = 400
 
     // MARK: Gating
 
@@ -176,8 +177,7 @@ final class ChatComposerModel {
                 "pinAfterSend": pin ? true : nil,
             ])
             let result = (try? JSONDecoder().decode(SendResult.self, from: Data(json.utf8))) ?? SendResult(isSent: true)
-            if let line = result.dropLine {
-                notice(line)
+            if result.dropLine != nil {
                 failure = Failure(text: text, why: result.dropReason ?? "the room refused it")
                 return false
             }
@@ -238,7 +238,11 @@ final class ChatComposerModel {
     private func perform(_ action: SlashOutcome.UIAction, typed: String) {
         switch action.kind {
         case "open_user_card":
-            if let login = action.login { onProfile(login) }
+            if let login = action.login, !login.isEmpty {
+                onProfile(ProfileTarget(userID: action.userID ?? "", login: login,
+                                        displayName: action.displayName ?? login,
+                                        roomID: session.roomID, roomLogin: session.channel))
+            }
         case "open_url":
             if let raw = action.url, let url = URL(string: raw) { UIApplication.shared.open(url) }
         case "copy_text":

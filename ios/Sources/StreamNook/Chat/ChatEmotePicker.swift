@@ -127,13 +127,18 @@ struct ChatEmotePicker: View {
     var body: some View {
         @Bindable var picker = picker
         VStack(spacing: 6) {
-            TextField("", text: $picker.query, prompt: Text("Search emotes...").foregroundStyle(Color(ChatTheme.textMuted)))
-                .font(.sn(13))
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(Color(ChatTheme.surface), in: .rect(cornerRadius: 10))
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(ComposerInk.quiet)
+                TextField("", text: $picker.query, prompt: Text("Search emotes...").foregroundStyle(ComposerInk.quiet))
+                    .font(.sn(13))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(Color(ChatTheme.surface), in: .rect(cornerRadius: 10))
             tabRow
             grid
         }
@@ -155,13 +160,14 @@ struct ChatEmotePicker: View {
                 Button {
                     picker.select(id)
                 } label: {
-                    VStack(spacing: 1) {
+                    VStack(spacing: 2) {
                         tabLabel(id, active: active)
-                        if let count = picker.count(id) {
-                            Text("\(count)").font(.sn(10)).opacity(0.7)
-                        }
+                            .frame(height: 16)
+                        Text(picker.count(id).map { "\($0)" } ?? " ")
+                            .font(.sn(10).monospacedDigit())
+                            .foregroundStyle(active ? Color.white : ComposerInk.quiet)
                     }
-                    .foregroundStyle(active ? Self.color(id) : Color(ChatTheme.textSecondary))
+                    .foregroundStyle(active ? Self.color(id) : ComposerInk.quiet)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 6)
                     .background(active ? Color.white.opacity(0.08) : .clear, in: .rect(cornerRadius: 8))
@@ -177,13 +183,17 @@ struct ChatEmotePicker: View {
     @ViewBuilder private func tabLabel(_ id: String, active: Bool) -> some View {
         switch id {
         case "favorites":
-            Text("★").font(.system(size: 13, weight: .bold)).foregroundStyle(.yellow)
+            // A pointed shape needs a point more to look the size of the logos beside it.
+            Image(systemName: "star.fill")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(active ? Color.yellow : ComposerInk.quiet)
         case "emoji":
-            Text("😀").font(.system(size: 15))
+            Image(systemName: "face.smiling")
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(active ? Color(ChatTheme.accent) : ComposerInk.quiet)
         default:
             // The provider's own logo, in its brand color while selected.
-            ProviderLogo(provider: id, size: 15, tinted: active)
-                .opacity(active ? 1 : 0.75)
+            ProviderLogo(provider: id, size: 14, tinted: active)
         }
     }
 
@@ -206,7 +216,7 @@ struct ChatEmotePicker: View {
             if picker.waiting || picker.answer == nil {
                 centered("Loading emotes...")
             } else if picker.tab == "favorites", picker.query.isEmpty {
-                centered("No favorites yet. Long-press an emote to add it.")
+                emptyFavorites
             } else {
                 centered("No emotes found")
             }
@@ -228,14 +238,25 @@ struct ChatEmotePicker: View {
                                 }
                                 .padding(.horizontal, 4)
                             } header: {
-                                header(section.title, count: section.emotes.count, key: section.key)
+                                header(section.title, count: picker.sections.count > 1 ? section.emotes.count : nil,
+                                       key: section.key)
                             }
                         }
                     }
                     .id("top")
                 }
+                .mask(Self.edgeFade)
                 .onChange(of: picker.resetToken) { _, _ in reader.scrollTo("top", anchor: .top) }
             }
+        }
+    }
+
+    /// A 16 pt eased fade at the bottom of a scrolling grid.
+    static var edgeFade: some View {
+        VStack(spacing: 0) {
+            Color.black
+            LinearGradient(colors: [.black, .black.opacity(0.6), .clear], startPoint: .top, endPoint: .bottom)
+                .frame(height: 16)
         }
     }
 
@@ -272,6 +293,7 @@ struct ChatEmotePicker: View {
                         }
                         .id("top")
                     }
+                    .mask(Self.edgeFade)
                     .onChange(of: picker.resetToken) { _, _ in reader.scrollTo("top", anchor: .top) }
                 }
             }
@@ -304,16 +326,31 @@ struct ChatEmotePicker: View {
         .tracking(1)
         .foregroundStyle(Color(ChatTheme.textSecondary))
         .padding(.vertical, 6)
-        .padding(.horizontal, 4)
         .background(Color(ChatTheme.background))
         .overlay(alignment: .bottom) { Rectangle().fill(Color(ChatTheme.borderSubtle)).frame(height: 1) }
+    }
+
+    private var emptyFavorites: some View {
+        GeometryReader { geo in
+            VStack(spacing: 8) {
+                Image(systemName: "star")
+                    .font(.system(size: 20, weight: .regular))
+                Text("No favorites yet. Long-press an emote to add it.")
+                    .font(.sn(12))
+                    .multilineTextAlignment(.center)
+            }
+            .foregroundStyle(ComposerInk.quiet)
+            .padding(.horizontal, 24)
+            .frame(maxWidth: .infinity)
+            .position(x: geo.size.width / 2, y: geo.size.height * 0.4)
+        }
     }
 
     private func centered(_ text: String) -> some View {
         // Fills the grid's space from the top, so the search and tabs never move with it.
         Text(text)
             .font(.sn(12))
-            .foregroundStyle(Color(ChatTheme.textMuted))
+            .foregroundStyle(ComposerInk.quiet)
             .multilineTextAlignment(.center)
             .padding(.horizontal, 24)
             .frame(maxWidth: .infinity, minHeight: 128)
@@ -336,9 +373,7 @@ private struct EmoteCell: View {
             EmoteThumb(url: cell.url, height: 32, wide: wide)
                 .padding(wide ? 4 : 6)
                 .frame(maxWidth: .infinity, minHeight: 32)
-                .background(ring.opacity(0.10), in: .rect(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(ring.opacity(0.5), lineWidth: ring == .clear ? 0 : 1))
-                .shadow(color: ring.opacity(0.6), radius: ring == .clear ? 0 : 3)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(ring.opacity(0.45), lineWidth: ring == .clear ? 0 : 1))
                 .opacity(cell.locked ? 0.4 : cell.replacedBy != nil ? 0.5 : 1)
                 .overlay(alignment: .bottomTrailing) {
                     if cell.locked {

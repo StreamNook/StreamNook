@@ -32,19 +32,18 @@ struct ChatMenuSheet: View {
             List {
                 if let modes = session.modes, !modes.modes.isEmpty {
                     Section {
-                        HStack(spacing: 12) {
-                            Image(systemName: "lock.fill")
-                                .font(.system(size: 17))
-                                .foregroundStyle(.secondary)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("This chat is in")
-                                    .font(.sn(13.5))
-                                    .foregroundStyle(.secondary)
-                                Text(modes.modes.map(\.label).joined(separator: " · "))
-                                    .font(.sn(14))
+                        ForEach(modes.modes, id: \.kind) { mode in
+                            Label {
+                                Text(mode.compact)
+                            } icon: {
+                                Image(systemName: RoomModeSymbol.name(mode.kind))
+                                    .foregroundStyle(Color(ChatTheme.textSecondary))
                             }
+                            .accessibilityHint(mode.detail)
                         }
-                        .accessibilityElement(children: .combine)
+                    } header: {
+                        Text("This chat is in")
+                            .foregroundStyle(Color(red: 0x8C / 255, green: 0xA0 / 255, blue: 0xA7 / 255))
                     } footer: {
                         if let standing = modes.standing { Text(standing) }
                     }
@@ -54,9 +53,12 @@ struct ChatMenuSheet: View {
                         Button {
                             Task { await toggleFollow(following) }
                         } label: {
-                            Label(following ? "Unfollow \(label)" : "Follow \(label)",
-                                  systemImage: following ? "heart.slash.fill" : "heart.fill")
-                                .foregroundStyle(following ? Color.red : Color.green)
+                            Label {
+                                Text(following ? "Unfollow \(label)" : "Follow \(label)")
+                            } icon: {
+                                Image(systemName: following ? "heart.slash" : "heart")
+                                    .foregroundStyle(following ? Color.red : Color.green)
+                            }
                         }
                         .disabled(followBusy)
                     }
@@ -72,7 +74,7 @@ struct ChatMenuSheet: View {
                                     if let badge = relationship?.badgeURL {
                                         EmoteThumb(url: badge, height: 19).accessibilityHidden(true)
                                     } else {
-                                        Image(systemName: "star.fill").foregroundStyle(Color(ChatTheme.accent))
+                                        Image(systemName: "star")
                                     }
                                 }
                                 Spacer()
@@ -120,6 +122,7 @@ struct ChatMenuSheet: View {
             .navigationTitle(label)
             .navigationBarTitleDisplayMode(.inline)
         }
+        .presentationDragIndicator(.visible)
         // Only while the sheet is open: the follow and subscription lookups and the role.
         .task { await load() }
     }
@@ -258,5 +261,18 @@ struct ChatCommandSheet: View {
             return
         }
         rows = list
+    }
+}
+
+/// The symbol the composer and the chat menu show for a room mode.
+enum RoomModeSymbol {
+    static func name(_ kind: String) -> String {
+        switch kind {
+        case "subs_only": return "star"
+        case "emote_only": return "face.smiling"
+        case "followers_only": return "heart"
+        case "slow": return "timer"
+        default: return "touchid"
+        }
     }
 }

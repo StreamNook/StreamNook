@@ -7,10 +7,10 @@ import SwiftUI
 struct ChatComposer: View {
     let session: ChatSession
     /// Opens a chatter's profile (`/usercard`).
-    var onProfile: (String) -> Void = { _ in }
+    var onProfile: (ProfileTarget) -> Void = { _ in }
     @State private var model: ChatComposerModel
 
-    init(session: ChatSession, onProfile: @escaping (String) -> Void = { _ in }) {
+    init(session: ChatSession, onProfile: @escaping (ProfileTarget) -> Void = { _ in }) {
         self.session = session
         self.onProfile = onProfile
         _model = State(initialValue: ChatComposerModel(session: session))
@@ -88,6 +88,7 @@ private struct ComposerBar: View {
             }
             ZStack(alignment: .bottom) {
                 ChatEmotePicker(model: model)
+                    .floatingSurface()
                     .opacity(model.panel == .emotes ? 1 : 0)
                     .offset(y: model.panel == .emotes ? 0 : 10)
                     .scaleEffect(model.panel == .emotes ? 1 : 0.98, anchor: .bottom)
@@ -97,6 +98,7 @@ private struct ComposerBar: View {
                     SuggestionStrip(model: model) {
                         if !model.fieldDisabled { focused = true }
                     }
+                    .floatingSurface()
                     .transition(.opacity.combined(with: .offset(y: 4)))
                 }
             }
@@ -133,31 +135,34 @@ private struct ComposerBar: View {
 
     /// A message Twitch did not take: why, and Retry or Discard. The text stays in the field.
     private func failureChip(_ failure: ChatComposerModel.Failure) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 4) {
             Image(systemName: "exclamationmark.circle.fill")
                 .font(.system(size: 13))
-                .foregroundStyle(Color.orange)
+                .foregroundStyle(ComposerInk.warning)
+                .frame(width: 36)
             Text("Not sent: \(failure.why)")
                 .font(.sn(12.5))
                 .foregroundStyle(Color(ChatTheme.textSecondary))
                 .lineLimit(2)
-            Spacer(minLength: 0)
+            Spacer(minLength: 8)
             Button("Retry") { Task { await model.send() } }
                 .font(.sn(12.5, 600))
                 .disabled(model.sending)
             Button("Discard") { model.discardFailure() }
                 .font(.sn(12.5))
-                .foregroundStyle(Color(ChatTheme.textMuted))
+                .foregroundStyle(ComposerInk.quiet)
+                .padding(.leading, 8)
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, 14)
+        .padding(.trailing, 16)
         .padding(.top, 6)
         .accessibilityElement(children: .contain)
     }
 
     private func prompt(slowWait: Int) -> Text {
         if model.fieldDisabled {
-            // Why the viewer cannot type, in the warning color.
-            return Text(model.placeholder).foregroundStyle(Color.orange).fontWeight(.medium)
+            // Why the viewer cannot type, in the one warning color.
+            return Text(model.placeholder).foregroundStyle(ComposerInk.warning).fontWeight(.medium)
         }
         if slowWait > 0 {
             return Text("Slow mode: you can send again in \(slowWait)s").foregroundStyle(Color(ChatTheme.textMuted))
@@ -166,10 +171,13 @@ private struct ComposerBar: View {
     }
 
     private func inputRow(slowWait: Int) -> some View {
-        HStack(alignment: .bottom, spacing: 6) {
+        HStack(alignment: .center, spacing: 6) {
             HStack(spacing: 4) {
                 if !session.style.hideEmoteButton {
                     emoteButton
+                        // It inserts nothing that could be sent while a mode other than
+                        // emote-only blocks the room.
+                        .opacity(model.fieldDisabled && session.modes?.blocked != "emote_only" ? 0.4 : 1)
                 }
                 TextField("", text: $model.draft, prompt: prompt(slowWait: slowWait))
                     .font(.sn(15))
@@ -182,7 +190,9 @@ private struct ComposerBar: View {
                     .disabled(model.fieldDisabled)
                     .autocorrectionDisabled(!session.style.spellcheck)
                     .textInputAutocapitalization(.sentences)
-                if let modes = model.shownModes {
+                if model.draft.count >= ChatComposerModel.counterFrom {
+                    counter
+                } else if let modes = model.shownModes, !model.fieldDisabled {
                     RoomModeIndicator(modes: modes) {
                         model.panel = .none
                         model.menuOpen = true
@@ -194,18 +204,16 @@ private struct ComposerBar: View {
                     } label: {
                         Image(systemName: "slash.circle")
                             .font(ComposerSymbol.font)
-                            .foregroundStyle(Color(ChatTheme.textMuted))
+                            .foregroundStyle(Color(ChatTheme.textSecondary))
                             .frame(width: 32, height: 36)
                     }
                     .accessibilityLabel("Chat commands")
                 }
             }
             .padding(.leading, 4)
-            .padding(.trailing, 8)
+            .padding(.trailing, 5)
             .frame(minHeight: 40)
             .glassEffect(.regular, in: .rect(cornerRadius: 12))
-            // Above the field's top edge, clear of the symbols at its end.
-            .overlay(alignment: .topTrailing) { counter.alignmentGuide(.top) { $0[.bottom] + 2 } }
 
             Button {
                 if model.canSend {
@@ -240,16 +248,17 @@ private struct ComposerBar: View {
         .padding(.top, 8)
     }
 
-    /// "N/500" once a message nears Twitch's limit, red past it.
-    @ViewBuilder private var counter: some View {
+    /// "N/500" once a message nears Twitch's limit: quiet, orange in the last 20, red past it.
+    private var counter: some View {
         let count = model.draft.count
-        if count >= 400 {
-            Text("\(count)/\(ChatComposerModel.messageLimit)")
-                .font(.system(size: 10, weight: .medium).monospacedDigit())
-                .foregroundStyle(count > ChatComposerModel.messageLimit ? Color.red : Color(ChatTheme.textMuted))
-                .padding(.trailing, 10)
-                .accessibilityLabel("\(count) of \(ChatComposerModel.messageLimit) characters")
-        }
+        let limit = ChatComposerModel.messageLimit
+        let ink = count > limit ? Color.red : (count >= limit - 20 ? ComposerInk.warning : ComposerInk.quiet)
+        return Text("\(count)/\(limit)")
+            .font(.system(size: 13, weight: .medium).monospacedDigit())
+            .foregroundStyle(ink)
+            .padding(.horizontal, 4)
+            .frame(height: 36)
+            .accessibilityLabel("\(count) of \(limit) characters")
     }
 
     private var emoteButton: some View {
@@ -280,10 +289,39 @@ private struct ComposerBar: View {
     }
 }
 
-/// The symbols at the field's end (room modes, commands) share one size and weight, muted, so
-/// the emoji at its start is the only color in the field.
+/// The symbols at the field's end (room modes, commands) share one size, weight and ink, so the
+/// emoji at its start is the only color in the field.
 enum ComposerSymbol {
     static let font = Font.system(size: 17, weight: .medium)
+}
+
+/// The composer's two inks beyond the theme: one quiet gray that stays readable on every chat
+/// background (placeholders, hints, counts), and one warning color for anything blocked or not sent.
+enum ComposerInk {
+    static let quiet = Color(red: 0x86 / 255, green: 0x98 / 255, blue: 0x9E / 255)
+    static let warning = Color(red: 1, green: 0x94 / 255, blue: 0x30 / 255)
+}
+
+extension View {
+    /// A surface that floats over the chat above the composer: an opaque apron from its bottom
+    /// edge down to the composer's hairline (so no chat shows in the gap or its rounded corners)
+    /// and a short fade above it, so the chat it covers never ends in a hard cut.
+    func floatingSurface() -> some View {
+        let ground = Color(ChatTheme.background)
+        return background(alignment: .bottom) {
+            ground
+                .frame(height: 28)
+                .offset(y: 8)
+                .padding(.horizontal, -10)
+        }
+        .background(alignment: .top) {
+            LinearGradient(colors: [ground.opacity(0), ground], startPoint: .top, endPoint: .bottom)
+                .frame(height: 12)
+                .offset(y: -12)
+                .padding(.horizontal, -10)
+                .allowsHitTesting(false)
+        }
+    }
 }
 
 /// The room's modes inside the field: the first mode's symbol, and "+N" when more are on.
@@ -294,7 +332,7 @@ private struct RoomModeIndicator: View {
     var body: some View {
         Button(action: open) {
             HStack(spacing: 4) {
-                Image(systemName: Self.symbol(modes.modes[0].kind))
+                Image(systemName: RoomModeSymbol.name(modes.modes[0].kind))
                     .font(ComposerSymbol.font)
                 if modes.modes.count > 1 {
                     Text("+\(modes.modes.count - 1)")
@@ -316,16 +354,6 @@ private struct RoomModeIndicator: View {
         let labels = modes.modes.map(\.label).joined(separator: ", ")
         guard let standing = modes.standing else { return labels }
         return "\(labels). \(standing)"
-    }
-
-    static func symbol(_ kind: String) -> String {
-        switch kind {
-        case "subs_only": return "star"
-        case "emote_only": return "face.smiling"
-        case "followers_only": return "heart"
-        case "slow": return "timer"
-        default: return "touchid"
-        }
     }
 }
 
@@ -384,11 +412,11 @@ private struct SuggestionStrip: View {
                     }
                 }
                 Spacer()
-                Text("Swipe, tap to use")
+                Text(model.suggestions.count > 1 ? "Swipe for more, tap to use" : "Tap to use")
                     .font(.sn(10))
-                    .foregroundStyle(Color(ChatTheme.textMuted))
+                    .foregroundStyle(ComposerInk.quiet)
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.05)).frame(height: 1) }
         }
