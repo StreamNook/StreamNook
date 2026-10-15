@@ -104,7 +104,7 @@ enum Drive {
             case "undo": model.toasts.show(value.isEmpty ? "Message deleted" : value, .info, action: "Undo") {}
             case "wait": try? await Task.sleep(for: .seconds(Double(value) ?? 1))
             case "pause": model.watch.pause()
-            case "edge", "proxy": break
+            case "edge": break
             case "route": model.watch.route = PlayRoute(rawValue: value) ?? .plain
             case "offset": model.watch.offsetFromLive = Double(value)
             case "preserve": model.watch.preservesOffset = true
