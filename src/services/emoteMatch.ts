@@ -17,8 +17,7 @@ export interface EmoteMatchRow {
   insertText?: string;
   url: string;
   localUrl?: string;
-  /** `user` marks a chatter row, which follows the emotes in a cycle answer. */
-  provider: NonNullable<EmoteTabCandidate['emote']>['provider'] | 'user';
+  provider: NonNullable<EmoteTabCandidate['emote']>['provider'];
   /** Where the emote comes from: "Twitch Global", "Channel Sub", "7TV", ... */
   sourceLabel: string;
   /** The same without the provider ("Global", "Channel Sub", "Personal"), for
@@ -29,8 +28,9 @@ export interface EmoteMatchRow {
   matchLen?: number;
   /** Section heading while browsing with nothing typed. */
   group?: string;
-  /** A chatter row's login. */
-  login?: string;
+  /** Set on a chatter row (Rust's provider `user`), which follows the emotes
+   *  in a cycle answer: the chatter's login. */
+  chatterLogin?: string;
   isZeroWidth?: boolean;
   modifierFlags?: number;
 }
@@ -56,7 +56,7 @@ interface WireRow {
   insert_text?: string;
   url: string;
   local_path?: string;
-  provider: EmoteMatchRow['provider'];
+  provider: EmoteMatchRow['provider'] | 'user';
   source_label: string;
   source_detail: string;
   match_at?: number;
@@ -96,7 +96,7 @@ export async function matchEmotes(
         insertText: r.insert_text,
         url: r.url,
         localUrl: r.local_path ? convertFileSrc(r.local_path) : undefined,
-        provider: r.provider,
+        provider: r.provider === 'user' ? 'twitch' : r.provider,
         sourceLabel: r.source_label,
         sourceDetail: r.source_detail,
         matchAt: r.match_at,
@@ -104,7 +104,7 @@ export async function matchEmotes(
         group: r.group,
         isZeroWidth: r.is_zero_width,
         modifierFlags: r.modifier_flags,
-        login: r.login,
+        chatterLogin: r.provider === 'user' ? (r.login ?? r.name.replace(/^@/, '')) : undefined,
       })),
     };
   } catch {
@@ -143,13 +143,12 @@ export async function personalEmoteOverrides(
  *  a display name is localized. */
 export function rowsToTabCandidates(rows: EmoteMatchRow[]): EmoteTabCandidate[] {
   return rows.map((r, i): EmoteTabCandidate => {
-    if (r.provider === 'user') {
-      const displayName = r.name.replace(/^@/, '');
+    if (r.chatterLogin !== undefined) {
       return {
         name: r.name,
         insertText: r.insertText,
         priority: i,
-        chatter: { username: r.login ?? displayName, displayName },
+        chatter: { username: r.chatterLogin, displayName: r.name.replace(/^@/, '') },
       };
     }
     return {
