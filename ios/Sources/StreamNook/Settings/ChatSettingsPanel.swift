@@ -708,7 +708,6 @@ private struct RemindersNote: View {
             Text("Reminders are set up and posted from StreamNook on your computer.")
                 .font(.sn(12))
                 .foregroundStyle(SN.textMuted)
-                .padding(.horizontal, 4)
         }
     }
 }

@@ -224,7 +224,6 @@ struct AddAnother: View {
             Label(title, systemImage: "plus").font(.sn(13, 600)).foregroundStyle(SN.accent).frame(minHeight: 36)
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 4)
     }
 }
 
@@ -825,7 +824,6 @@ struct CustomCommandsSettings: View {
                 }
                 .font(.sn(12, 600)).foregroundStyle(SN.accent).buttonStyle(.plain)
             }
-            .padding(.horizontal, 4)
             if reference { CommandReference() }
             if commands.isEmpty {
                 EmptyListCard(text: "No custom commands yet.", button: "Add your first command") { Task { _ = await store.add(path) } }
@@ -957,7 +955,7 @@ struct NicknamesSettings: View {
         SettingsBlock(title: "Nicknames", detail: "Nicknames you've set for individual chatters. Only visible to you. Set or clear a nickname from the user's profile card in chat.", bare: true) {
             if overrides.isEmpty {
                 Text("No overrides yet. Click any user's name in chat to open their profile card, then set a nickname.")
-                    .font(.sn(12)).foregroundStyle(SN.textMuted).padding(.horizontal, 4)
+                    .font(.sn(12)).foregroundStyle(SN.textMuted)
             } else {
                 ForEach(overrides, id: \.id) { item in
                     let name = item.entry["username"] as? String ?? item.id

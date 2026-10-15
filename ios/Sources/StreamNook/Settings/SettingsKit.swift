@@ -17,13 +17,13 @@ struct SettingsBlock<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(title).snSectionStyle().padding(.horizontal, 4)
+            // On the page's one left edge with the panels below (design-eye).
+            Text(title).snSectionStyle()
             if let detail {
                 Text(detail)
                     .font(.sn(12))
                     .foregroundStyle(SN.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 4)
                     .padding(.top, 4)
             }
             Group {
@@ -115,10 +115,12 @@ struct SettingRow<Trailing: View, Below: View, Nested: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .center, spacing: 16) {
+            // The control lines up with the title, not the middle of a long description.
+            HStack(alignment: .settingTitle, spacing: 16) {
                 VStack(alignment: .leading, spacing: 2) {
                     SettingTitle(title: title, paths: paths, hasHelp: help != nil, helpOpen: $helpOpen,
                                  afterReset: afterReset)
+                        .alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
                     if let detail {
                         Text(detail)
                             .font(.sn(12))
@@ -136,7 +138,7 @@ struct SettingRow<Trailing: View, Below: View, Nested: View>: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                trailing
+                trailing.alignmentGuide(.settingTitle) { $0[VerticalAlignment.center] }
             }
             below
             nested
@@ -183,6 +185,15 @@ extension WideRow where Nested == EmptyView {
          @ViewBuilder below: () -> Below) {
         self.init(title: title, detail: detail, help: help, paths: paths, below: below, nested: { EmptyView() })
     }
+}
+
+extension VerticalAlignment {
+    private enum SettingTitleAlignment: AlignmentID {
+        static func defaultValue(in context: ViewDimensions) -> CGFloat { context[VerticalAlignment.center] }
+    }
+
+    /// The middle of a setting row's title line.
+    static let settingTitle = VerticalAlignment(SettingTitleAlignment.self)
 }
 
 /// Settings that only mean something with the row above: indented behind a thin rule.

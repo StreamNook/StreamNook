@@ -76,7 +76,7 @@ struct AdFreePanel: View {
 struct GroupLabel: View {
     let text: String
     init(_ text: String) { self.text = text }
-    var body: some View { Text(text).snSectionStyle().padding(.horizontal, 4).padding(.bottom, -10) }
+    var body: some View { Text(text).snSectionStyle().padding(.bottom, -10) }
 }
 
 /// A phone-only panel's master switch: symbol, title, a line that follows the state.
