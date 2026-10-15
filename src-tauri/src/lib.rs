@@ -1926,6 +1926,7 @@ pub fn run() {
             get_twitch_bio,
             update_twitch_bio,
             update_twitch_display_name,
+            upload_seventv_profile_picture,
             upload_twitch_profile_image,
             get_user_chat_colors,
             block_user,
