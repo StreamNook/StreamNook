@@ -312,7 +312,7 @@ pub fn describe_with(m: &ModesIn, standing: Standing, follow: OwnFollow) -> Room
         .find(|kind| proven(*kind));
     let reason = blocked.map(|kind| match kind {
         ModeKind::SubsOnly => "Subscribers only".to_string(),
-        ModeKind::EmoteOnly => "Emote only. Send emotes from the picker.".to_string(),
+        ModeKind::EmoteOnly => "Emote-only: pick an emote".to_string(),
         _ => match follow_need.flatten() {
             Some(secs) => format!("You can chat in {}", follow_age((secs + 59) / 60).0),
             None => "Follow to chat".to_string(),
@@ -528,7 +528,7 @@ mod tests {
         // A subscriber is spared sub-only, so emote-only is next.
         let v = describe_with(&all, Standing::Viewer { is_sub: true }, OwnFollow::NotFollowing);
         assert_eq!(v.blocked, Some(ModeKind::EmoteOnly));
-        assert_eq!(v.reason.as_deref(), Some("Emote only. Send emotes from the picker."));
+        assert_eq!(v.reason.as_deref(), Some("Emote-only: pick an emote"));
         // Emote-only off: the follow decides, and a subscriber is spared it.
         let follow = ModesIn { followers_only_minutes: 0, ..Default::default() };
         let v = describe_with(&follow, viewer(), OwnFollow::NotFollowing);

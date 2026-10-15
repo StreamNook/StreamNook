@@ -82,10 +82,10 @@ import Testing
         {"modes":[{"kind":"emote_only","label":"Emote-only chat","compact":"Emote-only","short":"Emote-only",
                    "detail":"Messages can only contain emotes.","applies_to_you":true}],
          "prompt":"Emote-only chat","prompt_short":"Emote-only","standing":null,"slow_seconds":0,
-         "blocked":"emote_only","reason":"Emote only. Send emotes from the picker."}
+         "blocked":"emote_only","reason":"Emote-only: pick an emote"}
         """#)
         #expect(modes.blocked == "emote_only")
-        #expect(modes.reason == "Emote only. Send emotes from the picker.")
+        #expect(modes.reason == "Emote-only: pick an emote")
         let open = try decode(ChatRoomModes.self, #"{"modes":[],"slow_seconds":0}"#)
         #expect(open.blocked == nil)
     }

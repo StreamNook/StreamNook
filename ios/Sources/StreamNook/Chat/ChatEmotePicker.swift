@@ -203,7 +203,13 @@ struct ChatEmotePicker: View {
         if picker.tab == "emoji" {
             emojiGrid
         } else if picker.sections.isEmpty {
-            centered(picker.waiting || picker.answer == nil ? "Loading emotes..." : "No emotes found")
+            if picker.waiting || picker.answer == nil {
+                centered("Loading emotes...")
+            } else if picker.tab == "favorites", picker.query.isEmpty {
+                centered("No favorites yet. Long-press an emote to add it.")
+            } else {
+                centered("No emotes found")
+            }
         } else {
             ScrollViewReader { reader in
                 ScrollView {
@@ -304,10 +310,14 @@ struct ChatEmotePicker: View {
     }
 
     private func centered(_ text: String) -> some View {
+        // Fills the grid's space from the top, so the search and tabs never move with it.
         Text(text)
             .font(.sn(12))
             .foregroundStyle(Color(ChatTheme.textMuted))
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 24)
             .frame(maxWidth: .infinity, minHeight: 128)
+            .frame(maxHeight: .infinity, alignment: .top)
     }
 }
 

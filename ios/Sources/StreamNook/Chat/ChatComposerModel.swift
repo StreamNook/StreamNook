@@ -279,6 +279,9 @@ final class ChatComposerModel {
 
     /// A line only the viewer sees, in this room's chat.
     func notice(_ line: String) {
+        #if DEBUG
+        chatLog.notice("composer notice: \(line, privacy: .public)")
+        #endif
         let row: [String: Any] = [
             "id": "system-local-\(UUID().uuidString)",
             "user_id": "",
@@ -297,6 +300,9 @@ final class ChatComposerModel {
     }
 
     func show(_ text: String) {
+        #if DEBUG
+        chatLog.notice("composer toast: \(text, privacy: .public)")
+        #endif
         toast = text
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(3))

@@ -58,7 +58,7 @@ enum ComposerDrive {
         case "emote":
             modes = ["modes": [mode("emote_only", "Emote-only chat", "Emote-only", "Emote-only", "Messages can only contain emotes.")],
                      "prompt": "Emote-only chat", "prompt_short": "Emote-only", "slow_seconds": 0,
-                     "blocked": "emote_only", "reason": "Emote only. Send emotes from the picker."]
+                     "blocked": "emote_only", "reason": "Emote-only: pick an emote"]
         case "follow":
             modes = ["modes": [mode("followers_only", "Followers-only chat (10 minutes)", "Followers-only (10m)", "Followers 10m",
                                     "Only accounts that have followed for 10 minutes can chat.")],

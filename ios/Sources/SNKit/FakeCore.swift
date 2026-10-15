@@ -202,6 +202,12 @@ public final class FakeCore: CoreBridge {
     static func emotePicker(_ emotesJSON: Data?, args: [String: Any]) -> [String: Any] {
         let set = emotesJSON.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: [[String: Any]]] } ?? [:]
         let ids = ["twitch", "bttv", "7tv", "ffz"]
+        // The fake has no favorites: that tab answers with nothing in it.
+        if args["tab"] as? String == "favorites" {
+            var tabs: [[String: Any]] = [["id": "favorites", "count": 0]]
+            tabs += ids.map { ["id": $0, "count": set[$0]?.count ?? 0] }
+            return ["ready": emotesJSON != nil, "tab": "favorites", "tabs": tabs, "sections": [Any]()]
+        }
         let tab = (args["tab"] as? String).flatMap { ids.contains($0) ? $0 : nil } ?? "twitch"
         let query = (args["query"] as? String ?? "").lowercased()
         let rows = (set[tab] ?? []).filter { emote in

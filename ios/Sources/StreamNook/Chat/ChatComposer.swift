@@ -204,7 +204,8 @@ private struct ComposerBar: View {
             .padding(.trailing, 8)
             .frame(minHeight: 40)
             .glassEffect(.regular, in: .rect(cornerRadius: 12))
-            .overlay(alignment: .bottomTrailing) { counter }
+            // Above the field's top edge, clear of the symbols at its end.
+            .overlay(alignment: .topTrailing) { counter.alignmentGuide(.top) { $0[.bottom] + 2 } }
 
             Button {
                 if model.canSend {
@@ -246,8 +247,7 @@ private struct ComposerBar: View {
             Text("\(count)/\(ChatComposerModel.messageLimit)")
                 .font(.system(size: 10, weight: .medium).monospacedDigit())
                 .foregroundStyle(count > ChatComposerModel.messageLimit ? Color.red : Color(ChatTheme.textMuted))
-                .padding(.trailing, 8)
-                .padding(.bottom, 2)
+                .padding(.trailing, 10)
                 .accessibilityLabel("\(count) of \(ChatComposerModel.messageLimit) characters")
         }
     }
@@ -358,6 +358,8 @@ private struct SuggestionStrip: View {
                 }
                 .scrollTargetBehavior(.viewAligned)
                 .scrollPosition(id: $active, anchor: .leading)
+                // 52 pt tiles and 10 pt above and below: the strip never takes the picker's height.
+                .frame(height: 72)
                 // A new list starts again at its first tile.
                 .onChange(of: model.suggestions.first?.key) { _, first in
                     active = first
