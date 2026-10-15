@@ -8,7 +8,7 @@ struct YouScreen: View {
     let model: AppModel
     @AppStorage("sn-start-tab") private var startTab = MobileTab.following.rawValue
     @State private var picks: CosmeticsScreenModel?
-    @State private var identity: OwnIdentityData?
+    @State private var ownIdentity: OwnIdentityData?
 
     private var user: TwitchUser? { model.signIn.user }
 
@@ -22,7 +22,7 @@ struct YouScreen: View {
                 // Signed out, the card above already offers the sign-in; the accounts wait for it.
                 if user != nil {
                     label("Accounts")
-                    AccountsCard(model: model, picks: picks, sevenTvPicture: identity?.picture)
+                    AccountsCard(model: model, picks: picks, sevenTvPicture: ownIdentity?.picture)
                         .padding(.horizontal, 16)
                 }
 
@@ -72,7 +72,7 @@ struct YouScreen: View {
     @ViewBuilder
     private var identity: some View {
         if let user, let picks {
-            OwnIdentityCard(model: model, user: user, picks: picks, identity: $identity)
+            OwnIdentityCard(model: model, user: user, picks: picks, identity: $ownIdentity)
         } else {
             SignedOutIdentityCard(model: model)
         }
